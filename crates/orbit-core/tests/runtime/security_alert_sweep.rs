@@ -259,6 +259,125 @@ fn code_snapshot(number: u64, rule: &str, path: &str) -> Value {
     code_alerts_snapshot(vec![code_alert(number, rule, path, 12)])
 }
 
+fn write_repo_file(root: &tempfile::TempDir, path: &str) {
+    let full = root.path().join("repo").join(path);
+    if let Some(parent) = full.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(full, "fixture\n").unwrap();
+}
+
+fn dependabot_alert(number: u64, package: &str, manifest_path: &str) -> Value {
+    json!({
+        "number": number, "severity": "high", "ecosystem": "cargo", "package": package,
+        "manifest_path": manifest_path, "scope": "runtime",
+        "ghsa_id": "GHSA-fixture", "cve_id": "", "summary": "fixture advisory",
+        "vulnerable_version_range": "< 1.0.1", "first_patched_version": "1.0.1",
+        "created_at": "fixture", "updated_at": "fixture",
+        "html_url": "https://example.invalid/advisory",
+    })
+}
+
+fn dependabot_snapshot_for(alerts: Vec<Value>) -> Value {
+    json!({
+        "schema_version": 2, "collected": true,
+        "collection_status": "fully_collected",
+        "repository": {"full_name": "acme/orbit"},
+        "open_alerts": alerts,
+        "open_dependabot_pull_requests": [],
+    })
+}
+
+fn sweep_tasks_seed_file_selectors_from_alert_locations() {
+    let (root, runtime) = fixture();
+    for path in [
+        "crates/a/src/lib.rs",
+        "crates/b/src/lib.rs",
+        "Cargo.toml",
+        "Cargo.lock",
+    ] {
+        write_repo_file(&root, path);
+    }
+    let code = code_alerts_snapshot(vec![
+        code_alert(484, "rust/cleartext-logging", "crates/a/src/lib.rs", 12),
+        code_alert(485, "rust/cleartext-logging", "crates/b/src/lib.rs", 12),
+    ]);
+    let filed = file(&runtime, code, None);
+    assert_eq!(filed["filed_count"], 1, "{filed}");
+    let task = runtime
+        .get_task(filed["filed"][0]["task_id"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(
+        task.context_files,
+        vec![
+            "file:crates/a/src/lib.rs".to_string(),
+            "file:crates/b/src/lib.rs".to_string()
+        ],
+        "a code-scanning group carries one selector per distinct alert path"
+    );
+
+    let (root, runtime) = fixture();
+    for path in ["Cargo.toml", "Cargo.lock"] {
+        write_repo_file(&root, path);
+    }
+    let mut alert = dependabot_alert(71, "serde", "Cargo.toml");
+    alert["lockfile_path"] = json!("Cargo.lock");
+    let filed = file(&runtime, dependabot_snapshot_for(vec![alert]), None);
+    assert_eq!(filed["filed_count"], 1, "{filed}");
+    let task = runtime
+        .get_task(filed["filed"][0]["task_id"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(
+        task.context_files,
+        vec!["file:Cargo.lock".to_string(), "file:Cargo.toml".to_string()],
+        "a Dependabot task carries its manifest and the alert-named lockfile"
+    );
+}
+
+fn sweep_tasks_drop_missing_and_git_orbit_paths() {
+    let (root, runtime) = fixture();
+    write_repo_file(&root, "crates/a/src/lib.rs");
+    write_repo_file(&root, ".git/seeded.rs");
+    write_repo_file(&root, ".orbit/seeded.rs");
+    let snapshot = code_alerts_snapshot(vec![
+        code_alert(484, "rust/cleartext-logging", "crates/a/src/lib.rs", 12),
+        code_alert(
+            485,
+            "rust/cleartext-logging",
+            "crates/missing/src/lib.rs",
+            12,
+        ),
+        code_alert(486, "rust/cleartext-logging", ".git/seeded.rs", 12),
+        code_alert(487, "rust/cleartext-logging", ".orbit/seeded.rs", 12),
+    ]);
+    let filed = file(&runtime, snapshot, None);
+    assert_eq!(filed["filed_count"], 1, "{filed}");
+    let task = runtime
+        .get_task(filed["filed"][0]["task_id"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(
+        task.context_files,
+        vec!["file:crates/a/src/lib.rs".to_string()],
+        "missing and .git/.orbit alert paths are dropped, not filed"
+    );
+
+    let (_root, runtime) = fixture();
+    let filed = file(
+        &runtime,
+        dependabot_snapshot_for(vec![dependabot_alert(71, "serde", "missing/Manifest.toml")]),
+        None,
+    );
+    assert_eq!(filed["filed_count"], 1, "{filed}");
+    let task = runtime
+        .get_task(filed["filed"][0]["task_id"].as_str().unwrap())
+        .unwrap();
+    assert!(
+        task.context_files.is_empty(),
+        "a missing manifest seeds no selector: {:?}",
+        task.context_files
+    );
+}
+
 fn assert_rejected_owner(report: &Value, number: u64, owner: &str) {
     let matched: Vec<_> = report["skipped_existing"]
         .as_array()
@@ -993,5 +1112,7 @@ crate::scenario_table!(
     rejected_grouped_owner_refills_alert_moved_onto_a_sibling_location,
     rejection_naming_a_covering_task_does_not_suppress_code_scanning_refiling,
     rejected_source_uses_supersedes_before_legacy_consolidation_comments,
-    typed_code_scanning_evidence_consolidates_despite_edited_prose
+    typed_code_scanning_evidence_consolidates_despite_edited_prose,
+    sweep_tasks_seed_file_selectors_from_alert_locations,
+    sweep_tasks_drop_missing_and_git_orbit_paths
 );

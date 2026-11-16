@@ -11,7 +11,9 @@ use crate::application::contracts::DEPENDABOT_TAG;
 use crate::application::sweep_filing::duplicate_tasks::{
     DuplicateMatchKind, DuplicateTaskLookup, DuplicateTaskMatch, find_covering_task,
 };
-use crate::application::sweep_filing::{bounded_u64, digest, display, truncate_chars};
+use crate::application::sweep_filing::{
+    bounded_u64, digest, display, seeded_file_selectors, truncate_chars,
+};
 use crate::application::task::TaskAddParams;
 
 use super::code_groups;
@@ -180,6 +182,13 @@ where
                 .filter_map(|alert| severity_rank(&field(alert, "severity").to_ascii_lowercase()))
                 .max()
                 .unwrap_or(floor);
+            // Seed the manifest (and the alert-named lockfile, when present)
+            // that exists at the filing base. The pilot and the run's own
+            // widening still add the real repair site on top of this seed.
+            let context_files = seeded_file_selectors(
+                dependabot_seed_paths(&manifest_path, &cluster_alerts),
+                &runtime.paths().repo_root,
+            );
             let params = TaskAddParams {
                 title: dependabot_task_title(&package, &manifest_path),
                 description: dependabot_task_description(
@@ -206,6 +215,7 @@ where
                 task_type: Some(TaskType::Bug),
                 status: Some(TaskStatus::Backlog),
                 system_created: true,
+                context_files,
                 ..TaskAddParams::default()
             };
             pending_tasks.push(PendingTask {
@@ -308,6 +318,7 @@ where
             snapshot,
             group,
             covered_siblings,
+            repo_root: &runtime.paths().repo_root,
         });
         pending_tasks.push(PendingTask {
             params,
@@ -529,6 +540,31 @@ fn dependabot_task_title(package: &str, manifest_path: &str) -> String {
     let budget = 120usize.saturating_sub(DEPENDABOT_TITLE_PREFIX.chars().count());
     let body = format!("Update {package} in {manifest_path}");
     format!("{DEPENDABOT_TITLE_PREFIX}{}", truncate_chars(&body, budget))
+}
+
+/// Raw repository paths a Dependabot task seeds from: the cluster's manifest
+/// plus any lockfile an alert in the cluster names. The caller filters them
+/// against the filing base, so unknown lockfile keys simply contribute
+/// nothing until the projection names them.
+fn dependabot_seed_paths(manifest_path: &str, alerts: &[Value]) -> Vec<String> {
+    const LOCKFILE_KEYS: &[&str] = &[
+        "lockfile_path",
+        "lock_file_path",
+        "lockfile",
+        "lock_file",
+        "lock_path",
+        "manifest_lock_path",
+    ];
+    let mut paths = vec![manifest_path.to_string()];
+    for alert in alerts {
+        for key in LOCKFILE_KEYS {
+            let candidate = field(alert, key);
+            if !candidate.is_empty() {
+                paths.push(candidate);
+            }
+        }
+    }
+    paths
 }
 
 fn secret_task_title(secret_type: &str, number: u64) -> String {
