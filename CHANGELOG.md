@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## 0.51.0 — 2026-11-16
+
+### Breaking Changes
+
+- **Host-evidence rules match task tags**: Host-evidence rules can now carry a `tags` field, which older Orbit binaries reject as an unknown field when loading the rule. ([ORB-24940])
+  Tag-matching rules refused by older binaries → keep rules path-only or upgrade every reader to 0.51.0+
+- **Store schema 93 for routine breakers**: The store schema rises to 93 with additive routine-breaker tables, which older binaries can read but do not enforce. ([ORB-25103])
+  Breaker state ignored by older binaries → use Orbit 0.51.0+ to manage and honour breaker state
+- **Named operator ship bypasses readiness gates**: A named `orbit run ship` now dispatches past schedule and readiness gates, and `--ignore-schedule` is a hidden no-op. ([ORB-25082])
+  Readiness gates removed from named ships → use auto-drain or the agent ship path when gates must hold
+
+### Highlights
+
+- **Routine circuit breaker**: Routine jobs stop after three consecutive failures in the same error class and retry half-open after backoff or a deploy, with operator controls to inspect the breaker. ([ORB-25103])
+- **Rebind a moved workspace**: Operators can rebind a registered workspace after moving its checkout, with identity checks and an atomic host-local update. ([ORB-25066])
+- **Waivable readiness blockers**: The task readiness panel lets an operator waive waivable blockers, records the action, and lets the operator remove the waiver. ([ORB-25084])
+- **Bounded resident briefs**: Resident briefs include the latest checkpoint in full, bounded summaries for earlier checkpoints, and delta-only notes instead of an unbounded history tail. ([ORB-25099])
+- **Tag-matched host evidence**: Host-evidence rules can match task tags as well as changed paths, so security-tagged work can owe CodeQL on a non-Linux follower. ([ORB-24940])
+- **Operator ship override**: An explicit operator ship can dispatch a named task past drain readiness gates and lock waits, recording what it overrode. ([ORB-25082])
+
 ## 0.50.0 — 2026-11-15
 
 ### Breaking Changes
