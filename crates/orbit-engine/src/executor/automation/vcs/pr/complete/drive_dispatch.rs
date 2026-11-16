@@ -11,7 +11,7 @@ use crate::context::RuntimeHost;
 
 use super::super::super::super::input::input_string_field;
 
-use super::super::super::landing::checks::CheckReadGap;
+use super::super::super::checks::CheckReadGap;
 use super::super::super::operations::BASE_MODIFIED_MERGE_ATTEMPTS;
 use super::super::super::push::push_batch_changes;
 use super::super::answers::{PullRequestStatus, ReviewedMergeOutcome, read_pr_status_before};

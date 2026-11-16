@@ -1,6 +1,6 @@
 //! The unchanged-head classification rerun and the no-edit repair rerun.
 
-use super::super::super::super::pr::PullRequestStatus;
+use super::super::super::pr::PullRequestStatus;
 use super::super::{
     jobs::{answers, commit_jobs, failed_step, job_label, unsuccessful},
     log::job_log,
@@ -27,7 +27,7 @@ use std::{collections::BTreeSet, path::Path};
     clippy::too_many_arguments,
     reason = "the classification rerun takes the same landing identity the flaky retry does"
 )]
-pub(in crate::executor::automation::vcs::landing::checks) fn request_classification_rerun<
+pub(in crate::executor::automation::vcs::checks) fn request_classification_rerun<
     H: RuntimeHost + ?Sized,
 >(
     host: &H,
@@ -83,7 +83,7 @@ pub(in crate::executor::automation::vcs::landing::checks) fn request_classificat
         tasks,
         handoff,
         &plan,
-        super::super::super::super::completion_deadline::now_ms()?,
+        super::super::super::completion_deadline::now_ms()?,
     )? {
         CiRerunAdmission::Reserved
             if send_reserved_rerun(host, workspace, tasks, handoff, pr, &plan, deadline_ms)? =>
@@ -163,10 +163,8 @@ pub(in crate::executor::automation::vcs) fn request_no_edit_repair_rerun<
             continue;
         }
         let log = job_log(host, workspace, run_id, id, job, Some(deadline_ms))?;
-        let signature = super::super::super::super::super::ci::log_signature::error_signature(
-            &log,
-            failed_step(job),
-        );
+        let signature =
+            super::super::super::super::ci::log_signature::error_signature(&log, failed_step(job));
         if signature.step_fallback || signature.text.is_empty() {
             return Ok(CiRerunStep::NotEligible);
         }
@@ -217,7 +215,7 @@ pub(in crate::executor::automation::vcs) fn request_no_edit_repair_rerun<
         tasks,
         None,
         &plan,
-        super::super::super::super::completion_deadline::now_ms()?,
+        super::super::super::completion_deadline::now_ms()?,
     )? {
         CiRerunAdmission::Reserved => {
             if send_reserved_rerun(host, workspace, tasks, None, pr, &plan, deadline_ms)? {

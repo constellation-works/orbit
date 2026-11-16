@@ -8,10 +8,10 @@ use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
-use super::super::super::super::ci::log_signature::error_signature;
-use super::super::super::git::git_output;
-use super::super::super::operations;
-use super::super::super::operations::{
+use super::super::super::ci::log_signature::error_signature;
+use super::super::git::git_output;
+use super::super::operations;
+use super::super::operations::{
     CiCommitJobEvidence, CiCommitJobsAnswer, CiJobConclusion, CiJobStatus,
 };
 

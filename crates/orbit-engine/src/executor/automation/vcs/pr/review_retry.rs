@@ -1,5 +1,5 @@
 //! Review-watch access to the existing completion retry and read-deferral path.
-use super::super::landing::checks::rerun_diagnostic::CiRerunDiagnostic;
+use super::super::checks::rerun_diagnostic::CiRerunDiagnostic;
 use super::super::remote_probe::fixed_wait;
 use super::answers::PullRequestStatus;
 use super::auto_fix::{

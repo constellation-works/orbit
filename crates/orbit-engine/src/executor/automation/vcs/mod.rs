@@ -5,6 +5,7 @@ mod baseline;
 mod build_output;
 mod candidate_resume;
 mod candidate_validate;
+mod checks;
 pub mod claim;
 mod commit;
 mod completion_deadline;

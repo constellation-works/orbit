@@ -1,7 +1,7 @@
 //! Bounded observations, never authorization for a CI mutation.
 
-use super::super::super::operations::{CiCommitJobEvidence, CiCommitJobIdentity};
-use super::super::super::pr::PullRequestStatus;
+use super::super::operations::{CiCommitJobEvidence, CiCommitJobIdentity};
+use super::super::pr::PullRequestStatus;
 use crate::context::RuntimeHost;
 use orbit_common::{OrbitError, security::redaction::redact_all_and_home};
 use serde::{Deserialize, Serialize};

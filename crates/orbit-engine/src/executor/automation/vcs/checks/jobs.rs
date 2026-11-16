@@ -7,13 +7,13 @@ use serde_json::json;
 
 use crate::context::RuntimeHost;
 
-use super::super::super::super::ci::log_signature::{
+use super::super::super::ci::log_signature::{
     LineKind, classify_log_lines, declared_infrastructure_signature, diagnostic_excerpt,
     log_payload,
 };
-use super::super::super::baseline::network_inconclusive;
-use super::super::super::operations;
-use super::super::super::operations::{CiCommitJobEvidence, CiCommitJobsAnswer, CiJobConclusion};
+use super::super::baseline::network_inconclusive;
+use super::super::operations;
+use super::super::operations::{CiCommitJobEvidence, CiCommitJobsAnswer, CiJobConclusion};
 
 use super::recovery::{CheckFailureClass, FailedJob};
 

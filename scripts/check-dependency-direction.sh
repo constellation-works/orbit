@@ -329,6 +329,9 @@ contracts_higher="${app_modules}|routines|auto_tasks"
 # when it climbs out to the crate root, and a `crate::` path or use-tree counts too
 # [ORB-22005]. With `$4` set to `application-root`, also expand absolute
 # `crate::application::` paths and nested use-trees into the application modules.
+# With `$4` set to `named-path`, match the `|`-separated path prefixes `$3`
+# anywhere in code, including grouped trees, while preserving comments and
+# literals as non-dependencies. A single name matches that identifier alone.
 super_chains_into() {
   python3 - "$1" "$2" "$3" "${4:-}" <<'PY'
 import pathlib
@@ -412,6 +415,18 @@ for path in paths:
         parts.pop()
     source = path.read_text()
     tokens = list(code_tokens(source))
+    if sys.argv[4] == "named-path":
+        prefixes = [tuple(name.split("::")) for name in upper]
+        for index, (name, start) in enumerate(tokens):
+            if not any(name == prefix[0] for prefix in prefixes):
+                continue
+            named_paths, _ = use_tree(tokens, index)
+            if any(segments[:len(prefix)] == prefix
+                   for segments in named_paths for prefix in prefixes):
+                number = source.count("\n", 0, start) + 1
+                print(f"{path}:{number}:{source.splitlines()[number - 1]}")
+                failed = True
+        continue
     index = 0
     while index + 1 < len(tokens):
         if tokens[index][0] not in path_starts or tokens[index + 1][0] != "::":
@@ -1180,6 +1195,20 @@ for consumer in handoff.rs commit/actions.rs commit/summary.rs commit/already_re
     dependency_matches -n -U "\bpr::\{[^}]*\b(${projection_names})\b" "$vcs_src/$consumer" ||
     dependency_matches -n -U "\bpr::body::\{[^}]*\b(${projection_names})\b" "$vcs_src/$consumer"; then
     echo "orbit-engine vcs ${consumer} must read task projections from conventions, not pr"
+    fail=1
+  fi
+done
+
+# Shared hosted-check handling sits below landing. Scan Rust identifiers and
+# use trees so the word landing in unchanged evidence and docs is not an edge.
+# PR, base and claim must consume checks directly, never through landing.
+if ! super_chains_into "$vcs_src" checks landing named-path; then
+  echo "orbit-engine vcs checks must not reference landing"
+  fail=1
+fi
+for consumer in pr base claim; do
+  if ! super_chains_into "$vcs_src" "$consumer" 'landing::checks' named-path; then
+    echo "orbit-engine vcs ${consumer} must consume checks directly, not landing::checks"
     fail=1
   fi
 done

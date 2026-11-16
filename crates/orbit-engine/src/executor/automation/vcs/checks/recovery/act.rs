@@ -9,8 +9,8 @@ use serde_json::json;
 
 use crate::context::{HandoffLandingContext, RuntimeHost};
 
-use super::super::super::super::operations;
-use super::super::super::super::pr::PullRequestStatus;
+use super::super::super::operations;
+use super::super::super::pr::PullRequestStatus;
 
 use super::super::base_update::contains;
 use super::super::head::onto_passing_tip;
@@ -307,7 +307,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             match host.admit_handoff_base_update(&context.handoff_id, &request)? {
                 orbit_types::workflow::PrBaseUpdateAdmission::Reserved => {}
                 orbit_types::workflow::PrBaseUpdateAdmission::Observe(previous) => {
-                    super::super::super::super::completion_deadline::Deadline(previous.deadline_ms)
+                    super::super::super::completion_deadline::Deadline(previous.deadline_ms)
                         .remaining()?;
                     return Ok(CheckRecoveryStep::Wait);
                 }

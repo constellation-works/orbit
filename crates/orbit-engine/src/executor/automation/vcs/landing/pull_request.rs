@@ -10,6 +10,10 @@ use serde_json::{Value, json};
 use crate::context::{HandoffLandingStep, RuntimeHost};
 
 use super::super::base::refresh::RefreshStep;
+use super::super::checks::{
+    CheckRecovery, CheckRecoveryStep, ReadWait, failed_checks, landing_log_read_wait,
+    landing_read_wait, recover_failed_checks,
+};
 use super::super::commit::squash_merge_fields;
 use super::super::completion_hold::pull_request_changed_paths;
 use super::super::git::{fetch_remote_base, git_command_success};
@@ -21,10 +25,6 @@ use super::super::pr::{
 };
 use super::super::pr::{ReviewedMergeOutcome, diagnostics, draft_recovery};
 use super::super::remote_probe::fixed_wait as sleep;
-use super::checks::{
-    CheckRecovery, CheckRecoveryStep, ReadWait, failed_checks, landing_log_read_wait,
-    landing_read_wait, recover_failed_checks,
-};
 use super::intent::{LandingView, reconcile_intent};
 use super::observe::{adopt_base_update, landing_tip, observe_candidate, pin_for};
 use super::record::{
@@ -255,7 +255,7 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
         // [model ranking §5.1] A check recorded failing with no known cause
         // that now passes on the same head was flaky.
         self.recovery.failures.observe_passes(host, context, status);
-        super::checks::rerun_diagnostic::observe_ci_rerun_head(
+        super::super::checks::rerun_diagnostic::observe_ci_rerun_head(
             host,
             std::slice::from_ref(&context.task_id),
             &context.handoff_id,

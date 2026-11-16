@@ -20,7 +20,7 @@ use std::time::{Duration, SystemTime};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::super::super::operations::{CiCommitJobEvidence, CiJobStatus};
+use super::super::operations::{CiCommitJobEvidence, CiJobStatus};
 
 /// Answers kept at once; the oldest is pruned first.
 const MAX_ENTRIES: usize = 128;

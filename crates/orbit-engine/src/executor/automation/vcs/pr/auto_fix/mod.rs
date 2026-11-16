@@ -66,7 +66,7 @@
 //! reruns the failed required checks once on the unchanged head through
 //! the shared CI rerun budget. Only a rerun that fails again stops.
 //!
-//! [`head_check_evidence`]: super::super::landing::checks::head_check_evidence
+//! [`head_check_evidence`]: super::super::checks::head_check_evidence
 
 mod admission;
 mod checks;

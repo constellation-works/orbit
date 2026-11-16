@@ -27,8 +27,8 @@ use orbit_types::workflow::{DeliveryRefusal, PrAutoFixReadDeferral, PrAutoFixRea
 use crate::context::RuntimeHost;
 use crate::executor::automation::read_throttle::read_not_before;
 
+use super::super::super::checks::DeferredLogRead;
 use super::super::super::completion_deadline::now_ms;
-use super::super::super::landing::checks::DeferredLogRead;
 use super::{admission, ledger, verdict};
 
 /// Waits one exact read may earn before completion stops holding.

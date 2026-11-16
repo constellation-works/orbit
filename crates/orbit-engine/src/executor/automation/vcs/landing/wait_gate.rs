@@ -29,8 +29,12 @@ pub fn landing_wait_gate_cleared<H: RuntimeHost + ?Sized>(
     let pr = number.to_string();
     let status = read_pr_status(host, workspace, &pr)?;
     if status.head_sha.as_deref() != Some(&context.candidate.candidate.commit)
-        && super::checks::verify_published_base_update(workspace, &context.candidate, &status)
-            .is_err()
+        && super::super::checks::verify_published_base_update(
+            workspace,
+            &context.candidate,
+            &status,
+        )
+        .is_err()
     {
         return Ok(false);
     }
@@ -92,7 +96,7 @@ pub fn landing_wait_gate_cleared<H: RuntimeHost + ?Sized>(
         }));
     }
     if gate == LandingWaitGate::JobLogsUnavailable {
-        let failed = super::checks::failed_checks(&status);
+        let failed = super::super::checks::failed_checks(&status);
         if !failed.is_empty() {
             let Some(head) = status.head_sha.as_deref() else {
                 return Ok(false);
@@ -100,7 +104,7 @@ pub fn landing_wait_gate_cleared<H: RuntimeHost + ?Sized>(
             // Keep each sweep observation bounded too. No repair or CI
             // mutation is admitted here, even if the newly readable log fails.
             let deadline_ms = super::super::completion_deadline::now_ms()?.saturating_add(60_000);
-            return super::checks::failed_job_logs_readable(
+            return super::super::checks::failed_job_logs_readable(
                 host,
                 workspace,
                 head,

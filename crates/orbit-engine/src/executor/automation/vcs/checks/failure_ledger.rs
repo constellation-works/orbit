@@ -32,8 +32,8 @@ use orbit_types::workflow::{
 
 use crate::context::{HandoffLandingContext, RuntimeHost};
 
-use super::super::super::operations::CiCommitJobEvidence;
-use super::super::super::pr::{CheckState, PullRequestStatus};
+use super::super::operations::CiCommitJobEvidence;
+use super::super::pr::{CheckState, PullRequestStatus};
 use super::recovery::{CheckFailureClass, FailedJob};
 
 /// The recorded failures of one landing's task, read once per attempt and

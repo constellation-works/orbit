@@ -84,7 +84,37 @@ class RelativeImportTests(unittest.TestCase):
             path = self.root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("")
+        for module in ("checks", "pr", "base", "claim"):
+            (self.root / "crates/orbit-engine/src/executor/automation/vcs" / module).mkdir()
         self.prepare_config_paths()
+
+    def test_vcs_checks_dependency_direction(self):
+        # The shared classifier must not reach back into landing, and its
+        # consumers must not recreate the old checks route through landing.
+        vcs = self.root / "crates/orbit-engine/src/executor/automation/vcs"
+        self.check_rows([
+            ("checks/probe.rs", source + "\n") for source in (
+                "use super::super::landing::Probe;",
+                "use crate::executor::automation::vcs::{landing::Probe};",
+                "use super::super::{git::Probe, landing::{Other}};",
+            )
+        ], rejected=True, base=vcs)
+        for consumer in ("pr", "base", "claim"):
+            self.check_rows([
+                (f"{consumer}/probe.rs", source + "\n") for source in (
+                    "use super::super::landing::checks::Probe;",
+                    "fn probe() { super::super::landing::checks::read(); }",
+                    "use super::super::{landing::{checks::Probe}};",
+                    "use super::super::landing::{ /* note */ checks::Probe};",
+                )
+            ], rejected=True, base=vcs)
+        self.check_rows([
+            ("checks/probe.rs", "use super::super::pr::Probe;\n"
+             "// landing::checks is the retired path.\n"
+             'const EVIDENCE: &str = "the landing waits";\n'),
+            *[(f"{consumer}/probe.rs", "use super::super::checks::Probe;\n")
+              for consumer in ("pr", "base", "claim")],
+        ], rejected=False, base=vcs)
 
     def prepare_config_paths(self):
         src = self.root / "crates/orbit-config/src"
