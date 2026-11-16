@@ -419,20 +419,30 @@ Findings:
 - `F2` [low, open] <summary>
   - Cited: <paths the finding cites>
 
+<what the verdict means for delivery> Full certificate: `review-gate.json`.
 - Reviewer: crew `<crew>` (<provider> / <model>)
-- Implementation: `<sha>` on base `<sha>` (N commit(s), unchanged by review)
-- Reviewer commit: `<sha>` `review: …` by <author>
-- Final candidate: `<sha>`
+- Implementation: `<sha12>` on base `<sha12>` (N commit(s), unchanged by review)
+- Reviewer commit: `<sha12>` `review: …` by <author>
+- Final candidate: `<sha12>`
 - Selectors widened for reviewer-changed paths: …
 - Validation on final candidate: … record(s) […], complete: …
-- Owner-required checks: <captured commands, or none configured>
-- Not established by this review: <failed diagnostics and their sources, or none>
-- Required checks retained from earlier report revisions: <id, command and outcome, with any retirement reason, or none>
+- Owner-required checks: <captured commands>
+- Not established by this review: <failed diagnostics and their sources>
+- Required checks retained from earlier report revisions: <id, command and outcome, with any retirement reason>
 - Reviewer runtime: …s of … min
 - Escalation: …
-
-<what the verdict means for delivery>
 ```
+
+Only evidence that carries information is written. `Findings:` is omitted
+without findings; the `Reviewer commit` line needs a reviewer commit; the
+`Final candidate` line appears only when it differs from the implementation;
+widened selectors, owner-required checks (omitted when none are configured),
+not-established diagnostics, retained checks and an escalation appear only when
+present. The `Owner-required checks` line states `missing legacy host contract;
+fresh review required` when the certificate has no host check snapshot. Commits
+are shortened to 12 characters, and the `review-gate.json` artifact holds the
+full certificate [ORB-25129]. The lead line is unchanged, so
+`legacy_review_settlement` still decodes it.
 
 A fixed finding names its changed paths on its `Changed:` line. Any other finding that cites paths lists them on a `Cited:` line. The [agent scorecards](../agent-scorecards/2_design.md#53-reviewers) judge a `reject` by whether the next implementation run changed those paths.
 
