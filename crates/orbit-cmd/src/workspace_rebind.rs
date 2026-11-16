@@ -223,7 +223,7 @@ pub fn rebind_checkout_directory(
             ));
         }
         let pending_path = global_root.join(PENDING_REBIND);
-        let decision = if pending_path.try_exists()? {
+        let mut decision = if pending_path.try_exists()? {
             let saved: RebindDecision = serde_json::from_str(&std::fs::read_to_string(
                 &pending_path,
             )?)
@@ -232,7 +232,8 @@ pub fn rebind_checkout_directory(
                 || saved.workspace_id != decision.workspace_id
                 || saved.new.repo_root != target
                 || saved.partition_id != decision.partition_id
-                || (decision.old != saved.old && decision.old != saved.new)
+                || !(checkout_binding_matches(&decision.old, &saved.old)
+                    || checkout_binding_matches(&decision.old, &saved.new))
             {
                 return Err(refused(
                     "a different checkout rebind is pending; repeat the original workspace and target directory",
@@ -260,6 +261,16 @@ pub fn rebind_checkout_directory(
         *checkout = decision.new.clone();
         let machine = orbit_registry::inspect_machine_identity(global_root)?;
         workspace_registry::validate_workspace_registry(&mut registry, &(&machine).into())?;
+        // Validation canonicalizes the saved checkout in place (sorted and
+        // deduped `path_overrides`, a filled `role`). Record the pending
+        // decision from that validated checkout so a torn rebind's saved
+        // registry and pending file agree on retry.
+        decision.new = registry
+            .checkouts
+            .iter()
+            .find(|checkout| checkout.workspace_id == decision.workspace_id)
+            .ok_or_else(|| refused("registered checkout disappeared; repeat the command"))?
+            .clone();
         let result = CheckoutRebindResult {
             workspace_id: decision.workspace_id.clone(),
             old: decision.old.clone(),
@@ -468,6 +479,15 @@ fn record_checkout_rebind_audit(
         step_index: None,
     };
     Store::append_audit_event_at_path(&global_root.join("orbit.db"), &params, Default::default())
+}
+
+/// Binding identity of a checkout, ignoring fields registry validation
+/// canonicalizes (`path_overrides` order/duplicates, a filled `role`).
+/// A torn rebind's saved registry holds the validated form while its
+/// pending decision may hold the pre-validation form; both name the
+/// same binding.
+fn checkout_binding_matches(a: &WorkspaceCheckout, b: &WorkspaceCheckout) -> bool {
+    a.workspace_id == b.workspace_id && a.repo_root == b.repo_root && a.orbit_dir == b.orbit_dir
 }
 
 fn refused(message: impl Into<String>) -> OrbitError {

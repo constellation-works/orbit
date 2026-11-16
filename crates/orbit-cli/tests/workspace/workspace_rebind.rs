@@ -194,6 +194,156 @@ fn observational_open_refuses_a_pending_checkout_rebind_until_recovery() {
     succeed(&moved, &home, &["--workspace", WORKSPACE, "task", "list"]);
 }
 
+#[test]
+fn torn_rebind_retry_survives_registry_normalization() {
+    if crate::isolated_test::run_in_child(
+        "workspace_rebind::torn_rebind_retry_survives_registry_normalization",
+    ) {
+        return;
+    }
+
+    let temp = tempdir().expect("fixture root");
+    let home = temp.path().join("home");
+    let repo = temp.path().join("repo");
+    fs::create_dir_all(&home).expect("home");
+    crate::git_repo::SeededRepo::new(&repo)
+        .readme("# rebind normalization\n")
+        .build();
+    crate::git_repo::run(&repo, &["config", "maintenance.auto", "false"]);
+    crate::git_repo::run(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://example.com/rebind-observe.git",
+        ],
+    );
+    succeed(
+        &repo,
+        &home,
+        &[
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "rebind-observe-host",
+            "--task-prefix",
+            "RB",
+        ],
+    );
+    succeed(&repo, &home, &["workspace", "init", "--name", WORKSPACE]);
+    succeed(
+        &repo,
+        &home,
+        &["tool", "run", "orbit.task.list", "--input", "{}"],
+    );
+
+    // Sorted under the old root, but the prefix rewrite to `moved-repo`
+    // makes this order unsorted, so registry validation re-sorts it when
+    // it saves the rebound checkout.
+    let global = home.join(".orbit");
+    let registry_path = global.join("workspaces.json");
+    let outside = temp.path().join("p-outside");
+    let inside = repo.join("aaa");
+    let mut registry: Value =
+        serde_json::from_slice(&fs::read(&registry_path).expect("registry before rebind"))
+            .expect("parse registry before rebind");
+    registry["checkouts"][0]["path_overrides"] =
+        serde_json::json!([outside.to_string_lossy(), inside.to_string_lossy(),]);
+    fs::write(
+        &registry_path,
+        serde_json::to_vec_pretty(&registry).expect("registry JSON"),
+    )
+    .expect("write registry with path overrides");
+
+    let moved = temp.path().join("moved-repo");
+    fs::rename(&repo, &moved).expect("move the checkout");
+    let pending = global.join("workspace-rebind-pending.json");
+    let history = global.join("workspace-rebinds");
+    fs::write(&history, "not a directory\n").expect("block rebind history creation");
+
+    let interrupted = run(
+        &home,
+        &home,
+        &[
+            "--workspace",
+            WORKSPACE,
+            "workspace",
+            "rebind",
+            "--path",
+            &moved.to_string_lossy(),
+            "--json",
+        ],
+    );
+    assert!(
+        !interrupted.status.success(),
+        "the blocked finish must leave the rebind pending\n{}",
+        text(&interrupted)
+    );
+    assert!(
+        pending.is_file(),
+        "pending decision must survive the torn rebind"
+    );
+
+    // Restore the pre-validation form a pending decision recorded before
+    // the validated snapshot existed: its `new` checkout still carries
+    // the unsorted overrides the registry save canonicalized.
+    let mut pending_json: Value =
+        serde_json::from_slice(&fs::read(&pending).expect("pending decision"))
+            .expect("parse pending decision");
+    pending_json["new"]["path_overrides"] = serde_json::json!([
+        outside.to_string_lossy(),
+        moved.join("aaa").to_string_lossy(),
+    ]);
+    fs::write(
+        &pending,
+        serde_json::to_vec_pretty(&pending_json).expect("pending JSON"),
+    )
+    .expect("write pre-validation pending decision");
+    let saved_registry: Value =
+        serde_json::from_slice(&fs::read(&registry_path).expect("saved registry"))
+            .expect("parse saved registry");
+    let pending_overrides = pending_json["new"]["path_overrides"]
+        .as_array()
+        .expect("pending path_overrides")
+        .clone();
+    let saved_overrides = saved_registry["checkouts"][0]["path_overrides"]
+        .as_array()
+        .expect("saved path_overrides")
+        .clone();
+    assert_ne!(
+        pending_overrides, saved_overrides,
+        "fixture must torn-save a checkout validation normalized"
+    );
+    let mut pending_sorted = pending_overrides.clone();
+    pending_sorted.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+    assert_eq!(
+        pending_sorted, saved_overrides,
+        "saved checkout must differ only by validation sorting"
+    );
+
+    fs::remove_file(&history).expect("remove the history blocker");
+    succeed(
+        &home,
+        &home,
+        &[
+            "--workspace",
+            WORKSPACE,
+            "workspace",
+            "rebind",
+            "--path",
+            &moved.to_string_lossy(),
+            "--json",
+        ],
+    );
+    assert!(
+        !pending.exists(),
+        "recovery must retire the pending rebind decision"
+    );
+    open_normally(&global);
+    succeed(&moved, &home, &["--workspace", WORKSPACE, "task", "list"]);
+}
+
 /// The observational and writable factory opens must fail as one error while
 /// the decision is pending.
 fn refusal_message(global: &Path) -> String {
