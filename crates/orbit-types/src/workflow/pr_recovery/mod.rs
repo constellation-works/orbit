@@ -5,6 +5,7 @@ mod base_update;
 mod ci_failure;
 mod ci_rerun;
 mod completion;
+mod failure_handoff;
 mod infrastructure;
 
 pub use auto_fix::{
@@ -20,6 +21,9 @@ pub use base_update::{
     PrBaseUpdateReservation, decide_pr_base_update, pr_base_update_reservations,
 };
 pub use completion::{PR_COMPLETION_MUTATION_STARTED_EVENT, pr_completion_has_mutation_provenance};
+pub use failure_handoff::{
+    FailureHandoffHistoryNote, FailureHandoffStep, RecordedCandidateConflict,
+};
 pub use infrastructure::{
     PR_CANDIDATE_WORKFLOW_FAILED_EVENT, PR_CANDIDATE_WORKFLOW_FAILURE_MARKER,
     PR_INFRASTRUCTURE_RESERVED_EVENT, PrFailedWorkflowRun, PrInfrastructureAdmission,

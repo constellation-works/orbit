@@ -15,7 +15,7 @@ use orbit_types::identity::all_agent_families;
 use orbit_types::task::{TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     BUBBLEWRAP_NAMESPACE_REFUSALS, ClaimFailureClass, FORGE_UNAVAILABLE_EXPIRED_EVENT,
-    ProviderFailureClass,
+    FailureHandoffHistoryNote, FailureHandoffStep, ProviderFailureClass,
 };
 use serde::{Deserialize, Serialize};
 
@@ -96,7 +96,6 @@ const CONFLICT_BLOCKED_EVENT: &str = "pr_conflict_blocked";
 /// A run's failure handoff; a base conflict when the step that failed was
 /// `sync_base`, a failure of the work otherwise.
 const FAILURE_HANDOFF_EVENT: &str = "pr_failure_handoff";
-const SYNC_BASE_STEP: &str = "sync_base";
 /// Required validation could not find a tool: the host, not the candidate.
 const VALIDATION_ENVIRONMENT_EVENT: &str = "validation_environment_blocked";
 /// Status writes an operator, agent session or automation made by hand.
@@ -220,9 +219,20 @@ pub(in crate::application) fn classify_block(
                 None => BlockCause::Unclassified,
             };
         }
-        CONFLICT_BLOCKED_EVENT => return BlockCause::BaseConflict(conflicting_paths(text)),
-        FAILURE_HANDOFF_EVENT if note_field(text, "failed_step=") == Some(SYNC_BASE_STEP) => {
-            return BlockCause::BaseConflict(conflicting_paths(text));
+        CONFLICT_BLOCKED_EVENT | FAILURE_HANDOFF_EVENT => {
+            let conflict = FailureHandoffHistoryNote::decode(entry.note.as_deref());
+            if event == CONFLICT_BLOCKED_EVENT
+                || matches!(conflict.failed_step, Some(FailureHandoffStep::SyncBase))
+            {
+                let mut anchors: Vec<_> = conflict
+                    .conflicting_paths
+                    .iter()
+                    .filter_map(|path| Anchor::parse(path))
+                    .collect();
+                anchors.sort();
+                anchors.dedup();
+                return BlockCause::BaseConflict(anchors);
+            }
         }
         VALIDATION_ENVIRONMENT_EVENT => return BlockCause::Infra("environment"),
         FORGE_UNAVAILABLE_EXPIRED_EVENT => return BlockCause::Infra("forge_unavailable"),
@@ -288,32 +298,6 @@ fn claim_cause(settled: &SettledFailure) -> BlockCause {
             None => BlockCause::Unclassified,
         },
     }
-}
-
-/// `key<value>` in a `key=value, ` note, up to the next separator.
-fn note_field<'a>(text: &'a str, key: &str) -> Option<&'a str> {
-    let start = text.find(key)? + key.len();
-    let value = text[start..].split([',', ' ', ';', '\n']).next()?;
-    (!value.is_empty() && value != "-").then_some(value)
-}
-
-/// The paths a failure handoff recorded as conflicting: its last field,
-/// `conflicts=<path>, <path>` or `conflicts=none reported`.
-fn conflicting_paths(text: &str) -> Vec<Anchor> {
-    let Some((_, paths)) = text.rsplit_once("conflicts=") else {
-        return Vec::new();
-    };
-    let mut anchors: Vec<Anchor> = paths
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .split(", ")
-        .filter(|path| *path != "none reported")
-        .filter_map(Anchor::parse)
-        .collect();
-    anchors.sort();
-    anchors.dedup();
-    anchors
 }
 
 fn infra_cause(text: &str) -> Option<&'static str> {
