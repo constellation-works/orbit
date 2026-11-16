@@ -21,6 +21,7 @@ use super::authority::{NoticeCaller, NoticePoster};
 use super::limits;
 use super::{LinkedDone, NoticeAudit, notice_row, parse_notice_row};
 use crate::OrbitRuntime;
+use crate::application::resident::ResidentControlState;
 
 /// The shortest expiry a post may set.
 const MIN_EXPIRY_MINUTES: i64 = 5;
@@ -250,6 +251,32 @@ impl OrbitRuntime {
     ) -> Result<(NoticePostResult, bool), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let poster = self.resolve_notice_poster(caller)?;
+        if let (Some(task_id), Some(status_key), Some(_)) = (
+            poster.task_id.as_deref(),
+            poster.resident_status_key(),
+            poster.run_id.as_ref(),
+        ) && request.dedupe_key.as_deref().map(str::trim) == Some(status_key.as_str())
+        {
+            // Lock order: mandate task, then notice store. Control records
+            // use this same task lock. A cycle either posts before control,
+            // or observes it and leaves the final line alone.
+            let mut request = Some(request);
+            let mut posted = None;
+            self.stores()
+                .tasks()
+                .with_task_write_lock(task_id, &mut || {
+                    let request = request.take().ok_or_else(|| {
+                        OrbitError::Execution(
+                            "the resident status post was already consumed".into(),
+                        )
+                    })?;
+                    posted = Some(self.post_notice_as(&poster, request, audit)?);
+                    Ok(())
+                })?;
+            return posted.ok_or_else(|| {
+                OrbitError::Execution("the resident status post was not executed".into())
+            });
+        }
         self.post_notice_as(&poster, request, audit)
     }
 
@@ -257,7 +284,7 @@ impl OrbitRuntime {
     /// action leaves (`paused`, `stopped`, ...), so the notice says the
     /// mandate no longer cycles instead of keeping its last cycle's words.
     /// It is written as the mandate's own assignment: the next cycle's line
-    /// replaces it in place.
+    /// replaces it in place once manager control permits cycling again.
     pub(crate) fn post_resident_control_line(
         &self,
         task_id: &str,
@@ -319,6 +346,33 @@ impl OrbitRuntime {
         let now = Utc::now();
         let post = self.validate_notice_post(poster, request)?;
         audit.detail["dedupe_key"] = serde_json::Value::String(post.dedupe_key.clone());
+        if post.status_line
+            && poster.run_id.is_some()
+            && let Some(task_id) = poster.task_id.as_deref()
+            && self.resident_control_state(task_id)? != ResidentControlState::Active
+        {
+            // An admitted cycle may still report and checkpoint after
+            // pause, takeover or stop. Keep the manager's final status,
+            // including its expiry, rather than making that cycle fail.
+            post.resolve_expiry(poster, now)?;
+            let notice = self.resident_status_line(task_id)?.ok_or_else(|| {
+                refuse(
+                    NoticeRefusalCode::InvalidField,
+                    "the controlled resident has no status line to preserve; checkpoint and finish the admitted cycle",
+                )
+            })?;
+            audit.detail["outcome"] = serde_json::json!(PostOutcome::Updated.as_str());
+            audit.detail["cause"] = serde_json::json!("resident_control_preserved");
+            audit.detail["request_fingerprint"] =
+                serde_json::json!(post.request_fingerprint(poster, notice.scope));
+            return Ok((
+                NoticePostResult {
+                    notice,
+                    outcome: PostOutcome::Updated,
+                },
+                false,
+            ));
+        }
         let workspace_id = self.workspace_id()?;
         let workspace = NoticeWorkspace {
             name: self.notice_workspace_name(&workspace_id),

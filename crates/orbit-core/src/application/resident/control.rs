@@ -242,6 +242,18 @@ fn invalid(message: impl Into<String>) -> OrbitError {
 }
 
 impl OrbitRuntime {
+    /// Read current manager control, rather than the admitted cycle's
+    /// frozen grant. Callers coupling this to a write hold the task lock.
+    pub(crate) fn resident_control_state(
+        &self,
+        task_id: &str,
+    ) -> Result<ResidentControlState, OrbitError> {
+        let history = self.get_task_history(task_id)?;
+        resident_control_from_history(&history)
+            .map(|control| control.state)
+            .map_err(OrbitError::Execution)
+    }
+
     /// `orbit.resident.control`: pause, resume, stop, wake, take over or
     /// release a mandate. Each action is one history entry with the caller.
     pub fn control_resident(
