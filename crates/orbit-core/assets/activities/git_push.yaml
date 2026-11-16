@@ -8,7 +8,11 @@ spec:
     Push the active worktree branch without overwriting remote-only commits.
     The read-only pre-push remote probe retries supervisor timeouts up to
     three attempts, waiting 250 ms then 500 ms between attempts.
-    A rewritten branch requires the exact expected remote SHA from the durable
+    With `integrate_remote`, a remote branch that moved past the local one
+    (remote-only or diverged history) is merged into the local branch first,
+    adding a merge commit and rewriting nothing, and the push then
+    fast-forwards; a conflicting remote fails the step with the local branch
+    unchanged. A rewritten branch requires the exact expected remote SHA from the durable
     pre-rewrite checkpoint. A push the forge refuses for a server-side reason
     is retried with exponential backoff; past that budget the run holds at
     this step (forge_unavailable) for the clock to resume. A claimed leaf's
@@ -48,6 +52,10 @@ spec:
             type: integer
             minimum: 1
             maximum: 600000
+      # Local delivery only: merge a moved remote into the local branch
+      # instead of refusing to overwrite remote-only history.
+      integrate_remote:
+        type: boolean
       base:
         type: string
       base_ref:

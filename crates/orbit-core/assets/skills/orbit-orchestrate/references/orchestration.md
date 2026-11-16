@@ -878,7 +878,8 @@ By default the task pipelines end in `review`. PR mode prepares a source branch
 and opens a PR, then stops with that PR unmerged unless `--complete` was
 authorized. Local mode implements in an isolated worktree and fast-forwards the
 configured local base branch before the task reaches `review`; the leaf job's
-`auto_push` input controls its optional push. Review is not a pre-merge stop in
+`auto_push` input controls its optional push for a run that ends in `review`
+(a run under `--complete` always pushes). Review is not a pre-merge stop in
 local mode. Inspect the effective wrapper and child job inputs rather than
 assuming local mode means the current checkout was edited or a remote branch was
 updated.
@@ -893,7 +894,10 @@ tasks it ships from `review` to `done`. Default-off, and never enabled by
 workspace configuration, an environment variable, or a routine.
 
 - Local mode completes only after the bundle merged *and* pushed; a failed
-  publication leaves the task in `review`.
+  publication leaves the task in `review`. The push merges commits other hosts
+  published to the base since the run started (landed commits keep their shas and
+  stay reachable from the pushed base); a remote that cannot be merged cleanly
+  leaves the task in `review` with the merge failure as the reason.
 - PR mode completes only after the PR is verified merged. Branch protections and
   required checks are respected and never bypassed; pending checks may use
   GitHub auto-merge, but enabling auto-merge is not success. A closed or blocked

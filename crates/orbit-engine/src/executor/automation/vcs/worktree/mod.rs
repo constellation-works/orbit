@@ -2,6 +2,7 @@ mod cleanup;
 mod dependency_delivery;
 mod gc;
 mod identity;
+mod integrate;
 mod merge;
 mod paths;
 mod reclaim;
@@ -18,6 +19,7 @@ pub(super) use registration::{
     is_registered_worktree, path_is_registered, registered_worktree_paths,
 };
 
+pub(in crate::executor::automation::vcs) use integrate::merge_remote_head_into_base;
 pub(in crate::executor::automation::vcs) use merge::{
     checkout_holding_branch, ensure_clean_checkout,
 };
