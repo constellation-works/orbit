@@ -367,6 +367,7 @@
         "application/task/pilot/tests/drain_promotion.rs::prerequisite_lost_before_atomic_write_holds_both_authorities_and_replay",
         "application/task/pilot/tests/persist.rs::a_finding_changed_after_the_pilot_write_is_not_rejected",
         "application/task/pilot/tests/persist.rs::overlapping_pilot_graphs_lock_in_order_and_refuse_the_closing_edge",
+        "application/task/pilot/tests/persist.rs::seeded_scope_is_retained_when_pilot_widens_selectors",
         "application/task/pilot/tests/prepare.rs::automatic_admission_between_selection_and_hydration_settles_superseded",
         "application/task/pilot/tests/prepare.rs::explicit_admission_between_selection_and_hydration_settles_superseded",
         "application/task/pilot/tests/prepare.rs::unliftable_required_tool_is_a_blocking_pilot_finding",

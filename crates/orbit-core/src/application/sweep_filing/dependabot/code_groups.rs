@@ -23,6 +23,7 @@
 //! widening a task somebody may already be running.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use orbit_types::task::{
     CodeScanningAlertEvidence, TaskComplexity, TaskDecision, TaskRelation, TaskRelationType,
@@ -38,7 +39,7 @@ use super::filing::{
     append_collection_bounds, field, line_suffix, priority_for_rank, repository_name,
     severity_rank,
 };
-use crate::application::sweep_filing::{digest, display, truncate_chars};
+use crate::application::sweep_filing::{digest, display, seeded_file_selectors, truncate_chars};
 
 /// One leaf task has to stay executable, so a group is bounded both by how
 /// many alerts it carries and by how many distinct files it spans. A cause
@@ -73,6 +74,9 @@ pub(super) struct CodeGroupTaskRequest<'a> {
     pub(super) group: &'a CodeAlertGroup,
     /// Same-cause alerts left out of this task because open work owns them.
     pub(super) covered_siblings: &'a [CoveredAlert],
+    /// Filing-base checkout the alert paths are seeded against. Paths missing
+    /// there, or inside `.git`/`.orbit`, are dropped rather than filed.
+    pub(super) repo_root: &'a Path,
 }
 
 /// The generated per-alert coverage key. This is the identity the sweep has
@@ -212,16 +216,22 @@ pub(super) fn code_group_task_params(request: &CodeGroupTaskRequest<'_>) -> Task
     ));
     tags.push("security".to_string());
 
+    // Seed a starting footprint from the alert locations that exist at the
+    // filing base. Scanner locations are still only evidence of where the
+    // finding was observed, not a promise of every file the repair will
+    // modify: the task pilot and the run's own widening add the real repair
+    // site on top of this seed, and missing or `.git`/`.orbit` paths are
+    // dropped rather than filed.
+    let context_files =
+        seeded_file_selectors(distinct_paths(&request.group.alerts), request.repo_root);
+
     TaskAddParams {
         title: group_title(&rule, request.group),
         description: group_description(request, single_evidence.as_ref()),
         creation_decision: single_evidence.map(TaskDecision::CodeScanningAlert),
         acceptance_criteria: group_acceptance_criteria(&rule, request.group),
         tags,
-        // Scanner locations are evidence about where the finding was observed,
-        // not a reliable claim about which files the repair will modify.
-        // Task-pilot resolves those selectors from its pinned checkout.
-        context_files: Vec::new(),
+        context_files,
         relations: covering_relations(request.covered_siblings),
         required_tools: Vec::new(),
         priority: priority_for_rank(highest_severity_rank(alerts)),

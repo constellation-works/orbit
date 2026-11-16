@@ -10,7 +10,11 @@ pub(crate) mod dependabot;
 mod duplicate_tasks;
 mod task_port;
 
+use std::collections::BTreeSet;
+use std::path::Path;
+
 use orbit_common::OrbitError;
+use orbit_common::fs::selector::canonical_selector_in_workspace;
 use orbit_common::security::redaction::redact_all;
 use orbit_types::identity::lower_hex;
 use orbit_types::task::{TaskHistoryEntry, TaskStatus};
@@ -69,6 +73,49 @@ pub(crate) fn truncate_chars(value: &str, max_chars: usize) -> String {
         return value.to_string();
     }
     value.chars().take(max_chars).collect::<String>() + "…"
+}
+
+/// Seed `file:` selectors from alert-reported repository paths, keeping only
+/// the starting footprint a fresh sweep task may lock.
+///
+/// Every candidate is canonicalized against the filing base, then dropped when
+/// it does not name an existing file there or when it falls inside `.git` or
+/// `.orbit`. The result is sorted and deduplicated. A missing filing base
+/// canonicalizes nowhere, so every candidate is dropped and the task files
+/// with an empty footprint rather than a dead selector. The task pilot and the
+/// run's own widening still add the real repair site on top of this seed.
+pub(crate) fn seeded_file_selectors(
+    paths: impl IntoIterator<Item = String>,
+    repo_root: &Path,
+) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    for raw in paths {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let candidate = format!("file:{}", trimmed.replace('\\', "/"));
+        let Ok(canonical) = canonical_selector_in_workspace(&candidate, repo_root) else {
+            continue;
+        };
+        let Some(anchor) = canonical.strip_prefix("file:") else {
+            continue;
+        };
+        if anchor.is_empty() || anchor == "." {
+            continue;
+        }
+        if anchor
+            .split('/')
+            .any(|part| part == ".git" || part == ".orbit")
+        {
+            continue;
+        }
+        if !repo_root.join(anchor).is_file() {
+            continue;
+        }
+        seen.insert(canonical);
+    }
+    seen.into_iter().collect()
 }
 
 /// Redact and bound an error message included in a sweep result.

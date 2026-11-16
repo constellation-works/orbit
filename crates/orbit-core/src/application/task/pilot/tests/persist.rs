@@ -262,6 +262,83 @@ fn overlapping_pilot_graphs_lock_in_order_and_refuse_the_closing_edge() {
     assert_eq!(dependencies(&d), std::slice::from_ref(&a));
 }
 
+/// A sweep-seeded footprint is a starting point, not a ceiling: the pilot keeps
+/// the seeded selector and can still add the real repair site beside it.
+#[test]
+fn seeded_scope_is_retained_when_pilot_widens_selectors() {
+    let workspace = workspace(None);
+    std::fs::write(workspace.repo.join("SEED.md"), "seed\n").expect("write seed");
+    git(&workspace.repo, &["add", "SEED.md"]);
+    git(&workspace.repo, &["commit", "-m", "seed file"]);
+    let task = workspace
+        .runtime
+        .add_task(TaskAddParams {
+            title: "Seeded sweep task".to_string(),
+            description: "Seeded description".to_string(),
+            acceptance_criteria: vec!["Seeded is done.".to_string()],
+            plan: "Seeded plan".to_string(),
+            status: Some(TaskStatus::Backlog),
+            context_files: vec!["file:SEED.md".to_string()],
+            ..Default::default()
+        })
+        .expect("add seeded task");
+    let prepared = prepare(&workspace, &task.id);
+    assert_eq!(
+        prepared["tasks"][0]["context_files_before"],
+        json!(["file:SEED.md"]),
+        "{prepared}"
+    );
+    let task_entry = prepared["tasks"][0].clone();
+    let (revision, tree) = proof(&prepared);
+    let output = workspace
+        .runtime
+        .run_deterministic(
+            "apply_task_pilot_results",
+            &json!({}),
+            &json!({
+                "workspace_path": prepared["workspace_path"],
+                "prepared": prepared,
+                "results": [{
+                    "partition_index": 0,
+                    "observed_revision": revision,
+                    "observed_tree": tree,
+                    "task_ids": [task.id],
+                    "tasks": [{
+                        "task_id": task_entry["task_id"],
+                        "context_files_before": task_entry["context_files_before"],
+                        "context_files_after": ["file:README.md", "file:SEED.md"],
+                        "disposition": "selectors",
+                        "recommended_crew": "opus",
+                        "recommended_complexity": "low",
+                        "assessment_rationale": "SEED.md is the sweep seed; README.md is the repair site.",
+                        "validation_approach": "Run the prepare and apply actions.",
+                        "confidence": "high",
+                        "evidence_gaps": [],
+                        "reassessment_triggers": [],
+                        "blocked_by": [],
+                        "adr_conflicts": [],
+                        "utility_warnings": [],
+                        "surface_warnings": [],
+                        "duplicate_of": Value::Null,
+                        "already_landed": Value::Null,
+                    }],
+                }],
+            }),
+            ToolContext::default(),
+        )
+        .expect("apply pilot widening");
+    assert_eq!(output["status"], "succeeded", "{output}");
+    assert_eq!(output["applied_count"], 1, "{output}");
+    let updated = workspace.runtime.get_task(&task.id).expect("task");
+    let mut selectors = updated.context_files.clone();
+    selectors.sort();
+    assert_eq!(
+        selectors,
+        vec!["file:README.md".to_string(), "file:SEED.md".to_string()],
+        "the pilot keeps the seed and adds the repair site"
+    );
+}
+
 fn apply_finding_invalid(runtime: &OrbitRuntime, prepared: &Value) -> Value {
     let task = &prepared["tasks"][0];
     let (revision, tree) = proof(prepared);
