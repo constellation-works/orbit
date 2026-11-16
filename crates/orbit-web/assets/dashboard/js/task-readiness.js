@@ -630,7 +630,23 @@ async function runTagWrite(task, button, context, request) {
 // `readiness.waivable`), so the drain admits it like ready work. Host,
 // browser-kit and human-crew waits are not readiness gaps and stay.
 const READINESS_WAIVED_TAG = "readiness-waived";
+const NO_DIFF_EXPECTED_TAG = "no-diff-expected";
 const WAIVE_EFFECT = "the drain admits it like ready work and may run it beside other work, though it holds no file lock";
+const WAIVE_EFFECT_PROTECTED = "the complexity gate is waived while ordinary file conflicts remain protected";
+
+function taskDeclaresNoFootprint(task) {
+  if (!task) return true;
+  const tags = taskTags(task);
+  if (tags.includes(NO_DIFF_EXPECTED_TAG)) return false;
+  const files = Array.isArray(task.context_files) ? task.context_files : [];
+  return files.length === 0;
+}
+
+function hasAbsentFootprint(task, readiness) {
+  const gaps = readinessGaps(readiness);
+  if (gaps.some((gap) => gap.code === "missing_context_files")) return true;
+  return taskDeclaresNoFootprint(task);
+}
 
 function waivableGaps(readiness) {
   return Array.isArray(readiness && readiness.waivable) ? readiness.waivable.filter(Boolean) : [];
@@ -645,6 +661,8 @@ function buildReadinessWaiver(task, readiness, context) {
   const codes = waivableGaps(readiness);
   if (!waived && codes.length === 0) return null;
   const mutable = taskShared.canMutateTask(task);
+  const absent = hasAbsentFootprint(task, readiness);
+  const effect = absent ? WAIVE_EFFECT : WAIVE_EFFECT_PROTECTED;
   const wrap = el("div", { class: "readiness-waiver" });
   if (waived) {
     const history = Array.isArray(task.history) ? task.history : [];
@@ -652,7 +670,7 @@ function buildReadinessWaiver(task, readiness, context) {
     const by = record && record.by ? ` by ${record.by}` : "";
     wrap.appendChild(el("span", {
       class: "readiness-fix",
-      text: `Readiness waived${by}: ${WAIVE_EFFECT}.`,
+      text: `Readiness waived${by}: ${effect}.`,
     }));
     const remove = el("button", {
       type: "button",
@@ -681,16 +699,19 @@ function buildReadinessWaiver(task, readiness, context) {
       class: "attention-action readiness-waive",
       text: "Waive readiness",
       title: mutable
-        ? `Waive ${names}: adds the readiness-waived tag, recorded in history with your name; ${WAIVE_EFFECT}. Host, browser-kit and human-crew waits still apply.`
+        ? `Waive ${names}: adds the readiness-waived tag, recorded in history with your name; ${effect}. Host, browser-kit and human-crew waits still apply.`
         : taskShared.aggregateRefusalTitle("Waive readiness", "waive readiness gaps"),
     });
     waive.disabled = !mutable;
+    const confirmEffect = absent
+      ? "The drain then admits it like ready work and may run it beside other work, though it holds no file lock"
+      : "The complexity gate is waived while ordinary file conflicts remain protected";
     waive.addEventListener("click", (event) => {
       event.stopPropagation();
       runTagWrite(task, waive, context, {
         tag: READINESS_WAIVED_TAG,
         add: true,
-        confirm: `Waive the readiness gaps of ${task.id} (${names})? The drain then admits it like ready work and may run it beside other work, though it holds no file lock. This adds the readiness-waived tag and records the waiver in its history with your name. Remove the waiver to restore the gates.`,
+        confirm: `Waive the readiness gaps of ${task.id} (${names})? ${confirmEffect}. This adds the readiness-waived tag and records the waiver in its history with your name. Remove the waiver to restore the gates.`,
         refusalCode: "readiness_waiver_refused",
         notice: () => `${task.id}: readiness waived; the drain admits it like ready work`,
       });
