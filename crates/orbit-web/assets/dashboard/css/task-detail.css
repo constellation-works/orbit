@@ -277,6 +277,34 @@
 .detail-tab-count:empty { display: none; }
 .detail-tabpanel { min-width: 0; }
 .detail-tabpanel[hidden] { display: none; }
+/* ORB-25102: on the comments tab the panel fills the detail to the pinned
+   Comment action, so a short thread meets the composer with no dead band;
+   the thread itself is uncapped (below) and the detail scrolls as a whole. */
+.task-detail-pane .task-detail > .detail-tabpanel[data-tab-panel="comments"]:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.comments-tab-content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.comments-tab-content > .comments-panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.comments-panel:not(.collapsed) .comment-thread {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.comments-panel:not(.collapsed) .comment-thread > .comment-card:last-child {
+  flex-grow: 1;
+}
 
 .history-list { min-width: 0; }
 
@@ -1505,16 +1533,15 @@ input.field-editor-input {
   .history-kv dd { margin-bottom: 6px; }
 }
 
-/* ORB-12645/ORB-12651: the comment thread. It sits in the left/main
-   detail column, capped to keep actions visible, with per-card collapse,
-   Markdown bodies at ~72ch measure, and a sticky header inside the thread. */
+/* ORB-25102 (replaces the ORB-12645 cap): the comment thread grows with
+   the detail so no band sits between the last comment and the Comment
+   action; the detail scrolls as a whole and the sticky footer keeps the
+   Comment action visible. Per-card collapse and the ~72ch body measure
+   stay on the cards themselves. */
 .comments-panel .comment-thread {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: min(60vh, 640px);
-  overflow-y: auto;
-  padding-right: 4px;
   position: relative;
 }
 .comment-pref {
@@ -1794,6 +1821,9 @@ input.field-editor-input {
 .task-action-footer:has(> .field-actions:empty) { display: none; }
 .task-detail-pane .row-detail .task-action-footer .actions { padding-top: 0; border-top: 0; }
 .task-action-footer .reject-form { animation: none; }
+/* ORB-25102: let the comments region meet its pinned composer across the
+   task-detail gap. */
+.task-action-footer[data-footer-tab="comments"] { margin-top: -16px; }
 @container task-pane (max-width: 440px) {
   .task-action-footer { margin: auto -16px -16px; padding-inline: 16px; }
 }
