@@ -884,6 +884,11 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
       : Boolean(dockView);
     if (dockView) {
       if (ctx.setDrainView) ctx.setDrainView(dockView);
+      // Above the one-column breakpoint an explicit dock target shows the
+      // dock beside the list and remembers it shown. A Tasks route with no
+      // dock target never reaches here, so a collapsed choice stays put.
+      // One column already shows the dock as its own route.
+      if (ctx.showDockBesideList) ctx.showDockBesideList();
       if (dockRouteShown) {
         const [route, taskQuery = ""] = hash.split("?");
         const params = new URLSearchParams(taskQuery);

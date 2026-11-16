@@ -119,6 +119,17 @@ function setDockCollapsed(collapsed) {
   if (focusFromShow) document.getElementById("dock-collapse")?.focus();
 }
 
+/// Show the dock beside the list for an explicit dock target (Open log,
+/// `#tasks?dock=…`, `#notices`, Open Tasks dock). Above the one-column
+/// breakpoint this clears a remembered collapse, writes that choice and
+/// syncs both toggle buttons. At one column the dock is already its own
+/// route, so the remembered choice stays. A no-op when the dock is already
+/// beside the list.
+export function showDockBesideList() {
+  if (tasksOneColumn()) return;
+  setDockCollapsed(false);
+}
+
 function onDockShortcut(event) {
   if (event.defaultPrevented || (event.key || "").toLowerCase() !== "b") return;
   const primary = onMac ? event.metaKey : event.ctrlKey;

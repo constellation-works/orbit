@@ -13,7 +13,7 @@ import { fetchAndRenderAgents, getAgentsRole, placeholdAgentsAggregate, setAgent
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
 import { openDoctor, peekDoctor, wireDoctorPanel } from './js/doctor.js';
 import { initLogTail, fitLogPanelToViewport, noticesDockShown, residentsDockShown, setDockMode, setDockRouteShown } from './js/log-tail.js';
-import { initDockToggle } from './js/dock-toggle.js';
+import { initDockToggle, showDockBesideList } from './js/dock-toggle.js';
 import { renderDiagnostics } from './js/diagnostics.js';
 import { fetchAndRenderMetrics, placeholdMetricsAggregate } from './js/metrics.js';
 import { fetchAndRenderResources, placeholdResourcesAggregate } from './js/resources.js';
@@ -385,6 +385,7 @@ function routerContext() {
     fitLogPanelToViewport,
     setDrainView: (mode) => setDockMode(mode),
     setDockRouteShown,
+    showDockBesideList,
 
     // Events and Codebase pass-throughs (re-exported here for router;
     // imported at top of this file)
@@ -2328,10 +2329,13 @@ startChangeStream();
 // host cannot delay the selected view. Both reuse the same in-flight read;
 // warmup paints the indicator when the snapshot arrives.
 void startFleetIndicatorRefresh().catch(error => console.error(error));
+// The remembered collapse is applied before the first route. An explicit
+// dock target clears it, and that clear has to see the preference this load
+// just restored.
+initDockToggle();
 iT();
 
 initLogTail();
-initDockToggle();
 // The status bar opens the full tail in the Tasks dock.
 document.getElementById("log-statusbar-open")?.addEventListener("click", () => {
   sAT("tasks?dock=log");
