@@ -27,7 +27,11 @@ output, or the messages below the table: a source or host may have been
 unreadable. The `run_failed`, `run_stuck`, `claim_stale` and `host_unhealthy`
 kinds need Operator capability; a session without it reports those sources as
 degraded. A live resident cycle reads them, read-only, for the workspaces its
-mandate covers.
+mandate covers. On a replica, a `run_failed` item that names a task is also
+degraded: the owner's task status is not readable there, so the item does not
+by itself mean the task is still open. In JSON, `detail.held_claim` is true
+only while that run's claim is still live; `detail.claimed_leaf` records that
+the run was a claimed leaf, including after the claim settled.
 :::
 
 ## Choose scope and filter

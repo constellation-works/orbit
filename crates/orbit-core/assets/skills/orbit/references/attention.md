@@ -14,7 +14,15 @@ Scope defaults to the current workspace; `--workspace` repeats, and `--all` read
 
 Runtime kinds read stored runs without reconciliation. `run_failed` reports recent failed,
 timed-out or interrupted runs, suppressing older attempts superseded by a newer submission
-of the same job/task and runs already named by a blocked item. `run_stuck` detects a gone
+of the same job/task and runs already named by a blocked item. On the workspace owner a run
+whose task is terminal is omitted. A replica cannot read the owner's task status, so a failed
+run that names a task is still listed and `run_failed` is `degraded` with code
+`source_unavailable` (task records on a replica are not authoritative; read the workspace
+owner). A failed run that names no task is not degraded for that reason. `detail.held_claim`
+is true only while a claim for the run is still live. `detail.claimed_leaf` is true when the
+run was a claimed leaf, including after the claim settled as `failed`, `landed` or `revoked`.
+A settled claim does not present as held. Severity is high when `held_claim` is true.
+`run_stuck` detects a gone
 owner before reconciliation or a run beyond its bound: a run that declares a deadline (a
 drain's stamped or extended window, or an explicit deadline/timeout in its input) is stuck
 only past that deadline plus 120 minutes, or when its pipeline `updated_at` or step activity

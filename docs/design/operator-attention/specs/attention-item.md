@@ -41,7 +41,7 @@ review records alone; "runtime" kinds need run, claim, provider or host state.
 | `blocked` | task | `triage_candidacy` in `task/blocked_recovery/triage.rs`, over `current_block` and the final-recovery escalation | status is `blocked` and the block episode awaits a human: a claimed leaf needs an external prerequisite (`owner_route` or `environment`, surfaced immediately with its leaf error), final recovery escalated, or its backstop is silent. A block that final recovery is still resolving mechanically is not an item | the time the task moved to `blocked` (`blocked_at`) |
 | `decision_open` | task | `decision_requests_from_history`, effective state `open` (what `orbit.decision` action `list` returns) | an open request exists that no other item folds (see below): gates `agent_request` and `proposed_approval`, or any gate whose subject has no other item | `raised_at` |
 | `review_waiting` | task | the newest single-task delivery run and `current_completion_hold`, else the review gate record (`crates/orbit-core/src/application/review/`) and the `review_approval` decision gate | status is `review`, and either the newest delivery run ended `held` on a `delivery_*` code (`detail.waiting_on`: `delivery_hold`), a completion hold is current (`completion_hold`), or no review run is active and the task waits on an approval or an exhausted review budget (`approval` or `review_budget`). A live delivery run suppresses the hold item | the hold's finish or record time, else the time the review settled |
-| `run_failed` | runtime | the job-run store (`JobRun`, `orbit.run` action `list`) | the newest submitted run of a job (per task when it has one) is `failed`, `timeout` or `interrupted`, falls inside the 48-hour run window, and nothing newer superseded it. The owning task is not terminal and is not already an item that names this run | `finished_at` |
+| `run_failed` | runtime | the job-run store (`JobRun`, `orbit.run` action `list`) | the newest submitted run of a job (per task when it has one) is `failed`, `timeout` or `interrupted`, falls inside the 48-hour run window, and nothing newer superseded it. On the workspace owner, its referenced task is not terminal and the run is not already an item that names it. A replica keeps a task-naming run visible because it cannot read the owner's task status (see below) | `finished_at` |
 | `run_stuck` | runtime | the job-run store: state `running` or `pending` | the run's owner process is gone (`pid` and `pid_start_time` no longer match a live process on the run's host) before reconcile records the existing `Interrupted` state (an orphaned-run disposition, not a separate state), or it has run past its bound: a run that declares a deadline (a drain's stamped/extended window from its pipeline state, or an explicit `deadline`/`for_seconds`/`timeout_seconds`/`ttl_seconds` in its input) is past that deadline plus the 120-minute grace, or its last progress (pipeline `updated_at` or recorded step activity) has stalled for 120 minutes; a run that declares no bound has run past 120 minutes | `started_at` (or `scheduled_at` when pending) |
 | `claim_stale` | runtime | the claim inspection behind `orbit.drain.claims` (`ClaimInspection`, `crates/orbit-store/src/contracts/task/coordination/settlement.rs`) | an unsettled claim has an expired reservation, a host-local bound run that is absent or terminal, an unresolved merge intent or an invalidated landing. These are diagnostics, not proof the worker died, so `reason` says "possibly stale" | the claim's last event time |
 | `ci_red` | runtime | provider read of the workspace's base branch (the data `github.run.list` returns for `git_remote` and `base_branch`) | the newest completed run of a workflow on the base branch head is `failure` or `timed_out` and no newer run of that workflow succeeded | that run's `updated_at`, labelled as an onset-time proxy (`detail.since_source: updated_at`, `since_is_proxy: true`); the provider projection supplies no exact completion timestamp |
@@ -79,6 +79,18 @@ Notes that bind implementations:
   `degraded` rather than silently missing
   ([4_decisions.md](../4_decisions.md#a-derived-view-never-widens-who-may-read-its-sources)).
   The session gains no write capability.
+- **`run_failed` and the owner's task.** On the workspace owner, a failed run whose task is
+  terminal is not an item. A replica cannot read that status: the owner's task index is empty
+  there, and the replica's own task copy is not authoritative. The run stays listed (it is
+  authoritative on the executing host) and the kind adds one `degraded` entry, code
+  `source_unavailable`, message "Task records on a replica are not authoritative; read the
+  workspace owner". A failed run that names no task is not degraded for that reason.
+  `detail.held_claim` is true only while a claim bound to the run on this host is still live
+  (`claimed`, `running`, `handed_off` or `repair_pending`), or the follower's local pull for
+  that run is not `settled`, `idle` or `refused`. A settled claim (`failed`, `landed`,
+  `revoked`) is not a held claim. `detail.claimed_leaf` is true when such a binding exists,
+  including after it settled. Severity is high when `held_claim` is true. `run_stuck` uses
+  the same live-claim meaning for `detail.held_claim` and does not carry `claimed_leaf`.
 - **Network sources degrade, they do not fail.** `ci_red` needs provider authentication
   (`github.auth.status`); with none, or on timeout, it yields `degraded` code
   `source_unavailable`. On the workspace owner, a workspace with no recognisable remote
@@ -205,7 +217,7 @@ and are not waiting on a single task.
 | `blocked` | high | high | none |
 | `decision_open` | medium | high | request `risk_tier` `irreversible`, `authority` or `spend`; and one level when `expires_at` is within 6 hours |
 | `review_waiting` | low for `approval` and `completion_hold`; medium for `delivery_hold` and `review_budget` | high | `review_budget` and `delivery_hold` start at medium |
-| `run_failed` | medium | high | high when the run held a claim |
+| `run_failed` | medium | high | high when `detail.held_claim` is true (a live claim; a settled claim does not raise severity) |
 | `run_stuck` | medium | high | high when the run holds a claim |
 | `claim_stale` | high | high | none |
 | `ci_red` | high | critical | critical after the age thresholds are both passed |
