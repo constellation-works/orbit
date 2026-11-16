@@ -224,8 +224,9 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
             // a provider limit its window, reset and skipped crews. A task
             // with no footprint names its wait and fix [ORB-15191], and an
             // unverified review finding the verification job to run. Other
-            // long repair instructions stay in JSON.
-            let host = matches!(
+            // long repair instructions stay in JSON; [ORB-25221] points
+            // operators to --json when detail is recorded.
+            let host = if matches!(
                 reason,
                 "host_os_mismatch"
                     | "host_labels_missing"
@@ -237,19 +238,23 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
                     | "provider_limit"
                     | "awaiting_footprint"
                     | "awaiting_exclusive_slot"
-            )
-            .then(|| {
-                if reason == "host_os_mismatch" {
+            ) {
+                let detail = if reason == "host_os_mismatch" {
                     task["host_os_wait"]
                         .as_str()
                         .or_else(|| task["detail"].as_str())
                 } else {
                     task["detail"].as_str()
-                }
-            })
-            .flatten()
-            .map(|detail| format!(": {detail}"))
-            .unwrap_or_default();
+                };
+                detail.map(|d| format!(": {d}")).unwrap_or_default()
+            } else if task["detail"]
+                .as_str()
+                .is_some_and(|detail| !detail.trim().is_empty())
+            {
+                ": see --json for detail".to_string()
+            } else {
+                String::new()
+            };
             // The primary OS wait already carries its local scope above.
             // Keep an OS wait behind another blocker as a secondary note.
             let secondary_os_wait = task["host_os_wait"]

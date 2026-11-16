@@ -264,6 +264,20 @@ fn pr_workspace_without_a_forge_remote_refuses_ship_before_any_worktree_or_crew(
     let held = fixture.readiness(&plain);
     assert_eq!(held["eligible"], false, "{held}");
     assert_eq!(held["reason"], "pr_forge_remote_missing", "{held}");
+    let readiness_text = fixture.success(&["run", "readiness"]);
+    assert!(
+        readiness_text.contains(&format!(
+            "{plain}: waiting (pr_forge_remote_missing): see --json for detail"
+        )),
+        "readiness text must point to --json for pr_forge_remote_missing detail: {readiness_text}"
+    );
+    let explicit_text = fixture.success(&["run", "readiness", &plain]);
+    assert!(
+        explicit_text.contains(&format!(
+            "{plain}: waiting (pr_forge_remote_missing): see --json for detail"
+        )),
+        "explicit readiness text must point to --json for pr_forge_remote_missing detail: {explicit_text}"
+    );
     let admitted = fixture.readiness(&local);
     assert_eq!(admitted["eligible"], true, "{admitted}");
 
