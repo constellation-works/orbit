@@ -73,6 +73,63 @@ function detabLeading(line) {
   return i ? " ".repeat(col) + line.slice(i) : line;
 }
 
+// Column width of a whitespace run, tabs at stops of four. Measures a fence's
+// own indent; it is not a rewritten command line.
+function whitespaceColumns(text) {
+  let col = 0;
+  for (let i = 0; i < text.length; i++) {
+    col += text[i] === "\t" ? 4 - (col % 4) : 1;
+  }
+  return col;
+}
+
+function leadingWhitespace(line) {
+  let i = 0;
+  while (i < line.length && (line[i] === " " || line[i] === "\t")) i++;
+  return line.slice(0, i);
+}
+
+// True when `lead` itself has a tab occupying exactly [col, col + width).
+function leadTabAt(lead, col, width) {
+  let c = 0;
+  for (let i = 0; i < lead.length; i++) {
+    if (lead[i] === "\t") {
+      const w = 4 - (c % 4);
+      if (c === col && w === width) return true;
+      c += w;
+    } else {
+      c += 1;
+    }
+    if (c > col) return false;
+  }
+  return false;
+}
+
+// Drop the opening fence's indent from a code line. Spaces come off up to
+// that indent's column count. A tab comes off only when the fence lead covers
+// those columns with a tab, so a recipe tab is never rewritten as spaces.
+function stripFenceLead(line, lead) {
+  if (!lead) return line;
+  const columns = whitespaceColumns(lead);
+  let col = 0;
+  let i = 0;
+  while (i < line.length && col < columns) {
+    const ch = line[i];
+    if (ch === " ") {
+      col += 1;
+      i += 1;
+    } else if (ch === "\t") {
+      const width = 4 - (col % 4);
+      if (col + width > columns || !leadTabAt(lead, col, width)) break;
+      col += width;
+      i += 1;
+    } else {
+      break;
+    }
+  }
+  return line.slice(i);
+}
+
 function leadingSpaces(line) {
   let i = 0;
   while (i < line.length && line[i] === " ") i++;
@@ -141,13 +198,6 @@ function isClosingFence(line, fenceChar, fenceLength, baseIndent = 0) {
   return i === line.length;
 }
 
-function stripFenceIndent(line, indent) {
-  if (!indent) return line;
-  let i = 0;
-  while (i < line.length && i < indent && line[i] === " ") i++;
-  return line.slice(i);
-}
-
 // Fenced commands in a task description, in order.
 export function humanTaskCommands(text) {
   const out = [];
@@ -155,7 +205,7 @@ export function humanTaskCommands(text) {
   let inFence = false;
   let fenceChar = "";
   let fenceLength = 0;
-  let fenceIndent = 0;
+  let fenceLead = "";
   let fenceBaseIndent = 0;
   let fenceInBlockquote = false;
   let blockLines = [];
@@ -166,18 +216,23 @@ export function humanTaskCommands(text) {
   let listStack = [];
 
   for (const rawLine of lines) {
+    // Expanded text measures list and fence structure. Command bytes stay on
+    // the original line: a tab inside the command is not four spaces.
     const expanded = detabLeading(rawLine);
     if (inFence) {
-      const line = fenceInBlockquote
+      const structural = fenceInBlockquote
         ? stripBlockquotePrefix(expanded).line
         : expanded;
-      if (isClosingFence(line, fenceChar, fenceLength, fenceBaseIndent)) {
+      const source = fenceInBlockquote
+        ? stripBlockquotePrefix(rawLine).line
+        : rawLine;
+      if (isClosingFence(structural, fenceChar, fenceLength, fenceBaseIndent)) {
         inFence = false;
         const c = blockLines.join("\n");
         if (c.trim()) out.push(c);
         blockLines = [];
       } else {
-        blockLines.push(stripFenceIndent(line, fenceIndent));
+        blockLines.push(stripFenceLead(source, fenceLead));
       }
       continue;
     }
@@ -215,10 +270,11 @@ export function humanTaskCommands(text) {
       : 0;
     const open = parseOpeningFence(line, containerIndent);
     if (open) {
+      const rawStructural = quoted ? stripBlockquotePrefix(rawLine).line : rawLine;
       inFence = true;
       fenceChar = open.fenceChar;
       fenceLength = open.fenceLength;
-      fenceIndent = open.indent;
+      fenceLead = leadingWhitespace(rawStructural);
       fenceBaseIndent = containerIndent;
       fenceInBlockquote = quoted;
       blockLines = [];
