@@ -194,7 +194,7 @@ export function autoDrainCapacity(capacity, counts, blocked, { pull = false, app
     .filter(([, count]) => Number(count) > 0);
   const pipelines = pipelineCounts.map(([pipeline, count]) => [pipeline, Number(count)]);
   // Legacy wrappers can occupy slots without appearing in the pipeline map.
-  const other = busy - pipelineCounts.reduce((sum, [, count]) => sum + Number(count), 0);
+  const other = workspaceBusy - pipelineCounts.reduce((sum, [, count]) => sum + Number(count), 0);
   if (pipelines.length && other > 0) pipelines.push(["other", other]);
   const byPipeline = pipelines.map(([pipeline, count]) => `${pipeline}: ${autoDrainPlural(count, "slot")}`);
   // A shortfall the operator should notice reads amber; a stopped window is
