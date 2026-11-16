@@ -122,12 +122,10 @@ fn maybe_trip(
     let failures: Vec<&ObservedFire> = fires
         .iter()
         .filter(|fire| floor.is_none_or(|floor| fire.created_at > floor))
-        .filter(|fire| {
-            !matches!(
-                fire.outcome,
-                ObservedOutcome::InFlight | ObservedOutcome::Ignored
-            )
-        })
+        // A skipped fire is not a failure and may be ignored. An in-flight
+        // fire is still part of the streak: it must finish before older
+        // failures can be called consecutive.
+        .filter(|fire| fire.outcome != ObservedOutcome::Ignored)
         .take_while(|fire| matches!(fire.outcome, ObservedOutcome::Failed(_)))
         .take(BREAKER_TRIP_THRESHOLD)
         .collect();

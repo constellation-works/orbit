@@ -920,3 +920,65 @@ fn repeated_identical_failures_open_the_routine_breaker_until_a_trial_succeeds()
         "one recorded event per transition, not one per fire"
     );
 }
+
+/// A pending newer fire has not failed yet and must stop the failure streak
+/// from tripping a breaker on older failures.
+#[test]
+fn in_flight_fire_prevents_trip_until_its_outcome_is_known() {
+    let store = Store::open_in_memory().expect("in-memory store");
+    let coll = collection(vec![routine("job", "allow")]);
+    let dispatch = FakeDispatch::default();
+    let now = Utc::now();
+    store
+        .routine_record_baseline("job", &(now - Duration::hours(1)).to_rfc3339())
+        .expect("baseline");
+
+    for minute in 1..=3 {
+        let slot = (now - Duration::minutes(10 - minute)).to_rfc3339();
+        store
+            .routine_record_fire_intent(&RoutineFireIntentParams {
+                routine_name: "job".into(),
+                slot: slot.clone(),
+                attempt: 1,
+                source_workspace: "polaris".into(),
+            })
+            .expect("failure intent");
+        store
+            .routine_mark_fire_outcome(
+                "job",
+                &slot,
+                1,
+                RoutineFireState::Failed,
+                Some("dispatch failed"),
+            )
+            .expect("failure outcome");
+    }
+
+    let in_flight_slot = (now - Duration::minutes(1)).to_rfc3339();
+    store
+        .routine_record_fire_intent(&RoutineFireIntentParams {
+            routine_name: "job".into(),
+            slot: in_flight_slot.clone(),
+            attempt: 1,
+            source_workspace: "polaris".into(),
+        })
+        .expect("in-flight intent");
+    store
+        .routine_mark_fire_dispatched("job", &in_flight_slot, 1, "in-flight")
+        .expect("in-flight dispatch");
+    dispatch
+        .states
+        .borrow_mut()
+        .insert("in-flight".into(), JobRunState::Running);
+    dispatch
+        .liveness
+        .borrow_mut()
+        .insert("in-flight".into(), RunOwnerLiveness::Alive);
+
+    run_sweep_core(&store, &coll, &dispatch, SweepOptions::default(), now).expect("sweep");
+
+    assert!(
+        store.routine_breakers().expect("breaker rows").is_empty(),
+        "a newer unresolved fire prevents older failures from counting as consecutive"
+    );
+}
