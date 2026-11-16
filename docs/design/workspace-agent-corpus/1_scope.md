@@ -178,10 +178,12 @@ A weekly workspace-local auto-task proposes rule edits [ORB-20747]. It is not a 
 default. The template is `decision-precedent.auto-task.yaml` beside this
 document. An operator copies it into `.orbit/auto_tasks/` and enables it
 there. The run calls `orbit decision consolidate`, which prints proposed file
-text and writes nothing. The pull request is the only place a rule changes,
-and a human merge is the curation step. [ORB-20822] repaired precedent auto-answer
-to read decision documents and path dependency digests at the workspace's pinned
-integration revision, never from working-tree edits. The revision resolver prefers
+text and writes nothing. A pull request is where a rule change is reviewed and
+lands as corpus guidance; an operator may stage a local curation edit with
+`orbit decision rule-auto`, but auto-answer reads only the version at its pinned
+integration revision. A human merge is the curation step. [ORB-20822] repaired
+precedent auto-answer to read decision documents and path dependency digests at
+the workspace's pinned integration revision, never from working-tree edits. The revision resolver prefers
 the fetched origin base branch, then the local base branch, then HEAD
 (`application/task/base_revision.rs::workspace_base_revision`). Config dependency
 digests still read current workspace configuration. Consolidation and `rule-auto`
