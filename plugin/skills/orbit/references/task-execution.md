@@ -40,8 +40,8 @@ read only paths present in the returned metadata array (MCP may wrap it in
 `value`).
 
 Read `comments` (chronological, each with `by` and `at`) alongside the
-canonical description. A `task-pilot` receipt comment carries a one-line summary
-and an `assessment_artifact` path; fetch its full audit with `orbit.task.artifact`
+canonical description. A `task-pilot` receipt comment's `pilot` object carries a
+one-line `summary` and an `assessment_artifact` path (its `message` is the stored receipt); fetch its full audit with `orbit.task.artifact`
 action `get`, passing the task's `id` and that `path`, when you need its findings
 or post-deploy requirements. Older receipts contain the assessment JSON inline. An orchestrator or operator refinement posted after the
 description supersedes a stale "Suggested direction"/"Suggested fix" section

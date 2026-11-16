@@ -104,71 +104,11 @@ function commentMessage(comment) {
   return comment && typeof comment.message === "string" ? comment.message : "";
 }
 
-// The audit body of a pilot receipt: the whole message when the comment
-// carries its typed operation id.
-function pilotReceiptBody(comment) {
-  const message = commentMessage(comment);
-  if (comment.operation_id == null) return legacyPilotReceiptBody(message);
-  return /^[a-fA-F0-9]{64}$/.test(comment.operation_id) ? message : null;
-}
-
-// Compatibility reader for receipts written before the typed operation id:
-// an `operation_id=<id>` first line ahead of the audit body.
-function legacyPilotReceiptBody(message) {
-  const newline = message.indexOf("\n");
-  if (newline < 0 || !/^operation_id=[a-fA-F0-9]{64}\r?$/.test(message.slice(0, newline))) return null;
-  return message.slice(newline + 1);
-}
-
-// A pilot receipt is persisted data: summarize only a recognized assessment,
-// and keep the original message for raw/copy and for unrecognized comments.
-function pilotAssessment(comment) {
-  if (!comment || comment.by !== "task-pilot") return null;
-  const body = pilotReceiptBody(comment);
-  if (body == null) return null;
-  try {
-    const receipt = JSON.parse(body);
-    const assessment = receipt && receipt.assessment;
-    const fields = ["disposition", "confidence", "recommended_crew", "recommended_complexity", "assessment_rationale"];
-    if (!assessment || !fields.every(field => typeof assessment[field] === "string" && assessment[field].trim())) return null;
-    return { receipt, assessment };
-  } catch {
-    return null;
-  }
-}
-
-function pilotAssessmentView({ receipt, assessment }) {
-  const view = el("div", { class: "pilot-assessment" });
-  const fields = el("dl", { class: "pilot-assessment-fields" });
-  const addField = (label, value) => {
-    fields.appendChild(el("dt", { text: label }));
-    fields.appendChild(el("dd", { text: value }));
-  };
-  const recommendation = (field, before) => {
-    const after = assessment[field];
-    return typeof before === "string" && before && before !== after ? `${before} → ${after}` : after;
-  };
-  addField("Disposition", assessment.disposition);
-  addField("Confidence", assessment.confidence);
-  addField("Recommended crew", recommendation("recommended_crew", receipt.crew_before));
-  addField("Recommended complexity", recommendation("recommended_complexity", receipt.complexity_before));
-  addField("Rationale", assessment.assessment_rationale);
-  view.appendChild(fields);
-  for (const [field, label] of [["evidence_gaps", "Evidence gaps"], ["reassessment_triggers", "Reassessment triggers"], ["blocked_by", "Blocked by"]]) {
-    const items = Array.isArray(assessment[field]) ? assessment[field].filter(item => typeof item === "string" && item.trim()) : [];
-    if (items.length === 0) continue;
-    view.appendChild(el("div", { class: "pilot-assessment-label", text: label }));
-    view.appendChild(el("ul", {}, items.map(text => el("li", { text }))));
-  }
-  for (const [field, label] of [["duplicate_of", "Duplicate of"], ["already_landed", "Already landed"]]) {
-    const finding = assessment[field];
-    if (finding == null) continue;
-    const text = typeof finding === "string" ? finding : finding && typeof finding === "object"
-      ? [finding.task_id, finding.commit, finding.evidence].filter(value => typeof value === "string" && value.trim()).join(" · ")
-      : "";
-    if (text) addField(label, text);
-  }
-  return view;
+// A task-pilot receipt reads as its summary line. The record projects that line
+// as `pilot.summary` beside the stored `message`, which stays the raw view.
+function pilotSummary(comment) {
+  const pilot = comment && comment.pilot;
+  return pilot && typeof pilot.summary === "string" && pilot.summary.trim() ? pilot.summary : null;
 }
 
 // Resident records are persisted JSON. Only recognize the known shapes; malformed
@@ -366,10 +306,10 @@ function buildCommentCard(task, comment, index) {
   const key = commentKey(task, index);
   const message = commentMessage(comment);
   const writer = comment && comment.by ? String(comment.by) : "?";
-  const pilot = pilotAssessment(comment);
+  const pilotLine = pilotSummary(comment);
   const resident = residentComment(comment);
-  const titles = pilot || resident ? [] : commentSections(message);
-  const long = !pilot && !resident && commentIsLong(message);
+  const titles = pilotLine || resident ? [] : commentSections(message);
+  const long = !pilotLine && !resident && commentIsLong(message);
 
   const card = el("article", { class: "comment-card" });
   card.id = commentAnchorId(task.id, index);
@@ -406,7 +346,7 @@ function buildCommentCard(task, comment, index) {
     actions,
   ]);
 
-  const view = pilot ? pilotAssessmentView(pilot) : resident ? residentCommentView(resident) : taskFields.markdownView(message);
+  const view = pilotLine ? el("p", { text: pilotLine }) : resident ? residentCommentView(resident) : taskFields.markdownView(message);
   view.classList.add("markdown-body", "comment-body");
   const headings = renderedCommentHeadings(view);
   const raw = el("pre", { class: "comment-raw", text: message });
@@ -641,7 +581,7 @@ export function renderCommentsPanel(panel, task) {
     renderCommentsPanel(panel, task);
   });
   actions.appendChild(order);
-  if (comments.some((comment) => !pilotAssessment(comment) && !residentComment(comment) && commentIsLong(commentMessage(comment)))) {
+  if (comments.some((comment) => !pilotSummary(comment) && !residentComment(comment) && commentIsLong(commentMessage(comment)))) {
     const collapseAll = el("button", {
       class: "comment-pref",
       text: "collapse all",

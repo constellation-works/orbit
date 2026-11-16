@@ -1,5 +1,7 @@
-//! The one-line summary of a task-pilot assessment comment.
+//! The readable form of a task-pilot comment: its one-line summary, beside
+//! the structured fields of its receipt.
 
+use serde::Serialize;
 use serde_json::Value;
 
 use super::TaskComment;
@@ -69,4 +71,55 @@ impl TaskComment {
             bounded
         })
     }
+
+    /// The readable form of a task-pilot comment: the summary of a current
+    /// receipt, or of an older receipt that holds its assessment inline. `None`
+    /// for other comments and for a body neither form recognizes. The stored
+    /// message is not changed; it stays the raw view and the digest that the
+    /// pilot audit verifies.
+    pub fn pilot_comment_view(&self) -> Option<PilotCommentView> {
+        if !self.is_task_pilot_comment() {
+            return None;
+        }
+        if let Some(receipt) = self.receipt()
+            && let Ok(body) = serde_json::from_str::<Value>(receipt.body)
+            && let (Some(summary), Some(artifact)) = (
+                receipt_text(&body, "summary"),
+                receipt_text(&body, "assessment_artifact"),
+            )
+        {
+            return Some(PilotCommentView {
+                summary: summary.to_owned(),
+                assessment_artifact: Some(artifact.to_owned()),
+                assessment_sha256: receipt_text(&body, "assessment_sha256").map(str::to_owned),
+            });
+        }
+        self.pilot_assessment_summary()
+            .map(|summary| PilotCommentView {
+                summary,
+                assessment_artifact: None,
+                assessment_sha256: None,
+            })
+    }
+}
+
+/// A task-pilot comment as readers show it. Its `summary` replaces the stored
+/// message in the readable body; the receipt's structured fields sit beside it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PilotCommentView {
+    /// The one-line summary a reader scans.
+    pub summary: String,
+    /// Path of the assessment artifact, for receipts that name one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assessment_artifact: Option<String>,
+    /// Digest the assessment artifact must match.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assessment_sha256: Option<String>,
+}
+
+fn receipt_text<'a>(body: &'a Value, field: &str) -> Option<&'a str> {
+    body.get(field)?
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
