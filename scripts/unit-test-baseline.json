@@ -385,6 +385,7 @@
         "application/task/tests/paths.rs::a_screened_write_is_refused_when_the_grant_it_relied_on_changes",
         "application/task/tests/paths.rs::explicit_root_without_cwd_binding_rejects_data_dir_and_parent_selectors",
         "application/task/tests/records.rs::cas_failure_leaves_no_companion_edits_behind",
+        "application/task/tests/records.rs::concurrent_status_change_cannot_split_a_cas_guarded_write",
         "application/task/tests/requeue.rs::requeue_reports_the_candidate_its_stopped_run_held",
         "application/task/tests/resolves.rs::landing_keeps_every_named_target_through_a_failed_history_read",
         "application/task/tests/retained_candidate.rs::truncated_candidate_status_marks_the_omitted_count_as_a_lower_bound",
