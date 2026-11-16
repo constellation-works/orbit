@@ -74,6 +74,7 @@ pub(crate) const DASHBOARD_CSS: &str = concat!(
     include_str!("../assets/dashboard/css/automation.css"),
     include_str!("../assets/dashboard/css/drain.css"),
     include_str!("../assets/dashboard/css/settings.css"),
+    include_str!("../assets/dashboard/css/fleet.css"),
     include_str!("../assets/dashboard/css/plugins.css"),
     include_str!("../assets/dashboard/css/leases.css"),
     include_str!("../assets/dashboard/css/notices.css"),

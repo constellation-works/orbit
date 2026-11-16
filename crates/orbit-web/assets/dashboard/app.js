@@ -32,6 +32,7 @@ import { taskState } from './js/task-shared.js';
 import { primeTaskDetail, taskDetailSnapshot } from './js/task-data.js';
 import { TASK_SECTION_STEP, taskDispatchIdentity } from './js/task-shared.js';
 import { primeTaskRuns, taskRunsTabActive } from './js/task-detail.js';
+import { fetchAndRenderHosts, resetHostsView, initFleetView } from './js/hosts.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
 import { applyPushedHostResources, fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
 import { changeStreamLive, onChange, onChangeStreamLive, startChangeStream } from './js/change-stream.js';
@@ -1515,6 +1516,7 @@ function taskLocksShown() {
 }
 
 function activeRefreshJobs({ poll = false } = {}) {
+  if (activeTab === "fleet") return [{ panel: "Fleet", request: fetchAndRenderHosts() }];
   // ORB-00039: in the aggregate "All workspaces" view there is no concrete
   // workspace to scope per-workspace endpoints to, so skip every per-workspace
   // fetch (they'd 400) and render placeholders for the panels they feed. Only
@@ -2155,7 +2157,7 @@ async function refreshDashboard({ poll = false } = {}) {
   if (host || workspacesWanted || workspaceRebuild) {
     const ready = await ensureHostScope();
     if (sequence !== refreshSequence || host !== getHost()) return null;
-    if (!ready) {
+    if (!ready && activeTab !== "fleet") {
       showHostUnavailable(new Date());
       return false;
     }
@@ -2303,10 +2305,12 @@ function selectFleetScope(host, workspace) {
 
 initOperations({ getTab: () => activeTab, selectFleetScope, getJobsSubtab: () => activeJobsSubtab, getWorkspaces: () => dashboardWorkspaces, getOperationsSubtab: () => activeOperationsSubtab });
 initConfig();
+initFleetView({ selectScope: selectFleetScope });
 
 initRuns(runsContext());
 initRunDetail(runDetailContext());
 const rctx = routerContext();
+rctx.resetFleetView = resetHostsView;
 initRouter(rctx);
 // Resolve the host, then its workspaces, before the router fires its first
 // refresh so the initial fetches carry the right scope (top-level await;

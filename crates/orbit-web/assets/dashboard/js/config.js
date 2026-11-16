@@ -17,7 +17,6 @@
 import { captureFocus, captureWorkspaceVisit, el, fetchJson, formatDateTime, getWorkspace, hostWriteRefusal, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel, teardownNode } from './common.js';
 import { renderExecution, renderMachine, renderOther, renderReview, renderWorkflow, resetTopics, workspacePolicyMissing } from './config-topics.js';
 import { fetchHostResourcePayload, hostReading, hostVerdict, onHostResources } from './host-resources.js';
-import { fetchAndRenderHosts, resetHostsView } from './hosts.js';
 import { renderSettingsBar, settingsEditButton, settingsKeyName, settingsRow, settingsRowSource, settingsSearchField, settingsSection, settingsSource, settingsSourceIsSet } from './settings-ui.js';
 
 const $ = (id) => document.getElementById(id);
@@ -37,7 +36,6 @@ const SUBTAB_SOURCES = {
   crews: { path: "/api/config/effective", scope: "workspace" },
   machine: { path: "/api/config/file?scope=global", scope: "global" },
   other: { path: "/api/config/effective", scope: "workspace" },
-  hosts: { path: "/api/hosts", scope: null },
 };
 const LEGACY_SUBTABS = { effective: "workflow", "workspace-file": "other", "global-file": "machine", system: "machine", keys: "other", "all-keys": "other" };
 
@@ -83,7 +81,6 @@ export function setConfigSubtab(name) {
   if (name !== activeSubtab) {
     editing = null;
     lastPayload = null;
-    if (name === "hosts" || activeSubtab === "hosts") resetHostsView();
   }
   activeSubtab = name;
 }
@@ -93,8 +90,6 @@ export function getConfigSubtab() {
 }
 
 export async function fetchAndRenderConfig() {
-  // The host file is machine-global, so Hosts renders in the aggregate view too.
-  if (activeSubtab === "hosts") return fetchAndRenderHosts();
   if (isAggregateView()) {
     renderPanelPlaceholder("config-body");
     const bar = $("config-controls");

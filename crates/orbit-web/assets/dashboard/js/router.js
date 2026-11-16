@@ -47,7 +47,7 @@ function markWorkspaceSelectorScope(fleetWide) {
 
 // Retired Drain and auto-drain links are
 // normalized in place so Back never gets trapped on a redirect.
-const TABS = ["tasks", "jobs", "leases", "diagnostics", "analytics", "operations", "knowledge", "plugins", "config", "run-detail"];
+const TABS = ["tasks", "jobs", "leases", "fleet", "diagnostics", "analytics", "operations", "knowledge", "plugins", "config", "run-detail"];
 const DIAG_SUBTABS = ["incidents", "doctor"];
 // Health › Incidents views: `#diagnostics/incidents[/events|/errors]`.
 const INCIDENTS_VIEWS = ["incidents", "events", "errors"];
@@ -82,6 +82,7 @@ const RAIL_LABELS = {
   tasks: "Tasks",
   jobs: "Jobs",
   leases: "Leases",
+  fleet: "Fleet",
   diagnostics: "Health",
   analytics: "Analytics",
   operations: "Automation",
@@ -222,9 +223,9 @@ function syncViewTabs(id, view, shown) {
 }
 const KNOWLEDGE_SUBTABS = ["frictions", "memory"];
 // ORB-12724: `effective` is the layered view; the two `*-file` views are the
-// `--scope` equivalents, and `keys` is the settable-key reference. `hosts` is
-// the serving host's registered remote hosts [ORB-14451].
-const CONFIG_SUBTABS = ["workflow", "execution", "review", "crews", "machine", "hosts", "other"];
+// `--scope` equivalents, and `keys` is the settable-key reference.
+// Retired Hosts routes are normalized to Observe Fleet below.
+const CONFIG_SUBTABS = ["workflow", "execution", "review", "crews", "machine", "other"];
 const CONFIG_LEGACY_REDIRECTS = { effective: "workflow", "workspace-file": "other", "global-file": "machine", system: "machine", keys: "other", "all-keys": "other" };
 
 function parseHashRoute(raw) {
@@ -617,6 +618,15 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     query.delete("dockMode");
     query.delete("panel");
   } else dockView = null;
+  // Retired host settings and aggregate dock links retain the address's
+  // host/workspace scope; only the destination changes.
+  if ((head === "config" && segments[1] === "hosts") || (head === "tasks" && dockView === "fleet")) {
+    head = "fleet";
+    segments.splice(0, segments.length, "fleet");
+    for (const key of ["dock", "dockMode", "panel"]) query.delete(key);
+    dockView = null;
+    legacyRoute = true;
+  }
   // Old standalone Agents links normalize to Analytics › Agents in place.
   if (head === "agents") {
     const role = AGENT_ROLES.includes(segments[1]) || segments[1] === "orchestrators" ? segments[1] : ctx.getAgentsRole();
@@ -678,6 +688,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   } else {
     top = "tasks";
   }
+  if (top !== "fleet") ctx.resetFleetView?.();
   ctx.setTab(top);
   // ORB-10972: the topbar breadcrumb names the active destination, since the
   // rail no longer sits above the content where the tab strip used to.

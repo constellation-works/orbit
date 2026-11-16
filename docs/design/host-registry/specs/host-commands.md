@@ -1,6 +1,6 @@
 ---
 type: design
-summary: "Spec: operator-registered remote hosts — the host file, orbit host add/list/show/rename/remove, dashboard Settings › Hosts, live identity probe, retired destinations file recovery"
+summary: "Spec: operator-registered remote hosts — the host file, orbit host add/list/show/rename/remove, dashboard Observe › Fleet, live identity probe, retired destinations file recovery"
 last_validated: 2026-10-20
 title: Spec — Host commands
 owner: opus
@@ -22,7 +22,7 @@ An entry stores the operator's name for the host, its SSH target, and the host's
 when the host is registered; that snapshot supports creation-time crew-pool selection. Reachability,
 Orbit version, pull protocol and workspaces are read live from the host and never persisted.
 The OS snapshot is not refreshed by probes; remove and add the host again to refresh it.
-Operators manage entries from the CLI or from the dashboard's Settings › Hosts view. Status:
+Operators manage entries from the CLI or from the dashboard's Observe › Fleet view. Status:
 the host file, `orbit host`, the envelope fields, the doctor row and retired-file recovery are
 implemented ([ORB-14448]), and so is the dashboard view ([ORB-14451]).
 
@@ -240,21 +240,19 @@ Status: implemented ([ORB-14451], on the [ORB-14448] operations).
 
 ### View
 
-The view is Settings › Hosts (`#config/hosts`).
+The view is Observe › Fleet (`#fleet`). Legacy `#config/hosts` links normalize in place and retain host/workspace context.
 
 - It shows the local host first, labelled as the host this dashboard edits, followed by every
   entry. Each row has reachability, version, protocol, the skew flag and workspace roles. An
   unreachable host shows its error class and is never hidden.
-- Adding is an inline form (SSH target, optional name), and renaming is an inline editor.
-  Removing asks for confirmation inline. The dashboard has no modal dialogs.
+- Host cards open diagnostic dialogs with the full protocol, compatibility, workspace roles, health and probe errors. Add (SSH target, optional name), Rename and Remove open dialogs naming the serving registry. Local entries cannot be renamed or removed.
 - A remove refused with `host_in_use` lists the dependents and offers an explicit force
   confirmation.
 - Keyboard and focus behave as in [user-interface 2_design §6](../../user-interface/2_design.md#6-top-level-navigation).
 - Opening the view and its Reload button first list registered hosts with `probe=false`,
   show checking reachability for pending remote probes, then fill in live fields when the
   probe finishes. An unreachable destination gets a plain-language explanation with a
-  network and SSH check and a Reload step; the probe diagnostic remains in the row note's
-  tooltip. An add shows the new host as its identity probe found it.
+  network and SSH check and a Reload step; the probe diagnostic remains in the host dialog's failure disclosure. An add shows the new host as its identity probe found it.
   The dashboard's periodic refresh lists with `probe=false` and keeps each row's last probed
   fields, so identity discovery is not repeated in the background. A row marked not probed has not been
   asked since the view opened.
@@ -265,8 +263,7 @@ The view is Settings › Hosts (`#config/hosts`).
   Other hosts read resources independently, and every panel refresh rereads drain state.
   A missing workspace row shows drain unavailable rather than idle. Older remote
   hosts without the aggregate or its independent drain/pull fields retain the
-  per-workspace readiness compatibility path until they are upgraded. The serving host is answered locally. The Health
-  column shows load, memory, disk, drain state and the throttle verdict; Show switches the
+  per-workspace readiness compatibility path until they are upgraded. The serving host is answered locally. Cards show CPU load/utilization, memory, disk and I/O (Linux PSI full avg60), with stale or unavailable readings left unknown. The diagnostic dialog retains drain state and the throttle verdict; Show switches the
   dashboard to that host. Unreachable or unprobed hosts are not asked for health readings,
   and a failed reading is shown without suppressing other hosts. These readings remain view
   state and do not change the host file.
@@ -354,6 +351,6 @@ implementation in [ORB-14448] and [ORB-14451] (dashboard).
 - [ORB-14447] fixed replica GC lookup of locally owned task IDs.
 - [ORB-14448] implemented the host file and orbit host operations.
 - [ORB-14449] implemented task-prefix routing and --host selection.
-- [ORB-14451] implemented dashboard Settings › Hosts through shared registry operations.
+- [ORB-14451] implemented dashboard Observe › Fleet through shared registry operations.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

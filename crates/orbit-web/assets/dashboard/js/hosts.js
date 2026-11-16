@@ -1,35 +1,38 @@
-// Settings › Hosts: the serving host's registered remote hosts [ORB-14451].
-//
-// Rows are `orbit host list --json` for the host file of the machine serving
-// this dashboard. Add, rename and remove call the same operations as
-// `orbit host`, so a refusal is the CLI's typed error, shown beside the
-// control that caused it. Opening the view, Reload and Add probe the hosts;
-// first paint the cached list with pending reachability, then update it when
-// the probe finishes. The background poll reads cached fields only and keeps
-// each row's last live reading, so a host added from the CLI appears on the
-// next refresh without the dashboard opening SSH sessions every 30 seconds.
-//
-// Health is separate from that probe [ORB-15230]. While this view is open,
-// each refresh also reads `/host/resources` and one `/fleet/drains` for every
-// reachable host through `/api/on/<host>/` (the serving host's own name is
-// answered locally). An unreachable host is not asked; its row shows the
-// probe error. One host's failure leaves the others up. Show uses the same
-// switch as the host picker.
-//
-// Editors are inline (the dashboard has no modals): they open with focus in
-// their first control, close on Escape as Cancel does unless a request is in
-// flight, and hand focus back to the button that opened them.
-
-import { captureFocus, el, fetchJson, getHost, setRegisteredHosts, requestHostSwitch, requestJson, requestPanel } from './common.js';
-import { describeResource, fetchHostResourcePayloadFor, hostResources, hostVerdict } from './host-resources.js';
-import { renderSettingsBar, settingsSection } from './settings-ui.js';
+// Observe › Fleet: serving-host registry, probes and guarded registry mutations.
+import { captureFocus, el, fetchJson, getHost, onWorkspaceChange, pinnedInfoHint, setRegisteredHosts, requestHostSwitch, requestJson, requestPanel } from './common.js';
+import { describeResource, fetchHostResourcePayloadFor, hostVerdict } from './host-resources.js';
+import { fleetButton, fleetFacts, fleetHostCards, fleetDrainSection, fleetProviderSection } from './fleet-view.js';
 
 const $ = (id) => document.getElementById(id);
 
 const NO_VALUE = "–";
 /// What only a probe reports; a `?probe=false` row borrows these from the
 /// last probe of the same host at the same SSH target.
-const LIVE_FIELDS = ["reachable", "error", "binary_version", "protocol_fingerprint", "skew", "skew_fields", "workspaces", "task_prefix"];
+const LIVE_FIELDS = ["reachable", "error", "binary_version", "protocol_fingerprint", "skew", "skew_fields", "workspaces", "task_prefix", "host_os"];
+
+let selectScope = () => {};
+let selectedHost = null;
+let dialog = null;
+let noticeTimer = null;
+
+export function initFleetView(context) {
+  selectScope = context.selectScope;
+  onWorkspaceChange(resetHostsView);
+  // Expire a displayed sample even while the next network read is pending.
+  setInterval(() => {
+    if (document.hidden || !document.querySelector('.tab-pane[data-tab="fleet"].active')) return;
+    let expired = false;
+    for (const reading of health.values()) {
+      const sample = reading.resources;
+      if (!sample || sample.stale || !Number.isFinite(sample.max_age_seconds)) continue;
+      const age = sample.sample_age_seconds + (Date.now() - reading.receivedAt) / 1000;
+      if (age <= sample.max_age_seconds) continue;
+      reading.resources = { ...sample, stale: true, verdict_unknown: true, sample_age_seconds: age, reason: 'Resource sample expired; use Reload to request current readings.' };
+      expired = true;
+    }
+    if (expired && !editing) render();
+  }, 5000);
+}
 
 let lastPayload = null;
 let live = new Map();
@@ -52,6 +55,9 @@ let healthEpoch = 0;
 
 /// Forget everything when the view is left, so reopening it probes again.
 export function resetHostsView() {
+  selectedHost = null;
+  if (dialog?.open) dialog.close();
+  clearTimeout(noticeTimer);
   epoch += 1;
   healthEpoch += 1;
   lastPayload = null;
@@ -69,7 +75,7 @@ export async function fetchAndRenderHosts({ probe = probeNext } = {}) {
   if (probe) pendingProbe = checking;
   try {
     await requestPanel(
-      "config-body",
+      "fleet-body",
       "hosts",
       () => fetchJson("/api/hosts?probe=false"),
       (payload) => {
@@ -135,83 +141,97 @@ function withLiveFields(row) {
 // ------------------------------------------------------------------ render
 
 function render() {
-  const body = $("config-body");
+  const body = $("fleet-body");
   if (!body || !lastPayload) return;
   if (!editable()) editing = null;
   const restoreBody = captureFocus(body);
-  const restoreControls = captureFocus($("config-controls"));
+  const restoreControls = captureFocus($("fleet-controls"));
   renderControls(lastPayload);
   body.replaceChildren(...view(lastPayload));
   restoreBody();
   restoreControls();
+  renderDialog();
 }
 
-/// The page bar: whose host file this is, Add host and Reload.
 function renderControls(payload) {
-  const local = (payload.hosts || []).find((row) => row.local);
-  const add = editable()
-    ? actionButton("Add host", () => openEditor({ kind: "add", id: null, draft: { ssh: "", name: "" } }), "host-add-open")
-    : null;
-  if (add) {
-    add.setAttribute("aria-expanded", String(editing?.kind === "add"));
-    add.disabled = add.disabled || editing?.kind === "add";
-  }
-  renderSettingsBar({
-    lead: [el("div", { class: "settings-bar-text" }, [
-      `Edits on this page write the host file of ${local ? local.name : "the serving host"} `,
-      el("span", { class: "mono", text: payload.host_file || "hosts.toml" }),
-    ])],
-    actions: [add],
-    reloadTitle: "Read the host file again and probe every host",
-    onReload: () => {
-      editing = null;
-      notice = "";
-      fetchAndRenderHosts({ probe: true }).catch((error) => console.error("Failed to reload hosts", error));
-    },
-  });
+  const local = (payload.hosts || []).find(row => row.local);
+  const add = editable() ? fleetButton("Add host", "Open a dialog to register a remote host on the serving host", () => openEditor({ kind: "add", id: null }), "host-add-open") : null;
+  const reload = fleetButton("Reload", pendingProbe ? "Wait for the current host probes to finish" : editing?.pending ? "Wait for the registry change to finish" : "Reread the serving registry and probe every registered host", () => {
+    if (editing?.pending) return;
+    editing = null;
+    notice = "";
+    fetchAndRenderHosts({ probe: true }).catch(error => console.error(error));
+  }, "fleet-reload");
+  reload.disabled = Boolean(pendingProbe || editing?.pending);
+  $("fleet-controls")?.replaceChildren(
+    el("h1", { text: "Fleet" }),
+    pinnedInfoHint(`Registry on ${local?.name || "the serving host"}: ${payload.host_file || "hosts.toml"}. Add, Rename and Remove write only this registry. Selected host: ${getHost() || local?.name || "local"}; the workspace selection does not filter Fleet.`),
+    el("div", { class: "fleet-page-actions" }, [add, reload]),
+  );
 }
 
-/// Edits are governed; a session without the operator capability sees the
-/// hosts read-only rather than an editor that 403s on save.
 function editable() {
-  return lastPayload?.host_edit?.authorized !== false;
+  return lastPayload?.host_edit?.authorized === true;
 }
 
 function view(payload) {
   const hosts = (payload.hosts || []).map(withLiveFields);
-  const local = hosts.find((row) => row.local);
   const nodes = [];
   if (payload.load_error) nodes.push(loadErrorBanner(payload));
-  // ORB-14680: these routes are never forwarded, so with another host
-  // selected the list is still the serving host's file, and says so.
-  if (getHost()) {
-    nodes.push(el("div", {
-      class: "settings-callout host-scope-selected",
-      text: `Showing ${getHost()} in the other views. This list is still ${local ? local.name : "the serving host"}'s host file, the one the host picker reads.`,
-    }));
-  }
-  if (!editable()) {
-    nodes.push(el("div", {
-      class: "settings-callout warn host-read-only",
-      text: `Read-only: ${payload.host_edit.reason || "editing the host file needs the operator capability"}`,
-    }));
-  }
-  const status = el("div", { class: "host-notice", text: notice });
-  status.setAttribute("role", "status");
-  status.setAttribute("aria-live", "polite");
-  nodes.push(status);
-  if (editing?.kind === "add") nodes.push(addSection());
-  const remote = Math.max(hosts.length - 1, 0);
-  const { section, body } = settingsSection("Hosts", { count: `${remote} remote host${remote === 1 ? "" : "s"}` });
-  const list = el("div", { class: "host-list" });
-  list.setAttribute("role", "table");
-  list.setAttribute("aria-label", "Registered hosts");
-  list.appendChild(headRow());
-  const names = new Map(hosts.map((host) => [host.machine_id, host.name]));
-  for (const row of hosts) list.appendChild(hostRow(row, names));
-  body.appendChild(list);
-  nodes.push(section);
+  if (!editable()) nodes.push(el("div", { class: "settings-callout warn", text: `Read-only: ${payload.host_edit?.reason || "registry editing requires operator capability"}` }));
+  if (notice) nodes.push(el("div", { class: "host-notice", role: "status" }, [notice, fleetButton("Dismiss", "Dismiss this registry result", () => { notice = ""; render(); })]));
+  nodes.push(fleetHostCards(hosts, health, id => { selectedHost = id; renderDialog(); }));
+  nodes.push(fleetDrainSection(hosts, health, selectScope));
+  nodes.push(fleetProviderSection(hosts, health));
   return nodes;
+}
+
+function renderDialog() {
+  const row = (lastPayload?.hosts || []).map(withLiveFields).find(row => row.machine_id === selectedHost);
+  if (!editing && !row) { selectedHost = null; if (dialog?.open) dialog.close(); return; }
+  if (!dialog) {
+    dialog = el("dialog", { class: "fleet-dialog", id: "fleet-dialog", "aria-labelledby": "fleet-dialog-title" });
+    document.body.append(dialog);
+    dialog.addEventListener("cancel", event => { event.preventDefault(); if (!editing?.pending) closeFleetDialog(); });
+  }
+  const restore = captureFocus(dialog);
+  const openDetails = new Set([...dialog.querySelectorAll("details[open]")].map(node => node.querySelector("summary")?.textContent));
+  const local = lastPayload.hosts.find(host => host.local);
+  const content = el("div", { class: "fleet-dialog-body" });
+  const title = editing ? `${editing.kind === "add" ? "Add host" : editing.kind === "rename" ? "Rename" : "Remove"}${row ? ` · ${row.name}` : ""}` : row.name;
+  if (editing) {
+    content.append(el("span", { class: "muted", text: `Registry on ${local?.name || "the serving host"}` }));
+    content.append(editing.kind === "add" ? addSection() : editing.kind === "rename" ? renameEditor(row) : removeEditor(row));
+  } else {
+    const names = new Map(lastPayload.hosts.map(host => [host.machine_id, host.name]));
+    content.append(fleetFacts([
+      ["Machine ID", row.machine_id], ["SSH", row.ssh || "Local"], ["Task prefix", row.task_prefix || "Unknown"],
+      ["Orbit version", row.binary_version || "Unknown"], ["Reachability", reachableCell(row)],
+      ["Protocol", row.protocol_fingerprint || "Not probed"], ["Compatibility", skewCell(row)],
+      ["Workspaces", workspacesCell(row, names)], ["Health", healthCell(row)],
+    ]));
+    if (row.error) content.append(el("details", {}, [el("summary", { text: "Probe failure details" }), el("p", { text: hostError(row) }), el("pre", { text: JSON.stringify(row.error, null, 2) })]));
+    const reading = health.get(row.machine_id);
+    const warnings = (reading?.drains || []).filter(drain => drain.pilotWarning || drain.error);
+    if (warnings.length) content.append(el("details", {}, [el("summary", { text: "Drain diagnostics" }), ...warnings.map(drain => el("p", { text: `${drain.name}: ${drain.pilotWarning || drain.error}` }))]));
+    if (reading?.resources) content.append(el("details", {}, [el("summary", { text: "Health details" }), el("p", { text: hostVerdict(reading.resources).reason }), ...['cpu', 'memory', 'disk', 'io'].map(resource => el('p', { text: describeResource(reading.resources, resource).detail }))]));
+    if (!row.local && editable()) content.append(el("h3", { text: `Registry on ${local?.name || "the serving host"}` }), actionsCell(row));
+    content.append(hostSwitch(row));
+  }
+  dialog.replaceChildren(el("header", { class: "fleet-dialog-head" }, [el("h2", { id: "fleet-dialog-title", text: title }), fleetButton("Close", "Close diagnostics and discard unsaved edits", closeFleetDialog)]), content);
+  for (const detail of dialog.querySelectorAll("details")) detail.open = openDetails.has(detail.querySelector("summary")?.textContent);
+  if (!dialog.open) dialog.showModal();
+  restore();
+}
+
+function closeFleetDialog() {
+  if (editing?.pending) return;
+  const id = selectedHost;
+  selectedHost = null;
+  editing = null;
+  dialog?.close();
+  const card = [...document.querySelectorAll('.fleet-host-card')].find(node => node.dataset.key === id);
+  (card || document.querySelector('.host-add-open'))?.focus();
 }
 
 function loadErrorBanner(payload) {
@@ -225,61 +245,6 @@ function loadErrorBanner(payload) {
   ]);
   banner.setAttribute("role", "alert");
   return banner;
-}
-
-const HOST_COLUMNS = ["Host", "Reachable", "Version", "Protocol", "Skew", "Workspaces", "Health", ""];
-
-function headRow() {
-  const head = el("div", { class: "host-grid host-head col-head" }, HOST_COLUMNS.map((label) => el("span", { text: label })));
-  head.setAttribute("role", "row");
-  for (const cell of head.children) cell.setAttribute("role", "columnheader");
-  return head;
-}
-
-function hostRow(row, names) {
-  const node = el("div", { class: `host-row${row.local ? " local" : ""}${row.reachable === false ? " unreachable" : ""}` });
-  node.dataset.key = row.machine_id;
-  const cells = el("div", { class: "host-grid" }, [
-    identityCell(row),
-    reachableCell(row),
-    el("span", { class: "host-version mono", text: row.binary_version || NO_VALUE }),
-    el("span", {
-      class: "host-protocol mono",
-      text: row.protocol_fingerprint ? row.protocol_fingerprint.slice(0, 12) : NO_VALUE,
-      title: row.protocol_fingerprint || "not probed",
-    }),
-    skewCell(row),
-    workspacesCell(row, names),
-    healthCell(row),
-    actionsCell(row),
-  ].map((value, index) => index === HOST_COLUMNS.length - 1 ? value : el("div", { class: "host-cell" }, [
-    el("span", { class: "host-label", text: HOST_COLUMNS[index] }),
-    value,
-  ])));
-  cells.setAttribute("role", "row");
-  for (const cell of cells.children) cell.setAttribute("role", "cell");
-  node.appendChild(cells);
-  if (row.error && !row.checking) {
-    node.appendChild(el("div", { class: "host-error", text: hostError(row), title: row.error.message }));
-  }
-  if (editing?.id === row.machine_id) {
-    node.appendChild(editing.kind === "rename" ? renameEditor(row) : removeEditor(row));
-  }
-  return node;
-}
-
-function identityCell(row) {
-  return el("span", { class: "host-identity" }, [
-    el("span", { class: "host-name" }, [
-      el("span", { class: "host-name-text", text: row.name }),
-      row.local ? el("span", { class: "host-local", text: "local · edited here" }) : null,
-      hostSwitch(row),
-    ]),
-    el("span", {
-      class: "host-facts mono",
-      text: [row.machine_id, row.ssh ? `ssh ${row.ssh}` : null, `prefix ${row.task_prefix || "unknown"}`].filter(Boolean).join(" · "),
-    }),
-  ]);
 }
 
 /// Show switches the dashboard the way the host picker does. The href is the
@@ -339,7 +304,7 @@ function healthCell(row) {
   }
   const verdict = reading.resources ? hostVerdict(reading.resources) : null;
   const chips = reading.resources
-    ? el("span", { class: "host-health-readings" }, hostResources(reading.resources).map((resource) => resourceChip(reading.resources, resource)))
+    ? el("span", { class: "host-health-readings" }, ['cpu', 'memory', 'disk', 'io'].map((resource) => resourceChip(reading.resources, resource)))
     : el("span", { class: "host-health-error", text: reading.resourcesError || "resources unavailable" });
   const drain = drainLine(reading, verdict);
   const node = el("span", { class: "host-health" }, [chips, drain]);
@@ -408,7 +373,14 @@ async function loadHealth() {
   const payload = lastPayload;
   if (!payload || token !== healthEpoch) return;
   const rows = (payload.hosts || []).map(withLiveFields);
-  const entries = await Promise.all(rows.map(async (row) => [row.machine_id, await readHealth(row)]));
+  const entries = [];
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(3, rows.length) }, async () => {
+    while (next < rows.length) {
+      const row = rows[next++];
+      entries.push([row.machine_id, await readHealth(row)]);
+    }
+  }));
   if (token !== healthEpoch) return;
   health = new Map(entries);
   render();
@@ -426,7 +398,7 @@ async function readHealth(row) {
     ),
     readDrains(row.name, workspaces),
   ]);
-  return { kind: "ready", ...resources, drains, workspaceCount: workspaces.length };
+  return { kind: "ready", receivedAt: Date.now(), ...resources, drains, workspaceCount: workspaces.length };
 }
 
 async function readDrains(hostName, workspaces) {
@@ -459,6 +431,15 @@ async function readDrains(hostName, workspaces) {
       phase: error ? null : item.drain_phase,
       pull: !error && item.pull_active,
       pullStopped: !error && item.pull_admissions_stopped,
+      ownerStopped: item?.owner_admissions_stopped,
+      runId: item?.drain_run_id,
+      pullRunId: item?.pull_drain_run_id,
+      work: item?.owner_running_tasks,
+      pullWork: item?.pull_running_tasks,
+      queued: item?.queued_drains || [],
+      holds: item?.holds || [],
+      topWait: item?.top_wait_reason,
+      pilotWarning: item?.task_pilot_warning,
       error,
     };
   }));
@@ -473,6 +454,13 @@ async function readLegacyDrain(hostName, workspace) {
     drain.phase = capacity.drain_phase || (capacity.drain_run_id ? "draining" : "idle");
     drain.pull = Boolean(capacity.pull_drain_run_id);
     drain.pullStopped = capacity.pull_drain_admissions_stopped === true;
+    drain.ownerStopped = capacity.admissions_stopped === true;
+    drain.runId = capacity.drain_run_id;
+    drain.pullRunId = capacity.pull_drain_run_id;
+    drain.work = capacity.running_admitted_workers;
+    drain.pullWork = capacity.wrapper_leaf_runs;
+    drain.queued = capacity.queued_drains || [];
+    drain.holds = [capacity.admissions_stopped || drain.pullStopped ? "admissions stopped" : null, capacity.resource_throttle?.reason].filter(Boolean);
   } catch (error) {
     drain.error = error.message || "drain unavailable";
   }
@@ -634,25 +622,33 @@ function textInput(cls, label, placeholder, draft, field) {
 function actionButton(label, onClick, kind = "") {
   const button = el("button", { class: `settings-btn ${kind}`.trim(), text: label });
   button.type = "button";
+  const help = { Rename: "Open the registry name editor", Remove: "Review removal from the serving registry", Cancel: "Discard this registry edit", "Force remove": "Remove this registration despite its dependent replicas and drains" }[label] || label;
+  const description = editing?.pending ? "Wait for the registry change to finish" : help;
+  button.setAttribute("aria-label", label);
+  button.setAttribute("aria-description", description);
   button.disabled = Boolean(editing?.pending);
   button.addEventListener("click", (event) => {
     event.stopPropagation();
     onClick();
   });
-  return button;
+  return pinnedInfoHint(description, { trigger: button, preserveAction: true });
 }
 
 function submitButton(label) {
   const button = el("button", { class: "settings-btn primary host-submit", text: label });
   button.type = "submit";
+  const description = editing?.pending ? "Wait for the registry change to finish" : "Validate and save this change to the serving registry";
+  button.setAttribute("aria-label", label);
+  button.setAttribute("aria-description", description);
   button.disabled = Boolean(editing?.pending);
-  return button;
+  return pinnedInfoHint(description, { trigger: button, preserveAction: true });
 }
 
 // ---------------------------------------------------------------- sessions
 
 function openEditor(next) {
   if (editing?.pending) return;
+  if (next.id) selectedHost = next.id;
   editing = { error: null, code: null, dependents: null, pending: false, draft: {}, ...next };
   notice = "";
   render();
@@ -660,7 +656,7 @@ function openEditor(next) {
 }
 
 function focusEditor() {
-  const body = $("config-body");
+  const body = dialog;
   const target = body?.querySelector(".host-editor input") || body?.querySelector(".host-editor .host-confirm");
   target?.focus?.();
 }
@@ -676,15 +672,11 @@ function closeEditor() {
 /// to Add host when that row is gone.
 function returnFocus(session) {
   if (!session) return;
-  const body = $("config-body");
-  if (session.kind !== "add") {
-    for (const row of body?.querySelectorAll(".host-row") || []) {
-      if (row.dataset.key !== session.id) continue;
-      row.querySelector(session.kind === "rename" ? ".host-rename" : ".host-remove")?.focus();
-      return;
-    }
+  if (dialog?.open) {
+    dialog.querySelector(session.kind === "rename" ? ".host-rename" : ".host-remove")?.focus();
+    return;
   }
-  $("config-controls")?.querySelector(".host-add-open")?.focus();
+  $("fleet-controls")?.querySelector(".host-add-open")?.focus();
 }
 
 function cancelOnEscape(node) {
@@ -717,6 +709,8 @@ async function mutate(session, request, onSuccess) {
   if (editing !== session) return;
   editing = null;
   notice = onSuccess(response);
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => { notice = ""; render(); }, 10000);
   if (response?.host) remember([response.host]);
   try {
     await fetchAndRenderHosts({ probe: false });

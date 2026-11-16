@@ -1,4 +1,4 @@
-/* Tasks dock: auto-drain status, Start a window and fleet summary. */
+/* Tasks dock: auto-drain status and Start a window. */
 /* Every card header: title left, a muted note or count right. */
 #dock-pane-drain .panel > header {
   align-items: baseline; gap: 4px 12px; padding: 14px 18px; border-bottom: 1px solid var(--hair);
@@ -372,63 +372,7 @@
 /* Settlement report shown on the runs table after cancelling a drain run. */
 .run-cancel-notice { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 
-/* Fleet drains: one group per host (tabbed when there are several), one line per workspace. A second line
-   appears only for eligible work, a top wait or holds. Idle rows stay muted;
-   live drains lead their group in full colour. Wide cards flow into columns. */
 #auto-drain-panel { container: drain-card / inline-size; }
-.fleet-drains { display: grid; gap: 12px; font-size: 12px; }
-.fleet-host { min-width: 0; }
-/* More than one host: a tab per host, one host's section at a time. The
-   section heading keeps the host name for assistive tech and shows its count. */
-.fleet-host-tabs { display: flex; width: 100%; max-width: 480px; margin-left: 0; box-sizing: border-box; border-radius: 6px; font: 500 11px var(--font-sans); letter-spacing: 0; text-transform: none; }
-.fleet-host-tab { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 5px 6px; }
-.fleet-host-tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fleet-host-tab .drain-dot { width: 6px; height: 6px; }
-.drain-dot.fleet-dot-down { background: transparent; box-shadow: inset 0 0 0 1.5px var(--warn-fg); }
-.drain-dot.fleet-dot-loading { opacity: 0.5; }
-.fleet-tabbed .fleet-host-name > span:first-child { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.fleet-host-name {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 0 4px;
-  padding-bottom: 4px; border-bottom: 1px solid var(--hair); color: var(--fg-soft);
-  font: 600 13px/1.3 var(--font-sans); letter-spacing: 0;
-}
-.fleet-host-name > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.fleet-host-count { flex: 0 0 auto; color: var(--fg-mute); font: 400 11px var(--font-sans); }
-.fleet-rows {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
-  column-gap: 16px; margin: 0; padding: 0; list-style: none;
-}
-.fleet-row { position: relative; min-width: 0; padding: 4px 6px; margin: 0 -6px; border-radius: var(--radius-sm); }
-.fleet-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.fleet-workspace {
-  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--fg-dim); background: none; border: 0; padding: 0; font: inherit; text-align: left; cursor: pointer;
-}
-.fleet-live .fleet-workspace, .fleet-row:hover .fleet-workspace { color: var(--accent); }
-.fleet-live .fleet-workspace { font-weight: 600; }
-.fleet-workspace:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.fleet-selectable { cursor: pointer; }
-.fleet-selectable:hover { background: var(--bg-control); }
-.fleet-phase { flex: 0 0 auto; font-size: 11px; }
-.fleet-row[data-phase="draining"] .fleet-phase { color: var(--state-running); }
-.fleet-row[data-phase="pulling"] .fleet-phase { color: var(--accent); }
-.fleet-row[data-phase="winding_down"] .fleet-phase { color: var(--warn-fg); }
-.fleet-slots { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; color: var(--fg-mute); font: 11px var(--font-mono); font-variant-numeric: tabular-nums; }
-.fleet-meter { width: 28px; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
-.fleet-meter > span { display: block; height: 100%; background: var(--state-running); }
-.fleet-slots-busy { color: var(--fg-strong); }
-.fleet-slots-full .fleet-meter > span { background: var(--warn-fg); }
-.fleet-detail { display: flex; flex-wrap: wrap; gap: 2px 10px; padding-left: 15px; color: var(--fg-mute); font-size: 11px; overflow-wrap: anywhere; }
-.fleet-eligible { color: var(--fg-dim); }
-.fleet-holds { color: var(--warn-fg); }
-.fleet-pilot-warning { margin: 2px 0 0; padding-left: 15px; color: var(--warn-fg); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
-.fleet-unavailable { color: var(--fg-mute); grid-column: 1 / -1; }
-.fleet-row.fleet-unavailable .fleet-workspace { color: inherit; }
-.fleet-loading { color: var(--fg-mute); }
-.fleet-row[data-phase="loading"] .fleet-phase { color: var(--fg-mute); font-style: italic; }
-.fleet-host-loading { color: var(--fg-mute); font-style: italic; }
-.fleet-host-down { color: var(--warn-fg); }
-.fleet-empty { margin: 0; color: var(--fg-mute); }
 
 .drain-approval-summary { color: var(--fg-dim); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .drain-approval-summary a { color: var(--warn-fg); text-decoration: underline; }

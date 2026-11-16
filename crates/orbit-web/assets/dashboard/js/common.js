@@ -1024,6 +1024,7 @@ export function infoHint(text, { id = null } = {}) {
 // The bubble flips above the icon when it would run off the bottom. The
 // stylesheet shows it on hover and focus; this only says where it goes. A
 // supplied trigger keeps its own appearance and link navigation, if any.
+// preserveAction leaves button activation and dialog Escape handling untouched.
 let pinnedHintFollowsScroll = false;
 
 function placePinnedInfoHint(hint) {
@@ -1050,7 +1051,7 @@ function placePinnedInfoHint(hint) {
   hint.style.setProperty("--hint-tip-top", `${top}px`);
 }
 
-export function pinnedInfoHint(text, { trigger = null } = {}) {
+export function pinnedInfoHint(text, { trigger = null, preserveAction = false } = {}) {
   const hint = trigger || infoHint(text);
   if (trigger) hint.appendChild(el("span", { class: "info-hint-text", text }));
   hint.classList.add("pinned-hint-trigger");
@@ -1059,13 +1060,13 @@ export function pinnedInfoHint(text, { trigger = null } = {}) {
   hint.addEventListener("mouseenter", place);
   hint.addEventListener("focus", place);
   hint.addEventListener("pinned-hint-refresh", place);
-  hint.addEventListener("click", (event) => {
+  if (!preserveAction) hint.addEventListener("click", (event) => {
     if (hint.tagName !== "A") event.preventDefault();
     event.stopPropagation();
     hint.focus();
     place();
   });
-  hint.addEventListener("keydown", (event) => {
+  if (!preserveAction) hint.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       event.stopPropagation();
       hint.blur();

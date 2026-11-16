@@ -53,7 +53,7 @@ let logVisibilityWired = false;
 const LOG_PANEL_PREFS_KEY = "orbit.dashboard.logPanel";
 // Visual order of the Tasks dock tabs. The arrow, Home and End keys walk this
 // list (wireDockModeToggle), so it must match the tablist's order in index.html.
-const DOCK_MODES = ["drain", "fleet", "notices", "residents", "log"];
+const DOCK_MODES = ["drain", "notices", "residents", "log"];
 
 function loadLogPanelPrefs() {
   try {
@@ -139,21 +139,6 @@ export function fitLogPanelToViewport() {
 function applyDockMode() {
   const dock = $("side-dock");
   if (!dock) return;
-  if (isAggregateView() && !$("dock-tab-fleet")) {
-    const tab = el("button", { type: "button", role: "tab", class: "dock-seg", id: "dock-tab-fleet", "aria-selected": "false", "aria-controls": "dock-pane-fleet", text: "Fleet" });
-    tab.dataset.mode = "fleet";
-    tab.tabIndex = -1;
-    tab.addEventListener("click", () => chooseDockMode("fleet"));
-    $("dock-tab-drain").after(tab);
-    const pane = el("div", { class: "dock-pane", id: "dock-pane-fleet", role: "tabpanel", "aria-labelledby": "dock-tab-fleet" }, [
-      el("section", { class: "panel drain-card" }, [el("header", {}, [el("h2", { class: "drain-title", text: "Fleet drains" })]), el("div", { class: "body", id: "fleet-drains-body" })]),
-    ]);
-    pane.dataset.pane = "fleet";
-    $("dock-pane-drain").after(pane);
-  } else if (!isAggregateView()) {
-    $("dock-tab-fleet")?.remove();
-    $("dock-pane-fleet")?.remove();
-  }
   const modes = dockModes();
   const mode = shownDockMode();
   dock.dataset.mode = mode;
@@ -174,7 +159,7 @@ function applyDockMode() {
 // only when the full-size strip would overflow, then drop secondary state
 // only when the shrunken strip still would. A fixed width breakpoint
 // cannot tell fitting from overflowing layouts — the same dock width fits
-// without Fleet or counts and overflows with them — so the trigger is
+// without counts and overflows with them — so the trigger is
 // measured: the visible tabs' natural widths against the head's width.
 let dockTabFitWired = false;
 
@@ -204,7 +189,7 @@ function wireDockTabFit() {
   if (!head || !group) return;
   dockTabFitWired = true;
   new ResizeObserver(fitDockTabs).observe(head);
-  // Badge and state text (counts, the log's worst level, Fleet appearing)
+  // Badge and state text (counts, the log's worst level)
   // changes the natural width without resizing the head.
   new MutationObserver(fitDockTabs).observe(group, {
     childList: true, subtree: true, characterData: true,
@@ -214,7 +199,7 @@ function wireDockTabFit() {
 }
 
 function dockModes() {
-  return isAggregateView() ? DOCK_MODES : DOCK_MODES.filter(mode => mode !== "fleet");
+  return DOCK_MODES;
 }
 
 function shownDockMode() {
