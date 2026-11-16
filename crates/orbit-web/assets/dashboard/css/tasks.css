@@ -843,8 +843,9 @@ main.tasks-layout > .controls {
    status card, Start a window, Log, Notices) beside both, its tab bar
    level with the bar. With `filter-spans` the bar takes both columns and the
    dock starts below it with the list. An open task takes the dock's place,
-   and below 1000px, where shell.css stacks every main grid, the task list
-   takes the full width. */
+   and below the Tasks dock breakpoint (`TASKS_ONE_COLUMN_QUERY` in log-tail.js),
+   the task list takes the full width. shell.css separately stacks other main
+   grids at 1000px. */
 /* Keep the drain title and a workspace-host target readable side by side. */
 main.tasks-layout {
   grid-template-columns: minmax(0, 1fr) clamp(440px, 32%, 520px);
@@ -857,11 +858,12 @@ main.tasks-layout > .tasks-dock { grid-column: 2; grid-row: 1 / -1; }
 main.tasks-layout.filter-spans:not(.task-pane-open) > .controls { grid-column: 1 / -1; }
 main.tasks-layout.filter-spans:not(.task-pane-open) > .tasks-dock { grid-row: 2; }
 .tasks-dock { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-/* Without room for the dock (an open task, or below 1000px) only its message
-   area stays, floating at the foot of the view (see below). */
+/* Without room for the dock (an open task or the one-column Tasks layout),
+   only its message area stays, floating at the foot of the view (see below). */
 main.tasks-layout.task-pane-open > .tasks-dock { display: contents; }
 main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
-@media (max-width: 1000px) {
+/* Keep this cutoff aligned with TASKS_ONE_COLUMN_QUERY in log-tail.js. */
+@media (max-width: 1315px) {
   /* Stacked: the bar, then the list (or the dock on the dock route), each
      content-sized as before; the bar's own padding keeps the 12px gap. */
   main.tasks-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
@@ -948,7 +950,8 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
 .tasks-messages .task-action-notice { background: color-mix(in srgb, var(--state-success) 10%, var(--bg-elev)); }
 /* The floating area, at the foot of the Tasks view (the active tab pane is
    its containing block): under the list while a task is open, so it covers
-   none of the task's controls, and across the page below 1000px. It takes no
+   none of the task's controls, and across the page at the one-column Tasks
+   breakpoint (`TASKS_ONE_COLUMN_QUERY` in log-tail.js). It takes no
    clicks of its own, so when empty it hides nothing; its messages are opaque
    cards over the list. */
 main.tasks-layout.task-pane-open > .tasks-dock > .tasks-messages {
@@ -964,7 +967,7 @@ main.tasks-layout.task-pane-open > .tasks-dock > .tasks-messages {
 }
 main.tasks-layout.task-pane-open > .tasks-dock > .tasks-messages > :not(#tasks-notices),
 main.tasks-layout.task-pane-open #tasks-notices > * { pointer-events: auto; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
-@media (max-width: 1000px) {
+@media (max-width: 1315px) {
   .tasks-dock > .tasks-messages {
     position: absolute;
     left: 12px;

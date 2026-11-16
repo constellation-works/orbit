@@ -44,7 +44,7 @@ Agent runs produce more state changes, logs, and diagnostics than a human can re
 
 The Tasks dock holds the Auto-drain status and forecast, a simple **Start a
 window** card, and **Log**. It gives way to the task pane when
-a task opens. Below 1000px the list keeps the full width, and an explicit Drain or
+a task opens. Below 1316px the list keeps the full width, and an explicit Drain or
 Log link shows the dock in its place; the rail's **Tasks** item
 returns to the list, keeping its filters.
 Backlog readiness names holding tasks; each task detail lists its context
