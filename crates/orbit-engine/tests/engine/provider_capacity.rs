@@ -1040,6 +1040,21 @@ fn a_timed_out_attempt_reaches_recovery_and_the_post_recovery_attempt() {
 
     let message = failure_message(&run.outcome);
     assert!(
+        message.contains("wall-clock timeout"),
+        "the failure is the wall-clock kill, not a missing completion envelope: {message}"
+    );
+    assert_eq!(
+        count(&run.events, |kind| matches!(
+            kind,
+            V2AuditEventKind::CliInvocationFinished {
+                timed_out: true,
+                ..
+            }
+        )),
+        2,
+        "each provider attempt is killed at the wall-clock budget: {message}"
+    );
+    assert!(
         !is_provider_unavailable(None, Some(&message)),
         "the timeout is a provider failure: {message}"
     );

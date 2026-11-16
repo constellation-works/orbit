@@ -1632,6 +1632,8 @@ fn assert_refresh_refuses(sandbox: &Path, cases: &[(&str, bool, &str, &str, &str
         let error = complete_with_logical_clock(&host, &input).unwrap_err();
         assert!(error.to_string().contains(refusal), "{case}: {error}");
         assert_eq!(fx.merge_requests().len(), 1, "{case}: no second mutation");
+        // One open read, then one fresh read. A second merged `pr view`
+        // increments `merged-reads` and fails this exact total.
         assert_eq!(fx.status_reads(), 2, "{case}: one fresh read");
         assert_eq!(fx.head(), fx.candidate, "{case}: no local rewrite");
         assert!(host.landings().is_empty(), "{case}");
@@ -1689,6 +1691,8 @@ fn an_already_merged_refresh_reconciles_without_another_merge_request(sandbox: &
             squash(&fx.candidate),
             "{outcome}: no second mutation"
         );
+        // One open read plus exactly one merged `pr view`. A second merged
+        // read increments `merged-reads` and fails this exact total.
         assert_eq!(fx.status_reads(), 2, "{outcome}: exactly one fresh read");
         assert_eq!(fx.forge_calls().last().unwrap(), "pr view");
         let mutations = host
@@ -5670,10 +5674,14 @@ impl Fixture {
         self.forge_lines("merge-requests")
     }
     fn status_reads(&self) -> usize {
-        self.forge_state("reads")
-            .map(|value| value.parse().unwrap())
-            .unwrap_or(0)
-            + usize::from(self.forge_state("merged-reads").is_some())
+        let count = |name| {
+            self.forge_state(name)
+                .map(|value| value.parse().unwrap())
+                .unwrap_or(0)
+        };
+        // `reads` counts open `pr view`s. `merged-reads` counts each merged
+        // `pr view` on its own, so a second reconciliation read is visible.
+        count("reads") + count("merged-reads")
     }
 }
 fn action(host: &DeliveryHost, name: &str, input: &Value) -> Res<Value> {
@@ -6577,7 +6585,8 @@ status() {
         return
     fi
     if [ -f "$forge/merged" ]; then
-        touch "$forge/merged-reads"
+        merged_reads=$(( $(cat "$forge/merged-reads" 2>/dev/null || echo 0) + 1 ))
+        printf '%s\n' "$merged_reads" > "$forge/merged-reads"
         # GitHub keeps headRefOid after the head branch is deleted. `land`
         # records it; a forge that merged before this substitute did falls
         # back to the live branch.

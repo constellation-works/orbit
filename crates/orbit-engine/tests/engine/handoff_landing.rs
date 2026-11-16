@@ -2174,15 +2174,16 @@ fn suspicion_only_history_cannot_admit_repair_from_a_non_pr_run() {
                     assert_reason(&forge, case, &["classified `candidate`"]);
                     assert_not_sent(&forge, &["ci.rerun_failed"], case);
                 } else {
-                    let _ = outcome;
+                    // A foreign push or workflow_dispatch run is not a verified
+                    // rerun, so it cannot admit repair or requeue. The full
+                    // step list is the guard: `StopForRequeue` and
+                    // `Stop { repairable: true }` both fail it.
+                    outcome.expect_err(case);
                     assert_sent_len(&forge, "ci.rerun_failed", 0, case);
-                    assert!(
-                        !forge.steps().iter().any(|step| matches!(
-                            step,
-                            HandoffLandingStep::Stop { repairable: true }
-                        )),
-                        "{case}: no repair without a verified rerun: {:?}",
-                        forge.steps()
+                    assert_steps(
+                        &forge.steps(),
+                        &[HandoffLandingStep::Stop { repairable: false }],
+                        case,
                     );
                 }
             }
