@@ -152,10 +152,11 @@ orbit doctor --check env-pass --json
 
 **If a variable is missing.** A `pass` name the launching shell does not set
 reaches no agent, unless a timer-started run reads it from
-[clock.env](#scheduled-credentials-clockenv). The run still starts, with a
-warning, and the provider may fall back to a saved login. A missing per-crew
-source, or an unusable `file:` source, excludes that crew from drains and
-refuses its activities.
+[clock.env](#scheduled-credentials-clockenv). A manual start whose launching
+environment lacks the name still proceeds with a warning, and the provider
+may fall back to a saved login.
+A missing per-crew source, or an unusable `file:` source, excludes that crew
+from drains and refuses its activities.
 
 **Where the value comes from.** Terminal runs read your shell, so start drains
 from a login shell. Dashboard runs inherit the web service's environment:
