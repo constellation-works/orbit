@@ -79,6 +79,18 @@ Notes that bind implementations:
   `degraded` rather than silently missing
   ([4_decisions.md](../4_decisions.md#a-derived-view-never-widens-who-may-read-its-sources)).
   The session gains no write capability.
+- **`run_failed` and the owner's task.** On the workspace owner, a failed run whose task is
+  terminal is not an item. A replica cannot read that status: the owner's task index is empty
+  there, and the replica's own task copy is not authoritative. The run stays listed (it is
+  authoritative on the executing host) and the kind adds one `degraded` entry, code
+  `source_unavailable`, message "Task records on a replica are not authoritative; read the
+  workspace owner". A failed run that names no task is not degraded for that reason.
+  `detail.held_claim` is true only while a claim bound to the run on this host is still live
+  (`claimed`, `running`, `handed_off` or `repair_pending`), or the follower's local pull for
+  that run is not `settled`, `idle` or `refused`. A settled claim (`failed`, `landed`,
+  `revoked`) is not a held claim. `detail.claimed_leaf` is true when such a binding exists,
+  including after it settled. Severity is high when `held_claim` is true. `run_stuck` uses
+  the same live-claim meaning for `detail.held_claim` and does not carry `claimed_leaf`.
 - **Network sources degrade, they do not fail.** `ci_red` needs provider authentication
   (`github.auth.status`); with none, or on timeout, it yields `degraded` code
   `source_unavailable`. On the workspace owner, a workspace with no recognisable remote
@@ -205,7 +217,7 @@ and are not waiting on a single task.
 | `blocked` | high | high | none |
 | `decision_open` | medium | high | request `risk_tier` `irreversible`, `authority` or `spend`; and one level when `expires_at` is within 6 hours |
 | `review_waiting` | low for `approval` and `completion_hold`; medium for `delivery_hold` and `review_budget` | high | `review_budget` and `delivery_hold` start at medium |
-| `run_failed` | medium | high | high when the run held a claim |
+| `run_failed` | medium | high | high when `detail.held_claim` is true (a live claim; a settled claim does not raise severity) |
 | `run_stuck` | medium | high | high when the run holds a claim |
 | `claim_stale` | high | high | none |
 | `ci_red` | high | critical | critical after the age thresholds are both passed |
