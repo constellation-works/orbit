@@ -1,32 +1,5 @@
-//! The untrusted half of audit attribution: what a caller says it is.
-//!
-//! Orbit's trusted identity (`audit_events.role`, and the canonical actor
-//! projection derived from it) is only populated when the caller arrived
-//! through a path Orbit can authenticate — a managed run envelope or the local
-//! CLI. An MCP server started from a client's own config has no such envelope,
-//! so its `role` is `unverified` and its canonical actor is `unattributed`.
-//!
-//! That is the correct label, and this module does not widen it. It adds a
-//! *second, separate* field for the identity the caller claimed about itself,
-//! so unauthenticated traffic is attributable-but-labelled instead of
-//! anonymous [ORB-10890].
-//!
-//! ## The one rule
-//!
-//! A self-reported value is evidence, never a credential. It is stored in its
-//! own column, never merged into `role` or the `actor_*` projection, never
-//! consulted by an authentication or authorization decision, and never
-//! rendered without being marked unverified. Anyone who can reach the MCP
-//! server can supply any string here; a surface that forgets the marking turns
-//! a published per-agent number into a forgeable one.
-//!
-//! ## Absent is not a default
-//!
-//! [`normalize_self_reported_actor`] returns `None` for a missing, blank, or
-//! malformed claim. `None` means anonymous. It must never be filled in from a
-//! neighbouring session, a previous call, or the trusted label — inheriting
-//! another actor's identity is exactly the failure this field exists to make
-//! visible.
+//! Keeps caller claims separate from trusted attribution to prevent impersonation.
+//! Display them as unverified and leave absent claims anonymous; they grant no authority.
 
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
