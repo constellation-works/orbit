@@ -61,6 +61,7 @@ fn workspace_list_records(registry: &WorkspaceRegistry, include_replicas: bool) 
                 "owner_machine_id": workspace.owner_machine_id,
                 "role": checkout.and_then(|checkout| checkout.role.map(|role| role.to_string())),
                 "repo_root": checkout.map(|checkout| checkout.repo_root.to_string_lossy()),
+                "orbit_dir": checkout.map(|checkout| checkout.orbit_dir.to_string_lossy()),
             })
         })
         .collect()
@@ -75,6 +76,7 @@ fn workspace_list_table(registry: &WorkspaceRegistry, include_replicas: bool) ->
         Column::new("OWNER").fixed(),
         Column::new("ROLE").fixed(),
         Column::new("ROOT").path(),
+        Column::new("ORBIT DIR").path(),
     ])
     .empty_message("no workspaces registered");
 
@@ -103,6 +105,9 @@ fn workspace_list_table(registry: &WorkspaceRegistry, include_replicas: bool) ->
             owner.to_string(),
             role,
             root,
+            checkout
+                .map(|checkout| checkout.orbit_dir.display().to_string())
+                .unwrap_or_else(|| "-".to_string()),
         ]);
     }
     table

@@ -1,0 +1,27 @@
+Initialize and manage workspaces
+
+Usage: orbit workspace [OPTIONS] <COMMAND>
+
+Commands:
+  init           Initialize a new workspace in the current directory
+  sync           Converge managed artifacts on the defaults shipped by this Orbit binary
+  rebind         Rebind this host to a checkout directory the operator already moved
+  list           List all registered workspaces
+  show           Show the current workspace
+  source-remote  Inspect or explicitly rebind the source Git remote
+  ship-mode      Show or rebind how this workspace delivers shipped tasks (pr or local)
+  role           Validate or reassert this checkout's declared local role
+  publication    Manage the owner-local task-publication repository binding
+  remove         Remove a workspace from the registry (does not delete .orbit)
+  teardown       Remove all Orbit artifacts from a named workspace
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

@@ -13,6 +13,19 @@ use super::row::{AUDIT_EVENT_COLUMNS, audit_event_from_row};
 use super::{param_refs, since_tool_filter, where_clause};
 
 impl Store {
+    /// Whether a durable audit event already records this execution.
+    /// Recovery uses the unique execution key to make audit replay idempotent.
+    pub fn audit_execution_is_recorded(&self, execution_id: &str) -> Result<bool, OrbitError> {
+        self.with_read_connection(|conn| {
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM audit_events WHERE execution_id = ?1)",
+                [execution_id],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_store_error)
+        })
+    }
+
     pub fn list_audit_events(
         &self,
         filter: &AuditEventFilter,
