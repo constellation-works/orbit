@@ -139,12 +139,27 @@ function leadingSpaces(line) {
 function stripBlockquotePrefix(line) {
   let rest = line;
   let quoted = false;
+  let depth = 0;
   for (;;) {
     const match = /^ {0,3}> ?/.exec(rest);
-    if (!match) return { line: rest, quoted };
+    if (!match) return { line: rest, quoted, depth };
     quoted = true;
+    depth++;
     rest = rest.slice(match[0].length);
   }
+}
+
+// Remove at most `depth` quote prefixes — the enclosing container's own.
+// Any further `>` is content (for example a shell redirection inside a
+// fenced block quoted at that depth), not another quote marker to strip.
+function stripBlockquotePrefixes(line, depth) {
+  let rest = line;
+  for (let i = 0; i < depth; i++) {
+    const match = /^ {0,3}> ?/.exec(rest);
+    if (!match) break;
+    rest = rest.slice(match[0].length);
+  }
+  return rest;
 }
 
 // A list item's marker column and the column its content starts at, or null.
@@ -208,6 +223,7 @@ export function humanTaskCommands(text) {
   let fenceLead = "";
   let fenceBaseIndent = 0;
   let fenceInBlockquote = false;
+  let fenceQuoteDepth = 0;
   let blockLines = [];
   // Open list items, outermost first. A fence indented to an item's content
   // indent (plus up to three columns) is a fenced block inside that item —
@@ -221,10 +237,10 @@ export function humanTaskCommands(text) {
     const expanded = detabLeading(rawLine);
     if (inFence) {
       const structural = fenceInBlockquote
-        ? stripBlockquotePrefix(expanded).line
+        ? stripBlockquotePrefixes(expanded, fenceQuoteDepth)
         : expanded;
       const source = fenceInBlockquote
-        ? stripBlockquotePrefix(rawLine).line
+        ? stripBlockquotePrefixes(rawLine, fenceQuoteDepth)
         : rawLine;
       if (isClosingFence(structural, fenceChar, fenceLength, fenceBaseIndent)) {
         inFence = false;
@@ -237,7 +253,7 @@ export function humanTaskCommands(text) {
       continue;
     }
 
-    const { line, quoted } = stripBlockquotePrefix(expanded);
+    const { line, quoted, depth } = stripBlockquotePrefix(expanded);
     if (!line.trim()) continue;
     const indent = leadingSpaces(line);
     const item = parseListItem(line);
@@ -270,13 +286,14 @@ export function humanTaskCommands(text) {
       : 0;
     const open = parseOpeningFence(line, containerIndent);
     if (open) {
-      const rawStructural = quoted ? stripBlockquotePrefix(rawLine).line : rawLine;
+      const rawStructural = quoted ? stripBlockquotePrefixes(rawLine, depth) : rawLine;
       inFence = true;
       fenceChar = open.fenceChar;
       fenceLength = open.fenceLength;
       fenceLead = leadingWhitespace(rawStructural);
       fenceBaseIndent = containerIndent;
       fenceInBlockquote = quoted;
+      fenceQuoteDepth = depth;
       blockLines = [];
     }
   }
