@@ -872,10 +872,10 @@ routing the delivery to a capable host: a host without user namespaces can
 never fulfil the hold, and the candidate does not reach the test, so the review
 releases it without relying on a later pull request run. CI scope decides
 whether such a run executes the test (`scripts/ci-change-scope.sh`: a docs-only
-pull request runs no test job, one confined to `crates/` runs only the affected
-crates' tests, and any other pull request runs every test), so no execution is
-claimed. A diff that touches sandbox code keeps requiring real execution
-evidence.
+pull request runs no test job, one confined to `crates/` runs tests for the
+affected and always-run crates, and any other pull request runs every test),
+so no execution is claimed. A diff that touches sandbox code keeps requiring
+real execution evidence.
 
 A broader required run can defer the very tests the reviewer names [ORB-17043].
 `cargo test -p <crate> --test <target> <module>` passes with a
