@@ -266,3 +266,166 @@ fn a_native_exact_file_write_leaves_sibling_and_auth_sentinels_read_only() {
     assert_eq!(std::fs::read_to_string(sibling).unwrap(), "sentinel");
     assert_eq!(std::fs::read_to_string(auth).unwrap(), "sentinel");
 }
+
+/// A checkout made under umask 0002, with `.git/`, `.orbit/`, a sibling root
+/// file and `CLAUDE.md`, inside a scratch parent that also holds a file
+/// outside the workspace.
+#[cfg(unix)]
+fn group_writable_checkout(parent: &Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let workspace = parent.join("worktree");
+    for dir in [
+        &workspace,
+        &workspace.join(".git"),
+        &workspace.join(".orbit"),
+    ] {
+        std::fs::create_dir(dir).unwrap();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o775)).unwrap();
+    }
+    for file in [
+        workspace.join(".git/config"),
+        workspace.join(".orbit/config.toml"),
+        workspace.join("README.md"),
+        workspace.join("CLAUDE.md"),
+        parent.join("outside.md"),
+    ] {
+        write_owner_file(&file, "sentinel");
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o664)).unwrap();
+    }
+    workspace
+}
+
+#[cfg(unix)]
+fn workspace_agents_spec(root: &Path) -> PluginBackendSpec {
+    fixture_spec(root, Path::new("{{workspace}}/AGENTS.md"))
+}
+
+/// The managed standards sync rewrites a worktree's `AGENTS.md`. Under the
+/// real sandbox a `{{workspace}}/AGENTS.md` grant reaches that file when it is
+/// group-writable and when it is a link to `CLAUDE.md` in the same worktree,
+/// and writes to `.git/`, `.orbit/`, another root file and a path outside the
+/// worktree all stay refused.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_workspace_agents_md_grant_writes_that_file_only_under_landlock() {
+    use orbit_exec::{EnvironmentMode, ExecRequest, StdinMode, run_process};
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    for linked in [false, true] {
+        let temp = fixture_tempdir();
+        let root = temp.path().canonicalize().unwrap();
+        let workspace = group_writable_checkout(&root);
+        let agents = workspace.join("AGENTS.md");
+        if linked {
+            symlink("CLAUDE.md", &agents).unwrap();
+        } else {
+            write_owner_file(&agents, "sentinel");
+            std::fs::set_permissions(&agents, std::fs::Permissions::from_mode(0o664)).unwrap();
+        }
+        let profile = workspace_agents_spec(&root)
+            .sandbox_profile(Some(&workspace))
+            .unwrap_or_else(|error| panic!("linked={linked}: {error}"));
+        let granted = if linked {
+            workspace.join("CLAUDE.md")
+        } else {
+            agents.clone()
+        };
+        assert_eq!(
+            profile.write_files,
+            std::slice::from_ref(&granted),
+            "linked={linked}"
+        );
+        assert!(profile.write.is_empty());
+        let script = "printf managed > AGENTS.md || exit 10; \
+            for target in .git/config .git/new .orbit/config.toml README.md ../outside.md; do \
+            if printf forbidden > \"$target\" 2>/dev/null; then echo \"$target\"; exit 11; fi; done";
+        let req = ExecRequest {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), script.into()],
+            current_dir: Some(workspace.display().to_string()),
+            timeout_ms: Some(10000),
+            stdin_mode: StdinMode::Null,
+            environment_mode: EnvironmentMode::ClearAndSet(vec![(
+                "PATH".into(),
+                "/usr/bin:/bin".into(),
+            )]),
+            debug: false,
+        };
+        let output = run_process(&req, &profile).expect("confined AGENTS.md probe");
+        assert!(output.success, "linked={linked}: {output:?}");
+        assert_eq!(std::fs::read_to_string(&granted).unwrap(), "managed");
+        assert_eq!(
+            std::fs::symlink_metadata(&agents)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            linked,
+            "the link itself is kept"
+        );
+        for untouched in [
+            workspace.join(".git/config"),
+            workspace.join(".orbit/config.toml"),
+            workspace.join("README.md"),
+            root.join("outside.md"),
+        ] {
+            assert_eq!(
+                std::fs::read_to_string(&untouched).unwrap(),
+                "sentinel",
+                "linked={linked}: {}",
+                untouched.display()
+            );
+        }
+        assert!(!workspace.join(".git/new").exists());
+    }
+}
+
+/// An `AGENTS.md` link is granted only when its target stays a regular file
+/// inside the worktree and outside `.git` and `.orbit`, and a link swapped
+/// after admission is refused before the child starts.
+#[cfg(unix)]
+#[test]
+fn a_workspace_agents_md_link_leaving_the_worktree_or_into_metadata_is_refused() {
+    use orbit_exec::{EnvironmentMode, ExecRequest, StdinMode, run_process};
+    use std::os::unix::fs::symlink;
+    let temp = fixture_tempdir();
+    let root = temp.path().canonicalize().unwrap();
+    let workspace = group_writable_checkout(&root);
+    let agents = workspace.join("AGENTS.md");
+    let spec = workspace_agents_spec(&root);
+    for target in [
+        root.join("outside.md"),
+        Path::new("../outside.md").to_path_buf(),
+        Path::new(".git/config").to_path_buf(),
+        Path::new(".orbit/config.toml").to_path_buf(),
+        Path::new(".git").to_path_buf(),
+        Path::new("missing.md").to_path_buf(),
+    ] {
+        symlink(&target, &agents).unwrap();
+        let error = spec.sandbox_profile(Some(&workspace)).unwrap_err();
+        assert!(
+            matches!(error, orbit_common::OrbitError::PolicyDenied(_)),
+            "{}: {error}",
+            target.display()
+        );
+        std::fs::remove_file(&agents).unwrap();
+    }
+    // Without a workspace there is no boundary a link could stay inside.
+    symlink("CLAUDE.md", &agents).unwrap();
+    let mut absolute = spec.clone();
+    absolute.permissions.fs.write_files = vec![agents.display().to_string()];
+    assert!(absolute.sandbox_profile(None).is_err());
+
+    let profile = spec.sandbox_profile(Some(&workspace)).unwrap();
+    std::fs::remove_file(&agents).unwrap();
+    symlink("README.md", &agents).unwrap();
+    let req = ExecRequest {
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), "exit 0".into()],
+        current_dir: None,
+        timeout_ms: Some(1000),
+        stdin_mode: StdinMode::Null,
+        environment_mode: EnvironmentMode::ClearAndSet(vec![]),
+        debug: false,
+    };
+    let error = run_process(&req, &profile).unwrap_err().to_string();
+    assert!(error.contains("now resolves to"), "{error}");
+}

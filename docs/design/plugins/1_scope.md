@@ -7,7 +7,7 @@ doc_role: scope
 type: design
 summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_updated: 2026-11-12
+last_updated: 2026-11-15
 last_validated: 2026-11-12
 stage: shipped
 next: "—"
@@ -582,11 +582,32 @@ existing regular files, separately from directory roots in `fs.write`. It uses t
 same templates, `fs` consent (including scoped `fs=<root>` grants), digest binding,
 certification and upgrade re-consent. Omit the list when unused; empty, missing or
 non-file paths refuse rather than materialize a file or grant its parent. The exact
-file must be user-owned, have one hard link, and have no group/other write bits.
-Its physical path may not traverse symbolic links or unsafe directories; use the
-physical spelling (for example `/private/tmp` rather than macOS's `/tmp` alias).
-Orbit opens each component without following links and validates the opened file,
-then repeats admission before spawning. Protected install, Orbit state and workspace
+file must be user-owned, have one hard link, and have no other-write bit; a group
+write bit is accepted, because a checkout made under umask 0002 is group-writable and
+the grant gives the plugin nothing the group does not already hold. Its ancestors
+must be directories owned by the user or root: an other-writable one must be sticky,
+and a group-writable one must be the user's own or sticky. The physical path may not
+traverse symbolic links; use the physical spelling (for example `/private/tmp` rather
+than macOS's `/tmp` alias). Orbit opens each component without following links and
+validates the opened file, then repeats admission before spawning and refuses the
+spawn when the file now resolves elsewhere.
+
+*Workspace root files.* A grant such as `{{workspace}}/AGENTS.md` lets a mutating
+plugin (the constellation `standards` sync) rewrite one file at the workspace root;
+in a managed run `{{workspace}}` renders to the task worktree, so the grant reaches
+that worktree's file. The leaf, and only the leaf, may be a symbolic link when the
+call has a workspace: the link must sit inside it and its target must resolve to a
+safe regular file inside the same workspace, outside `.git` and `.orbit`. The
+resolved target (`CLAUDE.md` for Orbit's own `AGENTS.md` -> `CLAUDE.md`) is what
+both platforms grant, so a write through the link reaches it and the link itself
+stays. A link whose target leaves the workspace, is missing, or lands in `.git` or
+`.orbit` is refused, as is any link without a workspace. Because an exact-file grant
+admits only an existing file and a conformance workspace starts empty, `orbit plugin
+test` creates each `fs.write_files` entry that renders inside its scratch workspace
+(outside `.git` and `.orbit`) as an empty owner-only file before admission. We chose
+this over a `{{workspace}}` directory grant that carves out `.git` and `.orbit`:
+that grant would also open every other root file and every file or directory
+created at the root later, where the task asks for one named file. [ORB-25145] Protected install, Orbit state and workspace
 metadata boundaries apply to exact files too. A scoped grant covers a requested file
 only when it names that file or an ancestor directory; a descendant never grants a
 directory beneath the file. File replacement/creation and atomic rename require a
