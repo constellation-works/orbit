@@ -250,11 +250,11 @@ fn biased_history_corrects_quantiles_and_does_not_train_on_itself() {
                     .map(|id| stored_task(id, "medium", 100.0, false))
                     .collect(),
             );
-            record(&fixture, now - Duration::days(12), 19, eligible);
+            record(&fixture, now - Duration::days(12), 20, eligible);
             record(
                 &fixture,
                 now - Duration::days(9),
-                19,
+                20,
                 medium
                     .iter()
                     .map(|id| stored_task(id, "medium", 100.0, true))
@@ -265,7 +265,7 @@ fn biased_history_corrects_quantiles_and_does_not_train_on_itself() {
             let response = initial_work_forecast_baseline(json_ok(
                 server.get(&format!("{ENDPOINT}&history_tasks=5&concurrency=1")),
             ));
-            assert_eq!(response["model_version"], 19);
+            assert_eq!(response["model_version"], 20);
             assert_eq!(response["inputs"]["history_deliveries"], 5, "{response}");
             assert_eq!(
                 response["assumptions"]["residual_correction"],
@@ -344,7 +344,7 @@ fn biased_history_corrects_quantiles_and_does_not_train_on_itself() {
                 older["task_level"]["hours"]["n"].as_u64().unwrap() >= 8,
                 "version 14 must still be scored on its own measure: {older}"
             );
-            let current = version(19);
+            let current = version(20);
             assert_eq!(
                 current["task_level"]["hours"]["n"], 10,
                 "each done task counts once, and a forecast made after done is not in the population: {current}"
@@ -405,7 +405,7 @@ fn repeated_snapshots_count_one_residual_per_task() {
                 record(
                     &fixture,
                     now - Duration::days(days_ago),
-                    19,
+                    20,
                     training.clone(),
                 );
             }
@@ -461,19 +461,21 @@ fn repeated_snapshots_count_one_residual_per_task() {
     );
 }
 
-/// With stored base p90 > p50 the fitted spread is non-zero, and the
-/// correction must land on the full-script total. The only outcome pool
-/// is five one-hour failed attempts, so the open task's script is 25
-/// one-hour steps (the attempt cap) totalling 25 uncorrected hours.
-/// Training took four hours against a base p50 of one (p90 two), which
-/// maps a 25-hour total to four hours; applying the map per step would
-/// instead give 25 corrected steps. Tokens and USD follow the same
-/// total: each failed step carries them, and their corrected sums must
-/// be the correction of their uncorrected totals, not 25 corrections.
+/// The correction must land on the full-script total, and it must not
+/// stretch that total by its distance from the cohort center. The only
+/// outcome pool is five one-hour failed attempts, so the open task's
+/// script is 25 one-hour steps (the attempt cap) totalling 25 uncorrected
+/// hours, 25 times the cohort center of one hour. Training took four
+/// hours against a base p50 of one (p90 two), so the fitted p50 shift is
+/// `ln(4)`: the 25-hour total corrects to 100 hours, a factor of four,
+/// not to the `ln(10)` clamp the old cohort-center spread reached.
+/// Tokens and USD follow the same total: each failed step carries them,
+/// and their corrected sums must be the correction of their uncorrected
+/// totals.
 #[test]
-fn spread_correction_applies_to_the_full_script_total() {
+fn correction_applies_p50_shift_to_the_full_script_total() {
     isolated(
-        "backlog_correction::spread_correction_applies_to_the_full_script_total",
+        "backlog_correction::correction_applies_p50_shift_to_the_full_script_total",
         || {
             let fixture = Fixture::new();
             let now = Utc::now();
@@ -501,7 +503,7 @@ fn spread_correction_applies_to_the_full_script_total() {
             record(
                 &fixture,
                 now - Duration::days(12),
-                19,
+                20,
                 medium
                     .iter()
                     .map(|id| stored_task_spread(id, "medium"))
@@ -522,10 +524,22 @@ fn spread_correction_applies_to_the_full_script_total() {
                 let term = cohort(correction, "medium", metric);
                 assert_eq!(term["n"], 8, "{term}");
                 assert_eq!(term["applied"], true, "{term}");
+                assert_eq!(term["withheld"], Value::Null, "{term}");
                 let spread = term["spread"].as_f64().unwrap();
                 assert!(
-                    (spread + 1.0).abs() < 0.05,
-                    "{metric} spread must be non-zero, got {spread} from {term}"
+                    spread.abs() < 0.001,
+                    "{metric} spread must not stretch a draw, got {spread} from {term}"
+                );
+                let center = term["center"].as_f64().unwrap();
+                assert!(center > 0.0, "{metric} center: {term}");
+                let holdout = &term["holdout"];
+                assert_eq!(holdout["n"], 8, "{holdout}");
+                assert!(
+                    holdout["corrected_median_abs_log_p50_error"]
+                        .as_f64()
+                        .unwrap()
+                        < holdout["base_median_abs_log_p50_error"].as_f64().unwrap(),
+                    "{metric} holdout must expose improving p50 figures: {holdout}"
                 );
             }
 
@@ -537,23 +551,27 @@ fn spread_correction_applies_to_the_full_script_total() {
             );
             let hours = row["work_hours"]["p50"].as_f64().unwrap();
             assert!(
-                (3.5..4.5).contains(&hours),
-                "corrected steps must sum to the correction of the 25-hour total (4), got {hours}: {row}"
+                (90.0..110.0).contains(&hours),
+                "corrected steps must sum to 25 shifted by exp(ln(4)) (100), not the ln(10) clamp, got {hours}: {row}"
+            );
+            assert!(
+                (hours / base_hours - 4.0).abs() < 0.4,
+                "corrected/base ratio must be the fitted p50 factor 4, got {}: {row}",
+                hours / base_hours
             );
             let usd = row["usd"]["p50"].as_f64().unwrap();
             assert!(
-                (3.5..4.5).contains(&usd),
-                "corrected USD must sum to the correction of its total (4), got {usd}: {row}"
+                (90.0..110.0).contains(&usd),
+                "corrected USD must sum to the correction of its total (100), got {usd}: {row}"
             );
             let base_tokens = row["base"]["tokens"]["p50"].as_f64().unwrap();
             let tokens = row["tokens"]["p50"].as_f64().unwrap();
             let token_term = cohort(correction, "medium", "tokens");
-            // The log-affine map on the total, with the same ±ln(10)
-            // shift clamp the fit applies to a draw.
-            let shift = (token_term["p50_log_adjust"].as_f64().unwrap()
-                + token_term["spread"].as_f64().unwrap()
-                    * (base_tokens.ln() - token_term["center"].as_f64().unwrap().ln()))
-            .clamp(-10.0_f64.ln(), 10.0_f64.ln());
+            // The map on the total is only the fitted p50 shift.
+            let shift = token_term["p50_log_adjust"]
+                .as_f64()
+                .unwrap()
+                .clamp(-10.0_f64.ln(), 10.0_f64.ln());
             let expected_tokens = (base_tokens.ln() + shift).exp();
             assert!(
                 base_tokens > 0.0 && (tokens - expected_tokens).abs() <= expected_tokens * 0.05,
@@ -652,9 +670,9 @@ fn fit_and_calibration_read_the_first_not_started_forecast_per_task() {
                 };
             // Oldest first: the first not-started forecast, a later
             // not-started one, then one taken after work started.
-            record(&fixture, now - Duration::days(14), 19, row(1.0, false));
-            record(&fixture, now - Duration::days(13), 19, row(100.0, false));
-            record(&fixture, now - Duration::days(12), 19, row(0.01, true));
+            record(&fixture, now - Duration::days(14), 20, row(1.0, false));
+            record(&fixture, now - Duration::days(13), 20, row(100.0, false));
+            record(&fixture, now - Duration::days(12), 20, row(0.01, true));
 
             let server = fixture.server(false);
             let response = initial_work_forecast_baseline(json_ok(
@@ -706,7 +724,7 @@ fn fit_and_calibration_read_the_first_not_started_forecast_per_task() {
                 .as_array()
                 .unwrap()
                 .iter()
-                .find(|row| row["model_version"] == 19)
+                .find(|row| row["model_version"] == 20)
                 .unwrap();
             assert_eq!(
                 current["task_population"],
@@ -717,12 +735,12 @@ fn fit_and_calibration_read_the_first_not_started_forecast_per_task() {
     );
 }
 
-/// Twelve medium tasks against a base of one hour (p90 twenty): nine took
-/// one hour and three took 10, 14 and 18. In sample the fitted p90 is the
-/// 0.9 quantile, but held out the 14- and 18-hour tasks miss the p90 the
-/// other eleven fit, so leave-one-out coverage is 10/12 against a base of
-/// 12/12. The cohort meets the minimum and is withheld, and the open draw
-/// stays at the base.
+/// Twelve medium tasks against a base p50 of two hours (p90 20): nine
+/// took one hour and three took 10, 14 and 18. The fitted p50 shift
+/// halves every draw, so held out the 14- and 18-hour tasks miss the
+/// corrected p90 of ten the other eleven fit, and leave-one-out coverage
+/// is 10/12 against a base of 12/12. The cohort meets the minimum and is
+/// withheld, and the open draw stays at the base.
 #[test]
 fn cohort_withheld_when_holdout_p90_falls_below_base() {
     isolated(
@@ -751,10 +769,10 @@ fn cohort_withheld_when_holdout_p90_falls_below_base() {
             record(
                 &fixture,
                 now - Duration::days(12),
-                19,
+                20,
                 medium
                     .iter()
-                    .map(|id| stored_task_state(id, "medium", 1.0, 20.0, false))
+                    .map(|id| stored_task_state(id, "medium", 2.0, 20.0, false))
                     .collect(),
             );
 
@@ -780,6 +798,182 @@ fn cohort_withheld_when_holdout_p90_falls_below_base() {
             assert!(
                 (0.5..1.5).contains(&p50),
                 "a withheld cohort leaves the draw uncorrected, got {p50}"
+            );
+        },
+    );
+}
+
+/// A stored task reproducing the audit's token scale in ratio terms:
+/// base tokens p50 is `100 / exp(0.828)`, so every token residual is
+/// 0.828 and the cohort center is that base, far below an open task whose
+/// 25 failed steps total 2,500 base tokens.
+fn stored_task_audit(id: &str, complexity: &str) -> Value {
+    json!({
+        "id": id,
+        "complexity": complexity,
+        "forecast": {
+            "work_hours": {"p50": 1.0, "p90": 2.0},
+            "tokens": {"p50": 43.719, "p90": 87.438},
+            "usd": {"p50": 1.0, "p90": 2.0},
+            "base": {
+                "work_hours": {"p50": 1.0, "p90": 2.0},
+                "tokens": {"p50": 43.719, "p90": 87.438},
+                "usd": {"p50": 1.0, "p90": 2.0},
+            },
+        },
+    })
+}
+
+#[test]
+fn audit_scale_task_tokens_p50_is_not_clamped_to_ten_times_base() {
+    isolated(
+        "backlog_correction::audit_scale_task_tokens_p50_is_not_clamped_to_ten_times_base",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            for _ in 0..5 {
+                completed(&fixture, now - Duration::days(1));
+            }
+            let done_at = now - Duration::days(10);
+            let observed = now - Duration::days(8);
+            let mut medium = Vec::new();
+            for _ in 0..8 {
+                let id = completed_work(&fixture, done_at, TaskComplexity::Medium, 4);
+                retimestamp_invocation(&fixture, &id, observed);
+                medium.push(id);
+            }
+            for _ in 0..5 {
+                failed_attempt(&fixture, now - Duration::hours(12));
+            }
+            let pending = super::backlog_forecast::backlog_task(
+                &fixture,
+                "Open audit scale",
+                &["file:audit.rs"],
+                &[],
+                &[],
+            );
+            record(
+                &fixture,
+                now - Duration::days(12),
+                20,
+                medium
+                    .iter()
+                    .map(|id| stored_task_audit(id, "medium"))
+                    .collect(),
+            );
+
+            let server = fixture.server(false);
+            let response = initial_work_forecast_baseline(json_ok(
+                server.get(&format!("{ENDPOINT}&history_tasks=5&concurrency=1")),
+            ));
+            let correction = &response["inputs"]["correction"];
+            let term = cohort(correction, "medium", "tokens");
+            assert_eq!(term["n"], 8, "{term}");
+            assert_eq!(term["applied"], true, "{term}");
+            let q50 = term["p50_log_adjust"].as_f64().unwrap();
+            assert!((q50 - 0.828).abs() < 0.05, "q50 {q50}: {term}");
+            assert_eq!(term["spread"], 0.0, "{term}");
+            let center = term["center"].as_f64().unwrap();
+            assert!((center - 43.719).abs() < 0.1, "center {center}: {term}");
+
+            let row = prediction(&response, &pending);
+            let base = row["base"]["tokens"]["p50"].as_f64().unwrap();
+            let corrected = row["tokens"]["p50"].as_f64().unwrap();
+            assert!(
+                base > 4.0 * center,
+                "fixture base {base} must sit far from cohort center {center}: {row}"
+            );
+            let ratio = corrected / base;
+            assert!(
+                (2.0..2.6).contains(&ratio),
+                "corrected/base must be exp(q50) (~2.29), not the 10x clamp, got {ratio} from base {base} corrected {corrected}: {row}"
+            );
+            assert!(corrected < base * 9.9, "must not reach clamp: {row}");
+        },
+    );
+}
+
+/// Twelve medium tasks against a wide base (p50 one hour, p90 100):
+/// six took one hour and six took four. Held out, a one-hour task is
+/// corrected by a cohort whose median residual is `ln(4)` and a four-hour
+/// task by one whose median is zero, so every held-out corrected p50 is
+/// `ln(4)` from its actual while the base median absolute log error is
+/// half that. P90 coverage stays perfect on both sides, so only the new
+/// p50 holdout can withhold the cohort.
+#[test]
+fn cohort_withheld_when_holdout_p50_error_worsens() {
+    isolated(
+        "backlog_correction::cohort_withheld_when_holdout_p50_error_worsens",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            for _ in 0..5 {
+                completed(&fixture, now - Duration::days(1));
+            }
+            let done_at = now - Duration::days(10);
+            let observed = now - Duration::days(8);
+            let mut medium = Vec::new();
+            for hours in [1, 1, 1, 1, 1, 1, 4, 4, 4, 4, 4, 4] {
+                let id = completed_work(&fixture, done_at, TaskComplexity::Medium, hours);
+                retimestamp_invocation(&fixture, &id, observed);
+                medium.push(id);
+            }
+            let pending = super::backlog_forecast::backlog_task(
+                &fixture,
+                "Open medium",
+                &["file:medium.rs"],
+                &[],
+                &[],
+            );
+            record(
+                &fixture,
+                now - Duration::days(12),
+                20,
+                medium
+                    .iter()
+                    .map(|id| stored_task_state(id, "medium", 1.0, 100.0, false))
+                    .collect(),
+            );
+
+            let server = fixture.server(false);
+            let response = initial_work_forecast_baseline(json_ok(
+                server.get(&format!("{ENDPOINT}&history_tasks=5&concurrency=1")),
+            ));
+            let correction = &response["inputs"]["correction"];
+            for metric in ["work_hours", "usd"] {
+                let term = cohort(correction, "medium", metric);
+                assert_eq!(term["n"], 12, "{term}");
+                assert_eq!(term["applied"], false, "{metric}: {term}");
+                assert_eq!(term["withheld"], "p50_holdout", "{metric}: {term}");
+                let holdout = &term["holdout"];
+                assert_eq!(holdout["method"], "leave_one_out", "{holdout}");
+                assert_eq!(holdout["n"], 12, "{holdout}");
+                assert_eq!(holdout["base_under_p90"], 1.0, "{holdout}");
+                assert_eq!(holdout["corrected_under_p90"], 1.0, "{holdout}");
+                let base_error = holdout["base_median_abs_log_p50_error"].as_f64().unwrap();
+                let corrected_error = holdout["corrected_median_abs_log_p50_error"]
+                    .as_f64()
+                    .unwrap();
+                assert!(
+                    (base_error - 0.693).abs() < 0.01,
+                    "{metric} base p50 error {base_error}: {holdout}"
+                );
+                assert!(
+                    (corrected_error - 1.386).abs() < 0.01,
+                    "{metric} corrected p50 error {corrected_error}: {holdout}"
+                );
+                assert_eq!(
+                    holdout["base_p50_median_abs_log_error"],
+                    holdout["base_median_abs_log_p50_error"],
+                    "{holdout}"
+                );
+            }
+            let p50 = prediction(&response, &pending)["work_hours"]["p50"]
+                .as_f64()
+                .unwrap();
+            assert!(
+                (0.5..1.5).contains(&p50),
+                "a p50-withheld cohort leaves the draw uncorrected, got {p50}"
             );
         },
     );
