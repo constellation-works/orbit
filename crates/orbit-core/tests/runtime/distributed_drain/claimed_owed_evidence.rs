@@ -706,7 +706,13 @@ fn owner_fulfilment_resumes_the_held_mac_candidate_without_rework() {
 
     let owner = leaf.pair.wire.owner.clone();
     owner_checkout(&leaf, &origin);
-    fulfil_or_attach(&leaf, &owner, &hold, &root);
+    fulfil_or_attach(
+        &leaf,
+        &owner,
+        &hold,
+        &root,
+        "owner_fulfilment_resumes_the_held_mac_candidate_without_rework",
+    );
     assert_eq!(leaf.pair.owner_status(&leaf.task), "backlog");
     let receipt = owner.get_task_history(&leaf.task).unwrap();
     assert_eq!(
@@ -909,6 +915,7 @@ fn fulfil_or_attach(
     owner: &OrbitRuntime,
     hold: &ReviewEvidenceHold,
     root: &Path,
+    test: &str,
 ) {
     let log_artifact = "evidence/codeql-rust-linux.log.json";
     let probe = orbit_exec::probe_bwrap();
@@ -942,8 +949,11 @@ fn fulfil_or_attach(
         return;
     }
     orbit_exec::report_bwrap_deferral(
-        "owner CodeQL fulfilment (an operator attaches the result instead)",
-        &probe.detail,
+        test,
+        &format!(
+            "owner CodeQL fulfilment (an operator attaches the result instead): {}",
+            probe.detail
+        ),
     );
     attach_result(leaf, owner, hold);
 }
