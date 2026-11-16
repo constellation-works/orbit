@@ -5,17 +5,17 @@ status: Implemented
 feature: plugins
 doc_role: scope
 type: design
-summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
+summary: "Implemented plugin manifest, lifecycle, grants, brokered agent calls, consented builds and declarative extensions."
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
 last_updated: 2026-11-15
-last_validated: 2026-11-12
+last_validated: 2026-11-15
 stage: shipped
 next: "—"
 ---
 
 # Scope: Orbit plugin standard
 
-Status: phases 1-4 landed; phase 5 remains proposal.
+Status: phases 1–4 shipped; provider plugins (phase 5) remain deferred vision.
 Bearing: [Operations as data, not inherent methods](../orbit-core/4_decisions.md).
 Precedents: `*.orbit-tool.yaml` sidecar manifests (orbit-graph still ships three; its migration
 to `plugin.yaml` is pending), and orbit-research's version/capability allowlist against the
@@ -36,7 +36,9 @@ One manifest (`plugin.yaml`, `schemaVersion: 2`, superseding the v1 tool sidecar
 every contribution (tools, CLI, dashboard panels, routines, auto-tasks, activities, jobs,
 skills, config); one lifecycle (`orbit plugin …`); one execution protocol; one set of
 invariants enforced at load, enable and call time. A plugin is **data plus one backend
-executable**: no Rust, no dashboard JavaScript.
+executable**: no Rust, no dashboard JavaScript. The committed standard shipped in
+[ORB-12735]–[ORB-12738]; the host-side broker and consented install-time builds
+are also implemented (see their delivery sections below).
 
 ### Non-goals for v1
 
@@ -1345,6 +1347,10 @@ provenance-aware disabled-plugin skip beside `RETIRED_ROUTINE_JOBS`;
 5. **Provider plugins** — deferred: open `ProviderRegistry` and collapse the four provider
    vocabularies only when a second external provider exists.
 
+The [host-side broker](./2_agent_call_broker.md#8-rollout-and-follow-up-tasks)
+and [install-time builds](./3_install_time_build.md#6-implementation) shipped
+after these four phases. Neither is pending phase-5 provider work.
+
 ## 8. Risks
 
 - **Grant fatigue.** `--grant requested`/`all` for interactive use; explicit lists for scripts.
@@ -1410,5 +1416,7 @@ provenance-aware disabled-plugin skip beside `RETIRED_ROUTINE_JOBS`;
   its configured-catalog-only scope.
 - [ORB-21774] — closed `--host` and id-routed bypasses of the cross-host
   callback refusal.
+- [ORB-25145] — admitted exact-file writes to workspace root files, including
+  a final symlink whose checked target stays inside the worktree.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

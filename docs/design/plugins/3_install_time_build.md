@@ -3,18 +3,18 @@ type: design
 title: "Threat model: install-time spec.build for source-built plugins"
 summary: "Threat model and binding decisions for an opt-in spec.build that builds a git+ plugin source at install time: sandbox profile, network, environment, write scope, artifact digest, consent, pin files, doctor and abuse cases"
 owner: claude
-status: Accepted
+status: Implemented
 tags: [plugins, security, sandbox, supply-chain, install]
 paths: ["crates/orbit-exec/src/build_sandbox/**", "crates/orbit-tools/src/plugin/build/**", "crates/orbit-core/src/application/plugin/build.rs", "crates/orbit-runtime/src/plugin/build_witness.rs", "crates/orbit-tools/src/plugin/source.rs", "crates/orbit-types/src/plugin/pin.rs", "crates/orbit-core/src/application/plugin/install/**", "crates/orbit-core/src/application/plugin/inspect/doctor.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/linux_landlock/**", "crates/orbit-exec/src/macos_sandbox/**"]
 related_features: [plugins, policy-sandbox]
 related_artifacts: [ORB-12878, ORB-12843, ORB-12874, ORB-12816]
-last_updated: 2026-10-27
-last_validated: 2026-10-22
+last_updated: 2026-11-15
+last_validated: 2026-11-15
 ---
 
 # Threat model: install-time spec.build for source-built plugins
 
-Status: implemented. §6 maps each decision to the code and records where the implementation
+Status: implemented by [ORB-13887]. §6 maps each decision to the code and records where the implementation
 refines it. A change to any decision below is a security decision and needs a change to this
 document in the same PR.
 
@@ -23,10 +23,11 @@ Builds on [1_scope.md](./1_scope.md) §3 (plugin sources, pin file, staged insta
 
 ## 1. What is being added
 
-Today a plugin reaches a host as a directory, a `git+` checkout, a local archive, or an
-`https://` archive pinned by `sha256:` digest (`crates/orbit-tools/src/plugin/source.rs`). In
-every form the backend executable is already present in `.orbit-plugin/`. A Rust or Node
-backend must therefore be published as a prebuilt archive per platform.
+Before `spec.build`, a plugin reached a host as a directory, a `git+` checkout, a local
+archive, or an `https://` archive pinned by `sha256:` digest
+(`crates/orbit-tools/src/plugin/source.rs`). Every form required the backend executable
+to be present in `.orbit-plugin/`, so Rust or Node backends needed prebuilt archives
+per platform. The consented build path below removes that requirement for pinned `git+` sources.
 
 `spec.build` lets a manifest instead say how to produce the files its backend needs from the
 repository it ships in:
@@ -443,7 +444,9 @@ Where the implementation makes a decision above more precise:
   then a detached checkout of `FETCH_HEAD`, rather than `git clone`, because a clone cannot
   name an arbitrary commit. It runs with the same protocol policy plus `core.hooksPath=/dev/null`.
 - **The build directory** is `~/.orbit/plugins/<ns>/.build-<pid>-<nonce>/`. The pid lets install
-  pruning and doctor tell a live build from a leftover one with `kill(pid, 0)`.
+  pruning and doctor tell a live build from a leftover one through
+  `orbit_common::process::identity::process_is_alive`, which also treats a zombie
+  as exited; [ORB-24554] replaced the former `kill(pid, 0)` probe.
 - **The macOS `fetch` refusal** is checked twice: the install refuses the manifest before it
   plans or asks for consent (`OrbitError::PluginBuildFetchUnsupported`,
   `orbit_exec::BUILD_FETCH_PHASE_SUPPORTED`), and the macOS probe and phase launcher refuse a
@@ -472,5 +475,7 @@ Where the implementation makes a decision above more precise:
 - [ORB-12843] — ran the plugin-source review it was split from.
 - [ORB-12874] — built digest-pinned `https://` archive sources, the recommended alternative.
 - [ORB-12816] — built the consent gate for `orbit plugin test`.
+- [ORB-13887] — implemented consented install-time builds and their confinement.
+- [ORB-24554] — reused the zombie-aware process liveness probe for build cleanup.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
