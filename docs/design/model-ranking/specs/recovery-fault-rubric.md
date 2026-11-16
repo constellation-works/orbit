@@ -167,6 +167,15 @@ tokens. Keep examples in contributor/agent material. No new decision fields or
 runtime schema are proposed. A prompt-only change needs human review of these
 case applications; tests that merely pin wording would not prove attribution.
 
+The causal line is bounded. Each of the ten decision shapes in
+`final_recovery.yaml` caps `fault_evidence` at `maxLength: 500`, and
+`FaultAttribution::new` (`crates/orbit-types/src/workflow/final_recovery.rs`)
+cuts a longer line at `MAX_FAULT_EVIDENCE_CHARS` with an ellipsis, which can
+drop the distinguishing observation. The wording above asks for the requirement,
+the observation and the alternative it rules out, so adoption must put the
+decisive fact first and check that each example fits. Raising the cap is a
+separate schema decision that this proposal does not make.
+
 ## Reassessing the suspension without rewriting history
 
 1. **Freeze the existing record.** Retain the two original audit artifacts,
@@ -179,9 +188,14 @@ case applications; tests that merely pin wording would not prove attribution.
    version in a separate reassessment artifact; retain the original as the
    legacy version with its known ordering conflict. Do not pool judgments from
    different versions into one agreement rate. An attribution-rule change also
-   requires a new ranking season under design §4.2 when seasons are implemented;
-   while season metadata is absent, retain `season-0` as historical provenance
-   and distinguish reassessments by rubric SHA and cohort dates explicitly.
+   starts a new calibrated ranking season under design §4.2: `season.rs` bumps
+   `DEFINITION_VERSION` for a change to a measure's definition, weight or
+   attribution rule, and calibrated seasons are already recorded in
+   `rank-seasons.json`. Decisions carry no season label today, so the audit's
+   `season-0`, which every decision receives by default, is not the calibrated
+   season 0 in that file. Retain
+   `season-0` as historical provenance and distinguish reassessments by rubric
+   SHA and cohort dates explicitly; do not infer a ranking season from them.
 3. **Separate diagnosis from confirmation.** The five disagreements are useful
    calibration examples but were selected for disagreement and their labels
    have been seen. Reapplying the draft to them cannot estimate reliability.
