@@ -76,6 +76,8 @@ escalations, your notices and your checkpoint need no right.
 | `merge` | Land a reviewed delivery with `orbit.workflow` action `land`; move a task with no open pull request to `done` |
 | (none yet) | `plugin_upgrade` maps to no tool yet; never improvise an install |
 
+`orbit.attention` reads the runtime kinds (`run_failed`, `run_stuck`, `claim_stale`) and `host_unhealthy` for the covered workspaces while the cycle's grant is live; any other workspace still reports them as `capability` degraded. That is a read only: it grants no write.
+
 Core enforces the grant on every call, not the prompt: a write without this
 cycle's live grant, outside the covered workspaces, or without its right is
 refused. A refusal is information, not an obstacle to route around — record

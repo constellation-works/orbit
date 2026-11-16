@@ -7,6 +7,7 @@
 //! action the dead cycle completed.
 
 mod assignment_lifecycle;
+mod attention_read;
 mod checkpoint_history;
 mod control_admission;
 mod deadline_expiry;

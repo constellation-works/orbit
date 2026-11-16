@@ -67,14 +67,18 @@ fn attention_local_workspace(runtime: &OrbitRuntime) -> Result<AttentionWorkspac
 ///
 /// Each checkout reports what its host is authoritative for: an owner its
 /// task-level kinds, every checkout its own host health.
+///
+/// The runtime kinds and host health need the Operator capability, except
+/// that a live resident cycle reads them, read-only, for the workspaces in
+/// `resident_scope` (ids and names its mandate covers). The session gains no
+/// capability: every write stays operator-only.
 pub(crate) fn attention_query(
     runtime: &OrbitRuntime,
     input: Value,
     session_context: &ToolSessionContext,
+    resident_scope: Option<&BTreeSet<String>>,
 ) -> Result<Value, OrbitError> {
     let filter = AttentionFilter::parse(input)?;
-    let reads_host_health = filter.selected(AttentionKind::HostUnhealthy)
-        && resolved_caller_capabilities(session_context).contains(&McpCapability::Operator);
     let operator = resolved_caller_capabilities(session_context).contains(&McpCapability::Operator);
     let machine = orbit_config::load_machine_settings(&runtime.global_root())?;
     let host = AttentionHost {
@@ -183,6 +187,7 @@ pub(crate) fn attention_query(
         targets
     };
     let mut seen_workspaces = BTreeSet::new();
+    let mut host_health_withheld = false;
     let mut seen_notice_items = BTreeSet::new();
     for target in targets {
         if !seen_workspaces.insert(target.workspace_id.clone()) {
@@ -255,9 +260,14 @@ pub(crate) fn attention_query(
                 }
             }
         };
+        let reads_runtime = operator
+            || resident_scope.is_some_and(|covered| {
+                covered.contains(&target.workspace_id) || covered.contains(&target.name)
+            });
+        host_health_withheld |= !reads_runtime;
         runtime_sources::read_runtime_attention(
             &source_context,
-            operator,
+            reads_runtime,
             &mut candidates,
             &open_tasks,
         );
@@ -267,7 +277,7 @@ pub(crate) fn attention_query(
             &mut candidates,
             &open_tasks,
         );
-        if reads_host_health {
+        if reads_runtime && filter.selected(AttentionKind::HostUnhealthy) {
             let owner = selected.coordination_task_reads_visible();
             match host::read_doctor_host_item(runtime, selected, &workspace, &host, owner) {
                 Ok(Some(item)) => candidates.items.push(item),
@@ -322,7 +332,12 @@ pub(crate) fn attention_query(
             ),
         });
     }
-    if filter.selected(AttentionKind::HostUnhealthy) && !reads_host_health {
+    // Host health is one host-level answer: the session is told it was
+    // withheld whenever any selected workspace could not read it.
+    if filter.selected(AttentionKind::HostUnhealthy)
+        && !operator
+        && (host_health_withheld || workspaces.is_empty())
+    {
         degraded.push(host::host_capability_degraded(&host));
     }
     tracing::debug!(target: "orbit.attention", source_microseconds = ?source_costs, "attention source costs");

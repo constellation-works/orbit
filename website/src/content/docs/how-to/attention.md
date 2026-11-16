@@ -26,7 +26,8 @@ An empty list does not prove that nothing waits. Check `degraded` in the JSON
 output, or the messages below the table: a source or host may have been
 unreadable. The `run_failed`, `run_stuck`, `claim_stale` and `host_unhealthy`
 kinds need Operator capability; a session without it reports those sources as
-degraded.
+degraded. A live resident cycle reads them, read-only, for the workspaces its
+mandate covers.
 :::
 
 ## Choose scope and filter
