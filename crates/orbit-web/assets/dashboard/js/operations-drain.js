@@ -2,7 +2,7 @@ import { captureWorkspaceVisit, compareWorkspacePickerOrder, requestPanel, el, f
 import { drainCrewNote, drainPilotNote, setDrainReadiness, setDrainReadinessFailure } from './drain-waits.js';
 import { drainCheckout } from './drain-start.js';
 import { autoDrainForecast, refreshBacklogForecast } from './operations-forecast.js';
-import { loadFleetSnapshot, paintAggregateFleet, paintRailDrainReading, repaintRailDrainFromFleet } from './operations-fleet.js';
+import { loadFleetSnapshot, paintRailDrainReading, repaintRailDrainFromFleet } from './operations-fleet.js';
 import { $, feedback, operationsState, pendingOperations, registerOperationsReset, runLink, selectedWorkspace, workspaceReadOnlyReason } from './operations-shared.js';
 import { taskList, taskState } from './task-shared.js';
 import { configureOperationsDrainControls, autoDrainConcurrencyValid, autoDrainConcurrencyValue, autoDrainStopButton, autoDrainStopNote, refreshDrainAfterAction, renderAutoDrainStart } from './operations-drain-controls.js';
@@ -761,9 +761,8 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
     const revision = getWorkspaceRevision();
     const guard = () => generation === drainScopeGeneration && token === operationsState.aggregateFleetToken && revision === getWorkspaceRevision() && !selectedWorkspace();
     return requestPanel("auto-drain-body", `aggregate:${aggregateDrainHost || "owner"}:${aggregateDrainWorkspace || "none"}`, async () => {
-      const fleet = await loadFleetSnapshot({ refreshWhenStale: true, onPartial: payload => { if (guard()) paintAggregateFleet(payload); } });
+      const fleet = await loadFleetSnapshot({ refreshWhenStale: true });
       if (!guard()) return null;
-      paintAggregateFleet(fleet);
       const options = aggregateWorkspaceOptions(fleet);
       const rememberedWorkspace = rememberedAggregateWorkspace();
       const liveDefault = options.find(option => (fleet.items || []).some(row => row.workspace_id === option.id && !row.error && LIVE_DRAIN_PHASES.includes(row.phase)));
