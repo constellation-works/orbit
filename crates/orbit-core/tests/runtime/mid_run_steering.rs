@@ -288,8 +288,45 @@ fn two_runs_of_one_task_hold_independent_watermarks() {
     assert_eq!(fx.watermark(&first_run).comment, mark(0, first));
     assert_eq!(fx.watermark(&retry).comment, mark(1, second));
 
-    // A dispatch outside any persisted run has no record to hold one.
-    fx.prompt("jrun-without-state", "implement");
+    // A dispatch outside any persisted run has no record to hold a
+    // watermark: the prompt fails rather than silently losing it.
+    let refused = RuntimeHost::task_context_for_agent_input(
+        &fx.runtime,
+        "jrun-without-state",
+        "implement",
+        &json!({ "task_id": fx.task }),
+    );
+    assert!(refused.is_err(), "{refused:?}");
+}
+
+fn a_prompt_whose_run_has_no_state_fails_instead_of_dropping_the_watermark() {
+    let fx = Fixture::new(ENABLED);
+    // A run record the engine has not seeded pipeline state for yet.
+    let run = fx
+        .jobs
+        .insert_job_run(
+            "task_pr_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({ "task_id": fx.task })),
+            None,
+        )
+        .unwrap();
+    let refused = RuntimeHost::task_context_for_agent_input(
+        &fx.runtime,
+        &run.run_id,
+        "implement",
+        &json!({ "task_id": fx.task }),
+    );
+    assert!(refused.is_err(), "{refused:?}");
+    assert!(
+        fx.runtime
+            .get_task_history(&fx.task)
+            .unwrap()
+            .iter()
+            .all(|entry| entry.event != "steering_delivered"),
+        "no delivery was recorded for a prompt that was never sent"
+    );
 }
 
 /// The steering block a prompt leads with, checked to be its first key.
@@ -531,6 +568,7 @@ crate::scenario_table!(
     steering_off_writes_nothing_and_on_leaves_the_prompt_unchanged,
     steering_on_records_the_newest_comment_by_position_and_never_moves_back,
     two_runs_of_one_task_hold_independent_watermarks,
+    a_prompt_whose_run_has_no_state_fails_instead_of_dropping_the_watermark,
     steering_instruction_is_byte_inert_when_disabled_and_appended_when_enabled
 );
 

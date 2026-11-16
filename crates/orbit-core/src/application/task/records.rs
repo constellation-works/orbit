@@ -162,6 +162,30 @@ impl TaskRecordService<'_> {
                 "injected task record update failure".to_string(),
             ));
         }
+        // The status compare-and-set guards the whole multi-part write, not
+        // only its history commit: evaluate it before any artifact, document
+        // or history change lands, so a CAS failure leaves no companion
+        // edits behind. The history commit re-evaluates it under its lock,
+        // which stays authoritative for a status change racing this check.
+        if let Some(expected) = &params.expected_status {
+            let row = self
+                .store
+                .get_task_row(id, false)?
+                .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.to_string()))?;
+            if !expected.contains(&row.task.status) {
+                return Err(OrbitError::InvalidInput(format!(
+                    "task '{id}' status changed to '{}' before this write; \
+                     expected one of [{}]",
+                    row.task.status,
+                    expected
+                        .iter()
+                        .map(|status| status.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+        }
+
         // A work-starting write the claim footprint guard will refuse must
         // refuse before any companion artifact, document or history write:
         // the store's in-lock guard stays authoritative, and this pre-flight
