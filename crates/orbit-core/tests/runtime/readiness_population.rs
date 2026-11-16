@@ -176,8 +176,8 @@ fn readiness_reads_open_work_and_the_closed_tasks_its_rules_reach() {
         tracing::subscriber::with_default(subscriber, || readiness(&runtime, &[]).unwrap());
     let reads = reads.load(Ordering::Relaxed);
     assert!(
-        reads <= 100,
-        "readiness over {CLOSED} closed tasks must read only open work and what its rules reach: read {reads}"
+        (1..=100).contains(&reads),
+        "readiness over {CLOSED} closed tasks must read the open envelopes and what its rules reach (at least one), and at most 100: read {reads}"
     );
     assert_eq!(report["total"], 4, "{report}");
     assert_eq!(
