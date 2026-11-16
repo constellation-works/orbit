@@ -32,6 +32,21 @@ mechanical and the evolution and metrics passes possible. The keys here are the 
 numbers each admitted write under the assignment's write lock and returns the key as
 `resident_action_key`. No tool takes a caller-supplied resident key.
 
+Successful object replies carry `resident_action_key` at the top level. An admitted write
+that fails as `OrbitError::RemoteTool` carries the same stored key in
+`payload.detail.resident_action_key`; the broker forwards that detail as
+`error.detail.resident_action_key`. The error's code, message and retryability stay unchanged.
+Existing object detail fields are retained, with `resident_action_key` reserved for the local
+ledger key. Absent or null detail becomes an object containing the key; other detail values
+are retained as `remote_detail` inside that object.
+
+Refusals and errors of other variants still lack a reply key; ORB-25284 tracks that remaining
+carrier gap. In particular, a production `gh` merge failure with HTTP 502 is `Execution` when
+the resident action closes. The outer broker later exposes it as
+`plugin_broker_call_failed`/`RemoteTool`, after the opportunity to attach the key. That route
+remains part of the gap. Pre-admission denials have no ledger key. A failed reply does not
+prove a merge was refused or completed: read the forge before deciding what happened.
+
 ### Action ledger
 
 Each key has `resident_action` history rows on the assignment: a `started` row before the call and
@@ -209,5 +224,7 @@ Designed by claude (claude-opus-5-5) for [ORB-21229]; built by [ORB-21243] and [
 - [ORB-21243] — implements the checkpoint tool and the request/answer shapes
 - [ORB-21244] — core-assigned action keys and the action ledger (slice 3)
 - [ORB-21246] — implements brief reconstruction and the continuity adapter
+- ORB-25279 — retains action keys in post-admission `RemoteTool` failure detail
+- ORB-25284 — tracks the reply-key carrier for refusals and other error variants
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

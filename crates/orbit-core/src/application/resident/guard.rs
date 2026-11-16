@@ -486,7 +486,8 @@ impl OrbitRuntime {
     }
 
     /// Record how a ledgered write ended. The key travels back in the
-    /// response so the cycle can cite it in its checkpoint.
+    /// response (or RemoteTool error detail) so the cycle can cite it in its
+    /// checkpoint. Other error variants have no compatible detail carrier.
     pub(crate) fn close_resident_action(
         &self,
         ticket: ResidentActionTicket,
@@ -511,6 +512,21 @@ impl OrbitRuntime {
             if let Value::Object(map) = value {
                 map.insert("resident_action_key".into(), json!(row.key));
             }
+        }
+        if let Err(OrbitError::RemoteTool { payload, .. }) = result {
+            // Keep remote diagnostics, including non-object detail, while
+            // reserving the action key for this local ledger's admission.
+            if !payload.is_object() {
+                *payload = json!({"detail": payload.take()});
+            }
+            let detail = &mut payload["detail"];
+            if !detail.is_object() {
+                *detail = match detail.take() {
+                    Value::Null => json!({}),
+                    remote_detail => json!({"remote_detail": remote_detail}),
+                };
+            }
+            detail["resident_action_key"] = json!(row.key);
         }
         self.append_resident_action_row(&task_id, &row)
     }
