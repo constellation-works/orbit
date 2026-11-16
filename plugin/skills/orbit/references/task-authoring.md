@@ -178,9 +178,11 @@ halves of its input:
   selectors or evidence and request a new pilot assessment.
 
 Write the title as a concrete outcome that fits the commit subject. The pipeline
-composes the subject as `<type>: <title> [<ID>]` and cuts the title at a word
-boundary, never with an ellipsis, to keep the whole subject within 72 characters
-(when cut, the full title leads the commit body). Keep titles to at most 55
+composes the subject as `<type>: <title> [<ID>]` and rewrites a literal `…` to
+`...` and commas inside brackets to semicolons. It cuts the title at a word
+boundary, never with an ellipsis, to keep the whole subject within 72 characters.
+When the subject cuts or rewrites the title, the full title leads the commit body.
+Keep titles to at most 55
 characters for a bug, 54 for a feature, 53 for a chore and 50 for a refactor,
 which is 72 minus the type's prefix and the ` [<ID>]` marker (12 characters for
 an `ORB-` id with five digits). A longer id, or the ` (#<PR>)` a squash appends,
