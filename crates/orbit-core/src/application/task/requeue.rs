@@ -37,7 +37,10 @@
 //! the run, the task and its unchanged specification, the checkpoints
 //! authenticate the pull request open and unmerged at the recorded head, and
 //! every required check on that head has passed. Anything else is refused
-//! with nothing written, naming the exit that applies.
+//! with nothing written, naming the exit that applies. A block-triage option
+//! whose rewrite changes that specification discards the candidate instead,
+//! including when the checks are not green. A live run is still refused, and
+//! that refusal is judged on the unchanged task.
 //!
 //! A requeue waits for the task's run to stop: final recovery blocks the task
 //! before the run's failure handoff publishes, and a requeue in between would
@@ -660,13 +663,16 @@ impl OrbitRuntime {
     }
 
     /// Whether rewriting the specification of blocked `task` to `description`
-    /// and `acceptance_criteria` (either may be `None`: unchanged) is what
-    /// strands a candidate the task's failed run published or kept: the
-    /// unchanged task still returns to backlog onto that candidate, the
-    /// rewritten one is refused as no longer implemented by it. A decision
-    /// answer that rewrites then discards the candidate with the rewrite
-    /// instead of being refused. A candidate that was already unresumable, or
-    /// that the rewrite leaves implementing the task, is not reported.
+    /// and `acceptance_criteria` (either may be `None`: unchanged) strands a
+    /// candidate the task's failed run published or kept.
+    ///
+    /// A bound candidate is stranded by any specification change, including
+    /// when required checks are not green or the candidate is already
+    /// unresumable for another settled reason. The answer discards it instead
+    /// of being refused for the rewrite. A live run is not stranded: the
+    /// answer stays refused because the run has not stopped, judged on the
+    /// unchanged task. A rewrite that leaves the specification unchanged, or
+    /// that no bound candidate implements, is not reported.
     pub(crate) fn rewrite_strands_candidate(
         &self,
         task: &Task,
@@ -683,6 +689,13 @@ impl OrbitRuntime {
         if rewritten.spec_digest() == task.spec_digest() {
             return Ok(false);
         }
+        // Discarding a live run would race a handoff that may still publish.
+        if self.unsettled_run(task)?.is_some() {
+            return Ok(false);
+        }
+        if self.preserved_candidate_bound(task)? {
+            return Ok(true);
+        }
         match self.authenticate_published_backlog_return(task) {
             Ok(_) => {}
             Err(OrbitError::InvalidInput(_)) => return Ok(false),
@@ -693,6 +706,59 @@ impl OrbitRuntime {
             Err(OrbitError::InvalidInput(_)) => Ok(true),
             Err(error) => Err(error),
         }
+    }
+
+    /// Whether a preserved candidate is still bound to `task`: a failure-handoff
+    /// receipt, a pipeline publication the failure handoff kept, or a kept
+    /// claim that has not been discarded. A live run can still be bound; the
+    /// caller decides whether that run may be discarded.
+    pub(crate) fn preserved_candidate_bound(&self, task: &Task) -> Result<bool, OrbitError> {
+        if self.handoff_receipt(task)?.is_some() {
+            return Ok(true);
+        }
+        if self.pipeline_publication_kept(task)? {
+            return Ok(true);
+        }
+        // Admission offers a held candidate instead of the kept claim, and a
+        // plain requeue does not refuse that hold for a specification change.
+        if self.stopped_run_holds_candidate(task)? {
+            return Ok(false);
+        }
+        let Some(kept) = self.stores().tasks().kept_claim_candidate(
+            &task.id,
+            self.automation_machine_identity().unwrap_or_default(),
+        )?
+        else {
+            return Ok(false);
+        };
+        Ok(!matches!(
+            kept.fresh.as_ref().map(|(reason, _)| *reason),
+            Some(CandidateFreshReason::Discarded)
+        ))
+    }
+
+    /// Whether `task`'s current run pushed its own pull request and the
+    /// failure handoff kept that publication (`candidate_preserved`).
+    fn pipeline_publication_kept(&self, task: &Task) -> Result<bool, OrbitError> {
+        if !self.run_published_through_pipeline(task)? {
+            return Ok(false);
+        }
+        let Some(run_id) = task.job_run_id.as_deref() else {
+            return Ok(false);
+        };
+        let Some(state) = self.stored_run_state(run_id)? else {
+            return Ok(false);
+        };
+        let Some(checkpoint) = state.failure_activity_checkpoint.as_ref() else {
+            return Ok(false);
+        };
+        let output = &checkpoint.output;
+        Ok(checkpoint.activity_name == "pr_failure_handoff"
+            && matches!(
+                output.get("decision").and_then(Value::as_str),
+                Some("review_completion_failure" | "landing_review_failure")
+            )
+            && output.get("candidate_preserved").and_then(Value::as_bool) == Some(true))
     }
 
     /// Authenticate a plain blocked/review-to-backlog status update without a

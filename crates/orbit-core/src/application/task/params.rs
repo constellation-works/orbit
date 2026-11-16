@@ -264,6 +264,11 @@ pub struct TaskUpdateParams {
     /// next run implements fresh instead of resuming it [ORB-13985].
     /// Recorded as a task history event; refused while a run owns the task.
     pub discard_candidate: bool,
+    /// Operator acceptance of open review findings, recorded as history and
+    /// never as a description or acceptance-criteria edit. Absent from public
+    /// task input; only the decision answer that resumes the reviewed
+    /// candidate sets it.
+    pub finding_acceptance: Option<String>,
     /// Allow replacing tags when the replacement list drops a system identity tag (`ci-failure:*`).
     pub allow_drop_system_tags: bool,
 }
@@ -305,8 +310,10 @@ impl TaskUpdateParams {
             context_files,
             upsert_artifacts,
             discard_candidate,
+            finding_acceptance,
         } = self;
         comment.is_some()
+            && finding_acceptance.is_none()
             && review_settlement.is_none()
             && title.is_none()
             && description.is_none()

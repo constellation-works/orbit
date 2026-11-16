@@ -1894,6 +1894,9 @@ input.field-editor-input {
 .decision-consequence { flex: 1 1 200px; min-width: 0; color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
 .decision-pending { color: var(--fg-mute); font-size: 12px; }
 .decision-card { display: grid; gap: 10px; margin-top: 6px; min-width: 0; }
+.decision-answer-refusal { display: grid; gap: 8px; justify-items: start; margin: 0; }
+.decision-answer-refusal-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.decision-answer-refusal .action { font-family: var(--font-sans); }
 .decision-summary { margin: 0; font-size: 13px; line-height: 1.5; color: var(--fg-strong); overflow-wrap: anywhere; }
 .decision-human-action { margin: 6px 0 0; font-size: 13px; line-height: 1.5; color: var(--fg-soft); overflow-wrap: anywhere; white-space: pre-line; }
 .decision-human-action strong { color: var(--attention-fg, var(--fg-strong)); }

@@ -62,6 +62,14 @@ export const taskState = {
   // Operator records (pilot-admission / post-deploy): a refused record's typed
   // code and message, kept with the action like a refused recovery.
   operatorRecordRefusals: new Map(),
+  // A refused decision answer, keyed `<workspace>:<task id>:<request id>`.
+  // The message stays with the decision card across a detail rebuild: the
+  // request itself does not change, so a refresh used to drop the only sign
+  // that the answer failed.
+  decisionAnswerRefusals: new Map(),
+  // The refusal key whose card should be scrolled into view once, after the
+  // render that first shows it.
+  decisionAnswerFocus: null,
   // Guard duplicate clicks while a Ship request is pending. Once the server
   // accepts it, the server's 409 protects the live run; releasing this guard lets
   // a task returned to backlog be shipped again without reloading the page.

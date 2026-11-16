@@ -22,6 +22,12 @@ pub const NO_DRAIN_TAG: &str = "no-drain";
 /// last failed run preserved; the next run implements fresh [ORB-13985].
 pub const CANDIDATE_DISCARDED_EVENT: &str = "candidate_discarded";
 
+/// Task history event an operator records when accepting open review findings
+/// and resuming the reviewed candidate. It is not a specification edit: the
+/// description and acceptance criteria that guard that candidate stay as they
+/// are.
+pub const FINDING_ACCEPTANCE_EVENT: &str = "finding_acceptance";
+
 /// Task history event recording what a run, or a claim's admission, did with
 /// the candidate an earlier run or claim of the task preserved [ORB-13985]
 /// [ORB-14338].

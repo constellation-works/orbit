@@ -35,6 +35,12 @@ impl<'de> Deserialize<'de> for DecisionRiskTier {
     }
 }
 
+/// Derived block-triage answer that accepts open review findings and resumes
+/// the reviewed candidate. It is not stored on the request: readers add it
+/// the way they add `land`, and it carries [`DecisionAction::Requeue`] with
+/// no specification rewrite.
+pub const ACCEPT_FINDINGS_ANSWER_ID: &str = "accept-findings";
+
 /// One allowed answer to a [`DecisionRequest`](super::model::DecisionRequest).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DecisionAnswer {

@@ -396,6 +396,21 @@ the pull request is open, not a draft, still at the handed-off head, free of
 conflicts, and free of failed or pending required checks. Otherwise it refuses
 and leaves the request open.
 
+### If the blocked task has an open review finding
+
+When a reviewed candidate can still return to the backlog, its block decision
+offers an answer that accepts the open findings and resumes that same
+candidate. Choosing it does not change the task's description or acceptance
+criteria. The next run carries the candidate through validation and review
+again, then lands it.
+
+An option that would change the description or acceptance criteria says that
+the reviewed candidate is discarded. Choosing it discards the candidate and
+closes its pull request, including when required checks have not passed. A
+delivery that is still running is refused until that run stops; the refusal
+is not caused by the option's rewrite. On the dashboard that refusal stays
+on the decision card until you dismiss it or it expires.
+
 ### If a run is stuck pending
 
 A run stuck `pending` with no live worker still holds its task reservations.

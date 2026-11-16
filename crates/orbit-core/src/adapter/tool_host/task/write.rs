@@ -704,6 +704,9 @@ fn task_update_params_from_input(
         // Discarding a preserved candidate is an operator decision taken
         // from the CLI (`orbit task update --discard-candidate`).
         discard_candidate: false,
+        // Accepting findings is recorded only by the derived decision answer,
+        // never from task-update input.
+        finding_acceptance: None,
         allow_drop_system_tags: optional_bool_alias(input, &["allow_drop_system_tags"])?
             .unwrap_or(false),
     })

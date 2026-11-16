@@ -3,10 +3,10 @@
 use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::identity::is_automation_actor;
 use orbit_types::task::{
-    DECISION_ANSWERED_EVENT, DecisionAction, DecisionAnswer, DecisionGate, DecisionOption,
-    DecisionRequest, DecisionRequestState, DecisionResolution, PilotAdmissionOperatorRecord,
-    PilotAdmissionVerdict, ReadinessGap, ReadinessStage, TaskHistoryEntry, TaskRelation,
-    TaskRelationType, TaskStatus, readiness_gaps,
+    ACCEPT_FINDINGS_ANSWER_ID, DECISION_ANSWERED_EVENT, DecisionAction, DecisionAnswer,
+    DecisionGate, DecisionOption, DecisionRequest, DecisionRequestState, DecisionResolution,
+    PilotAdmissionOperatorRecord, PilotAdmissionVerdict, ReadinessGap, ReadinessStage,
+    TaskHistoryEntry, TaskRelation, TaskRelationType, TaskStatus, readiness_gaps,
 };
 
 use super::super::TaskRecordUpdateParams;
@@ -476,18 +476,38 @@ impl OrbitRuntime {
                 params.acceptance_criteria.as_deref(),
             )?;
         params.discard_candidate = discards;
+        if answer.id == ACCEPT_FINDINGS_ANSWER_ID {
+            if rewrites || !matches!(option.action, Some(DecisionAction::Requeue)) {
+                return Err(refuse(
+                    "accepting an open finding only resumes the reviewed candidate",
+                ));
+            }
+            let findings = self.open_review_finding_lines(&task)?;
+            if findings.is_empty() {
+                return Err(refuse("no open review finding remains to accept"));
+            }
+            params.finding_acceptance = Some(format!(
+                "accepted open review findings without changing the description or acceptance criteria: {}",
+                findings.join("; ")
+            ));
+        }
         // Source repair of the backlog return is refused before a split
         // files its follow-up. `add_task` commits on its own, so a later
         // refusal of the parent update would leave the follow-up behind.
         // A rewrite that strands the candidate discards it and skips this
-        // authentication, the same way the update does.
+        // authentication, the same way the update does. A live run is
+        // authenticated on the unchanged task: a failure handoff checks the
+        // specification before liveness, so a rewritten preview would refuse
+        // the answer for a change it made itself.
         if blocked && !discards && option_returns_blocked_task_to_backlog(&option.action) {
             let mut preview = task.clone();
-            if let Some(description) = &params.description {
-                preview.description.clone_from(description);
-            }
-            if let Some(criteria) = &params.acceptance_criteria {
-                preview.acceptance_criteria.clone_from(criteria);
+            if self.unsettled_run(&task)?.is_none() {
+                if let Some(description) = &params.description {
+                    preview.description.clone_from(description);
+                }
+                if let Some(criteria) = &params.acceptance_criteria {
+                    preview.acceptance_criteria.clone_from(criteria);
+                }
             }
             self.authenticate_published_backlog_return(&preview)?;
         }

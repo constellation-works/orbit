@@ -15,8 +15,8 @@ use orbit_common::fs::io::atomic_write_text;
 use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::identity::is_automation_actor;
 use orbit_types::task::{
-    DECISION_ANSWERED_EVENT, DECISION_REOPENED_EVENT, DecisionGate, DecisionRequest,
-    DecisionRequestState, DecisionResolution, MODEL_ANSWER_ACTOR, PRECEDENT_ACTOR,
+    ACCEPT_FINDINGS_ANSWER_ID, DECISION_ANSWERED_EVENT, DECISION_REOPENED_EVENT, DecisionGate,
+    DecisionRequest, DecisionRequestState, DecisionResolution, MODEL_ANSWER_ACTOR, PRECEDENT_ACTOR,
     PrecedentCitation, PrecedentSource, TaskHistoryEntry, TaskStatus,
 };
 use serde_json::{Value, json};
@@ -53,9 +53,10 @@ impl OrbitRuntime {
         };
         if request.gate != DecisionGate::AgentRequest
             || request.answers.iter().any(|answer| {
-                answer.option.as_ref().is_some_and(|option| {
-                    option.action == Some(orbit_types::task::DecisionAction::Land)
-                })
+                answer.id == ACCEPT_FINDINGS_ANSWER_ID
+                    || answer.option.as_ref().is_some_and(|option| {
+                        option.action == Some(orbit_types::task::DecisionAction::Land)
+                    })
             })
         {
             return Ok(request.clone());
