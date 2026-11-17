@@ -655,7 +655,6 @@ and `machine.task_prefix`. `orbit config keys` prints the same list.
 | `review.before_landing_hosts` | array&lt;string&gt; · **Default:** `[]`<br>Machine IDs (`hm_…`) whose claimed leaves run before-landing review while this owner's own deliveries do not. Config fails to load when this is non-empty and `review.timing` is `before_pr`. This is policy, not a security boundary. |
 | `review.minutes` | integer · **Default:** `30`<br>Time limit for one candidate's before-PR or before-landing review (1–1440). |
 | `review.baseline_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands before-PR review may rerun to confirm that a failed check also fails on the base. `workflow.required_validation_commands` always count. A confirmed claim holds the task in the backlog until the base passes. |
-| `review.host_evidence` | array&lt;table&gt; · **Default:** `[]`<br>Ordered `[[review.host_evidence]]` rules naming checks a claimed leaf's host owes for the paths it changed or the tags its task carries. A workspace list replaces the global one. See [Host evidence](#host-evidence). |
 
 Notes:
 
