@@ -812,8 +812,11 @@ shows its error instead of readings. **Drains** lists active and queued drains
 across the hosts. **Provider capacity** lists the usage windows each host
 reports for its accounts.
 
-Select a card to open that host's dialog, which shows probe failure details,
-drain diagnostics, and health details. Opening the page and **Reload** probe
+Select a card to open that host's dialog, which shows facts (identity,
+reachability, protocol fingerprint, compatibility, workspaces),
+plain-language probe failure details with cause, and drain diagnostics.
+Health readings (CPU, memory, disk, and I/O) stay on the card; the dialog
+does not repeat them. Opening the page and **Reload** probe
 every host. **Reload** also rereads the registry.
 
 - **Add host** takes an SSH target and an optional name. Saving probes the
