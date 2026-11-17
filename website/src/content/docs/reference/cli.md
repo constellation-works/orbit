@@ -25,6 +25,7 @@ Every subcommand accepts these options, before or after it.
 | `orbit init` | Set up the global Orbit root (`~/.orbit`), this machine's identity and task-ID prefix, and a [human crew](/reference/config/#human-crews). `--non-interactive` skips prompts; `--force` resets the root to shipped defaults. |
 | `orbit workspace init` | Register the current repository as a workspace. Common options: `--name`, `--base-branch`, `--ship-mode pr\|local`, `--role owner\|replica`, `--mcp`, `--preset <file>` ([presets](/reference/config/#workspace-presets)). |
 | `orbit workspace list\|show` | List registered workspaces, or show the current one. |
+| `orbit workspace rebind --path <dir> [--dry-run]` | Rebind this host to an already moved checkout; `--dry-run` validates without writing. |
 | `orbit workspace sync [--check] [--all]` | [Converge managed artifacts](/how-to/workspace-maintenance/#synchronize-shipped-defaults) on the defaults this binary ships. `--check` writes nothing; `--all` covers every workspace on this host. |
 | `orbit workspace role <workspace> <owner\|replica>` | Validate or reassert this checkout's role. |
 | `orbit workspace ship-mode [pr\|local]` | Print the workspace's ship mode, or change it. |
@@ -208,6 +209,7 @@ The [dashboard](/how-to/dashboard/) shows the same rankings.
 | `orbit clock status\|pause\|enable\|repair` \| `set --cadence-seconds <n>` | Inspect and control the host scheduler clock. `repair` rewrites a clock unit that names a missing, moved or stale program. |
 | `orbit routine list` \| `show <name>` | List routines with their next-due time and last fire, or show one. |
 | `orbit routine enable\|disable\|pause\|resume <name>` | `enable` and `disable` change the routine's versioned definition (operator only); `pause` and `resume` act on this host only. |
+| `orbit routine breaker reset\|bypass <name>` | Reset or bypass a routine’s host-local circuit breaker. |
 | `orbit routine init [--install-clock]` | Read this machine's identity; `--install-clock` also installs the OS clock unit. |
 | `orbit auto-task add --name <name> --title <title>` \| `list` \| `show\|update <name>` | Define and inspect auto-task templates. |
 | `orbit auto-task toggle <name> <on\|off>` | Enable or disable a definition. |

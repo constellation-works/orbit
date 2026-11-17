@@ -22,7 +22,7 @@ and choose your own expiry:
 ```json
 {
   "application_id": "release-sync",
-  "expires_at": "2026-11-16T00:00:00Z",
+  "expires_at": "<future RFC 3339 timestamp>",
   "scopes": [
     {
       "operation": {
@@ -107,12 +107,13 @@ A plugin tool also needs `plugin`, with the plugin's `name` and the installed
 ### Constrained scope with a rate limit
 
 This scope admits a move to `done` only for a task tagged `release` that is in
-`review`, with a comment of up to 500 characters, at most 20 times in any hour:
+`review`, with a comment of up to 500 characters, at most 20 times in any hour.
+Replace the expiry with a future RFC 3339 timestamp within 30 days:
 
 ```json
 {
   "application_id": "review-notifier",
-  "expires_at": "2026-11-30T00:00:00Z",
+  "expires_at": "<future RFC 3339 timestamp>",
   "scopes": [
     {
       "name": "approve-review",
@@ -137,12 +138,13 @@ stating what it admits. Check it against your intent.
 ### Plugin entry with a bound callback
 
 `example` and `example.apply` stand for your plugin and tool. The `fields` of a
-plugin operation must be declared input parameters of that tool.
+plugin operation must be declared input parameters of that tool. Replace the
+expiry with a future RFC 3339 timestamp within 30 days.
 
 ```json
 {
   "application_id": "approval-service",
-  "expires_at": "2026-11-16T00:00:00Z",
+  "expires_at": "<future RFC 3339 timestamp>",
   "scopes": [
     {
       "name": "apply-approved-proposal",
