@@ -147,22 +147,21 @@ fn prune_expired_grants(global_root: &Path, now: DateTime<Utc>) {
 
 /// Grant files are `<64 hex>.json`: the lowercase hex SHA-256 of the token.
 /// Anything else — a staging temp file (`.<grant>.<nanos>.<counter>.tmp`),
-/// a stray file — is left alone.
+/// a stray file — is left alone. Total over every file name: the suffix is
+/// removed with `strip_suffix` rather than by slicing at a byte offset, so a
+/// multibyte name cannot split a character.
 fn is_grant_file_name(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
     const HEX_LEN: usize = 64;
     const SUFFIX: &str = ".json";
-    if name.len() != HEX_LEN + SUFFIX.len() {
-        return false;
-    }
-    let (hex, suffix) = name.split_at(HEX_LEN);
-    if suffix != SUFFIX {
-        return false;
-    }
-    hex.bytes()
-        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    name.strip_suffix(SUFFIX).is_some_and(|hex| {
+        hex.len() == HEX_LEN
+            && hex
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    })
 }
 
 fn redeem_wait_grant(
