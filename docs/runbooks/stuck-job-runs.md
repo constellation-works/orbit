@@ -191,7 +191,10 @@ leaving it in an unresumable hold.
 Completion and owner landing also end `held` on typed parked decisions: a
 reported head changed, a repair is already dispatched, the PR is draft or
 closed, the task refuses promotion, owner landing needs a validated conflict
-repair, or required reviews/checks are unsatisfied without a red check. A
+repair, required reviews/checks are unsatisfied without a red check, or an
+already-landed or no-diff delivery's evidence went stale because the task's
+scope changed after it was captured (`delivery_evidence_stale`; the candidate
+stays in review). A
 completion budget expiry is also held as `delivery_completion_budget_expired`:
 the task stays in review, and the PR was unmerged at the last state the run
 observed but may have merged since, through auto-merge (a held run does not

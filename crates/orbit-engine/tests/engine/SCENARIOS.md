@@ -273,6 +273,7 @@ certifies the repaired head as both the original head and publication lease.
 - `claimed_commit_accepts_required_checks_with_controls_and_diagnostics`
 - `claimed_commit_refuses_incomplete_or_mismatched_mixed_role_evidence`
 - `claimed_commit_lands_after_owner_records_supplied_regression_from`
+- `owner_recheck_types_a_task_scope_change_after_the_evidence_as_stale`
 
 ### `candidate_resume::candidate_resume_contracts_1`
 
@@ -405,6 +406,7 @@ certifies the repaired head as both the original head and publication lease.
 - `a_local_candidate_landing_names_its_task_before_the_branch_moves`
 - `a_candidate_that_cannot_fast_forward_records_no_landing_intent`
 - `a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts`
+- `an_already_landed_landing_holds_when_its_evidence_went_stale`
 
 ### `handoff_landing::handoff_landing_contracts_2`
 
