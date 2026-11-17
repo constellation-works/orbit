@@ -328,6 +328,77 @@ fn a_candidate_that_cannot_fast_forward_records_no_landing_intent() {
     assert_eq!(host.last_step(), Some(stop));
 }
 
+/// The owner's completion write rechecks a NoDiff or already-landed
+/// checkpoint against the task as it is now. Evidence a task edit made stale
+/// is refused there as typed stale evidence; the landing records its stop and
+/// holds the run with the candidate in review, instead of failing it
+/// [ORB-25394].
+struct StaleEvidenceHost {
+    context: HandoffLandingContext,
+    steps: Mutex<Vec<HandoffLandingStep>>,
+    stops: Mutex<Vec<String>>,
+}
+
+impl orbit_engine::test_support::NullRuntimeHost for StaleEvidenceHost {
+    fn handoff_landing_context(
+        &self,
+        _handoff_id: &str,
+    ) -> Result<HandoffLandingContext, OrbitError> {
+        Ok(self.context.clone())
+    }
+
+    fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
+        if matches!(update.step, HandoffLandingStep::Complete) {
+            return Err(OrbitError::DeliveryRefused {
+                refusal: DeliveryRefusal::EvidenceStale,
+                message: "already_landed_unverified: task scope changed at scope.relations; \
+                          revalidate the current requirements, selectors and comments"
+                    .into(),
+            });
+        }
+        if matches!(update.step, HandoffLandingStep::Stop { .. }) {
+            self.stops.lock().unwrap().push(update.evidence.clone());
+        }
+        self.steps.lock().unwrap().push(update.step.clone());
+        Ok(())
+    }
+}
+
+fn an_already_landed_landing_holds_when_its_evidence_went_stale() {
+    let sandbox = tempdir().unwrap();
+    let mut context = owner_checkout(sandbox.path()).context;
+    context.candidate.candidate = context.candidate.base.clone();
+    context.candidate.delivery = HandoffDelivery::NoDiff {
+        evidence: orbit_types::workflow::handoff::HandoffArtifactRef {
+            path: "checkpoint.json".into(),
+            sha256: "0".repeat(64),
+        },
+    };
+    let host = StaleEvidenceHost {
+        context,
+        steps: Mutex::default(),
+        stops: Mutex::default(),
+    };
+
+    let error = land(&host).expect_err("stale evidence cannot complete the landing");
+
+    assert!(
+        matches!(
+            &error,
+            OrbitError::DeliveryRefused { refusal: DeliveryRefusal::EvidenceStale, message }
+                if message.contains("scope.relations")
+                    && message.contains("the candidate stays in review")
+        ),
+        "the landing is held, not a failed run: {error:?}"
+    );
+    assert_eq!(
+        *host.steps.lock().unwrap(),
+        vec![HandoffLandingStep::Stop { repairable: false }],
+        "one recorded stop, and no completion"
+    );
+    assert_eq!(host.stops.lock().unwrap().len(), 1);
+}
+
 /// Model the owner's journal guards at the RuntimeHost boundary: Stop needs a
 /// resolved intent, and a settled attempt cannot accept more landing writes.
 struct ReconciliationHost {
@@ -3738,6 +3809,10 @@ fn handoff_landing_contracts_1() {
             (
                 "a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts",
                 a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts,
+            ),
+            (
+                "an_already_landed_landing_holds_when_its_evidence_went_stale",
+                an_already_landed_landing_holds_when_its_evidence_went_stale,
             ),
         ]);
     });

@@ -159,11 +159,16 @@ fn claimed_commit_lands_after_owner_records_supplied_regression_from() {
             assert_eq!(result["decision"], "verified_already_landed", "{case}");
             assert_eq!(host.artifacts.lock().unwrap()[TASK_ID].len(), 4, "{case}");
         } else {
-            let message = result.expect_err(case).to_string();
+            let error = result.expect_err(case);
+            let message = error.to_string();
             assert!(
                 message.contains("already_landed_unverified")
                     && message.contains("scope.relations"),
                 "{case} must still be refused at scope.relations, got: {message}"
+            );
+            assert!(
+                matches!(error, OrbitError::Execution(_)),
+                "{case}: an implement-side refusal stays a failure, got: {error:?}"
             );
         }
         assert_eq!(git_head(temp.path()), head, "{case}");
@@ -327,6 +332,97 @@ fn claimed_commit_refuses_incomplete_or_mismatched_mixed_role_evidence() {
     }
 }
 
+/// The owner's recheck of an accepted already-landed checkpoint refuses a task
+/// whose scope changed after the evidence was captured as typed stale
+/// evidence, which a landing holds [ORB-25394]. The same recheck of an
+/// unchanged scope accepts it.
+fn owner_recheck_types_a_task_scope_change_after_the_evidence_as_stale() {
+    use orbit_types::task::{TaskRelation, TaskRelationType};
+    use orbit_types::workflow::DeliveryRefusal;
+    use orbit_types::workflow::automation::SourceRevision;
+    use orbit_types::workflow::handoff::{
+        HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffReview, TaskHandoff,
+    };
+    let temp = tempdir().unwrap();
+    init_git_repo(temp.path());
+    let head = git_head(temp.path());
+    let (report, logs) = mixed_evidence(&head);
+    let (host, checkpoint) = claimed_action(temp.path(), &head, report, logs);
+    let checkpoint = checkpoint.expect("the claimed leaf verifies its evidence");
+    let bytes = serde_json::to_vec(&checkpoint).unwrap();
+    host.artifacts
+        .lock()
+        .unwrap()
+        .get_mut(TASK_ID)
+        .unwrap()
+        .push(TaskArtifact::from_text(
+            "checkpoint.json",
+            String::from_utf8(bytes.clone()).unwrap(),
+        ));
+    let revision = SourceRevision {
+        commit: head.clone(),
+        tree: git_output(temp.path(), &["rev-parse", "HEAD^{tree}"]),
+    };
+    let handoff = TaskHandoff {
+        schema_version: 1,
+        workspace_id: "ws_owner".into(),
+        task_id: TASK_ID.into(),
+        claim_id: "claim-verifier".into(),
+        machine_id: "follower".into(),
+        run_id: RUN_ID.into(),
+        candidate: HandoffCandidate {
+            repository: "ws_owner".into(),
+            source_branch: "none".into(),
+            base_branch: git_output(temp.path(), &["rev-parse", "--abbrev-ref", "HEAD"]),
+            landing_branch: git_output(temp.path(), &["rev-parse", "--abbrev-ref", "HEAD"]),
+            candidate: revision.clone(),
+            base: revision,
+            delivery: HandoffDelivery::NoDiff {
+                evidence: HandoffArtifactRef {
+                    path: "checkpoint.json".into(),
+                    sha256: orbit_common::security::release::sha256_hex(&bytes),
+                },
+            },
+        },
+        review: HandoffReview::not_required(),
+        execution_summary: String::new(),
+        validation: Vec::new(),
+        footprint_widening: Vec::new(),
+        owed_criteria: Vec::new(),
+        regression_from: Vec::new(),
+        visual: None,
+    };
+    let observe = || {
+        orbit_engine::observe_no_diff_candidate(
+            &host,
+            temp.path(),
+            &handoff,
+            orbit_engine::BaseSyncMode::Local,
+        )
+    };
+    observe().expect("an unchanged scope still verifies on the owner");
+    host.tasks
+        .lock()
+        .unwrap()
+        .get_mut(TASK_ID)
+        .unwrap()
+        .relations = vec![TaskRelation {
+        relation_type: TaskRelationType::RegressionFrom,
+        target: "ORB-24428".to_string(),
+        regression: None,
+    }];
+    let error = observe().expect_err("a scope change after capture makes the evidence stale");
+    assert!(
+        matches!(
+            &error,
+            OrbitError::DeliveryRefused { refusal: DeliveryRefusal::EvidenceStale, message }
+                if message.contains("already_landed_unverified")
+                    && message.contains("scope.relations")
+        ),
+        "the owner's recheck types the stale evidence, got: {error:?}"
+    );
+}
+
 /// Behavior-distinct rows share one bounded family process.
 #[test]
 fn claimed_evidence_contracts_1() {
@@ -343,6 +439,10 @@ fn claimed_evidence_contracts_1() {
             (
                 "claimed_commit_lands_after_owner_records_supplied_regression_from",
                 claimed_commit_lands_after_owner_records_supplied_regression_from,
+            ),
+            (
+                "owner_recheck_types_a_task_scope_change_after_the_evidence_as_stale",
+                owner_recheck_types_a_task_scope_change_after_the_evidence_as_stale,
             ),
         ]);
     });

@@ -14,7 +14,7 @@ use orbit_types::task::Task;
 use orbit_types::workflow::handoff::{
     AlreadyLandedEvidence as Evidence, already_landed_scope as scope, already_landed_scope_matches,
 };
-use orbit_types::workflow::{ValidationOutcome, ValidationRole};
+use orbit_types::workflow::{DeliveryRefusal, ValidationOutcome, ValidationRole};
 use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
@@ -84,6 +84,64 @@ impl Verifier for AlreadyLanded {
         tested_head: &str,
         supplied_regression_from: &[String],
     ) -> Result<Value, OrbitError> {
+        Self::verify_evidence(
+            host,
+            task,
+            workspace,
+            run_id,
+            tested_head,
+            supplied_regression_from,
+            ScopeChange::Fails,
+        )
+    }
+
+    /// The owner's recheck of a handoff's pinned evidence. A task whose scope
+    /// changed after the evidence was captured is a deliberate, typed
+    /// [`DeliveryRefusal::EvidenceStale`], so the owner's landing holds the
+    /// candidate in review; every other refusal keeps its plain failure.
+    fn verify_handoff_at_revision_with_supplied_regression_from<H: RuntimeHost + ?Sized>(
+        host: &H,
+        task: &Task,
+        workspace: &Path,
+        run_id: &str,
+        checkpoint: &Value,
+        supplied_regression_from: &[String],
+    ) -> Result<(), OrbitError> {
+        let head = checkpoint["base_sha"].as_str().unwrap_or_default();
+        let checked = Self::verify_evidence(
+            host,
+            task,
+            workspace,
+            run_id,
+            head,
+            supplied_regression_from,
+            ScopeChange::StaleEvidence,
+        )?;
+        Self::compare_checkpoint(checkpoint, &checked)
+    }
+}
+
+/// What a task scope that differs from the recorded evidence's scope raises.
+#[derive(Clone, Copy)]
+enum ScopeChange {
+    /// The implement-side commit step: the agent's evidence is wrong, so the
+    /// step fails.
+    Fails,
+    /// The owner's recheck at acceptance or landing: the evidence went stale,
+    /// a refusal that parks the run.
+    StaleEvidence,
+}
+
+impl AlreadyLanded {
+    fn verify_evidence<H: RuntimeHost + ?Sized>(
+        host: &H,
+        task: &Task,
+        workspace: &Path,
+        run_id: &str,
+        tested_head: &str,
+        supplied_regression_from: &[String],
+        scope_change: ScopeChange,
+    ) -> Result<Value, OrbitError> {
         let report = Self::artifact(host, &task.id, ARTIFACT)?;
         let evidence: Evidence = serde_json::from_slice(&report.content).map_err(|error| {
             let diagnostic = error.to_string();
@@ -102,10 +160,16 @@ impl Verifier for AlreadyLanded {
         let expected_scope = scope(task, &comments);
         if !already_landed_scope_matches(&evidence.scope, task, &comments, supplied_regression_from)
         {
-            return Err(Self::refused(scope_changed(
-                &evidence.scope,
-                &expected_scope,
-            )));
+            let refused = Self::refused(scope_changed(&evidence.scope, &expected_scope));
+            return Err(match (scope_change, refused) {
+                (ScopeChange::StaleEvidence, OrbitError::Execution(message)) => {
+                    OrbitError::DeliveryRefused {
+                        refusal: DeliveryRefusal::EvidenceStale,
+                        message,
+                    }
+                }
+                (_, refused) => refused,
+            });
         }
         if !run_in_lineage(host, run_id, &evidence.run_id)? {
             return Err(Self::refused(

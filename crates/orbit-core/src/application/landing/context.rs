@@ -286,7 +286,7 @@ impl OrbitRuntime {
         ) {
             // Completion re-runs the same base and verifier-report checks as
             // acceptance, including current owner-required validation policy.
-            return self.observe_claim_handoff(&accepted.handoff, false);
+            return self.observe_landing_handoff(&accepted.handoff);
         }
         Ok(HandoffObservation {
             footprint_widening: accepted.handoff.footprint_widening.clone(),

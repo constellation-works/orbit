@@ -1,12 +1,25 @@
 use orbit_common::OrbitError;
 use orbit_engine::BaseSyncMode;
 use orbit_store::contracts::{HandoffObservation, HandoffReviewObservation};
+use orbit_types::workflow::DeliveryRefusal;
 use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery, TaskHandoff};
 
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
 
 use super::refusal;
+
+/// Acceptance and landing retry refuse a stale pinned report as the plain
+/// execution failure they always raised; only the landing completion parks.
+fn plain_stale_evidence_refusal(error: OrbitError) -> OrbitError {
+    match error {
+        OrbitError::DeliveryRefused {
+            refusal: DeliveryRefusal::EvidenceStale,
+            message,
+        } => OrbitError::Execution(message),
+        other => other,
+    }
+}
 
 impl OrbitRuntime {
     /// The owner's own reading of the candidate a claim is settling.
@@ -27,6 +40,17 @@ impl OrbitRuntime {
         remote: bool,
     ) -> Result<HandoffObservation, OrbitError> {
         self.observe_handoff_candidate(handoff, remote, None)
+            .map_err(plain_stale_evidence_refusal)
+    }
+
+    /// [`Self::observe_claim_handoff`] for the owner's landing completion,
+    /// which keeps a typed stale-evidence refusal so the landing run holds in
+    /// review instead of failing.
+    pub(crate) fn observe_landing_handoff(
+        &self,
+        handoff: &TaskHandoff,
+    ) -> Result<HandoffObservation, OrbitError> {
+        self.observe_handoff_candidate(handoff, false, None)
     }
 
     /// Only a stored acceptance may use provider base-only adoption. Initial
@@ -42,6 +66,7 @@ impl OrbitRuntime {
             ));
         }
         self.observe_handoff_candidate(&accepted.handoff, false, Some(accepted))
+            .map_err(plain_stale_evidence_refusal)
     }
 
     fn observe_handoff_candidate(

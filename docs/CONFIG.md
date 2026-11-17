@@ -1139,7 +1139,7 @@ within a backoff and ceiling (see [PR auto-fix repairs](#pr-auto-fix-repairs)):
 | Code | Decision |
 | --- | --- |
 | `delivery_head_changed` | The PR reports a head different from the one this run published. |
-| `delivery_evidence_stale` | Pinned delivery identity is missing or cannot be confirmed, or merge evidence is contradictory. |
+| `delivery_evidence_stale` | Pinned delivery identity is missing or cannot be confirmed, or merge evidence is contradictory. An owner landing of an already-landed or no-diff delivery also holds here when the task's scope changed after the evidence was captured. |
 | `delivery_repair_dispatched` | A repair was already admitted for the blocked head. This includes a check repair held before execution because the job lacked `step_failure_recovery`, and an in-budget check repair whose `step_failure_recovery` ran but returned an unsuccessful outcome or admitted no retry. If a repair is running, let it finish. If none ran, configure recovery for future heads; if it ran and failed, inspect the recovery attempt. Then repair and publish a new head and start a new delivery attempt. |
 | `delivery_pr_draft` | The PR is still a draft. |
 | `delivery_pr_closed` | The PR closed without merging. |
@@ -1196,7 +1196,10 @@ settlement for a claimed leaf; the held run itself has no generic resume path. R
 existing `succeeded` status for a held underlying run.
 
 Missing pinned identity fields, including the PR head, and contradictory merge
-evidence produce typed `delivery_evidence_stale` holds. A permanent failure to
+evidence produce typed `delivery_evidence_stale` holds, as does an owner landing
+of an already-landed or no-diff delivery whose task scope changed after its
+evidence was captured: the stop is recorded and the candidate stays in review.
+The same refusal on an implement-side commit remains a failure. A permanent failure to
 read required-check evidence in auto-fix, including a credential or permission
 refusal, holds as `delivery_check_evidence_inconclusive` before or after a
 completion mutation; no repair agent runs and no merge is admitted on that
