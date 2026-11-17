@@ -6,11 +6,10 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-/// Longest self-reported actor Orbit will record.
+/// Maximum UTF-8 byte length Orbit records for a self-reported actor.
 ///
 /// Generous for a client name or model string (`claude-code`, `claude-opus-5`)
-/// and far short of anything that could be used to smuggle a payload through
-/// the audit log.
+/// while bounding the size of the caller-controlled audit label.
 pub const SELF_REPORTED_ACTOR_MAX_LEN: usize = 128;
 
 /// The label an aggregate reports for traffic that claimed no identity at all.
