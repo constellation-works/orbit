@@ -730,10 +730,8 @@ fn pr_open_recovers_only_section_gap_drafts_on_resume() {
     );
 }
 
-/// The screenshots section reads the capture of record alone when the stored
-/// settle was made for another candidate: a stale `Refused` settle (held)
-/// must neither replace the summary nor append its hold, mirroring the
-/// mismatched-checks filter [ORB-20109].
+/// Historical external references are preserved but do not supply the PR's
+/// task link, which uses the configured stable URL or the plain task ID.
 #[test]
 fn fresh_pr_task_links_use_stable_task_urls_or_plain_ids() {
     isolated(
