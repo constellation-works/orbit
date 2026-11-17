@@ -39,7 +39,9 @@ CLOSER_OF = {"(": ")", "[": "]", "{": "}"}
 class Token:
     def __init__(self, kind, text, line):
         self.kind = kind
-        self.text = text
+        # Structural comparisons must never interpret literal contents as Rust tokens.
+        self.text = text if kind != "string" else ""
+        self.value = text if kind == "string" else None
         self.line = line
 
 
@@ -429,7 +431,7 @@ def match_env_macro(tokens, start, end):
         and tokens[start + 1].text == "!"
         and tokens[start + 2].text == "("
         and tokens[start + 3].kind == "string"
-        and tokens[start + 3].text.startswith("CARGO_BIN_EXE_")
+        and tokens[start + 3].value.startswith("CARGO_BIN_EXE_")
         and tokens[start + 4].text == ")"
     ):
         return start + 5
