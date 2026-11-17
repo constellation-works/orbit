@@ -7,7 +7,8 @@
 //! Establishing is attach-first: a bare `-N` forward that
 //! invokes nothing remotely is opened and probed, and only when nothing answers
 //! behind it is a second `ssh` run that both forwards the port and starts the
-//! remote command. OpenSSH binds the local `-L` listener only after
+//! remote command. The probe is reaped first, and that second `ssh` waits
+//! until the probe's listener has left the local port. OpenSSH binds the local `-L` listener only after
 //! authentication, so the short attach budget starts at that bind — a
 //! passphrase, password, or 2FA prompt does not expire it. Teardown therefore
 //! only ever stops what this process started — an attached, pre-existing
@@ -46,6 +47,17 @@ const MAX_SSH_DIAGNOSTICS_BYTES: usize = 8 * 1024;
 /// Grace period between SIGTERM and SIGKILL when tearing the tunnel down.
 #[cfg(unix)]
 const TEARDOWN_GRACE: Duration = Duration::from_secs(2);
+
+/// How long to wait for the attach probe's listener to leave the local port
+/// before the spawn child binds it. OpenSSH sets `SO_REUSEADDR`, so this wait
+/// uses the same option: an active listener fails the bind, and a `TIME_WAIT`
+/// socket does not. A foreign process that takes the port is surfaced; the
+/// wait does not authorize another allocation or a second spawn.
+const PORT_RELEASE_WAIT: Duration = Duration::from_secs(3);
+
+/// Poll interval while the attach probe's port is still occupied. The first
+/// check is immediate, so a port that is already free adds no sleep.
+const PORT_RELEASE_POLL: Duration = Duration::from_millis(20);
 
 /// What [`establish`] needs to know to bring a forward up.
 ///
@@ -191,6 +203,10 @@ pub(crate) fn establish(
         return Ok((probe, TunnelOrigin::Attached));
     }
     probe.shutdown();
+    // The probe's listener can still occupy this port after `wait` returns.
+    // Do not start the remote command until a bind matching OpenSSH's
+    // `SO_REUSEADDR` succeeds. A foreign holder stays a surfaced failure.
+    wait_until_local_port_free(spec)?;
 
     let mut tunnel = spawn_tunnel(spec, Some(&spec.remote_command))?;
     if poll_until_ready(
@@ -363,6 +379,134 @@ pub(crate) fn forward_spec(local_port: u16, remote_port: u16) -> String {
 /// Return `Ok` if a loopback TCP listener can bind `port` (immediately released).
 pub(crate) fn probe_bindable(port: u16) -> std::io::Result<()> {
     TcpListener::bind((Ipv4Addr::LOCALHOST, port)).map(|_| ())
+}
+
+/// True when `127.0.0.1:port` accepts a bind with `SO_REUSEADDR`, matching
+/// the option OpenSSH sets on an `-L` listener. The socket is closed before
+/// return, so a success does not keep the port.
+///
+/// An active listener fails this bind. A `TIME_WAIT` socket from the probe's
+/// own health checks does not, so the wait does not refuse a port OpenSSH
+/// itself could bind.
+#[cfg(unix)]
+fn local_port_reuse_bindable(port: u16) -> std::io::Result<bool> {
+    // SAFETY: `socket` returns a new fd or -1. `CloseFd` closes it on every path.
+    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let _close = CloseFd(fd);
+    let yes: libc::c_int = 1;
+    // SAFETY: `fd` is that socket. `SO_REUSEADDR` takes one `c_int`.
+    let rc = unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_REUSEADDR,
+            &yes as *const libc::c_int as *const libc::c_void,
+            std::mem::size_of_val(&yes) as libc::socklen_t,
+        )
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `sockaddr_in` is plain bytes. Unset fields, including `sin_zero`
+    // and `sin_len` where the platform has it, stay zero.
+    let mut addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+    addr.sin_family = libc::AF_INET as libc::sa_family_t;
+    addr.sin_port = port.to_be();
+    addr.sin_addr.s_addr = u32::from(Ipv4Addr::LOCALHOST).to_be();
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "visionos",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    ))]
+    {
+        addr.sin_len = std::mem::size_of_val(&addr) as u8;
+    }
+    // SAFETY: `addr` is a `sockaddr_in` of the size passed, and `fd` is our socket.
+    let rc = unsafe {
+        libc::bind(
+            fd,
+            &addr as *const libc::sockaddr_in as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        )
+    };
+    if rc == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::EADDRINUSE) {
+        Ok(false)
+    } else {
+        Err(error)
+    }
+}
+
+/// Closes a socket fd created for [`local_port_reuse_bindable`].
+#[cfg(unix)]
+struct CloseFd(libc::c_int);
+
+#[cfg(unix)]
+impl Drop for CloseFd {
+    fn drop(&mut self) {
+        // SAFETY: the fd came from `socket` and has not been closed.
+        unsafe { libc::close(self.0) };
+    }
+}
+
+/// Platforms without the Unix socket API use a plain bind. The reported
+/// failure is Linux, where the check above matches OpenSSH.
+#[cfg(not(unix))]
+fn local_port_reuse_bindable(port: u16) -> std::io::Result<bool> {
+    match probe_bindable(port) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// Block until the local forward port is free for the spawn child, or until
+/// [`PORT_RELEASE_WAIT`] elapses.
+///
+/// The attach probe has already been reaped. Its listener can still occupy
+/// the port after that. Cancellation stops the wait. A timeout is not a
+/// local-port conflict: the caller surfaces it and does not start the remote
+/// command.
+fn wait_until_local_port_free(spec: &TunnelSpec) -> Result<(), OrbitError> {
+    let deadline = Instant::now() + PORT_RELEASE_WAIT;
+    let port = spec.local_port;
+    loop {
+        if spec
+            .unattended
+            .as_ref()
+            .is_some_and(|bounds| bounds.cancel.load(Ordering::Relaxed))
+        {
+            return Err(cancelled(&spec.remote_description));
+        }
+        match local_port_reuse_bindable(port) {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error) => {
+                return Err(OrbitError::Io(format!(
+                    "checking whether local forward port {port} is free: {error}"
+                )));
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(OrbitError::Execution(format!(
+                "local forward port {port} was still in use after the attach probe exited"
+            )));
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        std::thread::sleep(PORT_RELEASE_POLL.min(remaining));
+    }
 }
 
 /// Ask the OS for a free ephemeral loopback port.

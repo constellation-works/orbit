@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Orbit Web SSH Local Forward"
-last_validated: 2026-11-15
+last_validated: 2026-11-17
 tags: [remote-access]
 ---
 
@@ -23,7 +23,7 @@ It is not used by MCP. MCP remote mode uses direct ssh -T stdio with no -L forwa
 3. Wait until the probe reports that it bound the local forward, or until it exits. OpenSSH binds `-L` only after authentication, so passphrase, password, and 2FA time is not part of the attach budget. An exit before that report is a connection failure, not "nothing is running". There is no separate authentication deadline; Ctrl-C cancels a stuck prompt.
 4. Once the bind is reported, poll HTTP GET /healthz on the local port for up to five seconds. Those five seconds are one deadline for every poll. The socket timeout bounds a single idle read, so a peer that keeps sending status bytes cannot stretch the wait. The status line is at most 8 KiB; a longer line, or a line that never completes, is not healthy. Cancelling during a poll stops it and reaps the SSH child this process owns.
 5. If the response status is 200, retain the probe child as an attached tunnel. No remote command is sent.
-6. If the probe times out while SSH remains alive, stop it and start:
+6. If the probe times out while SSH remains alive, stop it and wait until `127.0.0.1` on the same local port accepts a bind with `SO_REUSEADDR` (the option OpenSSH sets on an `-L` listener), for at most three seconds. The probe's listener can still occupy the port after the child has been reaped. The wait does not choose another port. If the port is still busy when the wait ends, establish fails and does not start the remote command. Otherwise start:
 
        ssh -tt -o ExitOnForwardFailure=yes <bind marker options> -L 127.0.0.1:<local>:localhost:<remote> <host> "<remote command>"
 
@@ -78,7 +78,7 @@ Attach mode sends no remote command, so --workspace and --global cannot reconfig
 - SSH exit 127: orbit is missing from the remote non-interactive PATH.
 - SSH exit 255: host, authentication, configuration, or network connection failed.
 - Other early exit: report the remote Web command and status.
-- Probe timeout: not an error; proceed to spawn mode. The five seconds start when the child reports that it bound the forward, not when the probe process starts. One poll cannot run past the time still left.
+- Probe timeout: not an error; proceed to spawn mode. The five seconds start when the child reports that it bound the forward, not when the probe process starts. One poll cannot run past the time still left. The probe is reaped first, and spawn waits up to three seconds for its listener to leave the local port (a `127.0.0.1` bind with `SO_REUSEADDR`). The remote command does not start while that bind fails.
 - Spawn readiness timeout: fail and tear down the SSH child. The 30 seconds are a total deadline with the same 8 KiB status-line bound.
 - Local port selection is a time-of-check/time-of-use race. If another process claims the port first, SSH exits 255 on its failed bind and no bind is reported, so that listener is never probed or attached as the tunnel. The dashboard's unattended host forward can reallocate a proven initial bind collision within its original deadline ([host-forward.md](./host-forward.md#tunnels)); foreground `web connect` continues to surface it, and neither caller replays a remote command after a spawn failure.
 - Two simultaneous connects can both miss an absent server and try to spawn; one remote bind may fail. This is surfaced rather than hidden.

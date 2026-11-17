@@ -11,7 +11,8 @@
                                 "delay": <seconds>,
                                 "hold": <bool>,
                                 "bind_gate": <"first" or "every" or null>,
-                                "bind_delay": <seconds>}}}
+                                "bind_delay": <seconds>,
+                                "hold_port_after_exit": <"attach" or "spawn" or null>}}}
 
 Every invocation first appends one JSON line to `log`: its pid, its mode
 (`attach` for a bare `-N` forward, `spawn` when a remote command follows the
@@ -35,6 +36,13 @@ host), the host, the remote command and the full argv. Then:
 
 It exits on SIGTERM, when its parent dies, or after LIFETIME seconds, so a
 failed test cannot leak it.
+
+`hold_port_after_exit` names a mode (`attach` or `spawn`). After that mode
+binds, a helper inherits the listening socket, waits until this process is
+reaped, then keeps the port for one second. The next `ssh` on that port then
+sees `EADDRINUSE` even though `wait` on this pid has already returned. The
+helper exits after that second, or after 30 seconds if this process never
+dies.
 
 `phases.jsonl` records child, bind, LocalCommand and proxy transitions with
 monotonic timestamps. Callers print this evidence before cleaning up a failed
@@ -122,6 +130,8 @@ def main():
     listener.listen(64)
     phase("bound", port=local_port)
     bind_event(config, record, local_port, None)
+    if host_config.get("hold_port_after_exit") == record["mode"]:
+        arm_port_hold(listener)
     run_local_command(options(argv))
     phase("proxy_ready")
     while True:
@@ -138,6 +148,50 @@ def bind_event(config, record, port, error):
              "errno": error, "parent": os.getppid()}
     os.write(fd, (json.dumps(event) + "\n").encode())
     os.close(fd)
+
+
+def arm_port_hold(listener):
+    """Hand the listening socket to a helper that outlives this process.
+
+    Forking after the watchdog thread has started is unsafe. The helper is a
+    fresh interpreter that inherits only this fd, so the port stays in
+    LISTEN after this pid has been reaped.
+    """
+    fd = listener.fileno()
+    os.set_inheritable(fd, True)
+    helper = subprocess.Popen(
+        [
+            sys.executable,
+            sys.argv[0],
+            "--hold-listener",
+            str(fd),
+            str(os.getpid()),
+            "1.0",
+            "30",
+        ],
+        pass_fds=(fd,),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    os.set_inheritable(fd, False)
+    phase("port_hold_armed", helper=helper.pid)
+
+
+def hold_inherited_listener(fd, parent, hold, cap):
+    """Keep `fd` open until `parent` is gone, then for `hold` seconds."""
+    os.fstat(fd)  # the inherited listening socket; closing it is the leak
+    started = time.monotonic()
+    while True:
+        try:
+            os.kill(parent, 0)
+        except OSError:
+            break
+        if time.monotonic() - started >= cap:
+            os._exit(0)
+        time.sleep(0.02)
+    time.sleep(hold)
+    os._exit(0)
 
 
 def watchdog():
@@ -233,4 +287,9 @@ def proxy(client, target):
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "--hold-listener":
+        hold_inherited_listener(
+            int(sys.argv[2]), int(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5])
+        )
+    else:
+        main()

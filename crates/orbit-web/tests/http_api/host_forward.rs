@@ -915,8 +915,12 @@ fn a_spawned_remote_is_operator_matched_and_stopped_on_shutdown() {
                 // F363: hold the initial child after allocation, take its port,
                 // then let its real bind fail. A fresh allocation must still
                 // spawn with exactly this session's authority.
+                // `hold_port_after_exit` keeps the successful attach listener
+                // up after that probe is reaped, so the spawn binds only once
+                // the port is actually free.
                 let stub = StubSsh::new(json!({"hostb-ssh": {
                     "attach": null, "spawn": port(&b_server), "bind_gate": "first",
+                    "hold_port_after_exit": "attach",
                 }}));
                 let mut a_server = a.server_with_path_envs(
                     operator,
