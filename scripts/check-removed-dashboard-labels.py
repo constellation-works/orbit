@@ -143,6 +143,27 @@ def removed_and_added_labels(base):
     return {label: files for label, files in removed.items() if label not in added}
 
 
+def filter_still_present(removed):
+    # A label removed from one dashboard file but still present elsewhere in
+    # the worktree dashboard is not a removal: docs may name the remaining
+    # instance. Check raw substrings, mirroring doc_hits.
+    if not removed:
+        return removed
+    root = ROOT / DASHBOARD
+    if not root.is_dir():
+        return removed
+    texts = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            texts.append(path.read_text(errors="replace"))
+        except OSError:
+            continue
+    return {label: files for label, files in removed.items()
+            if not any(label in text for text in texts)}
+
+
 def doc_paths():
     paths = []
     for relative in DOC_ROOTS:
@@ -201,6 +222,7 @@ def main():
         allowlist = load_allowlist()
         base = comparison_base()
         removed = removed_and_added_labels(base)
+        removed = filter_still_present(removed)
         if not removed:
             print("removed dashboard labels: no removed dashboard labels in the diff")
             return 0
