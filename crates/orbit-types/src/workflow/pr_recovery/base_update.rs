@@ -92,7 +92,7 @@ pub fn pr_base_update_reservations(
                     .ok_or("base update reservation lacks evidence")?,
             )
             .map_err(|error| format!("unreadable base update reservation: {error}"))?;
-            validate(&reservation)?;
+            validate(&reservation).map_err(|refusal| refusal.to_string())?;
             Ok(reservation)
         })
         .collect()
@@ -113,8 +113,8 @@ pub fn decide_pr_base_update(
     history: &[TaskHistoryEntry],
     request: &PrBaseUpdateReservation,
 ) -> PrBaseUpdateAdmission {
-    if validate(request).is_err() {
-        return PrBaseUpdateAdmission::Refused(PrBaseUpdateRefusal::IncompleteRequest);
+    if let Err(refusal) = validate(request) {
+        return PrBaseUpdateAdmission::Refused(refusal);
     }
     let reservations = match pr_base_update_reservations(history) {
         Ok(reservations) => reservations,
@@ -157,7 +157,7 @@ pub fn decide_pr_base_update(
     PrBaseUpdateAdmission::Reserved
 }
 
-fn validate(request: &PrBaseUpdateReservation) -> Result<(), String> {
+fn validate(request: &PrBaseUpdateReservation) -> Result<(), PrBaseUpdateRefusal> {
     let sha =
         |s: &str| matches!(s.len(), 40 | 64) && s.bytes().all(|byte| byte.is_ascii_hexdigit());
     if [
@@ -178,7 +178,7 @@ fn validate(request: &PrBaseUpdateReservation) -> Result<(), String> {
             .as_object()
             .is_some_and(|value| !value.is_empty())
     {
-        return Err("base update reservation has incomplete identity or evidence".into());
+        return Err(PrBaseUpdateRefusal::IncompleteRequest);
     }
     Ok(())
 }
