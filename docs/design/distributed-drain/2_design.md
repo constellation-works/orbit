@@ -1,8 +1,8 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-11-14
-last_validated: 2026-11-05
+last_updated: 2026-11-16
+last_validated: 2026-11-16
 status: Draft
 feature: distributed-drain
 doc_role: design
@@ -81,6 +81,9 @@ stored result, never another task; the drain run ID is context, not an idempoten
   full receipts for unsettled claims and failed or revoked claims with a preserved PR,
   and exposes their counts and bytes. Bounded retention needs a
   protocol that rejects retired namespaces, not a time-based DELETE.
+
+Admission compaction and accounting helpers were removed as unused by [ORB-15332]
+and [ORB-17641]. [ORB-19424] subsequently restored the promised operational path.
 
 **Operational retention ([ORB-19424]).** On the owner, `orbit doctor admission-receipts`
 reports full admission receipt and permanent tombstone counts and logical payload bytes.
@@ -227,10 +230,12 @@ tasks — still fails the guard.
 
 **Applied pilot holds.** The latest applied assessment's typed holds are read on
 every admission path from its atomic audit (`OrbitRuntime::pilot_admission_hold`).
-Operator-validation and `host_operational` holds defer the task from every
-executor. The latter seals the assessed material and pilot evidence in
-`host_operational_hold`; older receipts are backfilled at admission. Both
-require an evidenced decision through the trusted human update path, a re-scope,
+Operator-validation and `host_operational` holds normally defer the task from every
+executor. [ORB-21238] lets an operator skip ordinary pilot holds with `no-pilot`;
+[ORB-21767] preserves a current host-operational hold before applying that skip.
+The latter seals the assessed material and pilot evidence in
+`host_operational_hold`; older receipts are backfilled at admission. Without an
+applicable skip, both require an evidenced decision through the trusted human update path, a re-scope,
 or a newer assessment to release them. Backlog approval and `no-diff-expected`
 do not exempt host-operational work, and a decision grants no tools. A
 `native_os_hold` (a criterion needing native evidence from an OS the task's `os:`
@@ -974,7 +979,7 @@ namespace, with an unverifiable identity, or in this process's own group is refu
 stays, and the leaf is reported in `unstopped_leaves`, which fails the CLI (exit 1) and the MCP
 stop. The leaf's cancel accepts only a confirmed stop: an unconfirmed one fails before the run is
 finalized, so its recorded release stays held, as above. The MCP stop control
-(`orbit.workflow` action `auto`, `action: stop`) takes `force` and applies the same cancel to each live
+(`orbit.workflow` with `action: auto`, `mode: stop`) takes `force` and applies the same cancel to each live
 drain after stopping its admissions. A queued drain, or one whose worker is gone, has
 no pass to wait for and is cancelled immediately. The owner's local drain keeps detach-on-cancel;
 its `--force` cancels the detached children too, accepting only confirmed worker stops.
@@ -1026,9 +1031,12 @@ its own dependencies, on locks other tasks hold, and on its claim. Its own `rese
 checks the original context against persistent file reservations and frozen claim footprints at
 the serialized store boundary, then records a reservation with no files. The file-reservation
 conflict check and insert share one SQLite transaction. Release still has an id and the grant
-does not serialize anyone else. An unexpected diff is not refused: `git_commit` commits a
-non-empty stage and `sync_base` reports a recoverable rebase conflict the same way it does for
-any other shipment.
+does not serialize anyone else. On the owner-local delivery route, `git_commit`
+commits an unexpected
+non-empty stage and `sync_base` reports a recoverable rebase conflict. A claimed
+`no-diff-expected` leaf instead refuses changed files or a moved HEAD as
+`no_diff_expected_changed` before staging; its handoff-only route delivers no code
+([pull spec](./specs/task-pull.md#caller-checkpoint-status)).
 
 **Recovery** preserves branch, PR and failure evidence; an authorized operator or supervised
 orchestrator revokes the claim and picks the transition (usually `blocked` or `backlog`).
@@ -1362,10 +1370,8 @@ verified merged PR on its next poll. A stopped handoff uses the existing externa
 settlement, verifying the same base-only chain before atomically completing its task,
 claim, attempt and landing request. A missing deleted source branch can be recovered
 through `refs/pull/<n>/head`; a foreign or edited head still requires review reconciliation.
-This update landed during reconciliation as `b37482369495e62380cfdec9eb6e044d9a7fb9aa`,
-after the inspected checkout `9d7d87bc4f9d0196beb9d5b0a6749d796318ebb1`; its merged
-source, rather than the older one-update/direct-parent code at that checkout, was
-used for these landing details.
+The current checkout includes that implementation, including bounded inherited
+updates and reconciliation of externally merged handoffs.
 
 ### Owner dashboard surface
 
@@ -1682,7 +1688,7 @@ reads pilot warning holds only.
   (`pr_auto_fix_base_red`, `ci_base_suspect`).
 - **Retired provenance.** A seeded `blocked_task_triage` routine file is removed by
   `orbit workspace sync` when unedited; one that still loads is skipped as retired. The earlier
-  `blocked-task-triage` auto-task stays retired provenance (`RETIRED_AUTO_TASK_FILES` in
+  `blocked-task-triage` auto-task introduced by [ORB-17245] stays retired provenance (`RETIRED_AUTO_TASK_FILES` in
   `crates/orbit-core/src/application/auto_tasks/retired.rs`).
 
 ### 7.3 Ship sweep
@@ -1803,7 +1809,7 @@ this table retains its requirements without claiming the entire matrix was execu
 | Explicit ship, owner drains, leftover `ship_sweep` routine | Ship and drains take common admission and none grants merge rights or bypasses slot accounting; a leftover routine loads as retired and never fires |
 | Epic retirement with active old runs, including roots in review | Operator reconciles execution and reservations before migration following the runbook checklist |
 | Missing file selector, then reservation expiry | Full declared footprint stays protected |
-| Truly empty legacy task/epic context | Diagnostic with repair; no guessed or inherited surface |
+| Truly empty legacy task/epic context | Empty context holds no file lock; apply the multi-slot unknown-footprint rule above. An epic root with no own selectors while a descendant has some is withheld as `inherited_only_epic_root`; never infer the descendant union |
 | `review.timing` `off`, `before_pr` or `before_landing`, after-landing auto-task on or off | With `off`, admit and hand off a typed not-required disposition without reviewed SHA or artifact; with either timing, admit only a PR-mode executor declaring `review_gate` and require typed review evidence for the captured timing: before-PR evidence before the PR opens, or before-landing evidence for the settled head after `pr_open`. After-landing does not affect admission |
 | Owner-local task without origin | Local candidate handoff and authorized local landing; no PR or remote credentials |
 | SSH session and managed worker invocation | Session capability gates operator actions; managed runs never propagate operator authority; payload labels cannot replace claim/run authority |
@@ -1929,5 +1935,16 @@ this table retains its requirements without claiming the entire matrix was execu
 - [ORB-19424] — connected admission receipt compaction and separate logical storage accounting to `orbit doctor admission-receipts [--compact]`.
 - [ORB-21458] — kept the owner waiting for reported-but-running required checks within `max_wait_seconds` instead of stopping the handoff.
 - [ORB-21840] — counted review-decision holds separately from failure accounting (`accounting.outcome: review_decision_hold`).
+- [ORB-22350] — bounded re-polling while a BLOCKED provider state catches up with passing checks.
+- [ORB-22808] — retired the configurable admission-affinity reach; admission uses the band.
+- [ORB-22892] — held deterministic leaf load failures for the local drain window.
+- [ORB-23825] — reported follower implementation effort with claim settlements.
+- [ORB-23894] — applied protecting claim footprints before admitting overlapping local work.
+- [ORB-24115] — backfilled effort for settled claimed attempts.
+- [ORB-24150] — carried the follower model with late effort reports.
+- [ORB-24206] — carried the follower crew with late effort reports.
+- [ORB-25084] — let an operator waive backlog readiness gaps without waiving declared locks.
+- [ORB-21238] — made no-pilot an operator skip of ordinary pilot admission holds.
+- [ORB-21767] — kept current host-operational holds when no-pilot is added.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

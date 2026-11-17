@@ -3,7 +3,7 @@ summary: "Agent Families — Design"
 type: design
 title: "Agent Families — Design"
 owner: human
-last_updated: 2026-11-05
+last_updated: 2026-11-16
 last_validated: 2026-10-29
 status: Draft
 feature: agent-families
@@ -17,7 +17,9 @@ This document describes the current implementation of Orbit agent families and c
 
 ## 1. Family Registry
 
-The family registry spans `crates/orbit-types/src/identity/actor.rs` and `crates/orbit-types/src/identity/agent_pair.rs`. `all_agent_families()` returns the supported family identifiers ([ORB-00042] onboarded Grok as one); `agent_from_model()` infers a family from a model string, while `provider_for_agent_family()` maps a family identifier to its provider in `actor.rs`; and `infer_agent_family_from_model()` in `agent_pair.rs` remains the conservative recovery helper for older persisted artifacts.
+`AgentFamily` in `crates/orbit-types/src/identity/agent_family.rs` enumerates five canonical families: `codex`, `claude`, `gemini`, `grok`, and `muse`. `all_agent_families()` in `crates/orbit-types/src/identity/agent_pair.rs` returns their identifiers ([ORB-00042] onboarded Grok; [ORB-17620] added Muse). `agent_from_model()` in `identity/actor.rs` infers a family from a model string, while `provider_for_agent_family()` maps a family identifier to its provider there. [ORB-24739] corrected this description after the unused `provider_from_model()` helper was removed.
+
+[ORB-24589] made both inference helpers use `agent_family_from_model_prefix()` in `identity/agent_family.rs`. Their public behavior still differs: `agent_from_model()` also recognizes `ollama:` and bare `muse`, while `infer_agent_family_from_model()` accepts every exact canonical family name for legacy artifact recovery. `ollama` is not a member of the five-family registry.
 
 Adding a family is still a cross-cutting change: executor assets, sandbox behavior, provider inference, review automation, and scoreboard code all need review. The fixed registry forces that audit instead of silently accepting unknown families.
 
@@ -29,6 +31,9 @@ Workspace config defines one concrete agent assignment under each agent `[crews.
 `crates/orbit-config/src/raw.rs` owns the TOML shape, and `crates/orbit-config/src/resolved/crew.rs` materializes it into `Crew` values from `orbit-types`. Runtime loading rejects incomplete crews, retired `planner`/`implementer`/`reviewer` role sub-tables ([ORB-10620]) with guidance to write flat `model` and `provider` fields, and `[workflow].default_crew` values that do not name a defined crew. A retired `backend` key is accepted only as inert `cli` or rejected with migration guidance.
 
 The built-in crew registry includes model-named crews for Claude (`opus`, `sonnet`, `haiku`, and `fable`) and Codex (`astra`, `sol`, `terra`, and `luna`), plus Antigravity (`gemini-flash` and `argon`), Grok (`grok`), Copilot (`copilot`), and Muse (`muse-spark`, `muse-wonder`, and `muse-wonder-full`). The legacy Gemini CLI remains a recognized executor family but has no built-in crew; an operator must define a crew for it manually. Fresh `orbit init` config writes every built-in crew (seeding began as detected-provider-only in [ORB-10315]), sets `enabled = true` on crews whose provider CLI it detected and `enabled = false` on the rest, and chooses the first enabled crew as `[workflow].default_crew` (`opus`, `astra`, `gemini-flash`, `grok`, `copilot`, or `muse-spark`); interactive init lets the operator pick any enabled seeded crew by name instead, and never writes a `custom` crew.
+
+[ORB-23821] pinned the built-in `fable` model to `claude-fable-5-2` and seeded it
+in the xhard pool. Existing workspace crews and pools are not rewritten.
 
 There is no system crew lane [ORB-15663]. System work draws from `[workflow].purpose_crews.<purpose>` pools; `orbit init` writes the purpose pools as fixed lists filtered to the enabled crews, omitting a pool left empty (see `docs/CONFIG.md`, "What `orbit init` seeds"), so editing complexity pools later does not move them. When an earlier or unseeded route applies without an explicit purpose pool, Orbit's own work draws from the four `[workflow].*_complexity_crews` pools: auto-task templates by their complexity, the task pilot from `low`, and step-failure and PR conflict recovery from `medium`, falling back to `default_crew` when the pool is empty. The registry defines no built-in `system` crew and aliases nothing onto that name; `workflow.system_crew` loads for one release as an ignored, deprecated key, and a template or job still naming `crew: system` resolves through the pools with a warning. A user-authored `[crews.system]` table is an ordinary crew. Init seeds those pools from the detected families (see `docs/CONFIG.md`, "What `orbit init` seeds"); families with no pool rule leave them empty. It does not seed `qa`; the legacy `qa` name remains loadable for existing user-authored configuration. With no supported provider CLI, initialization writes every crew disabled and no default crew, so dispatch refuses until an operator enables one.
 
@@ -66,16 +71,20 @@ An activity-specific crew is carried in rendered input rather than persisted as 
 
 ## Task References
 
-- ORB-00042: Onboard Grok (xAI) as a first-class supported agent family.
-- ORB-10946: Add the standalone GitHub Copilot CLI as a first-class workflow executor.
-- ORB-10945: Add Cursor Agent CLI as a first-class Orbit workflow executor.
-- ORB-00058: Introduce per-task crew override for agent model selection.
-- ORB-10315: Seed model-specific crews only for providers available during initialization.
-- ORB-10620: Reject retired crew role sub-tables during config load.
-- ORB-10622: Remove activity roles and make the run crew the activity fallback.
-- ORB-10968: Keep task.show readable when a stored crew is unavailable.
-- ORB-11299: Replace the default Gemini CLI executor with Antigravity CLI and migrate legacy configurations.
-- ORB-13016: Stop deterministic job runs from recording a resolved crew or model.
-- ORB-15663: Retire workflow.system_crew and route system work through the complexity pools.
+- [ORB-00042] — Onboard Grok (xAI) as a first-class supported agent family.
+- [ORB-10946] — Add the standalone GitHub Copilot CLI as a first-class workflow executor.
+- [ORB-10945] — Add Cursor Agent CLI as a first-class Orbit workflow executor.
+- [ORB-00058] — Introduce per-task crew override for agent model selection.
+- [ORB-10315] — Seed model-specific crews only for providers available during initialization.
+- [ORB-10620] — Reject retired crew role sub-tables during config load.
+- [ORB-10622] — Remove activity roles and make the run crew the activity fallback.
+- [ORB-10968] — Keep task.show readable when a stored crew is unavailable.
+- [ORB-11299] — Replace the default Gemini CLI executor with Antigravity CLI and migrate legacy configurations.
+- [ORB-13016] — Stop deterministic job runs from recording a resolved crew or model.
+- [ORB-15663] — Retire workflow.system_crew and route system work through the complexity pools.
+- [ORB-17620] — added Muse to the canonical family registry and provenance validators.
+- [ORB-23821] — pinned the built-in Fable crew and seeded it in the xhard pool.
+- [ORB-24589] — shared the model-prefix inference table without changing public behavior.
+- [ORB-24739] — corrected the current family API description after dead-helper removal.
 
 Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

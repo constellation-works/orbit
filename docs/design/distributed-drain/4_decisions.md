@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Decisions
 owner: claude
-last_updated: 2026-11-10
+last_updated: 2026-11-16
 last_validated: 2026-10-28
 status: Draft
 feature: distributed-drain
@@ -874,5 +874,7 @@ the ceiling.
 - [ORB-13989] — made the before-PR reviewer repair findings in a second commit.
 - [ORB-21229] — rewrote the resident orchestrator as coordination only, under the epic-is-a-tag decision.
 - [ORB-23809] — handed held delivery leaves back to the auto-fix drain pass ([Held delivery leaves are handed back to the auto-fix drain pass](#held-delivery-leaves-are-handed-back-to-the-auto-fix-drain-pass)).
+- [ORB-22808] — retired the configurable admission-affinity reach cited by the census decision.
+- [ORB-23737] — held in-review landing stops instead of marking the run failed.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -2,8 +2,8 @@
 type: design
 summary: "Delivery automation operations [ORB-11330]"
 tags: [automation-triggers]
-last_updated: 2026-11-14
-last_validated: 2026-11-14
+last_updated: 2026-11-16
+last_validated: 2026-11-16
 ---
 
 # Delivery automation operations [ORB-11330]
@@ -147,7 +147,6 @@ remains disabled. Preview a definition before enabling it:
 
 ```sh
 orbit auto-task show delivery-code-review --preview --json
-orbit tool run orbit.auto_task.show --input '{"name":"delivery-code-review","preview":true}'
 ```
 
 Preview reports the owner identity, proposed baseline and existing debt without
@@ -209,7 +208,7 @@ range, including unattributed neighbors. Fill in the actual checks and findings,
 replace the action ID placeholder with the current task ID, and attach:
 
 ```sh
-orbit tool run orbit.task.artifact --input '{"action":"put","id":"<assigned task>","source_path":".orbit/tmp/automation-coverage.json","path":"automation-coverage.json","model":"codex"}'
+orbit tool run orbit.task.artifact --input '{"action":"put","id":"<assigned task>","source_path":".orbit/tmp/automation-coverage.json","path":"automation-coverage.json"}'
 ```
 
 The version-2 schema has these required fields:
@@ -322,7 +321,7 @@ alive or cannot be proved stopped continues waiting.
 
 ## Inspection and recovery
 
-`orbit auto-task show --json`, MCP `orbit.auto_task.show`, routine status/show and
+`orbit auto-task show --json`, routine status/show and
 the dashboard expose baseline, observed/covered boundaries, pending membership,
 unresolved evidence, active attempt/action and recent accepted receipt metadata.
 Open **Delivery coverage** on a dashboard operation card to inspect the immutable
@@ -1062,5 +1061,7 @@ part of this implementation.
   workspace namespace.
 - [ORB-21124] — made a pilot request on a held assessment run as a targeted
   re-check (`mode: recheck`) rather than a full assessment.
+- [ORB-22808] — fixed the automation stall interval and retired unused configuration.
+- [ORB-22844] — retired finding-verification and pilot-warning-triage routines.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

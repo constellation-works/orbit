@@ -3,7 +3,7 @@ summary: "Agent Families — Overview"
 type: design
 title: "Agent Families — Overview"
 owner: grok
-last_updated: 2026-11-05
+last_updated: 2026-11-16
 last_validated: 2026-11-07
 status: Draft
 stage: shipped
@@ -25,7 +25,7 @@ Family defaults were originally also used to pick activity role models, but that
 
 ## 2. Core Concepts
 
-- **Agent Family:** A stable identifier such as `claude`, `codex`, `gemini`, or `grok` used for routing, attribution, and legacy model inference.
+- **Agent Family:** One of `claude`, `codex`, `gemini`, `grok`, or `muse`, used for routing, attribution, and legacy model inference. [ORB-17620] added Muse to the canonical registry.
 - **Model Inference:** `agent_from_model()` in `crates/orbit-types/src/identity/actor.rs`, together with `infer_agent_family_from_model()` in `crates/orbit-types/src/identity/agent_pair.rs`, map concrete model strings to families. `infer_agent_family_from_model()` remains for legacy artifact recovery.
 - **Crew:** A named provider-model assignment loaded from `.orbit/config.toml` under `[crews.<name>]`; agent dispatch resolves an explicit override, then `task.crew`, then the layered default.
 - **Default Crew:** `[workflow].default_crew` supplies the workspace default tier when no explicit override or task crew is set. The resolved default can fall through to environment and system configuration.
@@ -34,21 +34,24 @@ Family defaults were originally also used to pick activity role models, but that
 
 ## 3. At a Glance
 
-| Concern | File | Task |
-|---------|------|------|
-| Family inference and crew resolver | `crates/orbit-types/src/identity/actor.rs`, `crates/orbit-types/src/identity/agent_pair.rs` | [ORB-00042], [ORB-00058], [ORB-10130] |
-| Task-level crew field | `crates/orbit-types/src/task/model/task.rs` | [ORB-00058] |
-| Runtime config loading | `crates/orbit-config/src/resolved/config.rs` | [ORB-00058] |
-| Default config template | `crates/orbit-config/assets/default-config.toml` | [ORB-00058] |
-| Run-time crew resolution | `crates/orbit-runtime/src/engine/crew/resolution.rs` | [ORB-00058] |
-| Tool and CLI crew surfaces | `crates/orbit-tools/src/builtin/orbit/task/` | [ORB-00058] |
-| Grok family onboarding | `crates/orbit-types/src/identity/actor.rs`, `crates/orbit-types/src/identity/agent_pair.rs` | [ORB-00042], [ORB-00043] |
+| Concern | File | Task | Status |
+| --- | --- | --- | --- |
+| Canonical family registry and shared model-prefix mapping | `crates/orbit-types/src/identity/agent_family.rs` | [ORB-17620] added Muse; [ORB-24589] unified prefix inference | done |
+| Family inference and crew resolver | `crates/orbit-types/src/identity/actor.rs`, `crates/orbit-types/src/identity/agent_pair.rs` | [ORB-00042], [ORB-00058], [ORB-10130] | implemented; early task records unavailable |
+| Task-level crew field | `crates/orbit-types/src/task/model/task.rs` | [ORB-00058] | done |
+| Runtime config loading | `crates/orbit-config/src/resolved/config.rs` | [ORB-00058] | done |
+| Default config template | `crates/orbit-config/assets/default-config.toml` | [ORB-00058] | done |
+| Run-time crew resolution | `crates/orbit-runtime/src/engine/crew/resolution.rs` | [ORB-00058] | done |
+| Tool and CLI crew surfaces | `crates/orbit-tools/src/builtin/orbit/task/` | [ORB-00058] | done |
+| Grok family onboarding | `crates/orbit-types/src/identity/actor.rs`, `crates/orbit-types/src/identity/agent_pair.rs` | [ORB-00042], [ORB-00043] | implemented; early task records unavailable |
 
 ## Task References
 
-- ORB-00042: Onboard Grok (xAI) as a first-class supported agent family.
-- ORB-00043: Add Grok to agent_from_model, all_agent_families, and provider_from_model.
-- ORB-00058: Introduce per-task crew override for agent model selection.
-- ORB-10130: Flatten each crew to one provider-model assignment.
+- [ORB-00042] — Onboard Grok (xAI) as a first-class supported agent family.
+- [ORB-00043] — Add Grok to agent_from_model, all_agent_families, and provider_from_model.
+- [ORB-00058] — Introduce per-task crew override for agent model selection.
+- [ORB-10130] — Flatten each crew to one provider-model assignment.
+- [ORB-17620] — added Muse as a canonical agent family for tool provenance.
+- [ORB-24589] — shared one model-prefix table between the two inference helpers.
 
 Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -141,7 +141,7 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (10)
+### Building (9)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -149,7 +149,6 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | File phase 3: host scope and notifications | claude |
 | [Crew Memory](./design/crew-memory/1_overview.md) | M5 shadow runs (ORB-23117); live from 2026-11-15, then conclude by 2026-12-20 (ORB-23110) | claude |
-| [Distributed Drain](./design/distributed-drain/1_overview.md) | Owner review of the building stage now receipts have an operator caller (ORB-19424). | claude |
 | [Experiments](./design/experiments/1_scope.md) | The horizon decision-channel step remains unfiled | claude |
 | [Model Ranking](./design/model-ranking/1_overview.md) | R4 has no open task (ORB-23305 rejected): file the freeze and 4-week shadow run | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
@@ -167,7 +166,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
 
-### Shipped (37)
+### Shipped (38)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -179,6 +178,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Auto-tasks](./design/auto-tasks/1_overview.md) | — | claude |
 | [Automation Triggers](./design/automation-triggers/1_overview.md) | — | codex |
 | [Crew Credentials](./design/crew-credentials/1_scope.md) | — | claude |
+| [Distributed Drain](./design/distributed-drain/1_overview.md) | — | claude |
 | [Distributions](./design/distributions/1_scope.md) | — | claude |
 | [Executors](./design/executors/4_decisions.md) | — | claude |
 | [Federated MCP](./design/federated-mcp/1_overview.md) | — | grok |
@@ -234,7 +234,7 @@ a conservative title/status fallback.
 | [Auditability](./design/auditability/1_overview.md) | Auditability is Orbit's answer to the operator question that matters after an agent touches a real repository: what happened, why, and who is accountable? | Draft | codex |
 | [Auto-concurrency](./design/auto-concurrency/1_overview.md) | Shipped predictive admission — Orbit records per-task CPU and memory samples, builds resource profiles, forecasts host load, and supports shadow or forecast-based admission for local and pull drains; operational accuracy evidence remains limited. | Draft | claude |
 | [Auto-tasks](./design/auto-tasks/1_overview.md) | Dynamically-defined recurring task templates minted by the host clock tick — periodic work as data, not code. | Implemented | claude |
-| [Automation Triggers](./design/automation-triggers/1_overview.md) | Proposed bounded state-driven triggers for routines and auto-tasks with durable work identity and honest coverage. | Draft | codex |
+| [Automation Triggers](./design/automation-triggers/1_overview.md) | Bounded delivery and preparation triggers for routines and auto-tasks, with durable work identity and honest coverage. | Draft | codex |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Scope: simulate real drain admission, review modes, retry outcomes, host resource fit and regression rework; expose task riskiness, score each forecast model version separately, and correct per-metric quantiles from scored residuals | Draft | claude |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Proposed Claude cloud task delivery, with a companion scope for Copilot repair of existing PRs under shared repair ownership, budgets and exact-head evidence. | Draft | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | Scope: a condition trigger kind whose predicate is a type-checked CEL expression over task, workspace, host and file state, fired once per subject edge with a durable fire identity, beside the typed trigger kinds | Draft | claude |
