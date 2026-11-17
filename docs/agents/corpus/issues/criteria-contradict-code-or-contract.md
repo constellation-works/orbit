@@ -104,3 +104,14 @@ Steady window `2026-10-24T07:23:59Z` through `2026-11-07T07:23:59Z`, capped at t
 Durable source evidence: task histories and comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts`, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
 
 6 of these occurrence(s) are already recorded in the rows above (ORB-18083, ORB-18291, ORB-18661, ORB-18674, ORB-18754, ORB-19035); they are not re-added.
+
+### ORB-25348 owner scan, 2026-11-17
+
+Steady window `2026-11-03T04:24:28Z` through `2026-11-17T04:24:28Z` (prior cursor `2026-11-15T14:46:06Z`, prior pass ORB-24998). Durable sources: task histories/comments read with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts` and run history `orbit run history --no-reconcile --json` in ORB-25348; original records remain authoritative.
+
+This slice counts 2 occurrences across 2 tasks; route `authoring`, disposition `counted` (below the 3-occurrence recurrence threshold). Change vs prior pass: grew (prior 1 for the CHANGELOG variant). New since cursor: 2. Both criteria contradict the workspace guide (dashboard dark-only / no UI tests), which wins over the criterion.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-11-16T09:25:04Z | ORB-25312 | not recorded | pilot contract_conflicts: criterion requires light+dark screenshots, guide states dashboard is dark-only; source ORB-25312 pilot_warnings | proposed, awaiting reconciliation |
+| 2026-11-17T04:13:59Z | ORB-25398 | not recorded | pilot contract_conflicts: criterion requires a DOM dashboard test, guide forbids UI tests; source ORB-25398 pilot_warnings | proposed, awaiting reconciliation |
