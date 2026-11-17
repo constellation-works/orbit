@@ -1672,6 +1672,16 @@ unmerged before it asks again [ORB-21765]. Runs without a pinned head retain
 ordinary `gh pr merge` and repository-enabled auto-merge. See the
 [provider merge contract](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request).
 
+The exact `gh: Merge already in progress (HTTP 405)` diagnostic, with an
+empty or consistent JSON error body, instead permits up to three read-only PR
+observations. Completion uses its ordinary poll waits and original deadline,
+with a separate counter from base-modification retries, and requires the same
+strict merged evidence described below. It never resends the merge or enters
+repair while that merge is in flight. Reaching the observation ceiling leaves
+the task in review. `handoff_land` makes only one reconciliation read: it may
+complete if already merged, and otherwise fails without another merge request.
+Other HTTP 405 refusals still fail on the first request.
+
 A narrowly classified synchronous server failure (HTTP 500, 502, 503 or 504)
 can mean that the merge landed but its response was lost. `pr_complete` makes
 one fresh authenticated status read within the original completion deadline.

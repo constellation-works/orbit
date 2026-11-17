@@ -393,6 +393,8 @@ pub(in crate::executor::automation::vcs) enum ReviewedMergeOutcome {
     /// The SHA-conditioned merge was refused because another merge moved the
     /// base first; carries the provider's diagnostic.
     BaseModified { diagnostic: String },
+    /// GitHub reports a merge already in flight. Only status reads are allowed.
+    InProgress { diagnostic: String },
     /// A narrowly classified synchronous server failure: never authorizes
     /// another mutation, only a fresh read by an opted-in completion caller.
     Ambiguous { diagnostic: String },
@@ -406,17 +408,26 @@ impl ReviewedMergeOutcome {
                 diagnostic: diagnostic.to_string(),
             };
         }
-        if response.get("refusal").and_then(Value::as_str)
-            == Some(operations::BASE_MODIFIED_REFUSAL)
-        {
-            return Self::BaseModified {
-                diagnostic: response
-                    .get("stderr")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string(),
-            };
+        let diagnostic = || {
+            response
+                .get("stderr")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        };
+        match response.get("refusal").and_then(Value::as_str) {
+            Some(operations::BASE_MODIFIED_REFUSAL) => {
+                return Self::BaseModified {
+                    diagnostic: diagnostic(),
+                };
+            }
+            Some(operations::MERGE_IN_PROGRESS_REFUSAL) => {
+                return Self::InProgress {
+                    diagnostic: diagnostic(),
+                };
+            }
+            _ => {}
         }
         Self::Accepted {
             landed_commit: response

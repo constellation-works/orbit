@@ -76,6 +76,9 @@ pub(super) const MAX_WORKFLOW_SOURCE_BYTES: usize = 256 * 1024;
 /// caller opts in with `report_base_modified`.
 pub(crate) const BASE_MODIFIED_REFUSAL: &str = "base_modified";
 
+/// A reviewed merge is already in flight; callers may read but never resend.
+pub(crate) const MERGE_IN_PROGRESS_REFUSAL: &str = "merge_in_progress";
+
 /// Synchronous merge requests a completion or a landing makes against a base
 /// that keeps moving, before it stops for the owner.
 pub(crate) const BASE_MODIFIED_MERGE_ATTEMPTS: u32 = 3;

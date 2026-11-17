@@ -142,68 +142,110 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         previous: &PullRequestStatus,
         diagnostic: &str,
     ) -> Result<DispatchFlow, OrbitError> {
-        let reconcile = || -> Result<Delivery, OrbitError> {
-            let repository = self
-                .merge_capabilities
+        self.read_reconciled_merge(previous)
+            .and_then(|delivery| {
+                delivery.ok_or_else(|| {
+                    OrbitError::Execution(
+                        "reconciliation did not confirm matching MERGED evidence".into(),
+                    )
+                })
+            })
+            .map(|delivery| DispatchFlow::Deliver(Box::new(delivery)))
+            .map_err(|error| self.merge_reconciliation_error(diagnostic, error))
+    }
+
+    /// A distinct read counter, independent of base-modified mutation retries.
+    /// Reuse the ordinary poll wait and deadline without entering repair or
+    /// requesting another merge while GitHub's first merge is in flight.
+    fn poll_in_progress_merge(
+        &mut self,
+        previous: &PullRequestStatus,
+        diagnostic: &str,
+    ) -> Result<DispatchFlow, OrbitError> {
+        let polling = (|| {
+            for reads in 1..=BASE_MODIFIED_MERGE_ATTEMPTS {
+                if let Some(delivery) = self.read_reconciled_merge(previous)? {
+                    return Ok(DispatchFlow::Deliver(Box::new(delivery)));
+                }
+                if reads < BASE_MODIFIED_MERGE_ATTEMPTS {
+                    self.wait_for_next_poll(None)?;
+                }
+            }
+            Err(OrbitError::Execution(format!(
+                "merge still unconfirmed after {BASE_MODIFIED_MERGE_ATTEMPTS} read-only observations; the observation ceiling is reached"
+            )))
+        })();
+        polling.map_err(|error| self.merge_reconciliation_error(diagnostic, error))
+    }
+
+    fn merge_reconciliation_error(&self, diagnostic: &str, error: OrbitError) -> OrbitError {
+        OrbitError::Execution(format!(
+            "pr_complete: could not request {} merge on pull request #{}: {diagnostic}; \
+             read-only reconciliation was inconclusive: {error}; the task stays in review",
+            self.merge_capabilities
                 .as_ref()
-                .map(|capabilities| capabilities.repository.as_str())
-                .ok_or_else(|| OrbitError::Execution("missing repository identity".into()))?;
-            let suffix = format!("/{repository}/pull/{}", self.pr_number);
-            if previous.number_selector.as_deref() != Some(self.pr_number)
-                || !previous.url.as_deref().is_some_and(|url| {
-                    url.strip_suffix(&suffix)
-                        .is_some_and(|host| host.starts_with("https://"))
-                })
-                || self.pin.candidate_sha().is_none()
-                || self.pin.head().is_none()
-                || input_string_field(self.input, "base").is_none()
-                || previous.base_branch.is_none()
-            {
-                return Err(OrbitError::Execution(
-                    "missing or inconsistent pinned PR identity".into(),
-                ));
-            }
-            let status = read_pr_status_before(
-                self.host,
-                Path::new(self.workspace_path),
-                self.pr_number,
-                self.completion_deadline_ms,
-            )?;
-            if status.number_selector != previous.number_selector || status.url != previous.url {
-                return Err(OrbitError::Execution(
-                    "PR number or repository URL changed during reconciliation".into(),
-                ));
-            }
-            if !matches!(classify_pr_state(&status), PrMergeState::Merged)
-                || status.state.as_deref() != Some("MERGED")
-                || !status.merged_at.as_deref().is_some_and(|timestamp| {
-                    chrono::DateTime::parse_from_rfc3339(timestamp).is_ok()
-                })
-                || !status.exact_merge_commit.as_deref().is_some_and(|sha| {
-                    matches!(sha.len(), 40 | 64) && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
-                })
-                || status.base_branch != previous.base_branch
-                || status.head_branch != previous.head_branch
-            {
-                return Err(OrbitError::Execution(
-                    "reconciliation did not confirm matching MERGED evidence".into(),
-                ));
-            }
-            ensure_pr_head_is_reviewed(&status, self.pr_number, self.reviewed_head_sha.as_deref())?;
-            self.delivered_merge(&status)
-        };
-        match reconcile() {
-            Ok(delivery) => Ok(DispatchFlow::Deliver(Box::new(delivery))),
-            Err(error) => Err(OrbitError::Execution(format!(
-                "pr_complete: could not request {} merge on pull request #{}: {diagnostic}; \
-                 read-only reconciliation was inconclusive: {error}; the task stays in review",
-                self.merge_capabilities
-                    .as_ref()
-                    .map(|c| c.strategy.as_str())
-                    .unwrap_or("synchronous"),
-                self.pr_number,
-            ))),
+                .map(|c| c.strategy.as_str())
+                .unwrap_or("synchronous"),
+            self.pr_number,
+        ))
+    }
+
+    /// The same strict merged evidence for ambiguous and in-progress replies.
+    fn read_reconciled_merge(
+        &self,
+        previous: &PullRequestStatus,
+    ) -> Result<Option<Delivery>, OrbitError> {
+        let repository = self
+            .merge_capabilities
+            .as_ref()
+            .map(|capabilities| capabilities.repository.as_str())
+            .ok_or_else(|| OrbitError::Execution("missing repository identity".into()))?;
+        let suffix = format!("/{repository}/pull/{}", self.pr_number);
+        if previous.number_selector.as_deref() != Some(self.pr_number)
+            || !previous.url.as_deref().is_some_and(|url| {
+                url.strip_suffix(&suffix)
+                    .is_some_and(|host| host.starts_with("https://"))
+            })
+            || self.pin.candidate_sha().is_none()
+            || self.pin.head().is_none()
+            || input_string_field(self.input, "base").is_none()
+            || previous.base_branch.is_none()
+        {
+            return Err(OrbitError::Execution(
+                "missing or inconsistent pinned PR identity".into(),
+            ));
         }
+        let status = read_pr_status_before(
+            self.host,
+            Path::new(self.workspace_path),
+            self.pr_number,
+            self.completion_deadline_ms,
+        )?;
+        if status.number_selector != previous.number_selector || status.url != previous.url {
+            return Err(OrbitError::Execution(
+                "PR number or repository URL changed during reconciliation".into(),
+            ));
+        }
+        if !matches!(classify_pr_state(&status), PrMergeState::Merged) {
+            return Ok(None);
+        }
+        if status.state.as_deref() != Some("MERGED")
+            || !status
+                .merged_at
+                .as_deref()
+                .is_some_and(|timestamp| chrono::DateTime::parse_from_rfc3339(timestamp).is_ok())
+            || !status.exact_merge_commit.as_deref().is_some_and(|sha| {
+                matches!(sha.len(), 40 | 64) && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+            || status.base_branch != previous.base_branch
+            || status.head_branch != previous.head_branch
+        {
+            return Err(OrbitError::Execution(
+                "reconciliation did not confirm matching MERGED evidence".into(),
+            ));
+        }
+        ensure_pr_head_is_reviewed(&status, self.pr_number, self.reviewed_head_sha.as_deref())?;
+        self.delivered_merge(&status).map(Some)
     }
 
     fn dispatch_blocked(
@@ -516,6 +558,9 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                     capabilities.strategy.as_str()
                 ))
             })? {
+                ReviewedMergeOutcome::InProgress { diagnostic } => {
+                    return self.poll_in_progress_merge(&status, &diagnostic);
+                }
                 ReviewedMergeOutcome::Ambiguous { diagnostic } => {
                     return self.reconcile_ambiguous_merge(&status, &diagnostic);
                 }

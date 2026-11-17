@@ -903,6 +903,19 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
             // Merged is what the provider reports, not what we asked for.
             ReviewedMergeOutcome::Accepted { .. } => return Ok(Step::Continue),
             ReviewedMergeOutcome::BaseModified { diagnostic: text } => text,
+            ReviewedMergeOutcome::InProgress { diagnostic } => {
+                if let Some(completed) = reconcile_intent(host, context, &intent_id, self.view)? {
+                    return Ok(Step::Done(completed));
+                }
+                self.intent = None;
+                return Err(self.stop(
+                    false,
+                    &format!(
+                        "pull request #{pr_number} merge is already in progress ({diagnostic}); \
+                         one re-read did not confirm it merged; retry landing after checking its status"
+                    ),
+                )?);
+            }
             // This caller does not opt into completion's reconciliation.
             ReviewedMergeOutcome::Ambiguous { diagnostic } => {
                 return Err(OrbitError::Execution(diagnostic));
