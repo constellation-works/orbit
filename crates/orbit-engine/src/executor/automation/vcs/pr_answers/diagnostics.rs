@@ -99,7 +99,7 @@ pub(in crate::executor::automation::vcs) fn status(status: &PullRequestStatus) -
 /// An allowlisted projection of the actual required-check response, including
 /// malformed/unknown fields. Never retain arbitrary payloads, URL fields, or logs.
 /// Classification still uses RequiredChecks::from_response, independently.
-pub(super) fn required_response(response: &Value) -> Value {
+pub(in crate::executor::automation::vcs) fn required_response(response: &Value) -> Value {
     let pr = response.get("pull_request");
     let commit = pr.and_then(|pr| pr.pointer("/commits/nodes/0/commit"));
     let rollup = commit.and_then(|commit| commit.get("statusCheckRollup"));

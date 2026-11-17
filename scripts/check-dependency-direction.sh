@@ -1241,6 +1241,130 @@ for consumer in pr base claim; do
   fi
 done
 
+# [ORB-25311] `vcs::pr_answers` owns the PR read model and sits below checks,
+# pr, landing, base, push and claim. A Rust path segment naming one of those
+# modules is an edge; a bare identifier or a string (a pull-request number,
+# the `checks` field, a `base` pin) is not. checks, base, push and claim
+# publication read the model from pr_answers and must not path-name `pr`.
+# Print every such path as `<file>:<line>:<text>` and exit nonzero when one
+# is found. A missing scan root fails closed.
+module_paths_into() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1])
+module = sys.argv[2]
+forbidden = set(sys.argv[3].split("|"))
+target = root / module
+if not target.exists():
+    print(f"dependency scan path missing: {target}", file=sys.stderr)
+    sys.exit(1)
+token = re.compile(
+    r"(?P<line>//[^\n]*)|(?P<block>/\*)"
+    r'|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")'
+    r'|(?P<literal>(?:b|c)?"(?:\\[\s\S]|[^"\\])*"'
+    r"|b?'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F_]+\}|[^\n])|[^'\\\n])')"
+    r"|::|[a-zA-Z_][a-zA-Z_0-9]*|\S"
+)
+block_delimiter = re.compile(r"/\*|\*/")
+
+
+def code_tokens(source):
+    index = 0
+    while match := token.search(source, index):
+        index = match.end()
+        if match.lastgroup in ("line", "literal"):
+            continue
+        if match.group("block") is not None:
+            depth = 1
+            while depth and (delimiter := block_delimiter.search(source, index)):
+                depth += 1 if delimiter.group() == "/*" else -1
+                index = delimiter.end()
+            if depth:
+                return
+        elif match.group("raw") is not None:
+            closing = '"' + match.group("hashes")
+            end = source.find(closing, index)
+            if end == -1:
+                return
+            index = end + len(closing)
+        else:
+            yield match.group(), match.start()
+
+
+def use_tree(tokens, index, prefix=()):
+    paths = []
+    while index + 1 < len(tokens) and tokens[index + 1][0] == "::":
+        prefix += (tokens[index][0],)
+        index += 2
+    if index < len(tokens) and tokens[index][0] == "{":
+        index += 1
+        while index < len(tokens) and tokens[index][0] != "}":
+            member_paths, index = use_tree(tokens, index, prefix)
+            paths.extend(member_paths)
+            if index < len(tokens) and tokens[index][0] == ",":
+                index += 1
+            else:
+                break
+        if index < len(tokens) and tokens[index][0] == "}":
+            index += 1
+    elif index < len(tokens):
+        paths.append(prefix + (tokens[index][0],))
+        index += 1
+        if index < len(tokens) and tokens[index][0] == "as":
+            index += 2
+    return paths, index
+
+
+failed = False
+paths = [target] if target.is_file() else sorted(target.rglob("*.rs"))
+for path in paths:
+    rel = path.relative_to(root)
+    if "tests" in rel.parts[:-1] or rel.name == "tests.rs":
+        continue
+    source = path.read_text()
+    tokens = list(code_tokens(source))
+    reported = set()
+
+    def report(start):
+        global failed
+        number = source.count("\n", 0, start) + 1
+        if number in reported:
+            return
+        reported.add(number)
+        print(f"{path}:{number}:{source.splitlines()[number - 1]}")
+        failed = True
+
+    for index, (name, start) in enumerate(tokens):
+        if name != "use":
+            continue
+        imported, _ = use_tree(tokens, index + 1)
+        if any(segment in forbidden for segments in imported for segment in segments):
+            report(start)
+    for index, (name, start) in enumerate(tokens):
+        if name not in forbidden:
+            continue
+        previous = tokens[index - 1][0] if index else ""
+        following = tokens[index + 1][0] if index + 1 < len(tokens) else ""
+        if previous == "::" or following == "::":
+            report(start)
+sys.exit(1 if failed else 0)
+PY
+}
+
+if ! module_paths_into "$vcs_src" pr_answers 'pr|checks|landing|base|push|claim'; then
+  echo "orbit-engine vcs pr_answers must not name pr, checks, landing, base, push or claim"
+  fail=1
+fi
+for consumer in checks base push.rs claim/published.rs; do
+  if ! module_paths_into "$vcs_src" "$consumer" pr; then
+    echo "orbit-engine vcs ${consumer} must not name pr; read the PR model from pr_answers"
+    fail=1
+  fi
+done
+
 # [ORB-24781] `job::run` (a run record's lifecycle: queries, cancellation,
 # reconciliation and drain controls) sits below `job::pipeline` (submission,
 # admission and worker execution). Run owns its audit trail (`audit_record`),

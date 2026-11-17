@@ -24,7 +24,7 @@ use super::handoff::{
     record_failed_handoff,
 };
 use super::operations;
-use super::pr::{PrMergeState, classify_pr_state, read_pr_status};
+use super::pr_answers::{PrMergeState, classify_pr_state, read_pr_status};
 use super::remote_probe::{RemoteBranchProbe, pre_push_remote_branch};
 
 pub(in crate::executor::automation) fn push_batch_changes<H: RuntimeHost + ?Sized>(

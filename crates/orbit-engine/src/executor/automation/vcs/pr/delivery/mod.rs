@@ -17,13 +17,14 @@
 //! resumed or hand-built completion input — enforces only what it carries, so
 //! the pins narrow the authorized set and never widen it.
 
-mod pin;
 mod state;
 
-pub(in crate::executor::automation::vcs) use super::merge_state::{
-    PrMergeState, classify_pr_state,
+// Compatibility shim: the pin and merge-state classifier live in
+// `vcs::pr_answers`. Retire this re-export once callers import that module
+// directly (follow-up).
+pub(in crate::executor::automation::vcs) use super::super::pr_answers::{
+    DeliveryEvidence, DeliveryPin, PrMergeState, classify_pr_state,
 };
-pub(in crate::executor::automation::vcs) use pin::{DeliveryEvidence, DeliveryPin};
 pub(in crate::executor::automation::vcs) use state::{
     BlockedCheckWait, OwedHostedChecks, UnreportedChecks, checked_pr_state, owed_hosted_checks,
 };

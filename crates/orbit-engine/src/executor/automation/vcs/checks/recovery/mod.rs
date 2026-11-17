@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
 
-use super::super::pr::{CheckState, PullRequestStatus};
+use super::super::pr_answers::{CheckState, PullRequestStatus};
 
 pub(in crate::executor::automation::vcs) use act::recover_failed_checks;
 pub(super) use dependency::unreadable_job_text;

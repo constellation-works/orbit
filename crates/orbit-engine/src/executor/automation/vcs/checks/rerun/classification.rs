@@ -1,6 +1,6 @@
 //! The unchanged-head classification rerun and the no-edit repair rerun.
 
-use super::super::super::pr::PullRequestStatus;
+use super::super::super::pr_answers::PullRequestStatus;
 use super::super::{
     jobs::{answers, commit_jobs, failed_step, job_label, unsuccessful},
     log::job_log,

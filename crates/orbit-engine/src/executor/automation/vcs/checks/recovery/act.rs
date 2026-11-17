@@ -10,7 +10,7 @@ use serde_json::json;
 use crate::context::{HandoffLandingContext, RuntimeHost};
 
 use super::super::super::operations;
-use super::super::super::pr::PullRequestStatus;
+use super::super::super::pr_answers::PullRequestStatus;
 
 use super::super::base_update::contains;
 use super::super::head::onto_passing_tip;

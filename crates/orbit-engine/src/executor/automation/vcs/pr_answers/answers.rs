@@ -481,7 +481,9 @@ pub(in crate::executor::automation::vcs) struct RequiredChecks {
     /// The independently reported PR head, checked against its commit before waiting.
     pub(in crate::executor::automation::vcs) reported_head_sha: Option<String>,
     /// Required contexts and their provider states from this same observation.
-    pub(super) checks: Vec<StatusCheck>,
+    /// `pub(in vcs)` rather than `pub(super)`: completion and auto-fix in `pr`
+    /// still read the field, and `pr` is no longer this module's parent.
+    pub(in crate::executor::automation::vcs) checks: Vec<StatusCheck>,
     /// [ORB-16185] Required check runs no workflow produced, with the check
     /// run and app identities this same head-bound observation reported.
     pub(in crate::executor::automation::vcs) check_runs: Vec<RequiredCheckRun>,

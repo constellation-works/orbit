@@ -13,7 +13,8 @@ use super::super::super::checks::{
     CheckReadGap, DeferredLogRead, HeadCheckEvidence, head_check_evidence, unmoved_red_base,
 };
 use super::super::super::git::{self, git_output};
-use super::super::answers::{CheckState, PullRequestStatus, RequiredChecks, read_required_checks};
+use super::super::RequiredChecks;
+use super::super::answers::{CheckState, PullRequestStatus, read_required_checks};
 use super::{admission, ledger, verdict};
 
 /// A required failure the base's own job already fails the same way, while

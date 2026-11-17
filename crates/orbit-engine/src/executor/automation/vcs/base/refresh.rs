@@ -1,5 +1,5 @@
 //! One owner-reserved base update for proven absent workflow emission.
-use super::super::pr::{
+use super::super::pr_answers::{
     CheckState, DeliveryPin, PrMergeState, PullRequestStatus, classify_pr_state,
     read_pr_status_before,
 };
@@ -129,12 +129,12 @@ pub(in crate::executor::automation::vcs) fn recover<H: RuntimeHost + ?Sized>(
         return Ok(RefreshStep::None);
     }
     match &status.review_decision {
-        super::super::pr::ReviewDecision::NotApplicable
-        | super::super::pr::ReviewDecision::Approved => {}
-        super::super::pr::ReviewDecision::ReviewRequired
-        | super::super::pr::ReviewDecision::ChangesRequested
-        | super::super::pr::ReviewDecision::Other(_)
-        | super::super::pr::ReviewDecision::Unavailable => {
+        super::super::pr_answers::ReviewDecision::NotApplicable
+        | super::super::pr_answers::ReviewDecision::Approved => {}
+        super::super::pr_answers::ReviewDecision::ReviewRequired
+        | super::super::pr_answers::ReviewDecision::ChangesRequested
+        | super::super::pr_answers::ReviewDecision::Other(_)
+        | super::super::pr_answers::ReviewDecision::Unavailable => {
             return Err(refused("required or unreadable review decision"));
         }
     }
