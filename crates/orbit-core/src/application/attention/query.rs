@@ -347,6 +347,7 @@ pub(crate) fn attention_query(
         echoed.remove("model");
         echoed.remove("agent");
         echoed.remove("candidate_read");
+        echoed.remove("wait_grant");
     }
     echoed["workspace"] = serde_json::json!(workspaces);
     let response = if filter.candidate_read {

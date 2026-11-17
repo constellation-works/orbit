@@ -20,6 +20,20 @@ impl GuardedModes for AttentionVerb {
                 orbit_common::governance::attention::attention_candidate_read_refusal(),
             ));
         }
+        // A grant lets a shell read on the session's behalf, so only a session
+        // whose capabilities a trusted seam asserted may mint one. `orbit tool
+        // run` asserts none, so a shell cannot mint its own.
+        if input.get("wait_grant").and_then(Value::as_bool) == Some(true)
+            && (session.effective_capabilities.is_empty()
+                || input.get("host").is_some()
+                || input.get("candidate_read").is_some()
+                || session.mcp_client_name.as_deref()
+                    == Some(orbit_common::governance::attention::ATTENTION_AGGREGATOR_CLIENT))
+        {
+            return Some(Err(
+                orbit_common::governance::attention::attention_wait_grant_refusal(),
+            ));
+        }
         if session
             .transport
             .is_some_and(|transport| transport != orbit_types::tool::McpTransport::Local)

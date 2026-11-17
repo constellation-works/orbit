@@ -146,12 +146,20 @@ fn execute_admitted(
         OrbitBuiltinAction::Attention(_) => {
             let resident_scope =
                 runtime.resident_cycle_attention_scope(task_scope.run_id.as_deref());
+            let mint = input.get("wait_grant").and_then(serde_json::Value::as_bool) == Some(true);
             crate::application::attention::attention_query(
                 runtime,
                 input,
                 session_context,
                 resident_scope.as_ref(),
             )
+            .and_then(|response| {
+                if mint {
+                    crate::application::attention::with_wait_grant(runtime, response)
+                } else {
+                    Ok(response)
+                }
+            })
         }
         OrbitBuiltinAction::Codebase(verb) => super::codebase_tools::dispatch(runtime, verb, input),
         OrbitBuiltinAction::Automation(verb) => {

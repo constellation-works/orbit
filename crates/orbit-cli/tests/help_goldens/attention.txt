@@ -1,6 +1,9 @@
 List what waits on an operator
 
-Usage: orbit attention [OPTIONS]
+Usage: orbit attention [OPTIONS] [COMMAND]
+
+Commands:
+  wait  Block until attention changes, with no model turn
 
 Options:
       --workspace <WORKSPACE>

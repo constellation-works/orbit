@@ -8,7 +8,7 @@ status: Draft
 feature: operator-attention
 tags: [operator-attention, spec]
 related_features: [operator-attention]
-related_artifacts: [ORB-21164, ORB-21165]
+related_artifacts: [ORB-21164, ORB-21165, ORB-25277]
 last_updated: 2026-11-04
 ---
 
@@ -131,6 +131,23 @@ Daniel dropped the session hook. [ORB-21165] is archived and is not a dependency
 
 No polling schedule, session hook, notification or live configuration change is installed by this contract.
 
+### Waiting from a shell without a model turn
+
+A session spends a turn per poll. To spend none, mint a wait grant on a read and block in the shell
+([decision](../4_decisions.md#a-shell-waits-on-attention-only-through-a-grant-its-own-session-mints)):
+
+1. In the session, call `orbit.attention` with `wait_grant: true` (and the scope and filters of
+   the watch). Keep `cursor.next` and `wait_grant.token`.
+2. In the shell, export the token as `ORBIT_ATTENTION_WAIT_TOKEN` and run
+   `orbit attention wait --since <cursor.next> --workspace <ws> --timeout 30m`.
+3. The wait polls the same derivation and prints the envelope, the next cursor and a `wait` record
+   when the delta is non-empty (exit `0`), the `degraded` set differs from its first read (exit
+   `4`), the timeout passes with no change (exit `3`), or every read failed (exit `5`). A timeout
+   still lists `degraded`; it is not all-clear while any entry remains.
+
+A shell with no grant, an expired grant or a scope outside the grant is refused with
+`capability_denied`.
+
 ## Cost
 
 A call recomputes selected task sources from one metadata index pass, hydrating only relevant nonterminal tasks. Kind selection skips unrelated source predicates. Source timings are logged at `orbit.attention=debug` in microseconds; they include a separate `task_index` bucket. Later runtime and provider slices consume the shared source deadline and cache fields.
@@ -153,5 +170,6 @@ Evidence is attached as `attention-source-costs.json` and the corresponding per-
 
 - [ORB-21164] — specified the fingerprint and cursor
 - [ORB-21165] — archived session-hook proposal
+- [ORB-25277] — shell wait through a session-minted grant
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

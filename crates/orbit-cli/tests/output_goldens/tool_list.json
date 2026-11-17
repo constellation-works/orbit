@@ -425,6 +425,12 @@
         "required": false
       },
       {
+        "name": "wait_grant",
+        "description": "Also mint a shell token for `orbit attention wait`.",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
         "name": "candidate_read",
         "description": "Reserved for Orbit's federated aggregator; never send it.",
         "param_type": "boolean",

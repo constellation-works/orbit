@@ -14,6 +14,15 @@ pub fn attention_candidate_read_refusal() -> crate::OrbitError {
     )
 }
 
+/// Refuse a wait grant to a caller that is not a capability-holding session.
+pub fn attention_wait_grant_refusal() -> crate::OrbitError {
+    attention_wire_refusal(
+        "wait_grant_not_permitted",
+        "A wait grant can be minted only by a session holding a capability grant, for a read that \
+         names no host and is not the federated aggregator's",
+    )
+}
+
 fn attention_wire_refusal(code: &str, message: &str) -> crate::OrbitError {
     crate::OrbitError::RemoteTool {
         code: crate::RemoteToolCode::Other(code.into()),

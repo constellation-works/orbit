@@ -1,8 +1,8 @@
 ---
 title: Operator Attention — Decisions
 owner: claude
-last_updated: 2026-11-08
-last_validated: 2026-11-08
+last_updated: 2026-11-16
+last_validated: 2026-11-16
 status: Draft
 feature: operator-attention
 doc_role: decisions
@@ -11,7 +11,7 @@ summary: "Decisions for orbit attention: derived view not inbox, stateless curso
 tags: [operator-attention]
 paths: ["crates/orbit-core/src/application/attention/**", "crates/orbit-mcp/src/federated/**"]
 related_features: [operator-attention, federated-mcp, human-decision-channel]
-related_artifacts: [ORB-21164]
+related_artifacts: [ORB-21164, ORB-25277]
 ---
 
 # Operator Attention — Decisions
@@ -278,9 +278,72 @@ Rejected:
 - Cost: `--kind decision_open` does not list every open request; `orbit decision list` stays
   the complete list of requests, and a reader who wants requests by gate uses it.
 
+## A shell waits on attention only through a grant its own session mints
+
+**Recorded:** 2026-11 · [ORB-25277]
+**Code anchors:** `crates/orbit-core/src/application/attention/wait.rs`, `crates/orbit-core/src/application/attention/wait_grant.rs`, `crates/orbit-cli/src/command/attention.rs`
+
+### Context
+
+A formation's watcher must learn that nothing changed without a model turn, which means a shell
+process blocking on the delta. A shell resolves as `local-cli` or `unknown` and holds no
+capability, so `orbit attention` and `orbit tool run orbit.attention` are refused there, and the
+refusal is right: attention lists what waits on an operator, and any local process reading it is
+the leak [a derived view must not widen](#a-derived-view-never-widens-who-may-read-its-sources).
+Daniel owns which caller may wait. This records the conservative choice the implementation took;
+it stays open to his revision.
+
+### Decision
+
+A session that already holds `agent` or `operator` mints a short-lived read grant for the shell it
+spawns: `orbit.attention` with `wait_grant: true` returns a `wait_grant` object whose token the
+session exports as `ORBIT_ATTENTION_WAIT_TOKEN`. `orbit attention wait --since <cursor>` presents
+that token and is the only way a shell without a capability reads attention.
+
+- **Authority is narrower than the minting session's.** A grant covers one thing: attention reads
+  of the workspaces that read named, with `agent` capability, for two hours. An operator session
+  cannot lend operator kinds; `run_failed`, `run_stuck`, `claim_stale` and `host_unhealthy` stay
+  `degraded` with code `capability`. It authorizes no write and no other tool.
+- **Only a trusted seam mints.** Minting is refused unless the session's capabilities were asserted
+  by a trusted seam (an MCP session or a run-stamped context). `orbit tool run` asserts none, so a
+  shell cannot mint its own, and the federated aggregator, `host` and `candidate_read` are refused.
+- **The shell without a grant is refused.** A missing, malformed, unknown or expired token is
+  `capability_denied`, as is `all`, `host`, or a workspace the grant does not name.
+- **Stateless cursor, local grant.** The grant is one private file per token under the global root
+  holding the SHA-256 of the token, the workspace ids and names, and the expiry; expired files are
+  pruned on the next mint. The delta itself still uses the stateless cursor from the read that
+  minted the grant.
+- **Outcomes are distinct and never clean by default.** `orbit attention wait` exits `0` with the
+  changed items and next cursor, `3` on timeout, `4` when the `degraded` set changed against the
+  first read of the wait, and `5` when every read failed to the deadline. A timeout still returns
+  the current `degraded` entries and `all_sources_readable`, so an unreadable source is never
+  reported as clean.
+
+Rejected:
+
+- **Letting any local process or `orbit tool run --model` read attention.** It turns the operator
+  wait list into a world-readable file on the machine.
+- **A flag-carried token.** It would appear in the process list; the environment variable does not.
+- **A grant that copies the minting session's capabilities.** An operator session would hand
+  runtime and host-health reads to any process holding the token.
+- **A server-side wait.** A held MCP call spends the session's turn, which is the cost this removes.
+- **A persistent cross-session wait token.** It outlives the session whose authority it borrows.
+
+### Consequences
+
+- A watcher session mints once per two hours and polls from its shell at no model cost.
+- Cost: a same-user local process that can read the token, or write a grant file itself, can read
+  agent-readable attention; the grant makes a read deliberate and auditable, it does not defend
+  against a hostile process under the same OS user, the same limit as `ORBIT_OPERATOR`.
+- Cost: the grant is host-local, so a wait covers workspaces on the host that minted it and never
+  fans out; the `degraded` baseline is the wait's own first read, so a change between the minting
+  read and that first read is not reported.
+- Cost: each poll recomputes the derivation (15 seconds apart by default, 5 at the minimum).
+
 ## Task References
 
 - [ORB-21164] — recorded the attention design decisions
 - [ORB-21165] — archived session-hook proposal
+- [ORB-25277] — shell wait on an attention delta through a session-minted grant
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
