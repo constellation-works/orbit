@@ -242,8 +242,13 @@ template:
     new occurrence or mechanism, retain the existing corpus and explain the clean result.
     Where task histories contain system `agent_corpus_append` entries, export those
     histories under `.orbit/tmp/` and run `python3 scripts/agent-corpus.py --records
-    <export.json> --corpus <mapped-corpus-directory>` to materialize them deterministically. Create a missing topic document
-    in this same proposal before materializing its appends. Never fabricate system outbox
+    <export.json> --corpus <mapped-corpus-directory>` to materialize them deterministically. Do not create a new topic document in this pass: its path is only known after the scan, so it
+    cannot be authorized in advance. For a group whose mechanism has no document under
+    `docs/agents/corpus/issues/`, skip materializing its appends and file one follow-up task whose
+    `context_files` names the exact `file:docs/agents/corpus/issues/<kebab-case-mechanism>.md`
+    (created with `allow_missing_context`), tagged `pilot-block-patterns` and `agent-corpus`, with the
+    group's evidence; such follow-ups do not count toward the 5 fix-task cap. Record the follow-up id as
+    the group's corpus disposition in the report. Never fabricate system outbox
     records. Regenerate the index with `python3 scripts/agent-corpus.py --corpus
     <mapped-corpus-directory>`; include all
     corpus changes in the delivery. No group may live only in the report artifact.
@@ -302,7 +307,7 @@ template:
   - No blocked or pilot-held task was edited, requeued, commented on or triaged; the only writes on other tasks were comments on open fix tasks covering a group.
   - Every group carries its change against the prior pass, and every fix this auto-task filed that reached done in the last 30 days has an effectiveness verdict, with a regression task filed for each `not effective` fix.
   - The pass ran on the owning machine and attached `pilot-block-report.json` and `pilot-block-cursor.json`, including `resume_after` and `resume_after_task` (the last read candidate's sort time and task id) when `partial` is true. When this pass resumed, the attached cursor's `cursor` is the prior cursor's `cursor` (not this scan start) and the report's `window_start` is the window start read from the prior report's `window_start`. Or the pass stopped with `wrong_host` in the execution summary without filing and without attaching a cursor.
-  - When the workspace maps a tracked corpus index and provides the corpus script, every observed group, including deferred and below-threshold groups, is proposed as a mechanism document or appended occurrences in the corpus worktree changes, with a fresh generated index; no group lives only in the report. Otherwise the execution summary identifies the missing prerequisite, and `git status --short` returns no changes.
+  - When the workspace maps a tracked corpus index and provides the corpus script, every observed group, including deferred and below-threshold groups, is proposed as appended occurrences to an existing mechanism document in the corpus worktree changes or, when no document exists for its mechanism, has a filed follow-up task naming the exact new document path, with a fresh generated index; no group lives only in the report. Otherwise the execution summary identifies the missing prerequisite, and `git status --short` returns no changes.
   task_type: chore
   tags:
   - pilot-block-patterns
