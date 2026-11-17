@@ -383,14 +383,23 @@ function historyControl() {
   return el("label", { class: "fc-history" }, [el("span", { class: "fc-control-label", text: "History" }), select]);
 }
 
-// Where this forecast came from and how old it is. The absolute time is its
-// tooltip; Refresh recomputes it live.
+// Where this forecast came from and how old it is (its tooltip, below, adds the
+// absolute time); Refresh recomputes it live.
+function sourceText() {
+  if (view.payload.served_from !== "stored") return "Live";
+  return `Stored ${relativeTime(view.payload.generated_at) ?? "earlier"}`;
+}
+
 function sourceLabel() {
-  const stored = view.payload.served_from === "stored";
-  const age = relativeTime(view.payload.generated_at);
-  const text = stored ? `Stored ${age ?? "earlier"}` : "Live";
-  const title = view.payload.generated_at ? `Computed ${formatDateTime(view.payload.generated_at)}` : null;
-  return el("span", { class: "fc-source", text, title });
+  return el("span", { class: "fc-source", text: sourceText() });
+}
+
+// The whole line as the header's tooltip: the absolute time, and what a truncated
+// header row cuts off.
+function sourceLineTitle() {
+  const model = view.payload.model_version != null ? ` · model v${view.payload.model_version}` : "";
+  const computed = view.payload.generated_at ? ` (computed ${formatDateTime(view.payload.generated_at)})` : "";
+  return `${sourceText()}${model}${computed}`;
 }
 
 function refreshButton() {
@@ -406,8 +415,23 @@ function refreshButton() {
   return button;
 }
 
+// R39: the header row never wraps. While its natural width fits it stays at full
+// size; once it does not, the History label drops out of sight (the select keeps
+// its accessible name) and the source line truncates behind its tooltip.
+function fitForecastHeaderRow(header) {
+  if (!header.clientWidth) return;
+  header.classList.remove("fc-header-compact");
+  if (header.scrollWidth > header.clientWidth) header.classList.add("fc-header-compact");
+}
+
+function oneRowHeader(children, extraClass = "") {
+  const header = el("div", { class: `fc-header fc-header-row${extraClass}` }, children);
+  if (typeof ResizeObserver === "function") new ResizeObserver(() => fitForecastHeaderRow(header)).observe(header);
+  return header;
+}
+
 function tabbedHeader(tab, children) {
-  const header = el("div", { class: "fc-header fc-tabbed" }, children);
+  const header = tab === "forecast" ? oneRowHeader(children, " fc-tabbed") : el("div", { class: "fc-header fc-tabbed" }, children);
   header.dataset.fcTab = tab;
   return header;
 }
@@ -415,7 +439,7 @@ function tabbedHeader(tab, children) {
 // The panel head already reads "N tasks · N slots"; this line continues it.
 function forecastHeader() {
   return tabbedHeader("forecast", [
-    el("p", { class: "fc-meta" }, [
+    el("p", { class: "fc-meta", title: sourceLineTitle() }, [
       sourceLabel(),
       view.payload.model_version != null ? ` · model v${view.payload.model_version}` : null,
     ]),
@@ -438,7 +462,7 @@ function renderViewControls() {
   const body = $(BODY);
   if (!body) return;
   const root = el("div", { class: "fc-view" }, [
-    el("div", { class: "fc-header" }, [el("div", { class: "fc-tools" }, [historyControl(), refreshButton()])]),
+    oneRowHeader([el("div", { class: "fc-tools" }, [historyControl(), refreshButton()])]),
     el("div", { class: "fc-scenario-row" }, [scenarioSwitch()]),
   ]);
   root.dataset.key = "forecast-view";
