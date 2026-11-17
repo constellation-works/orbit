@@ -39,7 +39,7 @@ use orbit_core::OrbitError;
 /// Delay between readiness probes.
 pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
-/// Maximum initial SSH diagnostic retained in memory. An incomplete capture
+/// Maximum SSH diagnostic retained in memory. An incomplete capture
 /// cannot authorize another allocation.
 const MAX_SSH_DIAGNOSTICS_BYTES: usize = 8 * 1024;
 
@@ -116,7 +116,7 @@ pub(crate) enum TunnelOrigin {
     Spawned,
 }
 
-/// An establish failure, distinguishing only a proven initial local bind
+/// An establish failure, distinguishing only a proven local bind
 /// collision from connection, readiness and remote-command failures.
 #[derive(Debug)]
 pub(crate) struct EstablishError {
@@ -175,7 +175,7 @@ pub(crate) fn establish(
         // Exit 255 alone includes authentication/network failures. Reallocation
         // is authorized only by this child's exact local bind diagnostic,
         // before its own marker and before any remote command was started.
-        let local_port_conflict = probe.initial_port_conflict(spec.local_port);
+        let local_port_conflict = probe.proven_port_conflict(spec.local_port);
         return Err(EstablishError {
             error: Box::new(error),
             local_port_conflict,
@@ -193,14 +193,28 @@ pub(crate) fn establish(
     probe.shutdown();
 
     let mut tunnel = spawn_tunnel(spec, Some(&spec.remote_command))?;
-    if poll_until_ready(
+    match poll_until_ready(
         &mut tunnel,
         &mut ready,
         spec.ready_timeout,
         &spec.remote_description,
         cancel_flag(spec),
-    )? {
-        return Ok((tunnel, TunnelOrigin::Spawned));
+    ) {
+        Ok(true) => return Ok((tunnel, TunnelOrigin::Spawned)),
+        Ok(false) => {}
+        Err(error) => {
+            // The spawn child reuses the probe's port, so it can lose the
+            // same local bind race. With `ExitOnForwardFailure=yes` ssh
+            // exits on that bind before it opens the session, so the remote
+            // command never ran and nothing is replayed by reallocating:
+            // the same proof as for the initial probe (exit 255, no bind
+            // marker, the exact diagnostic) authorizes it.
+            let local_port_conflict = tunnel.proven_port_conflict(spec.local_port);
+            return Err(EstablishError {
+                error: Box::new(error),
+                local_port_conflict,
+            });
+        }
     }
     let detail = format!("waiting for {} to become ready", spec.readiness_target);
     Err(match unattended {
@@ -251,9 +265,10 @@ fn spawn_tunnel(spec: &TunnelSpec, remote_command: Option<&str>) -> Result<SshTu
             command,
         ),
     };
-    // Only unattended initial probes need a diagnostic for ephemeral
-    // allocation. Foreground prompts and spawned children keep inherited stderr.
-    let diagnostics = if spec.unattended.is_some() && remote_command.is_none() {
+    // Only unattended children need a diagnostic for ephemeral allocation:
+    // a spawn child reuses its probe's port and can lose that bind too.
+    // Foreground children keep inherited stderr.
+    let diagnostics = if spec.unattended.is_some() {
         Some(
             std::fs::File::create(marker.dir.join("stderr"))
                 .map_err(|error| OrbitError::Io(format!("creating ssh diagnostics: {error}")))?,
@@ -271,8 +286,8 @@ fn spawn_tunnel(spec: &TunnelSpec, remote_command: Option<&str>) -> Result<SshTu
 /// `stdin` is null so Ctrl-C is delivered to *us* (the foreground process)
 /// rather than being forwarded down a pty to the remote.
 ///
-/// Foreground and spawned children inherit stderr. An unattended initial
-/// probe records it privately for bind classification and logs it on teardown.
+/// Foreground children inherit stderr. An unattended child records it
+/// privately for bind classification and logs it on teardown.
 fn spawn_ssh_for(
     spec: &TunnelSpec,
     ssh_args: &[String],
@@ -641,7 +656,7 @@ pub(crate) struct SshTunnel {
 }
 
 impl SshTunnel {
-    fn initial_port_conflict(&mut self, port: u16) -> bool {
+    fn proven_port_conflict(&mut self, port: u16) -> bool {
         if !matches!(self.try_wait(), Ok(Some(status)) if status.code() == Some(255))
             || self.forward_bound()
         {
@@ -684,7 +699,7 @@ impl SshTunnel {
         if let Some(marker) = &marker {
             let (diagnostics, complete) = marker.diagnostics();
             if !diagnostics.is_empty() {
-                tracing::warn!(%diagnostics, truncated = !complete, "ssh initial-forward diagnostics");
+                tracing::warn!(%diagnostics, truncated = !complete, "ssh forward diagnostics");
             }
         }
         drop(marker);
