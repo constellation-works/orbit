@@ -277,7 +277,8 @@ jobs:
     NON_GUARD_TEST_FILES = {
         "test-bench-compiler-cache.py", "test-check-npm-package.py",
         "test-codeql-path-barriers.py", "test-desktop-advisories.py",
-        "test-shell-waits-allowlist.json", "test-state-backup.py",
+        "test-shell-waits-allowlist.json", "test-child-runner-allowlist.json",
+        "test-state-backup.py",
         "test-visual-fixture-server.py",
     }
 
@@ -1024,6 +1025,92 @@ qa.main()
         exception["reason"] = ""
         allowlist.write_text(json.dumps([exception]))
         result = self.run_guard("check-test-shell-waits.py")
+        self.assertEqual(result.returncode, 1, result.stderr)
+
+    def test_static_rejects_raw_child_reexec(self):
+        """A hand-rolled test-binary re-exec fails the static guard by file:line."""
+        self.prepare_ci()
+        shutil.copy2(SCRIPTS / "check-test-child-runners.py", self.scripts)
+        allowlist = self.scripts / "test-child-runner-allowlist.json"
+        allowlist.write_text("[]")
+        fixture = self.root / "crates/example/tests/fixture.rs"
+        fixture.parent.mkdir(parents=True)
+        raw = (
+            "fn reexec() {\n"
+            "    let mut command = std::process::Command::new(std::env::current_exe().unwrap());\n"
+            "    command.output().unwrap();\n"
+            "}\n"
+        )
+        fixture.write_text(raw)
+        result = self.run_guard("ci-guardrails.sh", "--static")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("crates/example/tests/fixture.rs:", result.stderr)
+        self.assertIn("orbit_common::test_env::run_child_test", result.stderr)
+        cases = [
+            "    command.status().unwrap();\n",
+            "    command.spawn().unwrap();\n",
+            "    command.wait().unwrap();\n",
+            "    std::process::Command::new(env!(\"CARGO_BIN_EXE_orbit\")).output().unwrap();\n",
+        ]
+        for body in cases:
+            with self.subTest(body=body):
+                if "CARGO_BIN_EXE" in body:
+                    fixture.write_text("fn reexec() {\n" + body + "}\n")
+                else:
+                    fixture.write_text(raw.replace("    command.output().unwrap();\n", body))
+                result = self.run_guard("check-test-child-runners.py")
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("fixture.rs:", result.stderr)
+                self.assertIn("orbit_common::test_env::run_child_test", result.stderr)
+        sibling = self.root / "crates/example/src/process/tests/wait.rs"
+        sibling.parent.mkdir(parents=True)
+        fixture.write_text("")
+        sibling.write_text(raw)
+        result = self.run_guard("check-test-child-runners.py")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("wait.rs:", result.stderr)
+
+    def test_static_allows_run_child_test_and_rejects_stale_exception(self):
+        """The same re-exec passes through run_child_test; a leftover exception fails."""
+        self.prepare_ci()
+        shutil.copy2(SCRIPTS / "check-test-child-runners.py", self.scripts)
+        allowlist = self.scripts / "test-child-runner-allowlist.json"
+        allowlist.write_text("[]")
+        fixture = self.root / "crates/example/tests/fixture.rs"
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text(
+            "fn reexec() {\n"
+            "    let mut command = std::process::Command::new(std::env::current_exe().unwrap());\n"
+            "    orbit_common::test_env::run_child_test(&mut command);\n"
+            "}\n"
+            "fn within() {\n"
+            "    let mut command = std::process::Command::new(env!(\"CARGO_BIN_EXE_orbit\"));\n"
+            "    orbit_common::test_env::run_child_test_within(&mut command);\n"
+            "}\n"
+            "fn prose() {\n"
+            "    let note = \"Command::new(std::env::current_exe()).output()\";\n"
+            "    // Command::new(std::env::current_exe()).spawn()\n"
+            "    let _ = note;\n"
+            "    std::process::Command::new(\"git\").output().unwrap();\n"
+            "}\n"
+        )
+        result = self.run_guard("ci-guardrails.sh", "--static")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        fixture.write_text("")
+        exception = dict(path="crates/example/tests/fixture.rs", function="reexec",
+                         call=".output()", ordinal=0, reason="bounded fixture")
+        allowlist.write_text(json.dumps([exception]))
+        result = self.run_guard("check-test-child-runners.py")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("stale test-child-runner exception", result.stderr)
+        exception["reason"] = ""
+        fixture.write_text(
+            "fn reexec() {\n"
+            "    std::process::Command::new(std::env::current_exe().unwrap()).output().unwrap();\n"
+            "}\n"
+        )
+        allowlist.write_text(json.dumps([exception]))
+        result = self.run_guard("check-test-child-runners.py")
         self.assertEqual(result.returncode, 1, result.stderr)
 
     def test_fast_propagates_desktop_ui_failure(self):
