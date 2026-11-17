@@ -3,20 +3,26 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
+use orbit_store::contracts::{AgentExecutionRecord, InvocationAccountingFact};
+use orbit_types::identity::ReasoningEffort;
 use orbit_types::task::{TaskComplexity, TaskStatus};
+use orbit_types::telemetry::AgentExecutionIdentity;
 use orbit_types::workflow::ReviewVerdict;
 use serde_json::{Value, json};
 
 use super::super::facts::{Attempt, Finding, FindingState, RejectOutcome, Review, TaskFacts};
-use super::super::{AgentFacts, AgentQuery, AgentRole, agent_scorecard, attribution};
+use super::super::roles::pilots::{Graded, grade_all};
+use super::super::{
+    AgentFacts, AgentQuery, AgentRole, ExecutionMode, agent_scorecard, attribution,
+};
+use crate::application::codebase::{PilotAssessment, PilotEvidence, PilotRun};
 
 // (crew, tier, implemented tasks, landed tasks, reviewed tasks, first accepts).
 type Cohort<'a> = (&'a str, Option<TaskComplexity>, usize, usize, usize, usize);
 
 fn scorecard(cohorts: &[Cohort<'_>]) -> Value {
-    // The served window is the rolling span ending at the query clock, so the
-    // events are placed relative to that clock; fixed timestamps age out of it.
+    // Fixed timestamps age out of the served rolling window; use its clock.
     let now = Utc::now();
     let start = now - chrono::Duration::hours(1);
     let mut tasks = Vec::new();
@@ -24,94 +30,61 @@ fn scorecard(cohorts: &[Cohort<'_>]) -> Value {
         cohorts.iter().enumerate()
     {
         for index in 0..units {
-            let mut attempt = Attempt {
-                start,
-                end: Some(now),
-                runner: Default::default(),
-                job: true,
-                local: true,
-                implementer: true,
-                tags: Vec::new(),
+            let id = format!("{crew}-{cohort}-{index}");
+            // A shared model would merge cohorts: rows group by model and effort.
+            let attempt = implementer_attempt(start, now, crew, &format!("{crew}-model"), None);
+            let verdict = if index < accepted {
+                ReviewVerdict::Accept
+            } else if index % 2 == 0 {
+                ReviewVerdict::Reject
+            } else {
+                ReviewVerdict::AcceptWithFixes
             };
-            attempt.runner.crew = Some(crew.into());
-            // One model per crew: rows group by model and recorded effort,
-            // so a shared model would merge the cohorts into one row.
-            attempt.runner.model = Some(format!("{crew}-model"));
-            let reviews = (index < reviewed).then(|| Review {
-                attempt_id: format!("{crew}-{cohort}-{index}"),
-                activity_id: None,
-                at: start + chrono::Duration::minutes(1),
-                verdict: if index < accepted {
-                    ReviewVerdict::Accept
-                } else if index % 2 == 0 {
-                    ReviewVerdict::Reject
-                } else {
-                    ReviewVerdict::AcceptWithFixes
-                },
-                reviewer: Default::default(),
-                findings: Vec::new(),
-                reviewed: None,
-                final_candidate: None,
-                seconds: None,
-                fix_failed: false,
-                infrastructure: false,
-                outcome: RejectOutcome::Pending,
-            });
+            let landed_here = index < landed;
+            let reviews =
+                (index < reviewed).then(|| review_of(&id, None, plus_minutes(start, 1), verdict));
             tasks.push(TaskFacts {
-                id: format!("{crew}-{cohort}-{index}"),
-                title: "scorecard observation".into(),
-                status: if index < landed {
+                complexity,
+                status: if landed_here {
                     TaskStatus::Done
                 } else {
                     TaskStatus::Review
                 },
-                tags: Vec::new(),
-                context_files: Vec::new(),
-                complexity,
-                created_at: start,
-                landed: index < landed,
-                dropped: false,
+                landed: landed_here,
+                landed_at: landed_here.then_some(now),
                 attempts: vec![attempt],
                 final_attempt: Some(0),
-                execution: super::super::ExecutionMode::Managed,
-                landed_at: (index < landed).then_some(now),
-                records: Vec::new(),
                 reviews: reviews.into_iter().collect(),
-                filed: None,
-                warnings: Default::default(),
+                ..minimal_task(&id, start)
             });
         }
     }
-    let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
-    let facts = AgentFacts {
-        invocations: Default::default(),
-        launches: Default::default(),
-        computed_at: now,
-        tasks_scanned: tasks.len(),
-        tasks,
-        charges,
-        credits,
-        run_costs: BTreeMap::new(),
-        regressions: Vec::new(),
-        landed_lines: BTreeMap::new(),
-        performance_types: Vec::new(),
-        pilots: Vec::new(),
-    };
-    agent_scorecard(
-        &facts,
-        AgentRole::Implementers,
-        &AgentQuery::parse(Some("7d"), Some(1)).unwrap(),
-        Duration::ZERO,
-    )
+    role_scorecard(&scan_tasks(now, tasks), AgentRole::Implementers)
 }
 
-fn row<'a>(payload: &'a Value, crew: &str) -> &'a Value {
+fn matching_row<'a>(payload: &'a Value, field: &str, value: &str) -> &'a Value {
     payload["rows"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["crew"] == crew)
-        .unwrap()
+        .find(|row| row[field] == value)
+        .unwrap_or_else(|| panic!("no {field}={value} row: {payload}"))
+}
+
+fn row<'a>(payload: &'a Value, crew: &str) -> &'a Value {
+    matching_row(payload, "crew", crew)
+}
+
+fn labelled_row<'a>(payload: &'a Value, label: &str) -> &'a Value {
+    matching_row(payload, "label", label)
+}
+
+fn model_row<'a>(payload: &'a Value, model: &str) -> &'a Value {
+    matching_row(payload, "model", model)
+}
+
+fn units_of(payload: &Value, label: &str) -> Value {
+    labelled_row(payload, label)["units"].clone()
 }
 
 fn adjustments(row: &Value) -> &Value {
@@ -157,48 +130,203 @@ fn assert_conserved(payload: &Value) {
     }
 }
 
+/// The `AgentFacts` a scan of `tasks` reads, with attribution derived from
+/// the tasks and `pilots` as the service derives it.
+fn scan_facts(
+    now: DateTime<Utc>,
+    tasks: Vec<TaskFacts>,
+    invocations: Vec<InvocationAccountingFact>,
+    launches: Vec<AgentExecutionRecord>,
+    pilots: Vec<Graded>,
+) -> AgentFacts {
+    let (charges, credits) = attribution::attribute(&tasks, &[], &pilots);
+    AgentFacts {
+        invocations: invocations.into(),
+        launches: launches.into(),
+        computed_at: now,
+        tasks_scanned: tasks.len(),
+        tasks,
+        charges,
+        credits,
+        run_costs: BTreeMap::new(),
+        regressions: Vec::new(),
+        landed_lines: BTreeMap::new(),
+        performance_types: Vec::new(),
+        pilots,
+    }
+}
+
+fn scan_tasks(now: DateTime<Utc>, tasks: Vec<TaskFacts>) -> AgentFacts {
+    scan_facts(now, tasks, Vec::new(), Vec::new(), Vec::new())
+}
+
+fn week_query(min_support: usize) -> AgentQuery {
+    AgentQuery::parse(Some("7d"), Some(min_support)).unwrap()
+}
+
+fn role_scorecard(facts: &AgentFacts, role: AgentRole) -> Value {
+    agent_scorecard(facts, role, &week_query(1), Duration::ZERO)
+}
+
+fn implementer_attempt(
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    crew: &str,
+    model: &str,
+    run_id: Option<&str>,
+) -> Attempt {
+    let mut attempt = Attempt {
+        start,
+        end: Some(end),
+        runner: Default::default(),
+        job: true,
+        local: true,
+        implementer: true,
+        tags: Vec::new(),
+    };
+    attempt.runner.crew = Some(crew.into());
+    attempt.runner.model = Some(model.into());
+    attempt.runner.run_id = run_id.map(Into::into);
+    attempt
+}
+
+fn review_of(
+    attempt_id: &str,
+    activity_id: Option<&str>,
+    at: DateTime<Utc>,
+    verdict: ReviewVerdict,
+) -> Review {
+    Review {
+        attempt_id: attempt_id.into(),
+        activity_id: activity_id.map(Into::into),
+        at,
+        verdict,
+        reviewer: Default::default(),
+        findings: Vec::new(),
+        reviewed: None,
+        final_candidate: None,
+        seconds: None,
+        fix_failed: false,
+        infrastructure: false,
+        outcome: RejectOutcome::Pending,
+    }
+}
+
+fn settlement(activity_id: &str, at: DateTime<Utc>) -> Review {
+    let mut review = review_of(activity_id, Some(activity_id), at, ReviewVerdict::Accept);
+    review.reviewer.crew = Some("crew".into());
+    review.reviewer.model = Some("rev-model".into());
+    review
+}
+
+fn invocation(
+    id: i64,
+    (run_id, task_id): (&str, &str),
+    (activity_id, model): (&str, &str),
+    execution: Option<AgentExecutionIdentity>,
+    duration_ms: u64,
+    at: DateTime<Utc>,
+) -> InvocationAccountingFact {
+    InvocationAccountingFact {
+        execution,
+        id,
+        job_run_id: run_id.into(),
+        ts: at,
+        model: Some(model.into()),
+        input_tokens: 0,
+        cache_read_tokens: 0,
+        cache_create_tokens: 0,
+        cache_create_1h_tokens: 0,
+        output_tokens: 0,
+        task_ids: vec![task_id.into()],
+        provider_cost_usd: None,
+        derived_cost_usd: None,
+        activity_id: Some(activity_id.into()),
+        duration_ms,
+    }
+}
+
+fn identity(crew: &str, effort: Option<ReasoningEffort>) -> AgentExecutionIdentity {
+    AgentExecutionIdentity {
+        crew: Some(crew.into()),
+        reasoning_effort: effort,
+    }
+}
+
+fn plus_minutes(base: DateTime<Utc>, minutes: i64) -> DateTime<Utc> {
+    base + chrono::Duration::minutes(minutes)
+}
+
+fn minimal_task(id: &str, at: DateTime<Utc>) -> TaskFacts {
+    TaskFacts {
+        id: id.into(),
+        title: "multi-round effort observation".into(),
+        status: TaskStatus::Done,
+        tags: Vec::new(),
+        context_files: Vec::new(),
+        complexity: None,
+        created_at: at,
+        landed: true,
+        dropped: false,
+        attempts: Vec::new(),
+        final_attempt: None,
+        execution: ExecutionMode::Managed,
+        landed_at: Some(at),
+        records: Vec::new(),
+        reviews: Vec::new(),
+        filed: None,
+        warnings: Default::default(),
+    }
+}
+
+fn in_review(id: &str, at: DateTime<Utc>, attempts: Vec<Attempt>) -> TaskFacts {
+    TaskFacts {
+        status: TaskStatus::Review,
+        landed: false,
+        landed_at: None,
+        attempts,
+        final_attempt: Some(0),
+        ..minimal_task(id, at)
+    }
+}
+
 #[test]
 fn sparse_tier_scorecard_retains_own_evidence_and_conserves_fleet() {
     use TaskComplexity::{Hard, Low, Medium, XHard};
-    let payload = scorecard(&[
-        ("common", Some(Medium), 100, 100, 60, 60),
-        ("adjacent", Some(Hard), 30, 15, 10, 5),
-        ("rare", Some(XHard), 10, 0, 10, 0),
-    ]);
-    let rare = row(&payload, "rare");
-    // The old implementation gave this crew the medium pool's 9.09 expected
-    // landings. Borrowing from adjacent hard retains the rare tier's failures.
-    assert_eq!(rare["expected"]["weighted_landed"], json!(3.75));
-    assert_eq!(rare["expected"]["first_pass_accepts"], json!(3.75));
-    assert_eq!(
-        row(&payload, "common")["expected"]["weighted_landed"],
-        json!(100)
-    );
-    assert_eq!(adjustments(rare)[0]["tier"], "xhard");
-    assert_eq!(adjustments(rare)[0]["adjusted"], true);
-    assert_eq!(adjustments(rare)[0]["reference"], "hard");
-    assert_eq!(adjustments(rare)[0]["reference_tiers"], json!(["hard"]));
-    assert_eq!(
-        adjustments(rare)[0]["terms"]["weighted_landed"]["own_weight"],
-        json!(0.25)
-    );
-    assert_conserved(&payload);
-    // Changing only the rare tier's own outcomes changes its expectation;
-    // a wholesale replacement with the adjacent tier's rate cannot do this.
-    let changed = scorecard(&[
-        ("common", Some(Medium), 100, 100, 60, 60),
-        ("adjacent", Some(Hard), 30, 15, 10, 5),
-        ("rare", Some(XHard), 10, 10, 10, 10),
-    ]);
-    assert_eq!(
-        row(&changed, "rare")["expected"]["weighted_landed"],
-        json!(6.25)
-    );
-    assert_eq!(
-        row(&changed, "rare")["expected"]["first_pass_accepts"],
-        json!(6.25)
-    );
-    assert_conserved(&changed);
+    // The old implementation gave the rare crew 9.09 expected landings.
+    // Changing only its own outcomes must change that expectation, rather
+    // than replacing it wholesale with the adjacent tier's rate.
+    for (landed, accepted, expected) in [(0, 0, 3.75), (10, 10, 6.25)] {
+        let payload = scorecard(&[
+            ("common", Some(Medium), 100, 100, 60, 60),
+            ("adjacent", Some(Hard), 30, 15, 10, 5),
+            ("rare", Some(XHard), 10, landed, 10, accepted),
+        ]);
+        let rare = row(&payload, "rare");
+        for term in ["weighted_landed", "first_pass_accepts"] {
+            assert_eq!(
+                rare["expected"][term],
+                json!(expected),
+                "{landed}/{accepted}: {term}"
+            );
+        }
+        if landed == 0 {
+            assert_eq!(
+                row(&payload, "common")["expected"]["weighted_landed"],
+                json!(100)
+            );
+            let adjustment = &adjustments(rare)[0];
+            assert_eq!(adjustment["tier"], "xhard");
+            assert_eq!(adjustment["adjusted"], true);
+            assert_eq!(adjustment["reference"], "hard");
+            assert_eq!(adjustment["reference_tiers"], json!(["hard"]));
+            assert_eq!(
+                adjustment["terms"]["weighted_landed"]["own_weight"],
+                json!(0.25)
+            );
+        }
+        assert_conserved(&payload);
+    }
 
     // Ties prefer the lower supported tier; pooling remains defined with no
     // supported tier, an unassessed tier, or a reference with no reviews.
@@ -265,85 +393,37 @@ fn supported_tier_scorecard_keeps_existing_scores() {
     assert_conserved(&payload);
 }
 
-/// `run_task` is the `(run_id, task_id)` the invocation is recorded under.
-fn invocation(
-    id: i64,
-    (run_id, task_id): (&str, &str),
-    crew: &str,
-    effort: Option<orbit_types::identity::ReasoningEffort>,
-    identity: bool,
-    duration_ms: u64,
-    at: chrono::DateTime<Utc>,
-) -> orbit_store::contracts::InvocationAccountingFact {
-    orbit_store::contracts::InvocationAccountingFact {
-        execution: identity.then(|| orbit_types::telemetry::AgentExecutionIdentity {
-            crew: Some(crew.into()),
-            reasoning_effort: effort,
-        }),
-        id,
-        job_run_id: run_id.into(),
-        ts: at,
-        model: Some("m1".into()),
-        input_tokens: 0,
-        cache_read_tokens: 0,
-        cache_create_tokens: 0,
-        cache_create_1h_tokens: 0,
-        output_tokens: 0,
-        task_ids: vec![task_id.into()],
-        provider_cost_usd: None,
-        derived_cost_usd: None,
-        activity_id: Some("implement_one".into()),
-        duration_ms,
-    }
-}
-
 #[test]
 fn implementer_rows_group_by_model_and_recorded_effort() {
     use orbit_types::identity::ReasoningEffort::{High, Medium};
     let now = Utc::now();
     let start = now - chrono::Duration::hours(1);
-    // (crew, run, invocations): three medium tasks (one also carrying a
+    // (crew, run, invocation effort): three medium tasks (one also carrying a
     // shorter high invocation in the same run), two high, one provider
     // default, one with no invocation at all, and one medium task from a
     // second crew on the same model.
-    type RunEffort = Option<(
-        &'static str,
-        bool,
-        Option<orbit_types::identity::ReasoningEffort>,
-    )>;
-    let units: &[(&'static str, RunEffort)] = &[
-        ("opus", Some(("run-m1", true, Some(Medium)))),
-        ("opus", Some(("run-m2", true, Some(Medium)))),
-        ("opus", Some(("run-m3", true, Some(Medium)))),
-        ("opus", Some(("run-h1", true, Some(High)))),
-        ("opus", Some(("run-h2", true, Some(High)))),
-        ("opus", Some(("run-p1", true, None))),
+    let units = [
+        ("opus", Some(("run-m1", Some(Medium)))),
+        ("opus", Some(("run-m2", Some(Medium)))),
+        ("opus", Some(("run-m3", Some(Medium)))),
+        ("opus", Some(("run-h1", Some(High)))),
+        ("opus", Some(("run-h2", Some(High)))),
+        ("opus", Some(("run-p1", None))),
         ("opus", None),
-        ("other", Some(("run-o1", true, Some(Medium)))),
+        ("other", Some(("run-o1", Some(Medium)))),
     ];
     let mut tasks = Vec::new();
     let mut invocations = Vec::new();
     for (index, (crew, run)) in units.iter().enumerate() {
         let task_id = format!("effort-{index}");
-        let mut attempt = Attempt {
-            start,
-            end: Some(now),
-            runner: Default::default(),
-            job: true,
-            local: true,
-            implementer: true,
-            tags: Vec::new(),
-        };
-        attempt.runner.crew = Some((*crew).into());
-        attempt.runner.model = Some("m1".into());
-        if let Some((run_id, identity, effort)) = run {
-            attempt.runner.run_id = Some((*run_id).into());
+        let run_id = run.map(|(run_id, _)| run_id);
+        let attempt = implementer_attempt(start, now, crew, "m1", run_id);
+        if let Some((run_id, effort)) = run {
             invocations.push(invocation(
                 index as i64 * 2 + 1,
                 (run_id, &task_id),
-                crew,
-                *effort,
-                *identity,
+                ("implement_one", "m1"),
+                Some(identity(crew, *effort)),
                 60_000,
                 now,
             ));
@@ -353,67 +433,28 @@ fn implementer_rows_group_by_model_and_recorded_effort() {
                 invocations.push(invocation(
                     999,
                     (run_id, &task_id),
-                    crew,
-                    Some(High),
-                    true,
+                    ("implement_one", "m1"),
+                    Some(identity(crew, Some(High))),
                     1_000,
                     now,
                 ));
             }
         }
-        tasks.push(TaskFacts {
-            id: task_id,
-            title: "effort observation".into(),
-            status: TaskStatus::Review,
-            tags: Vec::new(),
-            context_files: Vec::new(),
-            complexity: None,
-            created_at: start,
-            landed: false,
-            dropped: false,
-            attempts: vec![attempt],
-            final_attempt: Some(0),
-            execution: super::super::ExecutionMode::Managed,
-            landed_at: None,
-            records: Vec::new(),
-            reviews: Vec::new(),
-            filed: None,
-            warnings: Default::default(),
-        });
+        tasks.push(in_review(&task_id, start, vec![attempt]));
     }
-    let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
-    let facts = AgentFacts {
-        invocations: invocations.into(),
-        launches: Default::default(),
-        computed_at: now,
-        tasks_scanned: tasks.len(),
-        tasks,
-        charges,
-        credits,
-        run_costs: BTreeMap::new(),
-        regressions: Vec::new(),
-        landed_lines: BTreeMap::new(),
-        performance_types: Vec::new(),
-        pilots: Vec::new(),
-    };
-    let payload = agent_scorecard(
-        &facts,
-        AgentRole::Implementers,
-        &AgentQuery::parse(Some("7d"), Some(1)).unwrap(),
-        Duration::ZERO,
-    );
+    let facts = scan_facts(now, tasks, invocations, Vec::new(), Vec::new());
+    let payload = role_scorecard(&facts, AgentRole::Implementers);
     let rows = payload["rows"].as_array().unwrap();
-    let by_label = |label: &str| rows.iter().find(|row| row["label"] == label).unwrap();
     assert_eq!(rows.len(), 4, "one row per (model, recorded effort)");
-    let medium = by_label("m1 @ medium");
+    let medium = labelled_row(&payload, "m1 @ medium");
     assert_eq!(medium["units"], json!(4));
     assert_eq!(medium["reasoning_effort"], json!("medium"));
     assert_eq!(medium["crews"], json!(["opus", "other"]));
-    assert_eq!(by_label("m1 @ high")["units"], json!(2));
-    let provider = by_label("m1 @ provider default");
+    assert_eq!(labelled_row(&payload, "m1 @ high")["units"], json!(2));
+    let provider = labelled_row(&payload, "m1 @ provider default");
     assert_eq!(provider["units"], json!(1));
     assert!(provider["reasoning_effort"].is_null());
-    let unknown = by_label("m1 @ effort unknown");
+    let unknown = labelled_row(&payload, "m1 @ effort unknown");
     assert_eq!(unknown["units"], json!(1));
     assert_eq!(unknown["reasoning_effort"], json!("unknown"));
 }
@@ -423,19 +464,16 @@ fn launch(
     run_id: &str,
     activity_id: &str,
     model: &str,
-    effort: Option<orbit_types::identity::ReasoningEffort>,
-    at: chrono::DateTime<Utc>,
-) -> orbit_store::contracts::AgentExecutionRecord {
-    orbit_store::contracts::AgentExecutionRecord {
+    effort: Option<ReasoningEffort>,
+    at: DateTime<Utc>,
+) -> AgentExecutionRecord {
+    AgentExecutionRecord {
         id,
         run_id: run_id.into(),
         activity_id: activity_id.into(),
         provider: "fixture".into(),
         model: Some(model.into()),
-        identity: orbit_types::telemetry::AgentExecutionIdentity {
-            crew: Some("opus".into()),
-            reasoning_effort: effort,
-        },
+        identity: identity("opus", effort),
         started_at: at,
         backfill: None,
     }
@@ -455,114 +493,46 @@ fn implementer_rows_use_launch_effort_when_invocation_never_completed() {
         ("completed", "run-completed"),
         ("neither", "run-neither"),
     ] {
-        let mut attempt = Attempt {
-            start,
-            end: Some(now),
-            runner: Default::default(),
-            job: true,
-            local: true,
-            implementer: true,
-            tags: Vec::new(),
-        };
-        attempt.runner.crew = Some("opus".into());
-        attempt.runner.model = Some("m1".into());
-        attempt.runner.run_id = Some(run_id.into());
-        tasks.push(TaskFacts {
-            id: task_id.into(),
-            title: "launch effort observation".into(),
-            status: TaskStatus::Review,
-            tags: Vec::new(),
-            context_files: Vec::new(),
-            complexity: None,
-            created_at: start,
-            landed: false,
-            dropped: false,
-            attempts: vec![attempt],
-            final_attempt: Some(0),
-            execution: super::super::ExecutionMode::Managed,
-            landed_at: None,
-            records: Vec::new(),
-            reviews: Vec::new(),
-            filed: None,
-            warnings: Default::default(),
-        });
+        let attempt = implementer_attempt(start, now, "opus", "m1", Some(run_id));
+        tasks.push(in_review(task_id, start, vec![attempt]));
     }
     let invocations = vec![invocation(
         1,
         ("run-completed", "completed"),
-        "opus",
-        Some(Medium),
-        true,
+        ("implement_one", "m1"),
+        Some(identity("opus", Some(Medium))),
         60_000,
         now,
     )];
-    let launches = vec![
-        // The latest matching launch decides for the unfinished attempt.
-        launch(1, "run-launch", "implement_one", "m1", Some(Low), start),
+    // (id, run, activity, model, effort, minutes after start). The latest
+    // matching launch decides for the unfinished attempt. Later launches for
+    // another model or another activity are not this unit's evidence.
+    let launches = [
+        (1, "run-launch", "implement_one", "m1", Some(Low), 0),
+        (2, "run-launch", "implement_one", "m1", Some(High), 1),
+        (3, "run-launch", "implement_one", "m2", Some(Medium), 2),
+        (4, "run-launch", "review", "m1", Some(Medium), 3),
+        (5, "run-completed", "implement_one", "m1", Some(High), 1),
+        (6, "run-neither", "implement_one", "m2", Some(High), 0),
+        (7, "run-neither", "review", "m1", Some(High), 0),
+    ]
+    .map(|(id, run_id, activity_id, model, effort, minutes)| {
         launch(
-            2,
-            "run-launch",
-            "implement_one",
-            "m1",
-            Some(High),
-            start + chrono::Duration::minutes(1),
-        ),
-        // Later launches for another model or another activity are not
-        // this unit's evidence.
-        launch(
-            3,
-            "run-launch",
-            "implement_one",
-            "m2",
-            Some(Medium),
-            start + chrono::Duration::minutes(2),
-        ),
-        launch(
-            4,
-            "run-launch",
-            "review",
-            "m1",
-            Some(Medium),
-            start + chrono::Duration::minutes(3),
-        ),
-        launch(
-            5,
-            "run-completed",
-            "implement_one",
-            "m1",
-            Some(High),
-            start + chrono::Duration::minutes(1),
-        ),
-        launch(6, "run-neither", "implement_one", "m2", Some(High), start),
-        launch(7, "run-neither", "review", "m1", Some(High), start),
-    ];
-    let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
-    let facts = AgentFacts {
-        invocations: invocations.into(),
-        launches: launches.into(),
-        computed_at: now,
-        tasks_scanned: tasks.len(),
-        tasks,
-        charges,
-        credits,
-        run_costs: BTreeMap::new(),
-        regressions: Vec::new(),
-        landed_lines: BTreeMap::new(),
-        performance_types: Vec::new(),
-        pilots: Vec::new(),
-    };
-    let payload = agent_scorecard(
-        &facts,
-        AgentRole::Implementers,
-        &AgentQuery::parse(Some("7d"), Some(1)).unwrap(),
-        Duration::ZERO,
-    );
+            id,
+            run_id,
+            activity_id,
+            model,
+            effort,
+            plus_minutes(start, minutes),
+        )
+    });
+    let facts = scan_facts(now, tasks, invocations, launches.into(), Vec::new());
+    let payload = role_scorecard(&facts, AgentRole::Implementers);
     let rows = payload["rows"].as_array().unwrap();
-    let by_label = |label: &str| rows.iter().find(|row| row["label"] == label).unwrap();
     assert_eq!(rows.len(), 3, "one row per attributed effort: {payload}");
-    assert_eq!(by_label("m1 @ high")["units"], json!(1));
-    assert_eq!(by_label("m1 @ medium")["units"], json!(1));
-    assert_eq!(by_label("m1 @ effort unknown")["units"], json!(1));
+    assert_eq!(units_of(&payload, "m1 @ high"), json!(1));
+    assert_eq!(units_of(&payload, "m1 @ medium"), json!(1));
+    assert_eq!(units_of(&payload, "m1 @ effort unknown"), json!(1));
 }
 
 #[test]
@@ -581,64 +551,21 @@ fn reviewer_ranks_are_dense_over_ranked_rows() {
     let mut tasks = Vec::new();
     for (model, count, verdict) in cohorts {
         for index in 0..*count {
-            let mut review = Review {
-                attempt_id: format!("{model}-{index}"),
-                activity_id: None,
-                at,
-                verdict: *verdict,
-                reviewer: Default::default(),
-                findings: Vec::new(),
-                reviewed: None,
-                final_candidate: None,
-                seconds: None,
-                fix_failed: false,
-                infrastructure: false,
-                outcome: RejectOutcome::Pending,
-            };
+            let id = format!("{model}-{index}");
+            let mut review = review_of(&id, None, at, *verdict);
             review.reviewer.crew = Some("review-crew".into());
             review.reviewer.model = Some((*model).into());
             tasks.push(TaskFacts {
-                id: format!("{model}-{index}"),
-                title: "reviewed".into(),
                 status: TaskStatus::Review,
-                tags: Vec::new(),
-                context_files: Vec::new(),
-                complexity: None,
-                created_at: at,
                 landed: false,
-                dropped: false,
-                attempts: Vec::new(),
-                final_attempt: None,
-                execution: super::super::ExecutionMode::Managed,
                 landed_at: None,
-                records: Vec::new(),
                 reviews: vec![review],
-                filed: None,
-                warnings: Default::default(),
+                ..minimal_task(&id, at)
             });
         }
     }
-    let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
-    let facts = AgentFacts {
-        invocations: Default::default(),
-        launches: Default::default(),
-        computed_at: now,
-        tasks_scanned: tasks.len(),
-        tasks,
-        charges,
-        credits,
-        run_costs: BTreeMap::new(),
-        regressions: Vec::new(),
-        landed_lines: BTreeMap::new(),
-        performance_types: Vec::new(),
-        pilots: Vec::new(),
-    };
-    let payload = agent_scorecard(
-        &facts,
-        AgentRole::Reviewers,
-        &AgentQuery::parse(Some("7d"), Some(5)).unwrap(),
-        Duration::ZERO,
-    );
+    let facts = scan_tasks(now, tasks);
+    let payload = agent_scorecard(&facts, AgentRole::Reviewers, &week_query(5), Duration::ZERO);
     let rows = payload["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 4);
     assert!(
@@ -649,239 +576,121 @@ fn reviewer_ranks_are_dense_over_ranked_rows() {
     let mut ranks: Vec<i64> = rows.iter().filter_map(|row| row["rank"].as_i64()).collect();
     ranks.sort_unstable();
     assert_eq!(ranks, [1, 2, 3], "ranks are dense over the ranked rows");
-    let small = rows.iter().find(|row| row["model"] == "r-small").unwrap();
+    let small = model_row(&payload, "r-small");
     assert!(small["rank"].is_null(), "below-support rows stay unranked");
     assert_eq!(small["below_support"], json!(true));
 }
 
-/// `run_task` is the `(run_id, task_id)` the invocation is recorded under.
-fn unit_invocation(
-    id: i64,
-    (run_id, task_id): (&str, &str),
-    activity_id: &str,
-    model: &str,
-    effort: orbit_types::identity::ReasoningEffort,
-    duration_ms: u64,
-    at: chrono::DateTime<Utc>,
-) -> orbit_store::contracts::InvocationAccountingFact {
-    orbit_store::contracts::InvocationAccountingFact {
-        execution: Some(orbit_types::telemetry::AgentExecutionIdentity {
-            crew: Some("crew".into()),
-            reasoning_effort: Some(effort),
-        }),
-        id,
-        job_run_id: run_id.into(),
-        ts: at,
+fn pilot_run(run_id: &str, model: &str, activity_id: &str) -> PilotRun {
+    PilotRun {
+        run_id: run_id.into(),
+        crew: Some("crew".into()),
         model: Some(model.into()),
-        input_tokens: 0,
-        cache_read_tokens: 0,
-        cache_create_tokens: 0,
-        cache_create_1h_tokens: 0,
-        output_tokens: 0,
-        task_ids: vec![task_id.into()],
-        provider_cost_usd: None,
-        derived_cost_usd: None,
         activity_id: Some(activity_id.into()),
-        duration_ms,
+        seconds: None,
+        tokens: None,
     }
 }
 
-fn minimal_task(id: &str, at: chrono::DateTime<Utc>) -> TaskFacts {
-    TaskFacts {
-        id: id.into(),
-        title: "multi-round effort observation".into(),
-        status: TaskStatus::Done,
-        tags: Vec::new(),
-        context_files: Vec::new(),
-        complexity: None,
-        created_at: at,
-        landed: true,
-        dropped: false,
-        attempts: Vec::new(),
-        final_attempt: None,
-        execution: super::super::ExecutionMode::Managed,
-        landed_at: Some(at),
-        records: Vec::new(),
-        reviews: Vec::new(),
-        filed: None,
-        warnings: Default::default(),
+fn pilot_assessment(
+    task_id: &str,
+    at: DateTime<Utc>,
+    run: PilotRun,
+    file: &str,
+) -> PilotAssessment {
+    PilotAssessment {
+        task_id: task_id.into(),
+        at,
+        run: Some(run),
+        after: vec![format!("file:{file}")],
+        author: Vec::new(),
+        landed: BTreeSet::from([file.to_string()]),
+        contested: Vec::new(),
     }
+}
+
+fn grade(assessments: Vec<PilotAssessment>) -> Vec<Graded> {
+    grade_all(PilotEvidence {
+        assessments,
+        waits: Vec::new(),
+    })
 }
 
 #[test]
 fn pilot_rows_keep_each_rounds_own_effort() {
-    use std::collections::BTreeSet;
-
     use orbit_types::identity::ReasoningEffort::{High, Medium};
-
-    use crate::application::agents::roles::pilots::grade_all;
-    use crate::application::codebase::{PilotAssessment, PilotEvidence, PilotRun};
-
     let now = Utc::now();
-    let at = now - chrono::Duration::minutes(30);
-    // One run, two rounds: the initial pilot ran high for 10s, the repair
-    // pilot medium for 60s. The run-wide longest-invocation rule labelled
-    // both receipts medium, pairing the initial model with an effort it
-    // never ran at. A third receipt's producing worker recorded no
-    // invocation in its run, so its effort stays unknown.
-    let graded = grade_all(PilotEvidence {
-        assessments: vec![
-            PilotAssessment {
-                task_id: "pilot-initial".into(),
-                at,
-                run: Some(PilotRun {
-                    run_id: "run-pilot".into(),
-                    crew: Some("crew".into()),
-                    model: Some("initial-model".into()),
-                    activity_id: Some("pilot".into()),
-                    seconds: None,
-                    tokens: None,
-                }),
-                after: vec!["file:src/a.rs".into()],
-                author: Vec::new(),
-                landed: BTreeSet::from(["src/a.rs".to_string()]),
-                contested: Vec::new(),
-            },
-            PilotAssessment {
-                task_id: "pilot-repair".into(),
-                at,
-                run: Some(PilotRun {
-                    run_id: "run-pilot".into(),
-                    crew: Some("crew".into()),
-                    model: Some("repair-model".into()),
-                    activity_id: Some("repair_pilot".into()),
-                    seconds: None,
-                    tokens: None,
-                }),
-                after: vec!["file:src/b.rs".into()],
-                author: Vec::new(),
-                landed: BTreeSet::from(["src/b.rs".to_string()]),
-                contested: Vec::new(),
-            },
-            PilotAssessment {
-                task_id: "pilot-orphan".into(),
-                at,
-                run: Some(PilotRun {
-                    run_id: "run-orphan".into(),
-                    crew: Some("crew".into()),
-                    model: Some("orphan-model".into()),
-                    activity_id: Some("repair_pilot".into()),
-                    seconds: None,
-                    tokens: None,
-                }),
-                after: vec!["file:src/c.rs".into()],
-                author: Vec::new(),
-                landed: BTreeSet::from(["src/c.rs".to_string()]),
-                contested: Vec::new(),
-            },
-        ],
-        waits: Vec::new(),
-    });
-    let tasks = vec![
-        minimal_task("pilot-initial", at),
-        minimal_task("pilot-repair", at),
-        minimal_task("pilot-orphan", at),
+    let at = plus_minutes(now, -30);
+    // The initial round's 10s/high must not borrow the repair's 60s/medium.
+    // The orphan's worker has no matching invocation, so stays unknown.
+    // (name, run, receipt activity, invocation activity, effort, duration).
+    let pilot = "pilot";
+    let repair = "repair_pilot";
+    let rounds = [
+        ("initial", "run-pilot", pilot, pilot, High, 10_000),
+        ("repair", "run-pilot", repair, repair, Medium, 60_000),
+        ("orphan", "run-orphan", repair, pilot, High, 60_000),
     ];
-    let invocations = vec![
-        unit_invocation(
-            1,
-            ("run-pilot", "pilot-initial"),
-            "pilot",
-            "initial-model",
-            High,
-            10_000,
+    let mut tasks = Vec::new();
+    let mut assessments = Vec::new();
+    let mut invocations = Vec::new();
+    for (index, (name, run, receipt, activity, effort, duration)) in rounds.into_iter().enumerate()
+    {
+        let task = format!("pilot-{name}");
+        let model = format!("{name}-model");
+        let file = ["src/a.rs", "src/b.rs", "src/c.rs"][index];
+        tasks.push(minimal_task(&task, at));
+        assessments.push(pilot_assessment(
+            &task,
             at,
-        ),
-        unit_invocation(
-            2,
-            ("run-pilot", "pilot-repair"),
-            "repair_pilot",
-            "repair-model",
-            Medium,
-            60_000,
+            pilot_run(run, &model, receipt),
+            file,
+        ));
+        invocations.push(invocation(
+            index as i64 + 1,
+            (run, &task),
+            (activity, &model),
+            Some(identity("crew", Some(effort))),
+            duration,
             at,
-        ),
-        // The orphan receipt's run recorded only the other round's worker.
-        unit_invocation(
-            3,
-            ("run-orphan", "pilot-orphan"),
-            "pilot",
-            "orphan-model",
-            High,
-            60_000,
-            at,
-        ),
-    ];
-    let (charges, credits) = attribution::attribute(&tasks, &[], &graded);
-    let facts = AgentFacts {
-        invocations: invocations.into(),
-        launches: Default::default(),
-        computed_at: now,
-        tasks_scanned: tasks.len(),
-        tasks,
-        charges,
-        credits,
-        run_costs: BTreeMap::new(),
-        regressions: Vec::new(),
-        landed_lines: BTreeMap::new(),
-        performance_types: Vec::new(),
-        pilots: graded,
-    };
-    let payload = agent_scorecard(
-        &facts,
-        AgentRole::Pilots,
-        &AgentQuery::parse(Some("7d"), Some(1)).unwrap(),
-        Duration::ZERO,
+        ));
+    }
+    let graded = grade(assessments);
+    let facts = scan_facts(now, tasks, invocations, Vec::new(), graded);
+    let payload = role_scorecard(&facts, AgentRole::Pilots);
+    assert_eq!(units_of(&payload, "initial-model @ high"), json!(1));
+    assert_eq!(units_of(&payload, "repair-model @ medium"), json!(1));
+    assert_eq!(
+        units_of(&payload, "orphan-model @ effort unknown"),
+        json!(1)
     );
-    let rows = payload["rows"].as_array().unwrap();
-    let units = |label: &str| {
-        rows.iter()
-            .find(|row| row["label"] == label)
-            .unwrap_or_else(|| panic!("row {label}: {payload}"))["units"]
-            .clone()
-    };
-    assert_eq!(units("initial-model @ high"), json!(1));
-    assert_eq!(units("repair-model @ medium"), json!(1));
-    assert_eq!(units("orphan-model @ effort unknown"), json!(1));
 }
 
-/// A pilot row's warning terms rate per settled assessment, and warnings
-/// settle independently of the assessed cohort, so the interval must resample
-/// settled warnings on tasks the row never assessed.
+/// Warning intervals must resample settled warnings, including tasks outside
+/// the assessed cohort.
 #[test]
 fn pilot_interval_resamples_settled_warnings_on_unassessed_tasks() {
     use crate::application::agents::roles::pilot_warnings::{Assessment, Outcome, Warnings};
-    use crate::application::codebase::{PilotAssessment, PilotEvidence, PilotRun};
-
     let now = Utc::now();
-    let at = now - chrono::Duration::minutes(30);
-    let run = |id: &str| PilotRun {
-        run_id: id.into(),
-        crew: Some("crew".into()),
-        model: Some("pilot-model".into()),
-        activity_id: Some("pilot".into()),
-        seconds: None,
-        tokens: None,
-    };
+    let at = plus_minutes(now, -30);
     // Ten landed tasks the pilot assessed with no lift over the filer.
     let mut tasks: Vec<TaskFacts> = (0..10)
         .map(|index| minimal_task(&format!("assessed-{index}"), at))
         .collect();
-    let graded = crate::application::agents::roles::pilots::grade_all(PilotEvidence {
-        assessments: tasks
+    let graded = grade(
+        tasks
             .iter()
             .map(|task| PilotAssessment {
-                task_id: task.id.clone(),
-                at,
-                run: Some(run(&format!("run-{}", task.id))),
-                after: vec!["file:src/a.rs".into()],
                 author: vec!["file:src/a.rs".into()],
-                landed: BTreeSet::from(["src/a.rs".to_string()]),
-                contested: Vec::new(),
+                ..pilot_assessment(
+                    &task.id,
+                    at,
+                    pilot_run(&format!("run-{}", task.id), "pilot-model", "pilot"),
+                    "src/a.rs",
+                )
             })
             .collect(),
-        waits: Vec::new(),
-    });
+    );
     // Warnings that settled in the window on other tasks: some dropped, one
     // never landed, none in the assessed cohort.
     let settled = |outcomes: &[Outcome]| -> Vec<TaskFacts> {
@@ -906,7 +715,11 @@ fn pilot_interval_resamples_settled_warnings_on_unassessed_tasks() {
                         held: Vec::new(),
                         outcome: outcome.clone(),
                         settled: Some((at, "settled".into())),
-                        run: Some(run(&format!("run-other-{index}"))),
+                        run: Some(pilot_run(
+                            &format!("run-other-{index}"),
+                            "pilot-model",
+                            "pilot",
+                        )),
                         mode: "full".into(),
                         escalated: false,
                     }],
@@ -916,24 +729,9 @@ fn pilot_interval_resamples_settled_warnings_on_unassessed_tasks() {
             })
             .collect()
     };
-    let query = AgentQuery::parse(Some("7d"), Some(1)).unwrap();
     let scored = |tasks: Vec<TaskFacts>| {
-        let (charges, credits) = attribution::attribute(&tasks, &[], &graded);
-        let facts = AgentFacts {
-            invocations: Default::default(),
-            launches: Default::default(),
-            computed_at: now,
-            tasks_scanned: tasks.len(),
-            tasks,
-            charges,
-            credits,
-            run_costs: BTreeMap::new(),
-            regressions: Vec::new(),
-            landed_lines: BTreeMap::new(),
-            performance_types: Vec::new(),
-            pilots: graded.clone(),
-        };
-        let payload = agent_scorecard(&facts, AgentRole::Pilots, &query, Duration::ZERO);
+        let facts = scan_facts(now, tasks, Vec::new(), Vec::new(), graded.clone());
+        let payload = role_scorecard(&facts, AgentRole::Pilots);
         let rows = payload["rows"].as_array().unwrap();
         assert_eq!(rows.len(), 1, "{payload}");
         rows[0].clone()
@@ -984,227 +782,86 @@ fn pilot_interval_resamples_settled_warnings_on_unassessed_tasks() {
     assert_eq!(band(&thin), (0.0, 0.0), "{thin}");
 }
 
+/// Each settlement keeps its invocation's effort, including re-reviews whose
+/// comments repeat the first lead and bind to the gate's `review` step.
 #[test]
 fn reviewer_rows_keep_each_settlements_own_effort() {
-    use orbit_types::identity::ReasoningEffort::{High, Medium};
-
-    let now = Utc::now();
-    let start = now - chrono::Duration::hours(1);
-    let first_at = start + chrono::Duration::minutes(20);
-    let second_at = start + chrono::Duration::minutes(50);
-    // One pipeline run, two settlements of the same reviewer model: the
-    // before-PR review ran high for 10s, the before-landing review
-    // medium for 60s. Neither may relabel the other.
-    let reviewer = |activity_id: &str, at: chrono::DateTime<Utc>| {
-        let mut review = Review {
-            attempt_id: activity_id.into(),
-            activity_id: Some(activity_id.into()),
-            at,
-            verdict: ReviewVerdict::Accept,
-            reviewer: Default::default(),
-            findings: Vec::new(),
-            reviewed: None,
-            final_candidate: None,
-            seconds: None,
-            fix_failed: false,
-            infrastructure: false,
-            outcome: RejectOutcome::Pending,
-        };
-        review.reviewer.crew = Some("crew".into());
-        review.reviewer.model = Some("rev-model".into());
-        review
-    };
-    let mut attempt = Attempt {
-        start,
-        end: Some(now),
-        runner: Default::default(),
-        job: true,
-        local: true,
-        implementer: true,
-        tags: Vec::new(),
-    };
-    attempt.runner.crew = Some("impl".into());
-    attempt.runner.model = Some("impl-model".into());
-    attempt.runner.run_id = Some("run-pr".into());
-    let mut task = minimal_task("reviewed-task", start);
-    task.attempts = vec![attempt];
-    task.final_attempt = Some(0);
-    task.reviews = vec![
-        reviewer("review", first_at),
-        reviewer("landing_review", second_at),
-    ];
-    let tasks = vec![task];
-    let invocations = vec![
-        unit_invocation(
-            1,
-            ("run-pr", "reviewed-task"),
-            "review",
-            "rev-model",
-            High,
-            10_000,
-            first_at - chrono::Duration::minutes(1),
-        ),
-        unit_invocation(
-            2,
-            ("run-pr", "reviewed-task"),
-            "landing_review",
-            "rev-model",
-            Medium,
-            60_000,
-            second_at - chrono::Duration::minutes(1),
-        ),
-    ];
-    let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
-    let facts = AgentFacts {
-        invocations: invocations.into(),
-        launches: Default::default(),
-        computed_at: now,
-        tasks_scanned: tasks.len(),
-        tasks,
-        charges,
-        credits,
-        run_costs: BTreeMap::new(),
-        regressions: Vec::new(),
-        landed_lines: BTreeMap::new(),
-        performance_types: Vec::new(),
-        pilots: Vec::new(),
-    };
-    let payload = agent_scorecard(
-        &facts,
-        AgentRole::Reviewers,
-        &AgentQuery::parse(Some("7d"), Some(1)).unwrap(),
-        Duration::ZERO,
-    );
-    let rows = payload["rows"].as_array().unwrap();
-    let units = |label: &str| {
-        rows.iter()
-            .find(|row| row["label"] == label)
-            .unwrap_or_else(|| panic!("row {label}: {payload}"))["units"]
-            .clone()
-    };
-    assert_eq!(units("rev-model @ high"), json!(1));
-    assert_eq!(units("rev-model @ medium"), json!(1));
-}
-
-#[test]
-fn reviewer_rows_keep_re_review_settlements_own_effort() {
     use orbit_types::identity::ReasoningEffort::{High, Low, Medium};
-
     let now = Utc::now();
     let start = now - chrono::Duration::hours(1);
-    let first_at = start + chrono::Duration::minutes(20);
-    let second_at = start + chrono::Duration::minutes(35);
-    let third_at = start + chrono::Duration::minutes(50);
-    // One pipeline run, three before-PR settlements of the same reviewer
-    // model: `review` ran high for 10s, `re_review` medium for 60s and
-    // `re_review_2` low for 30s. A re-review settlement comment carries the
-    // same lead as the first round's, so each is bound to the gate's `review`
-    // step; none may fall to effort unknown or relabel another.
-    let reviewer = |activity_id: &str, at: chrono::DateTime<Utc>| {
-        let mut review = Review {
-            attempt_id: activity_id.into(),
-            activity_id: Some(activity_id.into()),
-            at,
-            verdict: ReviewVerdict::Accept,
-            reviewer: Default::default(),
-            findings: Vec::new(),
-            reviewed: None,
-            final_candidate: None,
-            seconds: None,
-            fix_failed: false,
-            infrastructure: false,
-            outcome: RejectOutcome::Pending,
+    // Each case: settlements (activity, minute), invocations (activity,
+    // effort, duration_ms, minute), labels that need one unit, and labels
+    // that must not appear. Minutes are after `start`.
+    let cases = [
+        (
+            "before-pr/landing",
+            vec![("review", 20), ("landing_review", 50)],
+            vec![
+                ("review", High, 10_000, 19),
+                ("landing_review", Medium, 60_000, 49),
+            ],
+            vec!["rev-model @ high", "rev-model @ medium"],
+            vec![],
+        ),
+        (
+            "re-review",
+            vec![("review", 20), ("review", 35), ("review", 50)],
+            vec![
+                ("review", High, 10_000, 19),
+                ("re_review", Medium, 60_000, 34),
+                ("re_review_2", Low, 30_000, 49),
+            ],
+            vec!["rev-model @ high", "rev-model @ medium", "rev-model @ low"],
+            vec!["rev-model @ effort unknown"],
+        ),
+    ];
+    for (case, settled, invoked, expected, absent) in cases {
+        let task = TaskFacts {
+            attempts: vec![implementer_attempt(
+                start,
+                now,
+                "impl",
+                "impl-model",
+                Some("run-pr"),
+            )],
+            final_attempt: Some(0),
+            reviews: settled
+                .iter()
+                .map(|&(activity, minute)| settlement(activity, plus_minutes(start, minute)))
+                .collect(),
+            ..minimal_task("reviewed-task", start)
         };
-        review.reviewer.crew = Some("crew".into());
-        review.reviewer.model = Some("rev-model".into());
-        review
-    };
-    let mut attempt = Attempt {
-        start,
-        end: Some(now),
-        runner: Default::default(),
-        job: true,
-        local: true,
-        implementer: true,
-        tags: Vec::new(),
-    };
-    attempt.runner.crew = Some("impl".into());
-    attempt.runner.model = Some("impl-model".into());
-    attempt.runner.run_id = Some("run-pr".into());
-    let mut task = minimal_task("reviewed-task", start);
-    task.attempts = vec![attempt];
-    task.final_attempt = Some(0);
-    task.reviews = vec![
-        reviewer("review", first_at),
-        reviewer("review", second_at),
-        reviewer("review", third_at),
-    ];
-    let tasks = vec![task];
-    let invocations = vec![
-        unit_invocation(
-            1,
-            ("run-pr", "reviewed-task"),
-            "review",
-            "rev-model",
-            High,
-            10_000,
-            first_at - chrono::Duration::minutes(1),
-        ),
-        unit_invocation(
-            2,
-            ("run-pr", "reviewed-task"),
-            "re_review",
-            "rev-model",
-            Medium,
-            60_000,
-            second_at - chrono::Duration::minutes(1),
-        ),
-        unit_invocation(
-            3,
-            ("run-pr", "reviewed-task"),
-            "re_review_2",
-            "rev-model",
-            Low,
-            30_000,
-            third_at - chrono::Duration::minutes(1),
-        ),
-    ];
-    let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
-    let facts = AgentFacts {
-        invocations: invocations.into(),
-        launches: Default::default(),
-        computed_at: now,
-        tasks_scanned: tasks.len(),
-        tasks,
-        charges,
-        credits,
-        run_costs: BTreeMap::new(),
-        regressions: Vec::new(),
-        landed_lines: BTreeMap::new(),
-        performance_types: Vec::new(),
-        pilots: Vec::new(),
-    };
-    let payload = agent_scorecard(
-        &facts,
-        AgentRole::Reviewers,
-        &AgentQuery::parse(Some("7d"), Some(1)).unwrap(),
-        Duration::ZERO,
-    );
-    let rows = payload["rows"].as_array().unwrap();
-    let units = |label: &str| {
-        rows.iter()
-            .find(|row| row["label"] == label)
-            .unwrap_or_else(|| panic!("row {label}: {payload}"))["units"]
-            .clone()
-    };
-    assert_eq!(units("rev-model @ high"), json!(1));
-    assert_eq!(units("rev-model @ medium"), json!(1));
-    assert_eq!(units("rev-model @ low"), json!(1));
-    assert!(
-        rows.iter()
-            .all(|row| row["label"] != "rev-model @ effort unknown"),
-        "{payload}"
-    );
+        let invocations = invoked
+            .iter()
+            .enumerate()
+            .map(|(index, &(activity, effort, duration_ms, minute))| {
+                invocation(
+                    index as i64 + 1,
+                    ("run-pr", "reviewed-task"),
+                    (activity, "rev-model"),
+                    Some(identity("crew", Some(effort))),
+                    duration_ms,
+                    plus_minutes(start, minute),
+                )
+            })
+            .collect();
+        let facts = scan_facts(now, vec![task], invocations, Vec::new(), Vec::new());
+        let payload = role_scorecard(&facts, AgentRole::Reviewers);
+        for label in expected {
+            assert_eq!(
+                units_of(&payload, label),
+                json!(1),
+                "{case}: {label}: {payload}"
+            );
+        }
+        let rows = payload["rows"].as_array().unwrap();
+        for label in absent {
+            assert!(
+                rows.iter().all(|row| row["label"] != label),
+                "{case}: {label}: {payload}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -1214,92 +871,49 @@ fn reviewer_interval_resamples_review_units_not_task_groups() {
     let changed = BTreeSet::from(["src/lib.rs".to_string()]);
     let review = |id: &str, at| {
         let mut review = Review {
-            attempt_id: id.into(),
-            activity_id: None,
-            at,
-            verdict: ReviewVerdict::Reject,
-            reviewer: Default::default(),
             findings: vec![Finding {
                 severity: "low".into(),
                 state: FindingState::Open,
                 paths: changed.clone(),
                 line: format!("finding {id}"),
             }],
-            reviewed: None,
-            final_candidate: None,
-            seconds: None,
-            fix_failed: false,
-            infrastructure: false,
             outcome: RejectOutcome::Judged {
                 changed: changed.clone(),
                 accepted: false,
             },
+            ..review_of(id, None, at, ReviewVerdict::Reject)
         };
         review.reviewer.crew = Some("review-crew".into());
         review.reviewer.model = Some("review-model".into());
         review
     };
-    let facts = |tasks: Vec<TaskFacts>| {
-        let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
-        AgentFacts {
-            invocations: Default::default(),
-            launches: Default::default(),
-            computed_at: now,
-            tasks_scanned: tasks.len(),
-            tasks,
-            charges,
-            credits,
-            run_costs: BTreeMap::new(),
-            regressions: Vec::new(),
-            landed_lines: BTreeMap::new(),
-            performance_types: Vec::new(),
-            pilots: Vec::new(),
-        }
-    };
-    let query = AgentQuery::parse(Some("7d"), Some(1)).unwrap();
     let shared = {
         let mut task = minimal_task("shared-task", start);
         task.reviews = vec![
-            review("review-one", start + chrono::Duration::minutes(10)),
-            review("review-two", start + chrono::Duration::minutes(10)),
+            review("review-one", plus_minutes(start, 10)),
+            review("review-two", plus_minutes(start, 10)),
         ];
-        facts(vec![task])
+        scan_tasks(now, vec![task])
     };
     let split = {
         let mut first = minimal_task("first-task", start);
-        first.reviews = vec![review("review-one", start + chrono::Duration::minutes(10))];
+        first.reviews = vec![review("review-one", plus_minutes(start, 10))];
         let mut second = minimal_task("second-task", start);
-        second.reviews = vec![review("review-two", start + chrono::Duration::minutes(20))];
-        facts(vec![first, second])
+        second.reviews = vec![review("review-two", plus_minutes(start, 20))];
+        scan_tasks(now, vec![first, second])
     };
-    let payload =
-        |facts: &AgentFacts| agent_scorecard(facts, AgentRole::Reviewers, &query, Duration::ZERO);
-    let shared_payload = payload(&shared);
-    let repeated = payload(&shared);
-    let split_payload = payload(&split);
-    let interval = |payload: &Value| {
-        payload["rows"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|row| row["model"] == "review-model")
-            .unwrap()["interval"]
-            .clone()
-    };
+    let interval = |payload: &Value| model_row(payload, "review-model")["interval"].clone();
+    let shared_payload = role_scorecard(&shared, AgentRole::Reviewers);
     assert!(interval(&shared_payload).is_object(), "{shared_payload}");
     assert_eq!(
-        shared_payload["rows"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|row| row["model"] == "review-model")
-            .unwrap()["units"],
+        model_row(&shared_payload, "review-model")["units"],
         json!(2)
     );
+    let repeated = role_scorecard(&shared, AgentRole::Reviewers);
     assert_eq!(interval(&shared_payload), interval(&repeated));
     assert_eq!(
         interval(&shared_payload),
-        interval(&split_payload),
+        interval(&role_scorecard(&split, AgentRole::Reviewers)),
         "the same two review units must have the same interval whether they belong to one or two tasks"
     );
 }
@@ -1307,65 +921,31 @@ fn reviewer_interval_resamples_review_units_not_task_groups() {
 #[test]
 fn attempt_without_a_run_cannot_borrow_a_later_runs_effort() {
     use orbit_types::identity::ReasoningEffort::High;
-
     let now = Utc::now();
     let start = now - chrono::Duration::hours(1);
     // The same task first ran with no recorded run, then in a managed
     // run at high. The unrecorded attempt stays effort-unknown; only the
     // managed attempt counts at high.
-    let make_attempt = |run_id: Option<&str>, at: chrono::DateTime<Utc>| {
-        let mut attempt = Attempt {
-            start: at,
-            end: Some(at + chrono::Duration::minutes(5)),
-            runner: Default::default(),
-            job: true,
-            local: true,
-            implementer: true,
-            tags: Vec::new(),
-        };
-        attempt.runner.crew = Some("opus".into());
-        attempt.runner.model = Some("m1".into());
-        attempt.runner.run_id = run_id.map(str::to_string);
-        attempt
+    let attempt_at = |run_id: Option<&str>, at: DateTime<Utc>| {
+        implementer_attempt(at, plus_minutes(at, 5), "opus", "m1", run_id)
     };
     let mut task = minimal_task("borrowed-effort", start);
     task.status = TaskStatus::Review;
     task.attempts = vec![
-        make_attempt(None, start),
-        make_attempt(Some("run-later"), start + chrono::Duration::minutes(30)),
+        attempt_at(None, start),
+        attempt_at(Some("run-later"), plus_minutes(start, 30)),
     ];
     task.final_attempt = Some(1);
-    let tasks = vec![task];
-    let invocations = vec![unit_invocation(
+    let invocations = vec![invocation(
         1,
         ("run-later", "borrowed-effort"),
-        "implement_one",
-        "m1",
-        High,
+        ("implement_one", "m1"),
+        Some(identity("crew", Some(High))),
         60_000,
         now,
     )];
-    let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
-    let facts = AgentFacts {
-        invocations: invocations.into(),
-        launches: Default::default(),
-        computed_at: now,
-        tasks_scanned: tasks.len(),
-        tasks,
-        charges,
-        credits,
-        run_costs: BTreeMap::new(),
-        regressions: Vec::new(),
-        landed_lines: BTreeMap::new(),
-        performance_types: Vec::new(),
-        pilots: Vec::new(),
-    };
-    let payload = agent_scorecard(
-        &facts,
-        AgentRole::Implementers,
-        &AgentQuery::parse(Some("7d"), Some(1)).unwrap(),
-        Duration::ZERO,
-    );
+    let facts = scan_facts(now, vec![task], invocations, Vec::new(), Vec::new());
+    let payload = role_scorecard(&facts, AgentRole::Implementers);
     let rows = payload["rows"].as_array().unwrap();
     let mut labels: Vec<&str> = rows
         .iter()
@@ -1380,17 +960,9 @@ fn attempt_without_a_run_cannot_borrow_a_later_runs_effort() {
     assert!(rows.iter().all(|row| row["units"] == json!(1)));
 }
 
-/// One history entry as Orbit stores it, `minutes` after `base`.
-fn entry(base: chrono::DateTime<Utc>, minutes: i64, fields: Value) -> Value {
-    let mut fields = fields;
-    fields["at"] = json!(base + chrono::Duration::minutes(minutes));
-    fields
-}
-
-/// A final-recovery decision on `run`, recorded just before the transition
-/// its applier writes at `minutes`.
+/// Record the recovery decision just before its applier's transition.
 fn decided(
-    base: chrono::DateTime<Utc>,
+    base: DateTime<Utc>,
     minutes: i64,
     run: &str,
     decision: &str,
@@ -1412,38 +984,20 @@ fn decided(
     })
 }
 
-fn started(base: chrono::DateTime<Utc>, minutes: i64) -> Value {
-    entry(
-        base,
-        minutes,
-        json!({"by": "system", "event": "started", "from_status": "backlog", "to_status": "in_progress"}),
-    )
+fn started(base: DateTime<Utc>, minutes: i64) -> Value {
+    json!({"at": plus_minutes(base, minutes), "by": "system", "event": "started", "from_status": "backlog", "to_status": "in_progress"})
 }
 
-fn to_review(base: chrono::DateTime<Utc>, minutes: i64) -> Value {
-    entry(
-        base,
-        minutes,
-        json!({"by": "system", "event": "status_changed", "from_status": "in_progress", "to_status": "review"}),
-    )
+fn to_review(base: DateTime<Utc>, minutes: i64) -> Value {
+    json!({"at": plus_minutes(base, minutes), "by": "system", "event": "status_changed", "from_status": "in_progress", "to_status": "review"})
 }
 
-fn landed(base: chrono::DateTime<Utc>, minutes: i64) -> Value {
-    entry(
-        base,
-        minutes,
-        json!({"by": "owner-landing", "event": "landing_completed", "from_status": "review", "to_status": "done"}),
-    )
+fn landed(base: DateTime<Utc>, minutes: i64) -> Value {
+    json!({"at": plus_minutes(base, minutes), "by": "owner-landing", "event": "landing_completed", "from_status": "review", "to_status": "done"})
 }
 
-/// A rerun_ci recovery that could not read the pull request's checks and
-/// escalated, recorded with `fault`.
-fn rerun_ci_escalation(
-    base: chrono::DateTime<Utc>,
-    minutes: i64,
-    run: &str,
-    fault: &str,
-) -> [Value; 2] {
+/// Escalation after rerun_ci cannot read the pull request's checks.
+fn rerun_ci_escalation(base: DateTime<Utc>, minutes: i64, run: &str, fault: &str) -> [Value; 2] {
     let reason = "rerun_ci refused: the checks of pull request #8660 cannot be read \
                   (pull request #8660 mergeability is unknown)";
     [
@@ -1455,23 +1009,19 @@ fn rerun_ci_escalation(
             json!({"kind": "escalated", "reason": reason}),
             fault,
         ),
-        entry(
-            base,
-            minutes,
-            json!({
-                "by": "system",
-                "event": "final_recovery_escalated",
-                "note": format!("final recovery (run_id={run}) escalated: {reason}"),
-                "from_status": "review",
-                "to_status": "blocked",
-                "decision": {"kind": "run_transition", "run_id": run},
-            }),
-        ),
+        json!({
+            "at": plus_minutes(base, minutes),
+            "by": "system",
+            "event": "final_recovery_escalated",
+            "note": format!("final recovery (run_id={run}) escalated: {reason}"),
+            "from_status": "review",
+            "to_status": "blocked",
+            "decision": {"kind": "run_transition", "run_id": run},
+        }),
     ]
 }
 
-/// An operator's requeue of the unchanged, published candidate.
-fn operator_requeue(base: chrono::DateTime<Utc>, minutes: i64, run: &str) -> [Value; 2] {
+fn operator_requeue(base: DateTime<Utc>, minutes: i64, run: &str) -> [Value; 2] {
     [
         decided(
             base,
@@ -1481,41 +1031,29 @@ fn operator_requeue(base: chrono::DateTime<Utc>, minutes: i64, run: &str) -> [Va
             json!({"kind": "requeued"}),
             "unknown",
         ),
-        entry(
-            base,
-            minutes,
-            json!({
-                "by": "human:daniel",
-                "event": "operator_requeued",
-                "note": "requeued onto the published candidate: auto-fix found no defect; failed \
-                         job was a ripgrep download timeout. Reran CI by hand: required checks \
-                         green. Resume the candidate.",
-                "from_status": "blocked",
-                "to_status": "backlog",
-            }),
-        ),
+        json!({
+            "at": plus_minutes(base, minutes),
+            "by": "human:daniel",
+            "event": "operator_requeued",
+            "note": "requeued onto the published candidate: auto-fix found no defect; failed \
+                     job was a ripgrep download timeout. Reran CI by hand: required checks \
+                     green. Resume the candidate.",
+            "from_status": "blocked",
+            "to_status": "backlog",
+        }),
     ]
 }
 
-/// A run that failed on its work, then final recovery's requeue with `fault`.
-fn failed_then_requeued(
-    base: chrono::DateTime<Utc>,
-    minutes: i64,
-    run: &str,
-    fault: &str,
-) -> [Value; 3] {
+fn failed_then_requeued(base: DateTime<Utc>, minutes: i64, run: &str, fault: &str) -> [Value; 3] {
     [
-        entry(
-            base,
-            minutes,
-            json!({
-                "by": "system",
-                "event": "workflow_run_failed",
-                "note": format!("workflow failed: step=validate, run_id={run}, error_code=validation_failed"),
-                "from_status": "in_progress",
-                "to_status": "blocked",
-            }),
-        ),
+        json!({
+            "at": plus_minutes(base, minutes),
+            "by": "system",
+            "event": "workflow_run_failed",
+            "note": format!("workflow failed: step=validate, run_id={run}, error_code=validation_failed"),
+            "from_status": "in_progress",
+            "to_status": "blocked",
+        }),
         decided(
             base,
             minutes + 5,
@@ -1524,17 +1062,14 @@ fn failed_then_requeued(
             json!({"kind": "requeued"}),
             fault,
         ),
-        entry(
-            base,
-            minutes + 5,
-            json!({
-                "by": "system",
-                "event": "final_recovery_requeued",
-                "note": format!("final recovery (run_id={run}): requeued for a fresh attempt"),
-                "from_status": "blocked",
-                "to_status": "backlog",
-            }),
-        ),
+        json!({
+            "at": plus_minutes(base, minutes + 5),
+            "by": "system",
+            "event": "final_recovery_requeued",
+            "note": format!("final recovery (run_id={run}): requeued for a fresh attempt"),
+            "from_status": "blocked",
+            "to_status": "backlog",
+        }),
     ]
 }
 
@@ -1575,34 +1110,20 @@ fn observed_task(id: &str, model: &str, history: Vec<Value>) -> TaskFacts {
         attempt.runner.crew = Some(format!("{model}-crew"));
         attempt.runner.model = Some(model.to_string());
     }
-    facts.execution = super::super::ExecutionMode::Managed;
+    facts.execution = ExecutionMode::Managed;
     facts
 }
 
 #[test]
 fn memory_evidence_charges_implementers_only_for_judged_implementation_faults() {
     let base = Utc::now() - chrono::Duration::hours(6);
-    let created = |minutes| {
-        entry(
-            base,
-            minutes,
-            json!({"by": "claude", "event": "created", "to_status": "proposed"}),
-        )
-    };
+    let created = |minutes| json!({"at": plus_minutes(base, minutes), "by": "claude", "event": "created", "to_status": "proposed"});
     let mut infra = vec![created(0), started(base, 1), to_review(base, 15)];
     infra.extend(rerun_ci_escalation(base, 40, "jrun-a1", "unknown"));
     infra.extend(operator_requeue(base, 46, "jrun-a1"));
     infra.extend([
-        entry(
-            base,
-            47,
-            json!({"by": "hm_mac", "event": "pulled_by", "from_status": "backlog", "to_status": "in_progress", "note": "{}"}),
-        ),
-        entry(
-            base,
-            56,
-            json!({"by": "hm_mac", "event": "claim_handed_off", "from_status": "in_progress", "to_status": "review"}),
-        ),
+        json!({"at": plus_minutes(base, 47), "by": "hm_mac", "event": "pulled_by", "from_status": "backlog", "to_status": "in_progress", "note": "{}"}),
+        json!({"at": plus_minutes(base, 56), "by": "hm_mac", "event": "claim_handed_off", "from_status": "in_progress", "to_status": "review"}),
         landed(base, 66),
     ]);
 
@@ -1615,23 +1136,11 @@ fn memory_evidence_charges_implementers_only_for_judged_implementation_faults() 
     mixed.extend(operator_requeue(base, 46, "jrun-b2"));
     mixed.extend([started(base, 50), to_review(base, 60), landed(base, 70)]);
 
-    let mut spec = vec![created(0), started(base, 1)];
-    spec.extend(failed_then_requeued(base, 10, "jrun-c1", "specification"));
-    spec.extend([started(base, 20), to_review(base, 30), landed(base, 40)]);
-
     // A block by hand, requeued by hand, with nothing judging the work.
     let mut manual = vec![created(0), started(base, 1)];
     manual.extend([
-        entry(
-            base,
-            10,
-            json!({"by": "human:daniel", "event": "status_changed", "from_status": "in_progress", "to_status": "blocked"}),
-        ),
-        entry(
-            base,
-            20,
-            json!({"by": "human:daniel", "event": "status_changed", "from_status": "blocked", "to_status": "backlog"}),
-        ),
+        json!({"at": plus_minutes(base, 10), "by": "human:daniel", "event": "status_changed", "from_status": "in_progress", "to_status": "blocked"}),
+        json!({"at": plus_minutes(base, 20), "by": "human:daniel", "event": "status_changed", "from_status": "blocked", "to_status": "backlog"}),
         started(base, 21),
         to_review(base, 30),
         landed(base, 40),
@@ -1643,34 +1152,24 @@ fn memory_evidence_charges_implementers_only_for_judged_implementation_faults() 
     unjudged.extend(operator_requeue(base, 46, "jrun-d1"));
     unjudged.extend([started(base, 50), to_review(base, 60), landed(base, 70)]);
 
-    // Another model's judged fault stays in that model's pack.
-    let mut other = vec![created(0), started(base, 1)];
-    other.extend(failed_then_requeued(base, 10, "jrun-e1", "implementer"));
-    other.extend([started(base, 20), to_review(base, 30), landed(base, 40)]);
-
-    let tasks = vec![
+    let mut tasks = vec![
         observed_task("infra", "fixture-model", infra),
         observed_task("mixed", "fixture-model", mixed),
-        observed_task("spec", "fixture-model", spec),
         observed_task("manual", "fixture-model", manual),
         observed_task("unjudged", "fixture-model", unjudged),
-        observed_task("other", "other-model", other),
     ];
-    let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
-    let facts = AgentFacts {
-        invocations: Default::default(),
-        launches: Default::default(),
-        computed_at: Utc::now(),
-        tasks_scanned: tasks.len(),
-        tasks,
-        charges,
-        credits,
-        run_costs: BTreeMap::new(),
-        regressions: Vec::new(),
-        landed_lines: BTreeMap::new(),
-        performance_types: Vec::new(),
-        pilots: Vec::new(),
-    };
+    // The same retry sequence, once for a specification fault and once for
+    // another model's implementation fault (which must stay in its pack).
+    for (id, model, run, fault) in [
+        ("spec", "fixture-model", "jrun-c1", "specification"),
+        ("other", "other-model", "jrun-e1", "implementer"),
+    ] {
+        let mut history = vec![created(0), started(base, 1)];
+        history.extend(failed_then_requeued(base, 10, run, fault));
+        history.extend([started(base, 20), to_review(base, 30), landed(base, 40)]);
+        tasks.push(observed_task(id, model, history));
+    }
+    let facts = scan_tasks(Utc::now(), tasks);
 
     let claims = |model: &str| -> BTreeMap<String, Vec<(&'static str, Vec<String>)>> {
         let evidence = super::super::memory_evidence::model_evidence(&facts, model).unwrap();
@@ -1692,9 +1191,8 @@ fn memory_evidence_charges_implementers_only_for_judged_implementation_faults() 
                              because of how it was implemented";
 
     let fixture = claims("fixture-model");
-    // ORB-23194: a ripgrep download timeout, a mergeability-unknown recovery
-    // refusal and a requeue of the unchanged candidate are no implementation
-    // fault.
+    // ORB-23194: a download timeout, unknown-mergeability refusal and unchanged
+    // candidate requeue are not implementation faults.
     assert!(
         !fixture.contains_key("infra"),
         "an infrastructure rerun is not an implementation problem: {fixture:?}"
@@ -1717,135 +1215,74 @@ fn memory_evidence_charges_implementers_only_for_judged_implementation_faults() 
     );
 }
 
-/// One implementer unit for the crew-label fixtures: its crew label, its run
-/// (with an invocation: whether it recorded a dispatch identity and its
-/// effort) and the effort a follower reported for it.
 /// A labelled unit's run id and, when it completed an invocation, whether
 /// that invocation recorded a dispatch identity and at which effort.
-type LabelledRun = Option<(
+type LabelledRun = Option<(&'static str, Option<(bool, Option<ReasoningEffort>)>)>;
+
+/// One implementer unit for the crew-label fixtures: task id, crew label,
+/// its run ([`LabelledRun`]) and the effort a follower reported for it.
+type LabelledUnit = (
     &'static str,
-    Option<(bool, Option<orbit_types::identity::ReasoningEffort>)>,
-)>;
+    &'static str,
+    LabelledRun,
+    Option<Option<String>>,
+);
 
-struct LabelledUnit {
-    task_id: &'static str,
-    crew: &'static str,
-    run: LabelledRun,
-    reported: Option<Option<String>>,
-}
-
-fn labelled_facts(units: &[LabelledUnit]) -> AgentFacts {
+fn labelled_facts(units: Vec<LabelledUnit>) -> AgentFacts {
     let now = Utc::now();
     let start = now - chrono::Duration::hours(1);
     let mut tasks = Vec::new();
     let mut invocations = Vec::new();
-    for (index, unit) in units.iter().enumerate() {
-        let mut attempt = Attempt {
-            start,
-            end: Some(now),
-            runner: Default::default(),
-            job: true,
-            local: true,
-            implementer: true,
-            tags: Vec::new(),
-        };
-        attempt.runner.crew = Some(unit.crew.into());
-        attempt.runner.model = Some("m1".into());
-        attempt.runner.reported_effort.clone_from(&unit.reported);
-        if let Some((run_id, invoked)) = unit.run {
-            attempt.runner.run_id = Some(run_id.into());
-            if let Some((identity, effort)) = invoked {
-                invocations.push(invocation(
-                    index as i64 + 1,
-                    (run_id, unit.task_id),
-                    unit.crew,
-                    effort,
-                    identity,
-                    60_000,
-                    now,
-                ));
-            }
+    for (index, (task_id, crew, run, reported)) in units.into_iter().enumerate() {
+        let run_id = run.map(|(run_id, _)| run_id);
+        let mut attempt = implementer_attempt(start, now, crew, "m1", run_id);
+        attempt.runner.reported_effort = reported;
+        if let Some((run_id, Some((identified, effort)))) = run {
+            invocations.push(invocation(
+                index as i64 + 1,
+                (run_id, task_id),
+                ("implement_one", "m1"),
+                identified.then(|| identity(crew, effort)),
+                60_000,
+                now,
+            ));
         }
         tasks.push(TaskFacts {
-            id: unit.task_id.into(),
-            title: "crew label effort".into(),
-            status: TaskStatus::Done,
-            tags: Vec::new(),
-            context_files: Vec::new(),
             complexity: Some(TaskComplexity::Low),
-            created_at: start,
-            landed: true,
-            dropped: false,
+            landed_at: Some(now),
             attempts: vec![attempt],
             final_attempt: Some(0),
-            execution: super::super::ExecutionMode::Managed,
-            landed_at: Some(now),
-            records: Vec::new(),
-            reviews: Vec::new(),
-            filed: None,
-            warnings: Default::default(),
+            ..minimal_task(task_id, start)
         });
     }
-    let (charges, credits) = attribution::attribute(&tasks, &[], &[]);
-    AgentFacts {
-        invocations: invocations.into(),
-        launches: Default::default(),
-        computed_at: now,
-        tasks_scanned: tasks.len(),
-        tasks,
-        charges,
-        credits,
-        run_costs: BTreeMap::new(),
-        regressions: Vec::new(),
-        landed_lines: BTreeMap::new(),
-        performance_types: Vec::new(),
-        pilots: Vec::new(),
-    }
+    scan_facts(now, tasks, invocations, Vec::new(), Vec::new())
 }
 
-/// [ORB-24150] A unit with no invocation effort, launch record or follower
-/// report whose recorded crew label is `<crew>@<effort>` counts under that
-/// effort on the implementer scorecard and the model ranking's effort split,
-/// and the detail names the crew label as its source; a bare crew label stays
-/// effort unknown. Before the fix both labelled units were `effort unknown`.
+/// [ORB-24150] Without recorded effort, `<crew>@<effort>` supplies the scorecard,
+/// detail and ranking effort; a bare crew stays unknown. Previously both units
+/// were unknown.
 #[test]
 fn crew_label_effort_counts_when_no_effort_is_recorded() {
     use super::super::{RankQuery, RankSeasons, agent_detail_with_effort, agent_rank};
-    let facts = labelled_facts(&[
+    let facts = labelled_facts(vec![
         // No run at all: no invocation, launch record or report.
-        LabelledUnit {
-            task_id: "label-no-run",
-            crew: "opus@medium",
-            run: None,
-            reported: None,
-        },
+        ("label-no-run", "opus@medium", None, None),
         // A completed invocation with no dispatch identity.
-        LabelledUnit {
-            task_id: "label-old-invocation",
-            crew: "opus@medium",
-            run: Some(("run-old", Some((false, None)))),
-            reported: None,
-        },
-        LabelledUnit {
-            task_id: "bare",
-            crew: "opus",
-            run: None,
-            reported: None,
-        },
+        (
+            "label-old-invocation",
+            "opus@medium",
+            Some(("run-old", Some((false, None)))),
+            None,
+        ),
+        ("bare", "opus", None, None),
     ]);
-    let query = AgentQuery::parse(Some("7d"), Some(1)).unwrap();
+    let query = week_query(1);
     let payload = agent_scorecard(&facts, AgentRole::Implementers, &query, Duration::ZERO);
-    let rows = payload["rows"].as_array().unwrap();
-    let by_label = |label: &str| {
-        rows.iter()
-            .find(|row| row["label"] == label)
-            .unwrap_or_else(|| panic!("no {label} row: {payload}"))
-    };
-    let medium = by_label("m1 @ medium");
+    let medium = labelled_row(&payload, "m1 @ medium");
     assert_eq!(medium["units"], json!(2), "{payload}");
     assert_eq!(medium["effort_sources"], json!({"crew_label": 2}));
     assert_eq!(medium["crews"], json!(["opus@medium"]));
-    let unknown = by_label("m1 @ effort unknown");
+    let unknown = labelled_row(&payload, "m1 @ effort unknown");
     assert_eq!(
         unknown["units"],
         json!(1),
@@ -1867,13 +1304,7 @@ fn crew_label_effort_counts_when_no_effort_is_recorded() {
 
     let live = RankQuery::parse(None, None, None, None, true).unwrap();
     let rank = agent_rank(&facts, &live, &RankSeasons::default(), Duration::ZERO);
-    let split = rank["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["model"] == "m1")
-        .unwrap_or_else(|| panic!("no m1 ranking row: {rank}"))["effort_split"]
-        .clone();
+    let split = model_row(&rank, "m1")["effort_split"].clone();
     assert_eq!(
         split,
         json!([{
@@ -1897,26 +1328,16 @@ fn crew_label_effort_counts_when_no_effort_is_recorded() {
 #[test]
 fn recorded_effort_wins_over_a_crew_label_effort() {
     use orbit_types::identity::ReasoningEffort::Medium;
-    let facts = labelled_facts(&[
-        LabelledUnit {
-            task_id: "invocation-medium",
-            crew: "opus@high",
-            run: Some(("run-recorded", Some((true, Some(Medium))))),
-            reported: None,
-        },
-        LabelledUnit {
-            task_id: "reported-low",
-            crew: "opus@high",
-            run: None,
-            reported: Some(Some("low".into())),
-        },
+    let facts = labelled_facts(vec![
+        (
+            "invocation-medium",
+            "opus@high",
+            Some(("run-recorded", Some((true, Some(Medium))))),
+            None,
+        ),
+        ("reported-low", "opus@high", None, Some(Some("low".into()))),
     ]);
-    let payload = agent_scorecard(
-        &facts,
-        AgentRole::Implementers,
-        &AgentQuery::parse(Some("7d"), Some(1)).unwrap(),
-        Duration::ZERO,
-    );
+    let payload = role_scorecard(&facts, AgentRole::Implementers);
     let rows = payload["rows"].as_array().unwrap();
     let labels: BTreeSet<&str> = rows
         .iter()
@@ -1927,46 +1348,26 @@ fn recorded_effort_wins_over_a_crew_label_effort() {
         BTreeSet::from(["m1 @ low", "m1 @ medium"]),
         "{payload}"
     );
-    let by_label = |label: &str| rows.iter().find(|row| row["label"] == label).unwrap();
     assert_eq!(
-        by_label("m1 @ medium")["effort_sources"],
+        labelled_row(&payload, "m1 @ medium")["effort_sources"],
         json!({"invocation": 1})
     );
     assert_eq!(
-        by_label("m1 @ low")["effort_sources"],
+        labelled_row(&payload, "m1 @ low")["effort_sources"],
         json!({"follower_report": 1})
     );
 }
 
-/// [ORB-24640] A terminal pulled task whose follower reported provider-default
-/// effort keeps its `m1 @ provider default` grouping and `follower_report`
-/// source on a second unchanged scan that reuses the stored-facts cache,
-/// even when its crew label names a different effort; a missing report and
-/// a named effort stay distinct across the same reuse. Before the fix the
-/// cached row wrote the provider-default report as `null` and read it back
-/// as no report, so the warm scan fell back to the crew label.
+/// [ORB-24640] Cache reuse preserves a pulled task's provider-default report,
+/// overriding a conflicting crew suffix and staying distinct from missing and
+/// named efforts. Previously a cached null lost the report and used the crew.
 #[test]
 fn provider_default_report_survives_stored_facts_reuse() {
-    let cold = labelled_facts(&[
+    let cold = labelled_facts(vec![
         // Conflicting crew suffix: the reported default must still win warm.
-        LabelledUnit {
-            task_id: "pulled-default",
-            crew: "opus@high",
-            run: None,
-            reported: Some(None),
-        },
-        LabelledUnit {
-            task_id: "pulled-missing",
-            crew: "opus",
-            run: None,
-            reported: None,
-        },
-        LabelledUnit {
-            task_id: "pulled-named",
-            crew: "opus",
-            run: None,
-            reported: Some(Some("low".into())),
-        },
+        ("pulled-default", "opus@high", None, Some(None)),
+        ("pulled-missing", "opus", None, None),
+        ("pulled-named", "opus", None, Some(Some("low".into()))),
     ]);
     // The stored-facts cache round trip `StoredFacts::keep`/`entry` perform.
     let warm_tasks: Vec<TaskFacts> = cold
@@ -1974,46 +1375,25 @@ fn provider_default_report_survives_stored_facts_reuse() {
         .iter()
         .map(|task| serde_json::from_str(&serde_json::to_string(task).unwrap()).unwrap())
         .collect();
-    let (charges, credits) = attribution::attribute(&warm_tasks, &[], &[]);
-    let warm = AgentFacts {
-        invocations: Default::default(),
-        launches: Default::default(),
-        computed_at: cold.computed_at,
-        tasks_scanned: cold.tasks_scanned,
-        tasks: warm_tasks,
-        charges,
-        credits,
-        run_costs: BTreeMap::new(),
-        regressions: Vec::new(),
-        landed_lines: BTreeMap::new(),
-        performance_types: Vec::new(),
-        pilots: Vec::new(),
-    };
-    let query = AgentQuery::parse(Some("7d"), Some(1)).unwrap();
-    let cold_payload = agent_scorecard(&cold, AgentRole::Implementers, &query, Duration::ZERO);
-    let warm_payload = agent_scorecard(&warm, AgentRole::Implementers, &query, Duration::ZERO);
+    let warm = scan_tasks(cold.computed_at, warm_tasks);
+    let cold_payload = role_scorecard(&cold, AgentRole::Implementers);
+    let warm_payload = role_scorecard(&warm, AgentRole::Implementers);
     assert_eq!(
         warm_payload["rows"], cold_payload["rows"],
         "an unchanged warm scan must preserve the cold scan's grouping"
     );
-    let rows = warm_payload["rows"].as_array().unwrap();
-    let by_label = |label: &str| {
-        rows.iter()
-            .find(|row| row["label"] == label)
-            .unwrap_or_else(|| panic!("no {label} row: {warm_payload}"))
-    };
     assert_eq!(
-        by_label("m1 @ provider default")["effort_sources"],
+        labelled_row(&warm_payload, "m1 @ provider default")["effort_sources"],
         json!({"follower_report": 1}),
         "the provider-default report survives cache reuse: {warm_payload}"
     );
     assert_eq!(
-        by_label("m1 @ effort unknown")["effort_sources"],
+        labelled_row(&warm_payload, "m1 @ effort unknown")["effort_sources"],
         json!({"unrecorded": 1}),
         "a missing report stays distinct: {warm_payload}"
     );
     assert_eq!(
-        by_label("m1 @ low")["effort_sources"],
+        labelled_row(&warm_payload, "m1 @ low")["effort_sources"],
         json!({"follower_report": 1}),
         "a named effort stays distinct: {warm_payload}"
     );
