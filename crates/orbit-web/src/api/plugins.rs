@@ -258,9 +258,10 @@ fn bounded_panel_response(output: Value) -> Value {
     })
 }
 
-/// Projects one plugin for the dashboard. `source` and `install_path` are
-/// display-only and can be absolute host paths, so they are `~`-abbreviated
-/// like the workspace listing rather than disclosing the home directory.
+/// Projects one plugin for the dashboard. `source`, `install_path`, and the
+/// `programs[]` `path` and `resolves_to` are display-only and can be absolute
+/// host paths, so they are `~`-abbreviated like the workspace listing rather
+/// than disclosing the home directory.
 pub(super) fn plugin_to_json(summary: &PluginSummary, home: Option<&FsPath>) -> Value {
     command::plugin_summary_json(
         summary,
