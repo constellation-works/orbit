@@ -386,13 +386,13 @@ function renderDiagnostics(ctx = {}) {
   const end = paged ? Math.min(start + size, ordinary.length) : ordinary.length;
   const count = $("diag-count");
   const coverage = errorsCoverageLabel(last.errors);
-  count.textContent = `${errorsCountText(rows, ordinary, start, end, paged)}${coverage ? ` · ${coverage}` : ""}`;
+  const summary = `${errorsCountText(rows, ordinary, start, end, paged)}${coverage ? ` · ${coverage}` : ""}`;
+  count.replaceChildren(el("span", { class: "diag-count-summary", text: summary, title: summary }));
   count.title = coverage
     ? "Most recent step and event failures; log retention or the stderr read cap leaves the start of the selected window unread. Capped by the diag URL parameter (default 50)."
     : "Most recent step and event failures in the selected window; capped by the diag URL parameter (default 50).";
   const loadMore = loadMoreErrorsLink(last.errors, ctx);
   if (loadMore) {
-    count.appendChild(document.createTextNode(" · "));
     count.appendChild(loadMore);
   }
   const columns = getDiagErrorsColumns(ctx).filter(column =>
