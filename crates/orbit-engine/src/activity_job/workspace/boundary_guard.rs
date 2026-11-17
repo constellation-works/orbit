@@ -13,7 +13,7 @@ use super::declared_pair::{
 };
 use super::fingerprint::{
     GitPathState, GitWorktreeFingerprint, cached_primary_before_fingerprint, changed_paths,
-    git_fingerprint, git_output_raw,
+    git_fingerprint, git_is_ancestor, git_output_raw,
 };
 use super::rebase_recovery::RebaseContinuation;
 use super::{DeclaredWorktreePair, DispatchError, V2AuditWriter, WorktreeBoundaryGuard};
@@ -773,7 +773,7 @@ impl PrimaryBaseline {
         if after.head == tip {
             return Ok(true);
         }
-        Ok(git_output_raw(root, &["merge-base", "--is-ancestor", tip, &after.head])?.success)
+        git_is_ancestor(root, tip, &after.head)
     }
 
     fn drift_reason(&self, before: &GitWorktreeFingerprint) -> String {

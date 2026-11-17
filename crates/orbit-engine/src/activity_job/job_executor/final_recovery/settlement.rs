@@ -2,7 +2,7 @@ use orbit_types::workflow::{FaultAttribution, FinalRecoveryDecision, FinalRecove
 
 use crate::context::{FinalRecoveryApplication, FinalRecoveryApplied, TaskAutomationUpdate};
 use crate::executor::automation::vcs::absorbed::AbsorbedCandidate;
-use crate::executor::automation::vcs::git::{git_command_success, git_output};
+use crate::executor::automation::vcs::git::{git_output, is_ancestor};
 
 use super::super::*;
 use super::types;
@@ -55,11 +55,7 @@ pub(super) fn observe_repair_commit(
     let head_sha_before = head_before?.to_string();
     let head_sha = git_output(&workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"]).ok()?;
     if head_sha == head_sha_before
-        || !git_command_success(
-            &workspace_path,
-            &["merge-base", "--is-ancestor", &head_sha_before, &head_sha],
-        )
-        .ok()?
+        || !is_ancestor(&workspace_path, &head_sha_before, &head_sha).ok()?
     {
         return None;
     }

@@ -9,7 +9,8 @@ use crate::executor::automation::vcs::absorbed::{ABSORBING_STEP, AbsorbedReason,
 
 use super::super::boundary_guard::is_host_owned_path;
 use super::super::fingerprint::{
-    GitWorktreeFingerprint, changed_paths, git_fingerprint, git_output_raw, git_stdout,
+    GitWorktreeFingerprint, changed_paths, git_fingerprint, git_is_ancestor, git_output_raw,
+    git_stdout,
 };
 use super::super::generated_paths::{conflicted_generated_paths, regenerate};
 use super::super::rebase_repairs::{
@@ -397,13 +398,7 @@ impl WorktreeBoundaryGuard {
             &self.assigned_root,
             &["rev-parse", "--verify", &checkpoint.base_ref],
         )?;
-        if live == pinned
-            || !git_output_raw(
-                &self.assigned_root,
-                &["merge-base", "--is-ancestor", pinned, &live],
-            )?
-            .success
-        {
+        if live == pinned || !git_is_ancestor(&self.assigned_root, pinned, &live)? {
             return Ok(LandedOn::Candidate(pinned.to_string()));
         }
         let followed = git_mutation_output(&self.assigned_root, &["rebase", &live])?;
@@ -434,11 +429,7 @@ impl WorktreeBoundaryGuard {
         }
         if !self.completed_authorized_rebase(&followed)?
             || followed.head == live
-            || !git_output_raw(
-                &self.assigned_root,
-                &["merge-base", "--is-ancestor", &live, "HEAD"],
-            )?
-            .success
+            || !git_is_ancestor(&self.assigned_root, &live, "HEAD")?
         {
             return Err(invalid(
                 "rebasing onto the advanced base did not leave the checkpointed branch on that base with a candidate commit",
