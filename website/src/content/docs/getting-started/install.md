@@ -162,6 +162,125 @@ the global one.
 whether each agent CLI and the sandbox are ready.
 [Configuration](/reference/config/) lists every setting.
 
+## Prepare a browser kit for UI tasks
+
+When your tasks involve user interfaces, agents can capture screenshots and
+verify visual changes using a headless browser kit. The kit is host-owned and
+belongs to the user account that runs workers, rather than to a repository.
+
+Run browser-kit setup on the host as the user who runs workers. Do not run it
+as root, and do not run it from inside an agent worker: the worker sandbox gives
+each run an isolated scratch space and forbids elevation. On a multi-host
+setup, install the kit on each worker machine that handles UI tasks.
+
+### Requirements and location
+
+- **Location**: The kit installs under `~/.local/chromium-deps/`.
+- **Node**: Requires Node 18 or newer with `node` and `npm` on `PATH`. Orbit
+  checks for Node but does not install it.
+- **Pinned downloads**: Orbit downloads Playwright and the `pngjs` pixel
+  helper at the versions pinned by your Orbit release, plus its matching
+  Chromium headless shell (`chromium-headless-shell`) from Playwright's CDN.
+
+### Install and verify
+
+To install and verify the browser kit in one step:
+
+```bash
+orbit config browser-kit install
+```
+
+`install` downloads the pinned Playwright package and Chromium headless shell,
+configures the environment script (`env.sh`), and automatically runs the
+verification smoke test. If an existing kit is already present at the pinned
+version, Orbit adopts it, skips completed steps, and preserves an operator-managed
+`env.sh`.
+
+#### Linux shared libraries
+
+Chromium requires system shared libraries on Linux (such as GTK, ATK, X11, and
+font libraries). You have two options:
+
+- **Rootless unpack (default)**: On Debian and Ubuntu, `orbit config browser-kit install`
+  downloads and unpacks the needed packages directly into
+  `~/.local/chromium-deps/root/` without requiring `sudo`, setting up
+  `LD_LIBRARY_PATH` inside `env.sh`.
+- **System-wide packages**: To install dependencies system-wide using `sudo`, pass
+  `--with-deps`:
+
+  ```bash
+  orbit config browser-kit install --with-deps
+  ```
+
+On other Linux distributions, `install` and `status` report any unresolved
+libraries and the packages needed to satisfy them.
+
+### Check status and worker availability
+
+To inspect the kit:
+
+```bash
+orbit config browser-kit status
+```
+
+`status` reports the kit location, installed Playwright version, Chromium
+revision, Node path, library status, verification timestamp, and what workers
+receive.
+
+A successful verification records a pass in `orbit-kit.json`. Only then does
+Orbit's CLI runner inject three environment variables into workers:
+
+- `PLAYWRIGHT_BROWSERS_PATH`: Path to the downloaded browsers directory.
+- `PLAYWRIGHT_MODULE`: Path to the kit's Playwright ES module (`index.mjs`).
+- `ORBIT_BROWSER_KIT_ENV`: Path to `env.sh`, which worker checks source to load
+  the kit's library and font configuration.
+
+Tasks tagged `ui` require a verified browser kit. If verification has not passed,
+workers receive none of these variables, and UI tasks wait for a host with a
+verified kit.
+
+### Repair a failed or stale verification
+
+`verify` records the Playwright version and Chromium revision that passed. The
+pass remains current while those versions still match and the Playwright module,
+Chromium executable, and `env.sh` are present; `status` reports Linux library
+problems separately. If a newer Orbit release pins different package versions,
+`status` reports the mismatch, but it does not by itself revoke the previous
+pass, so workers continue receiving its variables until `install` updates the
+kit. Each `verify` run clears the previous pass first, so a failed or timed-out
+run leaves workers without the kit variables.
+
+To repair the kit:
+
+1. Run `orbit config browser-kit status` to inspect unresolved libraries or
+   configuration problems.
+2. If the installed versions match this release's pins, the required files are
+   present, and `status` reports no unresolved libraries, re-run the loopback
+   smoke test:
+
+   ```bash
+   orbit config browser-kit verify
+   ```
+
+   `verify` starts a local loopback server, launches headless Chromium, captures
+   a screenshot, checks pixel decoding, and records a fresh pass upon success.
+   Any failure immediately revokes the pass.
+3. If `status` reports a package version mismatch or a required file is missing,
+   run `orbit config browser-kit install` to update the kit; it verifies
+   automatically when its dependencies are resolved. If `status` or `install`
+   reports unresolved Linux libraries, follow the reported fix, then run
+   `orbit config browser-kit verify`.
+
+### Remove the kit
+
+To delete the kit and stop providing browser variables to workers:
+
+```bash
+orbit config browser-kit remove --confirm
+```
+
+`--confirm` is required to delete `~/.local/chromium-deps`.
+
 ## Stay current
 
 Ask your agent to upgrade Orbit; the `orbit-setup` skill checks for running
