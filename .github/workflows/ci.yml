@@ -172,6 +172,8 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
+          # The removed-dashboard-label guard compares against the event base.
+          fetch-depth: 0
 
       # Orchestration follows the workflow revision; candidate checks stay at the PR head.
       - &workflow-ci
@@ -215,6 +217,8 @@ jobs:
           path: .tool-cache/ripgrep-${{ env.RIPGREP_VERSION }}-${{ env.RIPGREP_LINUX_SHA256 }}/archive
           key: orbit-tool-ripgrep-${{ runner.os }}-linux-x86_64-${{ env.RIPGREP_VERSION }}-${{ env.RIPGREP_LINUX_SHA256 }}
       - name: Run static repository guards
+        env:
+          CI_TEST_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || '' }}
         run: ./scripts/ci-guardrails.sh --static
 
   # [ORB-16695] The test gate is split across runners. "Test build" compiles
