@@ -1070,6 +1070,24 @@ qa.main()
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("wait.rs:", result.stderr)
 
+    def test_child_runner_delimiter_literals_do_not_hide_reexec(self):
+        shutil.copy2(SCRIPTS / "check-test-child-runners.py", self.scripts)
+        (self.scripts / "test-child-runner-allowlist.json").write_text("[]")
+        fixture = self.root / "crates/example/tests/fixture.rs"
+        fixture.parent.mkdir(parents=True)
+        for delimiter in ("{", "}", "(", ")", "[", "]", ";", ",", "<", ">"):
+            for literal in (f'"{delimiter}"', f'r#"{delimiter}"#'):
+                with self.subTest(literal=literal):
+                    prefix = f"fn reexec() {{\n    let note = {literal}; // }} {{\n"
+                    fixture.write_text(prefix + "}\n")
+                    clean = self.run_guard("check-test-child-runners.py")
+                    self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
+                    fixture.write_text(prefix +
+                        "    std::process::Command::new(std::env::current_exe().unwrap()).output().unwrap();\n}\n")
+                    result = self.run_guard("check-test-child-runners.py")
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn("crates/example/tests/fixture.rs:3:", result.stderr)
+
     def test_static_allows_run_child_test_and_rejects_stale_exception(self):
         """The same re-exec passes through run_child_test; a leftover exception fails."""
         self.prepare_ci()
