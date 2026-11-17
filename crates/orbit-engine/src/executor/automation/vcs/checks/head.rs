@@ -10,7 +10,7 @@ use crate::context::RuntimeHost;
 
 use super::super::super::ci::log_signature::error_signature;
 use super::super::operations::{CiCommitJobEvidence, CiJobConclusion};
-use super::super::pr::RequiredChecks;
+use super::super::pr_answers::RequiredChecks;
 
 use super::annotations::source_annotations;
 use super::base_update::contains;

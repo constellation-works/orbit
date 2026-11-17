@@ -5,7 +5,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 
 use super::super::git::{git_command_success, git_output};
-use super::super::pr::PullRequestStatus;
+use super::super::pr_answers::PullRequestStatus;
 
 pub(super) fn contains(workspace: &Path, ancestor: &str, descendant: &str) -> bool {
     crate::executor::automation::vcs::git::is_ancestor(workspace, ancestor, descendant)
@@ -71,7 +71,7 @@ pub(in crate::executor::automation::vcs) fn verify_published_base_update(
     else {
         return Err(refuse("published delivery required".into()));
     };
-    super::super::pr::DeliveryPin::pinned(
+    super::super::pr_answers::DeliveryPin::pinned(
         &candidate.source_branch,
         &candidate.base_branch,
         &candidate.candidate.commit,
@@ -148,8 +148,8 @@ pub(in crate::executor::automation::vcs) fn verify_published_base_update(
         }
     }
     if matches!(
-        super::super::pr::classify_pr_state(status),
-        super::super::pr::PrMergeState::Merged
+        super::super::pr_answers::classify_pr_state(status),
+        super::super::pr_answers::PrMergeState::Merged
     ) {
         let merge = status
             .merge_commit

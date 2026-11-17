@@ -125,6 +125,7 @@ workspace auto run still treats a required child workflow failure as a parent fa
 | Delivery-leaf job ids and membership predicates (one owner for store, runtime, engine and core) | `crates/orbit-types/src/workflow/job.rs` | [ORB-24042] |
 | Shared task projections for delivery conventions, PR rendering, commit and handoff admission (owned by the lower conventions module) | `crates/orbit-engine/src/executor/automation/vcs/conventions.rs` | [ORB-24097] |
 | Shared hosted-check evidence, classification, rerun planning and recovery for landing, PR auto-fix/completion, base refresh and claim | `crates/orbit-engine/src/executor/automation/vcs/checks/` | [ORB-25310] |
+| PR read model (provider answers, merge-state classification, delivery pin, bounded diagnostics) below PR operations | `crates/orbit-engine/src/executor/automation/vcs/pr_answers/` | [ORB-25311] |
 | Seeded reference activities and pipeline jobs | `crates/orbit-core/assets/activities/`, `crates/orbit-core/assets/jobs/` | [T20260419-2347], [T20260419-0622-3], [T20260419-0623] |
 
 ---
@@ -133,7 +134,8 @@ workspace auto run still treats a required child workflow failure as a parent fa
 
 - **[ORB-24042]** — Give the delivery-leaf job ids one owner in `orbit-types`.
 - **[ORB-24097]** — Cut delivery conventions' dependency on PR rendering: `vcs::conventions` owns the shared task projections; PR rendering, commit admission and handoff admission consume that owner.
-- **[ORB-25310]** — Lift shared hosted-check handling out of landing into `vcs::checks`: landing, PR, base and claim consume it directly. The remaining `checks → pr` read-model dependency is a separate follow-up; no compatibility shim is needed after migrating all callers.
+- **[ORB-25310]** — Lift shared hosted-check handling out of landing into `vcs::checks`: landing, PR, base and claim consume it directly. The remaining `checks → pr` read-model dependency is cut by [ORB-25311].
+- **[ORB-25311]** — Move the PR read model to `vcs::pr_answers`. The order is `operations < pr_answers < checks < pr < landing` and `pr_answers < base, push, claim`. `pr` re-exports the old paths as a compatibility shim whose retirement is a follow-up.
 - **[T20260418-2010]** — Add the first v2 activity runtime scaffolding.
 - **[T20260418-2018]** — Add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).
 - **[T20260418-2019]** — Add v2 activity name resolution and pipeline skeleton assets.

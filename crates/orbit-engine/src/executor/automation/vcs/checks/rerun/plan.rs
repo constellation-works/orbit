@@ -1,6 +1,6 @@
 //! Planning and admitting the unchanged-head failed-jobs retry.
 
-use super::super::super::pr::PullRequestStatus;
+use super::super::super::pr_answers::PullRequestStatus;
 use super::super::rerun_diagnostic::{self, CiRerunDiagnostic, CiRerunStage};
 use super::super::{
     head::classify_logged_job,

@@ -37,7 +37,7 @@ impl PrMergeBlock {
         }
     }
 
-    pub(super) fn into_error(self, message: String) -> OrbitError {
+    pub(in crate::executor::automation::vcs) fn into_error(self, message: String) -> OrbitError {
         match self.refusal {
             Some(refusal) => OrbitError::DeliveryRefused { refusal, message },
             None => OrbitError::Execution(message),
@@ -130,7 +130,7 @@ pub(in crate::executor::automation::vcs) fn classify_pr_state(
 /// Review and readable-rollup refusals shared by landing and auto-fix.
 /// Display is diagnostic only; recovery authority matches the variants.
 #[derive(Debug, thiserror::Error)]
-pub(super) enum BlockedCheckRefusal {
+pub(in crate::executor::automation::vcs) enum BlockedCheckRefusal {
     #[error("review is required ({0})")]
     ReviewRequired(String),
     #[error("review decision is unavailable")]
@@ -140,14 +140,14 @@ pub(super) enum BlockedCheckRefusal {
 }
 
 impl BlockedCheckRefusal {
-    pub(super) fn delivery_refusal(&self) -> Option<DeliveryRefusal> {
+    pub(in crate::executor::automation::vcs) fn delivery_refusal(&self) -> Option<DeliveryRefusal> {
         matches!(self, Self::ReviewRequired(_)).then_some(DeliveryRefusal::RequirementsUnsatisfied)
     }
 }
 
 /// Review and readable-rollup guards precede any pending-check or
 /// source-repair authority.
-pub(super) fn blocked_checks(
+pub(in crate::executor::automation::vcs) fn blocked_checks(
     pull_request: &PullRequestStatus,
 ) -> Result<&[StatusCheck], BlockedCheckRefusal> {
     match &pull_request.review_decision {
@@ -217,7 +217,9 @@ fn classify_blocked_pr(pull_request: &PullRequestStatus) -> PrMergeState {
 }
 
 /// A red rollup cannot establish an administrative-only hold.
-pub(super) fn has_failed_pr_check(status: &PullRequestStatus) -> bool {
+pub(in crate::executor::automation::vcs) fn has_failed_pr_check(
+    status: &PullRequestStatus,
+) -> bool {
     status.status_checks.as_ref().is_some_and(|checks| {
         checks
             .iter()

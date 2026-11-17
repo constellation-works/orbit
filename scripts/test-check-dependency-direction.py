@@ -84,8 +84,11 @@ class RelativeImportTests(unittest.TestCase):
             path = self.root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("")
-        for module in ("checks", "pr", "base", "claim"):
-            (self.root / "crates/orbit-engine/src/executor/automation/vcs" / module).mkdir()
+        vcs = self.root / "crates/orbit-engine/src/executor/automation/vcs"
+        for module in ("checks", "pr", "base", "claim", "pr_answers"):
+            (vcs / module).mkdir()
+        (vcs / "push.rs").write_text("")
+        (vcs / "claim" / "published.rs").write_text("")
         self.prepare_config_paths()
 
     def test_vcs_checks_dependency_direction(self):
@@ -114,13 +117,87 @@ class RelativeImportTests(unittest.TestCase):
                 )
             ], rejected=True, base=vcs)
         self.check_rows([
-            ("checks/probe.rs", "use super::super::pr::Probe;\n"
+            ("checks/probe.rs", "use super::super::pr_answers::Probe;\n"
              "// landing::checks is the retired path.\n"
              'const EVIDENCE: &str = "the landing waits";\n'),
             *[(f"{consumer}/probe.rs", "use super::super::checks::Probe;\n"
                "use super::super::landing as l;\nuse l::Probe as Other;\n")
               for consumer in ("pr", "base", "claim")],
         ], rejected=False, base=vcs)
+
+    def test_vcs_pr_answers_dependency_direction(self):
+        # The read model sits below checks, pr, landing, base, push and claim.
+        # A path segment is an edge; a bare identifier or a string is not.
+        vcs = self.root / "crates/orbit-engine/src/executor/automation/vcs"
+        above = (
+            "use super::pr::Probe;",
+            "use super::checks::Probe;",
+            "use super::landing::Probe;",
+            "use super::base::Probe;",
+            "use super::push::Probe;",
+            "use super::claim::Probe;",
+            "use super::{pr::Probe};",
+            "use super::pr as renamed;\nfn probe() { renamed::Probe; }",
+            "fn probe() { operations::pr::read(); }",
+            "pub(in crate::executor::automation::vcs::pr) fn previous() {}",
+        )
+        self.check_rows(
+            [("pr_answers/probe.rs", source + "\n") for source in above],
+            rejected=True, base=vcs)
+        named_pr = (
+            "use super::pr::Probe;",
+            "use super::super::pr::Probe;",
+            "use super::{pr::Probe};",
+            "fn probe() { crate::executor::automation::vcs::pr::Probe; }",
+            "use super::pr as renamed;\nfn probe() { renamed::read(); }",
+        )
+        for consumer in ("checks/probe.rs", "base/probe.rs"):
+            self.check_rows(
+                [(consumer, source + "\n") for source in named_pr],
+                rejected=True, base=vcs)
+        for relative in ("push.rs", "claim/published.rs"):
+            for source in named_pr:
+                self.check_exact(relative, source + "\n", rejected=True, base=vcs)
+        self.check_rows([
+            ("pr_answers/probe.rs",
+             "use super::operations;\n"
+             "use super::answers::PullRequestStatus;\n"
+             "fn keep(base: &str) {\n"
+             "    let pr = 1;\n"
+             "    let checks = Vec::new();\n"
+             "    let _ = (pr, checks, base);\n"
+             "}\n"
+             'const NOTE: &str = "pr::checks landing base push claim";\n'
+             "// landing::pr\n"
+             "pub(in crate::executor::automation::vcs) fn previous_candidate_sha() {}\n"),
+            ("checks/probe.rs",
+             "use super::super::pr_answers::PullRequestStatus;\n"
+             "fn keep(pr: u64) { let _ = pr; }\n"
+             'const KEY: &str = "pr";\n'),
+            ("base/probe.rs", "fn keep() { let pr = 1; let _ = pr; }\n"),
+        ], rejected=False, base=vcs)
+        for relative, source in (
+            ("push.rs", "fn keep(pr: u64) { let _ = pr; }\n"),
+            ("claim/published.rs", 'fn keep() { let pr = "pr"; let _ = pr; }\n'),
+        ):
+            self.check_exact(relative, source, rejected=False, base=vcs)
+
+    def check_exact(self, relative, source, rejected, base):
+        path = base / relative
+        original = path.read_text()
+        path.write_text(source)
+        try:
+            result = subprocess.run(["bash", str(self.guard)], env=self.env,
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(result.stderr, "", result.stderr)
+            if rejected:
+                self.assertIn(f"{path}:", result.stdout)
+                self.assertEqual(result.returncode, 1, result.stdout)
+            else:
+                self.assertNotIn(f"{path}:", result.stdout)
+                self.assertEqual(result.returncode, 0, result.stdout)
+        finally:
+            path.write_text(original)
 
     def prepare_config_paths(self):
         src = self.root / "crates/orbit-config/src"

@@ -7,7 +7,7 @@ use orbit_types::workflow::handoff::{AcceptedHandoff, HandoffCandidate, HandoffD
 use crate::context::RuntimeHost;
 
 use super::super::git::{git_output, git_success};
-use super::super::pr::{
+use super::super::pr_answers::{
     DeliveryPin, PrMergeState, PullRequestStatus, classify_pr_state, read_pr_status,
 };
 use super::super::review_gate::revision;

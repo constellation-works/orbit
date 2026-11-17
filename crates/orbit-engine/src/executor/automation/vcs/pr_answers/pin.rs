@@ -1,4 +1,4 @@
-use super::super::answers::PullRequestStatus;
+use super::answers::PullRequestStatus;
 use crate::executor::automation::input::input_string_field;
 use crate::executor::automation::vcs::freshness::{branch_freshness_against_ref, commit_sha};
 use crate::executor::automation::vcs::git::{
@@ -74,7 +74,7 @@ impl DeliveryPin {
     }
 
     /// The exact head replaced by this run's verified push, if recorded.
-    pub(in crate::executor::automation::vcs::pr) fn previous_candidate_sha(&self) -> Option<&str> {
+    pub(in crate::executor::automation::vcs) fn previous_candidate_sha(&self) -> Option<&str> {
         self.previous_candidate_sha.as_deref()
     }
 

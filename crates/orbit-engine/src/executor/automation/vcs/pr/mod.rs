@@ -5,22 +5,20 @@
 //! owns the candidate identity and merge evidence completion runs behind.
 //! `merge_state` classifies the forge's merge guards and typed parked outcomes.
 //! `answers` parses the provider's PR answers once into the types every
-//! reader takes. `screenshots` publishes a task's screenshots to its evidence
-//! ref and renders the body's table of them.
+//! reader takes. Both, with diagnostics and the delivery pin, are owned by
+//! `vcs::pr_answers` and re-exported here. `screenshots` publishes a task's
+//! screenshots to its evidence ref and renders the body's table of them.
 
-mod answers;
 mod attribution;
 mod auto_fix;
 mod body;
 mod complete;
 mod delivery;
-pub(in crate::executor::automation::vcs) mod diagnostics;
 pub(in crate::executor::automation::vcs) mod draft_recovery;
 mod head_lag;
 mod infrastructure;
 mod labels;
 mod merge;
-mod merge_state;
 mod open;
 mod promote;
 mod recovery;
@@ -29,6 +27,14 @@ mod workflow_failure;
 pub(in crate::executor::automation::vcs) use review_retry::{ReviewCiRetryStep, recover_review_ci};
 mod screenshots;
 pub(in crate::executor::automation::vcs) mod source_identity;
+
+// Compatibility shim: the read model is owned by `vcs::pr_answers`. These
+// re-exports keep `pr::answers`, `pr::merge_state`, `pr::diagnostics` and the
+// flat `pr::` names compiling for concurrently merging callers. Retire them
+// once callers import `pr_answers` directly (follow-up).
+use super::pr_answers::answers;
+pub(in crate::executor::automation::vcs) use super::pr_answers::diagnostics;
+use super::pr_answers::merge_state;
 
 pub(in crate::executor::automation::vcs) use answers::ReviewDecision;
 pub(in crate::executor::automation::vcs) use answers::ReviewedMergeOutcome;
