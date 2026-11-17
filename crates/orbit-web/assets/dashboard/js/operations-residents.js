@@ -109,11 +109,22 @@ function button(text, label, variant = "") {
   return el("button", { class: `operation-button ${variant}`.trim(), type: "button", text, "aria-label": label || text });
 }
 
+let residentHintSeq = 0;
+
 function field(label, control, hint) {
+  if (!hint) {
+    return el("label", { class: "resident-field" }, [
+      el("span", { class: "resident-field-label", text: label }),
+      control,
+    ]);
+  }
+  residentHintSeq += 1;
+  const hintId = `resident-field-hint-${residentHintSeq}`;
+  const tip = infoHint(hint, { id: hintId });
+  if (control?.setAttribute) control.setAttribute("aria-describedby", hintId);
   return el("label", { class: "resident-field" }, [
-    el("span", { class: "resident-field-label", text: label }),
+    el("span", { class: "resident-field-label", text: label }, [tip]),
     control,
-    hint ? el("span", { class: "resident-field-hint", text: hint }) : null,
   ]);
 }
 

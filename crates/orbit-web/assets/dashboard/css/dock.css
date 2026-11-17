@@ -189,11 +189,11 @@
 .resident-start-title { grid-column: 1 / -1; margin: 0; font-size: 13px; font-weight: 600; }
 .resident-step {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 8px 12px;
-  min-width: 0; margin: 0; padding: 8px 10px 10px; border: 1px solid var(--hair); border-radius: 4px;
+  min-width: 0; margin: 0; padding: 8px 10px 10px; border: 1px solid var(--border-strong); border-radius: 4px;
 }
-.resident-step > legend { padding: 0 4px; color: var(--fg); font-size: 12px; font-weight: 600; }
+.resident-step > legend { padding: 0 4px; color: var(--fg-strong); font-size: 12px; font-weight: 600; }
 .resident-step > .resident-rights, .resident-step-note { grid-column: 1 / -1; }
-.resident-step-note { margin: 0; color: var(--fg-dim); font-size: 12px; }
+.resident-step-note { margin: 0; color: var(--fg); font-size: 12px; }
 .resident-step-note.warn { color: var(--warn-fg); }
 .resident-start-status { flex: 1 1 auto; margin: 0; color: var(--fg-dim); font-size: 12px; }
 .resident-form {
@@ -203,13 +203,19 @@
 .resident-start.resident-form { grid-template-columns: minmax(0, 1fr); margin-top: 0; }
 .resident-field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .resident-field-label, .resident-fact-label { color: var(--fg-dim); font-size: 11px; }
-.resident-field-hint { color: var(--fg-dim); font-size: 10px; }
+.resident-field-label { position: relative; --hint-left: 0; display: inline-flex; align-items: center; min-width: 0; }
+.resident-field-label .info-hint { flex: none; }
 .resident-field input, .resident-field select, .resident-field textarea,
 .resident-control input {
   box-sizing: border-box; width: 100%; min-width: 0; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px;
   background: var(--bg); color: var(--fg); font: 12px/1.4 var(--font-sans, inherit);
 }
 .resident-form-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+/* Same geometry for both actions: the primary modifier keeps its colours but
+   must not change the size (automation.css loads after this file, so the
+   dialog selector outranks `.operation-button.primary`). */
+.resident-start-dialog .resident-form-actions .operation-button,
+.resident-form-actions .operation-button { min-height: 34px; padding: 6px 14px; }
 .resident-rights { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; padding: 4px 6px; border: 1px solid var(--hair); border-radius: 4px; }
 .resident-rights legend { color: var(--fg-dim); font-size: 11px; padding: 0 4px; }
 .resident-right { display: inline-flex; align-items: center; gap: 4px; font: 11px/1.4 var(--font-mono); }
@@ -242,4 +248,5 @@
 @media (max-width: 1000px) {
   #residents-panel .operation-button, #residents-panel summary,
   .resident-start-dialog .operation-button { min-height: 44px; }
+  .resident-start-dialog .resident-form-actions .operation-button { min-height: 44px; }
 }
