@@ -47,6 +47,12 @@
 .fleet-dialog::backdrop { background: var(--bg-overlay, #0009); }
 .fleet-dialog-head { position: sticky; top: 0; padding: 18px; background: var(--bg-elev); border-bottom: 1px solid var(--border); z-index: 1; }
 .fleet-dialog-head h2 { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fleet-dialog-head .esc-close { height: 26px; }
+@media (max-width: 900px) {
+  /* Settings buttons grow to 32px below 900px. The dialog's close control
+     matches that height; at desktop it stays with the 26px settings button. */
+  .fleet-dialog-head .esc-close { height: 32px; }
+}
 .fleet-dialog-body { display: grid; gap: 18px; padding: 18px; min-width: 0; }
 .fleet-dialog-body pre, .fleet-dialog-body p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
 .fleet-dialog-body details { font-size: 12px; }
