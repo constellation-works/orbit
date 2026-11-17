@@ -68,6 +68,7 @@ mod flaky;
 mod infrastructure;
 mod landing_transport;
 mod mentions;
+mod merge_in_progress;
 mod review_watch;
 #[cfg(target_os = "linux")]
 mod stable_build_mount;
@@ -6584,6 +6585,13 @@ status() {
         cat "$forge/reconcile-status"
         return
     fi
+    if [ -f "$forge/merge-in-progress" ]; then
+        polls=$(( $(cat "$forge/merge-polls" 2>/dev/null || echo 0) + 1 ))
+        printf '%s\n' "$polls" > "$forge/merge-polls"
+        if [ -f "$forge/merge-after-polls" ] && [ "$polls" = "$(cat "$forge/merge-after-polls")" ]; then
+            land "$(cat "$forge/merge-in-progress")"
+        fi
+    fi
     if [ -f "$forge/merged" ]; then
         merged_reads=$(( $(cat "$forge/merged-reads" 2>/dev/null || echo 0) + 1 ))
         printf '%s\n' "$merged_reads" > "$forge/merged-reads"
@@ -6915,6 +6923,20 @@ merge() {
                 *+policy_disallowed) touch "$forge/merge-methods-disallowed" ;;
             esac
             refuse 405 "$base_modified" ;;
+        in_progress_error)
+            cat "$forge/in-progress-body"
+            cat "$forge/in-progress-stderr" >&2
+            exit 1 ;;
+        in_progress|in_progress_empty|in_progress_numeric)
+            printf '%s\n' "$sha" > "$forge/merge-in-progress"
+            if [ "$outcome" = in_progress_empty ]; then
+                echo 'gh: Merge already in progress (HTTP 405)' >&2; exit 1
+            fi
+            if [ "$outcome" = in_progress_numeric ]; then
+                echo '{"message":"Merge already in progress","status":405}'
+                echo 'gh: Merge already in progress (HTTP 405)' >&2; exit 1
+            fi
+            refuse 405 "Merge already in progress" ;;
         policy) refuse 405 "Merge commits are not allowed on this repository." ;;
         queue) refuse 405 "Changes must be made through the merge queue" ;;
         protection) refuse 405 "At least 1 approving review is required by reviewers with write access." ;;
@@ -7439,5 +7461,13 @@ fn known_red_validation_and_subset() {
             )],
         );
         claimed_known_red_equal_and_subset(sandbox);
+    });
+}
+
+#[test]
+fn merge_in_progress_contracts() {
+    isolated("merge_in_progress_contracts", |sandbox| {
+        merge_in_progress::merge_in_progress_completion_scenarios(sandbox);
+        merge_in_progress::merge_in_progress_refusal_scenarios(sandbox);
     });
 }

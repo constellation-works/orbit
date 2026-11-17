@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use super::super::input::{optional_string, required_string, valid_expected_remote_sha};
 use super::super::process::{execute, run_vcs_process, succeeded};
-use super::super::{BASE_MODIFIED_REFUSAL, SLOW_TIMEOUT_MS};
+use super::super::{BASE_MODIFIED_REFUSAL, MERGE_IN_PROGRESS_REFUSAL, SLOW_TIMEOUT_MS};
 
 /// GitHub's reason for refusing a merge because another merge moved the base
 /// between its mergeability check and the mutation (F2026-10-071). The `sha`
@@ -96,8 +96,10 @@ pub(in crate::executor::automation::vcs::operations) fn pr_merge(
 ///
 /// [ORB-14205] With `report_base_modified`, the provider's base-modification
 /// refusal returns `{"merged": false, "refusal": "base_modified"}` with the
-/// raw output, so the caller can decide whether to ask again. Every other
-/// failure, and that one without the opt-in, stays an error unless
+/// raw output, so the caller can decide whether to ask again. The exact
+/// merge-in-progress refusal is a distinct value permitting reads, never a
+/// second mutation. Other failures, including a base-modification refusal
+/// without its opt-in, stay errors unless
 /// `report_ambiguous` opts into reporting an uncertain server response. That
 /// outcome permits the completion caller one read, never a second mutation.
 fn pr_merge_reviewed(
@@ -145,6 +147,14 @@ fn pr_merge_reviewed(
         return Ok(json!({
             "merged": false,
             "refusal": BASE_MODIFIED_REFUSAL,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }));
+    }
+    if result.exit_code.is_some() && is_exact_merge_refusal(&result, "Merge already in progress") {
+        return Ok(json!({
+            "merged": false,
+            "refusal": MERGE_IN_PROGRESS_REFUSAL,
             "stdout": result.stdout,
             "stderr": result.stderr,
         }));
@@ -203,9 +213,14 @@ fn merge_message(input: &Value, strategy: &str) -> Result<Option<MergeMessage>, 
 /// error naming the same reason and status. Other 405s (policy, queue,
 /// protection), other statuses, timeouts, and anything ambiguous do not match.
 fn is_base_modified_refusal(result: &orbit_exec::ExecutionResult) -> bool {
+    is_exact_merge_refusal(result, BASE_MODIFIED_REASON)
+}
+
+/// Match only one whole HTTP 405 diagnostic and a consistent optional body.
+fn is_exact_merge_refusal(result: &orbit_exec::ExecutionResult, reason: &str) -> bool {
     if result.success
         || result.timed_out
-        || result.stderr.trim() != format!("gh: {BASE_MODIFIED_REASON} (HTTP 405)")
+        || result.stderr.trim() != format!("gh: {reason} (HTTP 405)")
     {
         return false;
     }
@@ -216,7 +231,7 @@ fn is_base_modified_refusal(result: &orbit_exec::ExecutionResult) -> bool {
     let Ok(Value::Object(body)) = serde_json::from_str::<Value>(body) else {
         return false;
     };
-    body.get("message").and_then(Value::as_str) == Some(BASE_MODIFIED_REASON)
+    body.get("message").and_then(Value::as_str) == Some(reason)
         && body
             .get("status")
             .is_none_or(|status| status.as_str() == Some("405") || status.as_u64() == Some(405))

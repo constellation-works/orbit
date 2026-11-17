@@ -706,7 +706,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
     }
 
     /// Phase 3: act on the classified merge state.
-    fn wait_for_next_poll(&mut self, base_red_reason: Option<&str>) -> Result<(), OrbitError> {
+    pub(super) fn wait_for_next_poll(
+        &mut self,
+        base_red_reason: Option<&str>,
+    ) -> Result<(), OrbitError> {
         if let Some(error) = self.expired(base_red_reason) {
             return Err(error);
         }

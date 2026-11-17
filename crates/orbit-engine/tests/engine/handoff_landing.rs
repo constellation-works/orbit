@@ -715,6 +715,8 @@ enum UpdateShape {
 struct ForgeState {
     head: String,
     merged: bool,
+    /// Return the in-progress outcome, with the next read merged or still open.
+    merge_in_progress: Option<bool>,
     merge_commit: Option<String>,
     /// The `CI / clippy` job on each commit.
     jobs: HashMap<String, FakeJob>,
@@ -1192,6 +1194,11 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
             ),
             "pr.merge" => {
                 assert_eq!(input["reviewed_head_sha"], state.head.as_str());
+                if let Some(merged) = state.merge_in_progress {
+                    state.merged = merged;
+                    return Ok(json!({"merged":false,"refusal":"merge_in_progress",
+                        "stderr":"gh: Merge already in progress (HTTP 405)"}));
+                }
                 state.merged = true;
                 Ok(json!({"landed_commit": "provider-merge"}))
             }
@@ -4079,5 +4086,43 @@ fn externally_merged_base_chain_lands_after_fetching_the_retained_pull_ref() {
     assert_eq!(
         evidence["external_merge"], true,
         "the completion history note records the merge as external"
+    );
+}
+
+#[test]
+fn handoff_merge_in_progress_contracts() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "handoff_merge_in_progress_contracts",
+        || {
+            for merged in [true, false] {
+                let sandbox = tempdir().unwrap();
+                let forge = FakeForge::new(sandbox.path(), false);
+                let head = forge.context.candidate.candidate.commit.clone();
+                forge.job(&head, passed(1, 11));
+                forge.state.lock().unwrap().merge_in_progress = Some(merged);
+                let (result, waits) = counted_land(&forge, json!({"max_wait_seconds":30}));
+                if merged {
+                    assert_eq!(result.unwrap()["phase"], "landed");
+                } else {
+                    let error = result.unwrap_err().to_string();
+                    assert!(
+                        error.contains("one re-read did not confirm it merged"),
+                        "{error}"
+                    );
+                    assert!(
+                        forge
+                            .steps()
+                            .contains(&HandoffLandingStep::Stop { repairable: false })
+                    );
+                }
+                assert!(
+                    waits.is_empty(),
+                    "handoff does not enter completion's polling path"
+                );
+                assert_sent_len(&forge, "pr.merge", 1, "no second mutation");
+                assert_sent_len(&forge, "pr.status", 2, "one reconciliation read");
+            }
+        },
     );
 }
