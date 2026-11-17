@@ -17,10 +17,11 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use serde_json::{Value, json};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::super::operations::{CiCommitJobEvidence, CiJobStatus};
+use super::super::operations::{CiCommitJobEvidence, CiJobLogAnswer, CiJobStatus};
 
 /// Answers kept at once; the oldest is pruned first.
 const MAX_ENTRIES: usize = 128;
@@ -31,6 +32,29 @@ const MAX_ENTRY_BYTES: usize = 256 * 1024;
 const MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 // Ignore older entries that could retain a truncated, unattributable answer.
 const SCHEMA_VERSION: u64 = 2;
+
+/// The persisted v2 cache envelope. The nested answer keeps the provider's
+/// permissive decoder while the envelope requires an object-shaped answer.
+#[derive(Deserialize, Serialize)]
+struct CiJobLogCacheEntry {
+    schema_version: u64,
+    repository: String,
+    run_id: u64,
+    job_id: u64,
+    run_attempt: u64,
+    #[serde(deserialize_with = "decode_cache_answer")]
+    answer: CiJobLogAnswer,
+}
+
+fn decode_cache_answer<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<CiJobLogAnswer, D::Error> {
+    let answer = Value::deserialize(deserializer)?;
+    if !answer.is_object() {
+        return Err(D::Error::custom("cache answer must be an object"));
+    }
+    Ok(CiJobLogAnswer::decode_response(answer))
+}
 
 /// The identity of one completed job's log for one run attempt.
 pub(super) struct JobLogKey {
@@ -76,12 +100,12 @@ impl JobLogKey {
         cache_dir(data_root).map(|dir| dir.join(format!("{name}.json")))
     }
 
-    fn matches(&self, entry: &Value) -> bool {
-        entry["schema_version"] == SCHEMA_VERSION
-            && entry["repository"] == self.repository.as_str()
-            && entry["run_id"] == self.run_id
-            && entry["job_id"] == self.job_id
-            && entry["run_attempt"] == self.run_attempt
+    fn matches(&self, entry: &CiJobLogCacheEntry) -> bool {
+        entry.schema_version == SCHEMA_VERSION
+            && entry.repository == self.repository
+            && entry.run_id == self.run_id
+            && entry.job_id == self.job_id
+            && entry.run_attempt == self.run_attempt
     }
 }
 
@@ -93,37 +117,39 @@ fn cache_dir(data_root: &Path) -> Option<PathBuf> {
 
 /// The cached answer for `key`, unless it is missing, aged out or does not
 /// carry exactly this key.
-pub(super) fn load(data_root: &Path, key: &JobLogKey) -> Option<Value> {
+pub(super) fn load(data_root: &Path, key: &JobLogKey) -> Option<CiJobLogAnswer> {
     let path = key.file(data_root)?;
     let metadata = std::fs::metadata(&path).ok()?;
     if metadata.len() > MAX_ENTRY_BYTES as u64 || aged_out(&metadata) {
         return None;
     }
-    let entry: Value = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
+    let entry: CiJobLogCacheEntry = serde_json::from_slice(&std::fs::read(&path).ok()?).ok()?;
     if !key.matches(&entry) {
         return None;
     }
-    entry
-        .get("answer")
-        .filter(|answer| answer.is_object())
-        .cloned()
+    Some(entry.answer)
 }
 
 /// Keep `answer` for `key`, pruning aged-out entries and the oldest beyond
 /// the entry cap first. A failure is logged and otherwise ignored.
-pub(super) fn store(data_root: &Path, key: &JobLogKey, answer: &Value) {
+pub(super) fn store(data_root: &Path, key: &JobLogKey, answer: &CiJobLogAnswer) {
     let Some(path) = key.file(data_root) else {
         return;
     };
-    let entry = json!({
-        "schema_version": SCHEMA_VERSION,
-        "repository": key.repository,
-        "run_id": key.run_id,
-        "job_id": key.job_id,
-        "run_attempt": key.run_attempt,
-        "answer": answer,
-    });
-    let Ok(text) = serde_json::to_string(&entry) else {
+    let entry = CiJobLogCacheEntry {
+        schema_version: SCHEMA_VERSION,
+        repository: key.repository.clone(),
+        run_id: key.run_id,
+        job_id: key.job_id,
+        run_attempt: key.run_attempt,
+        answer: answer.clone(),
+    };
+    // Keep the struct fields in the old envelope's insertion order so its
+    // serialized bytes, including the nested answer's field order, stay the same.
+    let Ok(value) = serde_json::to_value(&entry) else {
+        return;
+    };
+    let Ok(text) = serde_json::to_string(&value) else {
         return;
     };
     if text.len() > MAX_ENTRY_BYTES {
