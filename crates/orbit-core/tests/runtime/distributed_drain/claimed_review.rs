@@ -1062,8 +1062,11 @@ fn a_claimed_review_held_for_linux_codeql_is_fulfilled_by_the_owner() {
     let probe = orbit_exec::probe_bwrap();
     if !probe.available {
         orbit_exec::report_bwrap_deferral(
-            "owner CodeQL fulfilment of a claimed hold",
-            &probe.detail,
+            "a_claimed_review_held_for_linux_codeql_is_fulfilled_by_the_owner",
+            &format!(
+                "owner CodeQL fulfilment of a claimed hold: {}",
+                probe.detail
+            ),
         );
         assert!(tick.dispatched.is_empty(), "{tick:?}");
         assert!(
