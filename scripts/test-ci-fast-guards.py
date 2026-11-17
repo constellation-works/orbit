@@ -3400,6 +3400,90 @@ class PythonPreflightTests(unittest.TestCase):
         self.assertFalse(self.log.exists(), "a gate ran before the Python preflight")
 
 
+class RemovedDashboardLabelTests(unittest.TestCase):
+    """Drive scripts/check-removed-dashboard-labels.py in a miniature repo."""
+
+    LABEL = "Old Panel Title"
+    PANEL = "crates/orbit-web/assets/dashboard/js/panel.js"
+    DOC = "docs/design/user-interface/1_overview.md"
+
+    def setUp(self):
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(prefix="removed-labels-", dir=scratch)
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        scripts = self.root / "scripts"
+        scripts.mkdir(parents=True)
+        shutil.copy2(SCRIPTS / "check-removed-dashboard-labels.py", scripts)
+        (scripts / "removed-dashboard-labels-allowlist.json").write_text("[]\n")
+        self.panel = self.root / self.PANEL
+        self.panel.parent.mkdir(parents=True)
+        self.panel.write_text(f'export const title = "{self.LABEL}";\n')
+        self.doc = self.root / self.DOC
+        self.doc.parent.mkdir(parents=True)
+        self.doc.write_text(f"# Overview\n\nThe {self.LABEL} panel lists things.\n")
+        self.env = dict(os.environ, GIT_CEILING_DIRECTORIES=str(self.root.parent))
+        for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "CI_TEST_BASE"):
+            self.env.pop(key, None)
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.name", "Guard fixture")
+        self.git("config", "user.email", "guard@example.invalid")
+        self.git("add", ".")
+        self.git("commit", "-qm", "fixture base")
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+
+    def git(self, *arguments):
+        result = subprocess.run(["git", "-C", str(self.root), *arguments],
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result
+
+    def run_check(self):
+        return subprocess.run(
+            [sys.executable, str(self.root / "scripts/check-removed-dashboard-labels.py")],
+            env=self.env, text=True, capture_output=True)
+
+    def write_allowlist(self, entries):
+        (self.root / "scripts/removed-dashboard-labels-allowlist.json").write_text(
+            json.dumps(entries))
+
+    def test_removed_label_still_named_in_doc_fails(self):
+        self.panel.write_text("export const title = 'New Panel';\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(f'"{self.LABEL}"', result.stderr)
+        self.assertIn(self.PANEL, result.stderr)
+        self.assertIn(f"{self.DOC}:3", result.stderr)
+
+    def test_removed_label_with_doc_updated_passes(self):
+        self.panel.write_text("export const title = 'New Panel';\n")
+        self.doc.write_text("# Overview\n\nThe New Panel lists things.\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_readded_label_passes(self):
+        self.panel.write_text(f"export const heading = \"{self.LABEL}\";\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_allowlisted_label_passes_and_bad_entries_fail(self):
+        self.panel.write_text("export const title = 'New Panel';\n")
+        self.write_allowlist([{"label": self.LABEL, "doc": self.DOC,
+                                "reason": "Historical note keeps the old name."}])
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.write_allowlist([{"label": self.LABEL, "doc": self.DOC, "reason": " "}])
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("needs a reason", result.stderr)
+        self.write_allowlist([{"label": "Never Removed Label", "doc": self.DOC,
+                                "reason": "Kept for history."}])
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("stale allowlist entry", result.stderr)
+
+
 # These cases assert rendezvous, relative completion times or lane ordering.
 # Run them alone, as before. Other cases own independent roots, subprocess
 # environments and result objects; none changes this interpreter's globals.
