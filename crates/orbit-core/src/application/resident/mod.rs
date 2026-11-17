@@ -53,7 +53,10 @@ pub use grant::{
     ResidentDashboardGrant, ResidentDashboardGrantOutcome, ResidentDashboardGrantParams,
     ResidentGrantCaller, ResidentGrantOutcome, ResidentGrantParams,
 };
-pub(crate) use guard::{ResidentCallAdmission, ResidentCallClass};
+pub(crate) use guard::{
+    ResidentCallAdmission, ResidentCallClass, clear_failed_resident_action_key,
+    take_failed_resident_action_key,
+};
 pub(in crate::application) use routine_status_port::ResidentRoutineStatusPort;
 pub use steps::{RESIDENT_CYCLE_LEASE_MINUTES, resident_cycle_id};
 

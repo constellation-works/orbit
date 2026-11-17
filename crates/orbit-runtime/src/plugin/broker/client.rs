@@ -171,6 +171,22 @@ pub fn forward_call_with_status(
             if let Some(detail) = error.get("detail").filter(|detail| !detail.is_null()) {
                 payload["detail"] = detail.clone();
             }
+            // The broker envelope's top-level `action_key` (mirrored in
+            // `error`) carries a ledgered resident write's key on failed
+            // and refused replies; keep it on the reconstructed error.
+            let action_key = response
+                .get("action_key")
+                .and_then(Value::as_str)
+                .filter(|key| !key.is_empty())
+                .or_else(|| {
+                    error
+                        .get("action_key")
+                        .and_then(Value::as_str)
+                        .filter(|key| !key.is_empty())
+                });
+            if let Some(key) = action_key {
+                payload["action_key"] = json!(key);
+            }
             let kind = if super::is_host_credentialed_read(tool)
                 || orbit_types::tool::is_claimed_owner_tool(tool)
                 || super::is_brokered_resident_tool(tool)

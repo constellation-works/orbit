@@ -220,6 +220,15 @@ impl BrokerDispatch for RunDispatch {
         peer_pid: u32,
         cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<Value, OrbitError> {
+        self.call_with_action_key(request, peer_pid, cancelled).0
+    }
+
+    fn call_with_action_key(
+        &self,
+        request: BrokerRequest,
+        peer_pid: u32,
+        cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> (Result<Value, OrbitError>, Option<String>) {
         let BrokerRequest {
             tool,
             input,
@@ -260,7 +269,9 @@ impl BrokerDispatch for RunDispatch {
             EntryPoint::Cli => ToolEntryPoint::Cli,
             EntryPoint::Mcp => ToolEntryPoint::Mcp,
         };
-        self.runtime
+        crate::application::resident::clear_failed_resident_action_key();
+        let result = self
+            .runtime
             .execute_brokered_dispatch(
                 &tool,
                 input,
@@ -359,6 +370,13 @@ impl BrokerDispatch for RunDispatch {
                     )
                 },
             )
-            .map(|outcome| outcome.value)
+            .map(|outcome| outcome.value);
+        let action_key = if result.is_err() {
+            crate::application::resident::take_failed_resident_action_key()
+        } else {
+            crate::application::resident::clear_failed_resident_action_key();
+            None
+        };
+        (result, action_key)
     }
 }

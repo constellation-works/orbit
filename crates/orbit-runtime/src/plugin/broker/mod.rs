@@ -104,6 +104,19 @@ pub trait BrokerDispatch: Send + Sync {
         peer_pid: u32,
         cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<Value, OrbitError>;
+
+    /// Run the call, also reporting the resident ledger key when a
+    /// ledgered write was admitted before it failed or was refused.
+    /// The default reports no key; only the host dispatch that runs the
+    /// resident cycle guard overrides this.
+    fn call_with_action_key(
+        &self,
+        request: BrokerRequest,
+        peer_pid: u32,
+        cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> (Result<Value, OrbitError>, Option<String>) {
+        (self.call(request, peer_pid, cancelled), None)
+    }
 }
 
 /// One run's broker. Dropping it stops the listener and removes the socket

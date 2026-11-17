@@ -187,14 +187,64 @@ pub(crate) fn output_response(output: Value) -> Vec<u8> {
     .into_bytes()
 }
 
+/// Build an error envelope, adding the resident ledger `action_key` when
+/// a ledgered write was admitted before it failed or was refused.
+fn error_envelope(
+    code: &str,
+    message: &str,
+    retryable: bool,
+    detail: Value,
+    action_key: Option<&str>,
+) -> Vec<u8> {
+    let mut envelope = json!({
+        "schema_version": SCHEMA_VERSION,
+        "ok": false,
+        "error": {
+            "code": code,
+            "message": message,
+            "retryable": retryable,
+            "detail": detail,
+        },
+    });
+    if let Some(key) = action_key.filter(|key| !key.is_empty()) {
+        envelope["action_key"] = json!(key);
+        envelope["error"]["action_key"] = json!(key);
+    }
+    envelope.to_string().into_bytes()
+}
+
+/// The stored resident action key a `RemoteTool` error already carries,
+/// in its detail (ORB-25279) or as a payload `action_key`.
+fn remote_action_key(payload: &Value) -> Option<&str> {
+    payload
+        .get("action_key")
+        .and_then(Value::as_str)
+        .filter(|key| !key.is_empty())
+        .or_else(|| {
+            payload
+                .get("detail")
+                .and_then(|detail| detail.get("resident_action_key"))
+                .and_then(Value::as_str)
+                .filter(|key| !key.is_empty())
+        })
+}
+
 /// A call's error as the §4.3 error response. A backend's own structured
 /// error keeps its code, retryability and detail; the host's refusals and
 /// failures map onto the broker's codes, none of them retryable.
 ///
+/// `action_key` is the already-assigned resident ledger key for a
+/// post-admission failure or refusal of a ledgered write (ORB-25284,
+/// Daniel's option (a), 2026-11-16). It is carried as an optional
+/// top-level field on the error envelope (mirrored inside `error` for
+/// clients that parse only that object); omitted when there is no key,
+/// so pre-admission denials and non-ledgered calls are unchanged and
+/// clients that ignore unknown fields keep working.
+///
 /// A backend code that is also a listener code becomes
 /// [`CALL_FAILED`], not retryable: the client reads listener codes as "no
 /// broker audit row", so a dispatched call must never answer with one.
-pub(crate) fn call_error_response(error: &OrbitError) -> Vec<u8> {
+pub(crate) fn call_error_response(error: &OrbitError, action_key: Option<&str>) -> Vec<u8> {
     let code = match error {
         OrbitError::RemoteTool {
             code,
@@ -224,18 +274,14 @@ pub(crate) fn call_error_response(error: &OrbitError) -> Vec<u8> {
             } else {
                 (code, message.to_string(), retryable)
             };
-            return json!({
-                "schema_version": SCHEMA_VERSION,
-                "ok": false,
-                "error": {
-                    "code": code,
-                    "message": message,
-                    "retryable": retryable,
-                    "detail": payload.get("detail").cloned().unwrap_or(Value::Null),
-                },
-            })
-            .to_string()
-            .into_bytes();
+            let effective_key = action_key.or_else(|| remote_action_key(payload));
+            return error_envelope(
+                code,
+                &message,
+                retryable,
+                payload.get("detail").cloned().unwrap_or(Value::Null),
+                effective_key,
+            );
         }
         OrbitError::PolicyDenied(_)
         | OrbitError::CapabilityDenied(_)
@@ -254,5 +300,5 @@ pub(crate) fn call_error_response(error: &OrbitError) -> Vec<u8> {
         | OrbitError::ClaimRefused { .. } => INVALID_INPUT,
         _ => CALL_FAILED,
     };
-    error_response(code, &error.to_string(), false)
+    error_envelope(code, &error.to_string(), false, Value::Null, action_key)
 }
