@@ -6,10 +6,11 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-/// Maximum UTF-8 byte length Orbit records for a self-reported actor.
+/// Maximum UTF-8 byte length accepted for a trimmed self-reported actor claim
+/// before [`normalize_self_reported_actor`] runs.
 ///
-/// Generous for a client name or model string (`claude-code`, `claude-opus-5`)
-/// while bounding the size of the caller-controlled audit label.
+/// Unicode lowercasing can expand the claim, so the recorded value may be
+/// longer than this limit.
 pub const SELF_REPORTED_ACTOR_MAX_LEN: usize = 128;
 
 /// The label an aggregate reports for traffic that claimed no identity at all.
@@ -69,14 +70,19 @@ impl FromStr for AuditAttribution {
     }
 }
 
-/// Reduce a caller-supplied identity claim to the bounded form Orbit records,
-/// or `None` when there is nothing usable to record.
+/// Normalize a caller-supplied identity claim for an audit record, or `None`
+/// when there is nothing usable to record.
+///
+/// The length limit applies to the trimmed claim before normalization. Unicode
+/// lowercasing can expand the claim, so the returned value may be longer than
+/// [`SELF_REPORTED_ACTOR_MAX_LEN`].
 ///
 /// Rejects (as anonymous, never as an error the caller can act on):
 /// - a claim that is empty or only whitespace,
 /// - a claim containing a control character — newlines and tabs would let a
 ///   claim forge extra fields in any line-oriented rendering of the audit log,
-/// - a claim longer than [`SELF_REPORTED_ACTOR_MAX_LEN`] after trimming.
+/// - a claim whose trimmed UTF-8 byte length exceeds
+///   [`SELF_REPORTED_ACTOR_MAX_LEN`] (checked before normalization).
 ///
 /// Accepted claims are lowercased and have internal whitespace runs collapsed
 /// to a single space, so `Claude  Code` and `claude code` aggregate as one
