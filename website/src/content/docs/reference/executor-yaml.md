@@ -49,8 +49,8 @@ CLI's help, so verify flags against the provider CLI first.
 
 Every executor file is a schema version 2 resource envelope. The file name,
 without `.yaml`, must match `metadata.name`. To override a field, copy the
-installed file and change only the `spec` entries you mean to. This is the
-shipped Codex definition on Linux with one override, `host_os`:
+installed file and change only the `spec` entries you mean to. For example,
+this Codex definition on Linux restricts `host_os`:
 
 ```yaml
 schemaVersion: 2

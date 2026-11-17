@@ -27,10 +27,10 @@ orbit init
 CLIs, links Orbit's skills into your agents, and on Linux prepares the
 sandbox.
 
-Each [GitHub release](https://github.com/constellation-works/orbit/releases)
-also attaches a desktop app, a native window for the dashboard, as `.deb` and
-`.AppImage` bundles for Linux. A release may have no macOS bundle. The app
-needs this CLI install. See [Use the desktop app](/how-to/desktop/).
+[GitHub releases](https://github.com/constellation-works/orbit/releases) may
+also attach a desktop app, a native window for the dashboard, as `.deb` and
+`.AppImage` bundles for Linux. macOS bundles require signing and notarization
+credentials. The app needs this CLI install. See [Use the desktop app](/how-to/desktop/).
 
 ## Windows
 
