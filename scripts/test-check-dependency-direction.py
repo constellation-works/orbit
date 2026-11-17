@@ -89,7 +89,48 @@ class RelativeImportTests(unittest.TestCase):
             (vcs / module).mkdir()
         (vcs / "push.rs").write_text("")
         (vcs / "claim" / "published.rs").write_text("")
+        context = self.root / "crates/orbit-engine/src/context"
+        context.mkdir(parents=True)
+        (context / "dispatch_contract.rs").write_text("")
         self.prepare_config_paths()
+
+    def test_engine_context_dispatch_contract_direction(self):
+        # RuntimeHost owns the contracts below dispatch, including its null
+        # host and test fixtures. Shared orbit-types paths remain legal.
+        engine = self.root / "crates/orbit-engine/src"
+        self.check_rows([
+            (relative, source + "\n")
+            for relative in ("context/hosts/runtime_host/probe.rs",
+                             "context/hosts/null_host/defaults/probe.rs",
+                             "context/tests/probe.rs")
+            for source in (
+                "use crate::activity_job::DispatchError;",
+                "use crate::{context::RuntimeHost, activity_job::{DispatchError}};",
+                "fn probe() { crate::activity_job::dispatch_v2_activity(); }",
+                f"use {'super::' * len(Path(relative).parts)}{{activity_job::DispatchError}};",
+            )
+        ], rejected=True, base=engine)
+        self.check_rows([
+            ("context/hosts/probe.rs",
+             "use crate::context::dispatch_contract::DispatchError;\n"
+             "use orbit_types::workflow::activity_job::Provider;\n"
+             "// crate::activity_job is above the port.\n"
+             'const NOTE: &str = "crate::activity_job::DispatchError";\n'),
+        ], rejected=False, base=engine)
+        for source in (
+            "use crate::context::RuntimeHost;\n",
+            "use crate::{context::{RuntimeHost}};\n",
+            "fn probe() { crate::activity_job::dispatch_v2_activity(); }\n",
+        ):
+            self.check_exact("context/dispatch_contract.rs", source,
+                             rejected=True, base=engine)
+        self.check_exact("context/dispatch_contract.rs",
+                         "use std::path::PathBuf;\n"
+                         "use orbit_common::OrbitError;\n"
+                         "use orbit_types::workflow::activity_job::Provider;\n"
+                         "use serde_json::Value;\n"
+                         "use thiserror::Error;\n",
+                         rejected=False, base=engine)
 
     def test_vcs_checks_dependency_direction(self):
         # The shared classifier must not reach back into landing, and its

@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::activity_job::{
+use crate::context::dispatch_contract::{
     DispatchError, DispatchInvocationTrace, ResolvedCliExecutor, ResolvedSandbox,
     ResolvedShellExecutor,
 };

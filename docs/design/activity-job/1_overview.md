@@ -116,7 +116,7 @@ workspace auto run still treats a required child workflow failure as a parent fa
 | Granted script steps (done) | `crates/orbit-engine/src/activity_job/job_executor/target.rs`, [Script steps](../script-steps/1_scope.md) | [ORB-19983], [ORB-19985] |
 | Completion contracts / accepted history, historical reuse and condition facts (shipped); release-readiness example (disabled, nonseeded) | [Auto-task step specification](./specs/auto-task-step.md) | [ORB-20165], [ORB-22649], [ORB-20397] (shipped), [ORB-20166] (disabled example) |
 | Target-ref resolution | `crates/orbit-engine/src/activity_job/catalog/resolve.rs` | [T20260418-2019] |
-| v2 job run entrypoint and runtime host boundary | `crates/orbit-core/src/application/job/exec/entry.rs`, `crates/orbit-engine/src/context/hosts/runtime_host/mod.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host/host/implementation.rs` | [T20260418-2143], [T20260418-2210] |
+| v2 job run entrypoint and runtime host boundary, with port-owned dispatch contracts | `crates/orbit-core/src/application/job/exec/entry.rs`, `crates/orbit-engine/src/context/hosts/runtime_host/mod.rs`, `crates/orbit-engine/src/context/dispatch_contract.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host/host/implementation.rs` | [T20260418-2143], [T20260418-2210], [ORB-25491] |
 | Retired-backend rejection | `crates/orbit-types/src/workflow/activity_job/activity_v2.rs` | [ORB-10801] |
 | v2 DAG executor | `crates/orbit-engine/src/activity_job/job_executor/` | [T20260418-2018], [T20260509-2] |
 | V2 audit envelope and disk sink | `crates/orbit-types/src/workflow/activity_job/audit_envelope.rs`, `crates/orbit-engine/src/activity_job/audit_writer.rs`, `crates/orbit-engine/src/activity_job/sqlite_sink.rs` | [T20260419-0002] |
@@ -136,6 +136,7 @@ workspace auto run still treats a required child workflow failure as a parent fa
 - **[ORB-24097]** — Cut delivery conventions' dependency on PR rendering: `vcs::conventions` owns the shared task projections; PR rendering, commit admission and handoff admission consume that owner.
 - **[ORB-25310]** — Lift shared hosted-check handling out of landing into `vcs::checks`: landing, PR, base and claim consume it directly. The remaining `checks → pr` read-model dependency is cut by [ORB-25311].
 - **[ORB-25311]** — Move the PR read model to `vcs::pr_answers`. The order is `operations < pr_answers < checks < pr < landing` and `pr_answers < base, push, claim`. `pr` re-exports the old paths as a compatibility shim whose retirement is a follow-up.
+- **[ORB-25491]** — Put the dispatch contracts below `RuntimeHost` in `context::dispatch_contract`; the dependency guard rejects `context` paths into `activity_job` and any `crate::` path in the leaf. The dispatcher preserves the public paths with explicit re-exports; migrating the remaining consumers and retiring that shim is a follow-up. The remaining activity execution and automation cycle is outside this change.
 - **[T20260418-2010]** — Add the first v2 activity runtime scaffolding.
 - **[T20260418-2018]** — Add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).
 - **[T20260418-2019]** — Add v2 activity name resolution and pipeline skeleton assets.

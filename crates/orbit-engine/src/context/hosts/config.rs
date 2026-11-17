@@ -3,9 +3,8 @@
 use orbit_types::workflow::activity_job::Provider;
 
 /// Resolved crew assignment from `config.toml`. Each field
-/// is independently optional — the resolver in
-/// `crate::activity_job::crew` falls back to the inline activity value
-/// for any field the config does not specify.
+/// is independently optional — the crew resolver falls back to the inline
+/// activity value for any field the config does not specify.
 ///
 /// String fields from the on-disk crew assignment are parsed into the
 /// strongly typed activity-job enums at the orbit-core boundary; an
