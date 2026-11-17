@@ -142,6 +142,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/task-pane.js"),
     ),
     (
+        "/static/js/task-quick-filter.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-quick-filter.js"),
+    ),
+    (
         "/static/js/task-shared.js",
         JS,
         include_bytes!("../assets/dashboard/js/task-shared.js"),
