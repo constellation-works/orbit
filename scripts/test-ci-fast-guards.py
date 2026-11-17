@@ -3510,6 +3510,26 @@ class RemovedDashboardLabelTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("stale allowlist entry", result.stderr)
 
+    def test_removed_lowercase_visible_label_still_named_in_doc_fails(self):
+        # Lowercase copy such as `text: "hide unconfirmed successes"` is a
+        # visible label, not a class list. The class list beside it must not
+        # be reported.
+        label = "hide unconfirmed successes"
+        self.panel.write_text(
+            f'el("button", {{ class: "action approve", text: "{label}" }});\n')
+        self.doc.write_text(
+            f"# Overview\n\nThe {label} control lists things.\n\nThe action approve class styles it.\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "lowercase label base")
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+        self.panel.write_text("export const title = 'New Panel';\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(f'"{label}"', result.stderr)
+        self.assertIn(self.PANEL, result.stderr)
+        self.assertIn(f"{self.DOC}:3", result.stderr)
+        self.assertNotIn("action approve", result.stderr)
+
 
 # These cases assert rendezvous, relative completion times or lane ordering.
 # Run them alone, as before. Other cases own independent roots, subprocess

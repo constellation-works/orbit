@@ -32,6 +32,21 @@ QUOTED = re.compile(r'"([^"\n]+)"|\'([^\'\n]+)\'|`([^`\n]+)`')
 # user-visible label text. `/`, `-`, `&`, `:`, `.` and `,` stay allowed so
 # labels such as "Open / Recently closed" still match.
 CODE_CHARS = set("{}<>()[]=;\\|@#$^*_+~")
+# Declaration clause that holds a quoted run in JS or HTML: a `class`, `className`
+# or `*Class` property (its value, or a ternary branch of it), or a `class=`
+# attribute or `className =` assignment. A class list is never copy.
+CLASS_SINK = re.compile(
+    r"\b\w*?(?:[Cc]lass(?:es|Name|List)?|cls)\b[\"']?\s*(?::(?!:)|[+]?=(?!=))")
+CLASS_CALL = re.compile(r"\bclassList\.\w+\(\s*$")
+# An HTML `class="…"` attribute: the run follows `class=` with no closing quote
+# or tag boundary in between, so `class="a b" aria-label="c d"` leaves `c d` as copy.
+HTML_CLASS_ATTR = re.compile(r"\bclass\s*=\s*[\"']?[^\"'<>]*$")
+# CSS strings are visible copy only as `content:` values; grid-template-areas
+# rows and font or attribute selectors name layout, not labels.
+CSS_CONTENT = re.compile(r"\bcontent\s*:")
+PROPERTY_BEFORE = re.compile(r"[{,]\s*$")
+PROPERTY_AFTER = re.compile(r"\s*:(?!:)")
+IDENTIFIER_WORD = re.compile(r"[a-z0-9_-]+")
 
 
 def git(*arguments):
@@ -57,7 +72,42 @@ def comparison_base():
     raise ValueError("cannot resolve agent-main; set CI_TEST_BASE to the delivery base commit")
 
 
-def labels_in(line):
+def top_level_clause(text):
+    # Text since the nearest `,` `;` or opening bracket outside any nested brackets.
+    depth = 0
+    for index in range(len(text) - 1, -1, -1):
+        char = text[index]
+        if char in ")]}":
+            depth += 1
+        elif char in "([{":
+            if depth == 0:
+                return text[index + 1:]
+            depth -= 1
+        elif char in ",;" and depth == 0:
+            return text[index + 1:]
+    return text
+
+
+def is_class_or_property(line, match, words, suffix):
+    # Decided by where the run sits, not by its capitalization: lowercase copy
+    # such as `text: "not probed"` is a visible label.
+    before = line[:match.start()]
+    if suffix == ".css":
+        return CSS_CONTENT.search(top_level_clause(before)) is None
+    if HTML_CLASS_ATTR.search(before):
+        return True
+    if suffix == ".html":
+        return False
+    if CLASS_SINK.search(top_level_clause(before)) or CLASS_CALL.search(before):
+        return True
+    # A lowercase identifier run used as an object key is a property name.
+    return (PROPERTY_BEFORE.search(before) is not None
+            and PROPERTY_AFTER.match(line, match.end()) is not None
+            and all(IDENTIFIER_WORD.fullmatch(word) for word in words))
+
+
+def labels_in(line, path=""):
+    suffix = os.path.splitext(path)[1]
     labels = []
     for match in QUOTED.finditer(line):
         value = next(group for group in match.groups() if group is not None)
@@ -67,8 +117,7 @@ def labels_in(line):
             continue
         if CODE_CHARS.intersection(label) or "${" in label or "://" in label:
             continue
-        # A run of lowercase identifier tokens is a class list or key, not copy.
-        if all(re.fullmatch(r"[a-z0-9_-]+", word) for word in words):
+        if is_class_or_property(line, match, words, suffix):
             continue
         labels.append(label)
     return labels
@@ -85,13 +134,34 @@ def removed_and_added_labels(base):
         if line.startswith("--- a/"):
             current_file = line[6:]
         elif line.startswith("+++ b/"):
-            continue
+            current_file = line[6:]
         elif line.startswith("-") and not line.startswith("---"):
-            for label in labels_in(line[1:]):
+            for label in labels_in(line[1:], current_file):
                 removed.setdefault(label, set()).add(current_file)
         elif line.startswith("+") and not line.startswith("+++"):
-            added.update(labels_in(line[1:]))
+            added.update(labels_in(line[1:], current_file))
     return {label: files for label, files in removed.items() if label not in added}
+
+
+def filter_still_present(removed):
+    # A label removed from one dashboard file but still present elsewhere in
+    # the worktree dashboard is not a removal: docs may name the remaining
+    # instance. Check raw substrings, mirroring doc_hits.
+    if not removed:
+        return removed
+    root = ROOT / DASHBOARD
+    if not root.is_dir():
+        return removed
+    texts = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            texts.append(path.read_text(errors="replace"))
+        except OSError:
+            continue
+    return {label: files for label, files in removed.items()
+            if not any(label in text for text in texts)}
 
 
 def doc_paths():
@@ -152,6 +222,7 @@ def main():
         allowlist = load_allowlist()
         base = comparison_base()
         removed = removed_and_added_labels(base)
+        removed = filter_still_present(removed)
         if not removed:
             print("removed dashboard labels: no removed dashboard labels in the diff")
             return 0
