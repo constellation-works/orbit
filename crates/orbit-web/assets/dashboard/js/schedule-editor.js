@@ -43,7 +43,7 @@ export function scheduleEditButton({ key, label, reason, onOpen }) {
   const button = el("button", { class: "field-edit schedule-edit", text: "edit" });
   button.type = "button";
   button.disabled = Boolean(reason) || editors.has(key);
-  button.title = reason || `Edit ${label}`;
+  if (reason) button.setAttribute("aria-description", reason);
   button.setAttribute("aria-label", `Edit ${label}`);
   button.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -352,7 +352,7 @@ function buildEditor({ key, title, note, kinds, fields, value, preview, save, on
       status.hidden = !status.textContent;
       const unchanged = !checked.problem && JSON.stringify(checked.value) === editor.initial;
       saveButton.disabled = editor.pending || Boolean(checked.problem) || unchanged;
-      saveButton.title = unchanged ? "No change to save" : "";
+      if (unchanged) saveButton.setAttribute("aria-description", "No change to save"); else saveButton.removeAttribute("aria-description");
       cancelButton.disabled = editor.pending;
     };
     const changed = () => {

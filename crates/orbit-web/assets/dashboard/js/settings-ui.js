@@ -36,12 +36,12 @@ export function syncSettingsBarHeight(bar) {
 
 /// The one bar at the top of every Settings page: the page's own controls
 /// (`lead`), then its actions and Reload at the right end.
-export function renderSettingsBar({ lead = [], actions = [], onReload, reloadTitle = 'Reload', sticky = false }) {
+export function renderSettingsBar({ lead = [], actions = [], onReload, reloadDescription = null, sticky = false }) {
   const bar = document.getElementById('config-controls');
   if (!bar) return;
   bar.hidden = false;
   bar.classList.toggle('sticky', sticky);
-  const reload = el('button', { class: 'settings-icon-btn settings-reload', title: reloadTitle, 'aria-label': 'Reload' }, [settingsIcon('reload')]);
+  const reload = el('button', { class: 'settings-icon-btn settings-reload', "aria-description": reloadDescription, 'aria-label': 'Reload' }, [settingsIcon('reload')]);
   reload.type = 'button';
   reload.addEventListener('click', onReload);
   bar.replaceChildren(...lead.filter(Boolean), el('div', { class: 'settings-bar-actions' }, [...actions.filter(Boolean), reload]));
@@ -138,7 +138,7 @@ export function settingsRowSource(row) {
 /// The edit affordance: "Edit", or a pencil where a table cell has no room.
 export function settingsEditButton(onClick, label, { icon = false } = {}) {
   const button = icon
-    ? el('button', { class: 'settings-icon-btn settings-edit', title: label, 'aria-label': label }, [settingsIcon('pencil', 12)])
+    ? el('button', { class: 'settings-icon-btn settings-edit', 'aria-label': label }, [settingsIcon('pencil', 12)])
     : el('button', { class: 'settings-btn settings-edit', text: 'Edit', 'aria-label': label });
   button.type = 'button';
   button.addEventListener('click', (event) => { event.stopPropagation(); onClick(); });

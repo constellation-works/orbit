@@ -49,7 +49,7 @@ function syncDockToggleButtons() {
     if (!button) continue;
     button.setAttribute("aria-expanded", String(!dockCollapsed));
     button.setAttribute("aria-label", label);
-    button.title = `${label} (${dockShortcutLabel})`;
+    button.setAttribute("aria-description", dockShortcutLabel);
   }
 }
 

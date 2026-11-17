@@ -82,7 +82,7 @@ export function buildDecisionCard(task, request, detail, context) {
       class: answer.recommended ? "action decision-answer primary" : "action decision-answer",
       type: "button",
       text: answer.label,
-      title: `Answer ${request.id} with option ${answerId}`,
+      "aria-description": `Answer ${request.id} with option ${answerId}`,
     });
     btn.disabled = !mutable;
     btn.addEventListener("click", (e) => {
@@ -249,7 +249,7 @@ function decisionRefusalNode(key, message, context) {
     class: "action",
     type: "button",
     text: "Dismiss",
-    title: "Hide this refusal",
+    "aria-description": "Hide this refusal",
   });
   dismiss.addEventListener("click", (event) => {
     event.stopPropagation();

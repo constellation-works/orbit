@@ -76,7 +76,7 @@ export function appendPilotControls(actions, task, detail, context, mutable) {
   const btn = el("button", {
     class: "action pilot",
     text: running ? "piloting…" : "run pilot",
-    title: reason || help,
+    "aria-description": reason || help,
   });
   btn.disabled = Boolean(reason);
   btn.addEventListener("click", (e) => {
@@ -203,7 +203,7 @@ export function appendTriageControls(actions, task, detail, context, mutable) {
   const btn = el("button", {
     class: "action triage",
     text: running ? "triaging…" : "triage",
-    title: reason || subjectWords,
+    "aria-description": reason || subjectWords,
   });
   btn.disabled = Boolean(reason);
   btn.addEventListener("click", (e) => {
@@ -297,12 +297,12 @@ async function watchTriageRun(task, key, runId, visit, context) {
 export function appendRecoveryControls(actions, task, detail, context, mutable) {
   const blocked = task.status === "blocked";
   const settleable = blocked || task.status === "in-progress" || task.status === "review";
-  const disabledTitle = mutable ? "" : aggregateRefusalTitle("Recovery", "recover a task");
+  const disabledDescription = mutable ? "" : aggregateRefusalTitle("Recovery", "recover a task");
   if (blocked) {
     const resume = el("button", {
       class: "action requeue-resume",
       text: "Resume candidate",
-      title: disabledTitle || "Return this blocked task to the backlog keeping its published candidate: the next run adopts that candidate and pull request without re-implementing, then validates, reviews and lands it afresh",
+      "aria-description": disabledDescription || "Return this blocked task to the backlog keeping its published candidate: the next run adopts that candidate and pull request without re-implementing, then validates, reviews and lands it afresh",
     });
     resume.disabled = !mutable;
     resume.addEventListener("click", (e) => { e.stopPropagation(); runRecovery(task, detail, resume, context, "resume"); });
@@ -310,7 +310,7 @@ export function appendRecoveryControls(actions, task, detail, context, mutable) 
     const discard = el("button", {
       class: "action requeue-discard",
       text: "Discard and re-implement",
-      title: disabledTitle || "Discard this blocked task's published candidate, close its undelivered pull requests, and return it to the backlog so the next run implements fresh",
+      "aria-description": disabledDescription || "Discard this blocked task's published candidate, close its undelivered pull requests, and return it to the backlog so the next run implements fresh",
     });
     discard.disabled = !mutable;
     discard.addEventListener("click", (e) => { e.stopPropagation(); runRecovery(task, detail, discard, context, "discard"); });
@@ -320,7 +320,7 @@ export function appendRecoveryControls(actions, task, detail, context, mutable) 
     const settle = el("button", {
       class: "action settle-merged",
       text: "Settle merged PR",
-      title: disabledTitle || "Settle this task as done from its delivery pull request if that pull request already merged outside the pipeline into its target branch; if it has not merged, nothing changes",
+      "aria-description": disabledDescription || "Settle this task as done from its delivery pull request if that pull request already merged outside the pipeline into its target branch; if it has not merged, nothing changes",
     });
     settle.disabled = !mutable;
     settle.addEventListener("click", (e) => { e.stopPropagation(); runRecovery(task, detail, settle, context, "settle"); });
@@ -542,7 +542,7 @@ export function appendFixPrControls(actions, task, detail, context, mutable) {
   const btn = el("button", {
     class: "action fix-pr",
     text: "fix PR",
-    title: reason || `Hand pull request #${data.pr_number || taskPullRequestNumber(task)} back to its delivery to ${purpose}. The repair pushes to the same branch and never merges a pull request its delivery was not allowed to merge`,
+    "aria-description": reason || `Hand pull request #${data.pr_number || taskPullRequestNumber(task)} back to its delivery to ${purpose}. The repair pushes to the same branch and never merges a pull request its delivery was not allowed to merge`,
   });
   btn.disabled = Boolean(reason);
   btn.dataset.fixPrSignature = fixPrSignature(task);

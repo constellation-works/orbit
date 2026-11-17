@@ -106,7 +106,7 @@ export function updateDrainIndicators(phase, label) {
     tab.dataset.drainLabel = indicatorLabel;
     const name = tab.querySelector?.(".dock-seg-label")?.textContent || "Overview";
     tab.setAttribute("aria-label", `${name}: ${indicatorLabel}`);
-    tab.title = indicatorLabel;
+    tab.removeAttribute("title");
   }
   if (tabState) tabState.textContent = phase === "winding_down" ? label : "";
 }
@@ -416,7 +416,7 @@ export function autoDrainProviderLimitNote(readings) {
   ]);
   note.setAttribute("role", "status");
   const dismiss = el("button", {
-    class: "drain-note-dismiss", type: "button", title: "Dismiss until these limits change",
+    class: "drain-note-dismiss", type: "button", "aria-description": "Dismiss until these limits change",
     "aria-label": "Dismiss provider limits until they change",
   });
   dismiss.addEventListener("click", () => {

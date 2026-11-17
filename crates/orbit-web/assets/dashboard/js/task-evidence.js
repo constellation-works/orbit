@@ -62,7 +62,7 @@ export function buildOwedCriteria(owed, task, detail, context) {
         class: "action post-deploy-mark-met",
         type: "button",
         text: "Mark met",
-        title: mutable
+        "aria-description": mutable
           ? `Record that the deployed build met criterion ${entry.criterion}, with your measurement evidence; this settles the owed criterion`
           : taskShared.aggregateRefusalTitle("Mark met", "record a post-deploy measurement"),
       });

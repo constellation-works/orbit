@@ -399,7 +399,7 @@ function chipListInput(initial, draft, field) {
     node.replaceChildren();
     entries.forEach((entry, index) => {
       const chip = el("span", { class: "config-entry mono", text: entry });
-      const remove = el("button", { class: "config-entry-remove", text: "×", title: `Remove ${entry}` });
+      const remove = el("button", { class: "config-entry-remove", text: "×", "aria-label": `Remove ${entry}` });
       remove.type = "button";
       remove.addEventListener("click", (event) => {
         event.stopPropagation();

@@ -88,7 +88,7 @@ function buildReplayRunButton(run, host) {
   const button = hasCtx("buildReplayRunButton") ? _runDetailCtx.buildReplayRunButton(run, host) : null;
   if (button && !TERMINAL_RUN_STATES.has(run.state)) {
     button.disabled = true;
-    button.title = "Replay is available after this run finishes.";
+    button.setAttribute("aria-description", "Replay is available after this run finishes.");
   }
   return button;
 }
@@ -837,7 +837,7 @@ function buildRunFailure(run, steps) {
   const diagnostic = run.error_diagnostic || (step && step.error_diagnostic);
   if (diagnostic) {
     const raw = el("details", { class: "run-failure-diagnostic" }, [
-      el("summary", { text: "Diagnostic", title: "Show the structured failure details" }),
+      el("summary", { text: "Diagnostic", "aria-description": "Show the structured failure details" }),
       el("pre", { class: "mono", text: JSON.stringify(diagnostic, null, 2) }),
     ]);
     box.appendChild(raw);
@@ -1303,7 +1303,7 @@ function buildLogBlock(record, stream) {
     record.timed_out ? "timeout" : null,
     record[`${stream}_truncated`] ? "truncated" : null,
   ].filter(Boolean).join(" · ");
-  const toggle = el("button", { class: "back-action log-wrap-toggle", text: "Wrap lines", title: "Toggle line wrapping" });
+  const toggle = el("button", { class: "back-action log-wrap-toggle", text: "Wrap lines", "aria-description": "Toggle line wrapping" });
   toggle.setAttribute("aria-pressed", "true");
   block.appendChild(el("div", { class: "step-log-head" }, [
     el("span", { class: "label", text: stream }),

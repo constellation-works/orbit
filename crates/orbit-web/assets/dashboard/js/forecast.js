@@ -394,7 +394,7 @@ function sourceLabel() {
 }
 
 function refreshButton() {
-  const button = el("button", { class: "fc-refresh", type: "button", title: "Recompute this forecast live now", "aria-label": "Refresh forecast" }, [
+  const button = el("button", { class: "fc-refresh", type: "button", "aria-description": "Recompute this forecast live now", "aria-label": "Refresh forecast" }, [
     el("span", { class: "visually-hidden", text: "Refresh" }),
   ]);
   button.addEventListener("click", () => {
@@ -497,7 +497,7 @@ function scenarioSwitch() {
   ];
   return el("div", { class: "mx-seg mx-seg-wrap fc-scenario", role: "group", "aria-label": "Scenario" }, choices.map(([key, text, title]) => {
     const pressed = key === on;
-    const button = el("button", { class: pressed ? "mx-seg-btn on" : "mx-seg-btn", type: "button", text, title, "aria-pressed": pressed ? "true" : "false" });
+    const button = el("button", { class: pressed ? "mx-seg-btn on" : "mx-seg-btn", type: "button", text, "aria-description": title, "aria-pressed": pressed ? "true" : "false" });
     if (key === "proposed" && !offerable) button.disabled = true;
     button.addEventListener("click", () => {
       if (!pressed) pickScenario(key);

@@ -983,7 +983,18 @@ export function el(tag, opts = {}, children = []) {
   if (opts.id) node.id = opts.id;
   if (opts.class) node.className = opts.class;
   if (opts.text != null) node.textContent = opts.text;
-  if (opts.title != null) node.title = opts.title;
+  // STD-07 R41: a button shows no native tooltip. A title given for one
+  // becomes its accessible description instead, unless it only repeats the
+  // button's label or accessible name.
+  if (opts.title != null) {
+    if (tag === "button") {
+      if (opts["aria-description"] == null && opts.title !== opts.text && opts.title !== opts["aria-label"]) {
+        node.setAttribute("aria-description", String(opts.title));
+      }
+    } else {
+      node.title = opts.title;
+    }
+  }
   if (opts.style) Object.assign(node.style, opts.style);
   for (const [name, value] of Object.entries(opts)) {
     if (
@@ -1002,6 +1013,22 @@ export function el(tag, opts = {}, children = []) {
     if (child != null) node.append(child);
   }
   return node;
+}
+
+// STD-07 R41: a count badge inside a tab button carries its detail in the
+// button's accessible description, never in a native tooltip on the badge.
+// Several badges in one button join their details.
+export function setBadgeDescription(node, text) {
+  if (!node) return;
+  node.removeAttribute("title");
+  if (text) node.dataset.badgeDescription = text;
+  else delete node.dataset.badgeDescription;
+  const host = node.closest ? node.closest("button, a") : null;
+  if (!host) return;
+  const parts = [...host.querySelectorAll("[data-badge-description]")]
+    .map((badge) => badge.dataset.badgeDescription).filter(Boolean);
+  if (parts.length) host.setAttribute("aria-description", parts.join(" · "));
+  else host.removeAttribute("aria-description");
 }
 
 // A focusable "i" that shows an explanation on hover or keyboard focus, so a
@@ -1052,6 +1079,12 @@ function placePinnedInfoHint(hint) {
 }
 
 export function pinnedInfoHint(text, { trigger = null, preserveAction = false } = {}) {
+  // STD-07 R41: a button trigger gets no bubble; the text is its accessible
+  // description. Non-button triggers (links, truncated labels) keep theirs.
+  if (trigger && (trigger.tagName === "BUTTON" || trigger.getAttribute?.("role") === "button")) {
+    if (text && !trigger.getAttribute("aria-description")) trigger.setAttribute("aria-description", text);
+    return trigger;
+  }
   const hint = trigger || infoHint(text);
   if (trigger) hint.appendChild(el("span", { class: "info-hint-text", text }));
   hint.classList.add("pinned-hint-trigger");
@@ -1301,8 +1334,8 @@ export async function copyWithFeedback(node, text) {
 /// `copyWithFeedback` writes into it is announced through its polite live
 /// region. The click is kept from reaching a row that toggles on click, and a
 /// key press already stays with the button (see `makeToggleRow`).
-export function makeCopyButton(value, { class: className = "", text = value, title = "Copy to clipboard" } = {}) {
-  const button = el("button", { class: `copy-id ${className}`.trim(), text, title });
+export function makeCopyButton(value, { class: className = "", text = value, description = "Copy to clipboard" } = {}) {
+  const button = el("button", { class: `copy-id ${className}`.trim(), text, "aria-description": description });
   button.type = "button";
   button.setAttribute("aria-live", "polite");
   button.addEventListener("click", (event) => {

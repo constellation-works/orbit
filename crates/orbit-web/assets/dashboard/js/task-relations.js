@@ -106,7 +106,7 @@ function regressionSitesOf(entry) {
 function buildRegressionEntry(entry, context) {
   const target = regressionTargetId(entry);
   const item = el("span", { class: "regression-entry" });
-  const open = el("button", { class: "mono task-delivery-relation", type: "button", text: target, title: `Open ${target}` });
+  const open = el("button", { class: "mono task-delivery-relation", type: "button", text: target, "aria-description": `Open ${target}` });
   open.addEventListener("click", (event) => {
     event.stopPropagation();
     openVisibleTask(target, context);
@@ -256,7 +256,7 @@ export function buildRelationRow(key, label, targets, context) {
   const visible = ids.slice(0, RELATION_VISIBLE_LIMIT);
   visible.forEach((id, index) => {
     if (index > 0) value.appendChild(relationSeparator());
-    const open = el("button", { class: "mono task-delivery-relation", type: "button", text: id, title: `Open ${id}` });
+    const open = el("button", { class: "mono task-delivery-relation", type: "button", text: id, "aria-description": `Open ${id}` });
     open.addEventListener("click", (e) => {
       e.stopPropagation();
       openVisibleTask(id, context);
@@ -268,7 +268,7 @@ export function buildRelationRow(key, label, targets, context) {
     const overflow = el("span", { class: "relation-overflow" });
     for (const id of ids.slice(RELATION_VISIBLE_LIMIT)) {
       overflow.appendChild(relationSeparator());
-      const open = el("button", { class: "mono task-delivery-relation", type: "button", text: id, title: `Open ${id}` });
+      const open = el("button", { class: "mono task-delivery-relation", type: "button", text: id, "aria-description": `Open ${id}` });
       open.addEventListener("click", (e) => {
         e.stopPropagation();
         openVisibleTask(id, context);

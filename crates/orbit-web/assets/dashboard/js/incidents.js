@@ -19,7 +19,7 @@
 // Counts stay per signature: a cause header counts signatures, never runs or
 // events added across them.
 
-import { incidentClassLabel, auditActorLabel, el, fetchJson, syncNodes, getWindow, setWindow, notifyScopeChange, DASHBOARD_WINDOWS, getWorkspace, getHost, getWorkspaceRevision, onWorkspaceChange, formatAge, formatDateTime, bindRunLink, bindTaskLink, makeCopyButton, pinnedInfoHint, truncate } from './common.js';
+import { incidentClassLabel, auditActorLabel, el, fetchJson, syncNodes, getWindow, setWindow, notifyScopeChange, DASHBOARD_WINDOWS, getWorkspace, getHost, getWorkspaceRevision, onWorkspaceChange, formatAge, formatDateTime, bindRunLink, bindTaskLink, makeCopyButton, truncate } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 const $ = (id) => document.getElementById(id);
@@ -519,7 +519,7 @@ function windowSegmentsNode() {
     });
     button.dataset.window = value;
     button.addEventListener("click", () => selectWindow(value));
-    group.appendChild(pinnedInfoHint(help, { trigger: button, preserveAction: true }));
+    group.appendChild(button);
   }
   group.dataset.key = "incident-window";
   group.dataset.hash = current;
@@ -580,7 +580,7 @@ function classTilesNode(payload, window) {
       class: `incident-tile ${key}${on ? " on" : ""}`,
       type: "button",
       "aria-pressed": on ? "true" : "false",
-      title: `${incidentClassLabel(key, (payload.class_labels || {})[key])}: ${plural(incidents, "incident")} ${windowPhrase(window)}`,
+      "aria-description": `${incidentClassLabel(key, (payload.class_labels || {})[key])}: ${plural(incidents, "incident")} ${windowPhrase(window)}`,
     }, [
       el("span", { class: "incident-tile-label" }, [el("span", { class: "incident-dot", "aria-hidden": "true" }), CLASS_TITLES[key]]),
       el("span", { class: "incident-tile-count" }, [
@@ -810,7 +810,7 @@ function footerNodes(payload, cap, ctx) {
   const current = asCount(payload.limit) || INCIDENT_PAGE;
   const next = Math.min(current + INCIDENT_PAGE, INCIDENT_PAGE_MAX);
   if (next > current && hasCtx(ctx, "loadMoreIncidents")) {
-    const more = el("button", { class: "incident-link-button", type: "button", text: "Load older", title: `Load up to ${next} incidents` });
+    const more = el("button", { class: "incident-link-button", type: "button", text: "Load older", "aria-description": `Load up to ${next} incidents` });
     more.addEventListener("click", () => ctx.loadMoreIncidents(next));
     nodes.push(more);
   }
@@ -874,7 +874,7 @@ function openAuditEvents(group) {
 }
 
 function auditButton(group, text, className) {
-  const button = el("button", { class: className, type: "button", text, title: "Open the underlying events in Health › Incidents › Events" });
+  const button = el("button", { class: className, type: "button", text, "aria-description": "Open the underlying events in Health › Incidents › Events" });
   button.addEventListener("click", () => openAuditEvents(group));
   return button;
 }
@@ -1091,7 +1091,7 @@ function detailNode(group, groups, axis, now, ctx) {
   const messageChildren = [
     el("div", { class: "incident-message-head" }, [
       el("h4", { class: "incident-eyebrow", text: "Message" }),
-      makeCopyButton(text, { class: "incident-copy", text: "Copy", title: "Copy the full message" }),
+      makeCopyButton(text, { class: "incident-copy", text: "Copy", description: "Copy the full message" }),
     ]),
     el("pre", { class: `incident-full-message${message.recorded ? "" : " missing"}`, text }),
   ];
@@ -1107,7 +1107,7 @@ function detailNode(group, groups, axis, now, ctx) {
   const actions = [];
   const runIds = [...new Set(group.incidents.flatMap(incidentRunIds))];
   if (runIds.length === 1 && hasCtx(ctx, "setActiveTab")) {
-    const view = el("button", { class: "incident-action", type: "button", text: "View run", title: `Open ${runIds[0]}` });
+    const view = el("button", { class: "incident-action", type: "button", text: "View run", "aria-description": `Open ${runIds[0]}` });
     view.addEventListener("click", () => ctx.setActiveTab(`runs/${encodeURIComponent(runIds[0])}`));
     actions.push(view);
   } else if (runIds.length > 1) {

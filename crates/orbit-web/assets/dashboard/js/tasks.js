@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getUnownedReplicas, getWorkspace, hostWriteRefusal, workspaceColor, workspacePickerIndex, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, syncNodes, makeRowDisclosure, enableRovingRows, makeCopyButton } from './common.js';
+import { findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getUnownedReplicas, getWorkspace, hostWriteRefusal, workspaceColor, workspacePickerIndex, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, syncNodes, makeRowDisclosure, enableRovingRows, makeCopyButton, setBadgeDescription } from './common.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessFor, drainWaitSignature } from './drain-waits.js';
 import { elapsedLabel, runStartedAt, taskLockFiles } from './task-runtime.js';
 import { buildRiskRowPart, riskinessSignature } from './task-riskiness.js';
@@ -384,7 +384,7 @@ function buildGroupHeader(status, group, count, context) {
     class: "group-toggle",
     type: "button",
     "aria-expanded": collapsed ? "false" : "true",
-    title: collapsed ? `Expand ${label}` : `Collapse ${label}`,
+    "aria-description": collapsed ? `Expand ${label}` : `Collapse ${label}`,
   }, [
     el("span", { class: "group-chevron", "aria-hidden": "true" }),
     el("span", { class: "group-dot", "aria-hidden": "true" }),
@@ -423,7 +423,7 @@ function buildSectionMore(status, section, context) {
     class: "group-more-button",
     type: "button",
     text: `Show ${step} more · ${remaining} remaining`,
-    title: `Load the next ${step} ${label} tasks below these`,
+    "aria-description": `Load the next ${step} ${label} tasks below these`,
   });
   more.dataset.more = "step";
   more.addEventListener("click", () => context.loadMoreTaskSection(status));
@@ -431,7 +431,7 @@ function buildSectionMore(status, section, context) {
     class: "group-more-button",
     type: "button",
     text: "Show all",
-    title: `Load the remaining ${remaining} ${label} tasks`,
+    "aria-description": `Load the remaining ${remaining} ${label} tasks`,
   }) : null;
   if (all) {
     all.dataset.more = "all";
@@ -482,7 +482,7 @@ function buildBacklogReadiness(group, context) {
         class: `ready-filter${on ? " active" : ""}`,
         type: "button",
         "aria-pressed": on ? "true" : "false",
-        title: on ? "Show every backlog task" : `Show only tasks ${label.toLowerCase()}`,
+        "aria-description": on ? "Show every backlog task" : `Show only tasks ${label.toLowerCase()}`,
       }, [
         el("span", { class: "ready-filter-dot", "aria-hidden": "true" }),
         el("strong", { class: "ready-filter-count", text: String(counts[key]) }),
@@ -596,7 +596,7 @@ export function renderTasks(tasks, context) {
     const meta = tasksMeta(context);
     const matching = meta && Number.isFinite(meta.total) ? meta.total : filtered.length;
     railCount.textContent = String(matching);
-    railCount.title = "Tasks matching the current status filter";
+    setBadgeDescription(railCount, "Tasks matching the current status filter");
   }
   renderFilterSummary(context);
   refreshChips(context);
@@ -690,7 +690,7 @@ export function renderTasks(tasks, context) {
         // is. The ID line comes first in the DOM so Tab goes title → crew →
         // action; the grid draws it under the title.
         const meta = el("span", { class: "row-meta" }, [
-          makeCopyButton(t.id, { class: "id mono", title: "Copy task ID" }),
+          makeCopyButton(t.id, { class: "id mono", description: "Copy task ID" }),
           t.status === "backlog" ? taskReadiness.buildRowReason(t) : null,
           run ? buildRunCell(t) : null,
           buildRiskRowPart(t),

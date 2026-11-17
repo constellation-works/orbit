@@ -178,14 +178,14 @@ function refuseOnReadOnlyHost(btn) {
   const refusal = hostWriteRefusal();
   if (!refusal) return;
   btn.disabled = true;
-  btn.title = refusal;
+  btn.setAttribute("aria-description", refusal);
 }
 
 function buildCancelRunButton(run, host) {
   const btn = el("button", {
     class: "action reject run-cancel",
     text: "Cancel",
-    title: `Cancel ${run.run_id}`,
+    "aria-description": `Cancel ${run.run_id}`,
   });
   btn.disabled = !runIsCancellable(run) || cancelRequestsInFlight.has(runIdentity(run));
   btn.setAttribute("aria-label", runActionLabel("Cancel", run));
@@ -201,7 +201,7 @@ function buildReplayRunButton(run, host) {
   const btn = el("button", {
     class: "action archive run-replay",
     text: "Replay run",
-    title: `Replay ${run.run_id}`,
+    "aria-description": `Replay ${run.run_id}`,
   });
   btn.disabled = replayRequestsInFlight.has(runIdentity(run));
   btn.setAttribute("aria-label", runActionLabel("Replay", run));
@@ -217,7 +217,7 @@ function buildResumeRunButton(run, host) {
   const btn = el("button", {
     class: "action approve run-resume",
     text: "Resume",
-    title: `Resume ${run.run_id} from its first non-successful step`,
+    "aria-description": `Resume ${run.run_id} from its first non-successful step`,
   });
   btn.disabled = resumeRequestsInFlight.has(runIdentity(run));
   btn.setAttribute("aria-label", runActionLabel("Resume", run));
@@ -331,7 +331,7 @@ function runActionErrorNode(build, dismiss) {
   node.setAttribute("role", "alert");
   node.dataset.key = RUN_ACTION_ERROR_KEY;
   if (dismiss) {
-    const button = el("button", { class: "action", text: "dismiss", title: "Dismiss this error" });
+    const button = el("button", { class: "action", text: "dismiss", "aria-description": "Dismiss this error" });
     button.addEventListener("click", (e) => {
       e.stopPropagation();
       dismiss();
@@ -397,7 +397,7 @@ function cancelNoticeFor(run, result) {
 }
 
 function buildCancelNotice(notice, onDismiss) {
-  const dismiss = el("button", { class: "action", text: "dismiss", title: "Dismiss this settlement report" });
+  const dismiss = el("button", { class: "action", text: "dismiss", "aria-description": "Dismiss this settlement report" });
   dismiss.addEventListener("click", (e) => {
     e.stopPropagation();
     onDismiss();
@@ -582,7 +582,7 @@ function resumeErrorNode(error, run) {
   const open = el("button", {
     class: "action approve resume-live-run",
     text: `Open ${liveRunId}`,
-    title: `Open live run ${liveRunId}`,
+    "aria-description": `Open live run ${liveRunId}`,
   });
   open.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -983,7 +983,7 @@ function runsLimitNote(meta) {
   const button = el("button", {
     class: "action runs-load-more",
     text: isLoading ? "Loading…" : "Load more",
-    title: "Load more runs",
+    "aria-description": "Load more runs",
   });
   button.type = "button";
   button.disabled = Boolean(isLoading);
@@ -1099,7 +1099,7 @@ function runHeaderCell(label, key, opts = {}) {
   const button = el("button", {
     class: `runs-sort${runSort.key === key ? " active" : ""}`,
     text: label,
-    title: `Sort Recent Runs by ${label}`,
+    "aria-description": `Sort Recent Runs by ${label}`,
   });
   button.type = "button";
   if (runSort.key === key) {
@@ -1338,7 +1338,7 @@ function runGroupRow(group, attributed, listed) {
   const toggle = el("button", {
     class: "id run-group-toggle",
     text: group.repeatedFailure ? `${expanded ? "▾" : "▸"} ${first.job_id}` : `${expanded ? "▾" : "▸"} ${runs.length} pipeline runs`,
-    title: group.repeatedFailure ? `${expanded ? "Hide" : "Show"} the ${runs.length} individual failed runs of ${first.job_id}` : `${expanded ? "Hide" : "Show"} ${jobNames}`,
+    "aria-description": group.repeatedFailure ? `${expanded ? "Hide" : "Show"} the ${runs.length} individual failed runs of ${first.job_id}` : `${expanded ? "Hide" : "Show"} ${jobNames}`,
   });
   const failure = group.repeatedFailure ? { run: first } : groupFailure(group, failed, listed);
   let failedAt = el("span", { class: "run-failed-at" });
@@ -1392,7 +1392,7 @@ function runRow(r, attributed, body, { child = false } = {}) {
   const friction = runFriction(r);
   const { durationMs, isLive } = runDurationInfo(r);
   const formattedDuration = fmtDuration(durationMs);
-  const runIdSpan = makeCopyButton(r.run_id, { class: "run-id", title: "Copy run ID" });
+  const runIdSpan = makeCopyButton(r.run_id, { class: "run-id", description: "Copy run ID" });
   const runIdCell = el("span", { class: "run-id-cell" }, [runIdSpan]);
   if (r.retry_source_run_id) {
     const sourceId = r.retry_source_run_id;

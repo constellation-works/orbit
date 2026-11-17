@@ -1,6 +1,6 @@
 // Job catalogue and live run operations [ORB-10875, ORB-10876].
 
-import { captureWorkspaceVisit, copyText, el, fetchJson, formatDayHeading, hostWriteRefusal, isAggregateView, postJson, requestPanel, relativeTime } from './common.js';
+import { captureWorkspaceVisit, copyText, el, fetchJson, formatDayHeading, hostWriteRefusal, isAggregateView, postJson, requestPanel, relativeTime, setBadgeDescription } from './common.js';
 
 import {
   $,
@@ -63,7 +63,7 @@ export function updateJobFailureBadges(failing) {
   if (!node) return;
   node.hidden = jobs.length === 0;
   node.textContent = jobs.length ? `${jobs.length} failing` : "";
-  node.title = jobs.length ? `${jobs.map(failureStreakSummary).join("; ")}. See Jobs › Catalogue.` : "";
+  setBadgeDescription(node, jobs.length ? `${jobs.map(failureStreakSummary).join("; ")}. See Jobs › Catalogue.` : "");
 }
 
 // Keep the rail pill true from every tab, including before Jobs is opened.
@@ -228,7 +228,7 @@ function jobRow(job, workspace, streak) {
   const key = `job:run:${workspace.id}:${job.id}`;
   const runReason = controlReason(operationsState.lastOperations, "job_run");
   const pending = pendingOperations.has(key);
-  const run = el("button", { class: "operation-button primary job-run", text: pending ? "Submitting…" : "Run ▸", title: runReason || `Run ${job.id} in ${workspace.name}` });
+  const run = el("button", { class: "operation-button primary job-run", text: pending ? "Submitting…" : "Run ▸", "aria-description": runReason || `Run ${job.id} in ${workspace.name}` });
   run.type = "button";
   run.disabled = Boolean(runReason) || pending;
   run.addEventListener("click", () => {
@@ -266,7 +266,7 @@ function jobRow(job, workspace, streak) {
       ].filter(Boolean)),
     ]
     : [el("span", { class: "operation-cell-main muted", text: "no recent run" })];
-  const copy = el("button", { class: "operation-button secondary", text: "Copy command", title: "Copy the CLI command" });
+  const copy = el("button", { class: "operation-button secondary", text: "Copy command", "aria-description": "Copy the CLI command" });
   copy.type = "button";
   copy.addEventListener("click", async () => {
     copy.textContent = (await copyText(command)) ? "Copied" : "Copy failed";

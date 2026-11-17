@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, fetchJson, fetchDashboardChrome, listItems, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, isOwnedWorkspace, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge, formatDateTime, formatClock, getClockZone, setClockZone, zoneName, truncate } from './js/common.js';
+import { captureWorkspaceVisit, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, fetchJson, fetchDashboardChrome, listItems, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, isOwnedWorkspace, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge, formatDateTime, formatClock, getClockZone, setClockZone, zoneName, truncate, setBadgeDescription } from './js/common.js';
 import { taskPilotWarningsFilter, buildChips, buildTasksHash, buildTasksFilterHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, refreshChips, refreshPinnedTask, renderTasks, syncTaskControls, wireTaskPane } from './js/tasks.js';
 import { dropAggregateCrewsForOtherHosts, loadAggregateCrews } from './js/task-crew.js';
 import * as globalSearch from './js/global-search.js';
@@ -788,7 +788,7 @@ function renderFrictionDetail(friction, detail = $("friction-detail")) {
   const resolve = el("button", {
     class: "knowledge-btn primary",
     text: "resolve",
-    title: `Resolve ${friction.id}`,
+    "aria-description": `Resolve ${friction.id}`,
   });
   resolve.type = "button";
   resolve.disabled = friction.status === "resolved";
@@ -933,7 +933,7 @@ function buildKnowledgeValueList(values, opts = {}) {
   }
   for (const value of values) {
     if (opts.taskLinks) {
-      const btn = el("button", { class: "knowledge-link-row", text: value, title: `Open task ${value}` });
+      const btn = el("button", { class: "knowledge-link-row", text: value, "aria-description": `Open task ${value}` });
       btn.type = "button";
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -2035,7 +2035,7 @@ function setRailCount(id, value, alert = false, title = "", format = formatBigIn
   const empty = value == null || value === 0;
   node.textContent = empty ? "" : format(value);
   node.classList.toggle("alert", Boolean(alert) && !empty);
-  node.title = empty ? "" : title;
+  setBadgeDescription(node, empty ? "" : title);
 }
 
 function formatBigInt(n) {
@@ -2079,14 +2079,16 @@ function markRefreshStale(stale) {
     : "Stale · no successful refresh yet";
   for (const node of document.querySelectorAll(".rail-count")) {
     const previous = node.dataset.refreshStaleSuffix;
-    if (previous && node.title.endsWith(previous)) {
-      node.title = node.title.slice(0, -previous.length).replace(/ · $/, "");
+    let base = node.dataset.badgeDescription || "";
+    if (previous && base.endsWith(previous)) {
+      base = base.slice(0, -previous.length).replace(/ · $/, "");
     }
     node.classList.toggle("refresh-stale", stale);
     if (stale) {
-      node.title = node.title ? `${node.title} · ${suffix}` : suffix;
+      setBadgeDescription(node, base ? `${base} · ${suffix}` : suffix);
       node.dataset.refreshStaleSuffix = suffix;
     } else {
+      setBadgeDescription(node, base);
       delete node.dataset.refreshStaleSuffix;
     }
   }
@@ -2257,7 +2259,7 @@ function syncClockControls() {
     const on = button.dataset.zone === zone;
     button.classList.toggle("on", on);
     button.setAttribute("aria-pressed", String(on));
-    button.title = button.dataset.zone === "utc" ? "Show times in UTC, matching the CLI" : localTitle;
+    button.setAttribute("aria-description", button.dataset.zone === "utc" ? "Show times in UTC, matching the CLI" : localTitle);
   }
 }
 

@@ -1,6 +1,6 @@
 // Routine-definition and host clock operations [ORB-10875].
 
-import { captureWorkspaceVisit, el, fetchJson, isAggregateView, postJson, relativeTime } from './common.js';
+import { captureWorkspaceVisit, el, fetchJson, isAggregateView, postJson, relativeTime, setBadgeDescription } from './common.js';
 import { conditionStateLabel, renderAutomation } from './automation.js';
 import { createRoutineCatalogue, resetRoutineCatalogue } from './operations-routines-catalogue.js';
 import { closeRoutineEditors, routineEditButton, routineEditorElement } from './operations-routines-editor.js';
@@ -78,7 +78,7 @@ function routineButton(payload, routine) {
     pending,
     reason: reason || "",
   });
-  if (!reason) button.title = `${nextEnabled ? "Enable" : "Disable"} ${routine.name} → ${routine.target}`;
+  if (!reason) button.setAttribute("aria-description", `${nextEnabled ? "Enable" : "Disable"} ${routine.name} → ${routine.target}`);
   button.addEventListener("click", () => {
     if (reason || !selection.current()) return;
     return runOperation({
@@ -116,7 +116,7 @@ function routineBreakerButton(payload, routine, action) {
   const button = el("button", {
     class: `operation-button ${reset ? "primary" : "secondary"}`,
     text: pending ? "Pending…" : reset ? "Reset breaker" : "Fire once",
-    title: reason || (reset
+    "aria-description": reason || (reset
       ? `Close the breaker: ${routine.name} fires as scheduled again`
       : `Let ${routine.name} fire once on the next scheduler tick`),
   });
@@ -384,13 +384,13 @@ function paintRoutineFailureBadge(failures, { unavailable = false } = {}) {
   node.dataset.stale = unavailable ? "true" : "false";
   if (failures.length) {
     node.textContent = `${failures.length} routine${failures.length === 1 ? "" : "s"}${unavailable ? " (stale)" : ""}`;
-    node.title = `${failures.map(routine => `${routine.name}: ${routineFailureText(routine)}`).join("; ")}. ${unavailable ? "The latest refresh failed, so this is the last known state. " : ""}See Automation › Routines.`;
+    setBadgeDescription(node, `${failures.map(routine => `${routine.name}: ${routineFailureText(routine)}`).join("; ")}. ${unavailable ? "The latest refresh failed, so this is the last known state. " : ""}See Automation › Routines.`);
   } else if (unavailable) {
     node.textContent = "routines ?";
-    node.title = "Routine failure status is unavailable: the read failed. It retries on the next refresh.";
+    setBadgeDescription(node, "Routine failure status is unavailable: the read failed. It retries on the next refresh.");
   } else {
     node.textContent = "";
-    node.title = "";
+    setBadgeDescription(node, "");
   }
 }
 
@@ -593,7 +593,7 @@ function clockButton(payload, action, label) {
   const reason = unavailable
     ? clockUnavailableReason(payload.clock)
     : controlReason(payload, "clock_service");
-  const button = el("button", { class: "operation-button", text: pendingOperations.has(key) ? "Pending…" : label, title: reason });
+  const button = el("button", { class: "operation-button", text: pendingOperations.has(key) ? "Pending…" : label, "aria-description": reason });
   button.type = "button";
   button.disabled = Boolean(reason) || pendingOperations.has(key);
   button.addEventListener("click", () => {
@@ -657,7 +657,7 @@ export function renderClock(payload) {
     cadence.appendChild(option);
   }
   cadence.disabled = Boolean(reason) || pendingOperations.has(key);
-  const apply = el("button", { class: "operation-button secondary", text: pendingOperations.has(key) ? "Pending…" : "Apply cadence", title: "Reload cadence without changing whether the clock is enabled" });
+  const apply = el("button", { class: "operation-button secondary", text: pendingOperations.has(key) ? "Pending…" : "Apply cadence", "aria-description": "Reload cadence without changing whether the clock is enabled" });
   apply.type = "button";
   const syncApplyState = (chosen) => {
     apply.disabled = Boolean(reason) || pendingOperations.has(key) || chosen === clock.configured_cadence_seconds;

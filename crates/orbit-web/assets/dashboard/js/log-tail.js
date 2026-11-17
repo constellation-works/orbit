@@ -712,7 +712,7 @@ function clearLogView() {
   const btnBuffered = $("log-buffered-count");
   if (btnBuffered) {
     btnBuffered.textContent = "";
-    btnBuffered.title = "";
+    btnBuffered.removeAttribute("aria-description");
     btnBuffered.style.display = "none";
   }
   statusNewestEvent = null;
@@ -850,7 +850,7 @@ function bufferPausedLogEvent(ev) {
     btn.textContent = logBufferedDropped > 0
       ? `${logBuffered.length} buffered · ${logBufferedDropped} discarded`
       : `${logBuffered.length} buffered`;
-    btn.title = logBufferedDropped > 0 ? logGapMessage(logBufferedDropped) : "";
+    if (logBufferedDropped > 0) btn.setAttribute("aria-description", logGapMessage(logBufferedDropped)); else btn.removeAttribute("aria-description");
     btn.style.display = "";
   }
 }
@@ -931,7 +931,6 @@ function writeLogCounts(counts) {
   state.dataset.level = level;
   const tab = $("dock-tab-log");
   if (tab) {
-    tab.title = state.textContent;
     tab.setAttribute("aria-label", state.textContent ? `Log: ${state.textContent}` : "Log");
   }
 }

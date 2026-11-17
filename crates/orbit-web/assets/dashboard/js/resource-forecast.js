@@ -195,7 +195,7 @@ function headerLine() {
   const age = relativeTime(built);
   const text = `Profiles built ${age ?? "earlier"} · drives machine.auto_concurrency · read-only`;
   const meta = el("p", { class: "fc-meta", text, title: built ? `Built ${formatDateTime(built)}` : null });
-  const refresh = el("button", { class: "fc-refresh", type: "button", title: "Read the resource forecast again", "aria-label": "Refresh resource forecast" }, [
+  const refresh = el("button", { class: "fc-refresh", type: "button", "aria-description": "Read the resource forecast again", "aria-label": "Refresh resource forecast" }, [
     el("span", { class: "visually-hidden", text: "Refresh" }),
   ]);
   refresh.addEventListener("click", () => {

@@ -315,7 +315,7 @@ function historyPicker() {
       type: "button",
       text,
       "aria-pressed": on ? "true" : "false",
-      title: key == null
+      "aria-description": key == null
         ? `The last ${window} deliveries of each kind: the window admission prices with`
         : `Up to ${Number(key === "all" ? maximum : key).toLocaleString("en-US")} retained completed deliveries of each kind across crew models (union), with separate per-crew model windows. Orbit versions do not filter history; admission is unchanged`,
     });
@@ -340,7 +340,7 @@ function unitPicker() {
       type: "button",
       text,
       "aria-pressed": on ? "true" : "false",
-      title: key === "pct" && !available ? "This host's size could not be read" : null,
+      "aria-description": key === "pct" && !available ? "This host's size could not be read" : null,
     });
     button.dataset.unit = key;
     button.disabled = key === "pct" && !available;
@@ -369,7 +369,7 @@ function seriesCards(all, hidden, workClass, u) {
       class: `mx-sc rp-s-${series.key}${on ? " on" : " off"}${series.sparse ? " rp-sparse" : ""}`,
       type: "button",
       "aria-pressed": on ? "true" : "false",
-      title: `${on ? "Hide" : "Show"} ${series.label}${series.sparse ? ` (sparse: fewer than ${min} deliveries)` : ""}`,
+      "aria-description": `${on ? "Hide" : "Show"} ${series.label}${series.sparse ? ` (sparse: fewer than ${min} deliveries)` : ""}`,
     }, [
       el("span", { class: "mx-sc-label" }, [
         el("span", { class: "mx-swatch", "aria-hidden": "true" }),
