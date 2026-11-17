@@ -209,7 +209,7 @@ The [dashboard](/how-to/dashboard/) shows the same rankings.
 | `orbit clock status\|pause\|enable\|repair` \| `set --cadence-seconds <n>` | Inspect and control the host scheduler clock. `repair` rewrites a clock unit that names a missing, moved or stale program. |
 | `orbit routine list` \| `show <name>` | List routines with their next-due time and last fire, or show one. |
 | `orbit routine enable\|disable\|pause\|resume <name>` | `enable` and `disable` change the routine's versioned definition (operator only); `pause` and `resume` act on this host only. |
-| `orbit routine breaker reset\|bypass <name>` | Reset or bypass a routine’s host-local circuit breaker. |
+| `orbit routine breaker reset\|bypass <name>` | [Reset or bypass a routine's host-local circuit breaker](/how-to/recurring-work/#recover-a-tripped-routine). |
 | `orbit routine init [--install-clock]` | Read this machine's identity; `--install-clock` also installs the OS clock unit. |
 | `orbit auto-task add --name <name> --title <title>` \| `list` \| `show\|update <name>` | Define and inspect auto-task templates. |
 | `orbit auto-task toggle <name> <on\|off>` | Enable or disable a definition. |

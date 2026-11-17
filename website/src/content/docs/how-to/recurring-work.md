@@ -448,6 +448,50 @@ missing coverage. A [follower](/how-to/multi-host/) is not offered the pass.
 Follower collectors are unavailable, so do not add a collector definition for
 one on the owner or on the replica.
 
+## Recover a tripped routine
+
+When a routine keeps failing, Orbit stops firing it on that machine until one
+trial fire succeeds. Check whether the breaker tripped, fix the underlying
+failure, then close the breaker or let one trial through.
+
+After 3 fires in a row fail with the same error class, the scheduler stops
+firing the routine on this host. It tries one trial fire after a backoff that
+grows each time a trial fails (15 minutes up to 4 hours), or at the first tick
+after Orbit is upgraded. A successful trial closes the breaker and the routine
+fires as scheduled again. Breakers are host-local: other machines keep firing
+their copies, and every trip, trial, reset and bypass is recorded.
+
+```bash
+orbit routine list
+orbit routine show <name>
+```
+
+`list` marks a tripped routine with its error class, its next trial and the
+reset command. `show` reports `Next due: tripped (fires only as a breaker
+trial)`, the breaker line with the same details, and the recent breaker
+events.
+
+Fix the root cause before you recover: read the recent fires and the run
+output, and repair what keeps failing (a missing credential, for example; see
+[Scheduled credentials](#scheduled-credentials)). A reset without a fix trips
+the breaker again.
+
+```bash
+orbit routine breaker reset <name>    # close the breaker now; fires as usual
+orbit routine breaker bypass <name>   # fire once on the next tick as a trial
+```
+
+`reset` closes a tripped routine's breaker now so the scheduler fires it as
+usual. `bypass` lets the scheduler fire a tripped routine once on its next
+tick: a trial that succeeds closes the breaker, and one that fails leaves it
+open with a longer backoff.
+
+A tripped breaker is neither a pause nor a disabled definition.
+`orbit routine pause` and `orbit routine resume` are a deliberate stop you
+control on this host, and `orbit routine enable` and `orbit routine disable`
+change the versioned definition. Tripping changes neither, and resetting or
+bypassing changes neither back.
+
 ## If nothing fires
 
 Check in this order:
@@ -458,6 +502,8 @@ Check in this order:
 4. The routine is not paused on this machine: `orbit routine list`.
 5. Fires start but fail on a missing credential: see
    [Scheduled credentials](#scheduled-credentials).
+6. The routine tripped its circuit breaker: `orbit routine list` names the
+   error class and the next trial; [recover it](#recover-a-tripped-routine).
 
 `orbit clock tick --dry-run --verbose` shows the decision for every routine
 and auto-task. The [CLI reference](/reference/cli/#scheduler) lists every
