@@ -18,7 +18,8 @@ pub use auto_fix::{
 };
 pub use base_update::{
     PR_BASE_UPDATE_BUDGET_SPENT, PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission,
-    PrBaseUpdateReservation, decide_pr_base_update, pr_base_update_reservations,
+    PrBaseUpdateRefusal, PrBaseUpdateReservation, decide_pr_base_update,
+    pr_base_update_reservations,
 };
 pub use completion::{PR_COMPLETION_MUTATION_STARTED_EVENT, pr_completion_has_mutation_provenance};
 pub use failure_handoff::{

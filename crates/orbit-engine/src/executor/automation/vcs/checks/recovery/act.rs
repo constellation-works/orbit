@@ -313,15 +313,15 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 }
                 // A spent budget waits out the deadline for the base itself to
                 // recover; unreadable or invalid reservation evidence stops.
-                orbit_types::workflow::PrBaseUpdateAdmission::Refused(reason)
-                    if reason.starts_with(orbit_types::workflow::PR_BASE_UPDATE_BUDGET_SPENT) =>
-                {
+                orbit_types::workflow::PrBaseUpdateAdmission::Refused(
+                    refusal @ orbit_types::workflow::PrBaseUpdateRefusal::BudgetSpent { .. },
+                ) => {
                     return Ok(CheckRecoveryStep::WaitForBase(evidence(&format!(
-                        "waiting within the landing deadline: {reason}"
+                        "waiting within the landing deadline: {refusal}"
                     ))));
                 }
-                orbit_types::workflow::PrBaseUpdateAdmission::Refused(reason) => {
-                    return Ok(CheckRecoveryStep::Stop(reason));
+                orbit_types::workflow::PrBaseUpdateAdmission::Refused(refusal) => {
+                    return Ok(CheckRecoveryStep::Stop(refusal.to_string()));
                 }
             }
             // The reservation survives an unknown provider reply. Re-observe
