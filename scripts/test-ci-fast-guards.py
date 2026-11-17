@@ -1586,6 +1586,15 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         app = self.root / "crates/orbit-core/src/application"
         app.mkdir(parents=True, exist_ok=True)
         (app / "tag_instructions.rs").write_text("")
+        # [ORB-25311] The vcs pr_answers guard scans these engine paths
+        # directly via python and fails closed when absent; they must exist
+        # (empty) so the fixture reports no match, mirroring
+        # test-check-dependency-direction.py setUp.
+        vcs = self.root / "crates/orbit-engine/src/executor/automation/vcs"
+        for module in ("checks", "pr", "base", "claim", "pr_answers"):
+            (vcs / module).mkdir(parents=True, exist_ok=True)
+        (vcs / "push.rs").write_text("")
+        (vcs / "claim" / "published.rs").write_text("")
         config = self.root / "crates/orbit-config/src"
         for relative in ("aliases.rs", "seeding.rs", "config_document.rs", "plugin_enablement.rs",
                          "unknown.rs", "resolved/compatibility.rs", "config_io.rs", "crew_defaults.rs"):
