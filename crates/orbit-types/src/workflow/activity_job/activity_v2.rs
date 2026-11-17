@@ -135,8 +135,10 @@ pub struct AgentLoopSpec {
     /// authoritative.
     ///
     /// Distinct from [`AgentLoopSpec::require_completion_envelope`], which asks
-    /// only whether the invocation finished at all. Setting this implies the
-    /// completion check, since an absent envelope also fails validation.
+    /// whether the invocation finished with an accepted outcome, this flag asks
+    /// whether downstream templates can safely consume the structured response.
+    /// Setting this implies the completion check, since an absent envelope also
+    /// fails validation.
     #[serde(default)]
     pub require_response_envelope: bool,
     /// Require the CLI invocation to *terminate with* a well-formed Orbit
@@ -149,10 +151,20 @@ pub struct AgentLoopSpec {
     /// advance on work that never happened and defers the failure to whatever
     /// deterministic gate notices first, several steps downstream.
     ///
-    /// The check is content-blind: it reads the envelope *frame* only
-    /// (presence, `schemaVersion`, status token) and never `result` or `error`,
-    /// so an agent that declares `status: "failed"` satisfies it. Agent-loop
-    /// output remains advisory; only "did the contract complete" is enforced.
+    /// The check has two stages:
+    ///
+    /// 1. **Protocol frame completion**: stdout must end with a well-formed
+    ///    Orbit response envelope (presence, supported `schemaVersion`, and a
+    ///    recognized protocol status token). This stage never reads `result`
+    ///    or `error`.
+    /// 2. **Status outcome gate** ([ORB-10733]): under a required completion
+    ///    contract, an explicit `status: "failed"` or `status: "timeout"`
+    ///    outcome fails the step even if the provider exits 0. Only
+    ///    `status: "success"` may checkpoint the step.
+    ///
+    /// The envelope's `result` and `error` payloads remain advisory; only
+    /// [`AgentLoopSpec::require_response_envelope`] validates response content
+    /// for downstream consumers.
     ///
     /// Set to `false` only for an activity whose work is genuinely decorative —
     /// one whose non-completion should not stop the pipeline. Record why in the
