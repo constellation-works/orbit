@@ -6,6 +6,7 @@ import { applyUpdatedTask, forgetTaskDetailLoad, mergeTaskRecord, taskDetailSnap
 import * as taskReadiness from './task-readiness.js';
 import { humanCrewFor, isMyWorkTask, loadAggregateCrews, myWorkCrewNames } from './task-crew.js';
 import { recordRoutedHref } from './router.js';
+import { quickFilterActive, quickFilterMatches } from './task-quick-filter.js';
 
 // Advances whenever `taskState.openTaskId` changes, so a pin read for a task
 // the hash no longer names is dropped.
@@ -115,14 +116,17 @@ async function refreshWaitingCount(context) {
   }
 }
 
-export function filterTasks(tasks, context) {
+// `quick: false` leaves out the Shift-Shift quick filter, for the rows it narrows.
+export function filterTasks(tasks, context, { quick = true } = {}) {
   const activeStatuses = activeStatusSet(context);
+  const quickNarrows = quick && quickFilterActive();
   return tasks.filter((t) => {
     if (!activeStatuses.has(t.status)) return false;
     if (notReadyOnly && !taskReadiness.isNotReady(t)) return false;
     if (pilotWarningsOnly && !taskReadiness.pilotWarnings(t).length) return false;
     if (myWorkOnly && !isMyWorkTask(t)) return false;
     if (waitingOnly && !taskWaitsOnYou(t)) return false;
+    if (quickNarrows && !quickFilterMatches(t)) return false;
     return true;
   });
 }

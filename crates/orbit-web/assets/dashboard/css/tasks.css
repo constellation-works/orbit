@@ -1357,3 +1357,89 @@ main.tasks-layout.task-page-mode > .task-detail-pane { grid-column: 1; grid-row:
 }
 .empty-state .show-on-owner:hover { border-color: var(--accent); color: var(--accent); }
 .empty-state .show-on-owner:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The Shift-Shift quick filter: a Spotlight-style bar fixed to the viewport,
+   top-centre on every open, draggable by its own surface. It floats over the
+   page and moves nothing in the board's layout. */
+.quick-filter {
+  position: fixed;
+  top: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  width: min(580px, calc(100vw - 32px));
+  padding: 0 12px 0 16px;
+  height: 52px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-control) 94%, transparent);
+  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.6), 0 3px 10px rgba(0, 0, 0, 0.4);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  cursor: grab;
+  touch-action: none;
+  animation: quick-filter-in 120ms ease-out;
+}
+.quick-filter.dragging { cursor: grabbing; transition: none; }
+/* Once dragged the bar is placed by its own left/top, not centred. */
+.quick-filter[style*="left"] { transform: none; }
+.quick-filter:focus-within { border-color: var(--accent-line); }
+.quick-filter-icon { flex: none; width: 20px; height: 20px; color: var(--fg-mute); }
+.quick-filter-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--fg-strong);
+  font: inherit;
+  font-size: 17px;
+  cursor: text;
+}
+.quick-filter-input::placeholder { color: var(--fg-disabled); }
+.quick-filter-count {
+  flex: none;
+  color: var(--fg-mute);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.quick-filter-close {
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-well);
+  color: var(--fg-mute);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.3;
+  cursor: pointer;
+}
+.quick-filter-close:hover { color: var(--fg-strong); border-color: var(--fg-disabled); }
+@keyframes quick-filter-in {
+  from { opacity: 0; margin-top: -6px; }
+  to { opacity: 1; margin-top: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .quick-filter { animation: none; }
+}
+/* One column: the bar opens full-width at the top and stays there. */
+@media (max-width: 760px) {
+  .quick-filter,
+  .quick-filter[style*="left"] {
+    top: 8px;
+    left: 8px;
+    right: 8px;
+    width: auto;
+    transform: none;
+    cursor: default;
+  }
+}

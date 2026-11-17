@@ -292,6 +292,7 @@ fn all_tasks_json(
     // once for the page rather than once per row.
     // One batched delivery-run read per workspace for the page's rows.
     let mut attention_by_workspace: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
+    let mut run_branches_by_workspace: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     for (row, runtime, entry) in &rows {
         let _ = row;
         if !attention_by_workspace.contains_key(&entry.id) {
@@ -301,6 +302,14 @@ fn all_tasks_json(
                 .map(|(row, _, _)| row);
             let map = runtime.delivery_attention_map(workspace_rows)?;
             attention_by_workspace.insert(entry.id.clone(), map);
+            run_branches_by_workspace.insert(
+                entry.id.clone(),
+                runtime.local_run_branches(
+                    rows.iter()
+                        .filter(|(_, _, other)| other.id == entry.id)
+                        .map(|(row, _, _)| row),
+                ),
+            );
         }
     }
     let mut projections: BTreeMap<&str, TaskListProjection> = BTreeMap::new();
@@ -310,6 +319,12 @@ fn all_tasks_json(
             TaskListProjection::new(&runtime)
                 .with_delivery_attention(
                     attention_by_workspace
+                        .get(&entry.id)
+                        .cloned()
+                        .unwrap_or_default(),
+                )
+                .with_run_branches(
+                    run_branches_by_workspace
                         .get(&entry.id)
                         .cloned()
                         .unwrap_or_default(),

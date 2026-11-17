@@ -22,6 +22,8 @@ import { applyTaskStatusChange, buildCrewUpdateControl } from './task-status-con
 import { followRovingSelection, renderTaskPane } from './task-pane.js';
 import { taskRunLoads } from './task-detail.js';
 export { wireTaskPane } from './task-pane.js';
+import { quickFilterActive, syncQuickFilterCount } from './task-quick-filter.js';
+export { wireQuickFilter } from './task-quick-filter.js';
 
 // Task modules repaint the list through task-shared's `rerender`.
 setRenderer(renderTasks);
@@ -582,6 +584,12 @@ export function renderTasks(tasks, context) {
   const notice = takeTaskActionNotice(context);
 
   const filtered = filterTasks(tasks, context);
+  // The Shift-Shift quick filter narrows only the rows the board shows. The
+  // open pane and the counts read the rows without it, so typing never closes
+  // the pane or changes a total.
+  const quick = quickFilterActive();
+  const unnarrowed = quick ? filterTasks(tasks, context, { quick: false }) : filtered;
+  syncQuickFilterCount(filtered.length, unnarrowed.length);
   // Rows keep a fixed-width action column so actions line up between groups;
   // when no visible row has an action (a Done-only view) the whole column is
   // dead space, so the list gives it back as one.
@@ -594,22 +602,22 @@ export function renderTasks(tasks, context) {
   const railCount = document.getElementById("rail-count-tasks");
   if (railCount) {
     const meta = tasksMeta(context);
-    const matching = meta && Number.isFinite(meta.total) ? meta.total : filtered.length;
+    const matching = meta && Number.isFinite(meta.total) ? meta.total : unnarrowed.length;
     railCount.textContent = String(matching);
     setBadgeDescription(railCount, "Tasks matching the current status filter");
   }
   renderFilterSummary(context);
   refreshChips(context);
   const sections = tasksMeta(context)?.sections || new Map();
-  const narrowed = browserTaskFilterActive();
+  const narrowed = browserTaskFilterActive() || quick;
   const activeStatuses = context && typeof context.getActiveStatuses === "function" ? context.getActiveStatuses() : null;
   // A section with rows still to load keeps its control even when a
   // browser-side filter hides every loaded row, so more can be read.
   const pending = [...sections.values()].filter((section) => section.next_cursor
     && section.total > section.items.length && (!activeStatuses || activeStatuses.has(section.status)));
-  if (filtered.length === 0 && pending.length === 0) {
+  if (filtered.length === 0 && (pending.length === 0 || quick)) {
     const replica = tasks.length === 0 ? replicaOwner() : null;
-    const defaultText = tasks.length === 0 ? "No tasks available." : "No tasks match filter.";
+    const defaultText = tasks.length === 0 ? "No tasks available." : quick ? "No loaded tasks match the quick filter." : "No tasks match filter.";
     const replicaText = !replica
       ? defaultText
       : replica.several
@@ -622,7 +630,7 @@ export function renderTasks(tasks, context) {
     ]);
     syncTaskNotices([notice, ...buildFoldedStatusNotices(new Set(), context)].filter(Boolean));
     syncNodes(body, [emptyState]);
-    renderTaskPane(filtered, context);
+    renderTaskPane(unnarrowed, context);
     finishTaskRender(body);
     return;
   }
@@ -642,8 +650,9 @@ export function renderTasks(tasks, context) {
       group.sort((a, b) => workspacePickerIndex(a.workspace_id) - workspacePickerIndex(b.workspace_id));
     }
   }
+  // A status with no loaded match collapses while the quick filter is on.
   for (const section of pending) {
-    if (!groups.has(section.status)) groups.set(section.status, []);
+    if (!quick && !groups.has(section.status)) groups.set(section.status, []);
   }
   const ordered = GROUP_ORDER.filter((s) => groups.has(s)).concat(
     [...groups.keys()].filter((s) => !GROUP_ORDER.includes(s)),
@@ -769,7 +778,7 @@ export function renderTasks(tasks, context) {
   syncNodes(body, nodes);
   syncRowSelection(body);
   restoreSectionFocus(body, moreFocus);
-  renderTaskPane(filtered, context);
+  renderTaskPane(unnarrowed, context);
   finishTaskRender(body);
   const commentHash = taskComments.getCommentHash();
   if (commentHash.startsWith("#comment-")) {
