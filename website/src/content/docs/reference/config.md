@@ -718,11 +718,14 @@ artifact = "evidence/codeql-rust-linux.json"
   nothing for it.
 - **Commands and artifacts.** `name` and `command` must both be set.
   `artifact` must be a relative `.json` path (never `./`-prefixed) and must
-  not repeat another rule's artifact. A `host_sandbox_test` command must be
-  one settlement admits — `cargo test -p <crate> --test <target> [<filter>]`,
-  `cargo test -p <crate> --lib [<filter>]`, or an owner required-validation
-  command — or the config fails to load. A rule Orbit could never fulfil
-  fails load the same way, instead of holding every matching review forever.
+  not repeat another rule's artifact. A configured `host_sandbox_test`
+  command must be a focused cargo form — `cargo test -p <crate> --test
+  <target> [<filter>]` or `cargo test -p <crate> --lib [<filter>]` — or the
+  config fails to load. An owner required-validation command is admitted
+  only at settlement, against the owner's captured
+  `workflow.required_validation_commands`, so a rule naming one still fails
+  load. A rule Orbit could never fulfil fails load the same way, instead of
+  holding every matching review forever.
 - **`hosted_check`.** A Linux `codeql` rule may name the pull request check
   that runs exactly its `command` on every candidate, as the forge reports
   it (`hosted_check = "CodeQL / Analyze (rust)"`). Any other kind or OS, or
