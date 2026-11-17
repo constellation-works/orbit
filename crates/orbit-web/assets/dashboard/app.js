@@ -14,6 +14,7 @@ import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/r
 import { openDoctor, peekDoctor, wireDoctorPanel } from './js/doctor.js';
 import { initLogTail, fitLogPanelToViewport, noticesDockShown, residentsDockShown, setDockMode, setDockRouteShown } from './js/log-tail.js';
 import { initDockToggle, showDockBesideList } from './js/dock-toggle.js';
+import { initRailToggle } from './js/rail-toggle.js';
 import { renderDiagnostics } from './js/diagnostics.js';
 import { fetchAndRenderMetrics, placeholdMetricsAggregate } from './js/metrics.js';
 import { fetchAndRenderResources, placeholdResourcesAggregate } from './js/resources.js';
@@ -2333,6 +2334,7 @@ void startFleetIndicatorRefresh().catch(error => console.error(error));
 // dock target clears it, and that clear has to see the preference this load
 // just restored.
 initDockToggle();
+initRailToggle();
 iT();
 
 initLogTail();

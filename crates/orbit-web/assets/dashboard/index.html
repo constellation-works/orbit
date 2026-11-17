@@ -66,7 +66,7 @@
       <!-- ORB-10972: the top-level nav is a left rail of `.tab` destinations.
            A destination's `.subtab` views are its children here, shown while
            it is open; the router selects on these classes and ids. -->
-      <nav class="rail" aria-label="Dashboard sections">
+      <nav class="rail" id="navigation-rail" aria-label="Dashboard sections">
         <!-- The host and workspace pickers head the rail: they scope every
              view, so they belong above the destinations they scope, not below
              the fold. The host comes first because it scopes the workspace list. -->
@@ -134,15 +134,18 @@
              dashboard last refreshed, then the UTC/Local clock every time
              on the page follows. The block does not repeat the host name. -->
         <div class="rail-foot">
-          <button type="button" class="host-block stale" id="host-block" aria-expanded="false" aria-haspopup="dialog" aria-controls="host-detail" aria-live="polite" aria-label="Host resources: unknown">
-            <span class="host-block-head">
-              <span class="host-block-kicker">Host</span>
-              <span class="host-block-verdict"><span class="host-block-dot" aria-hidden="true"></span><span class="host-block-verdict-text">unknown</span></span>
-            </span>
-            <span class="host-resource unknown" data-resource="cpu" role="group" aria-label="cpu unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">load</span><span class="v">–</span></span>
-            <span class="host-resource unknown" data-resource="memory" role="group" aria-label="memory unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">mem</span><span class="v">–</span></span>
-            <span class="host-resource unknown" data-resource="disk" role="group" aria-label="disk unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">disk</span><span class="v">–</span></span>
-          </button>
+          <div class="rail-host-card">
+            <button type="button" class="host-block stale" id="host-block" aria-expanded="false" aria-haspopup="dialog" aria-controls="host-detail" aria-live="polite" aria-label="Host resources: unknown">
+              <span class="host-block-head">
+                <span class="host-block-kicker">Host</span>
+                <span class="host-block-verdict"><span class="host-block-dot" aria-hidden="true"></span><span class="host-block-verdict-text">unknown</span></span>
+              </span>
+              <span class="host-resource unknown" data-resource="cpu" role="group" aria-label="cpu unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">load</span><span class="v">–</span></span>
+              <span class="host-resource unknown" data-resource="memory" role="group" aria-label="memory unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">mem</span><span class="v">–</span></span>
+              <span class="host-resource unknown" data-resource="disk" role="group" aria-label="disk unavailable · sample unavailable · Throttle verdict: unknown"><span class="k">disk</span><span class="v">–</span></span>
+            </button>
+            <button type="button" class="dock-toggle rail-toggle" id="rail-toggle" aria-controls="navigation-rail" aria-expanded="true" aria-label="Hide navigation"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><rect x="2.8" y="3.8" width="14.4" height="12.4" rx="2"/><path d="M12.4 3.8v12.4"/></svg></button>
+          </div>
           <div class="rail-conn">
             <span id="conn-status" class="status-dot orange"></span>
             <span class="conn-text"><span id="conn-host" class="conn-host"></span><span id="meta-text" role="group" title="Connecting" aria-label="Connecting">connecting&hellip;</span></span>

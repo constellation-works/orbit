@@ -16,6 +16,40 @@
 .shell > .rail { grid-area: rail; }
 .shell > .main-col { grid-area: main; }
 
+/* The Host-header button is a sibling of the host dialog button, so its
+   clicks never open that dialog. Only the contents slide; the toggle stays.
+   The column changes once after leaving (rail-toggle.js), never per frame. */
+.rail-host-card { position: relative; }
+.rail-toggle { position: absolute; top: 4px; right: 4px; }
+.rail-toggle > svg { transform: scaleX(-1); }
+.rail .rail-toggle:focus-visible { outline-offset: -2px; }
+@media (min-width: 761px) {
+  .rail-host-card .host-block-head { min-height: 22px; padding-right: 28px; }
+  .rail > :not(.rail-foot),
+  .rail-foot > :not(.rail-host-card),
+  .rail-host-card > .host-block { transition: transform 180ms ease, opacity 180ms ease; }
+  .shell:is(.rail-leaving, .rail-entering) .rail > :not(.rail-foot),
+  .shell:is(.rail-leaving, .rail-entering) .rail-foot > :not(.rail-host-card),
+  .shell:is(.rail-leaving, .rail-entering) .rail-host-card > .host-block {
+    transform: translateX(-32px);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .shell.rail-collapsed { grid-template-columns: 45px minmax(0, 1fr); }
+  .shell.rail-collapsed > .rail { padding: 8px; }
+  .shell.rail-collapsed .rail > :not(.rail-foot),
+  .shell.rail-collapsed .rail-foot > :not(.rail-host-card),
+  .shell.rail-collapsed .rail-host-card > .host-block { display: none; }
+  .shell.rail-collapsed > .rail .rail-foot { padding: 0; margin-bottom: 0; bottom: 0; }
+  .shell.rail-collapsed .rail-toggle { position: static; }
+}
+@media (max-width: 760px) { .rail-toggle { display: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .rail > :not(.rail-foot),
+  .rail-foot > :not(.rail-host-card),
+  .rail-host-card > .host-block { transition: none; }
+}
+
 .skip-link {
   position: fixed;
   z-index: 1000;
