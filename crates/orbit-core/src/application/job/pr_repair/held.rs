@@ -62,6 +62,7 @@ pub(crate) fn handed_back_hold(refusal: DeliveryRefusal) -> bool {
         | DeliveryRefusal::BaseChaseExhausted
         | DeliveryRefusal::OriginUnavailable
         | DeliveryRefusal::CheckRepairActivityAbsent
+        | DeliveryRefusal::ReviewBudgetExhausted
         | DeliveryRefusal::VisualNotEstablished
         | DeliveryRefusal::VisualReviewUnresolved
         // The claim already ended. Resuming this hold would land a revoked handoff.

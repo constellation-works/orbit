@@ -57,6 +57,9 @@ pub enum DeliveryRefusal {
     /// the task returns to the backlog with the candidate kept, or blocks
     /// once the landing repair budget is spent. The held run is not resumed.
     LandingRepairRequeue,
+    /// Review admission exhausted the candidate's review or minutes budget.
+    /// The operator must renew the ledger or start a fresh delivery attempt.
+    ReviewBudgetExhausted,
     /// A `verify-mock-ui` delivery's capture was not established. Visual
     /// review was removed [ORB-22807]: nothing raises this any more, and it
     /// stays so runs recorded before then still read their refusal.
@@ -90,6 +93,7 @@ impl DeliveryRefusal {
             Self::CheckRepairActivityAbsent => "delivery_check_repair_activity_absent",
             Self::CheckRunsAbsent => "delivery_check_runs_absent",
             Self::LandingRepairRequeue => "delivery_landing_repair_requeue",
+            Self::ReviewBudgetExhausted => "review_budget_exhausted",
         }
     }
 
@@ -116,6 +120,7 @@ impl DeliveryRefusal {
             "delivery_check_repair_activity_absent" => Some(Self::CheckRepairActivityAbsent),
             "delivery_check_runs_absent" => Some(Self::CheckRunsAbsent),
             "delivery_landing_repair_requeue" => Some(Self::LandingRepairRequeue),
+            "review_budget_exhausted" => Some(Self::ReviewBudgetExhausted),
             _ => None,
         }
     }
@@ -176,6 +181,9 @@ impl DeliveryRefusal {
             }
             Self::LandingRepairRequeue => {
                 "The claim ended and the task returned to the backlog with this candidate kept (or it is blocked once the landing repair budget is spent). The next run repairs that candidate. Do not resume this held run.".into()
+            }
+            Self::ReviewBudgetExhausted => {
+                "Follow the refusal's recovery command: record an operator review-reset before resuming a local run, or requeue a claimed task on its owner for a fresh claim.".into()
             }
             Self::VisualNotEstablished | Self::VisualReviewUnresolved => {
                 "Inspect the held run. This refusal is no longer raised.".into()

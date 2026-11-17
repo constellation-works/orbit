@@ -108,6 +108,14 @@ fn admission_output(
     // repeat; everything else (Git, store contention) may be transient.
     let refused_or_failed = |error: OrbitError| match error {
         OrbitError::CapabilityDenied(message) => refused(message),
+        OrbitError::DeliveryRefused { refusal, message } => {
+            // Preserve the typed hold for job finalization; its text is diagnostic.
+            DispatchError::DeliveryRefused {
+                action: action.to_string(),
+                refusal,
+                message,
+            }
+        }
         other => DispatchError::action_failed(action, other.to_string()),
     };
     // A run without a captured review admission predates the policy or was
@@ -251,7 +259,9 @@ fn admission_output(
             Some("system"),
             match &outcome {
                 Ok(_) => AuditEventStatus::Success,
-                Err(OrbitError::CapabilityDenied(_)) => AuditEventStatus::Denied,
+                Err(OrbitError::CapabilityDenied(_) | OrbitError::DeliveryRefused { .. }) => {
+                    AuditEventStatus::Denied
+                }
                 Err(_) => AuditEventStatus::Failure,
             },
             audit_args,

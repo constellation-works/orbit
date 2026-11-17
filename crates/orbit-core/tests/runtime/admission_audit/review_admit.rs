@@ -42,7 +42,13 @@ fn each_candidate_gets_one_review_while_a_fresh_delivery_run_starts_over() {
         .admit_in(&resumed)
         .expect_err("a resume of the same candidate gets no second review");
     assert!(
-        matches!(error, DispatchError::DeterministicActionRefused { .. }),
+        matches!(
+            error,
+            DispatchError::DeliveryRefused {
+                refusal: orbit_types::workflow::DeliveryRefusal::ReviewBudgetExhausted,
+                ..
+            }
+        ),
         "{error}"
     );
     assert!(
@@ -213,7 +219,13 @@ fn reset_retires_an_exhausted_attempt_and_preserves_the_history_for_a_fresh_star
         || super::review_support::review_gate_admit(runtime, "review_gate_admit", &preflight_input);
     let error = preflight().expect_err("exhaustion refuses before implementation");
     assert!(
-        matches!(error, DispatchError::DeterministicActionRefused { .. }),
+        matches!(
+            error,
+            DispatchError::DeliveryRefused {
+                refusal: orbit_types::workflow::DeliveryRefusal::ReviewBudgetExhausted,
+                ..
+            }
+        ),
         "{error}"
     );
     assert!(

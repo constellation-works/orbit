@@ -4,7 +4,8 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::identity::Crew;
 use orbit_types::workflow::{
-    ReviewAdmission, ReviewGateAdmissionOutput, ReviewGateReviewer, ReviewerIdentity,
+    DeliveryRefusal, ReviewAdmission, ReviewGateAdmissionOutput, ReviewGateReviewer,
+    ReviewerIdentity,
 };
 use serde_json::Value;
 
@@ -207,7 +208,7 @@ pub(in crate::application::review::gate) fn reviewer_identity(
     })
 }
 
-/// Fail before implementation when the lineage's latest review ran out of
+/// Hold before implementation when the lineage's latest review ran out of
 /// minutes without a verdict: a resumed run would otherwise implement again
 /// only to be refused at admission. A settled review never blocks here — the
 /// next candidate is a new review. This does not reserve an attempt, load Git
@@ -224,10 +225,13 @@ pub(super) fn preflight_budget(
         && !ledger.reviewed(&latest.candidate, &latest.task_meaning_digest)
         && ledger.remaining_at(Utc::now()).seconds == 0
     {
-        return Err(OrbitError::CapabilityDenied(format!(
-            "review_budget_exhausted: review_minutes_exhausted for lineage '{lineage}'; {}",
-            budget_recovery(context, &lineage)
-        )));
+        return Err(OrbitError::DeliveryRefused {
+            refusal: DeliveryRefusal::ReviewBudgetExhausted,
+            message: format!(
+                "review_budget_exhausted: review_minutes_exhausted for lineage '{lineage}'; {}",
+                budget_recovery(context, &lineage)
+            ),
+        });
     }
     Ok(ReviewGateAdmissionOutput::PreflightPassed {
         lineage_key: lineage,

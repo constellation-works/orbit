@@ -7,9 +7,9 @@ use orbit_common::OrbitError;
 use orbit_engine::review_gate::candidate_identity;
 use orbit_store::contracts::ReviewReserveRequest;
 use orbit_types::workflow::{
-    REVIEW_CONTRACT_VERSION, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewAdmission,
-    ReviewGateAdmissionOutput, ReviewGateAdmitted, ReviewGateDecision, ReviewManifest,
-    ReviewReservation,
+    DeliveryRefusal, REVIEW_CONTRACT_VERSION, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT,
+    ReviewAdmission, ReviewGateAdmissionOutput, ReviewGateAdmitted, ReviewGateDecision,
+    ReviewManifest, ReviewReservation,
 };
 
 use super::super::super::evidence::{
@@ -130,14 +130,17 @@ pub(super) fn admit(
         ReviewReservation::Reserved { attempt } => (attempt, false),
         ReviewReservation::Resumed { attempt } => (attempt, true),
         ReviewReservation::Exhausted { reason, consumed } => {
-            return Err(OrbitError::CapabilityDenied(format!(
-                "review_budget_exhausted: {reason} for candidate {} in lineage '{lineage_key}' \
+            return Err(OrbitError::DeliveryRefused {
+                refusal: DeliveryRefusal::ReviewBudgetExhausted,
+                message: format!(
+                    "review_budget_exhausted: {reason} for candidate {} in lineage '{lineage_key}' \
                  ({}s of {}s); each candidate gets one review — {}",
-                candidate.head.commit,
-                consumed.seconds,
-                u64::from(ledger.budget.minutes) * 60,
-                reviewer::budget_recovery(context, &lineage_key)
-            )));
+                    candidate.head.commit,
+                    consumed.seconds,
+                    u64::from(ledger.budget.minutes) * 60,
+                    reviewer::budget_recovery(context, &lineage_key)
+                ),
+            });
         }
     };
 
