@@ -462,6 +462,10 @@ const READY_POOL_WORDS = { eligible: "eligible", locks: "locks", capacity: "capa
 // The Backlog card's readiness strip: one slim bar split by pool and a legend
 // whose entries filter the card to that pool. It is absent until the drain
 // snapshot arrives, so the card never claims readiness it does not know.
+// `group` is the Backlog population without the Shift-Shift quick filter:
+// the strip counts the underlying pools, so a temporary query can neither
+// shrink a pool's count nor clear the operator's pool selection (renderTasks
+// settles that selection against this same population before painting).
 function buildBacklogReadiness(group, context) {
   const { known, counts } = backlogReadiness(group);
   if (!known) return null;
@@ -476,7 +480,6 @@ function buildBacklogReadiness(group, context) {
     }),
     counts.unknown > 0 ? el("span", { class: "ready-bar-segment unknown", style: { flexGrow: String(counts.unknown) } }) : null,
   ]);
-  if (readyPoolFilter && counts[readyPoolFilter] === 0) readyPoolFilter = null;
   const legend = el("div", { class: "ready-legend", role: "group", "aria-label": "Filter the backlog by readiness" }, [
     ...DRAIN_POOLS.map(({ key, label }) => {
       const on = readyPoolFilter === key;
@@ -589,13 +592,26 @@ export function renderTasks(tasks, context) {
   // the pane or changes a total.
   const quick = quickFilterActive();
   const unnarrowed = quick ? filterTasks(tasks, context, { quick: false }) : filtered;
-  syncQuickFilterCount(filtered.length, unnarrowed.length);
+  // The readiness strip and its auto-clear read the Backlog rows without the
+  // quick filter: a pool the query merely hides is not an empty pool, so the
+  // operator's selection survives typing and closing the bar restores it.
+  // Only a pool empty in this underlying population clears the selection.
+  const backlogBase = unnarrowed.filter((t) => t.status === "backlog");
+  const baseReadiness = backlogReadiness(backlogBase);
+  if (readyPoolFilter && baseReadiness.known && baseReadiness.counts[readyPoolFilter] === 0) readyPoolFilter = null;
+  const poolNarrows = Boolean(readyPoolFilter && baseReadiness.known);
+  // Rows actually displayed: the quick filter intersected with the selected
+  // pool, so the shown counts never include an out-of-pool row.
+  const displayed = poolNarrows
+    ? filtered.filter((t) => t.status !== "backlog" || drainReadinessFor(t)?.pool === readyPoolFilter)
+    : filtered;
+  syncQuickFilterCount(displayed.length, unnarrowed.length);
   // Rows keep a fixed-width action column so actions line up between groups;
   // when no visible row has an action (a Done-only view) the whole column is
   // dead space, so the list gives it back as one.
-  const quickActions = filtered.some(hasQuickAction) ? "some" : "none";
+  const quickActions = displayed.some(hasQuickAction) ? "some" : "none";
   if (body.dataset.quickActions !== quickActions) body.dataset.quickActions = quickActions;
-  $("tasks-count").textContent = formatTaskCount(filtered.length, tasks.length, tasksMeta(context));
+  $("tasks-count").textContent = formatTaskCount(displayed.length, tasks.length, tasksMeta(context));
   // ORB-10972: the rail shows the matching total the panel header reports, so
   // the Tasks entry reads correctly from any other tab. The rows loaded are
   // not that total while a section holds more (ORB-14701).
@@ -665,7 +681,13 @@ export function renderTasks(tasks, context) {
   for (const status of ordered) {
     const group = groups.get(status);
     const section = sections.get(status);
-    const count = !narrowed && section ? { value: section.total, total: true } : { value: group.length, total: false };
+    // The selected pool narrows the Backlog card's rows, so its head counts
+    // the rows shown, like any other browser-side filter.
+    const poolRows = status === "backlog" && poolNarrows
+      ? group.filter((t) => drainReadinessFor(t)?.pool === readyPoolFilter)
+      : group;
+    const count = status === "backlog" && poolNarrows ? { value: poolRows.length, total: false }
+      : !narrowed && section ? { value: section.total, total: true } : { value: group.length, total: false };
     // Each status is one card: its head, the backlog's readiness strip, the
     // rows, then the control that loads more. The nodes stay siblings in the
     // list so row reuse and keyboard roving work across groups; CSS draws the
@@ -681,9 +703,9 @@ export function renderTasks(tasks, context) {
     }
     let rows = group;
     if (status === "backlog") {
-      const strip = buildBacklogReadiness(group, context);
+      const strip = buildBacklogReadiness(backlogBase, context);
       if (strip) groupNodes.push(strip);
-      if (readyPoolFilter && strip) rows = group.filter((t) => drainReadinessFor(t)?.pool === readyPoolFilter);
+      if (poolNarrows && strip) rows = poolRows;
     }
     for (const t of rows) {
       const rowKey = `task-${taskDispatchIdentity(t)}`;
