@@ -29,6 +29,7 @@ import {
   onWorkspaceChange,
   renderPanelPlaceholder,
   syncNodes,
+  setBadgeDescription,
 } from './common.js';
 import { pinnedInfoHint } from './forecast-shared.js';
 
@@ -249,7 +250,7 @@ function setHealthRailCount(body, ran) {
   if (!body || (failures === 0 && warnings === 0)) {
     node.textContent = "";
     node.classList.remove("alert");
-    node.title = "";
+    setBadgeDescription(node, "");
     return;
   }
   const parts = [];
@@ -257,7 +258,7 @@ function setHealthRailCount(body, ran) {
   if (warnings) parts.push(`${warnings} warn`);
   node.textContent = parts.join(" · ");
   node.classList.toggle("alert", failures > 0);
-  node.title = `orbit doctor${ran ? `, run ${formatAge(ran)} ago` : ""}: ${plural(failures, "failure")}, ${plural(warnings, "warning")}. See Health › Doctor.`;
+  setBadgeDescription(node, `orbit doctor${ran ? `, run ${formatAge(ran)} ago` : ""}: ${plural(failures, "failure")}, ${plural(warnings, "warning")}. See Health › Doctor.`);
 }
 
 function renderMeta() {
@@ -307,7 +308,7 @@ function remediationChildren(text) {
       children.push(part);
       return;
     }
-    const copy = el("button", { class: "doctor-copy", text: "copy", title: `Copy: ${part}`, type: "button" });
+    const copy = el("button", { class: "doctor-copy", text: "copy", "aria-description": `Copy: ${part}`, type: "button" });
     copy.setAttribute("aria-live", "polite");
     copy.setAttribute("aria-label", `Copy command ${part}`);
     copy.addEventListener("click", () => copyWithFeedback(copy, part));

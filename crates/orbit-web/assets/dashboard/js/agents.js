@@ -12,7 +12,7 @@
 // A role whose scorecard is not computed yet shows an empty state with its
 // terms. Pure vanilla JS, no build step; HTML uses `el()`, charts use inline SVG.
 
-import { el, syncNodes, fetchJson, getWindow, setWindow, persistScopeToUrl, syncWindowSelectors, wireWindowSelector, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, clockStamp, relativeTime } from './common.js';
+import { el, syncNodes, fetchJson, getWindow, setWindow, persistScopeToUrl, syncWindowSelectors, wireWindowSelector, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, clockStamp, relativeTime, setBadgeDescription } from './common.js';
 import * as common from './common.js';
 import { reviewersPanel } from './agents-reviewers.js';
 import { pilotsPanel } from './agents-pilots.js';
@@ -394,7 +394,7 @@ export function fetchAndRenderAgents() {
         const node = $("agents-count-rank");
         if (!node) return;
         node.textContent = text;
-        node.title = title || "";
+        setBadgeDescription(node, title || "");
       },
     });
   }
@@ -454,20 +454,20 @@ function setRoleCount(forRole, payload) {
   if (!node) return;
   if (!payload) {
     node.textContent = "";
-    node.title = "";
+    setBadgeDescription(node, "");
     return;
   }
   if (payload.status === "not_computed") {
     node.textContent = "—";
-    node.title = "Not computed yet";
+    setBadgeDescription(node, "Not computed yet");
     return;
   }
   const rows = Array.isArray(payload.rows) ? payload.rows : [];
   const ranked = rows.filter((row) => row.rank != null).length;
   node.textContent = `${ranked} ranked`;
   const unjudged = rows.filter((row) => row.unjudged).length;
-  node.title = `${plural(ranked, "ranked row")}; ${rows.length - ranked - unjudged} below ${payload.min_support} ${payload.unit}`
-    + (unjudged ? `; ${unjudged} unjudged` : "");
+  setBadgeDescription(node, `${plural(ranked, "ranked row")}; ${rows.length - ranked - unjudged} below ${payload.min_support} ${payload.unit}`
+    + (unjudged ? `; ${unjudged} unjudged` : ""));
 }
 
 function rows() {
@@ -974,7 +974,7 @@ function rankingNode(ranking) {
       class: "agents-row-select",
       type: "button",
       "aria-pressed": isSelected ? "true" : "false",
-      title: `Show ${rowLabel(row)} in the detail column. Crews: ${crewsText(row)}. Completed invocations: ${effortSummary(row)}. ${INVOCATION_POPULATION}`,
+      "aria-description": `Show ${rowLabel(row)} in the detail column. Crews: ${crewsText(row)}. Completed invocations: ${effortSummary(row)}. ${INVOCATION_POPULATION}`,
     }, [
       el("span", { class: "agents-crew", text: rowLabel(row) }),
       el("span", { class: "agents-model", text: crewsText(row) }),
@@ -1046,7 +1046,6 @@ function unjudgedTag() {
   const tag = el("span", {
     class: "agents-tag agents-tag-unjudged",
     text: "unjudged",
-    title: "No unit of this row is judged yet, so it has no score or rank and stays out of the fleet average.",
   });
   tag.dataset.tag = "unjudged";
   return tag;

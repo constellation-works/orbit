@@ -33,7 +33,7 @@ export function buildActionsRow(task, detail, context, { includeLifecycle = true
     const btn = el("button", {
       class: "action ship",
       text: shipped ? "shipping" : "ship",
-      title: shipped
+      "aria-description": shipped
         ? "A ship run is already in flight for this task"
         : "Dispatch this task through the pipeline with its own crew",
     });
@@ -56,7 +56,7 @@ export function buildActionsRow(task, detail, context, { includeLifecycle = true
   if (includeLifecycle && APPROVE_STATUSES.has(task.status)) {
     const reviewNeedsWorkspace = task.status === "review" && isAggregateView();
     const btn = el("button", { class: "action approve", text: "approve",
-      ...(reviewNeedsWorkspace ? { title: aggregateRefusalTitle("Approve", "approve") } : {}),
+      ...(reviewNeedsWorkspace ? { "aria-description": aggregateRefusalTitle("Approve", "approve") } : {}),
     });
     btn.disabled = !mutable || reviewNeedsWorkspace;
     btn.addEventListener("click", (e) => {

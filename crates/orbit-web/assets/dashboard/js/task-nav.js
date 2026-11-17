@@ -635,7 +635,7 @@ export function buildChips(context) {
   const container = $("task-filter");
   container.innerHTML = "";
   const chip = (text, attrs, quiet, title) => {
-    const node = el("button", { class: `chip${quiet ? " chip-quiet" : ""}`, type: "button", title }, [
+    const node = el("button", { class: `chip${quiet ? " chip-quiet" : ""}`, type: "button", "aria-description": title }, [
       el("span", { class: "chip-label", text }),
       ...((attrs.status || attrs.role === "waiting") ? [el("span", { class: "chip-count" })] : []),
     ]);
@@ -695,7 +695,7 @@ export function buildChips(context) {
     type: "button",
     "aria-controls": "task-filter-more",
     "aria-expanded": "false",
-    title: "My work, Waiting on you, closed statuses, All, Not ready and Pilot warnings",
+    "aria-description": "My work, Waiting on you, closed statuses, All, Not ready and Pilot warnings",
   }, [el("span", { text: "More" })]);
   more.addEventListener("click", () => {
     const open = more.getAttribute("aria-expanded") !== "true";
@@ -834,7 +834,7 @@ function paintWorkspaceFilter() {
   if (label) label.textContent = narrowing ? `${selected.length} workspace${selected.length === 1 ? "" : "s"}` : "Workspaces";
   button.classList.toggle("active", narrowing);
   button.setAttribute("aria-pressed", narrowing ? "true" : "false");
-  button.title = narrowing ? selected.map((workspaceId) => workspaceDisplayName(workspaceId)).join(", ") : "All workspaces";
+  button.setAttribute("aria-description", narrowing ? selected.map((workspaceId) => workspaceDisplayName(workspaceId)).join(", ") : "All workspaces");
   for (const option of list.children) {
     const on = checked.has(option.dataset.workspace);
     option.setAttribute("aria-selected", String(on));
@@ -854,7 +854,7 @@ function buildWorkspaceFilter(context) {
     "aria-expanded": "false",
     "aria-controls": "task-workspace-options",
     "aria-label": "Filter by workspace",
-    title: "All workspaces",
+    "aria-description": "All workspaces",
   }, [el("span", { class: "chip-label", text: "Workspaces" })]);
   button.dataset.role = "workspaces";
   const list = el("div", {

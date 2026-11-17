@@ -221,8 +221,8 @@ function commentAge(value) {
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 
-function commentActionButton(label, title) {
-  const button = el("button", { class: "comment-action", text: label, title });
+function commentActionButton(label, description) {
+  const button = el("button", { class: "comment-action", text: label, "aria-description": description });
   button.type = "button";
   return button;
 }
@@ -571,7 +571,7 @@ export function renderCommentsPanel(panel, task) {
   const order = el("button", {
     class: "comment-pref",
     text: commentPrefs.newestFirst ? "newest first" : "oldest first",
-    title: "Toggle the order this thread is listed in",
+    "aria-description": "Toggle the order this thread is listed in",
   });
   order.type = "button";
   order.addEventListener("click", (event) => {
@@ -585,7 +585,7 @@ export function renderCommentsPanel(panel, task) {
     const collapseAll = el("button", {
       class: "comment-pref",
       text: "collapse all",
-      title: "Collapse every expanded comment on this task",
+      "aria-description": "Collapse every expanded comment on this task",
     });
     collapseAll.type = "button";
     collapseAll.addEventListener("click", (event) => {

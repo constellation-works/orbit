@@ -143,7 +143,7 @@ export function buildQuickAction(task, context) {
   const btn = el("button", {
     class: `task-quick ${spec.kind}${ready ? " ready" : ""}${pending ? " pending" : ""}`,
     text: spec.text,
-    title: pending ? pendingLabel : (canRunQuickAction(task) ? spec.title : aggregateRefusalTitle(spec.title, spec.kind)),
+    "aria-description": pending ? pendingLabel : (canRunQuickAction(task) ? spec.title : aggregateRefusalTitle(spec.title, spec.kind)),
     ...(pending ? { "aria-label": pendingLabel, "aria-busy": "true" } : {}),
   });
   btn.type = "button";
@@ -185,7 +185,7 @@ export function buildQuickActionError(task, context) {
   const dismiss = el("button", {
     class: "task-quick-error-dismiss",
     text: "×",
-    title: "Dismiss this error",
+    "aria-description": "Dismiss this error",
     "aria-label": `Dismiss error for ${task.id}`,
   });
   dismiss.type = "button";

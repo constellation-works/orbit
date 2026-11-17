@@ -247,7 +247,7 @@ function makeContextRow(entry, task) {
   } else if (matches === null && (task.status === "backlog" || task.status === "in-progress")) {
     rowChildren.push(el("span", { class: "cf-pill cf-pill-unknown", text: "contention unknown" }));
   }
-  const copyBtn = el("button", { class: "cf-copy", type: "button", title: "Copy selector" }, [el("span", { text: "⧉", "aria-hidden": "true" })]);
+  const copyBtn = el("button", { class: "cf-copy", type: "button" }, [el("span", { text: "⧉", "aria-hidden": "true" })]);
   copyBtn.setAttribute("aria-label", `Copy ${selector}`);
   copyBtn.addEventListener("click", (event) => { event.stopPropagation(); copyText(selector); });
   rowChildren.push(copyBtn);
@@ -352,7 +352,7 @@ export function buildTaskFieldEditor(task, field, detail, context, editSlot = nu
       toggle: spec.toggle || null,
       editable: mutable,
       editTitle,
-      disabledTitle: aggregateRefusalTitle(editTitle, `edit ${spec.label}`),
+      disabledDescription: aggregateRefusalTitle(editTitle, `edit ${spec.label}`),
       save: (text, options) => patchJson(mutationPath, spec.toPayload(text, options)),
       onSaved: (updatedTask) => {
         if (visit.isCurrent()) completeFieldSave(task, field, updatedTask, context);

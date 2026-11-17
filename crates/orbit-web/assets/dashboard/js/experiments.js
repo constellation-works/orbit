@@ -738,7 +738,7 @@ function healthLink(readout) {
   const link = el("button", {
     class: `ex-health-link${warnings.length ? " ex-health-warn" : ""}`,
     type: "button",
-    title: warnings.map(warningLabel).join(", ") || null,
+    "aria-description": warnings.map(warningLabel).join(", ") || null,
   }, [
     warnings.length ? el("span", { class: "ex-warning-icon", "aria-hidden": "true", text: "!" }) : null,
     text,

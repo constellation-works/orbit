@@ -275,21 +275,21 @@ function buildPaneHead(task, pinned, context) {
     class: "action task-pane-back",
     type: "button",
     text: "Back to list",
-    title: "Back to the task list at this task (Esc)",
+    "aria-description": "Back to the task list at this task (Esc)",
   }) : null;
   if (back) back.addEventListener("click", () => closeTaskPane(context, { forget: true }));
   // Icon buttons: the glyph is CSS, the accessible name is the label.
   const full = page ? null : el("button", {
     class: "task-pane-icon task-pane-full",
     type: "button",
-    title: "Open full page (Enter on its row)",
+    "aria-description": "Open full page (Enter on its row)",
     "aria-label": "Open full page",
   });
   if (full) full.addEventListener("click", () => openTaskPage(task.id, context));
   const close = page ? null : el("button", {
     class: "task-pane-icon task-pane-close",
     type: "button",
-    title: "Close (Esc)",
+    "aria-description": "Close (Esc)",
     "aria-label": "Close task detail",
   });
   if (close) close.addEventListener("click", () => closeTaskPane(context, { forget: true }));
@@ -299,7 +299,7 @@ function buildPaneHead(task, pinned, context) {
   const baseHash = `${task.id}-${task.title}-${pinned}-${page}`;
   const title = el("h2", { class: "task-pane-title", id: "task-pane-title", text: task.title || task.id });
   title.tabIndex = -1;
-  const id = makeCopyButton(task.id, { class: "id mono", title: "Copy task ID" });
+  const id = makeCopyButton(task.id, { class: "id mono", description: "Copy task ID" });
   const spacer = el("span", { class: "task-pane-spacer" });
   const head = el("div", { class: "task-pane-head" }, [
     el("div", { class: "task-pane-bar" }, page
@@ -316,7 +316,7 @@ function buildPaneHead(task, pinned, context) {
 function buildTaskPagePlaceholder(context) {
   const back = el("button", { class: "action task-pane-back", type: "button", text: "Back to list" });
   back.addEventListener("click", () => closeTaskPane(context));
-  const id = makeCopyButton(taskState.taskPageId, { class: "id mono", title: "Copy task ID" });
+  const id = makeCopyButton(taskState.taskPageId, { class: "id mono", description: "Copy task ID" });
   const note = el("p", {
     class: taskState.taskPageError ? "panel-placeholder action-error" : "panel-placeholder",
     text: taskState.taskPageError || `Loading ${taskState.taskPageId}…`,

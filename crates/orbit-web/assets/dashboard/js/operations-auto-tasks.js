@@ -181,7 +181,7 @@ function autoTaskToggleButton(payload, definition) {
     pending,
     reason: reason || "",
   });
-  if (!reason) button.title = `${verb} ${definition.name}`;
+  if (!reason) button.setAttribute("aria-description", `${verb} ${definition.name}`);
   button.addEventListener("click", () => {
     if (reason || !selection.current() || pendingOperations.has(key)) return;
     const workspace = selectedWorkspace();
@@ -208,7 +208,7 @@ function autoTaskMintButton(payload, definition) {
   const button = el("button", {
     class: "operation-button secondary",
     text: pendingOperations.has(key) ? "Pending…" : "Mint now",
-    title: reason || "Mint one task now, ignoring schedule, enabled, and dedupe",
+    "aria-description": reason || "Mint one task now, ignoring schedule, enabled, and dedupe",
   });
   button.type = "button";
   button.disabled = Boolean(reason) || pendingOperations.has(key);
@@ -306,7 +306,7 @@ function autoTaskDeleteButton(payload, definition) {
   const button = el("button", {
     class: "operation-button danger",
     text: pending ? "Pending…" : "Delete",
-    title: reason || `Delete ${definition.name}`,
+    "aria-description": reason || `Delete ${definition.name}`,
     "aria-label": `Delete auto-task ${definition.name}`,
   });
   button.type = "button";

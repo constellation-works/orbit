@@ -413,7 +413,7 @@ function autoDrainStartButton(payload, form) {
   const button = el("button", {
     class: "operation-button drain-start primary",
     text: pending ? "Starting…" : `${payload.capacity?.drain_phase === "draining" ? "Start another" : "Start"} ${startLabel} window`,
-    title: reasons.submit || autoDrainStartRefusal(payload) || "Submit orbit.workflow action auto with this duration and concurrency",
+    "aria-description": reasons.submit || autoDrainStartRefusal(payload) || "Submit orbit.workflow action auto with this duration and concurrency",
   });
   button.type = "button";
   button.dataset.drainFocus = "start";
@@ -576,7 +576,7 @@ export function autoDrainStopButton(payload) {
   const button = el("button", {
     class: `operation-button drain-stop${autoDrainStopMode(payload) === "settle" ? " settle" : ""}`,
     text: pending ? copy.busy : copy.label,
-    title: reasons.stop || `${copy.description}${autoDrainStopMode(payload) === "settle" ? " (deliver recorded settlements)" : ""}`,
+    "aria-description": reasons.stop || `${copy.description}${autoDrainStopMode(payload) === "settle" ? " (deliver recorded settlements)" : ""}`,
   });
   button.type = "button";
   button.dataset.drainFocus = "stop";

@@ -347,7 +347,7 @@ function breakdownToggle(row) {
     class: "agents-rank-toggle",
     type: "button",
     "aria-expanded": open ? "true" : "false",
-    title: `${row.model || "Model"}: show or hide the breakdown`,
+    "aria-description": `${row.model || "Model"}: show or hide the breakdown`,
   }, [el("span", { class: "agents-rank-chevron", "aria-hidden": "true", text: "▸" })]);
   const bind = (detail, mainRow) => {
     detail.id = breakdownId(row.model);

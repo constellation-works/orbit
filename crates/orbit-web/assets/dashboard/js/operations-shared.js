@@ -1,4 +1,4 @@
-import { bindRunLink, bindTaskLink, detailsPanel, el, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, onWorkspaceChange, fmtDuration, normalizeTaskStatus, relativeTime } from './common.js';
+import { bindRunLink, bindTaskLink, detailsPanel, el, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, infoHint, onWorkspaceChange, fmtDuration, normalizeTaskStatus, relativeTime } from './common.js';
 
 export const operationsState = {
   context: null,
@@ -279,12 +279,11 @@ export function controlReason(payload, action = "routine_toggle") {
 
 export function explainUnavailable(button, reason) {
   if (!reason) return button;
-  // The wrapper is focusable because native disabled buttons cannot receive focus.
-  const wrapper = el("span", { class: "operation-action-unavailable" }, [button]);
-  wrapper.tabIndex = 0;
-  wrapper.title = reason;
-  wrapper.setAttribute("aria-label", `${button.getAttribute("aria-label") || button.textContent}: ${reason}`);
-  return wrapper;
+  // STD-07 R41: a disabled button's reason sits behind an info icon beside
+  // it (focusable, as a disabled button cannot take focus) and in the
+  // button's accessible description — never in a tooltip on the button.
+  button.setAttribute("aria-description", reason);
+  return el("span", { class: "operation-action-unavailable" }, [button, infoHint(reason)]);
 }
 
 export function selectionSnapshot() {
@@ -456,7 +455,7 @@ export function operationSwitch({ name, on, text, pending, reason }) {
   const button = el("button", {
     class: `operation-switch ${on ? "on" : "off"}${pending ? " pending" : ""}`,
     text,
-    title: reason || text,
+    "aria-description": reason || null,
   });
   button.type = "button";
   button.setAttribute("aria-label", name);
@@ -538,7 +537,7 @@ export function inactivePluginToggle(hiddenCount) {
   const button = el("button", {
     class: "operation-button secondary operation-inactive-toggle",
     text: showInactivePlugins ? "Hide plugin-off definitions" : `Show ${hiddenCount} hidden · plugin off`,
-    title: "Definitions seeded by a plugin that is switched off here never fire.",
+    "aria-description": "Definitions seeded by a plugin that is switched off here never fire.",
   });
   button.type = "button";
   button.setAttribute("aria-pressed", showInactivePlugins ? "true" : "false");

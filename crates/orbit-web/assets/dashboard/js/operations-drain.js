@@ -598,7 +598,7 @@ function autoDrainQueuedCancel(payload, runId) {
   const button = el("button", {
     class: "operation-button drain-queued-cancel",
     text: pending ? "Cancelling…" : "Cancel",
-    title: refusal || `Cancel queued window ${runId} before it starts`,
+    "aria-description": refusal || `Cancel queued window ${runId} before it starts`,
   });
   button.type = "button";
   button.dataset.drainFocus = `cancel-queued:${runId}`;

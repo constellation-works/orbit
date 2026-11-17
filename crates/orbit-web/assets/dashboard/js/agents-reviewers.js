@@ -92,7 +92,7 @@ function rowTags(row) {
   const tag = el("span", {
     class: "agents-tag agents-tag-accepts-often",
     text: "accepts often",
-    title: `Accepts ${rate}% of reviews on tiers other reviewers also judged; the other reviewers accept ${peers}% on the same tiers. Shown, not scored.`,
+    "aria-label": `Accepts ${rate}% of reviews on tiers other reviewers also judged; the other reviewers accept ${peers}% on the same tiers. Shown, not scored.`,
   });
   tag.dataset.tag = "accepts_often";
   return [tag];

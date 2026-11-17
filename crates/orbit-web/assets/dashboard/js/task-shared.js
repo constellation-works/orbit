@@ -251,7 +251,7 @@ export function actionErrorNode(text, remedy, detail) {
       class: "action-error-toggle",
       type: "button",
       text: "Show full",
-      title: "Show the full refusal, including the other ways to recover",
+      "aria-description": "Show the full refusal, including the other ways to recover",
     });
     toggle.setAttribute("aria-expanded", "false");
     toggle.addEventListener("click", (event) => {
@@ -260,9 +260,9 @@ export function actionErrorNode(text, remedy, detail) {
       full.hidden = !open;
       toggle.setAttribute("aria-expanded", String(open));
       toggle.textContent = open ? "Show less" : "Show full";
-      toggle.title = open
+      toggle.setAttribute("aria-description", open
         ? "Hide the full refusal"
-        : "Show the full refusal, including the other ways to recover";
+        : "Show the full refusal, including the other ways to recover");
     });
     node.appendChild(toggle);
     node.appendChild(full);
