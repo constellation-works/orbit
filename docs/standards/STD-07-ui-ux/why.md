@@ -250,6 +250,7 @@ Changed in v13: the owner reversed the hover help on buttons. On the Fleet page 
   resulting page is "Drain". It should be Tasks page, since that was the page that I was on"
   (f09993e5, ORB-25093, F2026-11-311). R5 kept neighbours from shifting and R23 said narrow
   widths drop secondary content, but nothing said which region survives a collapse.
+- **R44 (close buttons read "esc").** Daniel, 2026-11-17, on the Orbit dashboard: "All things close-able with 'esc' (and which has a close button), the button should be now labeled 'esc' instead of 'x', 'close', 'back to list'." He had just learned that Esc closes the Tasks detail panel and preferred it to browser Back (ORB-25406, withdrawn). The label teaches the shortcut where the eye already goes to close (ORB-25389).
 
 ## Process
 

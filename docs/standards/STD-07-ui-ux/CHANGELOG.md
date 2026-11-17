@@ -51,3 +51,4 @@ removed or changed in meaning.
   R16 adds that a detail view, dialog or drill-down does not repeat what the view that opened it already shows (the owner's Fleet host-dialog correction, ORB-25399).
 - **v13 (2026-11-17):** R41 reverses button hover help: a button shows no hover or focus bubble or native tooltip, its effect goes in its accessible description, and a consequence or disabled reason goes behind an info icon or in its confirmation (the owner's Fleet correction, ORB-25398).
   R32's closing sentence now says buttons carry no tooltip, following R41 (ORB-25398).
+- **v14 (2026-11-17):** adds R44 (a close button on a surface Esc closes is labelled "esc", not ×, "Close" or "Back to list"; its accessible name still says what it closes) (the owner's direction after ORB-25406, ORB-25389).
