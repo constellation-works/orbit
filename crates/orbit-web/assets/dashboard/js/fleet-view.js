@@ -4,9 +4,15 @@ import { describeResource, hostVerdict } from './host-resources.js';
 import { describeProviderReading } from './provider-usage.js';
 
 export function fleetButton(label, help, click, cls = '') {
-  const button = el('button', { type: 'button', class: `settings-btn ${cls}`.trim(), text: label, 'aria-label': label || help, 'aria-description': help });
-  button.addEventListener('click', click);
-  return pinnedInfoHint(help, { trigger: button, preserveAction: true });
+  const attrs = { type: 'button', class: `settings-btn ${cls}`.trim(), text: label };
+  const ariaLabel = label || help;
+  if (ariaLabel) attrs['aria-label'] = ariaLabel;
+  if (help && help !== label && help !== ariaLabel) {
+    attrs['aria-description'] = help;
+  }
+  const button = el('button', attrs);
+  if (click) button.addEventListener('click', click);
+  return button;
 }
 
 export function fleetFacts(rows) {
@@ -35,7 +41,7 @@ function resourceMeter(payload, resource, os) {
   const label = resource === 'cpu' ? (!payload || reading.utilization ? 'CPU' : 'Load') : { memory: 'Mem', disk: 'Disk', io: 'I/O' }[resource];
   const unknown = reading.value === '-';
   if (resource === 'io' && unknown && os === 'macos') reading.detail = 'I/O pressure unavailable on macOS; Linux PSI full avg60 is not reported.';
-  return el('div', { class: `fleet-metric ${reading.severity}`, title: reading.detail, 'aria-label': `${label}: ${unknown ? reading.detail : reading.value + reading.suffix}` }, [
+  return el('div', { class: `fleet-metric ${reading.severity}`, 'aria-label': `${label}: ${unknown ? reading.detail : reading.value + reading.suffix}` }, [
     el('span', { text: label }),
     el('span', { class: `fleet-track${unknown ? ' unknown' : ''}`, 'aria-hidden': 'true' }, [el('span', { style: { width: `${reading.fill}%` } })]),
     el('span', { class: 'mono', text: unknown ? '—' : reading.value }),

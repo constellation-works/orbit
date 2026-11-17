@@ -430,7 +430,6 @@ function workspacesCell(row, names) {
       text: workspace.role === "replica"
         ? `${workspace.name} (replica of ${names.get(workspace.owner_machine_id) || workspace.owner_machine_id || "unknown"})`
         : `${workspace.name} (owner)`,
-      title: workspace.id,
     }),
   ));
 }
@@ -561,13 +560,15 @@ function actionButton(label, onClick, kind = "") {
   const help = { Rename: "Open the registry name editor", Remove: "Review removal from the serving registry", Cancel: "Discard this registry edit", "Force remove": "Remove this registration despite its dependent replicas and drains" }[label] || label;
   const description = editing?.pending ? "Wait for the registry change to finish" : help;
   button.setAttribute("aria-label", label);
-  button.setAttribute("aria-description", description);
+  if (description && description !== label) {
+    button.setAttribute("aria-description", description);
+  }
   button.disabled = Boolean(editing?.pending);
   button.addEventListener("click", (event) => {
     event.stopPropagation();
     onClick();
   });
-  return pinnedInfoHint(description, { trigger: button, preserveAction: true });
+  return button;
 }
 
 function submitButton(label) {
@@ -575,9 +576,11 @@ function submitButton(label) {
   button.type = "submit";
   const description = editing?.pending ? "Wait for the registry change to finish" : "Validate and save this change to the serving registry";
   button.setAttribute("aria-label", label);
-  button.setAttribute("aria-description", description);
+  if (description && description !== label) {
+    button.setAttribute("aria-description", description);
+  }
   button.disabled = Boolean(editing?.pending);
-  return pinnedInfoHint(description, { trigger: button, preserveAction: true });
+  return button;
 }
 
 // ---------------------------------------------------------------- sessions
