@@ -144,7 +144,8 @@ pub(super) fn store(data_root: &Path, key: &JobLogKey, answer: &CiJobLogAnswer) 
         run_attempt: key.run_attempt,
         answer: answer.clone(),
     };
-    // The old JSON value envelope sorted keys recursively before encoding.
+    // Keep the struct fields in the old envelope's insertion order so its
+    // serialized bytes, including the nested answer's field order, stay the same.
     let Ok(value) = serde_json::to_value(&entry) else {
         return;
     };
