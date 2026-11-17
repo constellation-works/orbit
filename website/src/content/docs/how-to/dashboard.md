@@ -808,9 +808,11 @@ unreachable example.
 
 Each host is a card with its machine ID, SSH target, task prefix, and Orbit
 version, and with CPU, memory, disk, and I/O readings. An unreachable host
-shows its error instead of readings. **Drains** lists active and queued drains
-across the hosts. **Provider capacity** lists the usage windows each host
-reports for its accounts.
+shows its error instead of readings. **Drains** lists the live owner and pull
+drains across the hosts. It omits queued windows and any host whose drain
+reading is unavailable, and shows `No live drains.` when none is live.
+**Provider capacity** lists the usage windows each host reports for its
+accounts.
 
 Select a card to open that host's dialog, which shows facts (identity,
 reachability, protocol fingerprint, compatibility, workspaces),
