@@ -5,7 +5,7 @@
 // through the `orbit.resident.*` tools behind /api/residents; the server keeps
 // the mandate rules, so a refused write shows the server's own message.
 
-import { captureWorkspaceVisit, detailsPanel, el, fetchJson, infoHint, isAggregateView, makeToggleRow, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
+import { captureWorkspaceVisit, detailsPanel, el, fetchJson, infoHint, isAggregateView, makeToggleRow, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel, taskHref } from './common.js';
 import { actionReason, explainUnavailable, feedback, selectedWorkspaceName } from './operations-shared.js';
 
 const FEEDBACK = "resident-operation-feedback";
@@ -46,20 +46,21 @@ window.addEventListener("hashchange", () => {
 });
 
 
-function fact(label, value) {
+function fact(label, value, title = "") {
   return el("div", { class: "resident-fact" }, [
     el("span", { class: "resident-fact-label", text: label }),
-    el("span", { class: "resident-fact-value", text: value }),
+    el("span", { class: "resident-fact-value", text: value, title: title || null }),
   ]);
 }
 
-// "in 22m", "in 3h", "due 40m ago": a wake time read at a glance.
-function relative(value) {
-  const at = Date.parse(value);
-  if (Number.isNaN(at)) return "-";
-  const minutes = Math.round((at - Date.now()) / 60000);
-  const span = (mins) => (mins < 60 ? `${mins}m` : mins < 2880 ? `${Math.round(mins / 60)}h` : `${Math.round(mins / 1440)}d`);
-  return minutes > 0 ? `in ${span(minutes)}` : minutes === 0 ? "now" : `due ${span(-minutes)} ago`;
+function clock(value) {
+  return value ? String(value).replace("T", " ").replace(/\.\d+Z$/, "Z") : "";
+}
+
+// Open decisions when the card read succeeded; grant requests when it did not
+// or this server does not send the field yet.
+function openDecisionList(mandate) {
+  return Array.isArray(mandate.open_decisions) ? mandate.open_decisions : (mandate.open_requests || []);
 }
 
 // One write: pinned to the visit the operator acted in, refreshing the view
@@ -379,7 +380,7 @@ async function startResident(form, controls, status) {
 
 // Why a mandate needs the operator, or "".
 function needsOperator(mandate) {
-  const requests = mandate.open_requests?.length || 0;
+  const requests = openDecisionList(mandate).length;
   return [
     requests ? `${requests} request${requests === 1 ? "" : "s"}` : null,
     mandate.mandate_error || mandate.authority_error ? "invalid mandate" : null,
@@ -412,13 +413,40 @@ function statusLine(mandate) {
   };
 }
 
+function wakeReason(reason) {
+  const known = {
+    heartbeat: "heartbeat",
+    status_request: "status request",
+    digest_changed: "watched state changed",
+    deadline: "deadline",
+  };
+  const text = String(reason || "").trim();
+  if (!text) return "";
+  return known[text] || text.replaceAll("_", " ");
+}
+
+function spanLabel(mins) {
+  return mins < 60 ? `${mins}m` : mins < 2880 ? `${Math.round(mins / 60)}h` : `${Math.round(mins / 1440)}d`;
+}
+
+// What happens next, and when. An inactive mandate does not pretend to have a wake.
 function nextWake(payload, mandate) {
-  if (mandate.state !== "active") return { text: "-", title: "" };
-  if (mandate.live_cycle) return { text: "Now", title: "" };
-  if (!payload.routine?.enabled) return { text: "Routine off", title: "The cycle routine is off, so no cycle wakes this mandate." };
+  if (mandate.state !== "active") {
+    const why = mandate.state === "ended"
+      ? "The mandate has ended."
+      : (mandate.state_reason || `The mandate is ${mandate.state.replaceAll("_", " ")}.`);
+    return { text: "Will not wake", title: why };
+  }
+  if (mandate.live_cycle) return { text: "Running now", title: "" };
+  if (!payload.routine?.enabled) return { text: "Will not wake", title: "The cycle routine is off, so no cycle wakes this mandate." };
   const wake = mandate.latest_checkpoint?.next_wake;
-  if (wake) return { text: relative(wake.not_before), title: `${wake.reason} after ${when(wake.not_before)}` };
-  return { text: "Next tick", title: "" };
+  if (!wake?.not_before) return { text: "Wakes next routine tick", title: "No wake time is recorded." };
+  const at = Date.parse(wake.not_before);
+  if (Number.isNaN(at)) return { text: "Wakes at an unreadable time", title: wakeReason(wake.reason) };
+  const minutes = Math.round((at - Date.now()) / 60000);
+  const whenText = minutes > 0 ? `Wakes in ${spanLabel(minutes)}` : minutes === 0 ? "Wakes now" : `Was due ${spanLabel(-minutes)} ago`;
+  const reason = wakeReason(wake.reason);
+  return { text: reason ? `${whenText} · ${reason}` : whenText, title: clock(wake.not_before) };
 }
 
 function stateLabel(mandate) {
@@ -427,18 +455,41 @@ function stateLabel(mandate) {
   return state;
 }
 
+function endedMeta(mandate) {
+  if (mandate.state !== "ended") return null;
+  const outcome = mandate.latest_checkpoint?.outcome;
+  const at = mandate.control?.last?.at;
+  const parts = [];
+  if (outcome) parts.push(outcome);
+  if (at) parts.push(clock(at));
+  if (!parts.length) return null;
+  return el("span", { class: "resident-row-ended", text: parts.join(" · ") });
+}
+
 function mandateRow(mandate) {
   const selected = ui.selected === mandate.task_id;
   const goal = mandate.goal || mandate.mandate?.goal || mandate.title || mandate.task_id;
+  const status = statusLine(mandate);
+  const open = openDecisionList(mandate).length;
+  const meta = [
+    el("span", { class: "resident-row-state" }, [stateLabel(mandate)]),
+    el("span", { class: "resident-id", text: mandate.task_id }),
+  ];
+  if (open) {
+    const pill = el("span", { class: "pill", text: `${open} open` });
+    pill.dataset.status = "open";
+    meta.push(pill);
+  }
+  const statusAttrs = { class: "resident-row-status", text: status.text };
+  if (status.text.length > 72) statusAttrs.title = status.text;
   const row = el("div", {
     class: `resident-row${selected ? " selected" : ""}${mandate.state === "ended" ? " ended" : ""}`,
-    "aria-label": `Resident ${goal}, ${mandate.state}, task ${mandate.task_id}`,
+    "aria-label": `Resident ${goal}, ${mandate.state}, task ${mandate.task_id}. ${status.text}`,
   }, [
     el("span", { class: "resident-row-goal resident-goal", text: goal }),
-    el("span", { class: "resident-row-meta" }, [
-      el("span", { class: "resident-row-state" }, [stateLabel(mandate)]),
-      el("span", { class: "resident-id", text: mandate.task_id }),
-    ]),
+    el("span", { class: "resident-row-meta" }, meta),
+    el("span", statusAttrs),
+    endedMeta(mandate),
   ]);
   row.dataset.task = mandate.task_id;
   return makeToggleRow(row, {
@@ -473,34 +524,120 @@ function historyList(authority) {
   }));
 }
 
-function checkpointBlock(checkpoint, wake) {
-  if (!checkpoint) return el("div", { class: "resident-checkpoint" }, [
-    el("p", { class: "resident-muted", text: "No checkpoint yet." }),
-    el("div", { class: "resident-facts" }, [fact("Next wake", wake.title ? `${wake.text} · ${wake.title}` : wake.text)]),
-  ]);
-  const facts = [
-    fact("Cycle", `${checkpoint.cycle || "-"} (${checkpoint.outcome || "-"})`),
-    fact("Wake", `${list(checkpoint.wake?.reasons)} · ${checkpoint.wake?.digest || "-"}`),
-    fact("Actions", String(checkpoint.actions?.length || 0)),
-    fact("Next wake", wake.title ? `${wake.text} · ${wake.title}` : wake.text),
-  ];
-  return el("div", { class: "resident-checkpoint" }, [
-    checkpoint.notes ? el("p", { class: "resident-notes", text: checkpoint.notes }) : null,
-    el("div", { class: "resident-facts" }, facts),
+function checkpointNotes(checkpoint) {
+  const notes = checkpoint.notes;
+  if (!notes) return null;
+  if (notes.length <= 180) return el("p", { class: "resident-notes", text: notes });
+  const panel = detailsPanel(`resident-notes:${checkpoint.cycle || checkpoint.mandate || "notes"}`, { class: "resident-disclosure" });
+  panel.append(el("summary", { text: "Show notes" }), el("p", { class: "resident-notes", text: notes }));
+  return panel;
+}
+
+function wakeLine(checkpoint) {
+  const reasons = (checkpoint.wake?.reasons || []).map(wakeReason).filter(Boolean);
+  const digest = checkpoint.wake?.digest;
+  if (!reasons.length && !digest) return null;
+  return el("p", { class: "resident-muted resident-wake" }, [
+    el("span", { text: reasons.length ? `Woke for ${reasons.join(", ")}` : "Wake recorded" }),
+    digest ? infoHint(`Wake digest ${digest}`) : null,
   ]);
 }
 
+function recordList(label, items, render, empty) {
+  const rows = Array.isArray(items) ? items : [];
+  return el("div", { class: "resident-records" }, [
+    el("h4", { text: label }),
+    rows.length
+      ? el("ul", { class: "resident-record-list" }, rows.map(render))
+      : el("p", { class: "resident-muted", text: empty }),
+  ]);
+}
+
+function actionItem(action) {
+  const parts = [action.kind, action.subject, action.result, action.ref].filter(Boolean);
+  const line = el("li", { text: parts.join(" · ") || "Action" });
+  if (action.key) line.title = action.key;
+  return line;
+}
+
+function decisionItem(decision) {
+  const parts = [decision.summary, decision.class].filter(Boolean);
+  const line = el("li", { text: parts.join(" · ") || "Decision" });
+  if (decision.id) line.title = decision.id;
+  return line;
+}
+
+function costItem(cost) {
+  const parts = [cost.kind, cost.what].filter(Boolean);
+  if (Number.isFinite(Number(cost.minutes))) parts.push(`${cost.minutes}m`);
+  if (cost.retries) parts.push(`${cost.retries} retries`);
+  const line = el("li", { text: parts.join(" · ") || "Cost" });
+  if (cost.signature) line.title = cost.signature;
+  return line;
+}
+
+function checkpointRequestItem(request) {
+  const label = [request.decision_request || request.id, request.blocking ? "blocking" : ""].filter(Boolean).join(" · ");
+  return el("li", {}, [
+    el("span", { text: label || "Request" }),
+    request.task ? el("a", { class: "resident-id", href: taskHref(request.task), text: request.task }) : null,
+  ]);
+}
+
+function checkpointBlock(checkpoint) {
+  if (!checkpoint) {
+    return el("div", { class: "resident-checkpoint" }, [
+      el("p", { class: "resident-muted", text: "No checkpoint yet." }),
+    ]);
+  }
+  const outcome = checkpoint.outcome || "Outcome not recorded";
+  const probe = checkpoint.probe ? el("span", { class: "pill", text: "probe" }) : null;
+  if (probe) probe.dataset.status = "in_progress";
+  return el("div", { class: "resident-checkpoint" }, [
+    el("p", { class: "resident-checkpoint-summary" }, [
+      checkpoint.cycle ? el("span", { class: "resident-id", text: checkpoint.cycle }) : null,
+      el("span", { text: checkpoint.cycle ? ` · ${outcome}` : outcome }),
+      probe,
+    ]),
+    checkpoint.error ? el("p", { class: "resident-stalled", text: checkpoint.error }) : null,
+    wakeLine(checkpoint),
+    checkpointNotes(checkpoint),
+    recordList("Actions", checkpoint.actions, actionItem, "No actions this cycle"),
+    recordList("Decisions", checkpoint.decisions, decisionItem, "No decisions this cycle"),
+    recordList("Costs", checkpoint.costs, costItem, "No costs this cycle"),
+    recordList("Requests", checkpoint.requests, checkpointRequestItem, "No requests this cycle"),
+  ]);
+}
+
+const GATE_LABEL = {
+  resident_authority: "Grant",
+  agent_request: "Decision",
+  block_triage: "Block triage",
+  pilot_admission: "Pilot",
+  proposed_approval: "Proposed",
+  review_approval: "Review",
+  model_answer_review: "Model answer",
+  script_grant: "Script",
+};
+
+function gateLabel(gate) {
+  const name = typeof gate === "string" ? gate : "";
+  return GATE_LABEL[name] || name.replaceAll("_", " ") || "Decision";
+}
+
 function requestRows(payload, mandate) {
-  const requests = mandate.open_requests || [];
+  const requests = openDecisionList(mandate);
   if (!requests.length) return null;
   return el("div", { class: "resident-requests" }, requests.map(request => {
     const ask = request.resident_grant;
     const text = ask
       ? `Asks for +${list(ask.rights)}${ask.workspaces?.length ? ` in ${list(ask.workspaces)}` : ""}, relayed by ${ask.relay?.by || request.raised_by}`
-      : request.summary || request.gate;
+      : request.summary || gateLabel(request.gate);
     const answers = (request.answers || []).map(answer => {
       const id = answer.id || answer;
-      const action = button(answer.label || id, `${answer.label || id} request ${request.id}`);
+      const label = answer.label || id;
+      const action = button(label, `${label} request ${request.id}`);
+      if (answer.consequence && answer.consequence !== label) action.setAttribute("aria-description", answer.consequence);
       action.addEventListener("click", () => write(
         `/api/decisions/${encodeURIComponent(request.id)}/answer`,
         { answer: id, note: "Answered from the dashboard Residents view" },
@@ -509,8 +646,16 @@ function requestRows(payload, mandate) {
       ));
       return gated(payload, "resident_write", action);
     });
+    const state = request.state || "open";
+    const pill = el("span", { class: "pill", text: state });
+    pill.dataset.status = state;
     return el("div", { class: "resident-request" }, [
-      el("span", { class: "resident-request-id", text: request.id }),
+      el("span", { class: "resident-request-head" }, [
+        pill,
+        el("span", { class: "resident-request-gate", text: gateLabel(request.gate) }),
+        el("span", { class: "resident-request-id", text: request.id }),
+        request.task_id ? el("a", { class: "resident-id", href: taskHref(request.task_id), text: request.task_id }) : null,
+      ]),
       el("span", { class: "resident-request-text", text }),
       el("span", { class: "resident-actions" }, answers),
       ask?.quote ? el("q", { class: "resident-quote", text: ask.quote }) : null,
@@ -668,15 +813,127 @@ function controlRow(payload, mandate) {
     return gated(payload, "resident_write", made);
   });
   return el("div", { class: "resident-detail-actions" }, [
-    el("div", { class: "resident-actions" }, buttons),
+    el("div", { class: "resident-actions resident-controls" }, buttons),
     pending ? composer(payload, mandate, pending) : null,
+  ]);
+}
+
+// The grant the live cycle is running with, or the last cycle's grant when
+// none is live. An explicit null means the server looked and found nothing:
+// do not invent it from an older checkpoint. A missing field is an older
+// payload, and the checkpoint's own report is then the only record.
+function recordedCycle(mandate) {
+  const recorded = mandate.cycle_authority;
+  if (recorded && typeof recorded === "object") return recorded;
+  if (Object.prototype.hasOwnProperty.call(mandate, "cycle_authority")) return null;
+  const authority = mandate.latest_checkpoint?.authority;
+  if (!authority || typeof authority !== "object" || Array.isArray(authority)) return null;
+  return {
+    cycle: mandate.latest_checkpoint.cycle,
+    live: false,
+    rights: authority.rights || [],
+    observe_only: Boolean(authority.observe_only),
+    narrowed_by: authority.narrowed_by || null,
+    reported: true,
+  };
+}
+
+function sameAuthority(current, cycle) {
+  const currentObserve = !(current.rights || []).length;
+  const cycleObserve = Boolean(cycle.observe_only) || !(cycle.rights || []).length;
+  if (currentObserve !== cycleObserve) return false;
+  const sameList = (left, right) => {
+    const a = [...(left || [])].sort();
+    const b = [...(right || [])].sort();
+    return a.length === b.length && a.every((value, index) => value === b[index]);
+  };
+  if (!sameList(current.rights, cycle.rights)) return false;
+  if (!Array.isArray(cycle.workspaces)) return true;
+  return sameList(current.workspaces, cycle.workspaces);
+}
+
+function cycleRan(cycle) {
+  const observe = cycle.observe_only || !(cycle.rights || []).length;
+  if (observe) return "observe-only";
+  const rights = `with ${cycle.rights.join(", ")}`;
+  if (!Array.isArray(cycle.workspaces)) return rights;
+  const spaces = cycle.workspaces.length ? cycle.workspaces.join(", ") : "no workspaces";
+  return `${rights} in ${spaces}`;
+}
+
+function narrowedNote(cycle) {
+  const by = cycle?.narrowed_by;
+  if (!by) return "";
+  if (by === "deadline") return " The deadline had passed.";
+  if (String(by).startsWith("notice:")) return ` Narrowed by notice ${String(by).slice("notice:".length)}.`;
+  return ` Narrowed by ${by}.`;
+}
+
+function authorityEffect(mandate, current) {
+  const cycle = recordedCycle(mandate);
+  if (!cycle) {
+    if (mandate.live_cycle) return "A cycle is running. Its granted authority is not recorded here.";
+    if (mandate.latest_checkpoint) return "The last cycle's granted authority is not recorded. The next cycle uses this authority.";
+    return "No cycle has run yet. The next cycle uses this authority.";
+  }
+  const same = sameAuthority(current, cycle);
+  if (cycle.live && same) return "In effect for the cycle that is running.";
+  if (cycle.live) return `Takes effect next cycle. This cycle is running ${cycleRan(cycle)}.${narrowedNote(cycle)}`;
+  if (same) return "Next cycle uses this authority.";
+  return `Last cycle ran ${cycleRan(cycle)}.${narrowedNote(cycle)} Next cycle uses this authority.`;
+}
+
+function rightsLabel(rights, ended) {
+  if (rights?.length) return rights.join(", ");
+  return ended ? "none" : "Observes only";
+}
+
+function cycleFact(mandate) {
+  const live = mandate.live_cycle;
+  if (live) return fact("Cycle", `Running until ${clock(live.expires_at)}`, `${live.cycle} · run ${live.run_id}`);
+  const checkpoint = mandate.latest_checkpoint;
+  if (checkpoint?.cycle) return fact("Cycle", `Last · ${checkpoint.cycle}`);
+  return fact("Cycle", "No cycle running");
+}
+
+function statusExtra(mandate) {
+  const line = mandate.status_line;
+  if (!line?.title) return [];
+  const status = statusLine(mandate);
+  const nodes = [];
+  const posted = line.posted_at ? `Posted ${clock(line.posted_at)}` : "";
+  const lapse = line.expires_at ? `${status.stale ? "Lapsed" : "Lapses"} ${clock(line.expires_at)}` : "";
+  const text = [posted, lapse].filter(Boolean).join(" · ");
+  if (text) nodes.push(el("p", { class: "resident-muted", text }));
+  if (line.body) {
+    const panel = detailsPanel(`resident-status:${mandate.task_id}`, { class: "resident-disclosure" });
+    panel.append(el("summary", { text: "Show full status" }), el("p", { class: "resident-notes", text: line.body }));
+    nodes.push(panel);
+  }
+  return nodes;
+}
+
+function authorityBlock(mandate, effective) {
+  const cycle = recordedCycle(mandate);
+  return el("div", { class: "resident-authority-now" }, [
+    el("h4", { text: "Current authority" }),
+    el("div", { class: "resident-facts" }, [
+      fact("Rights", rightsLabel(effective.rights, mandate.state === "ended")),
+      fact("Workspaces", list(effective.workspaces)),
+      el("div", { class: "resident-fact" }, [
+        el("span", { class: "resident-fact-label", text: "Effect" }),
+        el("span", { class: "resident-fact-value resident-fact-prose" }, [
+          el("span", { text: authorityEffect(mandate, effective) }),
+          cycle?.reported ? infoHint("Taken from the checkpoint. The cycle grant was not recorded.") : null,
+        ]),
+      ]),
+    ]),
   ]);
 }
 
 function mandateDetail(payload, mandate) {
   const effective = mandate.effective_authority || {};
   const body = mandate.mandate || {};
-  const live = mandate.live_cycle;
   const wake = nextWake(payload, mandate);
   const last = mandate.control?.last;
   const warnings = [
@@ -686,16 +943,13 @@ function mandateDetail(payload, mandate) {
     mandate.stalled ? `Stalled: ${mandate.stalled_reason || "no checkpoint within the heartbeat"}` : null,
   ].filter(Boolean);
   const facts = [
-    fact("Rights", effective.rights?.length || mandate.state === "ended" ? list(effective.rights) : "none (observes only)"),
-    fact("Workspaces", list(effective.workspaces)),
-    fact("Crew", body.crew || "-"),
-    fact("Cadence", body.cadence ? `floor ${body.cadence.floor_minutes}m · heartbeat ${body.cadence.heartbeat_minutes}m` : "-"),
-    fact("Deadline", when(body.deadline || mandate.authority?.deadline)),
-    fact("Live cycle", live ? `${live.cycle} (run ${live.run_id}) until ${when(live.expires_at)}` : "none"),
+    fact("Next wake", wake.text, wake.title),
+    fact("Deadline", clock(body.deadline || mandate.authority?.deadline) || "No deadline"),
+    cycleFact(mandate),
+    fact("Crew", body.crew || "No crew"),
+    fact("Cadence", body.cadence ? `floor ${body.cadence.floor_minutes}m · heartbeat ${body.cadence.heartbeat_minutes}m` : "No cadence"),
   ];
-  if (last) facts.push(fact("Last control", `${last.action} by ${last.by || "-"} · ${when(last.at)}${last.reason ? ` · ${last.reason}` : ""}`));
-  const line = mandate.status_line;
-  const status = statusLine(mandate);
+  if (last) facts.push(fact("Last control", `${last.action} by ${last.by || "unknown"} · ${clock(last.at)}${last.reason ? ` · ${last.reason}` : ""}`));
   const id = mandate.task_id;
   // detailsPanel keeps each disclosure's open state across refreshes.
   let authority = null;
@@ -714,18 +968,13 @@ function mandateDetail(payload, mandate) {
   return el("section", { class: "resident-detail", "aria-label": `Detail for ${id}` }, [
     mandate.state_reason ? el("p", { class: "resident-muted", text: mandate.state_reason }) : null,
     ...warnings.map(text => el("p", { class: "resident-stalled", text })),
-    el("div", { class: `resident-status-detail${status.stale ? " stale" : ""}${status.empty ? " empty" : ""}` }, [
-      el("h4", { text: status.stale ? "Last status (silent since it lapsed)" : "Status" }),
-      line?.title ? el("p", { class: "resident-notes", text: line.title }) : el("p", { class: "resident-muted", text: status.text }),
-      line?.body ? el("p", { class: "resident-muted", text: line.body }) : null,
-      line?.title ? el("p", { class: "resident-muted", text: `Posted ${when(line.posted_at)} · ${status.stale ? "lapsed" : "lapses"} ${when(line.expires_at)}` }) : null,
-    ]),
+    el("div", { class: "resident-facts" }, facts),
+    ...statusExtra(mandate),
     requestRows(payload, mandate),
     controlRow(payload, mandate),
-    el("div", { class: "resident-detail-grid" }, [
-      el("div", {}, [el("h4", { text: "Mandate" }), el("div", { class: "resident-facts" }, facts)]),
-      el("div", {}, [el("h4", { text: "Latest checkpoint" }), checkpointBlock(mandate.latest_checkpoint, wake)]),
-    ]),
+    authorityBlock(mandate, effective),
+    el("h4", { text: "Latest checkpoint" }),
+    checkpointBlock(mandate.latest_checkpoint),
     authority,
     history,
   ]);
