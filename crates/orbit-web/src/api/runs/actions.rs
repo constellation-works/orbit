@@ -13,7 +13,7 @@ use orbit_core::OrbitRuntime;
 use orbit_core::application::distributed::PullStartOptionsSupplied;
 use orbit_core::application::job::{
     AutoDrainSubmissionProfile, AutoDrainSubmissionSource, DrainAdmissionsStopRequest,
-    ShipModeResolutionProfile, SubmissionKind,
+    ShipModeResolutionProfile, ShipSubmissionProfile,
 };
 use orbit_core::{DrainEntryPoint, WorkspacePullRequest};
 use orbit_types::workflow::{JobRunTrigger, ReviewLayer};
@@ -108,20 +108,13 @@ pub(in crate::api) async fn ship_workflow_action(
             // overrides the drain's readiness gates for the named tasks.
             operator_override: true,
         })?;
-        let mut shipped = json!({
-            "workflow": "ship",
-            "job_id": invoke.job_name,
-            "run_id": invoke.run_id,
-            "state": if invoke.queued { "queued" } else { "submitted" },
-            "submitted_at": invoke.submitted_at,
-        });
-        shipped["review"] = runtime.run_review_layer(&invoke.run_id)?;
-        runtime
-            .submission_notices(SubmissionKind::Ship {
-                explicit: !body.task_ids.is_empty(),
-            })
-            .insert_into(&mut shipped);
-        Ok(shipped)
+        Ok(runtime
+            .ship_submission_receipt(
+                &invoke,
+                !body.task_ids.is_empty(),
+                ShipSubmissionProfile::Http,
+            )?
+            .to_json())
     })
     .await
     {

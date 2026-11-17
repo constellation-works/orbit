@@ -42,6 +42,15 @@ An explicit task ID must be in `backlog` or `in-progress`: shipping a `blocked`,
 so return a blocked task to the backlog (`orbit task update <id> --status backlog`)
 before shipping it again.
 
+`orbit run ship --json` returns `workflow`, `job_id`, `run_id`, `state`,
+`submitted_at`, and the captured `review` layer (`{timing, source}`, or null),
+matching MCP ship and HTTP `POST /workflows/ship`. The CLI also retains its
+one-shot dispatch fields: `wait_timeout: false`, `attempt: 1`, `error_code: null`
+and `error_message: null`. Submission notices use `warning` and `note` strings
+(one notice per line); a validation-environment warning also appears as
+`validation_env_warning`. Absent notices omit their keys. Text output keeps
+its workflow/job/run/state and inspect lines, followed by warnings and notes.
+
 Readiness gates and lock waits are drain policy. An operator's explicit ship
 of named tasks (`orbit run ship <id>` or the dashboard's Ship) overrides them
 and dispatches: a pending `not_before`, unassessed complexity, no

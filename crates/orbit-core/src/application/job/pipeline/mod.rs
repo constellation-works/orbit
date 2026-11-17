@@ -64,7 +64,8 @@ pub(crate) use admission::input_hash;
 pub use notices::{SubmissionKind, SubmissionNotices};
 pub use submit::{
     AutoDrainRequest, AutoDrainSubmissionProfile, AutoDrainSubmissionReceipt,
-    AutoDrainSubmissionSource, ShipModeResolutionProfile, ShipRunRequest,
+    AutoDrainSubmissionSource, ShipModeResolutionProfile, ShipRunRequest, ShipSubmissionProfile,
+    ShipSubmissionReceipt,
 };
 pub(crate) use submit::{ChildPipelineAdmission, ChildSubmission};
 pub(crate) use submit::{PipelineSubmission, SubmittedDefinition};

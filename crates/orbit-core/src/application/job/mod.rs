@@ -84,7 +84,7 @@ pub use pipeline::{
     AutoDrainRequest, AutoDrainSubmissionProfile, AutoDrainSubmissionReceipt,
     AutoDrainSubmissionSource, PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult,
     PipelineWaitStatus, PipelineWorkerLogSnapshot, ShipModeResolutionProfile, ShipRunRequest,
-    SubmissionKind, SubmissionNotices,
+    ShipSubmissionProfile, ShipSubmissionReceipt, SubmissionKind, SubmissionNotices,
 };
 pub use pr_repair::{TaskAutoFixError, TaskAutoFixRefusal};
 pub(crate) use resume::PublishedResume;

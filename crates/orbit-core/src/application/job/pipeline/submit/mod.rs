@@ -3,6 +3,7 @@
 mod auto_drain_receipt;
 mod pipeline_run;
 mod ship;
+mod ship_receipt;
 
 pub use auto_drain_receipt::{
     AutoDrainRequest, AutoDrainSubmissionProfile, AutoDrainSubmissionReceipt,
@@ -12,3 +13,4 @@ pub(crate) use pipeline_run::{
     ChildPipelineAdmission, ChildSubmission, PipelineSubmission, SubmittedDefinition,
 };
 pub use ship::{ShipModeResolutionProfile, ShipRunRequest};
+pub use ship_receipt::{ShipSubmissionProfile, ShipSubmissionReceipt};
