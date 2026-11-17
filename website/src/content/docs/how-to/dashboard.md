@@ -189,6 +189,45 @@ With one workspace selected, Tasks updates live; other views refresh every
 `(N failed)` prefix to the page title. Click **Notify** to get a browser
 notification when a drain ends or a task is newly held on a red base.
 
+### Filter the loaded board
+
+Press Shift twice to open a floating filter bar over the task list. It
+narrows only the rows the board already loaded: it never asks the server,
+so it cannot find tasks outside the loaded list. The top-bar search is the
+opposite: it queries the server and jumps to the task, wherever it is.
+
+Type to filter. Every word you type must match something on the row:
+
+- A task ID, run ID, or pull-request number matches from its start.
+- The title, branch, host, or tags match anywhere inside the value.
+- Matching ignores case. A leading `#` before a pull-request number is
+  optional.
+
+The bar counts what it keeps, for example `3 of 40 shown`. Delete the text
+to see the full list again without closing the bar.
+
+Press Esc, or press Shift twice again, to close the bar. Closing clears the
+filter and returns the board to its normal list. Switching workspace or
+leaving Tasks closes it too. The bar opens only while the task board is
+showing and you are not typing in a field or a dialog.
+
+### Collapse the dock and rail
+
+On macOS press `⌘B`, on other systems press `Ctrl+B`, to slide the Tasks
+dock out of view so the list takes the full width; press it again to bring
+the dock back. The hide button in the dock's tab bar and the show button at
+the end of the filter bar do the same. This browser remembers your choice.
+The shortcut works while the task list sits beside the dock; with a task
+open, the dock already shows the task.
+
+In windows 1315px wide or narrower the dock is its own route instead of a
+side panel, so the shortcut does nothing there.
+
+The navigation rail has its own toggle button, which collapses it to a
+narrow strip. The rail has no shortcut, and this browser remembers its state
+separately from the dock. On phones the rail is a top strip instead, so
+collapsing does not apply there.
+
 ### Edit task metadata
 
 In a task's detail you can edit the description, acceptance criteria,
