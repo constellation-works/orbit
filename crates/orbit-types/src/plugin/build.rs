@@ -264,6 +264,12 @@ pub fn is_full_commit_id(value: &str) -> bool {
     matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// Whether `value` is a full SHA-1 Git commit object id: exactly 40 hex
+/// characters. A SHA-256 id is not one.
+pub fn is_sha1_commit_id(value: &str) -> bool {
+    value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 /// `(url, commit)` when `source` is `git+<url>#<full commit id>`, the only
 /// source form that may build (§3.1). The commit is lowercased.
 pub fn git_commit_source(source: &str) -> Option<(&str, String)> {

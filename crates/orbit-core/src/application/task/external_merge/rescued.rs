@@ -6,6 +6,7 @@
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::{AdmissionIdentity, AdmissionLookup, ExecutionClaimPhase};
+use orbit_types::plugin::is_sha1_commit_id;
 use orbit_types::task::Task;
 use orbit_types::workflow::handoff::{HandoffDelivery, LandingAttemptState};
 
@@ -51,7 +52,7 @@ impl OrbitRuntime {
         published_head: &str,
     ) -> Result<ExternalMergeSettlement, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        if claim_id.trim().is_empty() || pull_request == 0 || !full_commit(published_head) {
+        if claim_id.trim().is_empty() || pull_request == 0 || !is_sha1_commit_id(published_head) {
             return Err(refused(
                 id,
                 "a recovered claim, pull request number and full published head commit are required",
@@ -169,8 +170,8 @@ impl OrbitRuntime {
                 .branch_name,
             landing,
             id,
-        ) || !full_commit(&landing.head_sha)
-            || !full_commit(&landing.merge_commit)
+        ) || !is_sha1_commit_id(&landing.head_sha)
+            || !is_sha1_commit_id(&landing.merge_commit)
         {
             return Err(refused(
                 id,
@@ -221,8 +222,4 @@ impl OrbitRuntime {
         }
         Ok(())
     }
-}
-
-fn full_commit(commit: &str) -> bool {
-    commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit())
 }

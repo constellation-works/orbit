@@ -1,3 +1,4 @@
+use orbit_types::plugin::is_full_commit_id;
 use orbit_types::workflow::{
     CommitObservation, CommitObservationStatus, DeliveryEvidenceGap, JobRun, JobRunState,
     LandingMethod, LandingObservation, LandingObservationStatus, PipelineState, RunDeliveryStatus,
@@ -129,10 +130,7 @@ pub(super) fn optional_sha(value: Option<&Value>) -> Result<Option<String>, Deli
 
 /// A full SHA-1 or SHA-256 object id in lowercase hex.
 pub(super) fn is_full_sha(value: &str) -> bool {
-    matches!(value.len(), 40 | 64)
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    is_full_commit_id(value) && !value.bytes().any(|b| b.is_ascii_uppercase())
 }
 
 pub(super) fn landing(status: LandingObservationStatus) -> LandingObservation {

@@ -11,6 +11,7 @@ use orbit_common::fs::git::{
     should_retry_git_ref_cas, try_with_git_fetch_lock,
 };
 use orbit_engine::DispatchError;
+use orbit_types::plugin::is_full_commit_id;
 
 /// The tree id of the commit `revision` in `workspace`: `Ok(Err(stderr))`
 /// when Git has no readable tree for it.
@@ -292,7 +293,7 @@ pub(super) fn git_tree_path(anchor: &Path) -> Option<String> {
 
 /// Whether `value` is a full SHA-1 or SHA-256 commit id, in either hex case.
 pub(crate) fn is_commit_id(value: &str) -> bool {
-    matches!(value.len(), 40 | 64) && value.chars().all(|ch| ch.is_ascii_hexdigit())
+    is_full_commit_id(value)
 }
 
 pub(super) fn git(

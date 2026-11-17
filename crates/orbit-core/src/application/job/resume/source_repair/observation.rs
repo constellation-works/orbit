@@ -1,10 +1,11 @@
 //! Authenticate the host commit, review, synchronization and publication chain.
 use super::*;
+use orbit_types::plugin::is_sha1_commit_id;
 use orbit_types::workflow::{SuccessfulCheckpoint, pr_auto_fix_pushes};
 
 /// Whether a source-repair identity is a full SHA-1 object name.
 pub(super) fn is_exact_sha(sha: &str) -> bool {
-    sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+    is_sha1_commit_id(sha)
 }
 
 /// Read Git output with the deadline and refusal appropriate to the observation.

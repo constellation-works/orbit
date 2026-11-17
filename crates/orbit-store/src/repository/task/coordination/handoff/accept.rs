@@ -12,7 +12,9 @@ use orbit_types::workflow::{KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, hand
 
 use super::super::lifecycle::{encode, invalid, row};
 use super::review::review_refused;
-use super::{HANDOFF, TaskCommitBoundary, object_id};
+use orbit_types::plugin::is_full_commit_id;
+
+use super::{HANDOFF, TaskCommitBoundary};
 use crate::contracts::*;
 
 impl TaskCommitBoundary {
@@ -63,7 +65,7 @@ impl TaskCommitBoundary {
                 &candidate.base.tree,
             ]
             .iter()
-            .any(|s| !object_id(s))
+            .any(|s| !is_full_commit_id(s))
         {
             return Err(invalid(
                 "exact repository, branches and object IDs required",

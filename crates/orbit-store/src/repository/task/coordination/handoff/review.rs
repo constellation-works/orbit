@@ -8,7 +8,9 @@ use orbit_types::workflow::{
 };
 
 use super::super::lifecycle::invalid;
-use super::{TaskCommitBoundary, object_id};
+use orbit_types::plugin::is_full_commit_id;
+
+use super::TaskCommitBoundary;
 use crate::contracts::*;
 
 impl TaskCommitBoundary {
@@ -130,7 +132,7 @@ impl TaskCommitBoundary {
         ]
         .iter()
         .any(|s| s.trim().is_empty())
-            || !object_id(&evidence.reviewed_base_sha)
+            || !is_full_commit_id(&evidence.reviewed_base_sha)
         {
             return Err(review_refused(
                 R::ReviewCertificateMismatch,

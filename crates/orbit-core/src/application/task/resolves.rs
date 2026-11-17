@@ -17,6 +17,7 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_store::contracts::FrictionLandingOutcome;
+use orbit_types::plugin::is_sha1_commit_id;
 use orbit_types::task::{
     RESOLVES_TARGET_NOTE_PREFIX, ResolvesSideEffectRecord, ResolvesSideEffectState, Task,
     TaskHistoryEntry, TaskStatus, named_friction_targets, pending_resolves_entries,
@@ -291,7 +292,7 @@ fn landing_resolution(history: &[TaskHistoryEntry]) -> Option<LandingResolution>
 pub(crate) fn pull_request_delivery(note: &str) -> Option<(u64, &str)> {
     let (_, delivery) = note.rsplit_once("; delivered by pull request #")?;
     let (pr, commit) = delivery.split_once(" merged as ")?;
-    if commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if !is_sha1_commit_id(commit) {
         return None;
     }
     Some((pr.parse().ok()?, commit))

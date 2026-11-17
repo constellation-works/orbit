@@ -1,4 +1,5 @@
 //! Cumulative owner reservation for a provider base update, shared by causes.
+use crate::plugin::is_full_commit_id;
 use crate::task::TaskHistoryEntry;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -158,8 +159,7 @@ pub fn decide_pr_base_update(
 }
 
 fn validate(request: &PrBaseUpdateReservation) -> Result<(), PrBaseUpdateRefusal> {
-    let sha =
-        |s: &str| matches!(s.len(), 40 | 64) && s.bytes().all(|byte| byte.is_ascii_hexdigit());
+    let sha = is_full_commit_id;
     if [
         &request.execution,
         &request.repository,

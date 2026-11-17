@@ -1,5 +1,6 @@
 use orbit_common::OrbitError;
 use orbit_store::contracts::{ClaimInvocation, ClaimMutation};
+use orbit_types::plugin::is_sha1_commit_id;
 use orbit_types::task::{ExternalRef, Task, TaskStatus, push_external_ref_if_missing};
 
 use crate::OrbitRuntime;
@@ -32,7 +33,7 @@ pub(crate) fn settled_merge_commit(note: &str) -> Option<&str> {
         .strip_suffix(" outside Orbit")
         .or_else(|| merged.strip_suffix(" by owner decision"))?;
     let (_, commit) = merged.rsplit_once(" as ")?;
-    (commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(commit)
+    is_sha1_commit_id(commit).then_some(commit)
 }
 
 impl OrbitRuntime {
