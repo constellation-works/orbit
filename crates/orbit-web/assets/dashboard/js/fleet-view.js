@@ -72,17 +72,12 @@ export function fleetDrainSection(hosts, health, selectScope) {
   const list = el('div', { class: 'fleet-work-list' });
   for (const host of hosts) {
     const reading = health.get(host.machine_id);
-    if (!reading || reading.kind !== 'ready') {
-      list.append(el('div', { class: 'fleet-work-row' }, [el('span', { text: host.name }), el('span', { class: 'muted', text: host.checking ? 'Checking drains' : 'Drains unavailable' })]));
-      continue;
-    }
+    if (!reading || reading.kind !== 'ready') continue;
     for (const row of reading.drains || []) {
-      const drains = row.error ? [{ phase: 'Unknown', mode: 'Read failed', error: row.error }]
-        : [
-          ...(row.phase && row.phase !== 'idle' ? [{ phase: row.phase, mode: 'Owner drain', stopped: row.ownerStopped, run: row.runId, work: row.work }] : []),
-          ...(row.pull ? [{ phase: row.pullStopped ? 'Admissions stopped' : 'pulling', mode: 'Pull drain', stopped: row.pullStopped, run: row.pullRunId, work: row.pullWork }] : []),
-          ...(row.queued || []).map(drain => ({ phase: 'queued', mode: 'Queued window', run: drain.run_id })),
-        ];
+      const drains = [
+        ...(row.phase && row.phase !== 'idle' ? [{ phase: row.phase, mode: 'Owner drain', stopped: row.ownerStopped, run: row.runId, work: row.work }] : []),
+        ...(row.pull ? [{ phase: row.pullStopped ? 'Admissions stopped' : 'pulling', mode: 'Pull drain', stopped: row.pullStopped, run: row.pullRunId, work: row.pullWork }] : []),
+      ];
       for (const drain of drains) {
         const button = fleetButton('', `Open ${row.name} on ${host.name} for work, drain controls and admission details`, () => selectScope(host.local ? null : host.name, row.id), 'fleet-work-row');
         button.append(
@@ -96,7 +91,7 @@ export function fleetDrainSection(hosts, health, selectScope) {
       }
     }
   }
-  if (!list.childElementCount) list.append(el('p', { class: 'muted', text: 'No active or queued drains reported.' }));
+  if (!list.childElementCount) list.append(el('p', { class: 'muted', text: 'No live drains.' }));
   return section('Drains', list);
 }
 
