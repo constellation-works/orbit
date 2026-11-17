@@ -45,6 +45,39 @@ pub(super) fn refuse(message: impl Into<String>) -> OrbitError {
     OrbitError::JobValidation(format!("source repair refused: {}", message.into()))
 }
 
+/// Operator-decision refusals `candidate_resume` raises for a published
+/// candidate. Matched only by [`hold_operator_source_repair_refusal`], and
+/// only on the text [`refuse`] already stored. Integrity and authority
+/// refusals are absent here and stay failures.
+const OPERATOR_SOURCE_REPAIR_DECISIONS: &[&str] = &[
+    "published candidate lacks a unique requeue binding",
+    "a published candidate predates the current binding",
+    "retained local branch moved",
+    "published candidate is not an exact owner-local single-task execution",
+    "published source is live, discarded, changed, or lacks an applied requeue",
+];
+
+/// Hold an operator-decision source-repair refusal without changing its text.
+///
+/// Only `owner_published_candidate` applies this. Shared helpers keep
+/// returning [`OrbitError::JobValidation`], so requeue, explicit source
+/// repair, handoff and completion stay failures.
+pub(super) fn hold_operator_source_repair_refusal(error: OrbitError) -> OrbitError {
+    let OrbitError::JobValidation(message) = &error else {
+        return error;
+    };
+    if !OPERATOR_SOURCE_REPAIR_DECISIONS
+        .iter()
+        .any(|marker| message.contains(marker))
+    {
+        return error;
+    }
+    OrbitError::DeliveryRefused {
+        refusal: workflow::DeliveryRefusal::SourceRepairDecision,
+        message: message.clone(),
+    }
+}
+
 /// A refusal caused by the run's state; reports exactly as the [`refuse`] text
 /// it carries, with the reason attached for callers to classify.
 pub(super) fn refuse_run_state(

@@ -9,9 +9,11 @@
 //! refusal.
 use super::published_owner::{checkpoint, next, save_run};
 use super::*;
+use orbit_core::application::job::JobRunListParams;
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_types::task::TaskHistoryEntry;
-use orbit_types::workflow::{FailureActivityCheckpoint, JobRun};
+use orbit_types::workflow::{FailureActivityCheckpoint, JobRun, PipelineState};
+use std::collections::BTreeSet;
 
 /// The fixture job's `resume_candidate` step.
 const ADOPTION_STEP: u32 = 6;
@@ -329,4 +331,195 @@ pub(super) fn discard_across_successors_keeps_every_refusal() {
             "{case}: refusal precedes any checkout write"
         );
     }
+}
+
+/// The `successor_pushed` refusal, executed through the pipeline worker.
+///
+/// `next` marks its run running, and a running run is not executed, so this
+/// leaves the incoming run pending and replaces the fixture catalog with one
+/// `candidate_resume` step. The worker is what records the run outcome.
+pub(super) fn unbound_published_candidate_resume_holds_the_run() {
+    let f = Fixture::new();
+    discard(&f);
+    let (mut held, _setup, resumed) = attempt(&f);
+    let resumed = resumed.expect("the discarded publication implements fresh once");
+    hold(&f, &mut held, resumed);
+    let mut state = f.runtime.read_run_state(&held.run_id).unwrap().unwrap();
+    state.record_pipeline_output(
+        "push",
+        json!({"phase":"push","local_sha":f.head,"branch":f.branch}),
+    );
+    f.runtime.write_run_state(&held.run_id, &state).unwrap();
+    f.runtime
+        .apply_task_automation_update(
+            &f.task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::InProgress),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let mut incoming = f
+        .runtime
+        .insert_job_run(
+            "task_pr_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({"task_ids":[f.task]})),
+            None,
+        )
+        .unwrap();
+    incoming.state = JobRunState::Running;
+    incoming.pid = Some(std::process::id());
+    incoming.started_at = Some(Utc::now());
+    save_run(&f, &incoming);
+    f.runtime
+        .write_run_state(
+            &incoming.run_id,
+            &PipelineState::new(
+                incoming.run_id.clone(),
+                incoming.job_id.clone(),
+                incoming.input.clone().unwrap(),
+            ),
+        )
+        .unwrap();
+    let setup = f.action(
+        "worktree_setup",
+        json!({"job_run_id":incoming.run_id,"run_id":incoming.run_id,"task_ids":[f.task],"base":"main","base_sync":"remote"}),
+    );
+    assert_eq!(
+        setup["prior_job_run_id"], held.run_id,
+        "the pushed successor is the publication this resume judges"
+    );
+    incoming = f.runtime.show_job_run_observed(&incoming.run_id).unwrap();
+    incoming.state = JobRunState::Pending;
+    incoming.pid = None;
+    incoming.pid_start_time = None;
+    incoming.started_at = None;
+    incoming.finished_at = None;
+    save_run(&f, &incoming);
+    f.runtime
+        .write_run_state(
+            &incoming.run_id,
+            &PipelineState::new(
+                incoming.run_id.clone(),
+                incoming.job_id.clone(),
+                incoming.input.clone().unwrap(),
+            ),
+        )
+        .unwrap();
+    let jobs = f._root.path().join("global/resources/jobs");
+    std::fs::write(
+        jobs.join("task_pr_pipeline.yaml"),
+        json!({
+            "schemaVersion": 2,
+            "kind": "Job",
+            "metadata": {"name": "task_pr_pipeline"},
+            "spec": {
+                "state": "enabled",
+                "max_active_runs": 4,
+                "steps": [{
+                    "id": "resume_candidate",
+                    "default_input": {
+                        "job_run_id": incoming.run_id,
+                        "task_ids": [f.task],
+                        "workspace_path": setup["workspace_path"],
+                        "base_sha": setup["base_sha"],
+                        "prior_job_run_id": setup["prior_job_run_id"],
+                    },
+                    "spec": {
+                        "type": "deterministic",
+                        "action": "candidate_resume",
+                        "config": {},
+                    },
+                }],
+            },
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let discards_before = f
+        .runtime
+        .get_task_history(&f.task)
+        .unwrap()
+        .iter()
+        .filter(|entry| entry.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT)
+        .count();
+    let status_before = f.runtime.get_task(&f.task).unwrap().status;
+    let executed = f.runtime.execute_pipeline_run_worker(&incoming.run_id);
+    let run = f.runtime.show_job_run(&incoming.run_id).unwrap();
+    let step = run
+        .steps
+        .iter()
+        .rev()
+        .find(|step| step.error_message.is_some())
+        .unwrap_or_else(|| {
+            panic!(
+                "no refused step; state={:?} executed={executed:?}",
+                run.state
+            )
+        });
+    let message = step.error_message.as_deref().unwrap();
+    assert_eq!(
+        run.state,
+        JobRunState::Held,
+        "candidate_resume refusal must hold the run; executed={executed:?} message={message}"
+    );
+    assert_eq!(
+        step.error_code.as_deref(),
+        Some("delivery_source_repair_decision"),
+        "{message}"
+    );
+    assert!(
+        message.contains("lacks a unique requeue binding"),
+        "{message}"
+    );
+    assert!(
+        message.contains("inspect explicit source repair"),
+        "{message}"
+    );
+    assert!(message.contains("--discard-candidate"), "{message}");
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        status_before,
+        "the hold leaves the task for the operator"
+    );
+    let history = f.runtime.get_task_history(&f.task).unwrap();
+    assert_eq!(
+        history
+            .iter()
+            .filter(|entry| entry.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT)
+            .count(),
+        discards_before,
+        "the hold does not discard the candidate"
+    );
+    assert!(
+        !history
+            .iter()
+            .any(|entry| entry.event == "published_owner_requeued"),
+        "the hold does not requeue"
+    );
+    let runs = f
+        .runtime
+        .list_job_runs_observed(JobRunListParams {
+            job_id: Some("task_pr_pipeline".into()),
+            ..Default::default()
+        })
+        .unwrap();
+    let ids = runs
+        .iter()
+        .map(|run| run.run_id.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        ids,
+        BTreeSet::from([
+            f.source.run_id.as_str(),
+            held.run_id.as_str(),
+            incoming.run_id.as_str(),
+        ]),
+        "the hold does not submit another run"
+    );
+    assert_eq!(clean(&setup), "", "refusal precedes any checkout write");
 }

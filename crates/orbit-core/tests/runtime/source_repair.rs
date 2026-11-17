@@ -95,6 +95,7 @@ use crew_redraw::{
 };
 use discarded_successors::{
     discard_across_successors_keeps_every_refusal, discard_survives_unpublished_held_successors,
+    unbound_published_candidate_resume_holds_the_run,
 };
 use failed_successors::{
     failed_pre_adoption_chain_rebinds_the_original_publication,
@@ -1019,4 +1020,9 @@ crate::scenario_table!(
 crate::scenario_table!(
     published_completion_scenarios_permanent_prerequisites,
     permanent_required_check_and_merge_capability_answers_do_not_resume
+);
+
+crate::scenario_table!(
+    source_repair_decision_hold,
+    unbound_published_candidate_resume_holds_the_run,
 );

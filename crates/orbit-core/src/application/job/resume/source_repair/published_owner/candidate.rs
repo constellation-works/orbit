@@ -1,6 +1,7 @@
 //! The owner's published candidate and its authenticated publication
 //! binding.
 
+use super::super::admission::hold_operator_source_repair_refusal;
 use super::super::*;
 use super::source_checks::{adoptable_published_source, parse_preserved};
 use super::{PRESERVED, PreservedPublication};
@@ -8,6 +9,15 @@ use orbit_types::workflow;
 
 impl OrbitRuntime {
     pub(crate) fn owner_published_candidate(
+        &self,
+        task_id: &str,
+        source_id: Option<&str>,
+    ) -> Result<Option<SourceRepairBinding>, OrbitError> {
+        self.resolve_owner_published_candidate(task_id, source_id)
+            .map_err(hold_operator_source_repair_refusal)
+    }
+
+    fn resolve_owner_published_candidate(
         &self,
         task_id: &str,
         source_id: Option<&str>,
