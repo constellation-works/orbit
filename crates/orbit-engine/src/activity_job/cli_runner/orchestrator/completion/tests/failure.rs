@@ -213,8 +213,9 @@ fn a_codex_quota_turn_failure_is_provider_unavailable() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// [ORB-25393] A non-reserved declared code names a blocker; reserved,
-/// provider/transient and malformed declarations do not.
+/// [ORB-25393] A non-reserved declared code containing a blocker word names
+/// a blocker; reserved, provider/transient, ordinary-failure and malformed
+/// declarations do not.
 #[test]
 fn a_declared_failure_code_names_a_blocker_only_when_it_is_not_reserved_or_malformed() {
     use orbit_types::workflow::{
@@ -234,6 +235,21 @@ fn a_declared_failure_code_names_a_blocker_only_when_it_is_not_reserved_or_malfo
         agent_blocker_from_declared_failure("contract_contradiction", "criteria conflict")
             .is_some()
     );
+    assert!(
+        agent_blocker_from_declared_failure("live_fixture_unavailable", "no live fixture here")
+            .is_some()
+    );
+
+    // An ordinary failure code names no blocker word, so it stays a failure:
+    // `red` and `example_failure` are the pinned ordinary-failure fixtures of
+    // provider_failure_contracts_2 and local_provider_holds (ORB-18850).
+    for ordinary in ["red", "example_failure", "tests_failed", "unblockerish"] {
+        assert_eq!(
+            agent_blocker_from_declared_failure(ordinary, "evidence"),
+            None,
+            "{ordinary} stays an ordinary failure"
+        );
+    }
 
     for reserved in [
         "implementation_incomplete",

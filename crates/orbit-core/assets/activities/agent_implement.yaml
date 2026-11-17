@@ -232,7 +232,8 @@ spec:
           type: string
       # A real blocker (item 8). The step boundary records it and stops the run.
       # This successful-envelope shape is preferred; a `status: "failed"`
-      # envelope whose non-reserved `error.code` names the stop (with the
+      # envelope whose non-reserved `error.code` names the stop with a word
+      # blocker, blocked, contradiction or unavailable (with the
       # evidence as `error.message`) is normalized to the same hold.
       blocker:
         type: object
@@ -352,7 +353,8 @@ spec:
        `kind` is a short token (an ASCII letter, then letters, digits, `_`,
        `.`, `:` or `-`, at most 64 bytes); `evidence` is the reason. The run
        stops and keeps the candidate. The same hold follows from a
-       `status: "failed"` envelope whose `error.code` is that kind and whose
+       `status: "failed"` envelope whose `error.code` is that kind, containing
+       the word blocker, blocked, contradiction or unavailable, and whose
        `error.message` is the evidence, unless the code is one Orbit already
        reserves (a provider, transient or typed-hold code, or
        `implementation_incomplete`). Never set `blocked` with

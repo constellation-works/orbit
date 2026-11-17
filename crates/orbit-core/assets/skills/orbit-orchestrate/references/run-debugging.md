@@ -180,7 +180,10 @@ response still malformed after it fails with the original refusal.
 An implementer that declares a task-level stop has two equivalent shapes:
 `blocker: {kind, evidence}` on a successful envelope (the preferred shape), and
 a `status: "failed"` envelope (exit 0) whose `error.code` names the stop and
-whose `error.message` gives the evidence. The step boundary normalizes the
+whose `error.message` gives the evidence. The code names a stop only when,
+split on `_ . : -`, it contains blocker, blocked, contradiction or unavailable
+(`validation_blocker`, `live_fixture_unavailable`); an ordinary failure code
+such as `red` or `example_failure` keeps its ordinary failure. The step boundary normalizes the
 second shape into the first: the step fails with the `[task_blocked_by_agent]`
 marker and `kind=<error.code>`, retry, step recovery and final recovery are
 skipped, the failure activity receives `error_code=task_blocked_by_agent`, the

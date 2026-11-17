@@ -237,18 +237,38 @@ pub fn is_reserved_declared_failure_code(code: &str) -> bool {
     RESERVED_DECLARED_FAILURE_CODES.contains(&code)
 }
 
-/// The blocker a declared-failed implementer envelope names, when its
-/// `error.code` is a well-formed kind token that is not reserved (see
-/// [`is_reserved_declared_failure_code`]) and its `error.message` is
-/// non-empty evidence. The code is the kind, classified once through
-/// [`AgentBlockerClass::of_kind`] by the caller, and the message is the
-/// evidence, bounded like a `blocker` value's. Anything else — a reserved
-/// code, a malformed token, empty evidence — is `None`, and the step keeps
-/// its ordinary failed outcome.
+/// Words that make a declared-failed `error.code` name a task-level stop.
+/// The code is split on `_ . : -` (as [`AgentBlockerClass::of_kind`] does)
+/// and must contain one of them as a whole word, so `validation_blocker`,
+/// `task_blocked`, `contract_contradiction` and `live_fixture_unavailable`
+/// hold while an ordinary failure code such as `red` or `example_failure`
+/// stays a failure.
+pub const DECLARED_BLOCKER_CODE_WORDS: &[&str] =
+    &["blocker", "blocked", "contradiction", "unavailable"];
+
+/// Whether `code`, split on `_ . : -`, contains a
+/// [`DECLARED_BLOCKER_CODE_WORDS`] word.
+fn names_declared_blocker_word(code: &str) -> bool {
+    code.split(['_', '.', ':', '-'])
+        .any(|word| DECLARED_BLOCKER_CODE_WORDS.contains(&word.to_ascii_lowercase().as_str()))
+}
+
+/// The blocker a declared-failed implementer envelope names. All three must
+/// hold, in this order: the `error.code` is not reserved for another outcome
+/// (see [`is_reserved_declared_failure_code`]: provider, transient, typed
+/// holds and `implementation_incomplete`); it is a well-formed kind token
+/// containing a [`DECLARED_BLOCKER_CODE_WORDS`] word; and the
+/// `error.message` is non-empty evidence. The code is the kind, classified
+/// once through [`AgentBlockerClass::of_kind`] by the caller, and the message
+/// is the evidence, bounded like a `blocker` value's. Anything else is
+/// `None`, and the step keeps its ordinary failed outcome.
 #[must_use]
 pub fn agent_blocker_from_declared_failure(code: &str, evidence: &str) -> Option<AgentBlocker> {
     let kind = code.trim();
-    if !is_blocker_kind(kind) || is_reserved_declared_failure_code(kind) {
+    if is_reserved_declared_failure_code(kind)
+        || !is_blocker_kind(kind)
+        || !names_declared_blocker_word(kind)
+    {
         return None;
     }
     let evidence = evidence.trim();
