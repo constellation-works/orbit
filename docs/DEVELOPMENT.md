@@ -728,8 +728,9 @@ the original command exit status. They let bounded hosted excerpts retain build/
 separately from nextest testcase sums and the full GitHub job elapsed time.
 
 The Rust dependency caches are the `Swatinem/rust-cache`
-archives, one each for `Test build` and the Check job in `ci.yml`, plus the MSRV entry saved by `msrv.yml` push runs (same key). They hold
-dependency artifacts only. Each step sets `save-if: ${{ github.event_name == 'push' }}`, so a
+archives, one each for `Test build` and the Check job in `ci.yml`, plus the MSRV
+entry saved by `msrv.yml` push runs (same key). They hold dependency artifacts
+only. Each step sets `save-if: ${{ github.event_name == 'push' }}`, so a
 pull request restores the base branch's entries and never writes one: only a
 push to `main` or `agent-main` saves. A missed key or a failed restore leaves a
 cold or partial `target/`, and Cargo rebuilds what is missing. Hosted CI keeps
@@ -751,9 +752,10 @@ scheduling or another job must not discard otherwise reusable workspace
 outputs. Only protected-branch pushes save this cache. A fresh checkout
 gets old source mtimes back only after `ci-workspace-cache.py` verifies
 identical bytes and modes; changed inputs get a fresh mtime. Cargo still
-invalidates compiler, features and codegen environment changes. Workflow
-files consumed by `include_str!` or a build script remain tracked inputs and
-rebuild their consumers when their bytes change.
+invalidates compiler, features and codegen environment changes. A workflow
+file is an ordinary tracked input: changed bytes get a fresh mtime, and Cargo
+rebuilds a consumer only if it records that file, through an `include_str!`
+path or a build script's `cargo:rerun-if-changed`.
 
 The 2026-11-17 investigation found a workspace-cache miss preceding a 279 s
 folded test build in hosted run 44043933622 (Check: 516 s). The workflow file
@@ -764,10 +766,10 @@ median restore-plus-build time from 0.279 s to 0.073 s and compiler
 invocations from two to zero. This measures cache invalidation, not hosted
 seconds saved: artifact download/copy costs are excluded, the fixture is
 small, and an executed protected-push `Test build` must populate the new
-namespace (skip-only seeders populate dependencies, not workspace outputs). Changed
-codegen settings and older changed embedded workflow bytes both rebuilt in
-the replay. No checks or tests were retired. Measurement commands, logs and
-the replay script are retained in the task's `ci-budget/` artifacts.
+namespace (skip-only seeders populate dependencies, not workspace outputs).
+Changed codegen settings and older changed embedded workflow bytes both
+rebuilt in the replay. No checks or tests were retired. Measurement commands,
+logs and the replay script are retained in the task's `ci-budget/` artifacts.
 
 After merge, the operator should collect the latest 20 completed PR CI
 workflows carrying the change and run

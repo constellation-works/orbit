@@ -88,8 +88,10 @@ class CiDependencyCacheWorkflowTests(unittest.TestCase):
         workflow = self.root / ".github/workflows/ci.yml"
         workflow.write_text(workflow.read_text() + "# unrelated job scheduling edit\n")
         self.assertEqual(identity(), before,
-                         "CI-only edits must not force a cold workspace build; "
-                         "Cargo and the source manifest still validate reused outputs")
+                         "CI-only edits must not force a cold workspace build: hosted run "
+                         "44043933622 missed its workspace cache after agent-main commit "
+                         "46c0b7754 changed only ci.yml; Cargo and the source manifest still "
+                         "validate reused outputs")
         for name in sorted(inputs.keys() - {".github/workflows/ci.yml"}):
             with self.subTest(build_input=name):
                 path = self.root / name

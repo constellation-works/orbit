@@ -80,11 +80,11 @@ its extracted target directory; workers never share a mutable target.
 A cache miss performs the ordinary cold workspace build. The first deployment
 of a namespace needs an executed protected-push `Test build` before PRs can
 benefit; the skip-only seeders below populate dependencies, not workspace
-outputs. Source
-changes below core can invalidate most cached units, and the extra archive
-uses repository cache quota and download time. Measure those costs and cache
-hit/miss strata in the hosted handoff; local reuse timings do not establish
-the hosted budget. The dependency-only caches and seeders remain available.
+outputs. Source changes below core can invalidate most cached units, and the
+extra archive uses repository cache quota and download time. Measure those
+costs and cache hit/miss strata in the hosted handoff; local reuse timings do
+not establish the hosted budget. The dependency-only caches and seeders remain
+available.
 
 - **Who writes.** Every producer rust-cache step has
   `save-if: ${{ github.event_name == 'push' }}`. Only a push to `main` or
