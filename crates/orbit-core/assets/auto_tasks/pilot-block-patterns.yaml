@@ -211,8 +211,11 @@ template:
 
     Check the effective `[workflow.agent_corpus]` mapping in the layered workspace and
     global configuration. A workspace has a corpus when that mapping names a tracked
-    `INDEX.md` under its corpus directory. If there is no such index, or the workspace
-    does not provide `scripts/agent-corpus.py`, say which is missing in the execution
+    `INDEX.md`. The mapped corpus directory is the directory holding that index (for
+    `knowledge/corpus/INDEX.md`, it is `knowledge/corpus`). Every corpus path below is
+    under that directory and never a fixed location; its issue documents are
+    `<mapped-corpus-directory>/issues/<kebab-case-mechanism>.md`. If there is no such index,
+    or the workspace does not provide `scripts/agent-corpus.py`, say which is missing in the execution
     summary and finish with a clean worktree as a valid no-diff handoff. Still attach
     the report and cursor and complete the other rules. Do not create a corpus here.
     Also attach `no-diff.json` with `schema_version: 1`, this task's `task_id`, this
@@ -244,8 +247,8 @@ template:
     histories under `.orbit/tmp/` and run `python3 scripts/agent-corpus.py --records
     <export.json> --corpus <mapped-corpus-directory>` to materialize them deterministically. Do not create a new topic document in this pass: its path is only known after the scan, so it
     cannot be authorized in advance. For a group whose mechanism has no document under
-    `docs/agents/corpus/issues/`, skip materializing its appends and file one follow-up task whose
-    `context_files` names the exact `file:docs/agents/corpus/issues/<kebab-case-mechanism>.md`
+    `<mapped-corpus-directory>/issues/`, skip materializing its appends and file one follow-up task whose
+    `context_files` names the exact `file:<mapped-corpus-directory>/issues/<kebab-case-mechanism>.md`
     (created with `allow_missing_context`), tagged `pilot-block-patterns` and `agent-corpus`, with the
     group's evidence; such follow-ups do not count toward the 5 fix-task cap. Record the follow-up id as
     the group's corpus disposition in the report. Never fabricate system outbox
