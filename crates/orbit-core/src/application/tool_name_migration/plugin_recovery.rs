@@ -11,7 +11,9 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, sync_parent_dir};
 use orbit_types::tool::pre_family_tool_name;
 
-use super::{ToolNameRewrite, plugin_manifest_tool_rewrite, rewrite_yaml_keyed_list};
+use super::ToolNameRewrite;
+use super::auto_task_catalog::rewrite_yaml_keyed_list;
+use super::plugin_manifest::plugin_manifest_tool_rewrite;
 
 /// Bound compatibility work for writes made before originals were retained.
 /// New writes recover from retained bytes regardless of the list's length.

@@ -508,7 +508,7 @@ record's lifecycle and the evidence about it: the job-run audit writer
 the `record_pipeline_audit` and `record_pipeline_diagnostic_step` methods that
 `gc`, `review`, `job/exec`, orphan adoption, upgrade resume and composition
 call), the persisted worker-exit record format and its readers
-(`worker_exit.rs`), the read side of a worker's containment scope
+(`worker_exit/`), the read side of a worker's containment scope
 (`worker_scope.rs`: `WorkerScopeCgroup::from_recorded`, `counters` and
 `unit_result`) and the run-definition reads (`definition.rs`:
 `read_run_definition_snapshot`, `resolve_run_definition`,

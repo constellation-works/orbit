@@ -839,7 +839,7 @@ class RelativeImportTests(unittest.TestCase):
             "review/landing_dispatch_port.rs":
                 "pub(in crate::application) trait ReviewLandingDispatchPort {\n"
                 "    fn dispatch_recorded_landing_authority(&self);\n}\n",
-            "review/handoff.rs":
+            "review/handoff/accept.rs":
                 "impl OrbitRuntime {\n    fn accept(&self) {\n"
                 "        self.dispatch_recorded_landing_authority();\n    }\n}\n",
             "landing/review_port.rs":
@@ -865,11 +865,12 @@ class RelativeImportTests(unittest.TestCase):
             "task/external_merge/rescued.rs":
                 "fn probe() {\n    if tasks.landing_attempts()?.iter().any(|attempt| {\n"
                 "        true\n    }) {}\n}\n",
-            "review/handoff.rs":
+            "review/handoff/console.rs":
                 "fn probe() {\n    self.stores().tasks().landing_attempts()?\n}\n",
         }, rejected=False)
         for relative in ("task/external_merge/candidate.rs",
-                         "task/external_merge/rescued.rs", "review/handoff.rs"):
+                         "task/external_merge/rescued.rs",
+                         "review/handoff/console.rs"):
             with self.subTest(relative=relative):
                 self.check_files({
                     **method,
