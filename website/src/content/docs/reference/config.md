@@ -655,6 +655,7 @@ and `machine.task_prefix`. `orbit config keys` prints the same list.
 | `review.before_landing_hosts` | array&lt;string&gt; · **Default:** `[]`<br>Machine IDs (`hm_…`) whose claimed leaves run before-landing review while this owner's own deliveries do not. Config fails to load when this is non-empty and `review.timing` is `before_pr`. This is policy, not a security boundary. |
 | `review.minutes` | integer · **Default:** `30`<br>Time limit for one candidate's before-PR or before-landing review (1–1440). |
 | `review.baseline_commands` | array&lt;string&gt; · **Default:** `[]`<br>Commands before-PR review may rerun to confirm that a failed check also fails on the base. `workflow.required_validation_commands` always count. A confirmed claim holds the task in the backlog until the base passes. |
+| `review.host_evidence` | array&lt;table&gt; · **Default:** `[]`<br>Ordered `[[review.host_evidence]]` rules naming checks a claimed leaf's host owes for the paths it changed or the tags its task carries. A workspace list replaces the global one. See [Host evidence](#host-evidence). |
 
 Notes:
 
@@ -671,6 +672,91 @@ Notes:
   `orbit auto-task toggle delivery-code-review on`.
 - An installed plugin's declared settings are settable as
   `plugins.<ns>.<key>`, and crew fields as `crews.<name>.<field>`.
+
+## Host evidence
+
+A claimed leaf runs on a follower host whose OS can differ from the owner's.
+Some checks can only run on one OS: a Linux CodeQL run needs Linux
+extraction, and a sandbox test needs its own host's sandbox. Add
+`[[review.host_evidence]]` tables to `config.toml` to declare those checks,
+so a leaf on the wrong host owes them instead of failing, and the owner's
+host fulfils them. A layer that states the list replaces the earlier layer's
+list whole.
+
+Each rule has a `kind` (`codeql` or `host_sandbox_test`), a `name`, one or
+more workspace-relative `paths` globs, an `os` (`linux` or `macos`), the
+exact `command`, and a result `artifact` (a relative `.json` path, unique
+across rules). Two fields are optional: `tags`, a list of task tags added in
+Orbit 0.51.0, and `hosted_check`, which only a Linux `codeql` rule may set.
+
+```toml
+[[review.host_evidence]]
+kind = "codeql"
+name = "Linux CodeQL (rust)"
+paths = ["**/*.rs"]
+tags = ["security", "security-review"]
+os = "linux"
+command = "scripts/codeql-rust-local.sh --ram 16384 codeql/rust-queries:codeql-suites/rust-security-extended.qls"
+artifact = "evidence/codeql-rust-linux.json"
+```
+
+- **Paths.** `*` stays within one path component and `**` spans components.
+  A rule needs at least one glob, and a glob that does not compile fails the
+  config load.
+- **Tags.** A rule with `tags` is also owed when the claimed task carries any
+  listed tag, whatever paths the candidate changed. Tags compare
+  case-insensitively after trimming, so `Security` matches `security`. A
+  rule without `tags` matches paths only. Because tags change the
+  distributed-drain protocol fingerprint, a follower on an older build
+  refuses a tagged rule with `protocol_skew` before it can claim: keep rules
+  path-only or upgrade every reader to 0.51.0 or later.
+- **Which host owes.** A `codeql` rule is owed on a host of another OS than
+  the rule's `os`, and fulfilled by the owner on `os`. A `host_sandbox_test`
+  rule is owed on a host of its own `os`, which runs it outside the agent
+  sandbox at settlement. So the example above is owed by a macOS follower
+  that changes a `.rs` file, or by a macOS follower on a `security`-tagged
+  task even when the change touches no Rust file; a Linux follower owes
+  nothing for it.
+- **Commands and artifacts.** `name` and `command` must both be set.
+  `artifact` must be a relative `.json` path (never `./`-prefixed) and must
+  not repeat another rule's artifact. A `host_sandbox_test` command must be
+  one settlement admits — `cargo test -p <crate> --test <target> [<filter>]`,
+  `cargo test -p <crate> --lib [<filter>]`, or an owner required-validation
+  command — or the config fails to load. A rule Orbit could never fulfil
+  fails load the same way, instead of holding every matching review forever.
+- **`hosted_check`.** A Linux `codeql` rule may name the pull request check
+  that runs exactly its `command` on every candidate, as the forge reports
+  it (`hosted_check = "CodeQL / Analyze (rust)"`). Any other kind or OS, or
+  an empty value, fails load. Declare it only for a check that really runs
+  the rule's command: Orbit compares the name, not the queries the job runs.
+  Without it — a custom query, or a workspace with no equivalent hosted
+  check — the requirement holds the review for the owner's run.
+
+When a rule is owed, each side records that instead of running what its host
+cannot:
+
+1. The implementer records the command `not_run` with the reason (for
+   example the platform refusal) and hands off; the missing run is not a
+   failure.
+2. The reviewer names the requirement in its owed evidence, records it
+   `not_run`, and never attempts it. A verdict whose only gaps are owed
+   checks settles into a hold for that evidence instead of blocking.
+3. The owner captured the rules when the claim was admitted, and the
+   follower runs that captured contract, never its own settings. The owner's
+   host then fulfils the hold: it runs the admitted command fresh — CodeQL
+   through Bubblewrap namespaces in a standalone checkout of the held
+   commit, sandbox tests outside the agent sandbox in a fresh detached
+   worktree — and attaches the result at the rule's `artifact` path plus a
+   log. Receipt moves the task back for a fresh review, which verifies the
+   evidence. A complete CodeQL run whose SARIF has findings is a verdict on
+   the candidate, not evidence, and does not wait under the hold.
+
+The one exception is a before-landing review on another-OS host for a Linux
+`codeql` rule with `hosted_check`: the requirement is then owed to the owner
+and that check (`owner_owed_evidence`) instead of holding the review, and the
+owner's landing merges only after the named check reports an explicit
+success on the reviewed head. It waits while the check is absent, still
+running, or completed without success (`SKIPPED` or `NEUTRAL`).
 
 ## Tag instructions
 
