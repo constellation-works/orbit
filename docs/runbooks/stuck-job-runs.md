@@ -49,7 +49,7 @@ retains that state; its JSON `wait_timeout` is `false`.
 
 This is the field reference `orbit run show --help` used to carry.
 
-JSON shape: {"run":<job-run>,"pull_claim":<claim|null>,"crew_window":<window|null>,"catalog_layers":[{"reference":"job:…|activity:…","layer":"workspace|shipped|plugin:<ns>|explicit","shadows":[…]}],"pipeline_state":<state|null>,"steps":[<step>],"steps_source":"record|audit","provider_processes":[{"pid":...,"liveness":"alive|exited|unknown","stopped_descendants":[...],"blocked_on_stopped_descendant":<descendant|null>,...}]} or {"run_id":...,"job_id":...,"step":<step>,"step_output":<json|null>} with -s.
+JSON shape: {"run":<job-run>,"pull_claim":<claim|null>,"crew_window":<window|null>,"claimed_leaves":[<leaf>],"refused_settlements":[<refusal>],"pull_occupancy":<occupied-and-reviewing|null>,"pull_breaker":<breaker|null>,"catalog_layers":[{"reference":"job:…|activity:…","layer":"workspace|shipped|plugin:<ns>|explicit","shadows":[…]}],"pipeline_state":<state|null>,"steps":[<step>],"steps_source":"record|audit","provider_processes":[{"pid":...,"liveness":"alive|exited|unknown","stopped_descendants":[...],"blocked_on_stopped_descendant":<descendant|null>,...}]} or {"run_id":...,"job_id":...,"step":<step>,"step_output":<json|null>} with -s.
 
 The State: line above is `.run.state`, not a top-level `.state`;
 
@@ -82,9 +82,17 @@ settlement other than a failed candidate stays a `failure` with reason
 
 `.pipeline_state.drain_pass_counters` (the Admission passes: line) counts what limited every admission pass of a drain's lineage, local or pull, since `since`: `passes`, and `outcomes` with exactly one per pass, the first that applies of `admitted`, `failed`, `held`, `throttle`, `no_candidate`, `ceiling_full`, `gap_fit_held` and `deferred`; `held_by_reason` and `throttle_by_resource` split those two, and `waiting_by_reason` counts the passes in which a reason kept at least one task waiting, so its entries overlap. The counters survive terminalization and resume; a pull pass whose window has closed only settles and is not counted. Its `admission_refusal` (the Requests held: line) says why the last pass requested no claim although the window was open: `circuit_open` (the failure breaker is open), `circuit_half_open` (it waits for this drain's claims to settle before one probe claim), `settlement_refused`, `delivery_settlement_refused`, `no_runnable_crew`, `host_suppressed`, `owner_busy_backoff` (a claimed leaf was released because the owner's store stayed locked: no claim is requested for 5 minutes from when it ended, `.crew_window.owner_busy_backoff` names `until`, and a third such episode in the window suppresses the host with `.crew_window.host_suppressed_by_busy_owner` set, whose remedy is on the owner), or the owner's probe refusal; `before_pr_reviewer_unavailable` names the review's timing (before-PR or before-landing) and, while its crew is only backed off for capacity, the time it lifts, when requests resume by themselves.
 
-`.pipeline_state.pull_breaker` (the Breaker: line) is the failure breaker while it is open or half-open: it opens after three claims in a row settle as failures (released claims and Orbit's refusals of an implementer's handoff do not count), with `failures`, their `failure_classes` newest first, `opened_at` and `half_open_at`, when it admits one probe claim; a probe that succeeds closes it and one that fails reopens it with twice the wait. It is absent while closed. A pull drain's Throttled: line is this host's own pressure; the owner's throttle never holds a pull claim.
+`.pull_breaker` (the Breaker: line) is the failure breaker while it is open or half-open: it opens after three claims in a row settle as failures (released claims and Orbit's refusals of an implementer's handoff do not count), with `failures`, their `failure_classes` newest first, `opened_at` and `half_open_at`, when it admits one probe claim; a probe that succeeds closes it and one that fails reopens it with twice the wait. It is null while closed, and the text line is omitted. A pull drain's Throttled: line is this host's own pressure; the owner's throttle never holds a pull claim.
 
 `.claimed_leaves` lists a pull drain's launched leaves that are still running (the Claimed leaves: lines), each with its `stage`: `implementing`, or `reviewing` once it is in the before-landing review of its open PR, when the drain admits a replacement beside it, up to its concurrency; it is empty for every other run;
+
+Full MCP run show/observe and HTTP run detail carry the same six pull-drain
+sections as CLI JSON: `pull_claim`, `claimed_leaves`, `refused_settlements`,
+`crew_window`, `pull_occupancy` and `pull_breaker`. Occupancy reports
+`occupied` and `reviewing`, or null when unknown. Unreadable sections are
+logged and rendered null or empty without hiding the run; CLI additionally
+warns on stderr when the checkpoint is unreadable. Recorded-only HTTP detail
+retains a stored breaker but leaves live sections empty.
 
 `.refused_settlements` (the Settlement refused: lines) lists recorded outcomes the owner refused while still holding their claims, each with the owner's `reason`, `refusals`, `retry_after` and `remedy`: non-delivery refusals hold new claims, while delivery refusals hold only their own settlement; the drain retries each with backoff (at most every 15 minutes), and `orbit run auto --stop` retries it at once;
 
