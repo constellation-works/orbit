@@ -114,7 +114,9 @@ pub(in crate::executor::automation::vcs::pr) fn reserve_base_refresh<H: RuntimeH
             &request.pr_number,
             "the base refresh was already reserved; no second branch rewrite is allowed",
         )),
-        PrBaseUpdateAdmission::Refused(why) => Err(verdict::stopped(&request.pr_number, &why)),
+        PrBaseUpdateAdmission::Refused(why) => {
+            Err(verdict::stopped(&request.pr_number, &why.to_string()))
+        }
     }
 }
 

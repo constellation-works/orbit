@@ -181,7 +181,7 @@ pub(in crate::executor::automation::vcs) fn recover<H: RuntimeHost + ?Sized>(
         None => host.admit_pr_base_update(tasks, &request)?,
     };
     match admission {
-        PrBaseUpdateAdmission::Refused(why) => Err(refused(&why)),
+        PrBaseUpdateAdmission::Refused(why) => Err(refused(&why.to_string())),
         PrBaseUpdateAdmission::Observe(previous) => {
             Deadline(previous.deadline_ms).remaining()?;
             Ok(RefreshStep::Wait)

@@ -291,11 +291,12 @@ impl OrbitRuntime {
         request: &orbit_types::workflow::PrBaseUpdateReservation,
     ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
         use orbit_types::workflow::{
-            PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission, decide_pr_base_update,
+            PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission, PrBaseUpdateRefusal,
+            decide_pr_base_update,
         };
         if self.worker_invocation().is_some() {
             return Ok(PrBaseUpdateAdmission::Refused(
-                "base updates require the owning host".into(),
+                PrBaseUpdateRefusal::RequiresOwningHost,
             ));
         }
         let primary = task_ids

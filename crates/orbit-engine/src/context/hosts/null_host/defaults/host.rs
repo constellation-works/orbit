@@ -355,7 +355,7 @@ pub trait NullRuntimeHost: Send + Sync {
         _request: &orbit_types::workflow::PrBaseUpdateReservation,
     ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
         Ok(orbit_types::workflow::PrBaseUpdateAdmission::Refused(
-            "current handoff authority is unavailable".into(),
+            orbit_types::workflow::PrBaseUpdateRefusal::HandoffAuthorityUnavailable,
         ))
     }
     fn admit_pr_base_update(
@@ -364,7 +364,7 @@ pub trait NullRuntimeHost: Send + Sync {
         _request: &orbit_types::workflow::PrBaseUpdateReservation,
     ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
         Ok(orbit_types::workflow::PrBaseUpdateAdmission::Refused(
-            "no base update ledger".into(),
+            orbit_types::workflow::PrBaseUpdateRefusal::LedgerAbsent,
         ))
     }
     fn admit_ci_rerun(

@@ -112,8 +112,8 @@ fn owner_reservation_survives_concurrent_sibling_and_reopened_store() {
 
 fn base_update_reservation_is_shared_by_causes_and_survives_reopen() {
     use orbit_types::workflow::{
-        PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission, PrBaseUpdateReservation,
-        pr_base_update_reservations,
+        PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission, PrBaseUpdateRefusal,
+        PrBaseUpdateReservation, pr_base_update_reservations,
     };
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
@@ -189,7 +189,7 @@ fn base_update_reservation_is_shared_by_causes_and_survives_reopen() {
         assert!(
             matches!(
                 RuntimeHost::admit_pr_base_update(&reopened, &ids, &changed).unwrap(),
-                PrBaseUpdateAdmission::Refused(_)
+                PrBaseUpdateAdmission::Refused(PrBaseUpdateRefusal::BudgetSpent { .. })
             ),
             "{field} cannot reset the inherited/absent cumulative budget"
         );
@@ -219,7 +219,7 @@ fn base_update_reservation_is_shared_by_causes_and_survives_reopen() {
     assert!(
         matches!(
             RuntimeHost::admit_pr_base_update(&reopened, &ids, &resumed).unwrap(),
-            PrBaseUpdateAdmission::Refused(_)
+            PrBaseUpdateAdmission::Refused(PrBaseUpdateRefusal::UnreadableHistory(_))
         ),
         "unreadable history cannot grant a new budget"
     );
