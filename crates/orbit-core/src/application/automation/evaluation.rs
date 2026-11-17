@@ -247,15 +247,11 @@ impl DeliveryHost for Host<'_> {
     ) -> Result<bool, AutomationError> {
         let (_, head) = self.source.head(branch)?;
 
-        Ok(self
-            .source
-            .git(&[
-                "merge-base",
-                "--is-ancestor",
-                &state.observed.commit,
-                &head.commit,
-            ])
-            .is_ok())
+        Ok(matches!(
+            self.source
+                .is_ancestor(&state.observed.commit, &head.commit),
+            Ok(true)
+        ))
     }
 
     fn report_stall(

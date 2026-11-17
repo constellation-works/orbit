@@ -61,23 +61,16 @@ pub(crate) fn stale_tasks(
     // That older local head does not invalidate material already inspected
     // at the fetched pin. Read existing refs only: local advances beyond the
     // pin and rewritten histories still take the original stale-claim path.
-    if source
-        .git(&[
-            "merge-base",
-            "--is-ancestor",
-            &head.commit,
+    if matches!(
+        source.is_ancestor(&head.commit, &prepared_source.commit),
+        Ok(true)
+    ) && matches!(
+        source.is_ancestor(
             &prepared_source.commit,
-        ])
-        .is_ok()
-        && source
-            .git(&[
-                "merge-base",
-                "--is-ancestor",
-                &prepared_source.commit,
-                &format!("refs/remotes/origin/{branch}"),
-            ])
-            .is_ok()
-    {
+            &format!("refs/remotes/origin/{branch}"),
+        ),
+        Ok(true)
+    ) {
         return Ok(BTreeMap::new());
     }
 
@@ -97,15 +90,10 @@ pub(crate) fn stale_tasks(
     if policy.freshness.source_sensitivity == SourceSensitivity::Any {
         return every("source_sensitivity is any".into());
     }
-    if source
-        .git(&[
-            "merge-base",
-            "--is-ancestor",
-            &prepared_source.commit,
-            &head.commit,
-        ])
-        .is_err()
-    {
+    if !matches!(
+        source.is_ancestor(&prepared_source.commit, &head.commit),
+        Ok(true)
+    ) {
         return every("the branch no longer descends from the prepared source".into());
     }
 

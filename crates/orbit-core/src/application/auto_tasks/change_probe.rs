@@ -72,10 +72,7 @@ pub(crate) fn probe_change_since_last_sweep(
 
     // Both revisions are verified commits here, so a non-zero `--is-ancestor`
     // is git's answer ("not covered"), not a failure to answer.
-    let covered = tip == cursor
-        || source
-            .git(&["merge-base", "--is-ancestor", &tip, &cursor])
-            .is_ok();
+    let covered = tip == cursor || matches!(source.is_ancestor(&tip, &cursor), Ok(true));
 
     Ok(if covered {
         ChangeProbe::Unchanged {

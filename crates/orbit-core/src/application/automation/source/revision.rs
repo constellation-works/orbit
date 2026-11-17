@@ -87,9 +87,7 @@ impl<'a> Source<'a> {
         let head = match self.fetched_head(branch) {
             Ok(origin) => {
                 if origin == local
-                    || self
-                        .git(&["merge-base", "--is-ancestor", &origin.commit, &local.commit])
-                        .is_ok()
+                    || matches!(self.is_ancestor(&origin.commit, &local.commit), Ok(true))
                 {
                     local
                 } else {

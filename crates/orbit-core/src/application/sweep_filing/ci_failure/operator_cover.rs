@@ -207,16 +207,10 @@ impl<'a> OperatorCovers<'a> {
                     CoverState::Open => ("operator_cover_open", None),
                     CoverState::Unavailable => ("operator_cover_unavailable", None),
                     CoverState::Landed(commit) => {
-                        if self
-                            .source
-                            .git(&[
-                                "merge-base",
-                                "--is-ancestor",
-                                commit,
-                                &cluster.tested_commit,
-                            ])
-                            .is_ok()
-                        {
+                        if matches!(
+                            self.source.is_ancestor(commit, &cluster.tested_commit),
+                            Ok(true)
+                        ) {
                             assessment.failed_covers.push(json!({
                                 "task_id": owner.id, "cover": target, "landed_commit": commit,
                                 "reason": "cover_did_not_hold", "failure_key": cluster.failure_key,
