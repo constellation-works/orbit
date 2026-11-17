@@ -430,14 +430,14 @@ export function drainBacklogForecastLink(summary) {
     const detail = [reason, summary?.detail, summary?.baselineText, summary?.counts, ...(summary?.scope?.lines || [])].filter(Boolean).join(" ");
     link.title = `${detail}\nAnalytics › Forecast`;
     if (summary) link.dataset.forecastReason = summary.reasonKind || "unknown";
+    // No visible label or arrow here: with no drawable baseline the row is
+    // blank, and the reason stays in the tooltip and accessible text [ORB-20453].
     const bars = backlogBarList(summary?.baselineBars, null, "pre-regression baseline");
-    if (bars) bars.classList.add("baseline");
-    for (const child of [
-      bars ? null : el("span", { class: "drain-section-label", text: "Backlog" }),
-      bars,
-      el("span", { class: "visually-hidden", text: ` ${detail}` }),
-      bars ? null : el("span", { class: "drain-backlog-forecast-go", text: "›", "aria-hidden": "true" }),
-    ]) if (child) link.append(child);
+    if (bars) {
+      bars.classList.add("baseline");
+      link.append(bars);
+    }
+    link.append(el("span", { class: "visually-hidden", text: ` ${detail}` }));
     if (summary?.scope?.compact) link.append(el("span", { class: "drain-forecast-meta drain-backlog-forecast-scope", text: summary.scope.compact }));
     return link;
   }
