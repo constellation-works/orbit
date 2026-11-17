@@ -254,6 +254,28 @@ fn a_windowless_pull_drain_claims_up_to_its_slots_once_and_then_only_settles() {
     );
 }
 
+/// A leaf that hands off in a windowless single pass: the drain ends only
+/// once the owner has recorded the handoff, so its claim is `handed_off`,
+/// never still `claimed` or `running`, when the pass reports done. The wire
+/// answering `handed_off` without recording it on the owner left the claim
+/// unsettled on the owner while the follower settled locally [ORB-25460].
+fn a_windowless_single_pass_handed_off_claim_is_recorded_on_the_owner() {
+    let pair = Pair::new(1);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    pair.leaf_hands_off(&leaf);
+
+    let pass = pair.pass_over(&drain, windowless());
+
+    assert_eq!(pass["admitted"], 0, "{pass}");
+    assert_eq!(pass["done"], true, "{pass}");
+    assert!(single_pass_taken(&pair, &drain));
+    let claim = pair.owner_claim_for_leaf(&leaf);
+    assert_eq!(claim["claim"]["phase"], "handed_off", "{claim}");
+    assert_eq!(pair.owner_status(&task), "review");
+}
+
 /// A windowless drain over an empty backlog asks once and ends, rather than
 /// polling an idle owner.
 fn a_windowless_pull_drain_over_an_empty_backlog_asks_once_and_ends() {
@@ -605,6 +627,7 @@ fn a_legacy_zero_window_checkpoint_resumed_through_the_job_api_cannot_claim() {
 crate::scenario_table!(
     a_windowless_pull_drain_claims_up_to_its_slots_once_and_then_only_settles_scenarios,
     a_windowless_pull_drain_claims_up_to_its_slots_once_and_then_only_settles,
+    a_windowless_single_pass_handed_off_claim_is_recorded_on_the_owner,
     a_windowless_pull_drain_over_an_empty_backlog_asks_once_and_ends,
     an_explicit_zero_duration_pull_drain_admits_one_bounded_pass,
     an_expired_timed_window_never_gains_the_single_pass,

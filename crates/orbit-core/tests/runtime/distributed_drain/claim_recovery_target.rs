@@ -105,7 +105,6 @@ fn a_recovery_target_the_lifecycle_does_not_allow_is_refused_with_its_rule() {
 /// The refusal side of the completion gate is in `post_deploy`.
 fn a_handed_off_claim_recovers_to_done_with_its_completion_evidence() {
     let pair = Pair::new(1);
-    *pair.wire.accept_handoffs.lock().unwrap() = true;
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
     let task = pair.claimed_task(&leaf);

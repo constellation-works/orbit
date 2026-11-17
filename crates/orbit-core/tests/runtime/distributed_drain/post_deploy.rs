@@ -65,7 +65,6 @@ fn assess(pair: &Pair, typed: bool) {
 /// Hand off the pair's claimed leaf owing criterion 1, and return the
 /// owner's settlement pass with the handoff and the drain.
 fn hand_off_owing(pair: &Pair) -> (Value, TaskHandoff, String) {
-    *pair.wire.accept_handoffs.lock().unwrap() = true;
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
     let record = pair.admission(&leaf);
