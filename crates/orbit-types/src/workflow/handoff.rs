@@ -8,6 +8,13 @@ use serde::{Deserialize, Serialize};
 
 use super::{ReviewTiming, ReviewVerdict, automation::SourceRevision};
 
+mod checks_observation;
+
+pub use checks_observation::{
+    HistoricalLandingChecksObservation, LandingChecksObservationReplayKey,
+    LandingChecksObservationState, RecordedLandingChecksObservation,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HandoffArtifactRef {
@@ -469,9 +476,10 @@ pub const LANDING_WAITING_FOR_BASE_EVENT: &str = "landing_waiting_for_base";
 /// History event of the review watch that follows an owner-local delivery
 /// left in review with an open pull request (a dashboard ship, `orbit run
 /// ship` or a drain leaf, none of which hands off for landing). Its note is
-/// the JSON outcome: `state` (`passed`, `failed`, `conflicting`, `blocked`
-/// or `pending`), `pr_number`, `head_sha`, and for `failed` the landing's
-/// `classification` of the failed checks with its `detail`.
+/// the JSON outcome, a [`RecordedLandingChecksObservation`]: `state`
+/// (`passed`, `failed`, `conflicting`, `blocked` or `pending`), `pr_number`,
+/// `head_sha`, and for `failed` the landing's `classification` of the failed
+/// checks with its `detail`.
 pub const LANDING_CHECKS_OBSERVED_EVENT: &str = "landing_checks_observed";
 
 /// History event of the landing stop that found the task's landing repair

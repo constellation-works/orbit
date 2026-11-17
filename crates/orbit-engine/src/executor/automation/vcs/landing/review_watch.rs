@@ -22,7 +22,10 @@ use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskHistoryEntry, TaskStatus};
-use orbit_types::workflow::handoff::LANDING_CHECKS_OBSERVED_EVENT;
+use orbit_types::workflow::handoff::{
+    HistoricalLandingChecksObservation, LANDING_CHECKS_OBSERVED_EVENT,
+    LandingChecksObservationState as ObservedState, RecordedLandingChecksObservation,
+};
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -90,15 +93,17 @@ pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
             PrMergeState::Merged => return Ok(ended(&task_id, &pr_number, "merged")),
             PrMergeState::Closed => return Ok(ended(&task_id, &pr_number, "closed")),
             PrMergeState::Contradictory(why) => {
-                observation(&status, &pr_number, "blocked", Some(why))
+                observation(&status, &pr_number, ObservedState::Blocked, Some(why))
             }
             PrMergeState::Conflict => observation(
                 &status,
                 &pr_number,
-                "conflicting",
+                ObservedState::Conflicting,
                 Some("the pull request conflicts with its base".to_string()),
             ),
-            PrMergeState::Mergeable => observation(&status, &pr_number, "passed", None),
+            PrMergeState::Mergeable => {
+                observation(&status, &pr_number, ObservedState::Passed, None)
+            }
             PrMergeState::Pending if !expired => {
                 fixed_wait(Duration::from_secs(poll_interval_seconds));
                 continue;
@@ -106,7 +111,7 @@ pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
             PrMergeState::Pending => observation(
                 &status,
                 &pr_number,
-                "pending",
+                ObservedState::Pending,
                 Some(format!(
                     "the checks had not settled after {max_wait_seconds}s"
                 )),
@@ -119,7 +124,12 @@ pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
                     continue;
                 }
                 if failed.is_empty() {
-                    observation(&status, &pr_number, "blocked", Some(block.to_string()))
+                    observation(
+                        &status,
+                        &pr_number,
+                        ObservedState::Blocked,
+                        Some(block.to_string()),
+                    )
                 } else {
                     let mut retry_input = input.clone();
                     retry_input["workspace_path"] = json!(workspace);
@@ -142,7 +152,7 @@ pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
                             super::super::pr::ReviewCiRetryStep::Observe => None,
                         }
                     };
-                    let mut observed = failed_observation(
+                    let observed = failed_observation(
                         host,
                         input,
                         &workspace,
@@ -151,14 +161,15 @@ pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
                         &failed,
                         deadline_ms,
                     );
-                    if let Some(reason) = hold {
-                        observed["hold_reason"] = json!(reason);
+                    match hold {
+                        Some(reason) => observed.held(reason),
+                        None => observed,
                     }
-                    observed
                 }
             }
         };
         record(host, &task_id, &observed)?;
+        let observed = serde_json::to_value(&observed).map_err(encode_failed)?;
         return Ok(json!({
             "task_id": task_id,
             "pr_number": pr_number,
@@ -183,6 +194,10 @@ fn invalid(message: &str) -> OrbitError {
     OrbitError::InvalidInput(format!("pr_checks_watch: {message}"))
 }
 
+fn encode_failed(error: serde_json::Error) -> OrbitError {
+    OrbitError::Execution(format!("pr_checks_watch: {error}"))
+}
+
 fn ended(task_id: &str, pr_number: &str, reason: &str) -> Value {
     json!({"task_id": task_id, "pr_number": pr_number, "recorded": false, "ended": reason})
 }
@@ -203,18 +218,10 @@ fn checks_running(status: &PullRequestStatus) -> bool {
 fn observation(
     status: &PullRequestStatus,
     pr_number: &str,
-    state: &str,
+    state: ObservedState,
     reason: Option<String>,
-) -> Value {
-    let mut observed = json!({
-        "state": state,
-        "pr_number": pr_number,
-        "head_sha": status.head_sha,
-    });
-    if let Some(reason) = reason {
-        observed["reason"] = json!(reason);
-    }
-    observed
+) -> RecordedLandingChecksObservation {
+    RecordedLandingChecksObservation::settled(state, pr_number, status.head_sha.clone(), reason)
 }
 
 /// The `failed` observation: the failed checks by name, and the landing's
@@ -228,17 +235,14 @@ fn failed_observation<H: RuntimeHost + ?Sized>(
     pr_number: &str,
     failed: &[(Option<String>, String)],
     deadline_ms: u64,
-) -> Value {
-    let mut observed = observation(status, pr_number, "failed", None);
-    observed["failed_checks"] = json!(
-        failed
-            .iter()
-            .map(|(workflow, name)| match workflow {
-                Some(workflow) => format!("{workflow} / {name}"),
-                None => name.clone(),
-            })
-            .collect::<Vec<_>>()
-    );
+) -> RecordedLandingChecksObservation {
+    let failed_checks = failed
+        .iter()
+        .map(|(workflow, name)| match workflow {
+            Some(workflow) => format!("{workflow} / {name}"),
+            None => name.clone(),
+        })
+        .collect::<Vec<_>>();
     let classified = match (
         status.head_sha.as_deref(),
         fork_point(input, workspace, status),
@@ -265,9 +269,13 @@ fn failed_observation<H: RuntimeHost + ?Sized>(
             (watched.class, watched.detail)
         }
     };
-    observed["classification"] = json!(classified.0);
-    observed["detail"] = json!(classified.1);
-    observed
+    RecordedLandingChecksObservation::failed(
+        pr_number,
+        status.head_sha.clone(),
+        failed_checks,
+        classified.0,
+        classified.1,
+    )
 }
 
 /// The pull request's fork point from its base branch, that branch's name,
@@ -290,18 +298,21 @@ fn fork_point(
     Ok((fork.unwrap_or_default(), branch, tip))
 }
 
-/// Append the observation once: an identical note already recorded (a
-/// resumed or repeated watch of the same head) is not written again.
+/// Append the observation once: an entry with the same replay key (the
+/// identical note of a resumed or repeated watch of the same head) is not
+/// written again.
 fn record<H: RuntimeHost + ?Sized>(
     host: &H,
     task_id: &str,
-    observed: &Value,
+    observed: &RecordedLandingChecksObservation,
 ) -> Result<(), OrbitError> {
-    let note = serde_json::to_string(observed)
-        .map_err(|error| OrbitError::Execution(format!("pr_checks_watch: {error}")))?;
-    if host.get_task_history(task_id)?.iter().any(|entry| {
-        entry.event == LANDING_CHECKS_OBSERVED_EVENT && entry.note.as_deref() == Some(&note)
-    }) {
+    let replay_key = observed.replay_key().map_err(encode_failed)?;
+    if host
+        .get_task_history(task_id)?
+        .iter()
+        .filter_map(HistoricalLandingChecksObservation::from_history_entry)
+        .any(|recorded| recorded.replay_key() == &replay_key)
+    {
         return Ok(());
     }
     host.apply_task_automation_update(
@@ -313,7 +324,7 @@ fn record<H: RuntimeHost + ?Sized>(
                     WATCH_ACTOR,
                     LANDING_CHECKS_OBSERVED_EVENT,
                 )
-                .with_note(Some(note)),
+                .with_note(Some(replay_key.into_note())),
             ],
             ..TaskAutomationUpdate::default()
         },
