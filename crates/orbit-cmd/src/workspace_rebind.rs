@@ -63,7 +63,22 @@ pub(crate) fn refuse_pending_checkout_rebind(
     global_root: &Path,
     workspace_orbit_root: &Path,
 ) -> Result<(), OrbitError> {
-    let pending = global_root.join(PENDING_REBIND);
+    // The configured global root reaches this read through request-handler
+    // state. Canonicalize it, rejoin the fixed leaf, and keep `starts_with`
+    // inline: that is the barrier on the path the read receives. A missing
+    // root has no decision file, the same outcome as a missing read.
+    let root = match global_root.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let pending = root.join(PENDING_REBIND);
+    if !pending.starts_with(&root) {
+        return Err(refused(format!(
+            "pending checkout rebind path escapes its global root '{}'",
+            global_root.display()
+        )));
+    }
     let bytes = match std::fs::read(&pending) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
