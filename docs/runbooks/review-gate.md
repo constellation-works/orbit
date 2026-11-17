@@ -882,11 +882,15 @@ Identify the failed step from `orbit run show`, then act:
   specification is refused with `--discard-candidate` as the exit, which
   closes the task's undelivered Orbit pull requests and reruns from scratch. See
   [stuck job runs](./stuck-job-runs.md#requeue-a-failure-handoff-task-onto-its-published-candidate).
-- **`review_gate_admit` refused with `review_budget_exhausted`**: the
+- **`review_gate_admit` held with `review_budget_exhausted`**: the
   candidate already had its one review (`review_candidate_reviewed`) or its
-  reviewer spent `review.minutes` (`review_minutes_exhausted`). Renew it only
+  reviewer spent `review.minutes` (`review_minutes_exhausted`). Both admission
+  and the early minutes preflight end the run `held`, outside failure counts,
+  without retry, recovery or a failure handoff. The task status, ledger and
+  operator recovery text are preserved; no new review is reserved. Renew it only
   with a recorded decision:
-  `orbit task review-reset <task-id> --lineage '<exact-lineage-key>' --reason '<decision>'`.
+  `orbit task review-reset <task-id> --lineage '<exact-lineage-key>' --reason '<decision>'`,
+  then resume the held local run.
 
   A **claimed** leaf keeps that ledger on the executing host until settlement
   copies it to the owner. A claim is one attempt and keys its own lineage, so
@@ -900,7 +904,7 @@ Identify the failed step from `orbit run show`, then act:
   `--root` alone does not select a checkout. Run it on the owner, not on a
   replica: a replica does not hold the task, and it refuses control-plane
   writes. The task's next claim continues the kept candidate under a new
-  admission with a review budget of its own. `orbit job resume` of the failed
+  admission with a review budget of its own. `orbit job resume` of the held
   leaf stays refused.
 
 - **A claimed reviewer reported `incomplete` because its manifest or report

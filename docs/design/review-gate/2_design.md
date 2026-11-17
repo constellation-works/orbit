@@ -1650,8 +1650,13 @@ invocation that ended earlier with time left. The engine refuses the
 step (`review_minutes_exhausted`) when nothing is left. An accept that
 finished within its deadline settles on its evidence. A reviewer commit costs
 no separate budget; there are no reviewer-start counts or repair cycles.
-Exhaustion refuses admission (`review_budget_exhausted:
-review_candidate_reviewed | review_minutes_exhausted`). Provider token/cost
+Exhaustion holds the run at admission (`review_budget_exhausted:
+review_candidate_reviewed | review_minutes_exhausted`), including the early
+minutes preflight. This typed delivery hold runs no retry, recovery or failure
+handoff and is excluded from run failures. It preserves the task status,
+ledger and operator recovery text, reserving no new review. After a recorded
+local `review-reset`, the held run can resume in the same lineage; a claimed
+leaf instead needs the owner to requeue the task for a fresh claim. Provider token/cost
 caps are not enforced; usage stays unknown.
 
 ## 6. Managed completion and landing
