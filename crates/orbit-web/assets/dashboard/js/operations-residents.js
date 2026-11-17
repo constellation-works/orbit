@@ -625,6 +625,21 @@ function gateLabel(gate) {
   return GATE_LABEL[name] || name.replaceAll("_", " ") || "Decision";
 }
 
+// Block-triage reject and land, and review approval, dispose of work the
+// normal path cannot undo. Authority-tier grants are not this tier and keep
+// their direct write.
+function answerIsIrreversible(answer) {
+  return Boolean(answer) && typeof answer === "object" && answer.risk_tier === "irreversible";
+}
+
+// The task decision card uses this prompt. Cancel sends nothing. A host
+// without confirm cannot show the consequence, so the write is refused.
+function confirmIrreversibleDecisionAnswer(label, consequence) {
+  if (typeof window.confirm !== "function") return false;
+  const detail = consequence ? `\n\n${consequence}` : "";
+  return window.confirm(`Answer this decision with “${label}”?${detail}`);
+}
+
 function requestRows(payload, mandate) {
   const requests = openDecisionList(mandate);
   if (!requests.length) return null;
@@ -638,12 +653,20 @@ function requestRows(payload, mandate) {
       const label = answer.label || id;
       const action = button(label, `${label} request ${request.id}`);
       if (answer.consequence && answer.consequence !== label) action.setAttribute("aria-description", answer.consequence);
-      action.addEventListener("click", () => write(
-        `/api/decisions/${encodeURIComponent(request.id)}/answer`,
-        { answer: id, note: "Answered from the dashboard Residents view" },
-        `Answered ${request.id}: ${id}.`,
-        [action],
-      ));
+      action.addEventListener("click", () => {
+        if (answerIsIrreversible(answer) && !confirmIrreversibleDecisionAnswer(label, answer.consequence)) {
+          if (typeof window.confirm !== "function") {
+            feedback(FEEDBACK, "error", "Refused: an irreversible answer needs a confirmation dialog before it is sent.");
+          }
+          return;
+        }
+        write(
+          `/api/decisions/${encodeURIComponent(request.id)}/answer`,
+          { answer: id, note: "Answered from the dashboard Residents view" },
+          `Answered ${request.id}: ${id}.`,
+          [action],
+        );
+      });
       return gated(payload, "resident_write", action);
     });
     const state = request.state || "open";

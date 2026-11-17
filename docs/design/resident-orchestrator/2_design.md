@@ -476,7 +476,7 @@ under the governed operation `resident.write` (operator session only):
 | Relay a direction | `POST /api/residents/{id}/relay` | `orbit.resident.relay`, source `via: dashboard` |
 | Enable or disable the workspace's resident cycle routine | `POST /api/routines/toggle` | The existing routine toggle, audited like other operator toggles |
 
-`GET /api/residents` and `GET /api/residents/{id}` add two reads beside that show payload: `cycle_authority` is the grant recorded for the live cycle, or for the latest checkpoint's cycle when none is live, and `open_decisions` is every open decision on the mandate plus a checkpoint request that is still open on another task. `open_requests` remains the open `resident_authority` grants.
+`GET /api/residents` and `GET /api/residents/{id}` add two reads beside that show payload: `cycle_authority` is the grant recorded for the live cycle, or for the latest checkpoint's cycle when none is live, and `open_decisions` is every open decision on the mandate plus a checkpoint request that is still open on another task. `open_requests` remains the open `resident_authority` grants. An answer whose risk tier is `irreversible` confirms the chosen label and its consequence before `POST /api/decisions/{id}/answer`; cancelling sends no request. Other answers, including a `resident_authority` grant, still post on click.
 
 The dashboard runs the tools with its own session envelope (Agent, plus Operator when served
 `--operator`), never the terminal it was started from. So the tools' own authority rules apply
