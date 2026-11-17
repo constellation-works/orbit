@@ -41,7 +41,6 @@ fn a_follower_handoff_records_its_pull_request_once() {
         return;
     }
     let pair = Pair::new(1);
-    *pair.wire.accept_handoffs.lock().unwrap() = true;
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
     let delivered = handoff(&pair.admission(&leaf));
@@ -103,7 +102,6 @@ fn an_owner_repairs_a_legacy_missing_handoff_pr_ref_once() {
             },
         )
         .unwrap();
-    *pair.wire.accept_handoffs.lock().unwrap() = true;
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
     pair.leaf_hands_off(&leaf);
@@ -449,7 +447,6 @@ impl Delivery {
         provider_answers_only_pr_42();
         let config = owner_config(commands, "sol", &["sol"]);
         let pair = Pair::with_owner_config(&config, &[None]);
-        *pair.wire.accept_handoffs.lock().unwrap() = true;
         let drain = pair.run_drain();
         let leaf = pair.running_leaf(&drain, 1);
         let task = pair.claimed_task(&leaf);

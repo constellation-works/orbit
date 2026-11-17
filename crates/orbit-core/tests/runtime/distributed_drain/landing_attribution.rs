@@ -27,7 +27,6 @@ fn frictions(owner: &OrbitRuntime) -> FrictionStore {
 /// existing drain wire stands in for the provider's candidate observation;
 /// authority and completion still go through the real claim journal.
 fn complete_landing(pair: &Pair) -> String {
-    *pair.wire.accept_handoffs.lock().unwrap() = true;
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
     let delivered = handoff(&pair.admission(&leaf));
@@ -274,7 +273,6 @@ fn landing_retries_failed_prose_targets_with_the_original_delivery_evidence() {
 fn the_owners_review_batch_names_the_tasks_handoff_landings_delivered() {
     let pair = Pair::new(1);
     let owner = &pair.wire.owner;
-    *pair.wire.accept_handoffs.lock().unwrap() = true;
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
     let claimed = pair.claimed_task(&leaf);
