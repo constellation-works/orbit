@@ -295,8 +295,13 @@ function hostError(row) {
 function hostErrorCause(error) {
   if (!error) return null;
   switch (error.code) {
+    // `unreachable_destination` is a broad class: it covers malformed
+    // discovery replies and other transport failures besides timeouts, so no
+    // timeout cause is asserted here. Timeout wording is reserved for the
+    // structured `process_timeout` classification below (STD-02 §R26: assert
+    // only causes the code actually checked).
     case "unreachable_destination":
-      return "SSH connection timed out";
+      return null;
     case "process_timeout":
       return "Connection timed out";
     case "host_identity_mismatch":
