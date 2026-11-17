@@ -4,7 +4,7 @@ title: UI and UX — consistent spacing, shared edges, one type scale, minimal w
 summary: Normative rules for every operator-facing screen (dashboards, web apps, sites, panels): sibling spacing and shared edges, layouts that never shift, one type scale, contrast and one meaning per colour, minimal words with helper text behind an info icon, tooltips only where they add something, no redundant or inert elements, answer-first data with honest charts, visible live state, responsive use of width, and turning each owner correction into a rule; follow it in any project that renders a UI.
 status: draft
 tags: [standard, ui, ux, design]
-version: 13
+version: 14
 created: 2026-11-09
 updated: 2026-11-17
 last_validated: 2026-11-15
@@ -201,6 +201,7 @@ gate that enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, 
   Choosing a tab or item inside a secondary region while both are visible is not such a
   navigation. The secondary region keeps its selection for when it is reached, and widening
   again shows both regions.
+- **R44.** Every dialog, panel, drawer, popover or floating bar that Esc closes and that has a close button MUST label that button "esc", not ×, "Close" or "Back to list". The label is lowercase. The button's accessible name still says what it closes, for example "Close task details (Esc)". Placement follows R7.
 
 ### Process
 
