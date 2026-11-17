@@ -138,6 +138,7 @@ pub(super) fn run_target(
         t,
         dispatch.success,
         dispatch.message.take(),
+        dispatch.failure_code.as_ref(),
         &dispatch.output,
     );
     let (success, message) =
@@ -653,16 +654,53 @@ fn apply_implementer_blocker(
     target: &TargetStep,
     success: bool,
     message: Option<String>,
+    failure_code: Option<&orbit_types::workflow::StepFailureCode>,
     output: &Value,
 ) -> (bool, Option<String>) {
-    let Some(blocker) = orbit_types::workflow::agent_blocker_from_output(output) else {
-        return (success, message);
-    };
-    let upgrade = blocker.class() == orbit_types::workflow::AgentBlockerClass::UpgradePending;
-    if !upgrade && !is_implementer_step(step, target) {
+    if let Some(blocker) = orbit_types::workflow::agent_blocker_from_output(output) {
+        let upgrade = blocker.class() == orbit_types::workflow::AgentBlockerClass::UpgradePending;
+        if !upgrade && !is_implementer_step(step, target) {
+            return (success, message);
+        }
+        return (false, Some(blocker.step_failure_message()));
+    }
+    // A declared-failed envelope (`status: "failed"`, exit 0) that names a
+    // task-level stop in its `error.code` is the same stop in another shape:
+    // normalize it here, before retry and recovery see the outcome. Reserved
+    // codes, transient/provider codes and `implementation_incomplete` keep
+    // their existing outcomes inside `agent_blocker_from_declared_failure`;
+    // a malformed declaration (no typed code, a bad token, no evidence, or a
+    // timeout envelope) stays an ordinary failure.
+    if success || !is_implementer_step(step, target) {
         return (success, message);
     }
+    let Some(code) = failure_code else {
+        return (success, message);
+    };
+    let Some(text) = message.as_deref() else {
+        return (success, message);
+    };
+    if text.contains("declared envelope status=\"timeout\"") {
+        return (success, message);
+    }
+    let evidence = declared_failure_evidence(text);
+    let Some(blocker) =
+        orbit_types::workflow::agent_blocker_from_declared_failure(code.as_str(), evidence)
+    else {
+        return (success, message);
+    };
     (false, Some(blocker.step_failure_message()))
+}
+
+/// The `error.message` a declared-failure diagnostic carries, as the
+/// blocker's evidence. The diagnostic renders as
+/// `... error.code=<code>; error.message=<message>`; a message without that
+/// fragment is itself the evidence.
+fn declared_failure_evidence(message: &str) -> &str {
+    match message.split_once("error.message=") {
+        Some((_, evidence)) => evidence.trim(),
+        None => message.trim(),
+    }
 }
 
 fn is_implementer_step(step: &JobV2Step, target: &TargetStep) -> bool {

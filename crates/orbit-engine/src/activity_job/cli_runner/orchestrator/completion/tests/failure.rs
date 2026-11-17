@@ -213,6 +213,77 @@ fn a_codex_quota_turn_failure_is_provider_unavailable() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// [ORB-25393] A non-reserved declared code names a blocker; reserved,
+/// provider/transient and malformed declarations do not.
+#[test]
+fn a_declared_failure_code_names_a_blocker_only_when_it_is_not_reserved_or_malformed() {
+    use orbit_types::workflow::{
+        AgentBlockerClass, agent_blocker_from_declared_failure, is_reserved_declared_failure_code,
+    };
+
+    let blocker =
+        agent_blocker_from_declared_failure("validation_blocker", "needs a live pilot check")
+            .expect("task-level blocker");
+    assert_eq!(blocker.kind, "validation_blocker");
+    assert_eq!(blocker.evidence, "needs a live pilot check");
+    assert_eq!(blocker.class(), AgentBlockerClass::Task);
+    assert!(
+        agent_blocker_from_declared_failure("task_blocked", "already done elsewhere").is_some()
+    );
+    assert!(
+        agent_blocker_from_declared_failure("contract_contradiction", "criteria conflict")
+            .is_some()
+    );
+
+    for reserved in [
+        "implementation_incomplete",
+        "owner_route_unavailable",
+        "owner_signoff_required",
+        "footprint_unavailable",
+        "provider_unavailable",
+        "provider_limit",
+        "provider_capacity",
+        "provider_refusal",
+        "validation_environment",
+        "validation_route_unavailable",
+        "transient_failure",
+        "stalled",
+        "task_blocked_by_agent",
+        "upgrade_pending",
+    ] {
+        assert!(
+            is_reserved_declared_failure_code(reserved),
+            "{reserved} is reserved"
+        );
+        assert_eq!(
+            agent_blocker_from_declared_failure(reserved, "evidence"),
+            None,
+            "{reserved} keeps its existing outcome"
+        );
+    }
+
+    for (code, evidence) in [
+        ("", "evidence"),
+        ("9bad", "evidence"),
+        ("has space", "evidence"),
+        ("validation_blocker", ""),
+        ("validation_blocker", "  "),
+    ] {
+        assert_eq!(
+            agent_blocker_from_declared_failure(code, evidence),
+            None,
+            "malformed declaration {code:?}/{evidence:?} is not a blocker"
+        );
+    }
+
+    // A malformed envelope (no `error.message`) carries no typed code at
+    // ingestion, so the step boundary has nothing to normalize.
+    let malformed = r#"{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"validation_blocker"}}"#;
+    let outcome = project_stdout("fixture", malformed.as_bytes(), true, false, false);
+    assert!(!outcome.success);
+    assert_eq!(outcome.failure_code, None, "{outcome:?}");
+}
+
 /// [ORB-23956] An implement step that declares `owner_signoff_required` is
 /// waiting for recorded owner approval. That stop is a hold, not a failed run.
 #[test]
