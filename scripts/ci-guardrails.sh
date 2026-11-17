@@ -665,6 +665,7 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/check-dependency-direction.sh"
   run_guard "$repo_root/scripts/check-workflow-yaml.py"
   run_guard "$repo_root/scripts/check-test-shell-waits.py"
+  run_guard "$repo_root/scripts/check-test-child-runners.py"
   run_guard "$repo_root/scripts/check-codeql-production-paths.py"
   run_guard "$repo_root/scripts/check-codeql-extension-schema.py"
   run_guard "$repo_root/scripts/check-terminal-state-guard.sh"
