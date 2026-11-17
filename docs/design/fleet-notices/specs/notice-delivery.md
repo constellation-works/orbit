@@ -181,8 +181,7 @@ a broken config restores its notices without visiting another view. The operator
 `POST /api/notices` and `POST /api/notices/<id>/close`, which call the same core post and close as the tools and require an
 operator session. The banner shows while a warn, incident or maintenance notice is in that read, on
 every view, with title, scope, age and time to expiry and a link to the Notices view. The read
-leaves out residents' status lines, so the list is led by warnings; each status line is shown in
-the detail of its mandate once that mandate is selected in the Residents tab (the row keeps only the goal, state and task ID), marked silent once it has lapsed.
+leaves out residents' status lines, so the list is led by warnings; each mandate's row in the Residents tab shows its status-line headline (marked silent once it has lapsed), while the selected mandate's detail holds only the posted/expiry timestamps and the disclosed full body.
 The banner and Notices view share an in-flight read. Scheduled polls may reuse a completed read for
 up to 15 seconds to stay within the dashboard request budget; a non-poll refresh starts a
 fresh read.
