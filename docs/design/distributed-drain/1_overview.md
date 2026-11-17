@@ -1,11 +1,11 @@
 ---
 title: Distributed Drain — Overview
 owner: claude
-last_updated: 2026-11-10
-last_validated: 2026-11-05
+last_updated: 2026-11-16
+last_validated: 2026-11-16
 status: Draft
-stage: building
-next: "Owner review of the building stage now receipts have an operator caller (ORB-19424)."
+stage: shipped
+next: "—"
 feature: distributed-drain
 doc_role: overview
 type: design
@@ -18,7 +18,7 @@ related_artifacts: [ORB-12488, ORB-12490, ORB-12491, ORB-12492, ORB-12495, ORB-1
 
 # Distributed Drain — Overview
 
-> **Status: Draft, building; core runtime live.** [ORB-12488] authored the contract.
+> **Status: Draft; committed runtime scope shipped.** [ORB-12488] authored the contract.
 > The owner's claim and admission substrate, the internal `orbit.task.pull` / `orbit.drain.claim.bind` /
 > `orbit.drain.claim.settle` runtime tools, the routed follower peer (`orbit run auto --pull`), handoff
 > acceptance and approval, and the landing consumer are all live ([§3](#3-at-a-glance) tracks each
@@ -109,13 +109,13 @@ accounting were first removed as unused ([ORB-15332], [ORB-17641]); [ORB-19424] 
 with an operator caller, `orbit doctor admission-receipts`. Without `--compact` the command
 reports receipt counts and logical payload bytes. With it, compaction moves idle and settled
 receipts to permanent tombstones and keeps full receipts for unsettled claims and for failed or
-revoked claims with a preserved PR. The feature remains `building` per its frontmatter stage.
+revoked claims with a preserved PR. With that operational gap closed, committed runtime
+scope is shipped. The document remains Draft; delivery is not evidence of design approval.
 
 The separate fault-matrix audit [ORB-12501] was explicitly deferred by the owner and
 is now archived; [ORB-12617] completed the mixed-admission and end-to-end fixture
 slice, not that entire audit. [ORB-19393] completed inherited-check waits and
-externally merged handoff reconciliation; its integration delivery landed during
-this reconciliation, after the pinned source checkout.
+externally merged handoff reconciliation; both are present in the current checkout.
 
 ## 3. At a Glance
 
