@@ -25,7 +25,7 @@ Every subcommand accepts these options, before or after it.
 | `orbit init` | Set up the global Orbit root (`~/.orbit`), this machine's identity and task-ID prefix, and a [human crew](/reference/config/#human-crews). `--non-interactive` skips prompts; `--force` resets the root to shipped defaults. |
 | `orbit workspace init` | Register the current repository as a workspace. Common options: `--name`, `--base-branch`, `--ship-mode pr\|local`, `--role owner\|replica`, `--mcp`, `--preset <file>` ([presets](/reference/config/#workspace-presets)). |
 | `orbit workspace list\|show` | List registered workspaces, or show the current one. |
-| `orbit workspace rebind --path <dir> [--dry-run]` | Rebind this host to an already moved checkout; `--dry-run` validates without writing. |
+| `orbit workspace rebind --path <dir> [--dry-run]` | [Rebind this host to an already moved checkout](/how-to/workspace-maintenance/#rebind-a-moved-checkout); `--dry-run` validates without writing. |
 | `orbit workspace sync [--check] [--all]` | [Converge managed artifacts](/how-to/workspace-maintenance/#synchronize-shipped-defaults) on the defaults this binary ships. `--check` writes nothing; `--all` covers every workspace on this host. |
 | `orbit workspace role <workspace> <owner\|replica>` | Validate or reassert this checkout's role. |
 | `orbit workspace ship-mode [pr\|local]` | Print the workspace's ship mode, or change it. |

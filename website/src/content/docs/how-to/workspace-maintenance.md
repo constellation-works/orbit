@@ -1,11 +1,11 @@
 ---
 title: Maintain and remove workspaces
-description: "Inspect a workspace, sync shipped defaults after an upgrade, apply migrations, rebind a moved Git remote, and remove or tear down a workspace."
+description: "Inspect a workspace, sync shipped defaults after an upgrade, apply migrations, rebind a moved checkout or Git remote, and remove or tear down a workspace."
 ---
 
 Keep a registered workspace current as Orbit and your repository change:
-check its binding, pick up new defaults after an upgrade, follow a moved Git
-remote, and retire it when you are done.
+check its binding, pick up new defaults after an upgrade, relocate a checkout or
+follow a moved Git remote, and retire it when you are done.
 
 ## Inspect bindings and ship mode
 
@@ -216,12 +216,93 @@ orbit migrate --backfill-claimed-effort --workspace my-project
 The owner records an effort only for claims that follower ran and never
 replaces one it already holds.
 
+## Rebind a moved checkout
+
+When you move an existing repository checkout to a new directory on this
+machine, rebind the workspace to point Orbit's host-local registration to
+the new location.
+
+This command updates only the local checkout binding on the current host. It
+never moves files on disk, modifies Git configuration or remote URLs on your
+forge, or changes another host. To update the registered repository URL after a
+forge rename or transfer, use [Rebind a moved source Git remote](#rebind-a-moved-source-git-remote).
+
+### Prerequisites
+
+Before rebinding, ensure the checkout and host meet these requirements:
+
+- **Move files yourself.** Relocating the checkout directory on disk is an
+  operator action. Move the directory only after completing the other
+  prerequisites.
+- **Stop activity.** Stop workspace runs and release any active task claims or
+  path reservations.
+- **Remove managed worktrees.** Finish work in any retained Orbit-managed
+  worktrees under `.orbit/state/worktrees/` and remove them before moving the
+  primary checkout.
+- **Matching Git origin and identity.** The moved directory must be a primary
+  Git checkout whose `origin` remote matches the registered source remote. It
+  must retain its checkout-local `.orbit/` identity directory (not a symlink
+  or an external data root) matching the registered workspace.
+- **Existing host store.** The rebind operation requires an existing host store
+  (`~/.orbit/orbit.db`) outside the moved directory. If moving a newly
+  initialized checkout before running any tasks, run a runtime command such as
+  `orbit tool run orbit.task.list --input '{}'` first to initialize the store.
+- **Old directory removed.** The old checkout path must no longer exist.
+
+### Rebind walkthrough
+
+Always supply `--workspace` with the registered workspace name or ID, because
+Orbit cannot resolve the workspace from the moved path before rebinding.
+
+```bash
+# 1. Stop active runs and move the repository directory.
+mv /path/to/old-repo /path/to/new-repo
+
+# 2. Validate without changing the registry.
+orbit --workspace my-project workspace rebind --path /path/to/new-repo --dry-run
+
+# 3. Apply the new checkout binding.
+orbit --workspace my-project workspace rebind --path /path/to/new-repo
+
+# 4. Verify the registered checkout path.
+orbit --workspace my-project workspace show
+```
+
+Passing `--dry-run --json` outputs the `old` and `new` `repo_root` and
+`orbit_dir` paths and reports whether the binding would succeed without writing
+to the registry.
+
+### Refusals and recovery
+
+Orbit validates preconditions before writing changes and refuses the rebind if:
+
+- `--workspace` is omitted;
+- the host store (`orbit.db`) is missing (refused even under `--dry-run`);
+- the target is not a primary Git checkout root or its `origin` remote does not
+  match the registered source remote;
+- the target lacks a local `.orbit/` directory, uses a symlink for `.orbit/`,
+  or its `.orbit/` identity does not match the registered workspace;
+- the old checkout directory still exists;
+- retained Orbit-managed worktrees remain registered in Git or on disk;
+- live runs, active task claims, or path reservations remain unsettled; or
+- the checkout uses an external Orbit data root instead of a checkout-local
+  `.orbit/` directory.
+
+If a rebind is interrupted before completing, Orbit refuses runtime operations
+on the workspace until recovery finishes. Repeat the exact same command to
+complete the rebind safely:
+
+```bash
+orbit --workspace my-project workspace rebind --path /path/to/new-repo
+```
+
 ## Rebind a moved source Git remote
 
 When you transfer or rename the repository on your forge, update the source
 identity Orbit registered, so pull request delivery and task publication
 keep working. Orbit accepts a portable Git URL: no credentials, local paths
-or remote aliases.
+or remote aliases. To update local paths after relocating a checkout on disk,
+see [Rebind a moved checkout](#rebind-a-moved-checkout) above.
 
 :::caution[Remove a publication binding first]
 If the workspace uses [task publication](/how-to/task-publication/), the
