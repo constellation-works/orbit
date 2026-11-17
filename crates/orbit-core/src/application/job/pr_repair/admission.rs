@@ -347,11 +347,13 @@ impl OrbitRuntime {
         plan: &orbit_types::workflow::CiRerunPlan,
         now_ms: u64,
     ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError> {
-        use orbit_types::workflow::{CiRerunAdmission, decide_ci_rerun_with_policy};
+        use orbit_types::workflow::{
+            CiRerunAdmission, CiRerunRefusal, decide_ci_rerun_with_policy,
+        };
         self.ensure_coordination_task_write_permitted()?;
         if self.worker_invocation().is_some() {
             return Ok(CiRerunAdmission::Refused(
-                "CI retry requires the owning host".into(),
+                CiRerunRefusal::RequiresOwningHost,
             ));
         }
         if let Some(handoff_id) = handoff_id {
@@ -423,7 +425,7 @@ impl OrbitRuntime {
             .with_task_write_lock(primary, &mut || {
                 if self.get_task(primary)?.status.is_terminal() {
                     decision = Some(CiRerunAdmission::Refused(
-                        "CI retry owning task is terminal".into(),
+                        CiRerunRefusal::OwningTaskTerminal,
                     ));
                     return Ok(());
                 }
