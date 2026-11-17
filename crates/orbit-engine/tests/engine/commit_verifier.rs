@@ -3,13 +3,12 @@
 //! refusal of nested repositories that would deliver as gitlinks [ORB-15265],
 //! and an implementer's invalid-finding report rejecting its task [ORB-19635].
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
 use chrono::Utc;
-use orbit_common::{NotFoundKind, OrbitError};
+use orbit_common::OrbitError;
 use orbit_engine::execute_deterministic_action;
 use orbit_types::task::{
     ExternalRef, Task, TaskArtifact, TaskComment, TaskPriority, TaskStatus, TaskType,
@@ -20,225 +19,12 @@ use tempfile::tempdir;
 const TASK_ID: &str = "T1";
 const RUN_ID: &str = "jrun-verifier-test";
 
+#[path = "../support/commit_evidence.rs"]
+mod evidence_fixture;
+use evidence_fixture::VerifierHost;
+
 mod already_landed;
 mod finding_invalid;
-
-struct VerifierHost {
-    repo: PathBuf,
-    tasks: Mutex<BTreeMap<String, Task>>,
-    comments: Mutex<BTreeMap<String, Vec<TaskComment>>>,
-    artifacts: Mutex<BTreeMap<String, Vec<TaskArtifact>>>,
-    worker: Option<orbit_types::tool::WorkerInvocation>,
-    state: Mutex<Option<orbit_types::workflow::PipelineState>>,
-    unknown_artifact_read: Mutex<Option<(String, usize)>>,
-    bulk_reads: Mutex<usize>,
-    pr_config: Mutex<orbit_engine::PrConfig>,
-    rejected_findings: Mutex<Vec<orbit_types::workflow::handoff::FindingInvalidReport>>,
-    // `workflow.required_validation_commands`. Empty unless a case sets it.
-    required_commands: Mutex<Vec<String>>,
-}
-
-impl VerifierHost {
-    fn new(repo: &Path, task: Task) -> Self {
-        Self {
-            repo: repo.to_path_buf(),
-            tasks: Mutex::new(BTreeMap::from([(task.id.clone(), task)])),
-            comments: Mutex::default(),
-            artifacts: Mutex::default(),
-            worker: None,
-            state: Mutex::default(),
-            unknown_artifact_read: Mutex::default(),
-            bulk_reads: Mutex::default(),
-            pr_config: Mutex::default(),
-            rejected_findings: Mutex::default(),
-            required_commands: Mutex::default(),
-        }
-    }
-
-    fn set_required_commands(&self, commands: &[&str]) {
-        *self.required_commands.lock().unwrap() = commands
-            .iter()
-            .map(|command| (*command).to_string())
-            .collect();
-    }
-
-    fn set_conventions(&self, conventions: orbit_types::workflow::DeliveryConventions) {
-        self.pr_config.lock().unwrap().conventions = conventions;
-    }
-
-    fn set_comments(&self, task_id: &str, comments: Vec<TaskComment>) {
-        self.comments
-            .lock()
-            .unwrap()
-            .insert(task_id.to_string(), comments);
-    }
-
-    fn set_artifacts(&self, task_id: &str, artifacts: Vec<TaskArtifact>) {
-        self.artifacts
-            .lock()
-            .unwrap()
-            .insert(task_id.to_string(), artifacts);
-    }
-}
-
-impl orbit_engine::test_support::NullRuntimeHost for VerifierHost {
-    fn pr_config(&self) -> orbit_engine::PrConfig {
-        self.pr_config.lock().unwrap().clone()
-    }
-
-    fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
-        self.worker.clone()
-    }
-
-    fn attach_claim_validation_log(&self, path: &str, content: Vec<u8>) -> Result<(), OrbitError> {
-        let mut artifacts = self.artifacts.lock().unwrap();
-        let logs = artifacts.entry(TASK_ID.to_string()).or_default();
-        logs.retain(|artifact| artifact.path != path);
-        logs.push(TaskArtifact::from_text(
-            path,
-            String::from_utf8(content).expect("fixture JSON is UTF-8"),
-        ));
-        Ok(())
-    }
-
-    fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
-        self.tasks
-            .lock()
-            .unwrap()
-            .get(task_id)
-            .cloned()
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))
-    }
-
-    fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError> {
-        Ok(self
-            .comments
-            .lock()
-            .unwrap()
-            .get(task_id)
-            .cloned()
-            .unwrap_or_default())
-    }
-
-    fn get_task_artifact(
-        &self,
-        task_id: &str,
-        path: &str,
-    ) -> Result<Option<TaskArtifact>, OrbitError> {
-        if let Some((fault_path, remaining)) = &mut *self.unknown_artifact_read.lock().unwrap()
-            && fault_path == path
-        {
-            *remaining -= 1;
-            if *remaining == 0 {
-                return Err(OrbitError::OutcomeUnknown {
-                    mcp_call_id: "lost-artifact-read".into(),
-                    message: "named artifact reply lost".into(),
-                });
-            }
-        }
-        let artifact = self
-            .artifacts
-            .lock()
-            .unwrap()
-            .get(task_id)
-            .and_then(|artifacts| artifacts.iter().find(|artifact| artifact.path == path))
-            .cloned();
-        if let Some(artifact) = &artifact {
-            artifact.validate_inline_size(task_id)?;
-        }
-        Ok(artifact)
-    }
-
-    fn get_task_artifacts(&self, task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
-        *self.bulk_reads.lock().unwrap() += 1;
-        Ok(self
-            .artifacts
-            .lock()
-            .unwrap()
-            .get(task_id)
-            .cloned()
-            .unwrap_or_default())
-    }
-
-    fn read_run_state(
-        &self,
-        run_id: &str,
-    ) -> Result<Option<orbit_types::workflow::PipelineState>, OrbitError> {
-        Ok(self
-            .state
-            .lock()
-            .unwrap()
-            .as_ref()
-            .filter(|state| state.run_id == run_id)
-            .cloned())
-    }
-
-    fn get_job_run(
-        &self,
-        _run_id: &str,
-    ) -> Result<Option<orbit_types::workflow::JobRun>, OrbitError> {
-        Ok(None)
-    }
-
-    fn list_tasks_filtered(
-        &self,
-        status: Option<TaskStatus>,
-        priority: Option<TaskPriority>,
-        parent_id: Option<&str>,
-        batch_id: Option<&str>,
-        _external_ref: Option<&orbit_types::task::ExternalRef>,
-        _has_external_ref_system: Option<&str>,
-    ) -> Result<Vec<Task>, OrbitError> {
-        Ok(self
-            .tasks
-            .lock()
-            .unwrap()
-            .values()
-            .filter(|task| status.is_none_or(|status| task.status == status))
-            .filter(|task| priority.is_none_or(|priority| task.priority == priority))
-            .filter(|task| parent_id.is_none_or(|parent_id| task.parent_id() == Some(parent_id)))
-            .filter(|task| {
-                batch_id.is_none_or(|batch_id| task.job_run_id.as_deref() == Some(batch_id))
-            })
-            .cloned()
-            .collect())
-    }
-
-    fn apply_task_automation_update(
-        &self,
-        task_id: &str,
-        update: orbit_engine::TaskAutomationUpdate,
-    ) -> Result<(), OrbitError> {
-        let mut tasks = self.tasks.lock().unwrap();
-        let task = tasks
-            .get_mut(task_id)
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))?;
-        if let Some(status) = update.status {
-            task.status = status;
-        }
-        if let Some(execution_summary) = update.execution_summary {
-            task.execution_summary = execution_summary;
-        }
-        Ok(())
-    }
-
-    fn repo_root(&self) -> Result<String, OrbitError> {
-        Ok(self.repo.to_string_lossy().into_owned())
-    }
-
-    fn reject_invalid_finding(
-        &self,
-        report: &orbit_types::workflow::handoff::FindingInvalidReport,
-        _base_branch: &str,
-    ) -> Result<(), OrbitError> {
-        self.rejected_findings.lock().unwrap().push(report.clone());
-        Ok(())
-    }
-
-    fn required_validation_commands(&self) -> Vec<String> {
-        self.required_commands.lock().unwrap().clone()
-    }
-}
 
 fn fixture_task() -> Task {
     let now = Utc::now();
@@ -308,6 +94,19 @@ fn init_git_repo(dir: &Path) {
     git(&["commit", "-m", "initial commit [T1]"]);
 }
 
+fn temp_repo() -> tempfile::TempDir {
+    let temp = tempdir().expect("create tempdir");
+    init_git_repo(temp.path());
+    temp
+}
+
+fn verifier_fixture(task: Task) -> (tempfile::TempDir, VerifierHost, String) {
+    let temp = temp_repo();
+    let head = git_head(temp.path());
+    let host = VerifierHost::new(temp.path(), task);
+    (temp, host, head)
+}
+
 fn git_head(dir: &Path) -> String {
     git_output(dir, &["rev-parse", "HEAD"])
 }
@@ -322,6 +121,13 @@ fn action(host: &VerifierHost, input: &Value) -> Result<Value, OrbitError> {
         &HashMap::new(),
         None,
     )
+}
+
+fn per_task_input(repo: &Path, task_id: &str) -> Value {
+    json!({
+        "scope": "per_task", "job_run_id": RUN_ID,
+        "workspace_path": repo, "completed_task_ids": [task_id],
+    })
 }
 
 fn commit_input(repo: &Path, head: &str) -> Value {
@@ -339,25 +145,15 @@ fn artifact(path: &str, content: Value) -> TaskArtifact {
 }
 
 fn per_task_commit_delivers_both_sides_of_a_staged_rename() {
-    let temp = tempdir().expect("create tempdir");
+    let temp = temp_repo();
     let repo = temp.path();
-    init_git_repo(repo);
     git_output(repo, &["config", "diff.renames", "true"]);
     git_output(repo, &["mv", "README.md", "renamed.md"]);
     let mut task = fixture_task();
     task.context_files.push("file:renamed.md".to_string());
     let host = VerifierHost::new(repo, task);
 
-    let result = action(
-        &host,
-        &json!({
-            "scope": "per_task",
-            "job_run_id": RUN_ID,
-            "workspace_path": repo,
-            "completed_task_ids": [TASK_ID],
-        }),
-    )
-    .expect("deliver staged rename");
+    let result = action(&host, &per_task_input(repo, TASK_ID)).expect("deliver staged rename");
 
     assert_eq!(result["committed_task_ids"], json!([TASK_ID]));
     assert_eq!(
@@ -388,140 +184,79 @@ fn per_task_commit_delivers_both_sides_of_a_staged_rename() {
 fn templated_commit_with_long_non_title_placeholder_preserves_marker_and_lands() {
     use orbit_types::workflow::{ConventionTemplate, DeliveryConventions};
 
-    let temp = tempdir().expect("create tempdir");
-    let repo = temp.path();
-    init_git_repo(repo);
-    let mut task = fixture_task();
-    task.title = "Fix the widget".to_string();
-    task.external_refs = vec![ExternalRef {
-        system: "jira".to_string(),
-        id: "X".repeat(80),
-        url: None,
-    }];
-    let host = VerifierHost::new(repo, task.clone());
-    host.set_conventions(DeliveryConventions {
-        commit_subject: Some(
-            ConventionTemplate::parse_commit_subject(
-                "commit.subject_template",
-                "{{type}}({{ext.jira}}): {{title}} [{{task_id}}]",
-            )
-            .expect("documented subject template parses"),
-        ),
-        ..DeliveryConventions::default()
-    });
-    fs::write(repo.join("README.md"), "widget fix\n").expect("write README");
-
-    let result = action(
-        &host,
-        &json!({
-            "scope": "per_task",
-            "job_run_id": RUN_ID,
-            "workspace_path": repo,
-            "completed_task_ids": [TASK_ID],
-        }),
-    )
-    .expect("deliver templated commit with a long external reference");
-    assert_eq!(result["committed_task_ids"], json!([TASK_ID]));
-
-    let subject = git_output(repo, &["log", "-1", "--format=%s"]);
-    assert!(
-        subject.chars().count() <= 72,
-        "templated subject must stay within the budget, got {subject:?}"
-    );
-    assert!(
-        subject.contains(&format!("[{TASK_ID}]")),
-        "templated subject must preserve the complete delivery marker, got {subject:?}"
-    );
-    let message = git_output(repo, &["log", "-1", "--format=%B"]);
-    assert!(
-        message.contains("Fix the widget"),
-        "shortened subject must keep the full title in the body, got {message:?}"
-    );
-
-    // The commit just produced is acceptable as already-landed evidence.
-    let head = git_head(repo);
-    let report = json!({
-        "schema_version": 1,
-        "task_id": TASK_ID,
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "covering_commit": head,
-        "covering_task_id": TASK_ID,
-        "scope": orbit_types::workflow::handoff::already_landed_scope(&task, &[]),
-        "required_commands": ["make test"],
-        "validation": [{
-            "command": "make test",
-            "outcome": "passed",
-            "role": "required",
-            "log_artifact": "validation.json"
-        }],
-        "criteria_evidence": ["Verified criterion"]
-    });
-    let log = json!({
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "command": "make test",
-        "exit_code": 0,
-        "output": "ok"
-    });
-    host.set_artifacts(
-        TASK_ID,
-        vec![
-            artifact("already-landed.json", report),
-            artifact("validation.json", log),
-        ],
-    );
-    let verified = action(&host, &commit_input(repo, &head))
-        .expect("a marker-preserving templated commit must verify as already landed");
-    assert_eq!(verified["decision"], "verified_already_landed");
-    assert_eq!(verified["committed"], false);
-
-    // Normal title shortening still respects the budget and keeps the marker.
-    let temp = tempdir().expect("create tempdir");
-    let repo = temp.path();
-    init_git_repo(repo);
     let long_title = format!("Fix {}", "the very long widget ".repeat(8))
         .trim_end()
         .to_string();
-    let mut task = fixture_task();
-    task.title = long_title.clone();
-    let host = VerifierHost::new(repo, task);
-    host.set_conventions(DeliveryConventions {
-        commit_subject: Some(
-            ConventionTemplate::parse_commit_subject(
-                "commit.subject_template",
-                "{{type}}: {{title}} [{{task_id}}]",
-            )
-            .expect("subject template parses"),
+    for (case, title, reference, template, edit) in [
+        (
+            "long external reference",
+            "Fix the widget",
+            Some("X".repeat(80)),
+            "{{type}}({{ext.jira}}): {{title}} [{{task_id}}]",
+            "widget fix\n",
         ),
-        ..DeliveryConventions::default()
-    });
-    fs::write(repo.join("README.md"), "long title fix\n").expect("write README");
-    let result = action(
-        &host,
-        &json!({
-            "scope": "per_task",
-            "job_run_id": RUN_ID,
-            "workspace_path": repo,
-            "completed_task_ids": [TASK_ID],
-        }),
-    )
-    .expect("deliver commit with a long title");
-    assert_eq!(result["committed_task_ids"], json!([TASK_ID]));
-    let subject = git_output(repo, &["log", "-1", "--format=%s"]);
-    assert!(
-        subject.chars().count() <= 72,
-        "title-shortened subject must stay within the budget, got {subject:?}"
-    );
-    assert!(
-        subject.contains(&format!("[{TASK_ID}]")),
-        "title-shortened subject must preserve the marker, got {subject:?}"
-    );
-    let message = git_output(repo, &["log", "-1", "--format=%B"]);
-    assert!(
-        message.contains(&long_title),
-        "title-shortened commit must keep the full title in the body, got {message:?}"
-    );
+        (
+            "long title",
+            long_title.as_str(),
+            None,
+            "{{type}}: {{title}} [{{task_id}}]",
+            "long title fix\n",
+        ),
+    ] {
+        let temp = temp_repo();
+        let repo = temp.path();
+        let mut task = fixture_task();
+        task.title = title.to_string();
+        task.external_refs = reference
+            .into_iter()
+            .map(|id| ExternalRef {
+                system: "jira".to_string(),
+                id,
+                url: None,
+            })
+            .collect();
+        let host = VerifierHost::new(repo, task.clone());
+        host.set_conventions(DeliveryConventions {
+            commit_subject: Some(
+                ConventionTemplate::parse_commit_subject("commit.subject_template", template)
+                    .expect("subject template parses"),
+            ),
+            ..DeliveryConventions::default()
+        });
+        fs::write(repo.join("README.md"), edit).expect("write README");
+        let result = action(&host, &per_task_input(repo, TASK_ID))
+            .unwrap_or_else(|error| panic!("{case}: deliver templated commit: {error}"));
+        assert_eq!(result["committed_task_ids"], json!([TASK_ID]), "{case}");
+        let subject = git_output(repo, &["log", "-1", "--format=%s"]);
+        assert!(
+            subject.chars().count() <= 72,
+            "{case}: subject must stay within the budget, got {subject:?}"
+        );
+        assert!(
+            subject.contains(&format!("[{TASK_ID}]")),
+            "{case}: subject must preserve the complete delivery marker, got {subject:?}"
+        );
+        let message = git_output(repo, &["log", "-1", "--format=%B"]);
+        assert!(
+            message.contains(title),
+            "{case}: shortened subject must keep the full title in the body, got {message:?}"
+        );
+
+        if case == "long external reference" {
+            // The marker-preserving commit verifies as evidence of its own delivery.
+            let head = git_head(repo);
+            let mut report = evidence_fixture::verifier_already_landed_report(&head);
+            report["scope"] = orbit_types::workflow::handoff::already_landed_scope(&task, &[]);
+            host.set_artifacts(
+                TASK_ID,
+                evidence_artifacts("already-landed.json", report, &head, "make test"),
+            );
+            let verified = action(&host, &commit_input(repo, &head))
+                .expect("a marker-preserving templated commit must verify as already landed");
+            assert_eq!(verified["decision"], "verified_already_landed");
+            assert_eq!(verified["committed"], false);
+        }
+    }
 }
 
 /// The marker suffix at and next to the one-character remaining budget must
@@ -530,9 +265,8 @@ fn templated_commit_with_near_budget_marker_suffix_preserves_budget() {
     use orbit_types::workflow::{ConventionTemplate, DeliveryConventions};
 
     for ref_len in [59, 60, 61] {
-        let temp = tempdir().expect("create tempdir");
+        let temp = temp_repo();
         let repo = temp.path();
-        init_git_repo(repo);
         let mut task = fixture_task();
         task.id = "ORB-18018".to_string();
         task.external_refs = vec![ExternalRef {
@@ -554,16 +288,8 @@ fn templated_commit_with_near_budget_marker_suffix_preserves_budget() {
             ..DeliveryConventions::default()
         });
         fs::write(repo.join("README.md"), "marker suffix fix\n").expect("write README");
-        let result = action(
-            &host,
-            &json!({
-                "scope": "per_task",
-                "job_run_id": RUN_ID,
-                "workspace_path": repo,
-                "completed_task_ids": [task_id],
-            }),
-        )
-        .expect("deliver commit with a near-budget marker suffix");
+        let result = action(&host, &per_task_input(repo, &task_id))
+            .expect("deliver commit with a near-budget marker suffix");
         assert_eq!(result["committed_task_ids"], json!([task_id]));
         let subject = git_output(repo, &["log", "-1", "--format=%s"]);
         assert!(
@@ -578,129 +304,39 @@ fn templated_commit_with_near_budget_marker_suffix_preserves_budget() {
 }
 
 fn commit_verifier_refuses_no_diff_with_covering_commit_or_unknown_fields() {
-    let temp = tempdir().expect("create tempdir");
-    init_git_repo(temp.path());
-    let head = git_head(temp.path());
-    let host = VerifierHost::new(temp.path(), fixture_task());
+    let (temp, host, head) = verifier_fixture(fixture_task());
 
-    // 1. Evidence carrying `covering_commit` (the exact failure from ORB-13778 / ORB-13848)
-    let no_diff_with_covering_commit = json!({
-        "schema_version": 1,
-        "task_id": TASK_ID,
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "reason": "Genuine no-op.",
-        "covering_commit": head,
-        "validation": [{
-            "command": "make test",
-            "exit_code": 0,
-            "log_artifact": "validation.json"
-        }]
-    });
-    let log = json!({
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "command": "make test",
-        "exit_code": 0,
-        "output": "ok"
-    });
-
-    host.set_artifacts(
-        TASK_ID,
-        vec![
-            artifact("no-diff.json", no_diff_with_covering_commit),
-            artifact("validation.json", log.clone()),
-        ],
-    );
-
-    let error = action(&host, &commit_input(temp.path(), &head))
-        .expect_err("no-diff.json carrying covering_commit must be refused by the verifier");
-    let message = error.to_string();
-    assert!(
-        message.contains("unknown field `covering_commit`"),
-        "expected refusal mentioning unknown field covering_commit, got: {message}"
-    );
-
-    // 2. Evidence carrying any other unknown field
-    let no_diff_with_unknown_field = json!({
-        "schema_version": 1,
-        "task_id": TASK_ID,
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "reason": "Genuine no-op.",
-        "unexpected_field": "disallowed",
-        "validation": [{
-            "command": "make test",
-            "exit_code": 0,
-            "log_artifact": "validation.json"
-        }]
-    });
-    host.set_artifacts(
-        TASK_ID,
-        vec![
-            artifact("no-diff.json", no_diff_with_unknown_field),
-            artifact("validation.json", log),
-        ],
-    );
-
-    let error = action(&host, &commit_input(temp.path(), &head))
-        .expect_err("no-diff.json carrying unknown field must be refused by the verifier");
-    let message = error.to_string();
-    assert!(
-        message.contains("unknown field `unexpected_field`"),
-        "expected refusal mentioning unknown field unexpected_field, got: {message}"
-    );
+    // `covering_commit` reproduces ORB-13778 / ORB-13848; other extras also refuse.
+    for (field, value) in [
+        ("covering_commit", json!(head)),
+        ("unexpected_field", json!("disallowed")),
+    ] {
+        let mut report =
+            evidence_fixture::verifier_no_diff_report(&head, "make test", "Genuine no-op.");
+        report[field] = value;
+        host.set_artifacts(
+            TASK_ID,
+            evidence_artifacts("no-diff.json", report, &head, "make test"),
+        );
+        let message = action(&host, &commit_input(temp.path(), &head))
+            .expect_err(&format!("no-diff.json carrying {field} must be refused"))
+            .to_string();
+        assert!(
+            message.contains(&format!("unknown field `{field}`")),
+            "expected refusal mentioning unknown field {field}, got: {message}"
+        );
+    }
 }
 
 fn commit_verifier_refuses_already_landed_with_unknown_fields() {
-    let temp = tempdir().expect("create tempdir");
-    init_git_repo(temp.path());
-    let head = git_head(temp.path());
-    let host = VerifierHost::new(temp.path(), fixture_task());
+    let (temp, host, head) = verifier_fixture(fixture_task());
 
-    let already_landed_with_unknown_field = json!({
-        "schema_version": 1,
-        "task_id": TASK_ID,
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "covering_commit": head,
-        "covering_task_id": TASK_ID,
-        "scope": {
-            "title": "Test Task",
-            "description": "",
-            "acceptance_criteria": ["Criterion 1"],
-            "plan": "",
-            "context_files": ["file:README.md"],
-            "tags": [],
-            "relations": [],
-            "required_tools": [],
-            "type": "bug",
-            "comments": []
-        },
-        "required_commands": ["make test"],
-        "validation": [{
-            "command": "make test",
-            "outcome": "passed",
-            "role": "required",
-            "log_artifact": "validation.json"
-        }],
-        "criteria_evidence": ["Verified criterion"],
-        "unexpected_field": "disallowed"
-    });
-    let log = json!({
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "command": "make test",
-        "exit_code": 0,
-        "output": "ok"
-    });
+    let mut report = evidence_fixture::verifier_already_landed_report(&head);
+    report["unexpected_field"] = json!("disallowed");
 
     host.set_artifacts(
         TASK_ID,
-        vec![
-            artifact("already-landed.json", already_landed_with_unknown_field),
-            artifact("validation.json", log),
-        ],
+        evidence_artifacts("already-landed.json", report, &head, "make test"),
     );
 
     let error = action(&host, &commit_input(temp.path(), &head))
@@ -713,36 +349,12 @@ fn commit_verifier_refuses_already_landed_with_unknown_fields() {
 }
 
 fn commit_verifier_accepts_valid_no_diff_evidence() {
-    let temp = tempdir().expect("create tempdir");
-    init_git_repo(temp.path());
-    let head = git_head(temp.path());
-    let host = VerifierHost::new(temp.path(), fixture_task());
+    let (temp, host, head) = verifier_fixture(fixture_task());
 
-    let valid_no_diff = json!({
-        "schema_version": 1,
-        "task_id": TASK_ID,
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "reason": "Genuine no-op.",
-        "validation": [{
-            "command": "make test",
-            "exit_code": 0,
-            "log_artifact": "validation.json"
-        }]
-    });
-    let log = json!({
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "command": "make test",
-        "exit_code": 0,
-        "output": "ok"
-    });
+    let report = evidence_fixture::verifier_no_diff_report(&head, "make test", "Genuine no-op.");
 
     for stale in [None, Some(oversized_artifact("already-landed.json"))] {
-        let mut artifacts = vec![
-            artifact("no-diff.json", valid_no_diff.clone()),
-            artifact("validation.json", log.clone()),
-        ];
+        let mut artifacts = evidence_artifacts("no-diff.json", report.clone(), &head, "make test");
         artifacts.extend(stale);
         host.set_artifacts(TASK_ID, artifacts);
         let result = action(&host, &commit_input(temp.path(), &head))
@@ -758,47 +370,23 @@ fn commit_verifier_accepts_valid_no_diff_evidence() {
     }
 }
 
-fn valid_already_landed_artifacts(head: &str) -> Vec<TaskArtifact> {
-    let valid_already_landed = json!({
-        "schema_version": 1,
-        "task_id": TASK_ID,
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "covering_commit": head,
-        "covering_task_id": TASK_ID,
-        "scope": {
-            "title": "Test Task",
-            "description": "",
-            "acceptance_criteria": ["Criterion 1"],
-            "plan": "",
-            "context_files": ["file:README.md"],
-            "tags": [],
-            "relations": [],
-            "required_tools": [],
-            "type": "bug",
-            "comments": []
-        },
-        "required_commands": ["make test"],
-        "validation": [{
-            "command": "make test",
-            "outcome": "passed",
-            "role": "required",
-            "log_artifact": "validation.json"
-        }],
-        "criteria_evidence": ["Verified criterion"]
-    });
-    let log = json!({
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "command": "make test",
-        "exit_code": 0,
-        "output": "ok"
-    });
-
+fn evidence_artifacts(path: &str, report: Value, head: &str, command: &str) -> Vec<TaskArtifact> {
     vec![
-        artifact("already-landed.json", valid_already_landed),
-        artifact("validation.json", log),
+        artifact(path, report),
+        artifact(
+            "validation.json",
+            evidence_fixture::verifier_validation_log(head, command, 0, "ok"),
+        ),
     ]
+}
+
+fn valid_already_landed_artifacts(head: &str) -> Vec<TaskArtifact> {
+    evidence_artifacts(
+        "already-landed.json",
+        evidence_fixture::verifier_already_landed_report(head),
+        head,
+        "make test",
+    )
 }
 
 fn oversized_artifact(path: &str) -> TaskArtifact {
@@ -806,10 +394,7 @@ fn oversized_artifact(path: &str) -> TaskArtifact {
 }
 
 fn commit_verifier_accepts_valid_already_landed_evidence() {
-    let temp = tempdir().expect("create tempdir");
-    init_git_repo(temp.path());
-    let head = git_head(temp.path());
-    let host = VerifierHost::new(temp.path(), fixture_task());
+    let (temp, host, head) = verifier_fixture(fixture_task());
 
     // An unused invalid route must never shadow fully bound landing proof.
     for stale in [
@@ -899,10 +484,12 @@ fn commit_verifier_refuses_required_evidence_and_unknown_reads() {
             vec![
                 oversized_artifact("no-diff.json"),
                 valid[0].clone(),
-                artifact(
-                    "validation.json",
-                    json!({"run_id": "another-run", "tested_head": head, "command": "make test", "exit_code": 0, "output": "ok"}),
-                ),
+                artifact("validation.json", {
+                    let mut log =
+                        evidence_fixture::verifier_validation_log(&head, "make test", 0, "ok");
+                    log["run_id"] = json!("another-run");
+                    log
+                }),
             ],
         ),
     ] {
@@ -934,48 +521,52 @@ fn commit_verifier_refuses_required_evidence_and_unknown_reads() {
     }
 
     // Read uncertainty is not evidence invalidity, even with a valid alternate.
-    for (path, nth) in [
-        ("no-diff.json", 1),
-        ("no-diff.json", 2),
-        ("validation.json", 1),
+    for (route, reads) in [
+        (
+            "no-diff.json",
+            &[
+                ("no-diff.json", 1),
+                ("no-diff.json", 2),
+                ("validation.json", 1),
+            ][..],
+        ),
+        (
+            "already-landed.json",
+            &[
+                ("already-landed.json", 1),
+                ("already-landed.json", 2),
+                ("already-landed.json", 3),
+                ("validation.json", 1),
+            ][..],
+        ),
     ] {
-        let host = VerifierHost::new(temp.path(), fixture_task());
-        let mut artifacts = valid.clone();
-        artifacts.push(artifact("no-diff.json", json!({
-            "schema_version": 1, "task_id": TASK_ID, "run_id": RUN_ID,
-            "tested_head": head, "reason": "No change required.",
-            "validation": [{"command": "make test", "exit_code": 0, "log_artifact": "validation.json"}],
-        })));
-        host.set_artifacts(TASK_ID, artifacts);
-        *host.unknown_artifact_read.lock().unwrap() = Some((path.into(), nth));
-        let error = action(&host, &input).expect_err("unknown no-diff read must refuse fallback");
-        assert!(
-            error
-                .to_string()
-                .contains("owner call outcome unknown for lost-artifact-read"),
-            "{path} read {nth} must refuse an unknown transport outcome: {error}"
-        );
-        assert_eq!(git_head(temp.path()), head);
-    }
-    for (path, nth) in [
-        ("already-landed.json", 1),
-        ("already-landed.json", 2),
-        ("already-landed.json", 3),
-        ("validation.json", 1),
-    ] {
-        let host = VerifierHost::new(temp.path(), fixture_task());
-        let mut artifacts = valid.clone();
-        artifacts.push(oversized_artifact("no-diff.json"));
-        host.set_artifacts(TASK_ID, artifacts);
-        *host.unknown_artifact_read.lock().unwrap() = Some((path.into(), nth));
-        let error = action(&host, &input).expect_err("unknown alternate read must refuse");
-        assert!(
-            error
-                .to_string()
-                .contains("owner call outcome unknown for lost-artifact-read"),
-            "{path} read {nth} must refuse an unknown transport outcome: {error}"
-        );
-        assert_eq!(git_head(temp.path()), head);
+        for &(path, nth) in reads {
+            let host = VerifierHost::new(temp.path(), fixture_task());
+            let mut artifacts = valid.clone();
+            artifacts.push(if route == "no-diff.json" {
+                artifact(
+                    route,
+                    evidence_fixture::verifier_no_diff_report(
+                        &head,
+                        "make test",
+                        "No change required.",
+                    ),
+                )
+            } else {
+                oversized_artifact("no-diff.json")
+            });
+            host.set_artifacts(TASK_ID, artifacts);
+            *host.unknown_artifact_read.lock().unwrap() = Some((path.into(), nth));
+            let error = action(&host, &input)
+                .expect_err(&format!("{route}: {path} read {nth} must refuse fallback"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("owner call outcome unknown for lost-artifact-read"),
+                "{route}: {path} read {nth} must refuse an unknown transport outcome: {error}"
+            );
+            assert_eq!(git_head(temp.path()), head, "{route}: {path} read {nth}");
+        }
     }
 }
 
@@ -995,49 +586,7 @@ fn commit_verifier_accepts_already_landed_through_symlinked_parent_workspace() {
 
     let host = VerifierHost::new(&symlinked_repo, fixture_task());
 
-    let valid_already_landed = json!({
-        "schema_version": 1,
-        "task_id": TASK_ID,
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "covering_commit": head,
-        "covering_task_id": TASK_ID,
-        "scope": {
-            "title": "Test Task",
-            "description": "",
-            "acceptance_criteria": ["Criterion 1"],
-            "plan": "",
-            "context_files": ["file:README.md"],
-            "tags": [],
-            "relations": [],
-            "required_tools": [],
-            "type": "bug",
-            "comments": []
-        },
-        "required_commands": ["make test"],
-        "validation": [{
-            "command": "make test",
-            "outcome": "passed",
-            "role": "required",
-            "log_artifact": "validation.json"
-        }],
-        "criteria_evidence": ["Verified criterion"]
-    });
-    let log = json!({
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "command": "make test",
-        "exit_code": 0,
-        "output": "ok"
-    });
-
-    host.set_artifacts(
-        TASK_ID,
-        vec![
-            artifact("already-landed.json", valid_already_landed),
-            artifact("validation.json", log),
-        ],
-    );
+    host.set_artifacts(TASK_ID, valid_already_landed_artifacts(&head));
 
     let result = action(&host, &commit_input(&symlinked_repo, &head))
         .expect("already-landed evidence through symlinked workspace must be accepted");
@@ -1072,48 +621,11 @@ fn commit_verifier_refuses_already_landed_with_escaping_anchor_symlink() {
     task.context_files = vec!["file:escaping.txt".to_string()];
     let host = VerifierHost::new(&repo, task);
 
-    let report = json!({
-        "schema_version": 1,
-        "task_id": TASK_ID,
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "covering_commit": head,
-        "covering_task_id": TASK_ID,
-        "scope": {
-            "title": "Test Task",
-            "description": "",
-            "acceptance_criteria": ["Criterion 1"],
-            "plan": "",
-            "context_files": ["file:escaping.txt"],
-            "tags": [],
-            "relations": [],
-            "required_tools": [],
-            "type": "bug",
-            "comments": []
-        },
-        "required_commands": ["make test"],
-        "validation": [{
-            "command": "make test",
-            "outcome": "passed",
-            "role": "required",
-            "log_artifact": "validation.json"
-        }],
-        "criteria_evidence": ["Verified criterion"]
-    });
-    let log = json!({
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "command": "make test",
-        "exit_code": 0,
-        "output": "ok"
-    });
-
+    let mut report = evidence_fixture::verifier_already_landed_report(&head);
+    report["scope"]["context_files"] = json!(["file:escaping.txt"]);
     host.set_artifacts(
         TASK_ID,
-        vec![
-            artifact("already-landed.json", report),
-            artifact("validation.json", log),
-        ],
+        evidence_artifacts("already-landed.json", report, &head, "make test"),
     );
 
     let err = action(&host, &commit_input(&repo, &head))
@@ -1132,48 +644,12 @@ fn already_landed_refusal(
     head: &str,
     mutate: impl FnOnce(&mut Value),
 ) -> String {
-    let mut report = json!({
-        "schema_version": 1,
-        "task_id": TASK_ID,
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "covering_commit": head,
-        "covering_task_id": TASK_ID,
-        "scope": {
-            "title": "Test Task",
-            "description": "",
-            "acceptance_criteria": ["Criterion 1"],
-            "plan": "",
-            "context_files": ["file:README.md"],
-            "tags": [],
-            "relations": [],
-            "required_tools": [],
-            "type": "bug",
-            "comments": []
-        },
-        "required_commands": ["make test"],
-        "validation": [{
-            "command": "make test",
-            "outcome": "passed",
-            "role": "required",
-            "log_artifact": "validation.json"
-        }],
-        "criteria_evidence": ["Verified criterion"]
-    });
+    let mut report = evidence_fixture::verifier_already_landed_report(head);
     mutate(&mut report);
-    let log = json!({
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "command": "make test",
-        "exit_code": 0,
-        "output": "ok"
-    });
+
     host.set_artifacts(
         TASK_ID,
-        vec![
-            artifact("already-landed.json", report),
-            artifact("validation.json", log),
-        ],
+        evidence_artifacts("already-landed.json", report, head, "make test"),
     );
     action(host, &commit_input(repo, head))
         .expect_err("malformed already-landed evidence must be refused")
@@ -1181,10 +657,7 @@ fn already_landed_refusal(
 }
 
 fn commit_verifier_refusal_names_already_landed_field_contract() {
-    let temp = tempdir().expect("create tempdir");
-    init_git_repo(temp.path());
-    let head = git_head(temp.path());
-    let host = VerifierHost::new(temp.path(), fixture_task());
+    let (temp, host, head) = verifier_fixture(fixture_task());
 
     let message = already_landed_refusal(&host, temp.path(), &head, |report| {
         report["criteria_evidence"] = json!([{"criterion": "Criterion 1", "evidence": "ok"}]);
@@ -1219,10 +692,7 @@ fn commit_verifier_refusal_names_already_landed_field_contract() {
 }
 
 fn commit_verifier_keeps_refusing_unaccepted_already_landed_evidence() {
-    let temp = tempdir().expect("create tempdir");
-    init_git_repo(temp.path());
-    let head = git_head(temp.path());
-    let host = VerifierHost::new(temp.path(), fixture_task());
+    let (temp, host, head) = verifier_fixture(fixture_task());
 
     type Mutation = fn(&mut Value);
     let cases: [(&str, Mutation); 4] = [
@@ -1252,10 +722,7 @@ fn commit_verifier_keeps_refusing_unaccepted_already_landed_evidence() {
 /// scope comparison stays exact, but the refusal must say which key differs
 /// and what shape a comment takes, without echoing task content [F2026-10-449].
 fn commit_verifier_refusal_names_the_differing_already_landed_scope_key() {
-    let temp = tempdir().expect("create tempdir");
-    init_git_repo(temp.path());
-    let head = git_head(temp.path());
-    let host = VerifierHost::new(temp.path(), fixture_task());
+    let (temp, host, head) = verifier_fixture(fixture_task());
     let at = Utc::now();
     host.set_comments(
         TASK_ID,
@@ -1348,47 +815,46 @@ fn commit_verifier_keeps_refusing_already_landed_identity_and_covering_mismatche
     let head = unmarked.clone();
 
     let host = VerifierHost::new(temp.path(), fixture_task());
-    type Mutation = Box<dyn Fn(&mut Value)>;
-    let side_commit = side.clone();
-    let marked_commit = marked.clone();
-    let other_head = marked.clone();
-    let cases: Vec<(&str, &str, Mutation)> = vec![
+    for (case, field, value, expected) in [
         (
             "wrong task id",
+            "task_id",
+            "T2",
             "evidence must identify this task",
-            Box::new(|r| r["task_id"] = json!("T2")),
         ),
         (
             "missing covering task id",
+            "covering_task_id",
+            " ",
             "evidence must identify this task",
-            Box::new(|r| r["covering_task_id"] = json!(" ")),
         ),
         (
             "run outside the retry lineage",
+            "run_id",
+            "jrun-unrelated",
             "validation belongs to a different run",
-            Box::new(|r| r["run_id"] = json!("jrun-unrelated")),
         ),
         (
             "tested HEAD other than the owner-observed base",
+            "tested_head",
+            marked.as_str(),
             "tested HEAD is not the owner-observed base",
-            Box::new(move |r| r["tested_head"] = json!(other_head)),
         ),
         (
             "covering commit that is not an ancestor",
+            "covering_commit",
+            side.as_str(),
             "not a verified ancestor",
-            Box::new(move |r| r["covering_commit"] = json!(side_commit)),
         ),
         (
             "covering commit without the task marker",
+            "covering_commit",
+            head.as_str(),
             "no matching task delivery marker",
-            Box::new(|_| {}),
         ),
-    ];
-    for (case, expected, mutate) in cases {
+    ] {
         let message = already_landed_refusal(&host, temp.path(), &head, |report| {
-            report["covering_commit"] = json!(head);
-            report["tested_head"] = json!(head);
-            mutate(report);
+            report[field] = json!(value);
         });
         assert!(
             message.contains(expected),
@@ -1401,7 +867,7 @@ fn commit_verifier_keeps_refusing_already_landed_identity_and_covering_mismatche
     task.context_files = Vec::new();
     let host = VerifierHost::new(temp.path(), task);
     let message = already_landed_refusal(&host, temp.path(), &head, |report| {
-        report["covering_commit"] = json!(marked_commit);
+        report["covering_commit"] = json!(marked);
         report["scope"]["context_files"] = json!([]);
     });
     assert!(
@@ -1414,10 +880,7 @@ fn commit_verifier_keeps_refusing_already_landed_identity_and_covering_mismatche
 /// routes, so a task that correctly changed nothing is pointed at no-diff.json
 /// [F2026-10-169]. The reason keeps its already_landed_unverified prefix.
 fn commit_verifier_clean_tree_without_evidence_names_both_routes() {
-    let temp = tempdir().expect("create tempdir");
-    init_git_repo(temp.path());
-    let head = git_head(temp.path());
-    let host = VerifierHost::new(temp.path(), fixture_task());
+    let (temp, host, head) = verifier_fixture(fixture_task());
 
     let message = action(&host, &commit_input(temp.path(), &head))
         .expect_err("a clean tree without evidence must be refused")
@@ -1530,55 +993,30 @@ fn pipeline_commit_step_input(pipeline_asset: &str, repo: &Path, head: &str) -> 
 /// Both local and PR ship modes accept the clean tree, while missing evidence
 /// remains refused as an empty stage [ORB-14644].
 fn clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evidence() {
-    let temp = tempdir().expect("create tempdir");
+    let temp = temp_repo();
     let repo = temp.path();
-    init_git_repo(repo);
     let head = git_head(repo);
     let host = VerifierHost::new(repo, doc_duties_fixture_task());
 
-    let valid_no_diff = json!({
-        "schema_version": 1,
-        "task_id": TASK_ID,
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "reason": "Doc-duties batch accurate; no drift detected.",
-        "validation": [{
-            "command": "make ci-fast",
-            "exit_code": 0,
-            "log_artifact": "validation.json"
-        }]
-    });
-    let log = json!({
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "command": "make ci-fast",
-        "exit_code": 0,
-        "output": "ok"
-    });
-
+    let report = evidence_fixture::verifier_no_diff_report(
+        &head,
+        "make ci-fast",
+        "Doc-duties batch accurate; no drift detected.",
+    );
     host.set_artifacts(
         TASK_ID,
-        vec![
-            artifact("no-diff.json", valid_no_diff),
-            artifact("validation.json", log),
-        ],
+        evidence_artifacts("no-diff.json", report, &head, "make ci-fast"),
     );
 
-    // 1. Clean doc-duties chore succeeds through the local pipeline's commit step
+    for pipeline in ["task_local_pipeline.yaml", "task_pr_pipeline.yaml"] {
+        let input = pipeline_commit_step_input(pipeline, repo, &head);
+        let result = action(&host, &input)
+            .unwrap_or_else(|error| panic!("{pipeline} clean doc-duties commit: {error}"));
+        assert_eq!(result["decision"], "verified_no_diff", "{pipeline}");
+        assert_eq!(result["skipped_no_diff_expected"], true, "{pipeline}");
+        assert_eq!(result["committed"], false, "{pipeline}");
+    }
     let local_input = pipeline_commit_step_input("task_local_pipeline.yaml", repo, &head);
-    let local_result = action(&host, &local_input)
-        .expect("clean doc-duties chore must succeed through local pipeline commit step");
-    assert_eq!(local_result["decision"], "verified_no_diff");
-    assert_eq!(local_result["skipped_no_diff_expected"], true);
-    assert_eq!(local_result["committed"], false);
-
-    // 2. Clean doc-duties chore also succeeds through the PR pipeline's commit step
-    let pr_input = pipeline_commit_step_input("task_pr_pipeline.yaml", repo, &head);
-    let pr_result = action(&host, &pr_input)
-        .expect("clean doc-duties chore must succeed through PR pipeline commit step");
-    assert_eq!(pr_result["decision"], "verified_no_diff");
-    assert_eq!(pr_result["skipped_no_diff_expected"], true);
-    assert_eq!(pr_result["committed"], false);
 
     // The working tree remains clean and HEAD unchanged
     assert_eq!(git_head(repo), head);
@@ -1611,9 +1049,8 @@ fn clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evi
 /// [ORB-22407]. Owner selectors refuse even when supplied directly or recovered
 /// from the implement checkpoint [ORB-23194]; missing evidence still refuses.
 fn owner_empty_candidates_require_reports_and_claimed_selectors_settle() {
-    let temp = tempdir().expect("create tempdir");
+    let temp = temp_repo();
     let repo = temp.path();
-    init_git_repo(repo);
     let head = git_head(repo);
 
     let claimed_host = |repo: &Path| {
@@ -1773,9 +1210,8 @@ fn make_nested_stat_stale(sub: &Path) {
 /// With a gitlink already in history, delivery's host status and diff never
 /// recurse into it, so the nested repository's filter never runs on the host.
 fn owner_delivery_refuses_nested_repos_and_never_runs_their_filters() {
-    let temp = tempdir().expect("create tempdir");
+    let temp = temp_repo();
     let repo = temp.path();
-    init_git_repo(repo);
     let outside = tempdir().expect("create marker dir");
     let marker = outside.path().join("MARKER");
     let mut task = fixture_task();
@@ -1841,106 +1277,49 @@ fn owner_delivery_refuses_nested_repos_and_never_runs_their_filters() {
     assert!(marker.exists(), "the fixture's filter must be reachable");
 }
 
-/// Behavior-distinct rows share one bounded family process.
-#[test]
-fn commit_evidence_contracts_1() {
-    crate::git_fixture::isolated(module_path!(), "commit_evidence_contracts_1", || {
-        crate::git_fixture::run_scenarios(&[
-            (
-                "per_task_commit_delivers_both_sides_of_a_staged_rename",
-                per_task_commit_delivers_both_sides_of_a_staged_rename,
-            ),
-            (
-                "commit_verifier_refuses_no_diff_with_covering_commit_or_unknown_fields",
-                commit_verifier_refuses_no_diff_with_covering_commit_or_unknown_fields,
-            ),
-            (
-                "commit_verifier_refuses_already_landed_with_unknown_fields",
-                commit_verifier_refuses_already_landed_with_unknown_fields,
-            ),
-            (
-                "commit_verifier_accepts_valid_no_diff_evidence",
-                commit_verifier_accepts_valid_no_diff_evidence,
-            ),
-            (
-                "templated_commit_with_long_non_title_placeholder_preserves_marker_and_lands",
-                templated_commit_with_long_non_title_placeholder_preserves_marker_and_lands,
-            ),
-            (
-                "templated_commit_with_near_budget_marker_suffix_preserves_budget",
-                templated_commit_with_near_budget_marker_suffix_preserves_budget,
-            ),
-        ]);
-    });
+// Keep scenario names in the bounded, isolated family harness without spelling
+// each identifier twice.
+macro_rules! commit_contracts {
+    ($name:ident: $( $(#[$attr:meta])* $row:ident ),+ $(,)?) => {
+        #[test]
+        fn $name() {
+            crate::git_fixture::isolated(module_path!(), stringify!($name), || {
+                crate::git_fixture::run_scenarios(&[
+                    $( $(#[$attr])* (stringify!($row), $row as fn()) ),+
+                ]);
+            });
+        }
+    };
 }
 
-/// Behavior-distinct rows share one bounded family process.
-#[test]
-fn commit_evidence_contracts_2() {
-    crate::git_fixture::isolated(module_path!(), "commit_evidence_contracts_2", || {
-        crate::git_fixture::run_scenarios(&[
-            (
-                "commit_verifier_accepts_valid_already_landed_evidence",
-                commit_verifier_accepts_valid_already_landed_evidence,
-            ),
-            (
-                "commit_verifier_refuses_required_evidence_and_unknown_reads",
-                commit_verifier_refuses_required_evidence_and_unknown_reads,
-            ),
-            #[cfg(unix)]
-            (
-                "commit_verifier_accepts_already_landed_through_symlinked_parent_workspace",
-                commit_verifier_accepts_already_landed_through_symlinked_parent_workspace,
-            ),
-            #[cfg(unix)]
-            (
-                "commit_verifier_refuses_already_landed_with_escaping_anchor_symlink",
-                commit_verifier_refuses_already_landed_with_escaping_anchor_symlink,
-            ),
-            (
-                "commit_verifier_refusal_names_already_landed_field_contract",
-                commit_verifier_refusal_names_already_landed_field_contract,
-            ),
-        ]);
-    });
-}
+commit_contracts!(commit_evidence_contracts_1:
+    per_task_commit_delivers_both_sides_of_a_staged_rename,
+    commit_verifier_refuses_no_diff_with_covering_commit_or_unknown_fields,
+    commit_verifier_refuses_already_landed_with_unknown_fields,
+    commit_verifier_accepts_valid_no_diff_evidence,
+    templated_commit_with_long_non_title_placeholder_preserves_marker_and_lands,
+    templated_commit_with_near_budget_marker_suffix_preserves_budget,
+);
 
-/// Behavior-distinct rows share one bounded family process.
-#[test]
-fn commit_evidence_contracts_3() {
-    crate::git_fixture::isolated(module_path!(), "commit_evidence_contracts_3", || {
-        crate::git_fixture::run_scenarios(&[
-            (
-                "commit_verifier_keeps_refusing_unaccepted_already_landed_evidence",
-                commit_verifier_keeps_refusing_unaccepted_already_landed_evidence,
-            ),
-            (
-                "commit_verifier_refusal_names_the_differing_already_landed_scope_key",
-                commit_verifier_refusal_names_the_differing_already_landed_scope_key,
-            ),
-            (
-                "commit_verifier_keeps_refusing_already_landed_identity_and_covering_mismatches",
-                commit_verifier_keeps_refusing_already_landed_identity_and_covering_mismatches,
-            ),
-            (
-                "commit_verifier_clean_tree_without_evidence_names_both_routes",
-                commit_verifier_clean_tree_without_evidence_names_both_routes,
-            ),
-            (
-                "no_diff_expected_commits_an_unexpected_diff_and_skips_a_clean_tree",
-                no_diff_expected_commits_an_unexpected_diff_and_skips_a_clean_tree,
-            ),
-            (
-                "clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evidence",
-                clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evidence,
-            ),
-            (
-                "owner_empty_candidates_require_reports_and_claimed_selectors_settle",
-                owner_empty_candidates_require_reports_and_claimed_selectors_settle,
-            ),
-        ]);
-    });
-}
+commit_contracts!(commit_evidence_contracts_2:
+    commit_verifier_accepts_valid_already_landed_evidence,
+    commit_verifier_refuses_required_evidence_and_unknown_reads,
+    #[cfg(unix)]
+    commit_verifier_accepts_already_landed_through_symlinked_parent_workspace,
+    #[cfg(unix)]
+    commit_verifier_refuses_already_landed_with_escaping_anchor_symlink,
+    commit_verifier_refusal_names_already_landed_field_contract,
+);
+
+commit_contracts!(commit_evidence_contracts_3:
+    commit_verifier_keeps_refusing_unaccepted_already_landed_evidence,
+    commit_verifier_refusal_names_the_differing_already_landed_scope_key,
+    commit_verifier_keeps_refusing_already_landed_identity_and_covering_mismatches,
+    commit_verifier_clean_tree_without_evidence_names_both_routes,
+    no_diff_expected_commits_an_unexpected_diff_and_skips_a_clean_tree,
+    clean_doc_duties_task_completes_local_and_pr_pipeline_commit_with_no_diff_evidence,
+    owner_empty_candidates_require_reports_and_claimed_selectors_settle,
+);
 
 /// The command F2026-11-309 captured under a diagnostic label.
 const VISUAL_FIXTURE_CHECK: &str = "node --check scripts/visual-fixture-front.mjs";
@@ -1953,45 +1332,23 @@ fn already_landed_with_checks(
     required_commands: &[&str],
     checks: &[(&str, &str, &str, &str, i64)],
 ) -> Vec<TaskArtifact> {
-    let report = json!({
-        "schema_version": 1,
-        "task_id": TASK_ID,
-        "run_id": RUN_ID,
-        "tested_head": head,
-        "covering_commit": head,
-        "covering_task_id": TASK_ID,
-        "scope": {
-            "title": "Test Task",
-            "description": "",
-            "acceptance_criteria": ["Criterion 1"],
-            "plan": "",
-            "context_files": ["file:README.md"],
-            "tags": [],
-            "relations": [],
-            "required_tools": [],
-            "type": "bug",
-            "comments": []
-        },
-        "required_commands": required_commands,
-        "validation": checks.iter().map(|(command, role, outcome, path, _)| json!({
-            "command": command,
-            "role": role,
-            "outcome": outcome,
-            "log_artifact": path,
-        })).collect::<Vec<_>>(),
-        "criteria_evidence": ["The covering commit already contains the change, and the captured check passed."],
-    });
+    let mut report = evidence_fixture::verifier_already_landed_report(head);
+    report["required_commands"] = json!(required_commands);
+    report["validation"] = checks
+        .iter()
+        .map(|(command, role, outcome, path, _)| {
+            json!({
+                "command": command, "role": role, "outcome": outcome, "log_artifact": path,
+            })
+        })
+        .collect();
+    report["criteria_evidence"] =
+        json!(["The covering commit already contains the change, and the captured check passed."]);
     let mut artifacts = vec![artifact("already-landed.json", report)];
     for (command, _, _, path, exit_code) in checks {
         artifacts.push(artifact(
             path,
-            json!({
-                "run_id": RUN_ID,
-                "tested_head": head,
-                "command": command,
-                "exit_code": exit_code,
-                "output": "captured output",
-            }),
+            evidence_fixture::verifier_validation_log(head, command, *exit_code, "captured output"),
         ));
     }
     artifacts
@@ -2003,10 +1360,7 @@ fn already_landed_with_checks(
 /// from the host. A passing log covers a required command under either
 /// label, and a missing one is refused by name.
 fn commit_verifier_derives_already_landed_requirements_from_the_workspace() {
-    let temp = tempdir().expect("create tempdir");
-    init_git_repo(temp.path());
-    let head = git_head(temp.path());
-    let host = VerifierHost::new(temp.path(), fixture_task());
+    let (temp, host, head) = verifier_fixture(fixture_task());
     let input = commit_input(temp.path(), &head);
 
     host.set_required_commands(&[]);
@@ -2088,19 +1442,7 @@ fn commit_verifier_derives_already_landed_requirements_from_the_workspace() {
     assert_eq!(git_head(temp.path()), head);
 }
 
-/// Behavior-distinct rows share one bounded family process.
-#[test]
-fn commit_evidence_contracts_4() {
-    crate::git_fixture::isolated(module_path!(), "commit_evidence_contracts_4", || {
-        crate::git_fixture::run_scenarios(&[
-            (
-                "owner_delivery_refuses_nested_repos_and_never_runs_their_filters",
-                owner_delivery_refuses_nested_repos_and_never_runs_their_filters,
-            ),
-            (
-                "commit_verifier_derives_already_landed_requirements_from_the_workspace",
-                commit_verifier_derives_already_landed_requirements_from_the_workspace,
-            ),
-        ]);
-    });
-}
+commit_contracts!(commit_evidence_contracts_4:
+    owner_delivery_refuses_nested_repos_and_never_runs_their_filters,
+    commit_verifier_derives_already_landed_requirements_from_the_workspace,
+);
