@@ -39,28 +39,65 @@ class CiDependencyCacheWorkflowTests(unittest.TestCase):
                               ("msrv", msrv))
         }
 
-    def cache_identity(self, step):
+    def render_cache_input(self, value):
         # Execute hashFiles' documented SHA-256-of-file-digests contract for
-        # the workflow inputs. Model rust-cache's public shared-key precedence:
-        # `key` is ignored when `shared-key` is present. Automatic environment
-        # and member/lock hashes stay constant in this root-only reproduction.
-        def render(value):
-            def hash_files(match):
-                patterns = re.findall(r"'([^']+)'", match[1])
-                files = sorted({path for pattern in patterns for path in self.root.glob(pattern)
-                                if path.is_file()})
-                if not files:
-                    return ""
-                digest = hashlib.sha256()
-                for path in files:
-                    digest.update(hashlib.sha256(path.read_bytes()).digest())
-                return digest.hexdigest()
+        # the workflow inputs.
+        def hash_files(match):
+            patterns = re.findall(r"'([^']+)'", match[1])
+            files = sorted({path for pattern in patterns for path in self.root.glob(pattern)
+                            if path.is_file()})
+            if not files:
+                return ""
+            digest = hashlib.sha256()
+            for path in files:
+                digest.update(hashlib.sha256(path.read_bytes()).digest())
+            return digest.hexdigest()
 
-            return re.sub(r"\$\{\{\s*hashFiles\((.*?)\)\s*\}\}", hash_files, str(value))
+        return re.sub(r"\$\{\{\s*hashFiles\((.*?)\)\s*\}\}", hash_files, str(value))
 
+    def cache_identity(self, step):
+        # Model rust-cache's public shared-key precedence: `key` is ignored
+        # when `shared-key` is present. Automatic environment and member/lock
+        # hashes stay constant in this root-only reproduction.
         inputs = step.get("with", {})
-        return (render(inputs.get("prefix-key", "v0-rust")),
-                render(inputs.get("shared-key") or inputs.get("key", "")))
+        return (self.render_cache_input(inputs.get("prefix-key", "v0-rust")),
+                self.render_cache_input(inputs.get("shared-key") or inputs.get("key", "")))
+
+    def test_workflow_edits_reuse_workspace_cache_but_build_inputs_change_identity(self):
+        restore = next(step for step in self.jobs["test-build"]["steps"]
+                       if step.get("id") == "workspace-test-cache")
+        inputs = {
+            "Cargo.toml": '[workspace]\nmembers=["crates/member"]\n',
+            "Cargo.lock": "version = 4\n",
+            "crates/member/Cargo.toml": '[package]\nname="member"\nversion="0.1.0"\n',
+            ".cargo/config.toml": "[build]\njobs=4\n",
+            "scripts/with-test-build-lint.sh": "exec cargo test\n",
+            "scripts/ci-workspace-cache.py": "# source manifest implementation\n",
+            ".github/workflows/ci.yml": "jobs: {}\n",
+        }
+        for name, content in inputs.items():
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+
+        def identity():
+            return tuple(self.render_cache_input(restore["with"][field])
+                         for field in ("key", "restore-keys"))
+
+        before = identity()
+        workflow = self.root / ".github/workflows/ci.yml"
+        workflow.write_text(workflow.read_text() + "# unrelated job scheduling edit\n")
+        self.assertEqual(identity(), before,
+                         "CI-only edits must not force a cold workspace build; "
+                         "Cargo and the source manifest still validate reused outputs")
+        for name in sorted(inputs.keys() - {".github/workflows/ci.yml"}):
+            with self.subTest(build_input=name):
+                path = self.root / name
+                original = path.read_text()
+                path.write_text(original + "# changed build input\n")
+                self.assertNotEqual(identity(), before,
+                                    f"{name} must retain its separate workspace cache identity")
+                path.write_text(original)
 
     def test_virtual_root_profile_alone_invalidates_every_ci_dependency_identity(self):
         member = self.root / "crates/member/Cargo.toml"
