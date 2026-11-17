@@ -47,3 +47,7 @@ removed or changed in meaning.
   page's primary region stays shown; a secondary region replaces it only when the operator
   navigated to it at that width, and a selection inside it does not count). From the
   owner's Tasks/Drain collapse correction in session f09993e5 (ORB-25093, F2026-11-311).
+- **v12 (2026-11-17):** R9 adds that a label is vertically centred against its value, including a multi-line value (the owner's Fleet host-dialog correction, ORB-25399).
+  R16 adds that a detail view, dialog or drill-down does not repeat what the view that opened it already shows (the owner's Fleet host-dialog correction, ORB-25399).
+- **v13 (2026-11-17):** R41 reverses button hover help: a button shows no hover or focus bubble or native tooltip, its effect goes in its accessible description, and a consequence or disabled reason goes behind an info icon or in its confirmation (the owner's Fleet correction, ORB-25398).
+  R32's closing sentence now says buttons carry no tooltip, following R41 (ORB-25398).

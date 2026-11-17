@@ -95,6 +95,7 @@ A rule is here only when its correction recurred.
   ORB-20526 and ORB-20536. The owner asked for both to become
   validator rules: "let's add this to the ui ux rule - so that it will be caught by the new
   visual validator job".
+The vertical centring was added from the Fleet host dialog, where labels sat at the top of multi-line values such as Workspaces and Protocol: "the labels in the left column should be vertically center aligned" (2026-11-17, session orbit-0-orc, ORB-25399).
 - **R35 (chart text on the type scale).** "the texts inside this chart are way bigger than
   the rest of the texts around it. should be similar sizes" (7995d040, ORB-24114). The
   frontier chart drew a fixed 760-unit `viewBox` and stretched it to the panel, so its text
@@ -137,18 +138,21 @@ A rule is here only when its correction recurred.
   (1b5897bc); "what do you think about removing this page. seems bit redundant" (ORB-21641).
   Also ORB-19252, ORB-19253, ORB-22598–22601, ORB-22627, ORB-19161, ORB-17276, ORB-20509,
   ORB-20502, ORB-22935, ORB-22755, ORB-22756 and ORB-19697.
+The drill-down half was added because the Fleet host dialog repeated the host card's load, memory, disk and I/O readings: "get rid of "health" - previous page already includes it" (2026-11-17, session orbit-0-orc, ORB-25399).
 - **R32 (tooltips that add something).** "we don't need a hover-over help just to
   additionally display "done" - the green color make that obvious ... We just need those for
   those that gets truncated" and "excess space in the hover-over container" (7995d040,
   ORB-24124). Every progress-strip step had a tooltip, and each bubble was a fixed 280px
   wide.
-- **R41 (every button says what it does on hover).** "let's add another ux convention - on
+v13 replaced the closing sentence, which named a button's hover help (R41) as detail of this kind, when R41 was reversed (ORB-25398).
+- **R41 (no hover help on buttons; effect in the accessible description).** "let's add another ux convention - on
   every buttons, there should be a short hover-over help message on what it does"
   (f09993e5, F2026-11-304). The dashboard Residents tab's buttons (Start, Turn off, Wake for
   status, Pause…, Takeover…, Relay…, Stop…) gave no hint of their effect: whether Wake runs
   a cycle now, what Takeover hands over, or whether Stop can be undone. R32 limited
   tooltips to what the screen does not already show, which read as discouraging them on
   buttons. A button's effect is exactly that kind of off-screen detail.
+Changed in v13: the owner reversed the hover help on buttons. On the Fleet page a button's help bubble stayed on screen after the pointer left: "blatant defect. that help text persists even after not hovering. but let's just get rid of all hover-over help texts on this page, except for the i symbols. I think they are redundant." He then asked for R41 itself to be amended (2026-11-17, session orbit-0-orc, ORB-25398). The effect text stays available to assistive technology, and explanations go behind info icons, as R13 already requires.
 
 ## Data display
 
