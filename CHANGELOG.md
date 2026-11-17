@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.51.1 — 2026-11-17
+
+### Highlights
+
+- **Tasks page shortcuts**: Shift-Shift opens a floating quick filter that live-filters the board by id, PR, run, branch, host or tag. Cmd+B slides the drain dock away, and the nav rail collapses to a strip. ([ORB-25409])
+- **"esc" close buttons**: Panels and dialogs that Esc closes now label their close button "esc". ([ORB-25410])
+- **Fleet under Observe**: Fleet moved to Observe, with one host diagnostics dialog per host and only live drains listed. ([ORB-25239])
+- **Clearer Residents page**: The resident card separates current authority from the authority its last cycle ran with, shows open decisions and lists checkpoint actions; resident cycles now read runtime attention. ([ORB-25312])
+- **Held, not failed**: Implementer-declared blockers, review-budget refusals and stale already-landed evidence now hold the task instead of failing the run. ([ORB-25393])
+- **Refusals name the fix**: CLI refusals point to the tool to call, `orbit doctor` findings lead with the fix, and readiness text shows only the reason. ([ORB-25222])
+
 ## 0.51.0 — 2026-11-16
 
 ### Breaking Changes
