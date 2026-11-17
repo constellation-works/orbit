@@ -1,7 +1,7 @@
 //! `orbit run ship` CLI entrypoint.
 
 use clap::{Args, ValueEnum};
-use orbit_core::application::job::SubmissionKind;
+use orbit_core::application::job::ShipSubmissionProfile;
 use orbit_core::{
     CompletionPolicy, OrbitError, OrbitRuntime, ShipModeResolutionProfile, ShipRunRequest,
     find_workflow,
@@ -9,7 +9,7 @@ use orbit_core::{
 
 use crate::command::{CommandOut, Execute};
 
-use super::support::{WorkflowDispatchResult, workflow_dispatch_payload_with_notices};
+use super::support;
 
 const SHIP_WORKFLOW: &str = "ship";
 
@@ -114,29 +114,12 @@ impl Execute for ShipCommand {
             // readiness gates; the run's task history records which.
             operator_override: true,
         })?;
-        let run = WorkflowDispatchResult {
-            workflow_alias: SHIP_WORKFLOW,
-            job_id: invoke.job_name,
-            run_id: invoke.run_id,
-            state: if invoke.queued {
-                "queued".to_string()
-            } else {
-                "submitted".to_string()
-            },
-            attempt: 1,
-            wait_timeout: false,
-            error_code: None,
-            error_message: None,
-        };
-        let notices = runtime.submission_notices(SubmissionKind::Ship {
-            explicit: !self.task_ids.is_empty(),
-        });
-        workflow_dispatch_payload_with_notices(
-            SHIP_WORKFLOW,
-            &[run],
-            notices.warnings(),
-            notices.notes(),
-        )
+        let receipt = runtime.ship_submission_receipt(
+            &invoke,
+            !self.task_ids.is_empty(),
+            ShipSubmissionProfile::Cli,
+        )?;
+        support::ship_submission_payload(&receipt)
     }
 }
 

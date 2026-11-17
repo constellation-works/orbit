@@ -727,6 +727,11 @@ host, use `orbit run ship <task-id> --complete` there for a one-run completion
 authorization; do not use a local shadow store as a substitute. Otherwise
 report the MCP completion capability gap rather than inventing a `completion`
 argument.
+A ship receipt includes `workflow`, `job_id`, `run_id`, `state`, `submitted_at`
+(the submission timestamp), and `review` (the captured `{timing, source}` layer,
+or null). These fields agree with CLI `orbit run ship --json` and HTTP
+`POST /workflows/ship`; only the CLI also keeps `wait_timeout`, `attempt`,
+`error_code` and `error_message` from its generic dispatch envelope.
 A ship receipt, like an `orbit_workflow` action `auto` start, carries the notices the
 CLI and the dashboard report for the same submission: `warning` (one line per
 notice: an explicit ship's host resource throttle, a validation environment

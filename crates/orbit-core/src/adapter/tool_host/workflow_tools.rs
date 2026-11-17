@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::application::job::{
     ActivityInvocationEvidence, JobRunListParams, JobRunProjectionEvidence,
-    JobRunProjectionProfile, ShipModeResolutionProfile, SubmissionKind, project_job_run,
+    JobRunProjectionProfile, ShipModeResolutionProfile, ShipSubmissionProfile, project_job_run,
     run_display_steps, run_execution_progress_to_json, trim_full_show_agent_invocation_answer,
 };
 use crate::runtime::audit::run::{
@@ -111,19 +111,9 @@ fn ship(
         // ship overrides the drain's readiness gates.
         operator_override: false,
     })?;
-    let mut shipped = json!({
-        "workflow": "ship",
-        "job_id": invoke.job_name,
-        "run_id": invoke.run_id,
-        "state": if invoke.queued { "queued" } else { "submitted" },
-        "submitted_at": invoke.submitted_at,
-    });
-    runtime
-        .submission_notices(SubmissionKind::Ship {
-            explicit: !task_ids.is_empty(),
-        })
-        .insert_into(&mut shipped);
-    Ok(shipped)
+    Ok(runtime
+        .ship_submission_receipt(&invoke, !task_ids.is_empty(), ShipSubmissionProfile::Tool)?
+        .to_json())
 }
 
 /// The optional `review` layer a ship or drain start adds [ORB-16572].
