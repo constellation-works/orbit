@@ -1,7 +1,10 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
-use orbit_core::adapter::command::{PluginAddOptions, PluginEnableOptions, PluginSecretValue};
+use orbit_core::adapter::command::{
+    PluginAddOptions, PluginEnableOptions, PluginSecretValue, PluginSummaryJsonProfile,
+    plugin_summary_json,
+};
 use serde_json::{Value, json};
 
 use super::support::{Fixture, error_code, isolated, json_ok, write_json};
@@ -91,6 +94,84 @@ fn plugin_enable_requires_matching_recorded_grants_and_program_paths() {
             assert_eq!(
                 enabled["plugin"]["host_enabled"], true,
                 "matching reviewed consent permits HTTP re-enable"
+            );
+        },
+    );
+}
+
+#[test]
+fn plugin_program_paths_abbreviate_home_on_http_only() {
+    isolated(
+        "plugins::plugin_program_paths_abbreviate_home_on_http_only",
+        || {
+            // The server child's HOME is the fixture root, so a program under
+            // `.local/bin` is a home-directory program on the HTTP surface.
+            let fixture = Fixture::new();
+            let bin = fixture.path(".local/bin");
+            fs::create_dir_all(&bin).unwrap();
+            let uv = bin.join("uv-fixture");
+            let shadow_sh = bin.join("sh");
+            for file in [&uv, &shadow_sh] {
+                fs::write(file, "#!/bin/sh\nexit 0\n").unwrap();
+                fs::set_permissions(file, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            // `uv-fixture` is declared by absolute path, so its recorded path is
+            // the home-directory file. `sh` is a bare name: enable records the
+            // system shell, and the server's PATH resolves it to the shadowing
+            // executable under the home directory.
+            install(
+                &fixture,
+                &format!("  requires:\n    programs: [\"{}\", sh]\n", uv.display()),
+            );
+            fixture
+                .runtime
+                .enable_plugin("http-fixture", &PluginEnableOptions::default())
+                .unwrap();
+
+            // Operator mode, so the enable call below is authorized.
+            let server = fixture.server_with_path(true, &bin);
+            let listed = json_ok(server.get("/api/plugins?workspace=ws_http_fixture"));
+            let http = &listed[0]["programs"];
+            assert_eq!(http[0]["name"], uv.display().to_string());
+            assert_eq!(
+                http[0]["path"], "~/.local/bin/uv-fixture",
+                "HTTP program paths abbreviate the home directory like source and install_path"
+            );
+            assert_eq!(
+                http[1]["resolves_to"], "~/.local/bin/sh",
+                "HTTP resolves_to abbreviates the home directory like source and install_path"
+            );
+
+            // Enable answers with the same projection: disable in process, then
+            // re-enable over HTTP with the consent already recorded. A re-enable
+            // re-resolves bare names on the server's PATH, so this server keeps
+            // the PATH the consent was recorded under; the shadowing server would
+            // correctly refuse it as changed consent.
+            fixture.runtime.disable_plugin("http-fixture").unwrap();
+            let plain = fixture.server(true);
+            let enabled = json_ok(plain.send(
+                "POST",
+                "/api/plugins/http-fixture/enable?workspace=ws_http_fixture",
+                json!({"scope": "host"}),
+            ));
+            assert_eq!(
+                enabled["plugin"]["programs"][0]["path"], "~/.local/bin/uv-fixture",
+                "the enable response abbreviates the home directory like the listing"
+            );
+
+            // Reopen so the in-process runtime loads the plugin installed above;
+            // an empty append leaves `config.toml` as it was.
+            let fixture = fixture.with_workspace_config("");
+            let summaries = fixture.runtime.list_plugins().unwrap();
+            let cli = plugin_summary_json(&summaries[0], PluginSummaryJsonProfile::Cli);
+            assert_eq!(
+                cli["programs"][0]["path"],
+                fs::canonicalize(&uv).unwrap().to_str().unwrap(),
+                "CLI plugin JSON keeps the literal filesystem path"
+            );
+            assert_eq!(
+                http[1]["path"], cli["programs"][1]["path"],
+                "a program outside the home directory reads the same on both surfaces"
             );
         },
     );

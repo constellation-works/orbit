@@ -176,10 +176,10 @@ pub fn plugin_summary_json(
             .iter()
             .map(|program| json!({
                 "name": program.name,
-                "path": program.path.as_ref().map(|path| path.to_string_lossy()),
+                "path": program.path.as_ref().map(|path| profile.display_path(&path.to_string_lossy())),
                 "granted": program.granted(),
                 "problem": program.problem,
-                "resolves_to": program.resolves_to.as_ref().map(|path| path.to_string_lossy()),
+                "resolves_to": program.resolves_to.as_ref().map(|path| profile.display_path(&path.to_string_lossy())),
             }))
             .collect::<Vec<_>>(),
         "certified_orbit_version": summary.certified_orbit_version,
