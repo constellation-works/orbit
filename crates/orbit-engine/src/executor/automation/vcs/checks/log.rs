@@ -41,10 +41,12 @@ pub(super) fn job_log<H: RuntimeHost + ?Sized>(
         .as_ref()
         .and_then(|key| log_cache::load(host.data_root(), key));
     let reused = cached.is_some();
-    let response = CiJobLogAnswer::decode_response(match cached {
+    let response = match cached {
         Some(answer) => answer,
-        None => host.run_private_vcs_operation(operations::CI_JOB_LOG, input)?,
-    });
+        None => CiJobLogAnswer::decode_response(
+            host.run_private_vcs_operation(operations::CI_JOB_LOG, input)?,
+        ),
+    };
     if let Some(reason) = response.fallback_error.as_deref() {
         let message = format!("the log read recovered no text: {reason}");
         return Err(match response.read_throttle {
@@ -76,10 +78,8 @@ pub(super) fn job_log<H: RuntimeHost + ?Sized>(
     let log = bound_job_log(&response, job)?;
     // A completed job's readable answer never changes for its run attempt,
     // so later passes reuse it instead of reading the provider again.
-    if let (false, Some(key)) = (reused, cache_key.as_ref())
-        && let Ok(answer) = serde_json::to_value(&response)
-    {
-        log_cache::store(host.data_root(), key, &answer);
+    if let (false, Some(key)) = (reused, cache_key.as_ref()) {
+        log_cache::store(host.data_root(), key, &response);
     }
     Ok(log)
 }
