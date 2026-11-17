@@ -178,11 +178,9 @@ setup, install the kit on each worker machine that handles UI tasks.
 - **Location**: The kit installs under `~/.local/chromium-deps/`.
 - **Node**: Requires Node 18 or newer with `node` and `npm` on `PATH`. Orbit
   checks for Node but does not install it.
-- **Pinned downloads**: Orbit downloads Playwright at the exact version pinned
-  by your Orbit release, along with its matching Chromium headless shell
-  (`chromium-headless-shell`) from Playwright's CDN and the `pngjs` pixel
-  helper. Pinned versions ensure every worker compares rendered screenshots
-  with identical binaries.
+- **Pinned downloads**: Orbit downloads Playwright and the `pngjs` pixel
+  helper at the versions pinned by your Orbit release, plus its matching
+  Chromium headless shell (`chromium-headless-shell`) from Playwright's CDN.
 
 ### Install and verify
 
@@ -243,19 +241,22 @@ verified kit.
 
 ### Repair a failed or stale verification
 
-Verification guarantees that the smoke test ran against the exact package version
-and browser revision present on disk. The kit becomes unverified if:
+`verify` records the Playwright version and Chromium revision that passed. The
+pass remains current while those versions still match and the Playwright module,
+Chromium executable, and `env.sh` are present; `status` reports Linux library
+problems separately. If a newer Orbit release pins different package versions,
+`status` reports the mismatch, but it does not by itself revoke the previous
+pass, so workers continue receiving its variables until `install` updates the
+kit. Each `verify` run clears the previous pass first, so a failed or timed-out
+run leaves workers without the kit variables.
 
-- files in the kit change or are removed after the last pass;
-- an Orbit upgrade pins a newer Playwright release;
-- the smoke test failed or timed out.
-
-When verification is stale or failed, workers receive no browser variables. To
-repair the kit:
+To repair the kit:
 
 1. Run `orbit config browser-kit status` to inspect unresolved libraries or
    configuration problems.
-2. If the kit files are in place, re-run the loopback smoke test:
+2. If the installed versions match this release's pins, the required files are
+   present, and `status` reports no unresolved libraries, re-run the loopback
+   smoke test:
 
    ```bash
    orbit config browser-kit verify
@@ -264,8 +265,11 @@ repair the kit:
    `verify` starts a local loopback server, launches headless Chromium, captures
    a screenshot, checks pixel decoding, and records a fresh pass upon success.
    Any failure immediately revokes the pass.
-3. If versions are stale or files are missing, run `orbit config browser-kit install`
-   to update dependencies and re-verify.
+3. If `status` reports a package version mismatch or a required file is missing,
+   run `orbit config browser-kit install` to update the kit; it verifies
+   automatically when its dependencies are resolved. If `status` or `install`
+   reports unresolved Linux libraries, follow the reported fix, then run
+   `orbit config browser-kit verify`.
 
 ### Remove the kit
 
