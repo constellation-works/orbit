@@ -3,7 +3,7 @@
 // or persists: closing the bar drops the query and the board returns to its
 // normal list. The top-bar search (global-search.js) is separate: it queries
 // the server and navigates; this only narrows the board in place.
-import { el, onWorkspaceChange } from './common.js';
+import { el, escCloseButton, onWorkspaceChange } from './common.js';
 import { $, rerender, taskState } from './task-shared.js';
 import { taskPullRequestNumber } from './task-agent-actions.js';
 
@@ -163,13 +163,7 @@ function buildBar() {
     paintFilter();
   });
   countNode = el("span", { class: "quick-filter-count", role: "status", "aria-live": "polite" });
-  const close = el("button", {
-    class: "quick-filter-close",
-    type: "button",
-    text: "esc",
-    "aria-label": "Close quick filter (Esc)",
-  });
-  close.addEventListener("click", closeQuickFilter);
+  const close = escCloseButton("Close quick filter (Esc)", { onClick: closeQuickFilter });
   bar = el("div", { class: "quick-filter", role: "search" }, [buildSearchIcon(), input, countNode, close]);
   wireDrag(bar);
   document.body.appendChild(bar);

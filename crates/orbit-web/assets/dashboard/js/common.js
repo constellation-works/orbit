@@ -1015,6 +1015,33 @@ export function el(tag, opts = {}, children = []) {
   return node;
 }
 
+// STD-07 R44: a dialog, panel, drawer, popover or floating bar that Esc closes
+// labels that control "esc". The visible word stays lowercase. `name` is the
+// accessible name and says what the control closes, for example
+// "Close task details (Esc)". There is no title and no hover bubble (R41).
+// Width follows the word (R42); the stylesheet matches the height of the
+// header buttons beside it.
+export function labelEscClose(button, name, { description = null } = {}) {
+  button.type = "button";
+  button.textContent = "esc";
+  button.classList.add("esc-close");
+  button.setAttribute("aria-label", name);
+  button.removeAttribute("title");
+  if (description) button.setAttribute("aria-description", description);
+  else button.removeAttribute("aria-description");
+  return button;
+}
+
+export function escCloseButton(name, { className = "", description = null, onClick = null } = {}) {
+  const button = el("button", {
+    type: "button",
+    class: className ? `esc-close ${className}` : "esc-close",
+  });
+  labelEscClose(button, name, { description });
+  if (onClick) button.addEventListener("click", onClick);
+  return button;
+}
+
 // STD-07 R41: a count badge inside a tab button carries its detail in the
 // button's accessible description, never in a native tooltip on the badge.
 // Several badges in one button join their details.

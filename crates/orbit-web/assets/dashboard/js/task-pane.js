@@ -1,7 +1,7 @@
 // Orbit dashboard task pane: the pane render, its head, the resizer and the
 // keyboard navigation around it.
 
-import { el, getWorkspace, hostWriteRefusal, makeCopyButton, syncNodes } from './common.js';
+import { el, escCloseButton, getWorkspace, hostWriteRefusal, makeCopyButton, syncNodes } from './common.js';
 import { $, taskState } from './task-shared.js';
 import * as taskShared from './task-shared.js';
 import { closeTaskPane, filterTasks, focusTaskRow, openTaskPage, revealTaskRow, selectTask, stopRowInteraction } from './task-nav.js';
@@ -271,14 +271,11 @@ function buildListTaskDetail(t, drafts, existing, context) {
 }
 function buildPaneHead(task, pinned, context) {
   const page = taskState.taskPageId === task.id;
-  const back = page ? el("button", {
-    class: "action task-pane-back",
-    type: "button",
-    text: "Back to list",
-    "aria-description": "Back to the task list at this task (Esc)",
+  const back = page ? escCloseButton("Close task page (Esc)", {
+    description: "Back to the task list at this task",
+    onClick: () => closeTaskPane(context, { forget: true }),
   }) : null;
-  if (back) back.addEventListener("click", () => closeTaskPane(context, { forget: true }));
-  // Icon buttons: the glyph is CSS, the accessible name is the label.
+  // Open full page stays an icon. Close is the shared "esc" control (R44).
   const full = page ? null : el("button", {
     class: "task-pane-icon task-pane-full",
     type: "button",
@@ -286,13 +283,9 @@ function buildPaneHead(task, pinned, context) {
     "aria-label": "Open full page",
   });
   if (full) full.addEventListener("click", () => openTaskPage(task.id, context));
-  const close = page ? null : el("button", {
-    class: "task-pane-icon task-pane-close",
-    type: "button",
-    "aria-description": "Close (Esc)",
-    "aria-label": "Close task detail",
+  const close = page ? null : escCloseButton("Close task details (Esc)", {
+    onClick: () => closeTaskPane(context, { forget: true }),
   });
-  if (close) close.addEventListener("click", () => closeTaskPane(context, { forget: true }));
   const key = `pane-head-${task.id}`;
   // The head carries only the id and title; status, crew, run and dates live in
   // the detail's Details section, which edits them.
@@ -314,8 +307,10 @@ function buildPaneHead(task, pinned, context) {
 }
 // A full page whose task is still being read, or could not be.
 function buildTaskPagePlaceholder(context) {
-  const back = el("button", { class: "action task-pane-back", type: "button", text: "Back to list" });
-  back.addEventListener("click", () => closeTaskPane(context));
+  const back = escCloseButton("Close task page (Esc)", {
+    description: "Back to the task list at this task",
+    onClick: () => closeTaskPane(context),
+  });
   const id = makeCopyButton(taskState.taskPageId, { class: "id mono", description: "Copy task ID" });
   const note = el("p", {
     class: taskState.taskPageError ? "panel-placeholder action-error" : "panel-placeholder",

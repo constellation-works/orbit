@@ -1,5 +1,5 @@
 // Observe › Fleet: serving-host registry, probes and guarded registry mutations.
-import { captureFocus, el, fetchJson, getHost, onWorkspaceChange, pinnedInfoHint, setRegisteredHosts, requestJson, requestPanel } from './common.js';
+import { captureFocus, el, escCloseButton, fetchJson, getHost, onWorkspaceChange, pinnedInfoHint, setRegisteredHosts, requestJson, requestPanel } from './common.js';
 import { fetchHostResourcePayloadFor } from './host-resources.js';
 import { fleetButton, fleetFacts, fleetHostCards, fleetDrainSection, fleetProviderSection } from './fleet-view.js';
 
@@ -242,7 +242,13 @@ function renderDialog() {
       ]));
     }
   }
-  dialog.replaceChildren(el("header", { class: "fleet-dialog-head" }, [el("h2", { id: "fleet-dialog-title", text: title }), fleetButton("Close", "Close diagnostics and discard unsaved edits", closeFleetDialog)]), content);
+  dialog.replaceChildren(el("header", { class: "fleet-dialog-head" }, [
+    el("h2", { id: "fleet-dialog-title", text: title }),
+    escCloseButton("Close host details (Esc)", {
+      description: "Close diagnostics and discard unsaved edits",
+      onClick: closeFleetDialog,
+    }),
+  ]), content);
   for (const detail of dialog.querySelectorAll("details")) detail.open = openDetails.has(detail.querySelector("summary")?.textContent);
   if (!dialog.open) dialog.showModal();
   restore();
