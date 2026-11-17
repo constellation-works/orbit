@@ -4,9 +4,9 @@ title: UI and UX — consistent spacing, shared edges, one type scale, minimal w
 summary: Normative rules for every operator-facing screen (dashboards, web apps, sites, panels): sibling spacing and shared edges, layouts that never shift, one type scale, contrast and one meaning per colour, minimal words with helper text behind an info icon, tooltips only where they add something, no redundant or inert elements, answer-first data with honest charts, visible live state, responsive use of width, and turning each owner correction into a rule; follow it in any project that renders a UI.
 status: draft
 tags: [standard, ui, ux, design]
-version: 11
+version: 13
 created: 2026-11-09
-updated: 2026-11-15
+updated: 2026-11-17
 last_validated: 2026-11-15
 related: [STD-01-cli-surface, STD-04-testing-and-verification]
 ---
@@ -92,9 +92,7 @@ gate that enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, 
   family. Weight shows hierarchy only, and figures and labels are not bolded for emphasis.
   Monospace is used only for IDs, metrics, timestamps, code and logs; prose, hints and
   messages are sans-serif.
-- **R9.** A label MUST sit on the same row as its value, not on a row of its own above an
-  indented value. In label/value lists, a label MUST NOT wrap one word per line, and a value
-  MUST NOT draw over its label.
+- **R9.** A label MUST sit on the same row as its value, not on a row of its own above an indented value. In label/value lists, a label MUST NOT wrap one word per line, and a value MUST NOT draw over its label. Each label MUST be vertically centred against its value, including a value that spans several lines.
 - **R35.** Text inside a chart MUST use the page's type scale. Labels, ticks and axis titles
   render at the same sizes as the equivalent text around the chart at every width. A chart
   never scales its text with its own width (for example an SVG with a fixed `viewBox`
@@ -122,23 +120,9 @@ gate that enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, 
   is an error the operator must act on: it is never truncated.
 - **R15.** A label MUST be short and MUST NOT repeat context the screen already shows. For
   example, it says "View run", not "View run on host-1" next to the host's name.
-- **R16.** A screen MUST show each piece of information once, and only what the operator
-  acts on. Duplicate controls, nav entries for panels already on screen, redundant pages,
-  noise badges and filler values ("no estimate", "+0/-0") are removed. Disabled features
-  are hidden, not shown greyed out in nav.
-- **R32.** A hover tooltip MUST add something the screen does not already show: the full
-  text of a truncated label, a definition, or detail deliberately moved off the screen. It
-  never restates a visible label or a state that a colour, icon or position already shows
-  (for example "Implement · done" on a green step). The full text stays in the accessible
-  name either way. A tooltip's bubble fits its text up to a maximum width, with no empty
-  area beside a short text. A button's hover help (R41) is detail of this kind.
-- **R41.** Every button MUST carry a short hover help that says what it does: the effect of
-  pressing it, not its label repeated. For example, "Run a cycle now that writes a
-  checkpoint" on "Wake for status", or "End the mandate; it cannot be resumed" on "Stop".
-  It names any consequence the label does not show (irreversible, opens a dialog, affects
-  other hosts). It shows on hover and keyboard focus, stays within R32's sizing, and the
-  same text is in the button's accessible description. A disabled button's help says why
-  it is disabled.
+- **R16.** A screen MUST show each piece of information once, and only what the operator acts on. Duplicate controls, nav entries for panels already on screen, redundant pages, noise badges and filler values ("no estimate", "+0/-0") are removed. Disabled features are hidden, not shown greyed out in nav. A detail view, dialog or drill-down MUST NOT repeat what the view that opened it already shows; it adds only what that view lacks.
+- **R32.** A hover tooltip MUST add something the screen does not already show: the full text of a truncated label, a definition, or detail deliberately moved off the screen. It never restates a visible label or a state that a colour, icon or position already shows (for example "Implement · done" on a green step). The full text stays in the accessible name either way. A tooltip's bubble fits its text up to a maximum width, with no empty area beside a short text. Buttons carry no tooltip (R41).
+- **R41.** A button MUST NOT show a hover or focus help bubble or a native tooltip. Its label says what it does. The effect of pressing it, when the label does not show it, goes in the button's accessible description, for example "Run a cycle now that writes a checkpoint" on "Wake for status". A consequence the operator must see before acting (irreversible, affects other hosts) is shown in the confirmation the button opens, or behind an info icon beside it (R13). A disabled button's reason is given the same way: an info icon beside it, and the accessible description.
 
 ### Data display
 
