@@ -60,6 +60,10 @@ pub enum DeliveryRefusal {
     /// Review admission exhausted the candidate's review or minutes budget.
     /// The operator must renew the ledger or start a fresh delivery attempt.
     ReviewBudgetExhausted,
+    /// `candidate_resume` refused a published candidate that an operator must
+    /// either repair explicitly or discard. The refusal message is unchanged.
+    /// Integrity and authority refusals stay failures.
+    SourceRepairDecision,
     /// A `verify-mock-ui` delivery's capture was not established. Visual
     /// review was removed [ORB-22807]: nothing raises this any more, and it
     /// stays so runs recorded before then still read their refusal.
@@ -94,6 +98,7 @@ impl DeliveryRefusal {
             Self::CheckRunsAbsent => "delivery_check_runs_absent",
             Self::LandingRepairRequeue => "delivery_landing_repair_requeue",
             Self::ReviewBudgetExhausted => "review_budget_exhausted",
+            Self::SourceRepairDecision => "delivery_source_repair_decision",
         }
     }
 
@@ -121,6 +126,7 @@ impl DeliveryRefusal {
             "delivery_check_runs_absent" => Some(Self::CheckRunsAbsent),
             "delivery_landing_repair_requeue" => Some(Self::LandingRepairRequeue),
             "review_budget_exhausted" => Some(Self::ReviewBudgetExhausted),
+            "delivery_source_repair_decision" => Some(Self::SourceRepairDecision),
             _ => None,
         }
     }
@@ -184,6 +190,9 @@ impl DeliveryRefusal {
             }
             Self::ReviewBudgetExhausted => {
                 "Follow the refusal's recovery command: record an operator review-reset before resuming a local run, or requeue a claimed task on its owner for a fresh claim.".into()
+            }
+            Self::SourceRepairDecision => {
+                "Inspect explicit source repair for the publishing run, or discard the candidate (orbit task update <task-id> --status backlog --discard-candidate) so the next run implements fresh. The task is unchanged; do not resume this held run.".into()
             }
             Self::VisualNotEstablished | Self::VisualReviewUnresolved => {
                 "Inspect the held run. This refusal is no longer raised.".into()

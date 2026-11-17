@@ -202,6 +202,16 @@ cancel it) or another actor, so check the forge. Failed checks that need the
 base's own result are held as `delivery_base_checks_pending` until candidate
 recovery can proceed. Their `delivery_*` diagnostic codes are listed in
 [delivery refusals](../CONFIG.md#delivery-refusals-are-held).
+`candidate_resume` holds as `delivery_source_repair_decision` when a published
+candidate needs an operator to inspect explicit source repair or discard the
+candidate (no unique requeue binding, a publication that predates the current
+binding, a retained local branch that moved, a source that is not an exact
+owner-local single-task execution, or a source that is live, discarded,
+changed, or lacks an applied requeue). The refusal message is unchanged and
+names that next step. The task stays as the refusing action left it: the hold
+does not requeue, discard, or resume. Untrusted publication preservation, a
+missing operator reservation, a changed remote or pull-request identity, and
+`source repair refused: local identity missing` still fail the run.
 The task keeps the state the refusing action left it in, and gate/auto parents
 pass the held child. Missing or contradictory evidence and red candidate
 checks still fail. In auto-fix, a permanent required-check evidence read failure,
@@ -900,7 +910,16 @@ history entry records it as `reason` (`source_machine`, `task_machine`,
 next run implements fresh, or use explicit source repair. Owner-source
 identity refusals end with the same reason code, except
 `local_identity_missing`, which keeps the retained `source repair refused:
-local identity missing` refusal.
+local identity missing` refusal. That block is the requeue guard and is
+unchanged. A later `candidate_resume` that still meets an operator-decision
+refusal (no unique requeue binding, a publication that predates the current
+binding, a retained local branch that moved, a source that is not an exact
+owner-local single-task execution, or a source that is live, discarded,
+changed, or lacks an applied requeue) holds the run as
+`delivery_source_repair_decision` with the same message and next step. It does
+not requeue, discard, or resume. `local_identity_missing`, untrusted
+preservation, a missing operator reservation, and a changed remote or
+pull-request identity still fail that run.
 
 The blocked-task backstop is stricter: its decision is recorded under the
 recovery run, not the publishing run, so it can never preserve the failed
