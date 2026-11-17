@@ -1,6 +1,6 @@
 // Observe › Fleet: serving-host registry, probes and guarded registry mutations.
-import { captureFocus, el, fetchJson, getHost, onWorkspaceChange, pinnedInfoHint, setRegisteredHosts, requestHostSwitch, requestJson, requestPanel } from './common.js';
-import { describeResource, fetchHostResourcePayloadFor, hostVerdict } from './host-resources.js';
+import { captureFocus, el, fetchJson, getHost, onWorkspaceChange, pinnedInfoHint, setRegisteredHosts, requestJson, requestPanel } from './common.js';
+import { fetchHostResourcePayloadFor } from './host-resources.js';
 import { fleetButton, fleetFacts, fleetHostCards, fleetDrainSection, fleetProviderSection } from './fleet-view.js';
 
 const $ = (id) => document.getElementById(id);
@@ -204,19 +204,43 @@ function renderDialog() {
     content.append(editing.kind === "add" ? addSection() : editing.kind === "rename" ? renameEditor(row) : removeEditor(row));
   } else {
     const names = new Map(lastPayload.hosts.map(host => [host.machine_id, host.name]));
-    content.append(fleetFacts([
-      ["Machine ID", row.machine_id], ["SSH", row.ssh || "Local"], ["Task prefix", row.task_prefix || "Unknown"],
-      ["Orbit version", row.binary_version || "Unknown"], ["Reachability", reachableCell(row)],
-      ["Protocol", row.protocol_fingerprint || "Not probed"], ["Compatibility", skewCell(row)],
-      ["Workspaces", workspacesCell(row, names)], ["Health", healthCell(row)],
+    content.append(el("section", { class: "fleet-dialog-section" }, [
+      el("h3", { text: "Facts" }),
+      fleetFacts([
+        ["Machine ID", row.machine_id], ["SSH", row.ssh || "Local"], ["Task prefix", row.task_prefix || "Unknown"],
+        ["Orbit version", row.binary_version || "Unknown"], ["Reachability", reachableCell(row)],
+        ["Protocol", row.protocol_fingerprint || "Not probed"], ["Compatibility", skewCell(row)],
+        ["Workspaces", workspacesCell(row, names)],
+      ]),
     ]));
-    if (row.error) content.append(el("details", {}, [el("summary", { text: "Probe failure details" }), el("p", { text: hostError(row) }), el("pre", { text: JSON.stringify(row.error, null, 2) })]));
+    if (row.error) {
+      const cause = hostErrorCause(row.error);
+      const items = [
+        el("h3", { text: "Probe failure" }),
+        el("p", { class: "fleet-dialog-error", text: hostError(row) }),
+      ];
+      if (cause) {
+        items.push(el("p", { class: "fleet-dialog-cause", text: `Cause: ${cause}` }));
+      }
+      content.append(el("section", { class: "fleet-dialog-section" }, items));
+    }
     const reading = health.get(row.machine_id);
     const warnings = (reading?.drains || []).filter(drain => drain.pilotWarning || drain.error);
-    if (warnings.length) content.append(el("details", {}, [el("summary", { text: "Drain diagnostics" }), ...warnings.map(drain => el("p", { text: `${drain.name}: ${drain.pilotWarning || drain.error}` }))]));
-    if (reading?.resources) content.append(el("details", {}, [el("summary", { text: "Health details" }), el("p", { text: hostVerdict(reading.resources).reason }), ...['cpu', 'memory', 'disk', 'io'].map(resource => el('p', { text: describeResource(reading.resources, resource).detail }))]));
-    if (!row.local && editable()) content.append(el("h3", { text: `Registry on ${local?.name || "the serving host"}` }), actionsCell(row));
-    content.append(hostSwitch(row));
+    if (warnings.length) {
+      content.append(el("section", { class: "fleet-dialog-section" }, [
+        el("h3", { text: "Drain diagnostics" }),
+        ...warnings.map(drain => {
+          const detail = drain.pilotWarning || (typeof drain.error === "string" ? drain.error : drain.error?.message || "drain unavailable");
+          return el("p", { text: `${drain.name}: ${detail}` });
+        }),
+      ]));
+    }
+    if (!row.local && editable()) {
+      content.append(el("section", { class: "fleet-dialog-section" }, [
+        el("h3", { text: `Registry on ${local?.name || "the serving host"}` }),
+        actionsCell(row),
+      ]));
+    }
   }
   dialog.replaceChildren(el("header", { class: "fleet-dialog-head" }, [el("h2", { id: "fleet-dialog-title", text: title }), fleetButton("Close", "Close diagnostics and discard unsaved edits", closeFleetDialog)]), content);
   for (const detail of dialog.querySelectorAll("details")) detail.open = openDetails.has(detail.querySelector("summary")?.textContent);
@@ -247,125 +271,37 @@ function loadErrorBanner(payload) {
   return banner;
 }
 
-/// Show switches the dashboard the way the host picker does. The href is the
-/// same `?host=` the picker writes, so the control still works as a link.
-function hostSwitch(row) {
-  const selected = getHost();
-  const showing = row.local ? !selected : !!selected && selected.toLowerCase() === String(row.name).toLowerCase();
-  if (showing) return el("span", { class: "host-showing", text: "showing" });
-  const name = row.local ? null : row.name;
-  const link = el("a", {
-    class: "host-switch",
-    text: "Show",
-    title: `Switch the dashboard to ${row.name}`,
-  });
-  link.href = hostSwitchHref(name);
-  link.setAttribute("aria-label", `Show ${row.name}`);
-  link.addEventListener("click", (event) => {
-    // Modified and non-primary clicks follow the href (new tab, copy, open
-    // in background), so they must not be intercepted into an in-page switch.
-    if (event.defaultPrevented || (event.button ?? 0) !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    event.preventDefault();
-    event.stopPropagation();
-    requestHostSwitch(name);
-  });
-  return link;
-}
-
-function hostSwitchHref(name) {
-  const params = new URLSearchParams(window.location.search || "");
-  // The serving host is an explicit empty `host=`, not an absent parameter:
-  // a bare URL restores a remembered remote, an explicit empty one does not.
-  if (name) params.set("host", name);
-  else params.set("host", "");
-  const query = params.toString();
-  const path = window.location.pathname || "";
-  const hash = window.location.hash || "";
-  return `${path}${query ? `?${query}` : ""}${hash}`;
-}
-
 function hostError(row) {
+  if (!row.error) return "Unknown error occurred.";
   if (row.error.code === "unreachable_destination") {
     return `${row.name} could not be reached. Check the network connection and SSH access to ${row.ssh || row.name}, then use Reload to try again.`;
   }
-  return `${row.error.code}: ${row.error.message}`;
-}
-
-function healthCell(row) {
-  if (row.checking) return el("span", { class: "host-health host-health-pending", text: "checking…" });
-  if (row.reachable === false) {
-    const error = !row.error || row.error.code === "unreachable_destination" ? "could not be reached" : hostError(row);
-    return el("span", { class: "host-health host-health-error", text: error });
+  if (row.error.code === "process_timeout") {
+    return `Probe timed out while connecting to ${row.name}. Check the network connection and SSH access to ${row.ssh || row.name}, then use Reload to try again.`;
   }
-  if (row.reachable == null) return el("span", { class: "host-health host-health-pending", text: "not probed" });
-  const reading = health.get(row.machine_id);
-  if (!reading || reading.kind !== "ready") {
-    return el("span", { class: "host-health host-health-pending", text: "…" });
+  const msg = typeof row.error.message === "string" ? row.error.message.split("\n")[0].trim() : "";
+  if (msg && !msg.toLowerCase().includes("ssh:") && !msg.toLowerCase().includes("fatal:")) {
+    return `${row.name}: ${msg}`;
   }
-  const verdict = reading.resources ? hostVerdict(reading.resources) : null;
-  const chips = reading.resources
-    ? el("span", { class: "host-health-readings" }, ['cpu', 'memory', 'disk', 'io'].map((resource) => resourceChip(reading.resources, resource)))
-    : el("span", { class: "host-health-error", text: reading.resourcesError || "resources unavailable" });
-  const drain = drainLine(reading, verdict);
-  const node = el("span", { class: "host-health" }, [chips, drain]);
-  const summary = [chips.textContent, drain.textContent].filter(Boolean).join("; ");
-  const throttle = verdict ? verdict.status : "unknown";
-  node.setAttribute("aria-label", `${row.name}: ${summary}. Throttle verdict: ${throttle}`);
-  return node;
+  return `${row.name} encountered an error (${row.error.code || "unknown"}). Use Reload to try again.`;
 }
 
-function resourceChip(payload, resource) {
-  const { label, value, suffix, detail, severity, held } = describeResource(payload, resource);
-  const node = el("span", {
-    class: `host-resource ${severity}${held ? " throttled" : ""}`,
-    title: detail,
-  }, [
-    el("span", { class: "k", text: label }),
-    el("span", { class: "v", text: value }, suffix ? [el("span", { class: "unit", text: suffix })] : []),
-  ]);
-  node.dataset.resource = resource;
-  return node;
-}
-
-function drainLine(reading, verdict) {
-  const { text, active, title } = drainSummary(reading, verdict);
-  const throttled = verdict?.status === "held";
-  return el("span", {
-    class: `host-drain${active ? " active" : ""}${throttled ? " throttled" : ""}`,
-    text,
-    title,
-  });
-}
-
-/// One line for every workspace's drain capacity, plus the admission verdict
-/// the rail block states. A failed capacity read is named; it does not become "idle".
-function drainSummary(reading, verdict) {
-  const drains = reading.drains || [];
-  const known = drains.filter((drain) => !drain.error);
-  const failed = drains.filter((drain) => drain.error);
-  const parts = [];
-  const draining = known.some((drain) => drain.phase === "draining");
-  const winding = known.some((drain) => drain.phase === "winding_down");
-  const pulling = known.some((drain) => drain.pull);
-  if (draining) parts.push("Draining");
-  else if (winding) parts.push("Winding down");
-  if (pulling) {
-    const live = known.some((drain) => drain.pull && !drain.pullStopped);
-    parts.push(live ? "Pull drain" : "Pull drain · admissions stopped");
+function hostErrorCause(error) {
+  if (!error) return null;
+  switch (error.code) {
+    case "unreachable_destination":
+      return "SSH connection timed out";
+    case "process_timeout":
+      return "Connection timed out";
+    case "host_identity_mismatch":
+      return "Machine ID mismatch";
+    case "host_too_old":
+      return "Incompatible Orbit version";
+    case "unknown_host":
+      return "Host is not registered";
+    default:
+      return error.code ? error.code.replace(/_/g, " ") : null;
   }
-  if (!parts.length && known.length) parts.push("idle");
-  if (!known.length && failed.length) parts.push(failed[0].error);
-  if (reading.workspaceCount === 0 && !parts.length) parts.push("idle");
-  if (verdict?.status === "held") parts.push("throttled");
-  else if (!reading.resources || verdict?.status === "unknown") parts.push("throttle unknown");
-  const lines = known.map((drain) => {
-    const phase = drain.phase === "draining" ? "Draining" : drain.phase === "winding_down" ? "Winding down" : "idle";
-    return `${drain.name}: ${phase}${drain.pull ? ", pull drain" : ""}`;
-  });
-  for (const drain of failed) lines.push(`${drain.name}: ${drain.error}`);
-  if (verdict) lines.push(`Throttle verdict: ${verdict.status}${reading.resources?.reason ? ` · ${reading.resources.reason}` : ""}`);
-  else lines.push("Throttle verdict: unknown");
-  return { text: parts.join(" · ") || "…", active: draining || winding || pulling, title: lines.join("\n") };
 }
 
 async function loadHealth() {
