@@ -451,6 +451,48 @@ pub fn run_git_within(
     })
 }
 
+/// What `git merge-base --is-ancestor` answered, as [`git_ancestry`] reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitAncestry {
+    /// Exit 0: the first commit is an ancestor of (or equal to) the second.
+    Ancestor,
+    /// Exit 1: it is not.
+    NotAncestor,
+    /// Any other exit (such as 128, an unresolvable revision): Git could not
+    /// answer. `code` is `None` when a signal ended the process.
+    Unanswered { code: Option<i32>, stderr: String },
+}
+
+/// Ask Git whether `ancestor` is an ancestor of `descendant` in `repo`.
+///
+/// Spawn and timeout failures propagate as [`run_git`] reports them. Each
+/// caller decides whether [`GitAncestry::Unanswered`] reads as "not an
+/// ancestor" or as an error.
+pub fn git_ancestry(
+    repo: &Path,
+    ancestor: &str,
+    descendant: &str,
+) -> Result<GitAncestry, OrbitError> {
+    let answer = run_git(
+        repo,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            "--end-of-options",
+            ancestor,
+            descendant,
+        ],
+    )?;
+    Ok(match answer.code {
+        Some(0) => GitAncestry::Ancestor,
+        Some(1) => GitAncestry::NotAncestor,
+        code => GitAncestry::Unanswered {
+            code,
+            stderr: answer.stderr,
+        },
+    })
+}
+
 pub struct GitCommandOutput {
     pub success: bool,
     /// Git's exit status; `None` when a signal ended the process.

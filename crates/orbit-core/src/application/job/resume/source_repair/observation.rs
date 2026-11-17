@@ -36,11 +36,10 @@ pub(super) fn is_git_ancestor(
     ancestor: &str,
     descendant: &str,
 ) -> Result<bool, OrbitError> {
-    Ok(orbit_common::fs::git::run_git(
-        repo,
-        &["merge-base", "--is-ancestor", ancestor, descendant],
-    )?
-    .success)
+    Ok(matches!(
+        orbit_common::fs::git::git_ancestry(repo, ancestor, descendant)?,
+        orbit_common::fs::git::GitAncestry::Ancestor
+    ))
 }
 
 /// Verify that the supplied name resolves exactly to the same commit.
