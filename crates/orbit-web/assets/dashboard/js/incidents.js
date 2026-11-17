@@ -13,7 +13,7 @@
 // - the detail panel shows the selected signature's full message, its runs
 //   and its underlying audit events, and links out to both.
 //
-// Every count states what it is out of and which window it covers. The
+// The header selects the window; the footer states any list cap. The
 // grouping signature is an internal key: it decides which rows roll up and
 // which other signatures share a message, but it is never shown as one.
 // Counts stay per signature: a cause header counts signatures, never runs or
@@ -62,7 +62,6 @@ let incidentClass = "unexpected";
 let windowOverride = null;
 let searchQuery = "";
 let groupMode = "cause";
-let noMessageOnly = false;
 let selectedKey = null;
 let runsOpen = false;
 let evidenceOpen = false;
@@ -392,7 +391,7 @@ function causeSiblings(group, groups) {
 function listCap(payload) {
   const shown = asCount(payload && payload.shown_incident_count);
   const matching = asCount(payload && payload.matching_incident_count);
-  return { capped: shown > 0 && matching > shown, shown, matching };
+  return { capped: matching > shown, shown, matching };
 }
 
 function countLabel(group) {
@@ -501,25 +500,48 @@ function axisNode(axis, parts, className) {
   return el("span", { class: className }, axisLabels(axis, parts).map(text => el("span", { text })));
 }
 
-// ===== Header, class tiles, denominator and insight chips.
+// ===== Header window control and class tiles.
 
 function windowSegmentsNode() {
   const current = getIncidentWindow();
   const values = INCIDENT_WINDOWS.includes(current) ? INCIDENT_WINDOWS : [...INCIDENT_WINDOWS, current];
-  const group = el("div", { class: "mx-seg mx-seg-wrap", role: "group", "aria-label": "Time window" });
+  const group = el("div", { class: "mx-seg", role: "group", "aria-label": "Time window" });
   for (const value of values) {
     const on = value === current;
+    const help = `Show incidents ${windowPhrase(value)}`;
     const button = el("button", {
       class: `mx-seg-btn${on ? " on" : ""}`,
       type: "button",
       "aria-pressed": on ? "true" : "false",
       text: value,
+      "aria-label": value,
+      "aria-description": help,
     });
     button.dataset.window = value;
     button.addEventListener("click", () => selectWindow(value));
-    group.appendChild(button);
+    group.appendChild(pinnedInfoHint(help, { trigger: button, preserveAction: true }));
   }
+  group.dataset.key = "incident-window";
+  group.dataset.hash = current;
   return group;
+}
+
+// Keep the control available during loading and errors, independently of
+// the shared count resets. Routing retires it before another view renders.
+export function renderIncidentWindowHeader(visible) {
+  const slot = $("diag-window");
+  const count = $("diag-count");
+  if (count) {
+    count.hidden = visible;
+    if (visible) {
+      count.textContent = "";
+      count.removeAttribute("title");
+    }
+  }
+  if (!slot) return;
+  slot.hidden = !visible;
+  syncNodes(slot, visible ? [windowSegmentsNode()] : []);
+  settle(slot);
 }
 
 function selectWindow(value) {
@@ -538,16 +560,6 @@ function selectWindow(value) {
   }
   rerender();
   if (hasCtx(lastCtx, "refreshDiagnostics")) lastCtx.refreshDiagnostics();
-}
-
-function headNode() {
-  const node = el("div", { class: "incident-head-bar" }, [
-    pinnedInfoHint("Failed audit events, rolled up by signature across runs and grouped by the cause they share."),
-    windowSegmentsNode(),
-  ]);
-  node.dataset.key = "incident-head";
-  node.dataset.hash = getIncidentWindow();
-  return node;
 }
 
 function classTilesNode(payload, window) {
@@ -583,16 +595,7 @@ function classTilesNode(payload, window) {
     tiles.appendChild(tile);
   }
 
-  const failed = asCount(payload.raw_failed_events);
-  const total = asCount(payload.total_events);
-  const share = total > 0 ? ` (${(failed / total * 100).toFixed(1)}%)` : "";
-  const children = [
-    tiles,
-    el("p", {
-      class: "incident-denominator",
-      text: `${number(payload.incident_count)} incidents ${windowPhrase(window)}: ${number(failed)} failed events across ${number(payload.affected_run_count)} runs, out of ${number(total)} audited events${share}.`,
-    }),
-  ];
+  const children = [tiles];
   if (payload.truncated) {
     children.push(el("p", {
       class: "incident-scan-note",
@@ -601,7 +604,7 @@ function classTilesNode(payload, window) {
   }
   const section = el("section", { class: "incident-classes", "aria-label": "Incident classes" }, children);
   section.dataset.key = "incident-classes";
-  section.dataset.hash = JSON.stringify([incidentClass, window, facts, failed, total, payload.incident_count, payload.affected_run_count, payload.truncated]);
+  section.dataset.hash = JSON.stringify([incidentClass, window, facts, payload.truncated]);
   return section;
 }
 
@@ -611,44 +614,6 @@ function selectClass(key) {
   selectedKey = null;
   rerender();
   if (hasCtx(lastCtx, "refreshDiagnostics")) lastCtx.refreshDiagnostics();
-}
-
-function insightsNode(groups, now) {
-  const live = groups.filter(group => isLive(group, now)).length;
-  const silent = groups.filter(group => !group.message.recorded).length;
-  const lastHourSelected = getIncidentWindow() === "1h";
-  const chips = [];
-  if (live > 0) {
-    const chip = el("button", {
-      class: `incident-insight live${lastHourSelected ? " on" : ""}`,
-      type: "button",
-      "aria-pressed": lastHourSelected ? "true" : "false",
-    }, [el("span", { class: "incident-dot", "aria-hidden": "true" }), `${plural(live, "signature")} failed in the last hour`]);
-    chip.dataset.insight = "last-hour";
-    chip.addEventListener("click", () => selectWindow("1h"));
-    chips.push(chip);
-  }
-  if (silent > 0 || noMessageOnly) {
-    const chip = el("button", {
-      class: `incident-insight silent${noMessageOnly ? " on" : ""}`,
-      type: "button",
-      "aria-pressed": noMessageOnly ? "true" : "false",
-    }, [el("span", { class: "incident-dot", "aria-hidden": "true" }), `${plural(silent, "signature")} ${silent === 1 ? "records" : "record"} no error message`]);
-    chip.dataset.insight = "no-message";
-    chip.addEventListener("click", () => {
-      noMessageOnly = !noMessageOnly;
-      if (noMessageOnly) {
-        const first = groups.find(group => !group.message.recorded);
-        if (first) selectedKey = first.key;
-      }
-      rerender();
-    });
-    chips.push(chip);
-  }
-  const node = el("div", { class: "incident-insights", role: "group", "aria-label": "Insights" }, chips);
-  node.dataset.key = "incident-insights";
-  node.dataset.hash = JSON.stringify([live, silent, lastHourSelected, noMessageOnly]);
-  return node;
 }
 
 // ===== List (master).
@@ -662,10 +627,9 @@ function matchesSearch(group, query) {
   return haystack.includes(query);
 }
 
-function visibleGroups(groups, now) {
+function visibleGroups(groups) {
   const query = searchQuery.trim().toLowerCase();
-  return groups.filter(group => (!noMessageOnly || !group.message.recorded)
-    && matchesSearch(group, query));
+  return groups.filter(group => matchesSearch(group, query));
 }
 
 function causeCodeNode(cause) {
@@ -828,7 +792,6 @@ function emptyNode(text, { clear = false, status = false } = {}) {
     const button = el("button", { class: "incident-link-button", type: "button", text: "Clear filters" });
     button.addEventListener("click", () => {
       searchQuery = "";
-      noMessageOnly = false;
       if (layout) layout.search.value = "";
       rerender();
     });
@@ -840,15 +803,13 @@ function emptyNode(text, { clear = false, status = false } = {}) {
   return node;
 }
 
-function footerNodes(payload, cap, ctx, window) {
+function footerNodes(payload, cap, ctx) {
+  if (!cap.capped) return [];
   const label = CLASS_TITLES[incidentClass].toLowerCase();
-  const scope = cap.capped
-    ? `Rows roll up the newest ${number(cap.shown)} of ${number(cap.matching)} ${label} ${windowPhrase(window)}.`
-    : `Rows roll up all ${number(cap.matching || cap.shown)} ${label} ${windowPhrase(window)}.`;
-  const nodes = [el("span", { text: `${scope} Sorted by last seen.` })];
+  const nodes = [el("span", { text: `Rows roll up the newest ${number(cap.shown)} of ${number(cap.matching)} ${label}. Sorted by last seen.` })];
   const current = asCount(payload.limit) || INCIDENT_PAGE;
   const next = Math.min(current + INCIDENT_PAGE, INCIDENT_PAGE_MAX);
-  if (cap.capped && next > current && hasCtx(ctx, "loadMoreIncidents")) {
+  if (next > current && hasCtx(ctx, "loadMoreIncidents")) {
     const more = el("button", { class: "incident-link-button", type: "button", text: "Load older", title: `Load up to ${next} incidents` });
     more.addEventListener("click", () => ctx.loadMoreIncidents(next));
     nodes.push(more);
@@ -1210,15 +1171,12 @@ export function renderIncidents(payload, ctx = {}, { interactive = false } = {})
   const incidents = pending ? [] : (Array.isArray(payload.incidents) ? payload.incidents : [])
     .filter(incident => (incident.class || "unexpected") === incidentClass);
   const groups = groupIncidents(incidents);
-  const visible = visibleGroups(groups, now);
+  const visible = visibleGroups(groups);
   if (!visible.some(group => group.key === selectedKey)) selectedKey = visible.length ? visible[0].key : null;
   const cap = listCap(payload);
   const axis = incidentAxis(payload, groups, now);
 
-  const count = $("diag-count");
-  if (count) {
-    count.textContent = `Newest ${asCount(payload.shown_incident_count)} of ${asCount(payload.matching_incident_count)} incidents · window ${payload.window || window}`;
-  }
+  renderIncidentWindowHeader(true);
 
   const view = ensureLayout(body);
   const label = CLASS_TITLES[incidentClass];
@@ -1250,7 +1208,7 @@ export function renderIncidents(payload, ctx = {}, { interactive = false } = {})
   else rows = listRows(groups, visible, axis, now, cap);
   syncNodes(view.rows, rows);
   replaceMarks(view.rows, groups, axis, now);
-  const footer = el("div", { class: "incident-footer-row" }, pending ? [] : footerNodes(payload, cap, ctx, window));
+  const footer = el("div", { class: "incident-footer-row" }, pending ? [] : footerNodes(payload, cap, ctx));
   footer.dataset.key = "incident-footer";
   footer.dataset.hash = JSON.stringify([footer.textContent, pending]);
   syncNodes(view.footer, [footer]);
@@ -1268,9 +1226,7 @@ export function renderIncidents(payload, ctx = {}, { interactive = false } = {})
   replaceMarks(view.detail, groups, axis, now);
 
   syncNodes(body, [
-    headNode(),
     classTilesNode(payload, payload.window || window),
-    insightsNode(pending ? [] : groups, now),
     view.root,
   ]);
   if (interactive) [body, view.axisHead, view.rows, view.footer, view.detail].forEach(settle);

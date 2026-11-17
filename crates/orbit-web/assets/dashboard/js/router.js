@@ -20,6 +20,7 @@
 // Also exports parseHashRoute for symmetry (used only internally today).
 
 import { el, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, setWorkspace, parseDashboardWindow, persistScopeToUrl, syncWindowSelectors, notifyScopeChange } from './common.js';
+import { renderIncidentWindowHeader } from './incidents.js';
 import { adoptRunFiltersFromAddress, renderRuns } from './runs.js';
 import { AGENT_ROLES, adoptAgentsSpan, agentsSpan } from './agents.js';
 import { countViewsHashSuffix } from './metrics-running.js';
@@ -322,6 +323,7 @@ function setDiagSubtabImpl(ctx, name, view = ctx.getIncidentsView()) {
   ctx.setIncidentsView(view);
   // The view on screen: Incidents shows one of its three views.
   const shown = name === "incidents" ? view : name;
+  renderIncidentWindowHeader(shown === "incidents");
   const title = $("diag-title");
   if (title && DIAG_TITLES[shown]) title.textContent = DIAG_TITLES[shown];
   for (const btn of document.querySelectorAll("#diag-subtabs .subtab")) {
