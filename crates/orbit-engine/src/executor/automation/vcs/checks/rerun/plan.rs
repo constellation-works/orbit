@@ -14,14 +14,13 @@ use super::send::{
     record_retry_history, send_reserved_rerun,
 };
 use super::{
-    CiRerunStep, PlanMismatch, RerunPlanRequest, SHARED_RETRY_BUDGET_SPENT, authenticated_plan,
-    is_no_authenticated_plan_error,
+    CiRerunStep, PlanMismatch, RerunPlanRequest, authenticated_plan, is_no_authenticated_plan_error,
 };
 use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
     CI_INFRASTRUCTURE_RETRY_BACKOFF_EVENT, CiBaseSuspectLegacy, CiBaseSuspectRecord,
-    CiInfrastructureRetryBackoffRecord, CiRerunAdmission, CiRerunRoot,
+    CiInfrastructureRetryBackoffRecord, CiRerunAdmission, CiRerunRefusal, CiRerunRoot,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -416,15 +415,23 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
             record_retry_exhausted(host, tasks, handoff, &plan, attempts, &reason)?;
             Ok(CiRerunStep::BudgetSpent(reason))
         }
-        CiRerunAdmission::Refused(reason) => {
-            if conclusion_set && reason == SHARED_RETRY_BUDGET_SPENT {
-                let stop = cancellation_timeout_reason(&plan.roots);
-                record_cancellation_exhausted(host, tasks, handoff, &stop)?;
-                Ok(CiRerunStep::BudgetSpent(stop))
-            } else {
-                Ok(CiRerunStep::Wait(format!("CI retry holds: {reason}")))
-            }
+        CiRerunAdmission::Refused(CiRerunRefusal::SharedBudgetSpent) if conclusion_set => {
+            let stop = cancellation_timeout_reason(&plan.roots);
+            record_cancellation_exhausted(host, tasks, handoff, &stop)?;
+            Ok(CiRerunStep::BudgetSpent(stop))
         }
+        CiRerunAdmission::Refused(
+            reason @ (CiRerunRefusal::InvalidAuthorization
+            | CiRerunRefusal::UnreadableReservation
+            | CiRerunRefusal::UnsupportedVersion
+            | CiRerunRefusal::ConflictingReservations
+            | CiRerunRefusal::UnreadableLegacyHistory
+            | CiRerunRefusal::MissingLegacyActionIdentity
+            | CiRerunRefusal::SharedBudgetSpent
+            | CiRerunRefusal::RequiresOwningHost
+            | CiRerunRefusal::OwningTaskTerminal
+            | CiRerunRefusal::LedgerAbsent),
+        ) => Ok(CiRerunStep::Wait(format!("CI retry holds: {reason}"))),
         CiRerunAdmission::Observe(previous) => {
             // Same attempt: the send is in flight. A later attempt that is
             // still a conclusion stop has used the one rerun.

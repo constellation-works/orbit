@@ -8,12 +8,11 @@ use super::super::{
 use super::conclusion::conclusion_root;
 use super::send::send_reserved_rerun;
 use super::{
-    CiRerunStep, PlanMismatch, RerunPlanRequest, SHARED_RETRY_BUDGET_SPENT, authenticated_plan,
-    is_no_authenticated_plan_error,
+    CiRerunStep, PlanMismatch, RerunPlanRequest, authenticated_plan, is_no_authenticated_plan_error,
 };
 use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
-use orbit_types::workflow::{CiRerunAdmission, CiRerunPlan, CiRerunRoot};
+use orbit_types::workflow::{CiRerunAdmission, CiRerunPlan, CiRerunRefusal, CiRerunRoot};
 use std::{collections::BTreeSet, path::Path};
 
 /// [model ranking §5.1] Rerun a failed set once on its unchanged head when no
@@ -254,14 +253,19 @@ pub(in crate::executor::automation::vcs) fn request_no_edit_repair_rerun<
                 "ci_infrastructure_retry_exhausted: classification=transient attempts={attempts}; the candidate stays in review"
             )))
         }
-        CiRerunAdmission::Refused(reason) => {
-            if reason == SHARED_RETRY_BUDGET_SPENT {
-                Ok(CiRerunStep::BudgetSpent(format!(
-                    "the no-edit repair rerun is spent: {reason}"
-                )))
-            } else {
-                Ok(CiRerunStep::Wait(format!("CI retry holds: {reason}")))
-            }
-        }
+        CiRerunAdmission::Refused(reason @ CiRerunRefusal::SharedBudgetSpent) => Ok(
+            CiRerunStep::BudgetSpent(format!("the no-edit repair rerun is spent: {reason}")),
+        ),
+        CiRerunAdmission::Refused(
+            reason @ (CiRerunRefusal::InvalidAuthorization
+            | CiRerunRefusal::UnreadableReservation
+            | CiRerunRefusal::UnsupportedVersion
+            | CiRerunRefusal::ConflictingReservations
+            | CiRerunRefusal::UnreadableLegacyHistory
+            | CiRerunRefusal::MissingLegacyActionIdentity
+            | CiRerunRefusal::RequiresOwningHost
+            | CiRerunRefusal::OwningTaskTerminal
+            | CiRerunRefusal::LedgerAbsent),
+        ) => Ok(CiRerunStep::Wait(format!("CI retry holds: {reason}"))),
     }
 }

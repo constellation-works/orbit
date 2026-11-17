@@ -41,9 +41,6 @@ pub(in crate::executor::automation::vcs) enum CiRerunStep {
     BudgetSpent(String),
 }
 
-/// The admission sentence for a head that already used its one CI retry.
-const SHARED_RETRY_BUDGET_SPENT: &str = "the shared unchanged-head CI retry budget is spent";
-
 const NO_AUTHENTICATED_PLAN: &str = "CI retry adapter returned no authenticated plan";
 
 /// Whether `error` is the deserialisation failure [`authenticated_plan`]

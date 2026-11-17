@@ -660,6 +660,51 @@ fn wildcard_matches(pattern: &[u8], text: &[u8]) -> bool {
     pattern[p..].iter().all(|byte| *byte == b'*')
 }
 
+/// Why CI retry admission was refused. Consumers match the variant;
+/// `Display` preserves the historical wording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CiRerunRefusal {
+    /// The authenticated plan lacks complete or supported authorization.
+    InvalidAuthorization,
+    /// A stored reservation could not be decoded.
+    UnreadableReservation,
+    /// A stored reservation uses an unsupported schema version.
+    UnsupportedVersion,
+    /// Reservations disagree about the same provider attempt.
+    ConflictingReservations,
+    /// A legacy rerun history note could not be decoded.
+    UnreadableLegacyHistory,
+    /// A legacy rerun record lacks its action identity.
+    MissingLegacyActionIdentity,
+    /// Legacy history already spent the shared unchanged-head retry.
+    SharedBudgetSpent,
+    /// A claimed worker asked; retries require the owning host.
+    RequiresOwningHost,
+    /// The owning task is terminal.
+    OwningTaskTerminal,
+    /// This host keeps no CI retry ledger.
+    LedgerAbsent,
+}
+
+impl std::fmt::Display for CiRerunRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::InvalidAuthorization => "incomplete CI retry authorization",
+            Self::UnreadableReservation => "unreadable CI retry reservation",
+            Self::UnsupportedVersion => "unsupported CI retry reservation version",
+            Self::ConflictingReservations => "conflicting CI retry reservations for this attempt",
+            Self::UnreadableLegacyHistory => "unreadable legacy CI retry history",
+            Self::MissingLegacyActionIdentity => {
+                "legacy CI retry history omitted its action identity"
+            }
+            Self::SharedBudgetSpent => "the shared unchanged-head CI retry budget is spent",
+            Self::RequiresOwningHost => "CI retry requires the owning host",
+            Self::OwningTaskTerminal => "CI retry owning task is terminal",
+            Self::LedgerAbsent => "this host keeps no CI retry ledger",
+        })
+    }
+}
+
 /// Admission is atomic under the owning task/claim boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CiRerunAdmission {
@@ -673,7 +718,7 @@ pub enum CiRerunAdmission {
         attempts: u32,
     },
     Observe(Box<CiRerunPlan>),
-    Refused(String),
+    Refused(CiRerunRefusal),
 }
 
 /// Decide under the owning task/claim lock; unknown sends consume a reservation.
@@ -694,19 +739,17 @@ pub fn decide_ci_rerun_with_policy(
             )
         })
     {
-        return CiRerunAdmission::Refused("incomplete CI retry authorization".into());
+        return CiRerunAdmission::Refused(CiRerunRefusal::InvalidAuthorization);
     }
     let mut reserved: Vec<(CiRerunPlan, u64)> = Vec::new();
     let mut legacy_spent = false;
     for entry in history {
         if entry.event == CI_RERUN_RESERVED_EVENT {
             let Some(prior) = CiRerunPlan::from_reservation_entry(entry) else {
-                return CiRerunAdmission::Refused("unreadable CI retry reservation".into());
+                return CiRerunAdmission::Refused(CiRerunRefusal::UnreadableReservation);
             };
             if prior.schema_version != 1 {
-                return CiRerunAdmission::Refused(
-                    "unsupported CI retry reservation version".into(),
-                );
+                return CiRerunAdmission::Refused(CiRerunRefusal::UnsupportedVersion);
             }
             if prior.repository_id == plan.repository_id
                 && prior.pr_number == plan.pr_number
@@ -716,9 +759,7 @@ pub fn decide_ci_rerun_with_policy(
                     existing.run_id == prior.run_id && existing.run_attempt == prior.run_attempt
                 }) {
                     if existing != &prior {
-                        return CiRerunAdmission::Refused(
-                            "conflicting CI retry reservations for this attempt".into(),
-                        );
+                        return CiRerunAdmission::Refused(CiRerunRefusal::ConflictingReservations);
                     }
                 } else {
                     reserved.push((
@@ -729,12 +770,10 @@ pub fn decide_ci_rerun_with_policy(
             }
         } else if entry.event == CI_CHECK_RERUN_EVENT {
             let Some(prior) = CiCheckRerunRecord::from_history_note(entry.note.as_deref()) else {
-                return CiRerunAdmission::Refused("unreadable legacy CI retry history".into());
+                return CiRerunAdmission::Refused(CiRerunRefusal::UnreadableLegacyHistory);
             };
             let Some((head, _)) = prior.action_identity() else {
-                return CiRerunAdmission::Refused(
-                    "legacy CI retry history omitted its action identity".into(),
-                );
+                return CiRerunAdmission::Refused(CiRerunRefusal::MissingLegacyActionIdentity);
             };
             if head == plan.head_sha {
                 legacy_spent = true;
@@ -771,9 +810,7 @@ pub fn decide_ci_rerun_with_policy(
         return CiRerunAdmission::InfrastructureExhausted { attempts: 0 };
     }
     if legacy_spent && reserved.is_empty() {
-        return CiRerunAdmission::Refused(
-            "the shared unchanged-head CI retry budget is spent".into(),
-        );
+        return CiRerunAdmission::Refused(CiRerunRefusal::SharedBudgetSpent);
     }
     CiRerunAdmission::Reserved
 }

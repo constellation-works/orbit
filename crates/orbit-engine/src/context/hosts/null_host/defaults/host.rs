@@ -375,7 +375,7 @@ pub trait NullRuntimeHost: Send + Sync {
         _now_ms: u64,
     ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError> {
         Ok(orbit_types::workflow::CiRerunAdmission::Refused(
-            "this host keeps no CI retry ledger".into(),
+            orbit_types::workflow::CiRerunRefusal::LedgerAbsent,
         ))
     }
     fn admit_pr_infrastructure(

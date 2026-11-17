@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use orbit_types::task::{TaskDecision, TaskHistoryEntry};
 use orbit_types::workflow::{
     CI_RERUN_RESERVED_EVENT, CiInfrastructureRetryPolicy, CiRerunAdmission, CiRerunPlan,
-    CiRerunRoot, decide_ci_rerun_with_policy,
+    CiRerunRefusal, CiRerunRoot, decide_ci_rerun_with_policy,
 };
 use serde_json::json;
 
@@ -118,7 +118,7 @@ fn admission_decides_the_same_for_a_typed_and_a_legacy_reservation() {
         ];
         assert!(matches!(
             decide_ci_rerun_with_policy(&mixed, &reserved, policy, 3_000),
-            CiRerunAdmission::Refused(_)
+            CiRerunAdmission::Refused(CiRerunRefusal::ConflictingReservations)
         ));
     }
 }
@@ -141,6 +141,6 @@ fn a_foreign_decision_or_unreadable_note_is_no_reservation() {
             CiInfrastructureRetryPolicy::default(),
             1_000
         ),
-        CiRerunAdmission::Refused(_)
+        CiRerunAdmission::Refused(CiRerunRefusal::UnreadableReservation)
     ));
 }
