@@ -116,20 +116,53 @@ fn mint_wait_grant(
 }
 
 /// Best effort: a grant that cannot be removed is still refused once expired.
+/// Only files that look like grant records are candidates: the atomic store
+/// stages a mint in a sibling temp file in this same directory, so an
+/// unreadable or unparseable entry is another mint's in-flight staging file
+/// (or a newer binary's record), never an expired grant.
 fn prune_expired_grants(global_root: &Path, now: DateTime<Utc>) {
     let Ok(entries) = std::fs::read_dir(grant_dir(global_root)) else {
         return;
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        let expired = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str::<StoredWaitGrant>(&text).ok())
-            .is_none_or(|grant| grant.expires_at <= now);
+        if !is_grant_file_name(&path) {
+            continue;
+        }
+        let expired = match std::fs::read_to_string(&path) {
+            Ok(text) => match serde_json::from_str::<StoredWaitGrant>(&text) {
+                Ok(grant) => grant.expires_at <= now,
+                // Leave unreadable-shape records in place: a newer binary's
+                // grant still stands for its token, and redeem refuses what
+                // this binary cannot parse.
+                Err(_) => false,
+            },
+            Err(_) => false,
+        };
         if expired {
             let _ = remove_path_if_exists(&path);
         }
     }
+}
+
+/// Grant files are `<64 hex>.json`: the lowercase hex SHA-256 of the token.
+/// Anything else — a staging temp file (`.<grant>.<nanos>.<counter>.tmp`),
+/// a stray file — is left alone.
+fn is_grant_file_name(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    const HEX_LEN: usize = 64;
+    const SUFFIX: &str = ".json";
+    if name.len() != HEX_LEN + SUFFIX.len() {
+        return false;
+    }
+    let (hex, suffix) = name.split_at(HEX_LEN);
+    if suffix != SUFFIX {
+        return false;
+    }
+    hex.bytes()
+        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 fn redeem_wait_grant(
