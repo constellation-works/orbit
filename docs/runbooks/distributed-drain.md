@@ -1344,8 +1344,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
     `breaker_cooldown_seconds` default in the workspace catalog.
   - `orbit run show <drain-run>` prints the breaker on a `Breaker:` line:
     open or half-open, the failure count, the failure classes newest first,
-    and when it half-opens (JSON `pipeline_state.pull_breaker`: `failures`,
-    `failure_classes`, `opened_at`, `half_open_at`; absent while closed).
+    and when it half-opens (JSON `pull_breaker`: `failures`,
+    `failure_classes`, `opened_at`, `half_open_at`; null while closed).
     The refusal is the `Requests held: circuit_open: …` line, and
     `orbit run readiness` on the follower prints
     `Pull drain requests held: circuit_open: …` (JSON

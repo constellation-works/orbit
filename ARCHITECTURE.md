@@ -51,6 +51,16 @@ A deterministic script materializes reviewed repository batches; injection
 never reads unreviewed outbox data. No new store or internal crate edge is
 introduced. See the [corpus design](docs/design/workspace-agent-corpus/1_scope.md).
 
+Full run detail shares its six pull-drain sections through
+`application::job::pull_drain_detail::read_run_pull_drain_evidence`, beside
+`project_job_run`. The read uses `JobDrainPort` for distributed evidence;
+claim, settlement and crew-window DTOs live in application contracts, with
+their previous distributed exports retained. Core decides empty fallbacks
+and returns diagnostic reasons for each surface to log. Recorded-only
+HTTP detail uses the same operation without live reads and retains only its
+checkpoint breaker. CLI, HTTP and full MCP detail retain their other named
+projection profiles.
+
 ## Crates
 
 | Crate | Tier | Depends on (internal) |

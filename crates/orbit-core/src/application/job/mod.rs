@@ -91,6 +91,7 @@ pub(crate) use resume::PublishedResume;
 pub use review_hold::{ReviewHold, ReviewHoldKind};
 pub(in crate::application) use review_hook::ReviewAdmissionHook;
 pub(crate) use run::CodebaseDeliveryScan;
+pub use run::pull_drain_detail;
 pub(crate) use run::running_run_has_verified_owner;
 pub use run::{
     ActivityInvocationEvidence, BOUNDED_RUN_ANSWER_MAX_BYTES, BOUNDED_RUN_STEP_LIMIT,

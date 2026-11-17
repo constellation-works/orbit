@@ -48,6 +48,7 @@ mod failure_streak;
 mod interrupted_review;
 mod owner;
 mod projection;
+pub mod pull_drain_detail;
 mod query;
 mod queued_cancel;
 mod reconcile;

@@ -5,10 +5,10 @@
 
 use chrono::{DateTime, Utc};
 use orbit_store::contracts::{LocalPullAdmission, LocalPullPhase};
-use orbit_types::workflow::ClaimFailureClass;
 use serde::Serialize;
 
 use crate::application::contracts::SETTLEMENT_REFUSAL_REMEDY;
+pub use crate::application::contracts::{PullLeafClaim, RefusedPullSettlement};
 
 /// The first wait after the owner refuses a pending settlement while it still
 /// holds the claim [ORB-13979]. Each further refusal doubles it, up to
@@ -28,36 +28,6 @@ pub(crate) fn settlement_refusal_backoff(refusals: u32) -> std::time::Duration {
     SETTLEMENT_REFUSAL_FIRST_BACKOFF
         .saturating_mul(1 << doublings)
         .min(SETTLEMENT_REFUSAL_MAX_BACKOFF)
-}
-
-/// A settlement the owner refused while it still holds the claim
-/// [ORB-13979]: the record stays `settling`, its outcome kept, and delivery
-/// backs off rather than asking again on every pass. `orbit run show` lists
-/// these for the drain carrying them. A pass admits nothing new while a
-/// non-delivery refusal is held for its owner; a delivery-evidence refusal
-/// holds only its own settlement.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RefusedPullSettlement {
-    /// The owner's task the settlement is for.
-    pub task_id: Option<String>,
-    pub leaf_run_id: Option<String>,
-    /// The owner's host-qualified selector.
-    pub owner: String,
-    /// The drain run that admitted the claim.
-    pub drain_run_id: String,
-    /// The owner's refusal, as it answered.
-    pub reason: String,
-    /// Stable machine-readable refusal code, when the owner answered with one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
-    /// Consecutive refused deliveries.
-    pub refusals: u32,
-    pub first_refused_at: DateTime<Utc>,
-    pub last_refused_at: DateTime<Utc>,
-    /// No automatic pass delivers it before this.
-    pub retry_after: DateTime<Utc>,
-    /// What the operator does about it.
-    pub remedy: String,
 }
 
 impl RefusedPullSettlement {
@@ -143,37 +113,6 @@ impl PendingPullSettlements {
         self.oldest_recorded_at
             .map(|recorded| (now - recorded).max(chrono::Duration::zero()))
     }
-}
-
-/// The owner claim a local pull leaf run executes, as this follower recorded
-/// it. `orbit run show <leaf-run>` reads this so a leaf's run page names the
-/// task it works for, which owner holds the claim, and whether the outcome has
-/// reached that owner.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PullLeafClaim {
-    /// The owner's task the leaf executes.
-    pub task_id: Option<String>,
-    /// The owner's claim on that task.
-    pub claim_id: Option<String>,
-    /// The owner's host-qualified selector.
-    pub owner: String,
-    /// The drain run that admitted the claim.
-    pub drain_run_id: String,
-    /// Where the follower's record of this admission stands (`launched`,
-    /// `settling`, `settled`, ...).
-    pub settlement_phase: String,
-    /// Why the owner refused the settlement, once it had already ended the
-    /// claim.
-    pub refusal: Option<String>,
-    /// The owner's refusal of the pending settlement while it still holds
-    /// the claim, and when delivery is next attempted.
-    pub settlement_refusal: Option<RefusedPullSettlement>,
-    /// [ORB-14257] Why the leaf ended without its handoff, as its recorded
-    /// settlement types it; `None` until a failure or release is recorded,
-    /// and for a release of a leaf that never launched.
-    pub failure_class: Option<ClaimFailureClass>,
-    /// What the phase means for the operator.
-    pub guidance: String,
 }
 
 impl PullLeafClaim {

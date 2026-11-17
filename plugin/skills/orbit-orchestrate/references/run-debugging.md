@@ -62,7 +62,8 @@ Without `-s`, the object holds:
 - `recovery_attempts` (`state` is `unavailable`, `not_attempted` or
   `recorded`; see [Inspect recovery evidence](#inspect-recovery-evidence-before-falling-back-to-audit-files)),
   `tag_instructions`, `pull_claim` and `crew_window`, `claimed_leaves`,
-  `refused_settlements`, `catalog_layers` (each job or activity reference and
+  `refused_settlements`, `pull_occupancy` (`occupied` and `reviewing`),
+  `pull_breaker` (null while closed), `catalog_layers` (each job or activity reference and
   the layer that resolved it), `drain_summary`, `waiting_on_lock_holders`.
   Drain, claim and window fields are null or empty for a run that is not a
   pull drain or claimed leaf.
@@ -83,6 +84,14 @@ Without `-s`, the object holds:
 - `script_executions`: every script-step attempt, refusals included.
 - `worker_resource_limit`: present only when the resource watchdog recorded
   evidence for the run.
+
+The full MCP `orbit.workflow.run.show` / `orbit.workflow.run.observe` and
+HTTP run detail carry the same six pull-drain fields: `pull_claim`,
+`claimed_leaves`, `refused_settlements`, `crew_window`, `pull_occupancy` and
+`pull_breaker`. Unreadable sections are logged and remain null or empty;
+unknown occupancy is null. Recorded-only HTTP detail keeps the stored
+breaker but leaves the live sections empty. The bounded MCP view keeps its
+existing smaller profile.
 
 With `-s STEP --json` the object is `{"run_id", "job_id", "step",
 "step_output"}`. `step` holds the step's record fields and `step_output` its

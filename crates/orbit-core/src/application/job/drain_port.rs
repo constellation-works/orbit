@@ -17,11 +17,12 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::TaskCommitBoundary;
-use orbit_store::contracts::{AdmissionReceipt, LocalPullAdmission};
+use orbit_store::contracts::{AdmissionReceipt, DrainLeafOccupancy, LocalPullAdmission};
 use orbit_types::workflow::{JobRun, ResourceThrottle};
 
 use crate::application::contracts::{
-    ClaimedLeafStage, DrainClaimedLeaf, DrainEntryPoint, HostProviderHold, PullSettlementEntry,
+    ClaimedLeafStage, DrainClaimedLeaf, DrainEntryPoint, HostProviderHold, PullCrewWindow,
+    PullLeafClaim, PullSettlementEntry, RefusedPullSettlement,
 };
 
 /// Drain admission and owner coordination reads job code calls,
@@ -51,6 +52,21 @@ pub(in crate::application) trait JobDrainPort {
     /// for every other run.
     fn drain_claimed_leaves(&self, drain_run_id: &str)
     -> Result<Vec<DrainClaimedLeaf>, OrbitError>;
+
+    /// The claim the run executes, absent for an ordinary run.
+    fn run_pull_claim(&self, run_id: &str) -> Result<Option<PullLeafClaim>, OrbitError>;
+
+    /// Owner-refused settlements still held by this drain.
+    fn drain_refused_settlements(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<RefusedPullSettlement>, OrbitError>;
+
+    /// The drain's crew window, absent for an ordinary run.
+    fn drain_crew_window(&self, run_id: &str) -> Result<Option<PullCrewWindow>, OrbitError>;
+
+    /// Workspace-wide capacity competing with this pull drain.
+    fn drain_pull_occupancy(&self, run_id: &str) -> Result<Option<DrainLeafOccupancy>, OrbitError>;
 
     /// The pull admissions drain `drain_run_id` carries that still hold a
     /// slot; empty for every other run.
