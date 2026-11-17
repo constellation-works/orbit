@@ -9,7 +9,10 @@
 //! task gets normal review and validation; either way the decision is
 //! recorded in the task's history.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+use super::TaskHistoryEntry;
 
 /// Skip pre-PR, before-landing and after-landing agent review.
 pub const SKIP_REVIEW_TAG: &str = "skip-review";
@@ -71,16 +74,6 @@ impl GuardOutcome {
     pub fn permits(&self) -> bool {
         matches!(self, Self::NotConfigured | Self::Passed)
     }
-
-    fn reason(&self) -> Option<String> {
-        match self {
-            Self::Failed { detail } => Some(format!("its guard failed: {detail}")),
-            Self::MissingAtBase { guard } => Some(format!(
-                "its guard `{guard}` is missing at the base revision"
-            )),
-            _ => None,
-        }
-    }
 }
 
 /// The default allow-list: documentation (`docs/**`, Markdown outside
@@ -132,22 +125,6 @@ impl LightDeliveryJudgement {
     #[must_use]
     pub fn is_light(&self) -> bool {
         matches!(self, Self::Light { .. })
-    }
-
-    fn reason(&self, key: &str) -> String {
-        match self {
-            Self::Light { paths } => {
-                format!("every changed path ({paths}) matches `{key}`")
-            }
-            Self::Empty => "the candidate changes no path".to_string(),
-            Self::Outside { first, count: 1 } => {
-                format!("`{first}` is outside `{key}`")
-            }
-            Self::Outside { first, count } => format!(
-                "`{first}` and {} other changed path(s) are outside `{key}`",
-                count - 1
-            ),
-        }
     }
 }
 
@@ -243,41 +220,406 @@ impl LightDeliveryDecision {
     /// The task history note: the tag, the candidate, what happened and why.
     #[must_use]
     pub fn note(&self) -> String {
-        let tag = &self.tag;
-        let candidate = short(&self.candidate);
-        if self.applies() {
-            let skipped = if self.skips_review() {
-                "no agent review runs before the pull request, before landing or after landing"
-            } else {
-                "no local validation command runs"
-            };
-            let guard_note = if matches!(self.guard, GuardOutcome::Passed) {
-                " and its guard passed"
-            } else {
-                ""
-            };
-            return format!(
-                "`{tag}` applied to candidate {candidate}: {}{guard_note}, so {skipped}.",
-                self.judgement.reason(&self.profile_key)
-            );
-        }
-        let normal = if self.skips_review() {
-            "review"
-        } else {
-            "validation"
-        };
-        let reason = if !self.untagged.is_empty() {
-            format!(
-                "{} in this delivery do(es) not carry it",
-                self.untagged.join(", ")
-            )
-        } else if let Some(reason) = self.guard.reason() {
-            reason
-        } else {
-            self.judgement.reason(&self.profile_key)
-        };
-        format!("`{tag}` ignored for candidate {candidate}: {reason}; normal {normal} applies.")
+        RecordedLightDeliveryDecision::from_decision(self).note()
     }
+}
+
+/// How a recorded light-delivery decision turned out, as its history event
+/// and note render it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecordedLightDeliveryOutcome {
+    /// The tag applied; `guard_passed` when the note says the guard passed.
+    Applied { guard_passed: bool },
+    /// The tag was ignored and normal review or validation applies.
+    Ignored,
+}
+
+/// The one reason a recorded light-delivery note gives, in rendering
+/// precedence: untagged tasks, then the guard, then the path judgement.
+/// Each variant holds only what the note renders.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecordedLightDeliveryReason {
+    /// Delivered tasks that do not carry the tag.
+    Untagged { tasks: Vec<String> },
+    /// The mapped tag's guard failed; `detail` names the exit or cause.
+    GuardFailed { detail: String },
+    /// The mapped tag's guard is absent at the base revision.
+    GuardMissingAtBase { guard: String },
+    /// Every one of `paths` changed paths matches `profile_key`.
+    Light { paths: usize, profile_key: String },
+    /// The candidate changes no path.
+    Empty,
+    /// `count` changed paths, `first` among them, are outside `profile_key`.
+    Outside {
+        first: String,
+        count: usize,
+        profile_key: String,
+    },
+}
+
+/// The replay identity of a recorded light-delivery decision: exactly the
+/// information its history event and note carry, so two decisions share a
+/// key exactly when they would record the same event and note. The
+/// candidate is the abbreviated commit the note shows. Equality uses the
+/// encoded event and note, preserving legacy replay identity even when a
+/// path or profile key contains note punctuation.
+#[derive(Debug, Clone)]
+pub struct LightDeliveryReplayKey {
+    tag: String,
+    /// The candidate commit as recorded (its first 12 characters).
+    candidate: String,
+    outcome: RecordedLightDeliveryOutcome,
+    reason: RecordedLightDeliveryReason,
+    identity_note: String,
+}
+
+impl PartialEq for LightDeliveryReplayKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.event() == other.event() && self.identity_note == other.identity_note
+    }
+}
+
+impl Eq for LightDeliveryReplayKey {}
+
+impl LightDeliveryReplayKey {
+    /// The recorded tag.
+    #[must_use]
+    pub fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    /// The abbreviated candidate commit shown in the note.
+    #[must_use]
+    pub fn candidate(&self) -> &str {
+        &self.candidate
+    }
+
+    /// The recorded applied or ignored outcome.
+    #[must_use]
+    pub fn outcome(&self) -> &RecordedLightDeliveryOutcome {
+        &self.outcome
+    }
+
+    /// The typed reason parsed from the note.
+    #[must_use]
+    pub fn reason(&self) -> &RecordedLightDeliveryReason {
+        &self.reason
+    }
+
+    fn event(&self) -> &'static str {
+        match self.outcome {
+            RecordedLightDeliveryOutcome::Applied { .. } => LIGHT_DELIVERY_APPLIED_EVENT,
+            RecordedLightDeliveryOutcome::Ignored => LIGHT_DELIVERY_IGNORED_EVENT,
+        }
+    }
+
+    fn render_note(&self) -> String {
+        let skips_review = self.tag != SKIP_VALIDATION_TAG;
+        let reason = render_reason(&self.reason);
+        match &self.outcome {
+            RecordedLightDeliveryOutcome::Applied { guard_passed } => {
+                let skipped = applied_skipped(skips_review);
+                let guard_note = if *guard_passed { GUARD_PASSED_NOTE } else { "" };
+                format!(
+                    "`{}{APPLIED_INFIX}{}: {reason}{guard_note}, so {skipped}.",
+                    self.tag, self.candidate
+                )
+            }
+            RecordedLightDeliveryOutcome::Ignored => {
+                let normal = ignored_normal(skips_review);
+                format!(
+                    "`{}{IGNORED_INFIX}{}: {reason}; normal {normal} applies.",
+                    self.tag, self.candidate
+                )
+            }
+        }
+    }
+}
+
+impl LightDeliveryReplayKey {
+    /// The key `decision` records.
+    #[must_use]
+    pub fn from_decision(decision: &LightDeliveryDecision) -> Self {
+        let applied = decision.applies();
+        let judgement_reason = || match &decision.judgement {
+            LightDeliveryJudgement::Light { paths } => RecordedLightDeliveryReason::Light {
+                paths: *paths,
+                profile_key: decision.profile_key.clone(),
+            },
+            LightDeliveryJudgement::Empty => RecordedLightDeliveryReason::Empty,
+            LightDeliveryJudgement::Outside { first, count } => {
+                RecordedLightDeliveryReason::Outside {
+                    first: first.clone(),
+                    count: *count,
+                    profile_key: decision.profile_key.clone(),
+                }
+            }
+        };
+        let (outcome, reason) = if applied {
+            (
+                RecordedLightDeliveryOutcome::Applied {
+                    guard_passed: matches!(decision.guard, GuardOutcome::Passed),
+                },
+                judgement_reason(),
+            )
+        } else {
+            let reason = if !decision.untagged.is_empty() {
+                RecordedLightDeliveryReason::Untagged {
+                    tasks: decision.untagged.clone(),
+                }
+            } else {
+                match &decision.guard {
+                    GuardOutcome::Failed { detail } => RecordedLightDeliveryReason::GuardFailed {
+                        detail: detail.clone(),
+                    },
+                    GuardOutcome::MissingAtBase { guard } => {
+                        RecordedLightDeliveryReason::GuardMissingAtBase {
+                            guard: guard.clone(),
+                        }
+                    }
+                    GuardOutcome::NotConfigured | GuardOutcome::NotRun | GuardOutcome::Passed => {
+                        judgement_reason()
+                    }
+                }
+            };
+            (RecordedLightDeliveryOutcome::Ignored, reason)
+        };
+        let mut key = Self {
+            tag: decision.tag.clone(),
+            candidate: short(&decision.candidate).to_string(),
+            outcome,
+            reason,
+            identity_note: String::new(),
+        };
+        key.identity_note = key.render_note();
+        key
+    }
+}
+
+/// A light-delivery decision as task history records it: the one encoder
+/// every history writer uses, and the one compatibility codec that reads
+/// the recorded event and note back into a [`LightDeliveryReplayKey`]. The
+/// persisted bytes are the event name and prose note; nothing else is
+/// stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedLightDeliveryDecision {
+    key: LightDeliveryReplayKey,
+}
+
+const APPLIED_INFIX: &str = "` applied to candidate ";
+const IGNORED_INFIX: &str = "` ignored for candidate ";
+const GUARD_PASSED_NOTE: &str = " and its guard passed";
+const UNTAGGED_SUFFIX: &str = " in this delivery do(es) not carry it";
+const GUARD_FAILED_PREFIX: &str = "its guard failed: ";
+const GUARD_MISSING_PREFIX: &str = "its guard `";
+const GUARD_MISSING_SUFFIX: &str = "` is missing at the base revision";
+const EMPTY_REASON: &str = "the candidate changes no path";
+const LIGHT_PREFIX: &str = "every changed path (";
+const LIGHT_INFIX: &str = ") matches `";
+const OUTSIDE_ONE_INFIX: &str = "` is outside `";
+const OUTSIDE_MANY_INFIX: &str = " other changed path(s) are outside `";
+
+impl RecordedLightDeliveryDecision {
+    /// The record `decision` writes.
+    #[must_use]
+    pub fn from_decision(decision: &LightDeliveryDecision) -> Self {
+        Self {
+            key: LightDeliveryReplayKey::from_decision(decision),
+        }
+    }
+
+    /// The decision `entry` records, or `None` when it is not a
+    /// light-delivery event or its note is not one this codec renders
+    /// byte for byte. Existing history is read as written, never rewritten.
+    #[must_use]
+    pub fn decode(entry: &TaskHistoryEntry) -> Option<Self> {
+        let applied = match entry.event.as_str() {
+            LIGHT_DELIVERY_APPLIED_EVENT => true,
+            LIGHT_DELIVERY_IGNORED_EVENT => false,
+            _ => return None,
+        };
+        let note = entry.note.as_deref()?;
+        let key = if applied {
+            decode_applied(note)?
+        } else {
+            decode_ignored(note)?
+        };
+        let mut key = key;
+        // Only a note this codec renders identically decodes, so key
+        // equality is exactly the recorded event-and-note equality.
+        if key.render_note() != note {
+            return None;
+        }
+        key.identity_note = note.to_string();
+        Some(Self { key })
+    }
+
+    /// The replay identity this record carries.
+    #[must_use]
+    pub fn replay_key(&self) -> &LightDeliveryReplayKey {
+        &self.key
+    }
+
+    /// The history event this record writes.
+    #[must_use]
+    pub fn event(&self) -> &'static str {
+        self.key.event()
+    }
+
+    /// The history note this record writes: the tag, the abbreviated
+    /// candidate, what happened and why.
+    #[must_use]
+    pub fn note(&self) -> String {
+        self.key.identity_note.clone()
+    }
+
+    /// The history entry recording this decision, written by `by` at `at`.
+    #[must_use]
+    pub fn history_entry(&self, at: DateTime<Utc>, by: impl Into<String>) -> TaskHistoryEntry {
+        TaskHistoryEntry::new(at, by, self.event()).with_note(Some(self.note()))
+    }
+}
+
+fn applied_skipped(skips_review: bool) -> &'static str {
+    if skips_review {
+        "no agent review runs before the pull request, before landing or after landing"
+    } else {
+        "no local validation command runs"
+    }
+}
+
+fn ignored_normal(skips_review: bool) -> &'static str {
+    if skips_review { "review" } else { "validation" }
+}
+
+fn render_reason(reason: &RecordedLightDeliveryReason) -> String {
+    match reason {
+        RecordedLightDeliveryReason::Untagged { tasks } => {
+            format!("{}{UNTAGGED_SUFFIX}", tasks.join(", "))
+        }
+        RecordedLightDeliveryReason::GuardFailed { detail } => {
+            format!("{GUARD_FAILED_PREFIX}{detail}")
+        }
+        RecordedLightDeliveryReason::GuardMissingAtBase { guard } => {
+            format!("{GUARD_MISSING_PREFIX}{guard}{GUARD_MISSING_SUFFIX}")
+        }
+        RecordedLightDeliveryReason::Light { paths, profile_key } => {
+            format!("{LIGHT_PREFIX}{paths}{LIGHT_INFIX}{profile_key}`")
+        }
+        RecordedLightDeliveryReason::Empty => EMPTY_REASON.to_string(),
+        RecordedLightDeliveryReason::Outside {
+            first,
+            count: 1,
+            profile_key,
+        } => format!("`{first}{OUTSIDE_ONE_INFIX}{profile_key}`"),
+        RecordedLightDeliveryReason::Outside {
+            first,
+            count,
+            profile_key,
+        } => format!(
+            "`{first}` and {}{OUTSIDE_MANY_INFIX}{profile_key}`",
+            count - 1
+        ),
+    }
+}
+
+/// `tag` and the rest of a note after the `` `{tag}<infix>{candidate}: ``
+/// head, with the candidate.
+fn decode_head<'a>(note: &'a str, infix: &str) -> Option<(&'a str, &'a str, &'a str)> {
+    let (tag, rest) = note.strip_prefix('`')?.split_once(infix)?;
+    let (candidate, rest) = rest.split_once(": ")?;
+    Some((tag, candidate, rest))
+}
+
+fn decode_applied(note: &str) -> Option<LightDeliveryReplayKey> {
+    let (tag, candidate, rest) = decode_head(note, APPLIED_INFIX)?;
+    let skipped = applied_skipped(tag != SKIP_VALIDATION_TAG);
+    let rest = rest
+        .strip_suffix('.')?
+        .strip_suffix(skipped)?
+        .strip_suffix(", so ")?;
+    let (rest, guard_passed) = match rest.strip_suffix(GUARD_PASSED_NOTE) {
+        Some(rest) => (rest, true),
+        None => (rest, false),
+    };
+    let reason = decode_light(rest)?;
+    Some(LightDeliveryReplayKey {
+        tag: tag.to_string(),
+        candidate: candidate.to_string(),
+        outcome: RecordedLightDeliveryOutcome::Applied { guard_passed },
+        reason,
+        identity_note: String::new(),
+    })
+}
+
+fn decode_ignored(note: &str) -> Option<LightDeliveryReplayKey> {
+    let (tag, candidate, rest) = decode_head(note, IGNORED_INFIX)?;
+    let normal = ignored_normal(tag != SKIP_VALIDATION_TAG);
+    let reason = rest
+        .strip_suffix(" applies.")?
+        .strip_suffix(normal)?
+        .strip_suffix("; normal ")?;
+    let reason = if let Some(tasks) = reason.strip_suffix(UNTAGGED_SUFFIX) {
+        RecordedLightDeliveryReason::Untagged {
+            tasks: tasks.split(", ").map(str::to_string).collect(),
+        }
+    } else if let Some(detail) = reason.strip_prefix(GUARD_FAILED_PREFIX) {
+        RecordedLightDeliveryReason::GuardFailed {
+            detail: detail.to_string(),
+        }
+    } else if let Some(guard) = reason
+        .strip_prefix(GUARD_MISSING_PREFIX)
+        .and_then(|rest| rest.strip_suffix(GUARD_MISSING_SUFFIX))
+    {
+        RecordedLightDeliveryReason::GuardMissingAtBase {
+            guard: guard.to_string(),
+        }
+    } else if reason == EMPTY_REASON {
+        RecordedLightDeliveryReason::Empty
+    } else if reason.starts_with(LIGHT_PREFIX) {
+        decode_light(reason)?
+    } else {
+        decode_outside(reason)?
+    };
+    Some(LightDeliveryReplayKey {
+        tag: tag.to_string(),
+        candidate: candidate.to_string(),
+        outcome: RecordedLightDeliveryOutcome::Ignored,
+        reason,
+        identity_note: String::new(),
+    })
+}
+
+fn decode_light(reason: &str) -> Option<RecordedLightDeliveryReason> {
+    let (paths, profile_key) = reason
+        .strip_prefix(LIGHT_PREFIX)?
+        .strip_suffix('`')?
+        .split_once(LIGHT_INFIX)?;
+    Some(RecordedLightDeliveryReason::Light {
+        paths: paths.parse().ok()?,
+        profile_key: profile_key.to_string(),
+    })
+}
+
+fn decode_outside(reason: &str) -> Option<RecordedLightDeliveryReason> {
+    let body = reason.strip_prefix('`')?.strip_suffix('`')?;
+    if let Some((head, profile_key)) = body.rsplit_once(OUTSIDE_MANY_INFIX)
+        && let Some((first, others)) = head.rsplit_once("` and ")
+        && let Ok(others) = others.parse::<usize>()
+        && let Some(count) = others.checked_add(1)
+    {
+        return Some(RecordedLightDeliveryReason::Outside {
+            first: first.to_string(),
+            count,
+            profile_key: profile_key.to_string(),
+        });
+    }
+    let (first, profile_key) = body.rsplit_once(OUTSIDE_ONE_INFIX)?;
+    Some(RecordedLightDeliveryReason::Outside {
+        first: first.to_string(),
+        count: 1,
+        profile_key: profile_key.to_string(),
+    })
 }
 
 fn short(commit: &str) -> &str {
