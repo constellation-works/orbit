@@ -452,6 +452,12 @@ are authenticated for brokered calls; ordinary host calls remain host-attested.
 exactly as the in-process host does and returns only `ok`/`output`/`error`. `entry_point` is a
 hint for the audit row; it grants nothing.
 
+A failed or refused reply for a ledgered resident write admitted before it failed also carries
+the write's already-assigned key as an optional top-level `action_key` on the error envelope
+(mirrored inside `error`; ORB-25284). It is omitted when no key was assigned — pre-admission
+denials and non-ledgered calls — and changes no code, status or retryability, so clients that
+ignore unknown fields keep working.
+
 ### 4.4 Execution and audit
 
 The broker runs the call through the same audited dispatch the in-process path uses. The audit

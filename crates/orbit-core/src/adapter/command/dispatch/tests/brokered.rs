@@ -828,8 +828,19 @@ impl BrokerDispatch for HostWritableOrbit {
         peer_pid: u32,
         cancelled: Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<Value, OrbitError> {
+        self.call_with_action_key(request, peer_pid, cancelled).0
+    }
+
+    fn call_with_action_key(
+        &self,
+        request: BrokerRequest,
+        peer_pid: u32,
+        cancelled: Arc<std::sync::atomic::AtomicBool>,
+    ) -> (Result<Value, OrbitError>, Option<String>) {
         Self::set_mode(&self.orbit_dir, 0o755);
-        let result = self.dispatch.call(request, peer_pid, cancelled);
+        let result = self
+            .dispatch
+            .call_with_action_key(request, peer_pid, cancelled);
         Self::set_mode(&self.orbit_dir, 0o555);
         result
     }
@@ -1116,5 +1127,135 @@ fn a_sandboxed_resident_raise_creates_the_request_through_its_broker() {
             .as_str()
             .is_some_and(|message| message.contains("only a resident cycle's run")),
         "{refused}"
+    );
+}
+
+/// ORB-25284: a ledgered write refused after admission (`PolicyDenied`)
+/// and one failing with a non-`RemoteTool` error each carry their stored
+/// key in the broker envelope's `action_key`; a pre-admission denial and
+/// a successful reply carry none.
+#[test]
+fn brokered_resident_failed_and_refused_replies_carry_their_action_key() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &brokered_resident_failed_and_refused_replies_carry_their_action_key,
+    )) {
+        return;
+    }
+    use crate::application::task::TaskAddParams;
+    use orbit_types::workflow::{ActivityToolDenyPolicy, RESIDENT_ACTION_EVENT, ResidentActionRow};
+
+    const RAISE: &str = "orbit.decision.raise";
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.workspace_root.join("config.toml"),
+        "[crews.dk]\nkind = \"human\"\ndescription = \"Daniel's own work\"\n",
+    )
+    .expect("human crew");
+    let runtime = fixture.runtime();
+    let add = |crew: &str, title: &str| {
+        runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: "Which export format ships first?".into(),
+                acceptance_criteria: vec!["Decided".into()],
+                crew: Some(crew.into()),
+                ..Default::default()
+            })
+            .expect("task")
+            .id
+            .to_string()
+    };
+    let human_task = add("dk", "Decide the export format");
+    let agent_task = add("sol", "Build the export");
+    let workspace = runtime.workspace_id().expect("workspace id");
+    let raise = |task_id: &str| {
+        json!({
+            "workspace": workspace,
+            "task_id": task_id,
+            "question": "Which export format ships first?",
+            "options": [
+                {"label": "CSV", "consequence": "The export writes CSV.", "recommended": true},
+                {"label": "JSON", "consequence": "The export writes JSON."},
+            ],
+        })
+    };
+    let cwd = std::env::current_dir()
+        .and_then(std::fs::canonicalize)
+        .expect("test cwd");
+
+    let mut cycle = resident_cycle_run(&fixture, &runtime, &["dispatch"]);
+    cycle.workspace = Some(workspace.clone());
+    cycle.allowed_tools = Vec::new();
+    cycle.tool_deny_policy = Some(ActivityToolDenyPolicy {
+        activity: "resident_cycle".to_string(),
+        disallow_list: vec!["orbit.command.exec".to_string()],
+    });
+    let mandate = cycle.task_id.clone().expect("mandate");
+    let serving = serve(&fixture, cycle);
+    let ledger_keys = |tool: &str| -> Vec<String> {
+        let mut keys: Vec<String> = Vec::new();
+        for row in serving
+            .runtime
+            .get_task_history(&mandate)
+            .expect("history")
+            .iter()
+            .filter(|entry| entry.event == RESIDENT_ACTION_EVENT)
+            .filter_map(|entry| {
+                serde_json::from_str::<ResidentActionRow>(entry.note.as_deref()?).ok()
+            })
+            .filter(|row| row.tool == tool)
+        {
+            if !keys.contains(&row.key) {
+                keys.push(row.key);
+            }
+        }
+        keys
+    };
+
+    // Post-admission refusal: the guard ledgers the raise, then the
+    // handler refuses it with `PolicyDenied`.
+    let refused = serving.call(request(RAISE, raise(&agent_task), &cwd));
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert_eq!(
+        refused["error"]["code"], "plugin_broker_refused",
+        "{refused}"
+    );
+    assert_eq!(refused["error"]["retryable"], false, "{refused}");
+    let raise_keys = ledger_keys(RAISE);
+    assert_eq!(raise_keys.len(), 1, "{raise_keys:?}");
+    assert_eq!(refused["action_key"], raise_keys[0], "{refused}");
+    assert_eq!(refused["error"]["action_key"], raise_keys[0], "{refused}");
+
+    // Post-admission non-RemoteTool failure: the guard ledgers the ship,
+    // then submission fails for the missing task.
+    let failed = serving.call(request(
+        BROKERED_RESIDENT_SHIP_TOOL,
+        json!({"task_ids": ["ORB-1"], "mode": "local", "model": "codex"}),
+        &cwd,
+    ));
+    assert_eq!(failed["ok"], false, "{failed}");
+    assert_eq!(
+        failed["error"]["code"], "plugin_broker_call_failed",
+        "{failed}"
+    );
+    let ship_keys = ledger_keys(BROKERED_RESIDENT_SHIP_TOOL);
+    assert_eq!(ship_keys.len(), 1, "{ship_keys:?}");
+    assert_eq!(failed["action_key"], ship_keys[0], "{failed}");
+
+    // Pre-admission denial (cwd outside the worktree): no key was
+    // assigned, so the envelope carries no `action_key`.
+    let denied = serving.call(request(RAISE, raise(&human_task), &fixture.global_root));
+    assert_eq!(denied["ok"], false, "{denied}");
+    assert!(denied.get("action_key").is_none(), "{denied}");
+    assert!(denied["error"].get("action_key").is_none(), "{denied}");
+    assert_eq!(ledger_keys(RAISE).len(), 1, "no new ledger row");
+
+    // A successful reply keeps its key in the output, not the envelope.
+    let raised = serving.call(request(RAISE, raise(&human_task), &cwd));
+    assert_eq!(raised["ok"], true, "{raised}");
+    assert!(raised.get("action_key").is_none(), "{raised}");
+    assert!(
+        raised["output"]["resident_action_key"].is_string(),
+        "{raised}"
     );
 }

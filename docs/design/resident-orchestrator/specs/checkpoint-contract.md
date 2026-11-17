@@ -40,12 +40,20 @@ Existing object detail fields are retained, with `resident_action_key` reserved 
 ledger key. Absent or null detail becomes an object containing the key; other detail values
 are retained as `remote_detail` inside that object.
 
-Refusals and errors of other variants still lack a reply key; ORB-25284 tracks that remaining
-carrier gap. In particular, a production `gh` merge failure with HTTP 502 is `Execution` when
-the resident action closes. The outer broker later exposes it as
-`plugin_broker_call_failed`/`RemoteTool`, after the opportunity to attach the key. That route
-remains part of the gap. Pre-admission denials have no ledger key. A failed reply does not
-prove a merge was refused or completed: read the forge before deciding what happened.
+Every other post-admission failure or refusal of a ledgered write carries the same stored
+key in the broker error envelope's optional top-level `action_key` field (mirrored inside
+`error`), set for `PolicyDenied` refusals (`plugin_broker_refused`), `Execution` and other
+non-`RemoteTool` failures (`plugin_broker_call_failed`) alike (ORB-25284). Daniel chose this
+field, option (a), on 2026-11-16 ("Yes, field (a)"): a top-level envelope field is additive —
+omitted when there is no key, so clients that ignore unknown fields keep working — and needs
+no new `OrbitError` variant, detail reshaping or ledger change, while leaving error code,
+status and retryability unchanged. `RemoteTool` replies may carry the key in both places.
+The broker client keeps the key on the reconstructed error's payload as `action_key`.
+Pre-admission denials have no ledger key and carry no `action_key`; no key is minted for
+them. A production `gh` merge failure with HTTP 502 is `Execution` when the resident action
+closes, so the envelope now carries its key as `plugin_broker_call_failed` with `action_key`.
+A failed reply does not prove a merge was refused or completed: read the forge before
+deciding what happened.
 
 ### Action ledger
 
@@ -225,6 +233,6 @@ Designed by claude (claude-opus-5-5) for [ORB-21229]; built by [ORB-21243] and [
 - [ORB-21244] — core-assigned action keys and the action ledger (slice 3)
 - [ORB-21246] — implements brief reconstruction and the continuity adapter
 - ORB-25279 — retains action keys in post-admission `RemoteTool` failure detail
-- ORB-25284 — tracks the reply-key carrier for refusals and other error variants
+- ORB-25284 — carries action keys on failed and refused broker replies in the envelope `action_key`
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

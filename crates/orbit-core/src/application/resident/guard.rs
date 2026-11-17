@@ -69,6 +69,29 @@ pub(crate) struct ResidentActionTicket {
     row: ResidentActionRow,
 }
 
+std::thread_local! {
+    /// The key of the most recent ledgered write on this thread that
+    /// failed or was refused. The broker dispatch on the same thread
+    /// takes it to fill the envelope `action_key` (ORB-25284); other
+    /// callers leave it, and the next broker call clears it first.
+    static FAILED_RESIDENT_ACTION_KEY: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Drop any stale ledger key left on this thread.
+pub(crate) fn clear_failed_resident_action_key() {
+    FAILED_RESIDENT_ACTION_KEY.with(|slot| *slot.borrow_mut() = None);
+}
+
+/// Take the ledger key a ledgered write on this thread failed with.
+pub(crate) fn take_failed_resident_action_key() -> Option<String> {
+    FAILED_RESIDENT_ACTION_KEY.with(|slot| slot.borrow_mut().take())
+}
+
+fn record_failed_resident_action_key(key: &str) {
+    FAILED_RESIDENT_ACTION_KEY.with(|slot| *slot.borrow_mut() = Some(key.to_string()));
+}
+
 /// Every action row recorded under `cycle`, latest state per key, in key order.
 pub(crate) fn action_rows(history: &[TaskHistoryEntry], cycle: &str) -> Vec<ResidentActionRow> {
     let mut rows: Vec<ResidentActionRow> = Vec::new();
@@ -487,7 +510,8 @@ impl OrbitRuntime {
 
     /// Record how a ledgered write ended. The key travels back in the
     /// response (or RemoteTool error detail) so the cycle can cite it in its
-    /// checkpoint. Other error variants have no compatible detail carrier.
+    /// checkpoint. Other error variants have no compatible detail carrier,
+    /// so their key is stashed for the broker envelope `action_key`.
     pub(crate) fn close_resident_action(
         &self,
         ticket: ResidentActionTicket,
@@ -527,6 +551,9 @@ impl OrbitRuntime {
                 };
             }
             detail["resident_action_key"] = json!(row.key);
+        }
+        if result.is_err() {
+            record_failed_resident_action_key(&row.key);
         }
         self.append_resident_action_row(&task_id, &row)
     }
