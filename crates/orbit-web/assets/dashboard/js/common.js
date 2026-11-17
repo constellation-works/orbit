@@ -953,6 +953,22 @@ export function bindTaskLink(link, taskId, { workspace = currentWorkspace } = {}
     event.stopPropagation();
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
+    // A task link clicked while a task pane is already open on the Tasks
+    // list switches tasks: replace the open entry instead of stacking one
+    // entry per task, so Back still returns to the list (ORB-25406).
+    const currentHash = window.location.hash || "";
+    const currentQuery = currentHash.includes("?")
+      ? new URLSearchParams(currentHash.slice(currentHash.indexOf("?") + 1))
+      : new URLSearchParams();
+    const paneAlreadyOpen = currentHash.startsWith("#tasks")
+      && !currentHash.startsWith("#tasks/")
+      && currentQuery.has("open")
+      && !(workspace && workspace !== currentWorkspace);
+    if (paneAlreadyOpen) {
+      history.replaceState(history.state, "", `#tasks?open=${encodeURIComponent(taskId)}`);
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      return;
+    }
     if (workspace && workspace !== currentWorkspace) {
       // The source entry keeps its own scope: write it down as it is, change
       // scope in memory (its listeners clear any open task, so before the

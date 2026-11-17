@@ -172,11 +172,15 @@ export function revealTaskRow(taskId, block = "nearest") {
 // rewrap, so selection never costs the operator their place.
 export function selectTask(taskId, context, { anchor = null, workspace = null } = {}) {
   const top = anchor && typeof anchor.getBoundingClientRect === "function" ? anchor.getBoundingClientRect().top : null;
+  // Opening from the list adds one history entry; switching while the pane
+  // is already open replaces that entry, so Back returns to the list rather
+  // than to each task viewed (choice noted for ORB-25406).
+  const hadPane = Boolean(shownTaskId() || taskState.openTaskId);
   taskState.pinnedExternalTask = null;
   taskState.selectedTaskId = taskId;
   const owner = taskList(context).find(task => task.id === taskId && (!workspace || task.workspace_id === workspace));
   taskState.selectedTaskWorkspace = workspace || owner?.workspace_id || getWorkspace() || null;
-  setOpenTask(taskId);
+  setOpenTask(taskId, { history: hadPane ? "replace" : "push" });
   rerender(context);
   keepRowInPlace(taskId, top);
 }
@@ -290,13 +294,19 @@ function parseOpenTaskId(value) {
   return /^[\w.-]{1,64}$/.test(id) ? id : null;
 }
 
-// Mirror the open task into the current `#tasks` entry. The entry is replaced,
-// not pushed, so toggling a row never adds a Back step.
-function writeOpenTaskToUrl(taskId) {
+// Mirror the open task into the `#tasks` address. `push` (opening from the
+// list with no pane showing) adds exactly one entry carrying the already
+// normalized hash, so Back closes the pane and Forward reopens it, and Back
+// never lands on a spelling the router would rewrite forward again.
+// `replace` (switching tasks, closing, or any router-driven sync) rewrites
+// the current entry instead of stacking one per task. Closing therefore
+// replaces the open entry with the list hash — the ×/Escape choice for
+// ORB-25406 — so no stale `open=` entry is left behind.
+function writeOpenTaskToUrl(taskId, mode = "replace") {
   const hash = window.location.hash || "";
   const split = hash.indexOf("?");
   const route = split < 0 ? hash : hash.slice(0, split);
-  if (route !== "#tasks" || typeof window.history?.replaceState !== "function") return;
+  if (route !== "#tasks") return;
   const params = new URLSearchParams(split < 0 ? "" : hash.slice(split + 1));
   if (taskId) params.set("open", taskId);
   else params.delete("open");
@@ -305,15 +315,25 @@ function writeOpenTaskToUrl(taskId) {
   else params.delete("comment");
   const query = params.toString();
   const next = query ? `#tasks?${query}` : "#tasks";
-  if (next !== hash) window.history.replaceState(null, "", next);
+  if (next === hash) return;
+  if (mode === "push" && typeof window.history?.pushState === "function") {
+    window.history.pushState(window.history.state, "", next);
+  } else if (typeof window.history?.replaceState === "function") {
+    window.history.replaceState(window.history.state, "", next);
+  } else {
+    return;
+  }
+  // The write fires no event; keep the router's last-routed address in step
+  // so a later Back to the list is not skipped as already routed.
+  recordRoutedHref();
 }
 
-export function setOpenTask(taskId) {
+export function setOpenTask(taskId, { history = "replace" } = {}) {
   openTaskGeneration += 1;
   taskState.openTaskId = taskId;
   // A comment link names one task's thread; another task drops it.
   if (taskState.commentTarget && taskState.commentTarget.taskId !== taskId) taskState.commentTarget = null;
-  writeOpenTaskToUrl(taskId);
+  writeOpenTaskToUrl(taskId, history);
 }
 
 // Every path that closes a task detail goes through here so the URL stops
@@ -569,6 +589,19 @@ export function applyTasksHashQuery(query, context, page = null) {
   // filter the operator already has; reading it as "no filter" would reset
   // the chips to their defaults.
   if (open && !["status", "ready", "pilot", "crew", "waiting"].some((key) => query.has(key))) return;
+  // Back/Forward between the list and its open pane (or between panes via a
+  // replaced entry) changes only `open`/`comment`: the filter, pagination
+  // and scroll the list already has stay, so the list returns as it was.
+  const withoutOpen = (qs) => {
+    const p = new URLSearchParams(qs);
+    p.delete("open");
+    p.delete("comment");
+    p.delete("dock");
+    p.delete("dockMode");
+    p.delete("panel");
+    return p.toString();
+  };
+  if (withoutOpen(query.toString()) === withoutOpen(current.split("?")[1] || "")) return;
   // A replay names the list already shown. Back fires popstate and then
   // hashchange for the address the router just normalized; the second must
   // not send the list to its first page and top.
