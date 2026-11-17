@@ -54,6 +54,8 @@ mod build_budget;
 #[cfg(unix)]
 mod contract_correction;
 #[cfg(unix)]
+mod declared_blocker;
+#[cfg(unix)]
 mod fleet_notices;
 #[cfg(unix)]
 mod incomplete_continuation;

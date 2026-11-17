@@ -7,6 +7,13 @@
 //! [`TASK_BLOCKED_BY_AGENT_EVENT`] and leaves the worktree uncommitted,
 //! with no `[BLOCKED]` pull request.
 //!
+//! An implementer that instead returns a `status: "failed"` envelope whose
+//! `error.code` names a task-level stop is normalized the same way at the
+//! step boundary ([`agent_blocker_from_declared_failure`]): the code is the
+//! kind and the error message is the evidence. Codes Orbit already reserves
+//! for another outcome (provider, transient, typed holds and
+//! `implementation_incomplete`) keep their existing paths.
+//!
 //! A malformed shape is not a blocker. The step keeps its ordinary outcome.
 //!
 //! Step recovery declares the same blocker through an `external_blocker`
@@ -173,6 +180,98 @@ pub fn agent_blocker_from_output(output: &Value) -> Option<AgentBlocker> {
         return None;
     }
     let evidence = blocker.get("evidence").and_then(Value::as_str)?.trim();
+    if evidence.is_empty() {
+        return None;
+    }
+    Some(AgentBlocker {
+        kind: kind.to_string(),
+        evidence: bounded_text(evidence, MAX_EVIDENCE_BYTES),
+    })
+}
+
+/// `error.code` values a declared-failed envelope may carry that already
+/// name an Orbit outcome, so they are never re-read as a blocker kind.
+/// This is the exclusion list the step boundary applies before
+/// [`agent_blocker_from_declared_failure`]: the typed step codes
+/// (`owner_route_unavailable`, `owner_signoff_required`,
+/// `footprint_unavailable`), the provider classes (`provider_unavailable`,
+/// `provider_limit`, `provider_capacity`, `provider_refusal`), the
+/// validation-environment pair, the baseline-red and forge holds,
+/// `transient_failure` and `stalled`, the image-input codes, the held-run
+/// codes, the synthesized CLI terminal codes, `task_blocked_by_agent` and
+/// `upgrade_pending` (both already hold under their own classification),
+/// `worktree_mismatch` (the envelope's own mismatch failure), and
+/// `implementation_incomplete` (its bounded continuation path).
+const RESERVED_DECLARED_FAILURE_CODES: &[&str] = &[
+    "implementation_incomplete",
+    TASK_BLOCKED_BY_AGENT_ERROR_CODE,
+    UPGRADE_PENDING_ERROR_CODE,
+    super::state::OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
+    super::state::OWNER_SIGNOFF_REQUIRED_ERROR_CODE,
+    super::state::FOOTPRINT_UNAVAILABLE_ERROR_CODE,
+    super::state::PROVIDER_UNAVAILABLE_ERROR_CODE,
+    super::state::PROVIDER_LIMIT_ERROR_CODE,
+    super::state::PROVIDER_CAPACITY_ERROR_CODE,
+    super::state::PROVIDER_REFUSAL_ERROR_CODE,
+    super::state::VALIDATION_ENVIRONMENT_ERROR_CODE,
+    super::state::VALIDATION_ROUTE_UNAVAILABLE_ERROR_CODE,
+    super::state::TRANSIENT_FAILURE_ERROR_CODE,
+    super::state::STALLED_ERROR_CODE,
+    super::baseline::BASELINE_RED_ERROR_CODE,
+    super::forge_hold::FORGE_UNAVAILABLE_ERROR_CODE,
+    crate::workflow::IMAGE_INPUT_UNAVAILABLE_ERROR_CODE,
+    crate::workflow::IMAGE_NOT_SEEN_ERROR_CODE,
+    super::root_cause::REVIEW_DECISION_PENDING_ERROR_CODE,
+    super::root_cause::CHILD_TIMEOUT_ERROR_CODE,
+    super::root_cause::OPERATOR_STOPPED_ERROR_CODE,
+    "AGENT_TIMEOUT",
+    "AGENT_INVOCATION_FAILED",
+    "AGENT_TERMINAL_ENDING",
+    "worktree_mismatch",
+];
+
+/// Whether `code` is reserved for an existing Orbit outcome and so keeps
+/// that outcome when a declared-failed envelope carries it.
+#[must_use]
+pub fn is_reserved_declared_failure_code(code: &str) -> bool {
+    RESERVED_DECLARED_FAILURE_CODES.contains(&code)
+}
+
+/// Words that make a declared-failed `error.code` name a task-level stop.
+/// The code is split on `_ . : -` (as [`AgentBlockerClass::of_kind`] does)
+/// and must contain one of them as a whole word, so `validation_blocker`,
+/// `task_blocked`, `contract_contradiction` and `live_fixture_unavailable`
+/// hold while an ordinary failure code such as `red` or `example_failure`
+/// stays a failure.
+pub const DECLARED_BLOCKER_CODE_WORDS: &[&str] =
+    &["blocker", "blocked", "contradiction", "unavailable"];
+
+/// Whether `code`, split on `_ . : -`, contains a
+/// [`DECLARED_BLOCKER_CODE_WORDS`] word.
+fn names_declared_blocker_word(code: &str) -> bool {
+    code.split(['_', '.', ':', '-'])
+        .any(|word| DECLARED_BLOCKER_CODE_WORDS.contains(&word.to_ascii_lowercase().as_str()))
+}
+
+/// The blocker a declared-failed implementer envelope names. All three must
+/// hold, in this order: the `error.code` is not reserved for another outcome
+/// (see [`is_reserved_declared_failure_code`]: provider, transient, typed
+/// holds and `implementation_incomplete`); it is a well-formed kind token
+/// containing a [`DECLARED_BLOCKER_CODE_WORDS`] word; and the
+/// `error.message` is non-empty evidence. The code is the kind, classified
+/// once through [`AgentBlockerClass::of_kind`] by the caller, and the message
+/// is the evidence, bounded like a `blocker` value's. Anything else is
+/// `None`, and the step keeps its ordinary failed outcome.
+#[must_use]
+pub fn agent_blocker_from_declared_failure(code: &str, evidence: &str) -> Option<AgentBlocker> {
+    let kind = code.trim();
+    if is_reserved_declared_failure_code(kind)
+        || !is_blocker_kind(kind)
+        || !names_declared_blocker_word(kind)
+    {
+        return None;
+    }
+    let evidence = evidence.trim();
     if evidence.is_empty() {
         return None;
     }
