@@ -46,7 +46,7 @@
 .notice-group-heading {
   margin: 0;
   padding: 12px 16px 6px;
-  border-top: 1px solid var(--hair);
+  border-top: 1px solid var(--border-strong);
   color: var(--fg-mute);
   font: 600 11px var(--font-sans);
   letter-spacing: 0.06em;
@@ -74,7 +74,7 @@
 .notice-kind-partial { color: var(--state-pending); }
 .notice-coverage-banner .notice-banner-meta { overflow-wrap: anywhere; }
 
-/* The list: flat rows split by a hairline, on the panel's own edges.
+/* The list: flat rows split by a visible edge, on the panel's own edges.
    The dock is 320–440px, so a row is two lines at every width: the facts,
    then the title. Scope and time ellipsize; the title wraps. */
 #notices-panel > .body {
@@ -85,7 +85,7 @@
   overflow-x: hidden;
   overflow-y: auto;
 }
-.notice-row { border-bottom: 1px solid var(--hair); min-width: 0; }
+.notice-row { border-bottom: 1px solid var(--border-strong); min-width: 0; }
 .notice-row:last-child { border-bottom: 0; }
 /* Opening a row or switching the list rebuilds rows; that is not new data. */
 .notice-row.data-changed, .notice-row.data-new { animation: none; }
