@@ -30,9 +30,10 @@ pub use plugin::{
     PluginEnableResult, PluginLinkSummary, PluginMigrateRequest, PluginPanelSummary,
     PluginPermissionChange, PluginPermissionSummary, PluginRemoveOptions, PluginSecretStatus,
     PluginSecretValue, PluginSeedAction, PluginSeedOutcome, PluginSkillLink, PluginSummary,
-    PluginSyncOutcome, PluginTestOptions, PluginTestOutcome, PluginTestReport,
-    PluginTestValidationGate, PluginToolSummary, PluginUpgradeOptions, PluginUpgradeResult,
-    PluginValidationReport, execute_global_plugin_tool, host_plugin_cli_groups,
-    host_plugin_mcp_definitions, host_plugin_rows, migrate_plugin_sidecars,
+    PluginSummaryJsonProfile, PluginSyncOutcome, PluginTestOptions, PluginTestOutcome,
+    PluginTestReport, PluginTestValidationGate, PluginToolSummary, PluginUpgradeOptions,
+    PluginUpgradeResult, PluginValidationReport, execute_global_plugin_tool,
+    host_plugin_cli_groups, host_plugin_mcp_definitions, host_plugin_rows, migrate_plugin_sidecars,
+    plugin_summary_json,
 };
 pub use registry::{DoctorResult, DoctorStatus, ToolInfo};

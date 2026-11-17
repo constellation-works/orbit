@@ -18,9 +18,10 @@ pub use crate::application::plugin::{
     PluginAddOptions, PluginDoctorResult, PluginEnableOptions, PluginEnableResult,
     PluginLinkSummary, PluginMigrateRequest, PluginPanelSummary, PluginPermissionChange,
     PluginPermissionSummary, PluginRemoveOptions, PluginSecretStatus, PluginSeedAction,
-    PluginSeedOutcome, PluginSummary, PluginSyncOutcome, PluginTestOptions, PluginTestOutcome,
-    PluginTestReport, PluginTestValidationGate, PluginToolSummary, PluginUpgradeOptions,
-    PluginUpgradeResult, PluginValidationReport,
+    PluginSeedOutcome, PluginSummary, PluginSummaryJsonProfile, PluginSyncOutcome,
+    PluginTestOptions, PluginTestOutcome, PluginTestReport, PluginTestValidationGate,
+    PluginToolSummary, PluginUpgradeOptions, PluginUpgradeResult, PluginValidationReport,
+    plugin_summary_json,
 };
 pub use crate::runtime::plugin::discovery::{PluginCliGroup, PluginCliVerb};
 pub use crate::runtime::plugin::secrets::{MAX_PLUGIN_SECRET_BYTES, PluginSecretValue};

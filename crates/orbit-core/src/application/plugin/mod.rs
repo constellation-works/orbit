@@ -43,8 +43,9 @@ pub use conformance::{
 };
 pub use inspect::{
     PluginDoctorResult, PluginPermissionSummary, PluginRenderedEnvironment, PluginRenderedProfile,
-    PluginSummary, PluginToolSummary, PluginValidationReport, list_plugins, plugin_build_doctor,
-    plugin_doctor, show_plugin, validate_plugin_dir, validate_plugin_dir_for_workspace,
+    PluginSummary, PluginSummaryJsonProfile, PluginToolSummary, PluginValidationReport,
+    list_plugins, plugin_build_doctor, plugin_doctor, plugin_summary_json, show_plugin,
+    validate_plugin_dir, validate_plugin_dir_for_workspace,
 };
 pub(crate) use install::install_plugin_reporting_enable;
 pub use install::{

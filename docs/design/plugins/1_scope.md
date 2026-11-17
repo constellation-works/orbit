@@ -1210,7 +1210,16 @@ is limited to the recorded grant set and program paths; changed or absent
 consent must be reviewed with `orbit plugin enable`.
 
 The `plugins` tab lists every installed or pinned plugin from `GET /api/plugins` (enable
-state, diagnostics, tools, panels, links) and draws each panel with one generic renderer:
+state, diagnostics, tools, panels, links). Its plugin records and CLI JSON from
+`plugin list`, `show`, `add`, `enable`, `disable` and `upgrade` share one
+`orbit-core` projection. Both include the consented `build` record, program
+resolution/grant diagnostics, `tools[].agent_callable` and `panels[].refresh_ms`.
+The HTTP profile also includes effective `enabled` and `host_orbit_version`,
+and abbreviates `source` and `install_path` under the home directory to `~`;
+CLI paths remain usable as filesystem arguments. Session `capabilities` are
+added by the HTTP list handler rather than the plugin projection.
+
+The tab draws each panel with one generic renderer:
 
 | `render` | Input the panel's tool returns | Rendering |
 |---|---|---|

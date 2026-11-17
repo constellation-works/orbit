@@ -60,6 +60,15 @@ orbit plugin list                        # what is installed or pinned here
 orbit plugin show my-plugin              # tools, panels, and requested versus granted
 ```
 
+For machine-readable inspection, use `orbit plugin list --format json` or
+`orbit plugin show my-plugin --format json`. Plugin records in these commands
+and add/enable/disable/upgrade receipts include `build`, `programs` (recorded
+paths, grants and resolution problems), `tools[].agent_callable` and
+`panels[].refresh_ms`. The HTTP plugin records expose the same data, plus
+`enabled` and `host_orbit_version`; their `source` and `install_path` abbreviate
+the home directory to `~`, while CLI paths remain literal. The HTTP list also
+carries session-specific enable/disable `capabilities`.
+
 Run `orbit plugin test` before `add`. It applies ordinary template paths on its
 own. When the manifest asks for an unconfined backend, an absolute write root,
 `network: any`, or `env_pass`, it stops and prints the requested grants instead
