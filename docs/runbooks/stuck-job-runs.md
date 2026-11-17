@@ -402,7 +402,11 @@ the echo's recorded root-cause step as fallbacks. A job-level diagnostic names
 the pipeline, so it never supplies `STEP`; without step evidence, the cell is
 `-` (`null` in JSON). `--json` is
 `{"failures":[...]}`. It cannot be combined with `--incidents`. A parent whose waited-on
-children were all cancelled ends `cancelled`, not `failed`.
+children were all cancelled ends `cancelled`, with no run-level error code or
+error message. Its summary step retains the cancellation explanation in
+`agent_response_json.message`, and `orbit run show` keeps the guard step's audit
+detail naming the cancelled child. A genuinely failed child still fails its
+parent and records an error.
 
 The dashboard's run detail follows that same child-dispatch chain in one response.
 The failure box links every run id and task id in the message and adds a Root cause
