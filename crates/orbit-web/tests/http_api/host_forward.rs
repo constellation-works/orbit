@@ -982,9 +982,19 @@ fn a_spawned_remote_is_operator_matched_and_stopped_on_shutdown() {
                     .enumerate()
                     .filter_map(|(index, call)| (call["mode"] == "spawn").then_some(index))
                     .collect();
-                assert_eq!(spawn_indices.len(), 1, "exactly one spawn call: {calls:?}");
                 let spawn_index = calls.len() - 1;
-                assert_eq!(spawn_indices[0], spawn_index, "spawn is the final ssh call");
+                assert_eq!(
+                    *spawn_indices.last().unwrap(),
+                    spawn_index,
+                    "spawn is the final ssh call: {calls:?}"
+                );
+                // A spawn whose local bind lost the port race is reallocated
+                // like a failed attach (ORB-25377); only the final spawn may
+                // have bound, which the spawn event check below proves.
+                assert!(
+                    !spawn_indices.is_empty(),
+                    "at least one spawn call: {calls:?}"
+                );
                 let successful_attach_index = spawn_index - 1;
                 assert_eq!(
                     calls[successful_attach_index]["mode"], "attach",
@@ -992,17 +1002,20 @@ fn a_spawned_remote_is_operator_matched_and_stopped_on_shutdown() {
                 );
 
                 for (index, call) in calls[..successful_attach_index].iter().enumerate() {
-                    assert_eq!(call["mode"], "attach", "only attach probes precede spawn");
+                    assert!(
+                        call["mode"] == "attach" || call["mode"] == "spawn",
+                        "only attach probes and reallocated spawns precede the successful attach: {call:?}"
+                    );
                     let event = events
                         .iter()
                         .find(|event| event["pid"] == call["pid"])
-                        .unwrap_or_else(|| panic!("missing bind event for attach call: {call:?}"));
-                    assert_eq!(event["mode"], "attach");
+                        .unwrap_or_else(|| panic!("missing bind event for failed call: {call:?}"));
+                    assert_eq!(event["mode"], call["mode"]);
                     assert_eq!(event["port"], forwarded_port(call));
                     assert_eq!(
                         event["errno"],
                         libc::EADDRINUSE,
-                        "every failed attach must be a recorded EADDRINUSE collision: {call:?}, {event:?}"
+                        "every failed call before the successful attach must be a recorded EADDRINUSE collision: {call:?}, {event:?}"
                     );
                     if index > 0 {
                         assert_ne!(
@@ -1071,6 +1084,85 @@ fn a_spawned_remote_is_operator_matched_and_stopped_on_shutdown() {
                 for pid in pids {
                     assert!(!alive(pid), "graceful shutdown stops every owned ssh child");
                 }
+            }
+        },
+    );
+}
+
+/// ORB-25377: the spawn child reuses the attach child's port, so it can lose
+/// the same local bind race. A proven spawn bind collision (ssh exits 255
+/// before binding, with its exact diagnostic) reallocates on a fresh port
+/// instead of reporting the host unreachable.
+#[test]
+fn a_spawn_bind_collision_reallocates_on_a_fresh_port() {
+    isolated(
+        "host_forward::a_spawn_bind_collision_reallocates_on_a_fresh_port",
+        || {
+            let b = Fixture::host("hostb", "HB");
+            let b_server = b.server(true);
+            let a = Fixture::new();
+            write_hosts(&a, &[("hostb", &b.machine_id(), "hostb-ssh", "HB")]);
+            let stub = StubSsh::new(json!({"hostb-ssh": {
+                "attach": null, "spawn": port(&b_server),
+                "fail_first_spawn_bind": true,
+            }}));
+            let mut a_server = a.server_with_path_envs(
+                false,
+                stub.bin(),
+                &[(
+                    "ORBIT_TEST_HOST_FORWARD_ATTACH_TIMEOUT_MS",
+                    std::ffi::OsStr::new("300"),
+                )],
+            );
+            let state = json_ok(a_server.get("/api/hosts/hostb/connection"));
+            assert_eq!(
+                state["reachable"], true,
+                "a proven spawn bind collision must reallocate: {state}"
+            );
+            assert_eq!(state["origin"], "spawned", "{state}");
+            assert_eq!(state["machine_id"], b.machine_id());
+            let calls = stub.calls();
+            assert_eq!(
+                calls.len(),
+                4,
+                "attach, failed spawn, attach, spawn: {calls:?}"
+            );
+            let modes: Vec<&str> = calls
+                .iter()
+                .map(|call| call["mode"].as_str().unwrap())
+                .collect();
+            assert_eq!(modes, ["attach", "spawn", "attach", "spawn"]);
+            let bind_events = fs::read_to_string(stub.bin().join("bind-events.jsonl")).unwrap();
+            let events: Vec<Value> = bind_events
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(events.len(), calls.len(), "one bind event per ssh call");
+            assert_eq!(events[1]["mode"], "spawn");
+            assert_eq!(
+                events[1]["errno"],
+                json!(libc::EADDRINUSE),
+                "the failed spawn lost its local bind: {:?}",
+                events[1]
+            );
+            for event in [&events[0], &events[2], &events[3]] {
+                assert!(event["errno"].is_null(), "this child bound: {event}");
+            }
+            assert_eq!(forwarded_port(&calls[2]), forwarded_port(&calls[3]));
+            assert_ne!(
+                forwarded_port(&calls[1]),
+                forwarded_port(&calls[3]),
+                "reallocation chooses a fresh local port"
+            );
+            assert!(
+                !alive(calls[1]["pid"].as_i64().unwrap()),
+                "the failed spawn child is reaped before reallocation"
+            );
+            let pids = stub.pids();
+            assert!(alive(pids[3]), "the final spawn serves the tunnel");
+            assert!(a_server.terminate().success());
+            for pid in pids {
+                assert!(!alive(pid), "graceful shutdown stops every owned ssh child");
             }
         },
     );

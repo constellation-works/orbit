@@ -96,7 +96,9 @@ sessions and `orbit web open`; connect always opens the plain local URL.
 [ORB-14679] delivered this surface. [ORB-16130] subsequently allowed at most
 three ephemeral allocations for a proven initial attach bind collision, under
 the original deadline; authentication, readiness and remote-command failures
-remain failures. The [host-forward spec](./specs/host-forward.md#tunnels) records
+remain failures. [ORB-25377] extended that proof to the spawn child that
+reuses the attach port, whose proven bind exit likewise precedes any remote
+command. The [host-forward spec](./specs/host-forward.md#tunnels) records
 the diagnostic and child-reaping conditions.
 
 host_tunnels keeps one tunnel per host, keyed by `machine_id`, using ssh_tunnel's establish in unattended mode: `BatchMode=yes`, a bounded `ConnectTimeout` and a bounded wait for the forward listener, since a server has no terminal to prompt on. Establish is single-flight per host and runs on the blocking pool. Each new tunnel reads the remote's `GET /api/hosts?probe=false` and compares its local row's `machine_id` with the host file's; when the SSH child has exited by the end of that read, the exit is reported instead, since its port may have passed to another listener. A dead child is re-established by the next request, an idle tunnel closes after five minutes, and serve stops every child after its graceful-shutdown future completes, the one path that both a signal and the update handover take before exit or exec.
