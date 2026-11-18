@@ -212,8 +212,8 @@ fn worker_friction_add(
 ) -> Result<Option<Value>, OrbitError> {
     binding.validate_arguments(input)?;
     let parsed = FrictionVerb::Add.spec().parse_input(input.clone())?;
-    let (mut params, substitutions) =
-        super::friction_tools::add_params(&parsed, model.map(str::to_owned))?;
+    let model = claimed_friction_model(runtime, binding, model);
+    let (mut params, substitutions) = super::friction_tools::add_params(&parsed, Some(model))?;
     params.during_task = Some(binding.task_id.clone());
     let taxonomy = crate::runtime::friction::store_for(runtime)?
         .tags()?
@@ -227,6 +227,37 @@ fn worker_friction_add(
         substitutions,
     )
     .map(Some)
+}
+
+/// Trusted attribution for a claimed worker's friction. The call's own
+/// `model` field is never read: a session model the host asserted wins, then
+/// the crew model the claim's bound run recorded, then the claimed task's
+/// resolved crew, and finally the receiving (owner) process's resolved actor,
+/// the documented fallback ordinary friction creation uses.
+fn claimed_friction_model(
+    runtime: &OrbitRuntime,
+    binding: &WorkerInvocation,
+    model: Option<&str>,
+) -> String {
+    let trimmed = |value: &str| {
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    };
+    if let Some(model) = model.and_then(trimmed) {
+        return model;
+    }
+    if let Ok(Some(run)) = runtime.get_job_run_backend(&binding.bound_run_id)
+        && let Some(model) = run.crew_model.as_deref().and_then(trimmed)
+    {
+        return model;
+    }
+    if let Ok(task) = runtime.get_task(&binding.task_id)
+        && let Ok(Some(projection)) = runtime.resolved_crew_projection(&task)
+        && let Some(model) = trimmed(&projection.model)
+    {
+        return model;
+    }
+    runtime.actor().label.clone()
 }
 
 /// A claimed worker's follow-up filing: validated here, created by ordinary

@@ -153,6 +153,66 @@ fn a_claimed_worker_files_follow_up_work_only_from_its_active_claim() {
     assert!(stale.contains("stale_claim"), "{stale}");
 }
 
+/// [ORB-25665] A claimed worker with no session model files friction under
+/// attribution the owner resolves from the claim, recorded during the
+/// claimed task; once the claim is released the same call files nothing.
+fn a_claimed_workers_model_free_friction_uses_claim_attribution() {
+    let leaf = ReviewedLeaf::admit();
+    let owner = &leaf.pair.wire.owner;
+    let friction_count = || {
+        owner
+            .run_tool("orbit.friction.list", json!({}))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len()
+    };
+    let before = friction_count();
+
+    let friction = leaf
+        .bound
+        .run_tool(
+            "orbit.friction.add",
+            json!({"body": "Model-free friction from the claimed worker."}),
+        )
+        .expect("a model-free friction during the claim");
+    assert_eq!(friction["during_task"], leaf.task, "{friction}");
+    let model = friction["model"].as_str().expect("attribution");
+    assert!(!model.trim().is_empty(), "{friction}");
+    let stored = owner
+        .run_tool("orbit.friction.show", json!({"id": friction["id"]}))
+        .unwrap();
+    assert_eq!(stored["model"], model, "{stored}");
+    assert_eq!(stored["during_task"], leaf.task, "{stored}");
+    assert_eq!(friction_count(), before + 1);
+
+    let (_, worker) = leaf.claim();
+    owner
+        .mutate_execution_claim(
+            Some(&worker),
+            "model-free-friction-release",
+            &ClaimMutation::Release(ClaimEvidence {
+                summary: Some("The executor gave the claim back.".into()),
+                ..ClaimEvidence::default()
+            }),
+        )
+        .expect("the executor releases its claim");
+    let stale = leaf
+        .bound
+        .run_tool(
+            "orbit.friction.add",
+            json!({"body": "Friction after the claim ended."}),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(stale.contains("stale_claim"), "{stale}");
+    assert_eq!(
+        friction_count(),
+        before + 1,
+        "a refused claim files no friction"
+    );
+}
+
 fn agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist() {
     // The isolated launcher clears all activity grants and deny policies.
     assert!(std::env::var_os("ORBIT_ACTIVITY_TOOLS_DENY").is_none());
@@ -608,6 +668,7 @@ fn claim_evidence_is_searchable_without_reindex() {
 crate::scenario_table!(
     a_claimed_worker_files_follow_up_work_only_from_its_active_claim_scenarios,
     a_claimed_worker_files_follow_up_work_only_from_its_active_claim,
+    a_claimed_workers_model_free_friction_uses_claim_attribution,
     a_claimed_worker_searches_and_lists_only_its_owners_workspace,
     agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist,
     a_worker_update_persists_redacted_text_and_a_task_scoped_audit,
