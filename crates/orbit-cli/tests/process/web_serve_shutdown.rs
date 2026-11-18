@@ -393,7 +393,11 @@ fn exercise_stalled_peer(name: &str, sse: bool, prefix: &'static [u8]) {
 /// before it can publish its PID; the hook records `$!`, and a Linux
 /// subreaper parent proves that exact child was reaped. `unreaped` and
 /// `timeout` leave that child and a SIGTERM-ignoring descendant alive, and
-/// the parent must notice and sweep the process group it owns. `wrapper_stall`
+/// the parent must notice and sweep the process group it owns. The descendant
+/// inherits that ignore disposition before the stub publishes readiness, and
+/// both cases require the disposition to be set before teardown, the
+/// descendant to survive the group's SIGTERM, and SIGKILL to reap it.
+/// `wrapper_stall`
 /// stops the outer wrapper just after it starts the caller's job, before the
 /// recipe runs: the runner times out, and the sweep must reap the wrapper and
 /// that job so output collection reaches EOF (ORB-25620).
@@ -451,8 +455,12 @@ fn exercise_qa_recipe_boundary(boundary: &str) {
         serve_start..serve_end,
         // Hold `spawn_pid` and `pid_token` before `$$` is published, so the
         // runner cannot learn the PID from the child. `unreaped` and `timeout`
-        // also spawn a descendant that ignores SIGTERM, then block the same way.
-        r#"SERVE_CMD=(/bin/sh -c 'case "$QA_BOUNDARY" in unreaped|timeout) (trap "" TERM; exec sleep 300) & printf "%s\n" "$!" >"$QA_BASE/descendant.pid"; printf ready >"$QA_BASE/ready.fifo"; read -r _ <"$QA_BASE/hold.fifo" ;; spawn_pid|pid_token) read -r _ <"$QA_BASE/hold.fifo" ;; esac; echo $$ >"$QA_BASE/child.pid"; exec /usr/bin/python3 "$QA_BASE/listener.py"')"#,
+        // ignore SIGTERM in this shell, then fork. The descendant inherits
+        // that disposition — an ignored signal is kept across fork and exec —
+        // and this shell restores the default before writing the ready FIFO.
+        // The DEBUG hook waits on that FIFO, so teardown cannot start until
+        // the descendant already ignores SIGTERM.
+        r#"SERVE_CMD=(/bin/sh -c 'case "$QA_BOUNDARY" in unreaped|timeout) trap "" TERM; (exec sleep 300) & printf "%s\n" "$!" >"$QA_BASE/descendant.pid"; trap - TERM; printf ready >"$QA_BASE/ready.fifo"; read -r _ <"$QA_BASE/hold.fifo" ;; spawn_pid|pid_token) read -r _ <"$QA_BASE/hold.fifo" ;; esac; echo $$ >"$QA_BASE/child.pid"; exec /usr/bin/python3 "$QA_BASE/listener.py"')"#,
     );
     // The stub owns its loopback listener: it binds an ephemeral port, announces
     // that port and keeps it open until it exits. A fixed announced port would
@@ -565,10 +573,11 @@ def classify(pid):
     if state is not None:
         return "alive"
     try:
-        waited, _status = os.waitpid(pid, os.WNOHANG)
+        waited, status = os.waitpid(pid, os.WNOHANG)
     except ChildProcessError:
         return "reaped"
     if waited == pid:
+        note_reap(pid, status)
         return "zombie_left_by_harness"
     return "reaped"
 
@@ -598,14 +607,69 @@ def others_alive():
     me = os.getpid()
     return any(pid != me for pid in members)
 
+reaped_status = {}
+term_watch = {"after_term": "missing", "reaped_by": ""}
+
+def note_reap(pid, status):
+    if pid > 0:
+        reaped_status[pid] = status
+
 def reap_zombies():
     while True:
         try:
-            pid, _status = os.waitpid(-1, os.WNOHANG)
+            pid, status = os.waitpid(-1, os.WNOHANG)
         except ChildProcessError:
             return
         if pid == 0:
             return
+        note_reap(pid, status)
+
+def ignores_term(pid):
+    # Linux SigIgn uses bit (signum - 1). SIGTERM is 15, so the bit is 0x4000.
+    if not pid:
+        return ""
+    term_bit = 1 << (signal.SIGTERM - 1)
+    try:
+        with open(f"/proc/{pid}/status") as handle:
+            for line in handle:
+                if line.startswith("SigIgn:"):
+                    mask = int(line.split()[1], 16)
+                    return "1" if mask & term_bit else "0"
+    except (OSError, ValueError, IndexError):
+        return "0"
+    return "0"
+
+def descendant_liveness(pid):
+    if not pid:
+        return "missing"
+    state = proc_state(pid)
+    if state is None:
+        return "gone"
+    if state == "Z":
+        return "zombie"
+    return "alive"
+
+def observe_after_term(pid):
+    # Wait out delivery. A default disposition dies in this window; SIG_IGN stays.
+    if not pid:
+        return "missing"
+    deadline = time.monotonic() + 0.2
+    while True:
+        state = descendant_liveness(pid)
+        if state != "alive" or time.monotonic() >= deadline:
+            return state
+        reap_zombies()
+        time.sleep(0.02)
+
+def reaped_signal(pid):
+    status = reaped_status.get(pid)
+    if not pid or status is None:
+        return ""
+    if os.WIFSIGNALED(status):
+        return str(os.WTERMSIG(status))
+    if os.WIFEXITED(status):
+        return "exit:%d" % os.WEXITSTATUS(status)
+    return "unknown"
 
 def signal_others(sig):
     members = group_members(os.getpgrp())
@@ -620,16 +684,21 @@ def signal_others(sig):
                 pass
     return True
 
-def finish(proc, rc):
+def finish(proc, rc, descendant_pid):
     # Polite signal, bounded grace, then SIGKILL. A membership probe that
     # cannot answer counts as survival. Skip this process: it is the reaper.
+    # Sample the descendant after SIGTERM and before any SIGKILL, so a child
+    # that died from the first signal cannot be reported as escalated.
     signal_others(signal.SIGTERM)
     if rc is None:
         try:
             rc = proc.wait(timeout=0.5)
         except subprocess.TimeoutExpired:
-            signal_others(signal.SIGKILL)
-            rc = proc.wait(timeout=1)
+            rc = None
+    term_watch["after_term"] = observe_after_term(descendant_pid)
+    if rc is None:
+        signal_others(signal.SIGKILL)
+        rc = proc.wait(timeout=1)
     deadline = time.monotonic() + 0.5
     while time.monotonic() < deadline and others_alive():
         reap_zombies()
@@ -641,6 +710,7 @@ def finish(proc, rc):
             reap_zombies()
             time.sleep(0.02)
     reap_zombies()
+    term_watch["reaped_by"] = reaped_signal(descendant_pid)
     return rc
 
 def handle_term(_signum, _frame):
@@ -682,10 +752,13 @@ while True:
 observed = read_pid(observed_pid_file)
 published = read_pid(child_pid_file)
 descendant = read_pid(descendant_pid_file)
+# The stub writes the ready FIFO only after the descendant inherits SIG_IGN,
+# and the hook waits on that FIFO, so this read is before teardown.
+descendant_ignores_term = ignores_term(descendant)
 child = observed or published
 child_state = classify(child)
 descendant_state = classify(descendant)
-rc = finish(proc, rc)
+rc = finish(proc, rc, descendant)
 reap_zombies()
 
 def after(pid):
@@ -702,6 +775,9 @@ print(f"child_pid={child or ''}")
 print(f"child_state={child_state}")
 print(f"descendant_pid={descendant or ''}")
 print(f"descendant_state={descendant_state}")
+print(f"descendant_ignores_term={descendant_ignores_term}")
+print(f"descendant_after_term={term_watch['after_term']}")
+print(f"descendant_reaped_by={term_watch['reaped_by']}")
 print(f"child_after={after(child)}")
 print(f"descendant_after={after(descendant)}")
 print(f"group_survived={1 if others_alive() else 0}")
@@ -880,6 +956,21 @@ sys.stdout.flush()
         assert_pid_gone(child_pid, &format!("{boundary} server"));
     }
     if matches!(boundary, "unreaped" | "timeout") {
+        assert_eq!(
+            field("descendant_ignores_term="),
+            "1",
+            "{boundary}: descendant must ignore SIGTERM before teardown: {stdout} {stderr}"
+        );
+        assert_eq!(
+            field("descendant_after_term="),
+            "alive",
+            "{boundary}: SIGTERM must leave the ignoring descendant alive: {stdout} {stderr}"
+        );
+        assert_eq!(
+            field("descendant_reaped_by="),
+            "9",
+            "{boundary}: escalation must reap the descendant with SIGKILL: {stdout} {stderr}"
+        );
         let descendant_pid: libc::pid_t = field("descendant_pid=").parse().expect("descendant pid");
         assert_pid_gone(descendant_pid, &format!("{boundary} descendant"));
     }
