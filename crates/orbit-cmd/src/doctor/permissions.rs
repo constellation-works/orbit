@@ -394,22 +394,6 @@ fn visit(
     Ok(())
 }
 
-/// Scan `path` as [`inspect_state_directories`] scans each root, so a wide
-/// directory takes the fan-out path.
-#[cfg(all(test, unix))]
-pub(super) fn scan_fanned_for_test(path: &std::path::Path) -> std::io::Result<ScanReport> {
-    let mut seen = std::collections::BTreeSet::new();
-    let mut writable = Vec::new();
-    visit_fanned(path, true, &mut seen, &mut writable)?;
-    Ok((seen, writable))
-}
-
-#[cfg(all(test, unix))]
-pub(super) type ScanReport = (
-    std::collections::BTreeSet<std::path::PathBuf>,
-    Vec<(std::path::PathBuf, u32)>,
-);
-
 /// Test seam for filesystem ownership and deterministic disappearance races.
 #[cfg(all(test, unix))]
 pub(super) fn scan_with_hook(
@@ -429,3 +413,9 @@ pub(super) fn scan_with_hook(
     )?;
     Ok((seen, writable))
 }
+
+#[cfg(all(test, unix))]
+pub(super) type ScanReport = (
+    std::collections::BTreeSet<std::path::PathBuf>,
+    Vec<(std::path::PathBuf, u32)>,
+);

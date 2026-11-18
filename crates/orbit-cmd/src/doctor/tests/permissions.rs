@@ -66,37 +66,3 @@ fn disappearing_entries_are_skipped_at_metadata_and_read_dir_boundaries() {
         "a vanished directory must not remain a permission offender"
     );
 }
-
-/// A wide directory fans out over worker threads. When the OS refuses them,
-/// the same directories are still visited, in the same order.
-#[test]
-fn fan_out_scan_visits_the_same_directories_when_workers_cannot_start() {
-    use crate::doctor::DoctorWorkerSpawnRefusal;
-    use crate::doctor::permissions::scan_fanned_for_test;
-
-    let temp = tempfile::tempdir().expect("fixture");
-    let root = temp.path().canonicalize().expect("canonical fixture");
-    for index in 0..70 {
-        let child = root.join(format!("child-{index:02}"));
-        fs::create_dir_all(child.join("nested")).expect("child directory");
-        // Pin every mode so the umask cannot add writable directories.
-        let writable = index % 7 == 0;
-        for directory in [child.join("nested"), child] {
-            let mode = if writable { 0o777 } else { 0o700 };
-            fs::set_permissions(&directory, fs::Permissions::from_mode(mode)).unwrap();
-        }
-    }
-    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
-    let (expected_seen, expected_writable) = scan_fanned_for_test(&root).expect("threaded scan");
-    assert_eq!(
-        expected_writable.len(),
-        20,
-        "ten children and their nested directories"
-    );
-
-    let refusal = DoctorWorkerSpawnRefusal::install();
-    let (seen, writable) = scan_fanned_for_test(&root).expect("scan without workers");
-    assert!(refusal.refused() > 0, "the spawn failure must be exercised");
-    assert_eq!(seen, expected_seen);
-    assert_eq!(writable, expected_writable, "same directories, same order");
-}

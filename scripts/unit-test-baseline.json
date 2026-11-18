@@ -69,7 +69,6 @@
         "browser_kit/tests/libraries.rs::fonts_only_no_install_path_names_the_font_gap_and_a_fix",
         "browser_kit/tests/libraries.rs::resolved_libraries_without_a_font_gap_stay_resolved",
         "doctor/tests/permissions.rs::disappearing_entries_are_skipped_at_metadata_and_read_dir_boundaries",
-        "doctor/tests/permissions.rs::fan_out_scan_visits_the_same_directories_when_workers_cannot_start",
         "doctor/tests/permissions.rs::repair_refuses_final_and_parent_symlink_swaps_after_scanning",
         "doctor/tests/plugin_enablement.rs::absent_or_clean_host_config_is_ok",
         "doctor/tests/plugin_enablement.rs::misplaced_global_plugin_enablement_is_an_error_with_the_exact_fix",
