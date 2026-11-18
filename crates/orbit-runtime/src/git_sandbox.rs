@@ -184,6 +184,15 @@ fn validate_git_directory(
     metadata: &fs::Metadata,
     directories: &mut DirectoryIdentities,
 ) -> Result<(), OrbitError> {
+    validate_git_directory_with_pinned(path, metadata, directories, None)
+}
+
+fn validate_git_directory_with_pinned(
+    path: &Path,
+    metadata: &fs::Metadata,
+    directories: &mut DirectoryIdentities,
+    pinned: Option<&DirectoryIdentities>,
+) -> Result<(), OrbitError> {
     if !metadata.is_dir() {
         return Err(OrbitError::PolicyDenied(format!(
             "Git protection refuses non-directory metadata traversal `{}`",
@@ -191,6 +200,15 @@ fn validate_git_directory(
         )));
     }
     let identity = (metadata.dev(), metadata.ino());
+    if let Some(pinned) = pinned
+        && let Some(previous) = pinned.get(path)
+        && *previous != identity
+    {
+        return Err(OrbitError::PolicyDenied(format!(
+            "Git protection refuses replaced metadata directory `{}`",
+            path.display()
+        )));
+    }
     if let Some(previous) = directories.insert(path.to_path_buf(), identity)
         && previous != identity
     {
@@ -330,10 +348,20 @@ fn scan_git_tree(
     directories: &mut DirectoryIdentities,
     links: &mut ObjectLinks,
 ) -> Result<(), GitTreeScanError> {
+    scan_git_tree_with_pinned(root, scope, directories, links, None)
+}
+
+fn scan_git_tree_with_pinned(
+    root: &Path,
+    scope: ScanScope,
+    directories: &mut DirectoryIdentities,
+    links: &mut ObjectLinks,
+    pinned: Option<&DirectoryIdentities>,
+) -> Result<(), GitTreeScanError> {
     #[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
     run_scan_hook(GitScanStage::ReadDirectory, root).map_err(|error| scan_error(root, error))?;
     let metadata = fs::symlink_metadata(root).map_err(|error| scan_error(root, error))?;
-    validate_git_directory(root, &metadata, directories)?;
+    validate_git_directory_with_pinned(root, &metadata, directories, pinned)?;
     for entry in fs::read_dir(root).map_err(|error| scan_error(root, error))? {
         let entry = entry.map_err(|error| scan_error(root, error))?;
         let path = entry.path();
@@ -352,16 +380,28 @@ fn scan_git_tree(
             }
         }
         if metadata.is_dir() {
-            validate_git_directory(&path, &metadata, directories)?;
+            validate_git_directory_with_pinned(&path, &metadata, directories, pinned)?;
             match scope {
                 ScanScope::Root if entry.file_name() == "objects" => {
                     scan_object_store(&path, directories, links)?;
                 }
                 ScanScope::ObjectStore => {
-                    scan_git_tree(&path, ScanScope::ObjectStore, directories, links)?;
+                    scan_git_tree_with_pinned(
+                        &path,
+                        ScanScope::ObjectStore,
+                        directories,
+                        links,
+                        pinned,
+                    )?;
                 }
                 ScanScope::Root | ScanScope::Metadata => {
-                    scan_git_tree(&path, ScanScope::Metadata, directories, links)?;
+                    scan_git_tree_with_pinned(
+                        &path,
+                        ScanScope::Metadata,
+                        directories,
+                        links,
+                        pinned,
+                    )?;
                 }
             }
         }
@@ -369,7 +409,7 @@ fn scan_git_tree(
     // read_dir may have opened an older directory after a concurrent rename.
     // Never accept its contents as validation of the replacement at this path.
     let metadata = fs::symlink_metadata(root).map_err(|error| scan_error(root, error))?;
-    validate_git_directory(root, &metadata, directories)?;
+    validate_git_directory_with_pinned(root, &metadata, directories, pinned)?;
     Ok(())
 }
 
@@ -387,7 +427,7 @@ enum ObjectStoreEntry {
 }
 
 /// What one subtree scan found: its outcome, the directory identities it
-/// pinned and the object names it counted.
+/// newly pinned (not already in the shared set) and the object names it counted.
 struct SubtreeScan {
     result: Result<(), GitTreeScanError>,
     directories: DirectoryIdentities,
@@ -485,8 +525,10 @@ fn list_object_store(root: &Path) -> Vec<ObjectStoreEntry> {
     entries
 }
 
-/// Scan each subtree with its own copy of the identities pinned so far, on up
+/// Scan each subtree against the shared identities pinned so far, on up
 /// to [`MAX_OBJECT_SCAN_THREADS`] threads. Results come back in input order.
+/// Each subtree collects only identities not already pinned, so retained
+/// pins grow with the directories in that subtree, not with the shared set.
 /// Once a subtree fails, later ones are skipped: the fold stops at that
 /// failure and never reads them.
 fn scan_subtrees(
@@ -496,13 +538,21 @@ fn scan_subtrees(
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     let scan_one = |path: &Path, metadata: &fs::Metadata| {
-        let mut directories = pinned.clone();
+        let mut directories = DirectoryIdentities::new();
         let mut links = ObjectLinks::default();
-        let result = validate_git_directory(path, metadata, &mut directories)
-            .map_err(GitTreeScanError::from)
-            .and_then(|()| {
-                scan_git_tree(path, ScanScope::ObjectStore, &mut directories, &mut links)
-            });
+        let result =
+            validate_git_directory_with_pinned(path, metadata, &mut directories, Some(pinned))
+                .map_err(GitTreeScanError::from)
+                .and_then(|()| {
+                    scan_git_tree_with_pinned(
+                        path,
+                        ScanScope::ObjectStore,
+                        &mut directories,
+                        &mut links,
+                        Some(pinned),
+                    )
+                });
+        directories.retain(|path, identity| pinned.get(path) != Some(identity));
         SubtreeScan {
             result,
             directories,
