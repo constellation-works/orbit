@@ -49,9 +49,14 @@ pub(crate) fn record_pool_crew_health(
         let unset = runtime.unset_crew_env();
         let crews = runtime.context.settings().crews();
         let mut excluded = BTreeMap::new();
-        // Crews excluded by a provider usage window with a known reset. Their
-        // streak and run warning are kept; no friction is filed for them.
+        // Crews excluded by a provider usage window with a known reset, and
+        // crews an operator's `--allow-crew` window intentionally leaves out.
+        // Their streak and run warning are kept; no friction is filed for them.
         let mut quota_limited = BTreeSet::new();
+        // An operator's intentional `--allow-crew` restriction, not a host
+        // failure. A crew that is also unset or window-excluded keeps its
+        // actionable reason and still files.
+        let mut allowlist_restricted = BTreeSet::new();
         for name in members {
             let unset_reason = unset
                 .iter()
@@ -62,6 +67,11 @@ pub(crate) fn record_pool_crew_health(
                 .find(|entry| same_crew_family(&entry.crew, &name));
             let quota =
                 unset_reason.is_none() && window_exclusion.is_some_and(lifts_with_provider_quota);
+            let allowlist_excluded = unset_reason.is_none()
+                && window_exclusion.is_none()
+                && resolve_crew(&name, crews).is_ok_and(|crew| {
+                    crew.enabled && allowed.is_some_and(|allowed| !allowed.permits(&crew))
+                });
             let reason = unset_reason
                 .or_else(|| window_exclusion.map(|entry| entry.reason.clone()))
                 .or_else(|| {
@@ -78,6 +88,9 @@ pub(crate) fn record_pool_crew_health(
             if let Some(reason) = reason {
                 if quota {
                     quota_limited.insert(name.clone());
+                }
+                if allowlist_excluded {
+                    allowlist_restricted.insert(name.clone());
                 }
                 excluded.insert(name, reason);
             }
@@ -117,9 +130,11 @@ pub(crate) fn record_pool_crew_health(
                 tracing::warn!(target: "orbit.core.job_run", signal = "crew_pool_excluded", run_id, crew, warning = %streak.describe(&crew), "configured pool crew is excluded on every admission pass");
                 continue;
             }
-            // The window lifts at its reset by itself, and the run warning
-            // already reports it, so an env-repair friction would misdirect.
-            if quota_limited.contains(&crew) {
+            // The window lifts at its reset by itself, and an intentional
+            // `--allow-crew` restriction is working as requested. The run
+            // warning already reports either, so an env-repair friction
+            // would misdirect.
+            if quota_limited.contains(&crew) || allowlist_restricted.contains(&crew) {
                 continue;
             }
             let frictions = crate::runtime::friction::store_for(runtime)?;
