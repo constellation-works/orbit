@@ -877,8 +877,14 @@ finds that identical record already on the task and appends no second one; the
 `requeued` decision from the first requeue stands. The answer names the pull request, branch and head the
 next run resumes. That run re-authenticates the same receipt and adopts the
 branch without re-implementing (`resumed_carried`, `implement: false`). Commit,
-validation, review, push and landing run afresh on the same pull request, which
-later moves between `backlog` and `someday` do not close. Its `[BLOCKED]` title
+validation, push and landing run afresh on the same pull request, which
+later moves between `backlog` and `someday` do not close. Review runs afresh
+only when the successor run itself captures before-landing review
+(`review.timing = "before_landing"`, for example `--review before-landing` on
+the successor run): that authentication preserves the publication, it does not
+select review, and with review off `landing_review_gate_admit` reports
+`applies: false` (`review_before_landing_off`) and the `landing_review` step
+is skipped. Its `[BLOCKED]` title
 is not rewritten.
 
 A refusal changes nothing. A specification edited since the publication is
@@ -1003,8 +1009,13 @@ otherwise refuses with nothing written:
 It writes the same `requeued` decision and publication-preservation record a
 final-recovery requeue writes, and the answer's `resumes.source` is
 `pipeline`. The next run sets up a fresh worktree, adopts the branch and pull
-request without re-implementing (`resumed_carried`), then validates, reviews,
-pushes and lands it afresh. The stopped run's worktree does not have to exist.
+request without re-implementing (`resumed_carried`), then validates, pushes
+and lands it afresh, reviewing it afresh only when the successor run itself
+captures before-landing review (`review.timing = "before_landing"`, for example
+`--review before-landing` on the successor run). Requeue authentication
+preserves the publication; it does not select review for the successor, and
+with review off `landing_review_gate_admit` reports `applies: false`
+(`review_before_landing_off`) with the `landing_review` step skipped. The stopped run's worktree does not have to exist.
 
 When checks are still running, requeue once they pass. When the candidate
 needs source changes, use the explicit repair protocol below. A pull

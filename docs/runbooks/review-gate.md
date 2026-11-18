@@ -173,8 +173,18 @@ revalidation, `push_lease_lost` or `review_repair_after_merge` still ends the ru
 When the handoff's `reviewer_push` records the reviewer commit as a
 fast-forward of the published head on the PR branch, an operator requeue of
 the task, or the decision answer that requeues it, resumes the same PR at that
-reviewer head. Its required checks must have passed there. The next run then
-validates and reviews it afresh. A requeue is refused when the local or remote
+reviewer head. Its required checks must have passed there. The requeue
+authenticates only that prior push — that the reviewer commit is the
+receipt-attested fast-forward of the published head — not that the successor
+will review it. The next run validates the adopted head afresh, and reviews
+it afresh only when the successor run itself captures before-landing review
+(`review.timing = "before_landing"`, for example `--review before-landing` on
+the successor run). When the successor captures review off (the workspace
+default), `landing_review_gate_admit` reports `applies: false`
+(`review_before_landing_off`) and the `landing_review` step is skipped, so the
+adopted reviewer head lands without an independent review of its own. To obtain
+independent review on the successor, select before-landing review for that
+run. A requeue is refused when the local or remote
 branch, or the PR head, is anywhere else, when the receipt names another
 published head, branch or run, or when the task specification changed.
 
@@ -893,7 +903,11 @@ Identify the failed step from `orbit run show`, then act:
   re-implement it with
   `orbit task requeue <task-id> --reason '<why it can continue>'` once the
   task's run has stopped. The next run adopts the same branch, head and pull
-  request, then validates, reviews and lands it afresh. A changed task
+  request, then validates it afresh and lands it, reviewing it afresh only
+  when the successor run itself captures before-landing review
+  (`review.timing = "before_landing"`, for example `--review before-landing`
+  on the successor run). Requeue authentication preserves the publication; it
+  does not select review for the successor. A changed task
   specification is refused with `--discard-candidate` as the exit, which
   closes the task's undelivered Orbit pull requests and reruns from scratch. See
   [stuck job runs](./stuck-job-runs.md#requeue-a-failure-handoff-task-onto-its-published-candidate).
