@@ -1428,11 +1428,14 @@ if dependency_matches -n '\b(crate::application::job|super::super|super)::pipeli
 fi
 
 # [ORB-25492] orbit-web: api and serve sit above state, projections, lease and
-# the leaves. Production code in the lower modules names neither api nor serve.
+# the leaves, including runtime_memo. Production code in the lower modules
+# names neither api nor serve.
 # lease may name api::leases; it must not name serve. A missing scan root fails
 # closed. Tests are skipped inside module_paths_into.
 web_src="$repo_root/crates/orbit-web/src"
-for module in state why_stuck.rs projections.rs connect.rs host_tunnels.rs health.rs assets.rs run_failure.rs shutdown.rs; do
+for module in \
+  state why_stuck.rs projections.rs connect.rs host_tunnels.rs health.rs \
+  assets.rs run_failure.rs shutdown.rs runtime_memo.rs; do
   if ! module_paths_into "$web_src" "$module" 'api|serve'; then
     echo "orbit-web ${module} must not name api or serve"
     fail=1

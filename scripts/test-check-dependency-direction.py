@@ -1551,6 +1551,8 @@ class RelativeImportTests(unittest.TestCase):
             ("assets.rs", "use crate::serve::build_app;\n"),
             ("run_failure.rs", "use crate::api::runs::detail;\n"),
             ("shutdown.rs", "use crate::serve::run_server;\n"),
+            ("runtime_memo.rs", "use crate::api::routines::RoutineMemoKey;\n"),
+            ("runtime_memo.rs", "use crate::serve::shutdown_signal;\n"),
         ):
             self.check_exact(name, source, rejected=True, base=web)
         for name, source in (
@@ -1565,16 +1567,21 @@ class RelativeImportTests(unittest.TestCase):
              "// api::forward is the HTTP side.\n"),
             ("projections.rs", "use crate::why_stuck::attach_why_stuck;\n"),
             ("health.rs", "fn probe() {}\n"),
+            ("runtime_memo.rs", "use orbit_core::OrbitError;\n"),
         ):
             self.check_exact(name, source, rejected=False, base=web)
-        missing = web / "shutdown.rs"
-        missing.unlink()
-        result = subprocess.run(["bash", str(self.guard)], env=self.env,
-                                capture_output=True, text=True, check=False)
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("dependency scan path missing", result.stderr)
-        self.assertIn("shutdown.rs", result.stderr)
-        self.assertNotIn("dependency direction guard passed", result.stdout)
+        for required_leaf in ("runtime_memo.rs", "shutdown.rs"):
+            missing = web / required_leaf
+            missing.unlink()
+            try:
+                result = subprocess.run(["bash", str(self.guard)], env=self.env,
+                                        capture_output=True, text=True, check=False)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("dependency scan path missing", result.stderr)
+                self.assertIn(required_leaf, result.stderr)
+                self.assertNotIn("dependency direction guard passed", result.stdout)
+            finally:
+                missing.write_text("")
 
 
 # Each case builds its own fixture tree and spends nearly all of its wall time
