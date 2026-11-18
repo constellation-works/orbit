@@ -37,6 +37,14 @@ medium_complexity_crews = ["wonder:1", "wonder-alias:3", "spark:1"]
 hard_complexity_crews = ["wonder", "wonder-alias"]
 crew_selection = "static"
 
+[[workflow.task_types]]
+name = "repair"
+tags = ["repair"]
+
+[workflow.type_complexity_crews.repair]
+hard = ["wonder", "wonder-alias", "spark"]
+low = ["wonder", "wonder-alias"]
+
 [crews.wonder]
 provider = "muse"
 model = "muse-wonder-full-1.0"
@@ -188,7 +196,10 @@ fn a_follower_routes_a_reclaimed_leaf_around_the_model_its_account_refused() {
     let task_id = task.id.as_str();
     let medium = leaf(task_id, "wonder", "pool:medium", "medium");
     let hard = leaf(task_id, "wonder-alias", "pool:hard", "hard");
+    let type_hard = leaf(task_id, "wonder", "type:repair/hard", "hard");
+    let type_low = leaf(task_id, "wonder", "type:repair/low", "low");
     assert_eq!(resolved(&fx.runtime, &medium).unwrap(), "wonder");
+    assert_eq!(resolved(&fx.runtime, &type_hard).unwrap(), "wonder");
 
     // The first claimed leaf runs the owner's crew and Muse refuses it.
     let first = fx
@@ -216,6 +227,15 @@ fn a_follower_routes_a_reclaimed_leaf_around_the_model_its_account_refused() {
     assert_eq!(access["model"], WONDER, "{access}");
     assert_eq!(access["refused"], true, "{access}");
     assert_eq!(access["crew_account"], Value::Null, "{access}");
+
+    // The snapshot names the type pool even without classification inputs.
+    // The hard complexity pool has no alternative, but the type pool does.
+    assert_eq!(resolved(&fx.runtime, &type_hard).unwrap(), "spark");
+    let mut restricted_type = type_hard.clone();
+    restricted_type["allowed_crews"] = json!(["wonder"]);
+    assert!(held(&fx.runtime, &restricted_type).contains(WONDER));
+    // The low complexity pool has an alternative outside the named type pool.
+    assert!(held(&fx.runtime, &type_low).contains(WONDER));
 
     // The same automatic task is claimed again on this follower: the
     // refused model leaves the draw (both of its aliases), and the leaf

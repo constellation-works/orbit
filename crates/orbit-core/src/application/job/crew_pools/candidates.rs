@@ -359,8 +359,7 @@ impl OrbitRuntime {
     /// The crew a claimed leaf runs as on this follower, or `None` to keep
     /// the owner's crew from the claimed-task snapshot.
     ///
-    /// Two follower-local facts re-draw an automatic assignment (a snapshot
-    /// `crew_source` that is a pool, purpose or default choice):
+    /// Two follower-local facts re-draw an automatic assignment:
     ///
     /// - [ORB-17773] this follower's own usage pressure, under
     ///   `usage_pressure` policy;
@@ -370,6 +369,8 @@ impl OrbitRuntime {
     ///   Every member on a refused model and account leaves the draw; when
     ///   no drawable member remains, the leaf ends on the typed
     ///   `provider_model_access_hold` error before any provider runs.
+    ///   For a `type:` source, a refusal of the assigned crew opens the
+    ///   named type pool. Usage pressure alone keeps that assignment.
     ///
     /// The re-draw is the [ORB-17770] admission re-draw over a view built
     /// from the snapshot (`crew`, its automatic `crew_source` and
@@ -447,23 +448,11 @@ impl OrbitRuntime {
             .ok()
             .filter(|crew| refusals.rejects_crew_model(crew))
             .map(|crew| crew.assignment.model);
-        if !pressure && refused.is_none() {
+        let type_source = source.type_route().is_some();
+        // Only a verified refusal reopens a type assignment on the follower.
+        if refused.is_none() && (!pressure || type_source) {
             return Ok(None);
         }
-        // The claimed snapshot carries no tags or context files to classify
-        // the task by, so a type-pool crew keeps the owner's draw, unless this
-        // host was refused its model: no other member can be named here.
-        if matches!(source, CrewSource::Type { .. }) {
-            return match refused {
-                Some(model) => Err(model_access_hold(&BTreeSet::from([model]))),
-                None => Ok(None),
-            };
-        }
-        let pools = if input.get(POOLS_KEY).is_some() {
-            pools_from_input(input)?
-        } else {
-            self.capture_auto_crew_pools(input)?
-        };
         let now = chrono::Utc::now();
         let tags = source
             .purpose()
@@ -512,9 +501,31 @@ impl OrbitRuntime {
             updated_at: now,
             not_before: None,
         };
-        let (crews, draw_source, _) =
-            self.admissible_claimed_leaf_crew_candidates(&view, &pools)?;
+        let (crews, draw_source) = if type_source {
+            // The source names the pool's type and tier. The follower does
+            // not need the owner's tags or context files to open that pool.
+            self.type_assignment_candidates(&view)?
+                .unwrap_or_else(|| (Vec::new(), source.to_string()))
+        } else {
+            let pools = if input.get(POOLS_KEY).is_some() {
+                pools_from_input(input)?
+            } else {
+                self.capture_auto_crew_pools(input)?
+            };
+            let (crews, draw_source, _) =
+                self.admissible_claimed_leaf_crew_candidates(&view, &pools)?;
+            (crews, draw_source)
+        };
         let mut crews = self.reresolve_auto_candidates(crews, &task_auto_effort_subject(&view))?;
+        if type_source {
+            let hold = self.admission_provider_hold(&view);
+            let gate = self.provider_limit_gate(now);
+            crews.retain(|candidate| {
+                hold.as_ref().is_none_or(|hold| {
+                    !hold.excluded_crews.is_empty() && !hold.excludes(&candidate.crew.name)
+                }) && gate.limit_for(&candidate.crew).is_none()
+            });
+        }
         let allowlist = self.crew_allowlist_from_input(input)?;
         let drawable = |candidate: &CrewCandidate| {
             candidate.weight > 0
