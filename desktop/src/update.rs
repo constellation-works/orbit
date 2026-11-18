@@ -121,7 +121,7 @@ impl Updater {
     fn check(&mut self, manual: bool) {
         let _ = self.item.set_enabled(false);
         let _ = self.item.set_text("Checking for Updates…");
-        let today = chrono::Utc::now().date_naive();
+        let today = time::OffsetDateTime::now_utc().date();
         match self
             .releases
             .check(self.current, self.asset, trust::TRUSTED_RELEASE_KEYS, today)

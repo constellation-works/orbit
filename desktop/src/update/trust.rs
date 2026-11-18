@@ -6,12 +6,12 @@
 //! `scripts/check-installer-pubkey.sh` fails CI when they drift. Rotation
 //! edits both, as `docs/runbooks/release.md` describes.
 
-use chrono::NaiveDate;
 use rsa::RsaPublicKey;
 use rsa::pkcs1v15::{Signature, VerifyingKey};
 use rsa::pkcs8::DecodePublicKey;
 use rsa::signature::Verifier;
 use sha2::{Digest, Sha256};
+use time::{Date, Month};
 
 /// One release signing key. Dates are `YYYY-MM-DD`.
 #[derive(Debug, Clone, Copy)]
@@ -48,6 +48,32 @@ pub(crate) const TRUSTED_RELEASE_KEYS: &[TrustedReleaseKey] = &[TrustedReleaseKe
     public_key_pem: ORBIT_RELEASE_KEY_3_PEM,
 }];
 
+/// Parse a strict `YYYY-MM-DD` calendar date, rejecting invalid dates.
+pub(crate) fn parse_trust_date(text: &str) -> Result<Date, String> {
+    let bytes = text.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return Err(format!("invalid date {text:?}: expected YYYY-MM-DD"));
+    }
+    let parse_part = |digits: &[u8]| -> Result<i32, String> {
+        if !digits.iter().all(|byte| byte.is_ascii_digit()) {
+            return Err(format!("invalid date {text:?}: expected YYYY-MM-DD"));
+        }
+        Ok(digits
+            .iter()
+            .fold(0i32, |value, byte| value * 10 + i32::from(byte - b'0')))
+    };
+    let year = parse_part(&bytes[0..4])?;
+    let month = parse_part(&bytes[5..7])?;
+    let day = parse_part(&bytes[8..10])?;
+    let month = u8::try_from(month)
+        .ok()
+        .and_then(|month| Month::try_from(month).ok())
+        .ok_or_else(|| format!("invalid date {text:?}: month out of range"))?;
+    let day = u8::try_from(day).map_err(|_| format!("invalid date {text:?}: day out of range"))?;
+    Date::from_calendar_date(year, month, day)
+        .map_err(|error| format!("invalid date {text:?}: {error}"))
+}
+
 /// Verify a detached PKCS#1 v1.5 SHA-256 signature over `manifest` and return
 /// the ID of the key that made it.
 ///
@@ -57,7 +83,7 @@ pub(crate) fn verify_manifest(
     manifest: &[u8],
     signature: &[u8],
     keys: &[TrustedReleaseKey],
-    today: NaiveDate,
+    today: Date,
 ) -> Result<&'static str, String> {
     let signature = Signature::try_from(signature)
         .map_err(|error| format!("the checksum signature is malformed: {error}"))?;
@@ -77,7 +103,7 @@ pub(crate) fn verify_manifest(
                 key.id
             ));
         }
-        let not_after = NaiveDate::parse_from_str(key.not_after, "%Y-%m-%d")
+        let not_after = parse_trust_date(key.not_after)
             .map_err(|error| format!("release key {} has an invalid not_after: {error}", key.id))?;
         if today > not_after {
             return Err(format!(

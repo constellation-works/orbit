@@ -1,8 +1,10 @@
-use chrono::NaiveDate;
 use rsa::RsaPublicKey;
 use rsa::pkcs8::DecodePublicKey;
+use time::Date;
 
-use super::super::trust::{TRUSTED_RELEASE_KEYS, TrustedReleaseKey, checksum_for, verify_manifest};
+use super::super::trust::{
+    TRUSTED_RELEASE_KEYS, TrustedReleaseKey, checksum_for, parse_trust_date, verify_manifest,
+};
 
 const MANIFEST: &[u8] = include_bytes!("fixtures/manifest.txt");
 const SIGNATURE: &[u8] = include_bytes!("fixtures/manifest.txt.sig");
@@ -18,8 +20,8 @@ fn key(not_after: &'static str, revoked_at: Option<&'static str>) -> TrustedRele
     }
 }
 
-fn day(text: &str) -> NaiveDate {
-    NaiveDate::parse_from_str(text, "%Y-%m-%d").unwrap()
+fn day(text: &str) -> Date {
+    parse_trust_date(text).unwrap()
 }
 
 #[test]
@@ -40,6 +42,24 @@ fn refuses_a_manifest_signed_by_a_revoked_or_expired_key() {
     let expired = [key("2026-12-31", None)];
     let error = verify_manifest(MANIFEST, SIGNATURE, &expired, day("2027-01-01")).unwrap_err();
     assert!(error.contains("expired"), "{error}");
+}
+
+#[test]
+fn refuses_a_key_with_an_invalid_not_after() {
+    for invalid in [
+        "2030-02-30",
+        "2030-13-01",
+        "2030-00-10",
+        "not-a-date",
+        "2030-1-01",
+    ] {
+        let keys = [key(invalid, None)];
+        let error = verify_manifest(MANIFEST, SIGNATURE, &keys, day("2027-01-01")).unwrap_err();
+        assert!(error.contains("invalid not_after"), "{invalid}: {error}");
+    }
+    // Leap day is a real date and remains valid.
+    assert!(parse_trust_date("2028-02-29").is_ok());
+    assert!(parse_trust_date("2027-02-29").is_err());
 }
 
 #[test]
