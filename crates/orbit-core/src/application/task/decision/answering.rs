@@ -310,17 +310,25 @@ impl OrbitRuntime {
                     }
                 };
                 // Requests raised before the offer was hold-aware still list
-                // `evaluated`. Refuse it before the comment: a successful
-                // apply is what appends `decision_answered`, and this verdict
-                // records no resolution for a duplicate or already-landed hold.
+                // `evaluated`, and older requests exist for stale holds.
+                // Refuse before the comment: a successful apply is what
+                // appends `decision_answered`, and these verdicts record no
+                // resolution for the hold.
                 if let Some(hold) = self.pilot_admission_hold(task_id)?
                     && !hold.accepts_decision_answer(verdict)
                 {
-                    return Err(OrbitError::decision_refused(
-                        DecisionRefusalCode::AnswerNotApplicable,
+                    let message = if matches!(hold, PilotAdmissionHold::StaleAssessment(_)) {
+                        format!(
+                            "`{answer_id}` does not resolve a stale pilot assessment, which needs a new pilot; nothing was applied"
+                        )
+                    } else {
                         format!(
                             "`{answer_id}` does not resolve a duplicate or already-landed pilot hold; nothing was applied and the request stays open"
-                        ),
+                        )
+                    };
+                    return Err(OrbitError::decision_refused(
+                        DecisionRefusalCode::AnswerNotApplicable,
+                        message,
                     ));
                 }
                 // The trusted human path records the typed resolution from

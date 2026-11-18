@@ -490,7 +490,7 @@ fn a_drain_hold_is_the_typed_decision_and_rationale_text_cannot_forge_one() {
     let note = entry.note.as_deref().expect("pilot history note");
     assert!(
         note.contains(forged),
-        "the rationale reaches history unsanitised: {note}"
+        "the rationale text must reach history: {note}"
     );
     assert!(
         !note.chars().any(char::is_control),

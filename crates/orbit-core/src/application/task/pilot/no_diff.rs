@@ -214,7 +214,7 @@ impl VerifiedNoDiff {
             return Err(format!("no cited commit is on {base}"));
         }
 
-        let named = named_commits(runtime, source, task);
+        let named = named_commits(runtime, source, task)?;
         if named.is_empty() && paths.is_empty() {
             return Err(
                 "the finding names no commit and no path to relate a cited commit to".into(),
@@ -427,8 +427,15 @@ fn hex_tokens<'a>(
 
 /// The full SHAs of the commits the finding itself names: every commit that
 /// resolves from its description, and the landed commit of each
-/// `regression_from` target that delivery observed as merged.
-fn named_commits(runtime: &OrbitRuntime, source: &dyn SourceGit, task: &Task) -> Vec<String> {
+/// `regression_from` target that delivery observed as merged. A target never
+/// delivered names no commit; any other observation failure refuses the
+/// proof, since a missed culprit would let a proof citing it close the
+/// finding.
+fn named_commits(
+    runtime: &OrbitRuntime,
+    source: &dyn SourceGit,
+    task: &Task,
+) -> Result<Vec<String>, String> {
     let mut named = hex_tokens([task.description.as_str()], abbreviated_sha)
         .iter()
         .filter_map(|sha| resolve_commit(source, sha))
@@ -437,9 +444,17 @@ fn named_commits(runtime: &OrbitRuntime, source: &dyn SourceGit, task: &Task) ->
         if relation.relation_type != TaskRelationType::RegressionFrom {
             continue;
         }
-        let landed = runtime
-            .delivery_observation(relation.target.as_str(), None)
-            .ok()
+        let observation = match runtime.delivery_observation(relation.target.as_str(), None) {
+            Ok(observation) => Some(observation),
+            Err(OrbitError::TaskDeliveryUnavailable(_)) => None,
+            Err(error) => {
+                return Err(format!(
+                    "the delivery of regression culprit {} could not be read: {error}",
+                    relation.target
+                ));
+            }
+        };
+        let landed = observation
             .filter(|observation| observation.landing.status == LandingObservationStatus::Merged)
             .and_then(|observation| observation.landing.landed_commit)
             .and_then(|sha| resolve_commit(source, &sha));
@@ -447,7 +462,7 @@ fn named_commits(runtime: &OrbitRuntime, source: &dyn SourceGit, task: &Task) ->
     }
     named.sort();
     named.dedup();
-    named
+    Ok(named)
 }
 
 fn resolve_commit(source: &dyn SourceGit, revision: &str) -> Option<String> {

@@ -321,11 +321,17 @@ fn resolution_verb_negated(lower: &str, verb_at: usize) -> bool {
     // an affirmative verb preceded by an adverb still resolves.
     // "only" ends in "ly", so the walk reaches "not" in "not only
     // preserve ... but also ...". That correlative affirms the verb.
+    // A typographic apostrophe ("don’t") reads as the ASCII one, and "no"
+    // negates only as "no longer".
     let prefix = lower[..verb_at].trim_end();
     let mut scanned = 0;
     let mut only_in_window = false;
+    let mut after_longer = false;
     for token in prefix.rsplit(|c: char| c.is_whitespace()) {
-        let token = token.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'');
+        let token = token
+            .trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '\u{2019}')
+            .replace('\u{2019}', "'");
+        let token = token.as_str();
         if token.is_empty() {
             continue;
         }
@@ -333,7 +339,14 @@ fn resolution_verb_negated(lower: &str, verb_at: usize) -> bool {
         if scanned > 4 {
             break;
         }
-        if token == "not" || token == "never" || token == "cannot" || token.ends_with("n't") {
+        let no_longer = token == "no" && after_longer;
+        after_longer = token == "longer";
+        if no_longer
+            || token == "not"
+            || token == "never"
+            || token == "cannot"
+            || token.ends_with("n't")
+        {
             if token == "not" && only_in_window && not_only_but_also_in_sentence(lower, verb_at) {
                 only_in_window = false;
                 continue;

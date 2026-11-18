@@ -4,7 +4,7 @@ use super::super::TaskUpdateParams;
 use crate::OrbitRuntime;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_types::task::{Task, TaskHistoryEntry};
+use orbit_types::task::{Task, TaskComment, TaskHistoryEntry};
 
 const PILOT_REQUIREMENTS_EDITED_EVENT: &str = "pilot_requirements_edited";
 use serde_json::{Value, json};
@@ -16,8 +16,9 @@ impl OrbitRuntime {
     pub(crate) fn task_pilot_scheduling_assessment(
         &self,
         task_id: &str,
+        resolved_comments: &[TaskComment],
     ) -> Result<Option<bool>, OrbitError> {
-        self.task_pilot_applied_assessment(task_id, false)
+        self.task_pilot_assessment_from_comments(task_id, resolved_comments, false)
     }
 
     /// Reuse applied evidence for preparation unless edited requirements need
@@ -28,16 +29,18 @@ impl OrbitRuntime {
         &self,
         task_id: &str,
     ) -> Result<Option<bool>, OrbitError> {
-        self.task_pilot_applied_assessment(task_id, true)
+        let comments = self.get_task_pilot_comments(task_id)?;
+        self.task_pilot_assessment_from_comments(task_id, &comments, true)
     }
 
-    fn task_pilot_applied_assessment(
+    /// `comments` must carry resolved pilot audits.
+    fn task_pilot_assessment_from_comments(
         &self,
         task_id: &str,
+        comments: &[TaskComment],
         reassess_requirements: bool,
     ) -> Result<Option<bool>, OrbitError> {
-        let comments = self.get_task_pilot_comments(task_id)?;
-        for (_, receipt) in super::pilot_receipts(&comments) {
+        for (_, receipt) in super::pilot_receipts(comments) {
             if !super::is_operation_id(receipt.operation_id) {
                 continue;
             }

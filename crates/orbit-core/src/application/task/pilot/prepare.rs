@@ -4,7 +4,7 @@ use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
     ACCEPTANCE_CRITERIA_DOCUMENT, DESCRIPTION_DOCUMENT, TASK_FIELDS_UPDATED_EVENT, Task,
-    TaskComplexity, TaskStatus, task_fields_updated_documents,
+    TaskComment, TaskComplexity, TaskStatus, task_fields_updated_documents,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -294,8 +294,23 @@ pub(crate) fn prepare(
             // they do not exclude it either. Waiving that reason must not
             // waive exclusions hidden behind it in the short-circuit chain
             // above: recompute the independent gates in chain order.
-            let stale_repilot = matches!(reason, None | Some("context_files_not_empty"))
-                && stale_repilot_candidate(runtime, action, &envelope.id, &claimed_tasks)?;
+            // One task's unresolvable assessment artifact excludes that
+            // task alone; the rest of the pass still runs.
+            let stale_repilot = if matches!(reason, None | Some("context_files_not_empty")) {
+                match stale_repilot_candidate(runtime, action, &envelope.id, &claimed_tasks)? {
+                    Some(stale) => stale,
+                    None => {
+                        excluded.record(
+                            &envelope.id,
+                            PILOT_ASSESSMENT_UNAVAILABLE,
+                            &active_preparations,
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                false
+            };
             let reason = if stale_repilot && reason == Some("context_files_not_empty") {
                 no_diff_exclusion_reason(&envelope.tags)
                     .or_else(|| {
@@ -307,11 +322,12 @@ pub(crate) fn prepare(
             } else {
                 reason
             };
-            let reason = if reason.is_none()
-                && !stale_repilot
-                && already_piloted(runtime, action, &envelope.id)?
-            {
-                Some("assessment_already_applied")
+            let reason = if reason.is_none() && !stale_repilot {
+                match already_piloted(runtime, action, &envelope.id)? {
+                    Some(true) => Some("assessment_already_applied"),
+                    Some(false) => None,
+                    None => Some(PILOT_ASSESSMENT_UNAVAILABLE),
+                }
             } else {
                 reason
             };
@@ -736,20 +752,21 @@ fn left_automatic_selection(
 /// `task_pilot_unresolved` record after the latest apply; it keeps the task
 /// held until a later description/criteria edit, a newer assessment or an
 /// operator action, matching the drain's unresolved hold.
+/// `None` when the task's pilot assessment cannot be resolved.
 fn stale_repilot_candidate(
     runtime: &OrbitRuntime,
     action: &str,
     task_id: &str,
     claimed_tasks: &BTreeSet<String>,
-) -> Result<bool, DispatchError> {
+) -> Result<Option<bool>, DispatchError> {
     if claimed_tasks.contains(task_id) {
-        return Ok(false);
+        return Ok(Some(false));
     }
     let task = runtime.get_task(task_id).map_err(|error| {
         DispatchError::action_failed(action, format!("read task {task_id}: {error}"))
     })?;
     if !matches!(task.status, TaskStatus::Proposed | TaskStatus::Backlog) {
-        return Ok(false);
+        return Ok(Some(false));
     }
     let history = runtime.get_task_history(task_id).map_err(|error| {
         DispatchError::action_failed(action, format!("read task {task_id} history: {error}"))
@@ -781,39 +798,45 @@ fn stale_repilot_candidate(
             && latest_applied.is_none_or(|applied| entry.at > applied)
             && latest_requirements_edit.is_none_or(|edited| entry.at >= edited)
     }) {
-        return Ok(false);
+        return Ok(Some(false));
     }
-    let comments = runtime.get_task_pilot_comments(task_id).map_err(|error| {
-        DispatchError::action_failed(action, format!("read task {task_id} comments: {error}"))
-    })?;
+    let Some(comments) = resolved_pilot_comments(runtime, action, task_id)? else {
+        return Ok(None);
+    };
     let Some((_, receipt)) = super::pilot_receipts(&comments).next() else {
-        return Ok(false);
+        return Ok(Some(false));
     };
     if !super::is_operation_id(receipt.operation_id) {
-        return Ok(false);
+        return Ok(Some(false));
     }
     let Ok(audit) = serde_json::from_str::<Value>(receipt.body) else {
-        return Ok(false);
+        return Ok(Some(false));
     };
     super::freshness::pilot_requirements_stale(&task, &audit, receipt.operation_id, &|| {
         runtime.get_task_history(task_id)
     })
+    .map(Some)
     .map_err(|error| DispatchError::action_failed(action, error.to_string()))
 }
 
+/// Whether `task_id` already carries an applied assessment; `None` when its
+/// pilot assessment cannot be resolved.
 fn already_piloted(
     runtime: &OrbitRuntime,
     action: &str,
     task_id: &str,
-) -> Result<bool, DispatchError> {
+) -> Result<Option<bool>, DispatchError> {
+    let Some(comments) = resolved_pilot_comments(runtime, action, task_id)? else {
+        return Ok(None);
+    };
     if runtime
-        .task_pilot_scheduling_assessment(task_id)
+        .task_pilot_scheduling_assessment(task_id, &comments)
         .map_err(|error| {
             DispatchError::action_failed(action, format!("read task {task_id} assessment: {error}"))
         })?
         .is_some()
     {
-        return Ok(true);
+        return Ok(Some(true));
     }
     let history = runtime.get_task_history(task_id).map_err(|error| {
         DispatchError::action_failed(action, format!("read task {task_id} history: {error}"))
@@ -823,13 +846,34 @@ fn already_piloted(
         .rev()
         .find(|entry| entry.event == "task_pilot_applied")
     else {
-        return Ok(false);
+        return Ok(Some(false));
     };
-    let comments = runtime.get_task_pilot_comments(task_id).map_err(|error| {
+    let no_target_assessment = persist::no_target_pilot_assessment(applied, &comments);
+    Ok(Some(no_target_assessment.is_some()))
+}
+
+/// Discovery exclusion for a task whose pilot assessment artifact is missing,
+/// oversized or fails its digest check. It holds that task alone.
+const PILOT_ASSESSMENT_UNAVAILABLE: &str = "pilot_assessment_unavailable";
+
+/// `task_id`'s comments with pilot audits resolved, or `None` when an
+/// assessment artifact cannot be resolved. A failed comment read still fails
+/// the pass.
+fn resolved_pilot_comments(
+    runtime: &OrbitRuntime,
+    action: &str,
+    task_id: &str,
+) -> Result<Option<Vec<TaskComment>>, DispatchError> {
+    let comments = runtime.get_task_comments(task_id).map_err(|error| {
         DispatchError::action_failed(action, format!("read task {task_id} comments: {error}"))
     })?;
-    let no_target_assessment = persist::no_target_pilot_assessment(applied, &comments);
-    Ok(no_target_assessment.is_some())
+    match runtime.resolve_task_pilot_comments(task_id, &comments) {
+        Ok(resolved) => Ok(Some(resolved)),
+        Err(error) => {
+            tracing::warn!(task_id, %error, "pilot assessment unavailable; excluded from discovery");
+            Ok(None)
+        }
+    }
 }
 
 /// Bounded evidence for routine (non-explicit) discovery exclusions: every

@@ -65,6 +65,13 @@ pub(in super::super) fn operation_was_applied(
         .any(|event| event.event == "task_pilot_applied" && event.receipt() == Some(operation_id)))
 }
 
+fn task_deleted() -> ApplyTaskOutcome {
+    ApplyTaskOutcome::Stale(
+        "task_deleted",
+        "task no longer exists at the write boundary".to_string(),
+    )
+}
+
 pub(in super::super) fn apply_task(
     runtime: &OrbitRuntime,
     snapshot: &PreparedTaskSnapshot,
@@ -105,8 +112,15 @@ pub(in super::super) fn apply_task(
         // lock, then lock all of it in one sorted order. A walk under fewer
         // locks would take a later task's lock out of order and could wait
         // forever on another application doing the same [ORB-15408].
-        let graph = runtime
-            .discover_pilot_dependency_graph(&runtime.get_task(&task.task_id)?, &local_findings)?;
+        #[cfg(test)]
+        lock_hook::fire(lock_hook::Point::BeforeDiscovery);
+        // A task deleted since assess is stale here too, as it is under the locks.
+        let discovered = match runtime.get_task(&task.task_id) {
+            Ok(discovered) => discovered,
+            Err(OrbitError::NotFound { .. }) => return Ok(task_deleted()),
+            Err(error) => return Err(error),
+        };
+        let graph = runtime.discover_pilot_dependency_graph(&discovered, &local_findings)?;
         let mut lock_ids = vec![task.task_id.clone()];
         lock_ids.extend(graph.task_ids().cloned());
         lock_ids.sort();
@@ -145,10 +159,7 @@ pub(in super::super) fn apply_task(
             let mut current = match runtime.get_task(&task.task_id) {
                 Ok(current) => current,
                 Err(OrbitError::NotFound { .. }) => {
-                    outcome = Some(ApplyTaskOutcome::Stale(
-                        "task_deleted",
-                        "task no longer exists at the write boundary".to_string(),
-                    ));
+                    outcome = Some(task_deleted());
                     return Ok(());
                 }
                 Err(error) => return Err(error),

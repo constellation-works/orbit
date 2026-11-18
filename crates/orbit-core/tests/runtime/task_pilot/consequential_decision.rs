@@ -168,6 +168,21 @@ fn undecided_consequential_decision_holds_and_ordinary_choice_does_not() {
         "the ownership policy",
     );
 
+    // [ORB-25722] Typographic-apostrophe contractions and "no longer" negate too.
+    for sentence in [
+        "The ownership policy was undecided. Don\u{2019}t preserve the current ownership policy.",
+        "The ownership policy was undecided. We won\u{2019}t keep the current ownership policy.",
+        "The ownership policy was undecided. No longer preserve the current ownership policy.",
+    ] {
+        let task = filed(&workspace, sentence);
+        assert_holds(
+            &assess(&workspace, &task, json!([])),
+            "the ownership policy",
+            "a negated resolution verb must not count as a resolution",
+        );
+        assert_public_hold(&workspace, &task, "the ownership policy");
+    }
+
     let never_keep = filed(
         &workspace,
         "The ownership policy was undecided. Never keep the current ownership policy.",

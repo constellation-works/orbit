@@ -2,6 +2,8 @@ use std::cell::RefCell;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in super::super) enum Point {
+    /// Graph discovery is about to read the assessed task, unlocked.
+    BeforeDiscovery,
     /// The graph is discovered and no task lock is held yet.
     Discovered,
     /// Every lock is held and nothing has been read under them.

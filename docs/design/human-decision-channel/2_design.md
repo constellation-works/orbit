@@ -156,7 +156,9 @@ per request:
   criteria, which is a free-form edit). A duplicate or already-landed hold
   offers and accepts only `approve_anyway` and `clear`: `evaluated` does not
   override those findings, and an answer that cannot resolve the hold is
-  refused before the request is consumed. The answer records the same
+  refused before the request is consumed. A stale assessment raises no
+  request: only a new pilot resolves it, so it is surfaced for a repilot
+  instead, and an older request still open for it refuses every answer. The answer records the same
   `TaskDecision::PilotAdmission` history entry a verdict comment records, against
   the hold's `operation_id`, so `operator_resolution`
   (`crates/orbit-core/src/application/task/pilot/admission/backlog.rs`) accepts it

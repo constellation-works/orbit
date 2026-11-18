@@ -104,10 +104,12 @@ impl PilotAdmissionHold {
     /// Whether `verdict` records a resolution for this hold.
     ///
     /// A duplicate or already-landed finding accepts only an overriding
-    /// verdict. Every other hold keeps the answers it already accepted;
+    /// verdict, and a stale assessment accepts none: only a new pilot
+    /// resolves it. Every other hold keeps the answers it already accepted;
     /// evidence rules for `evaluated` still run when that comment is applied.
     pub(crate) fn accepts_decision_answer(&self, verdict: PilotAdmissionVerdict) -> bool {
         match self {
+            Self::StaleAssessment(_) => false,
             Self::Duplicate | Self::AlreadyLanded => verdict.overrides_findings(),
             _ => true,
         }
