@@ -367,9 +367,10 @@ spec:
     Verdict
 
     - `accept`: no defects, every required check passed, every record fits its
-      role, and you changed nothing.
+      role, and you changed no tracked file. Refreshing task-artifact
+      evidence alone (below) is not a tracked change and does not alter this.
     - `accept_with_fixes`: every finding `repaired`, every required check passed
-      on the fixed tree, and you changed files.
+      on the fixed tree, and you changed tracked files.
     - `reject`: an open finding you may not or could not fix, or a failed required
       check. Set `escalation` to the decision needed.
     - `incomplete`: the review could not finish (a denied required check,
@@ -379,6 +380,63 @@ spec:
       could not run a check. Failed checks, ambiguous intent, stale candidates
       and unnamed missing checks do not qualify.
     - Never report `accept` or `accept_with_fixes` with an unrun required check.
+
+    Evidence-only screenshot corrections (worked examples)
+
+    A screenshot is review evidence, not a tracked fix. Writing a capture
+    under `.orbit/tmp/` and attaching it with `orbit.task.artifact` action
+    `put` changes no tracked file, creates no reviewer repair commit, and
+    its artifact path (`screenshots/<view>-<theme>-<width>.png`) is not a
+    repository path for a `repaired` finding. Do not record an evidence-only
+    refresh as a finding at all: not `repaired` (that means fixed in this
+    attempt's reviewer commit), not `open`, and not `disposed` as a route
+    around the gate (`disposed` is for a suspicion an authorized decision
+    disposed of). Record the refresh in `summary` and in the required
+    validation record it satisfies. A tracked-file fix is the opposite:
+    record each such finding `repaired` with every changed tracked path in
+    `paths`, validate the fixed tree, and return `accept_with_fixes`.
+
+    - Clean tree, refreshed screenshots (an `accept`). Suppose the candidate
+      is fully verified except that an attached 375px capture does not show
+      the changed view, and the named required evidence is the record
+      `{"id":"V6","command":"<the manifest's screenshot check>","check":"changed-page screenshots","outcome":"passed","role":"required"}`
+      together with the attached artifact
+      `screenshots/<view>-<theme>-375.png`. Regenerate the capture, write it
+      under `.orbit/tmp/`, attach it at that same artifact path, and rerun
+      that same check. Report no finding for the refresh, keep `V6` with the
+      same `id`, `check` and `command` and outcome `passed` (its `note` may
+      name the refreshed artifact paths), say in `summary` that the named
+      screenshots were refreshed and rechecked, and return `accept`. This
+      settles consistently: the worktree is clean, so there is no repair;
+      there is no open finding; and the required record passed. Returning
+      `accept_with_fixes` with a `repaired` finding here is downgraded to
+      `incomplete` (`verdict_inconsistent: the reviewer reported fixes but
+      changed nothing`), and leaving the refresh `open` under an accept is
+      downgraded the same way. A differently named artifact or a new
+      diagnostic does not satisfy this evidence: the refreshed capture must
+      meet the same named required record and artifact path.
+    - Ready screenshots, stale optional PR presentation (not a rejection).
+      Suppose every required screenshot is ready: the artifact listing shows
+      each required `screenshots/...` artifact and every required screenshot
+      record passed, but the already-open PR's `## Screenshots` table is
+      stale, blank in a Before cell, or missing a row. That table is
+      optional presentation rendered by `pr_open` from the attached
+      artifacts; it is not a required validation record, you have no
+      authority to write the PR body, and an empty optional section never
+      blocks a candidate. Note the stale table in `summary`, record no
+      finding for it, and let the verdict follow the candidate (`accept`
+      with no tracked change, or `accept_with_fixes` for a tracked fix
+      validated on the fixed tree). Do not `reject` or escalate asking a PR
+      owner to refresh the table first.
+    - Absent or failed required screenshots (still blocking). If a required
+      `screenshots/...` artifact is absent, or its required record is
+      `failed`, `not_run` or `denied` with no named `external_evidence`
+      covering it, the evidence is not ready: keep the record's real
+      outcome, leave an `open` finding (or return `incomplete` with an
+      `escalation` when the check could not run and named external evidence
+      is the only gap), and do not report a pass. Settlement stays
+      fail-closed here, exactly as for a claimed tracked repair with no
+      tracked change, which it still downgrades.
 
     Report
 
