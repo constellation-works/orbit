@@ -448,13 +448,31 @@ fn exercise_qa_recipe_boundary(boundary: &str) {
         // Hold `spawn_pid` and `pid_token` before `$$` is published, so the
         // runner cannot learn the PID from the child. `unreaped` and `timeout`
         // also spawn a descendant that ignores SIGTERM, then block the same way.
-        r#"SERVE_CMD=(/bin/sh -c 'case "$QA_BOUNDARY" in unreaped|timeout) (trap "" TERM; exec sleep 300) & printf "%s\n" "$!" >"$QA_BASE/descendant.pid"; printf ready >"$QA_BASE/ready.fifo"; read -r _ <"$QA_BASE/hold.fifo" ;; spawn_pid|pid_token) read -r _ <"$QA_BASE/hold.fifo" ;; esac; echo $$ >"$QA_BASE/child.pid"; echo "Dashboard listening on http://127.0.0.1:9"; exec sleep 300')"#,
+        r#"SERVE_CMD=(/bin/sh -c 'case "$QA_BOUNDARY" in unreaped|timeout) (trap "" TERM; exec sleep 300) & printf "%s\n" "$!" >"$QA_BASE/descendant.pid"; printf ready >"$QA_BASE/ready.fifo"; read -r _ <"$QA_BASE/hold.fifo" ;; spawn_pid|pid_token) read -r _ <"$QA_BASE/hold.fifo" ;; esac; echo $$ >"$QA_BASE/child.pid"; exec /usr/bin/python3 "$QA_BASE/listener.py"')"#,
     );
+    // The stub owns its loopback listener: it binds an ephemeral port, announces
+    // that port and keeps it open until it exits. A fixed announced port would
+    // let an unrelated local service decide the recipe's "still listening"
+    // teardown probe (STD-04 §R7).
+    std::fs::write(
+        qa_base.join("listener.py"),
+        r#"import os, socket, time
+listener = socket.socket()
+listener.bind(("127.0.0.1", 0))
+listener.listen(8)
+port = listener.getsockname()[1]
+with open(os.path.join(os.environ["QA_BASE"], "port"), "w") as handle:
+    handle.write(str(port))
+print(f"Dashboard listening on http://127.0.0.1:{port}", flush=True)
+time.sleep(300)
+"#,
+    )
+    .expect("write listener stub");
     // Patterns are single-quoted: `$!` inside double quotes would expand in
     // the DEBUG trap and miss the assignment command.
     let hook = r#"
 browser_start() { :; }
-browser_shoot() { echo shot > "$SHOTS/dashboard-dark-1280.png"; }
+browser_shoot() { qa_listening "${1##*:}" || return 1; echo shot > "$SHOTS/dashboard-dark-1280.png"; }
 browser_close() { :; }
 __boundary_fired=
 __record_child() {
@@ -847,9 +865,22 @@ sys.stdout.flush()
         "{boundary}: teardown must leave artifacts in place: {stdout}"
     );
     if boundary == "none" {
+        // The capture stub only writes after connecting to the announced port,
+        // so the capture proves the fixture's own listener was open. The
+        // recipe's teardown probe then found it closed (exit 0 above) after the
+        // child was reaped.
         assert!(
             shots.join("dashboard-dark-1280.png").exists(),
             "normal recipe run must keep its capture: {stdout}"
+        );
+        let port: u16 = std::fs::read_to_string(qa_base.join("port"))
+            .expect("listener stub must record the port it owns")
+            .trim()
+            .parse()
+            .expect("listener port");
+        assert!(
+            port > 1024 && port != 9,
+            "the stub must own an ephemeral port, not a fixed one: {port}"
         );
     }
 }
