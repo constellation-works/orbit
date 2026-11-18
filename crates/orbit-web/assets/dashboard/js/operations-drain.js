@@ -5,7 +5,7 @@ import { autoDrainForecast, refreshBacklogForecast } from './operations-forecast
 import { loadFleetSnapshot, paintRailDrainReading, repaintRailDrainFromFleet } from './operations-fleet.js';
 import { $, feedback, operationsState, pendingOperations, registerOperationsReset, runLink, selectedWorkspace, workspaceReadOnlyReason } from './operations-shared.js';
 import { taskList, taskState } from './task-shared.js';
-import { configureOperationsDrainControls, autoDrainConcurrencyValid, autoDrainConcurrencyValue, autoDrainStopButton, autoDrainStopNote, refreshDrainAfterAction, renderAutoDrainStart } from './operations-drain-controls.js';
+import { configureOperationsDrainControls, autoDrainConcurrencyValue, autoDrainStopButton, autoDrainStopNote, refreshDrainAfterAction, renderAutoDrainStart } from './operations-drain-controls.js';
 import { autoDrainBlocked, autoDrainCapacity, autoDrainCounts, autoDrainPhase, autoDrainPlural, autoDrainProviderAuth, autoDrainProviderLimitNote, autoDrainReasons, autoDrainShortRunId, autoDrainThrottleLine, autoDrainTimeLeft, updateDrainIndicators } from './operations-drain-capacity.js';
 
 let announcedDrainState = null;
@@ -39,6 +39,11 @@ function resetAggregateDrainSelection() {
   clearDrainChrome();
   clearStartCard("auto-drain-quick-start");
   feedback("auto-drain-operation-feedback", "", "");
+}
+
+function retireFailedDrainReadiness() {
+  resetAggregateDrainSelection();
+  for (const button of $("auto-drain-body")?.querySelectorAll("button") || []) button.disabled = true;
 }
 
 function aggregateDrainScope(workspace, hostName, connection, generation, checkoutUnavailable, mode = "aggregate") {
@@ -309,6 +314,17 @@ function onDrainTargetChanged({ workspaceId, host }, role) {
   resetAggregateDrainSelection();
   fetchAndRenderAutoDrain().catch(error => console.error(error));
 }
+function drainReadinessPath(hostName, workspaceId, detailTaskId) {
+  const host = hostName ? (findRegisteredHost(hostName)?.local ? "" : hostName) : getHost() || "";
+  const concurrency = autoDrainConcurrencyValue(host);
+  const params = new URLSearchParams();
+  if (workspaceId) params.set("workspace", workspaceId);
+  if (concurrency) params.set("concurrency", concurrency);
+  if (detailTaskId) params.set("also_task", detailTaskId);
+  const path = hostName ? `/api/on/${encodeURIComponent(hostName)}/workflows/auto/readiness` : "/api/workflows/auto/readiness";
+  return `${path}${params.size ? `?${params}` : ""}`;
+}
+
 // Readiness, connection and refusal for one chosen host. All workspaces and a
 // concrete board's follower use this; the owner's own board does not.
 async function loadScopedDrainReadiness({ fleet, workspace, hostName, generation, mode, stillCurrent }) {
@@ -320,7 +336,7 @@ async function loadScopedDrainReadiness({ fleet, workspace, hostName, generation
     start_options: { checkout: "replica", workspace_id: workspace.id, pull_refusal: PULL_OWNER_UNAVAILABLE } });
   const [connection, readiness] = await Promise.all([
     findRegisteredHost(hostName)?.local ? null : fetchJson(`/api/hosts/${encodeURIComponent(hostName)}/connection`),
-    checkoutUnavailable ? unavailable() : fetchJson(`/api/on/${encodeURIComponent(hostName)}/workflows/auto/readiness?workspace=${encodeURIComponent(workspace.id)}`)
+    checkoutUnavailable ? unavailable() : fetchJson(drainReadinessPath(hostName, workspace.id))
       .catch(error => {
         // Only a replica reads as an unavailable owner; an owner whose
         // workspace is inactive keeps the error its readiness returned.
@@ -794,8 +810,7 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
       if (guard()) {
         // Retire any retained controls too: a failed connection/readiness
         // refresh cannot leave a write enabled with stale authority.
-        resetAggregateDrainSelection();
-        for (const button of $("auto-drain-body")?.querySelectorAll("button") || []) button.disabled = true;
+        retireFailedDrainReadiness();
       }
       throw error;
     });
@@ -806,14 +821,6 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
   // the card. A remembered follower is a different read and resets on switch.
   const panelScope = remembered ? `board:${workspace.id}:${remembered}` : "/api/workflows/auto/readiness";
   const fleet = loadFleetSnapshot({ refreshWhenStale: false });
-  const ownerPath = () => {
-    const concurrency = autoDrainConcurrencyValid() ? autoDrainConcurrencyValue() : "";
-    const params = new URLSearchParams();
-    if (concurrency) params.set("concurrency", concurrency);
-    if (detailTaskId) params.set("also_task", detailTaskId);
-    const query = params.size ? `?${params.toString()}` : "";
-    return `/api/workflows/auto/readiness${query}`;
-  };
   const readiness = requestPanel("auto-drain-body", panelScope, async () => {
     if (!remembered) {
       if (generation !== drainScopeGeneration) return null;
@@ -822,14 +829,14 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
         if (generation !== drainScopeGeneration || selectedWorkspace()?.id !== workspace.id) return;
         paintConcreteHostSelect(snapshot, workspace);
       }).catch(error => console.error(error));
-      return fetchJson(ownerPath());
+      return fetchJson(drainReadinessPath(null, null, detailTaskId));
     }
     const snapshot = await fleet;
     if (generation !== drainScopeGeneration) return null;
     const resolved = paintConcreteHostSelect(snapshot, workspace);
     if (!resolved?.follower) {
       boardDrainHost = null;
-      return fetchJson(ownerPath());
+      return fetchJson(drainReadinessPath(null, null, detailTaskId));
     }
     boardDrainHost = resolved.selected;
     return loadScopedDrainReadiness({
@@ -846,8 +853,8 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
     if (detailTaskId && visit.isCurrent() && generation === drainScopeGeneration && !boardDrainHost) {
       setDrainReadinessFailure({ id: detailTaskId, workspace_id: workspace.id }, error.message || String(error));
     }
-    if (boardDrainHost && generation === drainScopeGeneration) {
-      for (const button of $("auto-drain-body")?.querySelectorAll("button") || []) button.disabled = true;
+    if (remembered && generation === drainScopeGeneration && visit.isCurrent()) {
+      retireFailedDrainReadiness();
     }
     throw error;
   });

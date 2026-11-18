@@ -437,26 +437,23 @@ function renderOverTime(payload) {
     return;
   }
 
-  const bars = series.map((point, index) => {
+  const bars = series.map((point) => {
     const settled = point.succeeded + point.failed;
-    const rate = settled > 0 ? point.failed / settled : null;
     const lowSample = settled > 0 && settled < 20;
+    const rate = settled && !lowSample ? point.failed / settled : null;
     const echoNote = point.cascaded > 0
       ? `; ${point.cascaded} wrapper echoes rolled into the delivery that failed`
       : "";
-    const bar = el("div", { class: "rel-bar-slot" });
+    const reading = lowSample ? `${point.failed}/${settled} settled runs failed, n too small to be confident`
+      : rate == null ? "no settled runs (n=0)"
+      : `${pctFormatter.format(rate)} failed (${point.failed}/${settled} settled)`;
+    const label = `${formatUtcDateTime(point.bucket_start)} — ${reading}${echoNote}`;
+    const bar = el("div", { class: "rel-bar-slot", role: "img", title: label, "aria-label": label, tabindex: "0" });
     const fill = el("div", {
-      class: `rel-bar${rate == null ? " rel-bar-empty" : lowSample ? " rel-bar-low" : ""}`,
+      class: `rel-bar${lowSample ? " rel-bar-low" : rate == null ? " rel-bar-empty" : ""}`,
     });
-    // A bucket with no settled runs gets a hairline, not a zero-height bar
-    // that would read identically to a clean 0% bucket.
-    fill.style.height = rate == null ? "2px" : `${Math.max(2, rate * 100)}%`;
+    fill.style.height = lowSample ? "6px" : rate == null ? "2px" : `${Math.max(2, rate * 100)}%`;
     bar.appendChild(fill);
-    bar.title =
-      rate == null
-        ? `${formatUtcDateTime(point.bucket_start)} — no settled runs (n=0)${echoNote}`
-        : `${formatUtcDateTime(point.bucket_start)} — ${pctFormatter.format(rate)} failed` +
-          ` (${point.failed}/${settled} settled${lowSample ? ", n too small to be confident" : ""})${echoNote}`;
     bar.dataset.key = `bucket-${point.bucket_start}`;
     bar.dataset.hash = `${point.failed}-${settled}-${point.cascaded}`;
     return bar;

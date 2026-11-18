@@ -129,6 +129,10 @@ function refreshDraftComplexityControl(wrap, task, context) {
   const newFeedback = refreshed.querySelector(":scope > .mutation-feedback");
   if (newFeedback) control.appendChild(newFeedback);
 }
+function taskActionSignature(task) {
+  return [pilotSignature(task), triageSignature(task), recoverySignature(task)].join("|");
+}
+
 // The pinned resolver result shares the normal detail's crew control. Only
 // the dock needs the outside-the-list note; full-page CSS hides that box. A
 // task the filter matches is only further down its section than the rows
@@ -150,7 +154,7 @@ function buildPinnedTask(ptask, context) {
   const wrap = el("div", { class: "pinned-task-wrap" }, [row, detail]);
   wrap.teardown = () => taskComments.disconnectCommentCards(wrap);
   wrap.dataset.key = `pinned-${taskShared.taskDispatchIdentity(ptask)}`;
-  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask)}-${fixPrSignature(ptask)}-${taskReadiness.operatorRecordSignature(ptask)}-${decisionAnswerSignature(ptask)}`;
+  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask)}-${taskActionSignature(ptask)}-${fixPrSignature(ptask)}-${taskReadiness.operatorRecordSignature(ptask)}-${decisionAnswerSignature(ptask)}`;
   return wrap;
 }
 /* ORB-11655: a comment or reject form, or an open field editor (ORB-12235),
@@ -245,7 +249,7 @@ function buildListTaskDetail(t, drafts, existing, context) {
   // its read state instead; a detail rendered from the cached projection must
   // not be rebuilt just because a refresh has a read in flight.
   const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t)}-${taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(t))}-${pilotSignature(t)}-${triageSignature(t)}-${recoverySignature(t)}-${taskReadiness.operatorRecordSignature(t)}-${decisionAnswerSignature(state.task || t)}-${fixPrSignature(t)}-${hostWriteRefusal()}`;
+  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t)}-${taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(t))}-${taskActionSignature(t)}-${taskReadiness.operatorRecordSignature(t)}-${decisionAnswerSignature(state.task || t)}-${fixPrSignature(t)}-${hostWriteRefusal()}`;
   const detailHash = `${baseHash}-${taskDrainSignature(drain)}`;
   const existingDetail = existing.get(key);
   if (existingDetail && existingDetail.dataset.hash === detailHash) return existingDetail;

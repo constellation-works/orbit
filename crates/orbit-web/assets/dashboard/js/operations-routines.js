@@ -303,40 +303,50 @@ function watchRoutineTimelineSize(track) {
 function routineTimeline(routines, now = Date.now()) {
   const horizon = 60 * 60_000;
   const due = routines
-    .map((routine) => ({ routine, first: new Date(routineNextAt(routine) || NaN).getTime() }))
-    .filter(({ first }) => Number.isFinite(first) && first >= now - 60_000 && first <= now + horizon)
-    .flatMap(({ routine, first }) => routineFireTimes(routine, first, now + horizon)
-      .map((at, index) => ({ routine, at, repeat: index > 0 })))
+    .flatMap(routine => {
+      const breaker = trippedBreaker(routine);
+      const active = routineState(routine) === "active";
+      const first = Date.parse(breaker ? breaker.next_trial_at : routineNextAt(routine));
+      if (!Number.isFinite(first) || first < now - 60_000 || first > now + horizon || (breaker && !active)) return [];
+      const kind = breaker ? "trial" : active ? "fires" : "skipped";
+      const times = breaker ? [first] : routineFireTimes(routine, first, now + horizon);
+      return times.map((at, index) => ({ routine, kind, at, repeat: index > 0 }));
+    })
     .sort((a, b) => a.at - b.at);
   const strip = el("section", { class: "operation-timeline" });
   strip.setAttribute("aria-label", "Next hour");
-  const fires = due.filter(({ routine }) => routine.enabled && routine.effective !== false).length;
-  const active = routines.filter((routine) => routineState(routine) === "active").length;
+  const fires = due.filter(slot => slot.kind === "fires");
+  const trials = due.filter(slot => slot.kind === "trial").length;
+  const active = new Set(fires.map(slot => slot.routine)).size;
+  const summary = [
+    fires.length ? `${fires.length} fire${fires.length === 1 ? "" : "s"} from ${active} active routine${active === 1 ? "" : "s"}` : "",
+    trials ? `${trials} breaker trial${trials === 1 ? "" : "s"}` : "",
+  ].filter(Boolean).join(" · ");
   strip.appendChild(el("div", { class: "operation-timeline-head" }, [
     el("strong", { text: "Next hour" }),
     el("span", { class: "operation-timeline-range mono", text: `${clockHm(now, { zone: false })} → ${clockHm(now + horizon)}` }),
-    el("span", { class: "operation-timeline-summary", text: due.length
-      ? `${fires} fire${fires === 1 ? "" : "s"} from ${active} active routine${active === 1 ? "" : "s"}`
-      : "nothing is due in the next hour" }),
+    el("span", { class: "operation-timeline-summary", text: summary || (due.length ? "all slots paused" : "nothing is due in the next hour") }),
     el("span", { class: "operation-timeline-legend" }, [
-      el("span", { class: "operation-timeline-key fires", text: "will fire" }),
-      el("span", { class: "operation-timeline-key skipped", text: "paused · slot skipped" }),
+      fires.length ? el("span", { class: "operation-timeline-key fires", text: "will fire" }) : null,
+      trials ? el("span", { class: "operation-timeline-key trial", text: "breaker trial" }) : null,
+      due.some(slot => slot.kind === "skipped") ? el("span", { class: "operation-timeline-key skipped", text: "paused · slot skipped" }) : null,
     ]),
   ]));
   const track = el("div", { class: "operation-timeline-track" });
   track.appendChild(el("div", { class: "operation-timeline-axis" }));
   // Label rows are assigned from their rendered pixel widths after the track
   // enters the DOM. Repeated fires keep their tick marks but do not add labels.
-  due.forEach(({ routine, at, repeat }) => {
+  due.forEach(({ routine, at, repeat, kind }) => {
     const pct = Math.min(100, Math.max(0, ((at - now) / horizon) * 100));
-    const fires = routine.enabled && routine.effective !== false;
     const label = repeat ? null : el("span", { class: "operation-timeline-label mono", text: routine.name });
-    const tick = el("div", { class: `operation-timeline-tick ${fires ? "fires" : "skipped"}` }, [
+    const tick = el("div", { class: `operation-timeline-tick ${kind}` }, [
       el("span", { class: "operation-timeline-mark" }),
       label,
     ]);
     tick.style.left = `${pct}%`;
-    tick.title = `${routine.name} · ${clockHm(at)}${fires ? "" : " · paused"}`;
+    tick.title = `${routine.name} · ${clockHm(at)}${kind === "trial" ? " · breaker trial" : kind === "skipped" ? " · paused" : ""}`;
+    tick.setAttribute("aria-label", tick.title);
+    tick.tabIndex = 0;
     track.appendChild(tick);
   });
   watchRoutineTimelineSize(track);

@@ -6,6 +6,7 @@ import {
   $,
   controlReason,
   cronText,
+  routineScheduleText,
   durationText,
   explainUnavailable,
   feedback,
@@ -248,6 +249,7 @@ function jobRow(job, workspace, streak) {
     ? job.routines.map((routine) => {
       const cadence = routine.trigger?.deliveries_landed ? "on delivery"
         : routine.trigger?.state ? "on task change"
+        : routine.trigger?.condition ? routineScheduleText(routine)
         : cronText(routine.cron, routine.next_evaluation?.at || routine.next_due);
       const chip = el("a", { class: `operation-chip ${routine.enabled ? "" : "paused"}`.trim(), text: `${routine.name} · ${cadence}${routine.enabled ? "" : " · paused"}` });
       chip.href = "#operations/routines";

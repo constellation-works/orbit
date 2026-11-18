@@ -103,19 +103,33 @@ export function pilotSignature(task) {
   return `${running ? running.runId : ""}|${pilotRefusals.get(key) || ""}`;
 }
 
+async function submitTaskAgentAction(detail, button, path, body) {
+  for (const note of detail.querySelectorAll(".lifecycle-actions .action-error")) note.remove();
+  for (const action of detail.querySelectorAll(".action")) action.disabled = true;
+  button.innerHTML = `<span class="spinner"></span>wait`;
+  try {
+    return await postJson(path, body);
+  } finally {
+    // A repeated refusal can have exactly the previous text. The mounted
+    // detail now shows pending controls, so settlement must repaint it even
+    // in that case. The pinned wrapper owns the hash outside the list.
+    const keyed = detail.closest("[data-key]");
+    if (keyed) {
+      delete keyed.dataset.hash;
+      delete keyed.dataset.baseHash;
+    }
+  }
+}
+
 async function runPilot(task, detail, btnNode, context) {
   const visit = captureWorkspaceVisit();
   const key = taskShared.taskDispatchIdentity(task);
   if (!canMutateTask(task) || pilotRunsByTask.has(key)) return;
   const requestPath = visit.path(taskMutationPath(task, "/pilot"));
   pilotRefusals.delete(key);
-  const prior = detail.querySelector(".action-error");
-  if (prior) prior.remove();
-  for (const b of detail.querySelectorAll(".action")) b.disabled = true;
-  btnNode.innerHTML = `<span class="spinner"></span>wait`;
   let result;
   try {
-    result = await postJson(requestPath, {});
+    result = await submitTaskAgentAction(detail, btnNode, requestPath, {});
   } catch (error) {
     if (!visit.isCurrent()) return;
     const message = `run pilot failed: ${error.message || String(error)}`;
@@ -236,13 +250,9 @@ async function runTriage(task, detail, btnNode, context) {
   if (!canMutateTask(task) || triageRunsByTask.has(key)) return;
   const requestPath = visit.path(taskMutationPath(task, "/triage"));
   triageRefusals.delete(key);
-  const prior = detail.querySelector(".action-error");
-  if (prior) prior.remove();
-  for (const b of detail.querySelectorAll(".action")) b.disabled = true;
-  btnNode.innerHTML = `<span class="spinner"></span>wait`;
   let result;
   try {
-    result = await postJson(requestPath, {});
+    result = await submitTaskAgentAction(detail, btnNode, requestPath, {});
   } catch (error) {
     if (!visit.isCurrent()) return;
     const message = `triage failed: ${error.message || String(error)}`;
@@ -379,12 +389,8 @@ async function runRecovery(task, detail, btnNode, context, kind) {
   }
   const requestPath = visit.path(taskMutationPath(task, suffix));
   forgetRecoveryRefusal(key);
-  const prior = detail.querySelector(".action-error");
-  if (prior) prior.remove();
-  for (const b of detail.querySelectorAll(".action")) b.disabled = true;
-  btnNode.innerHTML = `<span class="spinner"></span>wait`;
   try {
-    await postJson(requestPath, body);
+    await submitTaskAgentAction(detail, btnNode, requestPath, body);
   } catch (error) {
     if (!visit.isCurrent()) return;
     const code = error && error.code ? error.code : "recovery_refused";
