@@ -113,12 +113,22 @@ def raw_opener_at(line: str, quote: int):
     return None
 
 
-def unclosed_string_closer(line: str, block_depth: int):
-    """Return the string still open at the end of the line, and the block depth.
+def strings_in_line(line: str, pending, block_depth: int):
+    """Return literal contents on this line and the lexer state for the next.
 
-    A line that ends inside a block comment opens no string. `//` ends the
-    line. Raw closers are literal; ordinary strings honor backslash escapes.
+    Rust comments are skipped, including nested block comments. This keeps an
+    artifact ID in provenance from being mistaken for text when another string
+    literal happens to share the line.
     """
+    contents = []
+    if pending is not None:
+        content, closed, remainder = close_open_string(line, pending[0], pending[1])
+        contents.append(content)
+        if not closed:
+            return contents, pending, block_depth
+        pending = None
+        line = remainder
+
     index = 0
     while index < len(line):
         if block_depth > 0:
@@ -147,23 +157,28 @@ def unclosed_string_closer(line: str, block_depth: int):
                 closer = '"' + ("#" * hashes)
                 end = line.find(closer, index + 1)
                 if end == -1:
-                    return ("raw", closer), block_depth
+                    contents.append(line[index + 1:])
+                    return contents, ("raw", closer), block_depth
+                contents.append(line[index + 1:end])
                 index = end + len(closer)
                 continue
+            start = index + 1
             end = index + 1
             while end < len(line):
                 if line[end] == "\\":
                     end += 2
                     continue
                 if line[end] == '"':
+                    contents.append(line[start:end])
                     index = end + 1
                     break
                 end += 1
             else:
-                return ("normal", '"'), block_depth
+                contents.append(line[start:])
+                return contents, ("normal", '"'), block_depth
             continue
         index += 1
-    return None, block_depth
+    return contents, None, block_depth
 
 
 def close_open_string(line: str, kind: str, closer: str):
@@ -198,27 +213,14 @@ def main() -> int:
             pending = None
             block_depth = 0
             for line_number, line in production_lines(path):
-                remainder = line
-                if pending is not None:
-                    content, closed, remainder = close_open_string(remainder, pending[0], pending[1])
-                    if match := CONCRETE_ID.search(content):
-                        violations.append(
-                            f"{relative}:{line_number}: concrete artifact ID {match.group(0)!r} "
-                            "in a shipped string literal"
-                        )
-                    if not closed:
+                contents, pending, block_depth = strings_in_line(line, pending, block_depth)
+                for content in contents:
+                    if not (match := CONCRETE_ID.search(content)):
                         continue
-                    pending = None
-                # Internal provenance belongs in ordinary source comments, which
-                # are intentionally outside this shipped-string guard. A line
-                # that contains a quote keeps the previous same-line check.
-                code = strip_line_comment(remainder)
-                if '"' in code and (match := CONCRETE_ID.search(code)):
                     violations.append(
                         f"{relative}:{line_number}: concrete artifact ID {match.group(0)!r} "
                         "in a shipped string literal"
                     )
-                pending, block_depth = unclosed_string_closer(remainder, block_depth)
 
     if violations:
         print(

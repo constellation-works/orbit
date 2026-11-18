@@ -1603,7 +1603,48 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         # absent [ORB-23019]; the stubbed rg finds no matches in the empty file.
         app = self.root / "crates/orbit-core/src/application"
         app.mkdir(parents=True, exist_ok=True)
+        # The architecture scan walks these module roots even in this small
+        # manifest fixture. Keep the same empty paths as
+        # test-check-dependency-direction.py so missing-path controls remain
+        # meaningful without turning unrelated scans into failures.
+        for relative in (
+            "crates/orbit-core/src/application/agents",
+            "crates/orbit-core/src/application/experiment",
+            "crates/orbit-core/src/application/contracts",
+            "crates/orbit-core/src/application/task",
+            "crates/orbit-core/src/application/job",
+            "crates/orbit-core/src/application/job/run",
+            "crates/orbit-core/src/application/automation",
+            "crates/orbit-core/src/application/auto_tasks",
+            "crates/orbit-core/src/application/review",
+            "crates/orbit-core/src/application/distributed",
+            "crates/orbit-core/src/application/pull_drain",
+            "crates/orbit-core/src/application/admission",
+            "crates/orbit-core/src/application/workspace_auto",
+            "crates/orbit-core/src/application/backlog_forecast",
+            "crates/orbit-core/src/application/codebase",
+            "crates/orbit-core/src/application/resident",
+            "crates/orbit-core/src/application/search",
+            "crates/orbit-core/src/application/sweep_filing",
+            "crates/orbit-core/src/application/notice",
+            "crates/orbit-core/src/application/evolution",
+            "crates/orbit-core/src/application/landing",
+            "crates/orbit-core/src/application/routines",
+            "crates/orbit-core/src/application/job/pipeline",
+            "crates/orbit-core/src/composition",
+            "crates/orbit-core/src/runtime",
+            "crates/orbit-core/src/adapter",
+            "crates/orbit-core/src/bootstrap",
+            "crates/orbit-runtime/src",
+            "crates/orbit-automation/src",
+            "crates/orbit-store/src/contracts",
+            "crates/orbit-store/src/driver/file",
+            "crates/orbit-store/src/driver/sqlite",
+            "crates/orbit-store/src/fs",
+        ):
+            (self.root / relative).mkdir(parents=True, exist_ok=True)
         (app / "tag_instructions.rs").write_text("")
+        (app / "agent_corpus.rs").write_text("")
         # [ORB-25311] The vcs pr_answers guard scans these engine paths
         # directly via python and fails closed when absent; they must exist
         # (empty) so the fixture reports no match, mirroring
@@ -3277,6 +3318,7 @@ class ScriptFailClosedTests(unittest.TestCase):
         accepted = {
             "comment": 'fn note() {\n    // ORB-10021\n    let _text = r#"\n        fine\n    "#;\n}\n',
             "block": 'fn note() {\n    /*\n    ORB-10021\n    */\n    let _text = r#"fine"#;\n}\n',
+            "block comment beside a string": 'fn note() { /* " ORB-10021 */ let _text = "fine"; }\n',
             "char": "fn note() {\n    let _quote = '\"';\n    // ORB-1\n    let _text = r#\"fine\"#;\n}\n",
         }
         for name, text in accepted.items():
