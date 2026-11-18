@@ -136,15 +136,16 @@ pub(crate) fn build_state(
     state::DashboardState::from_registry(global_root, source)
 }
 
-/// Upper bound on graceful connection drain once a shutdown signal (ctrl-c or
-/// SIGTERM) is received — well under `orbit-web.service`'s
-/// `TimeoutStopUSec=90s` (see the 2026-09-05 restart incident, ORB-11246:
-/// `stop-sigterm` timed out and systemd fell back to SIGKILL). [`shutdown_signal`]
-/// also tells long-lived streaming handlers (`api::request_shutdown`, e.g.
-/// `/api/log/stream`) to close cooperatively as soon as shutdown begins, so in
-/// practice the drain below finishes almost immediately; this timeout is a
-/// deterministic backstop for a connection that doesn't cooperate, so the
-/// process still exits on its own instead of relying on systemd's SIGKILL.
+/// Upper bound on graceful connection drain once shutdown begins (ctrl-c or
+/// SIGTERM, or a lifecycle boundary such as an Orbit upgrade) — well under
+/// `orbit-web.service`'s `TimeoutStopUSec=90s` (see the 2026-09-05 restart
+/// incident, ORB-11246: `stop-sigterm` timed out and systemd fell back to
+/// SIGKILL). As soon as shutdown begins, `run_server` also tells long-lived
+/// streaming handlers (`api::request_shutdown`, e.g. `/api/log/stream`) to close
+/// cooperatively, so in practice the drain below finishes almost immediately;
+/// this timeout is a deterministic backstop for a connection that doesn't
+/// cooperate, so the process still exits on its own instead of relying on
+/// systemd's SIGKILL.
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(10);
 
 /// `/healthz` with the same Host/Origin and nosniff layers as `/api`.
