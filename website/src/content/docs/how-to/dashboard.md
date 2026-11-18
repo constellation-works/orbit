@@ -851,9 +851,11 @@ version, and with CPU, memory, disk, and I/O readings. A card shows
 shows its error instead of readings. A host that has not been probed is never
 read, so its card shows `Telemetry unavailable` without waiting. **Drains** lists the live owner and pull
 drains across the hosts. It omits queued windows and any host whose drain
-reading is unavailable. While readings are still loading it shows
-`Checking drains…`, and it shows `No live drains.` only once every host's
-readings have arrived and none is live.
+reading is unavailable. `Checking drains…` is the section's empty loading copy
+while any host reading is still pending. Once reads settle, `No live drains.`
+appears if no live drain was reported; unavailable readings are omitted, so
+this empty state can appear even when some drain reads failed or a host was
+unreachable.
 **Provider capacity** lists the usage windows each host reports for its
 accounts.
 
