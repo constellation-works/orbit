@@ -792,14 +792,19 @@ jobs:
       # the newest compatible protected-branch build as well. The source
       # manifest retains mtimes only for byte- and mode-identical inputs;
       # Cargo still checks compiler, features, environment and changed inputs.
+      # Keep workflow scheduling and unrelated job edits out of this identity:
+      # Cargo fingerprints profile/environment changes, and the source manifest
+      # refreshes any workflow bytes a build script or include_str! consumes.
+      # Manifests, Cargo config and the lint/source-restore implementations
+      # still partition the cache. Only protected pushes publish outputs.
       - name: Restore workspace test outputs
         id: workspace-test-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target
-          key: v1-workspace-tests-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', '.github/workflows/ci.yml', 'scripts/with-test-build-lint.sh', 'scripts/ci-workspace-cache.py', 'crates/*/Cargo.toml') }}-${{ github.sha }}
+          key: v1-workspace-tests-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'scripts/with-test-build-lint.sh', 'scripts/ci-workspace-cache.py', 'crates/*/Cargo.toml') }}-${{ github.sha }}
           restore-keys: |
-            v1-workspace-tests-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', '.github/workflows/ci.yml', 'scripts/with-test-build-lint.sh', 'scripts/ci-workspace-cache.py', 'crates/*/Cargo.toml') }}-
+            v1-workspace-tests-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'scripts/with-test-build-lint.sh', 'scripts/ci-workspace-cache.py', 'crates/*/Cargo.toml') }}-
 
       - name: Verify cached workspace inputs
         run: python3 .orbit/tmp/workflow-ci/scripts/ci-workspace-cache.py restore --workspace "$GITHUB_WORKSPACE"

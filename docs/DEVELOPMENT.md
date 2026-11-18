@@ -727,10 +727,10 @@ These are wall seconds at Bash's one-second resolution with
 the original command exit status. They let bounded hosted excerpts retain build/check costs
 separately from nextest testcase sums and the full GitHub job elapsed time.
 
-The Rust build caches are the `Swatinem/rust-cache` dependency
-archives, one each for `Test build` and the Check job in `ci.yml`, plus the MSRV entry saved by `msrv.yml` push runs (same key). They hold
-dependency artifacts only; every run compiles the workspace members from its
-checkout. Each step sets `save-if: ${{ github.event_name == 'push' }}`, so a
+The Rust dependency caches are the `Swatinem/rust-cache`
+archives, one each for `Test build` and the Check job in `ci.yml`, plus the MSRV
+entry saved by `msrv.yml` push runs (same key). They hold dependency artifacts
+only. Each step sets `save-if: ${{ github.event_name == 'push' }}`, so a
 pull request restores the base branch's entries and never writes one: only a
 push to `main` or `agent-main` saves. A missed key or a failed restore leaves a
 cold or partial `target/`, and Cargo rebuilds what is missing. Hosted CI keeps
@@ -741,9 +741,49 @@ restores or saves. sccache cannot cache the workspace members, which Cargo
 compiles through `clippy-driver`, and rust-cache already supplies every
 dependency. The
 [compiler-cache runbook](runbooks/compiler-cache.md#ordinary-linux-ci) records
-the measurements, including why caching workspace members would not pay.
+the measurements, including why sccache cannot cache folded workspace compilations.
 `scripts/test-pr-state-workflows.py` fails if any cache step in `ci.yml` can
 save on a non-push event.
+
+`Test build` separately restores workspace outputs from `target/`. Its key
+binds the toolchain, Cargo manifests and lockfile, Cargo config, and the lint
+and source-restore implementations. It excludes `ci.yml`: editing job
+scheduling or another job must not discard otherwise reusable workspace
+outputs. Only protected-branch pushes save this cache. A fresh checkout
+gets old source mtimes back only after `ci-workspace-cache.py` verifies
+identical bytes and modes; changed inputs get a fresh mtime. Cargo still
+invalidates compiler, features and codegen environment changes. A workflow
+file is an ordinary tracked input: changed bytes get a fresh mtime, and Cargo
+rebuilds a consumer only if it records that file, through an `include_str!`
+path or a build script's `cargo:rerun-if-changed`.
+
+The 2026-11-17 investigation found a workspace-cache miss preceding a 279 s
+folded test build in hosted run 44043933622 (Check: 516 s). The workflow file
+was part of the cache hash, so workflow edits invalidated the previous cache
+identity. A local six-run replay of a workflow-only edit, using a
+dependency-free two-target fixture under the folded lint environment, reduced
+median restore-plus-build time from 0.279 s to 0.073 s and compiler
+invocations from two to zero. This measures cache invalidation, not hosted
+seconds saved: artifact download/copy costs are excluded, the fixture is
+small, and an executed protected-push `Test build` must populate the new
+namespace (skip-only seeders populate dependencies, not workspace outputs).
+Changed codegen settings and older changed embedded workflow bytes both
+rebuilt in the replay. No checks or tests were retired. Measurement commands,
+logs and the replay script are retained in the task's `ci-budget/` artifacts.
+
+After merge, the operator should collect the latest 20 completed PR CI
+workflows carrying the change and run
+`python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`. Retain full run,
+head and job identities and timestamps; report executed, failed, skipped,
+cancelled and missing measurements, with gaps never counted as zero. Report
+nearest-rank p90, median and maximum; keep Check's pre-start queue wait and
+awaited jobs' queue wait after Check starts separate from elapsed time, or
+mark unavailable timestamps as gaps. Compare workspace and dependency cache
+hits, selected crates, runner image/CPU, compile/guard/transfer/partition
+phases, and cold-cache runs before attributing any change. The
+[budget measurement handoff](design-patterns/test_strategy.md#quality-and-the-400-second-budget)
+gives the collection details; this implementation lane does not certify a
+post-merge hosted p90.
 
 #### PR test selection
 

@@ -56,8 +56,11 @@ The action additionally keys each dependency archive on the installed compiler v
 The separate Test build workspace-output cache retains `target/`, including
 workspace units and `target/.orbit-source-inputs.json`. Its namespace binds the
 runner OS, pinned compiler, Cargo manifests/lock/configuration, lint wrapper,
-workflow and source-manifest helper. Each protected-branch push saves a new
-SHA-keyed entry; PRs restore the newest compatible entry and never save one.
+and source-manifest helper. Workflow-only edits retain that identity; Cargo
+still fingerprints changed compiler/profile environment settings, and the
+source manifest refreshes changed workflow bytes if a build consumes them.
+Each executed `Test build` on a protected-branch push saves a new SHA-keyed
+entry; PRs restore the newest compatible entry and never save one.
 The helper runs from the workflow-revision checkout at the run's `github.sha`.
 On a pull request that is the merge commit, so the PR's own copy runs in its
 own job, as its other CI code does. Only a protected-branch push writes the
@@ -75,11 +78,13 @@ checks; the folded Clippy build and every selected test target still run.
 its extracted target directory; workers never share a mutable target.
 
 A cache miss performs the ordinary cold workspace build. The first deployment
-of a namespace needs a protected-branch producer before PRs can benefit. Source
-changes below core can invalidate most cached units, and the extra archive
-uses repository cache quota and download time. Measure those costs and cache
-hit/miss strata in the hosted handoff; local reuse timings do not establish
-the hosted budget. The dependency-only caches and seeders remain available.
+of a namespace needs an executed protected-push `Test build` before PRs can
+benefit; the skip-only seeders below populate dependencies, not workspace
+outputs. Source changes below core can invalidate most cached units, and the
+extra archive uses repository cache quota and download time. Measure those
+costs and cache hit/miss strata in the hosted handoff; local reuse timings do
+not establish the hosted budget. The dependency-only caches and seeders remain
+available.
 
 - **Who writes.** Every producer rust-cache step has
   `save-if: ${{ github.event_name == 'push' }}`. Only a push to `main` or

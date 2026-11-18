@@ -28,6 +28,9 @@ class WorkspaceCacheTests(unittest.TestCase):
                 '[package]\nname="cache-fixture"\nversion="0.1.0"\nedition="2024"\n[workspace]\n')
             (source / "lib.rs").write_text('pub fn value() -> &\'static str { include_str!("value.txt") }\n')
             (source / "main.rs").write_text('fn main() { println!("{}", cache_fixture::value()); }\n')
+            workflow = workspace / ".github/workflows/ci.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text("jobs: {}\n")
             asset = source / "value.txt"
             asset.write_text("alpha")
             wrapper = workspace / "rustc-wrapper"
@@ -77,6 +80,13 @@ os.execv(sys.argv[1], sys.argv[1:])
             self.assertEqual(build(), "alpha")
             self.assertEqual(log.read_text().splitlines(), compiled,
                              "unchanged checkout timestamps must not rebuild workspace units")
+
+            workflow.write_text(workflow.read_text() + "# unrelated job scheduling edit\n")
+            self.assertEqual(cache("restore")["changed_inputs"], 1)
+            self.assertEqual(build(), "alpha")
+            self.assertEqual(log.read_text().splitlines(), compiled,
+                             "changed workflow bytes must not rebuild unchanged Rust inputs")
+            cache("capture")
 
             original = asset.stat().st_mtime_ns
             asset.write_text("omega")  # Same length; an old mtime must not hide changed bytes.
