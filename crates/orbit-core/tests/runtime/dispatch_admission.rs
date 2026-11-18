@@ -64,6 +64,7 @@ mod load_failure;
 mod lock_busy_pass;
 mod replay_crew;
 mod reservation_grants;
+mod shared_base_repair;
 mod sqlite_busy_pass;
 mod submission_notices;
 mod task_pilot_warning;

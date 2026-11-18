@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 use orbit_common::OrbitError;
 use orbit_types::task::TaskDecision;
 use orbit_types::workflow::{
-    PR_AUTO_FIX_BASE_RED_EVENT, PR_AUTO_FIX_READ_DEFERRED_EVENT, PrAutoFixBaseRed,
-    PrAutoFixBlocker, PrAutoFixReadDeferral,
+    PR_AUTO_FIX_BASE_RED_EVENT, PR_AUTO_FIX_HEAD_FAILURE_EVENT, PR_AUTO_FIX_READ_DEFERRED_EVENT,
+    PrAutoFixBaseRed, PrAutoFixBlocker, PrAutoFixHeadFailure, PrAutoFixReadDeferral,
 };
 use serde_json::{Value, json};
 
@@ -150,6 +150,23 @@ pub(in crate::executor::automation::vcs::pr) fn record_base_red<H: RuntimeHost +
         &record.history_note(),
         Some(TaskDecision::PrAutoFixBaseRed(record.clone())),
         &|entry| PrAutoFixBaseRed::from_entry(entry).is_some_and(|held| held.same_hold(record)),
+    )
+}
+
+/// Persist the failure an admitted check repair was handed: a one-line note
+/// and the full record as the decision, once per identical record.
+pub(in crate::executor::automation::vcs::pr) fn record_head_failure<H: RuntimeHost + ?Sized>(
+    host: &H,
+    auto_fix: &admission::AutoFix,
+    record: &PrAutoFixHeadFailure,
+) -> Result<(), OrbitError> {
+    append_history_note(
+        host,
+        auto_fix,
+        PR_AUTO_FIX_HEAD_FAILURE_EVENT,
+        &record.history_note(),
+        Some(TaskDecision::PrAutoFixHeadFailure(record.clone())),
+        &|entry| PrAutoFixHeadFailure::from_entry(entry).is_some_and(|seen| seen == *record),
     )
 }
 

@@ -4,6 +4,7 @@ mod operator_override;
 mod ordering;
 mod pass_rows;
 mod population;
+mod shared_base_repair;
 mod snapshot;
 mod types;
 

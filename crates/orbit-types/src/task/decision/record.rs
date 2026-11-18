@@ -141,6 +141,9 @@ pub enum TaskDecision {
     /// A failed head held for an inherited base failure, recorded on
     /// `pr_auto_fix_base_red`.
     PrAutoFixBaseRed(crate::workflow::PrAutoFixBaseRed),
+    /// The failed checks, with signatures, an admitted check repair was
+    /// handed on one head, recorded on `pr_auto_fix_head_failure`.
+    PrAutoFixHeadFailure(crate::workflow::PrAutoFixHeadFailure),
     /// Code scanning alert evidence a per-alert sweep task was filed from,
     /// recorded on its `created` event.
     CodeScanningAlert(CodeScanningAlertEvidence),

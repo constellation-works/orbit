@@ -178,6 +178,73 @@ impl PrAutoFixBaseRed {
     }
 }
 
+/// History event recording the failed checks an admitted check repair was
+/// handed, with their normalized signatures, on the exact head [ORB-25510].
+pub const PR_AUTO_FIX_HEAD_FAILURE_EVENT: &str = "pr_auto_fix_head_failure";
+
+/// One required check that failed on a pull request head, as an admitted
+/// check repair read it from the job log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrAutoFixFailedCheck {
+    /// The job label (`workflow / job`).
+    pub check: String,
+    /// The failed step the signature was read from.
+    pub step: String,
+    /// The normalized error signature, the identity CI failure filing keys
+    /// its sweep repairs on. Never a step fallback.
+    pub signature: String,
+}
+
+/// The failure of a pull request head that auto-fix handed to a check
+/// repair, kept on the task so it outlives the run that read it.
+///
+/// A run whose repair did not repair the head holds in run state only, and
+/// the task stays in `review` holding its locks. This record is what
+/// admission reads to prove that a CI-failure sweep repair of the base fixes
+/// the same failure the held head waits on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrAutoFixHeadFailure {
+    pub pr_number: String,
+    pub failed_head: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+    /// The auto-fix run that admitted the repair.
+    pub run_id: String,
+    pub checks: Vec<PrAutoFixFailedCheck>,
+}
+
+impl PrAutoFixHeadFailure {
+    /// The one-line history note; the full record lives in the decision.
+    #[must_use]
+    pub fn history_note(&self) -> String {
+        let mut names: Vec<&str> = self.checks.iter().map(|c| c.check.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        let quoted = names
+            .iter()
+            .map(|name| format!("'{name}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "auto-fix repair handed {} failing on head {}",
+            clip_chars(&quoted, 120),
+            short_sha(&self.failed_head)
+        )
+    }
+
+    /// Read the record from its history entry's typed decision.
+    #[must_use]
+    pub fn from_entry(entry: &TaskHistoryEntry) -> Option<Self> {
+        if entry.event != PR_AUTO_FIX_HEAD_FAILURE_EVENT {
+            return None;
+        }
+        match &entry.decision {
+            Some(TaskDecision::PrAutoFixHeadFailure(record)) => Some(record.clone()),
+            _ => None,
+        }
+    }
+}
+
 /// Leads the completion failure that hands an admitted check repair to the
 /// step's repair activity. Only the watcher writes it, after admission.
 pub const PR_AUTO_FIX_CHECK_REPAIR_MARKER: &str = "pr_auto_fix_check_repair";

@@ -58,7 +58,11 @@
 //! That rerun finds the repair on the branch ([`publish_local_repair`]),
 //! runs the workspace's required validation on it, and publishes it on the
 //! pull request (or, for a reviewed head, hands it to the re-review round)
-//! before it watches the new head. The published head is recorded in the
+//! before it watches the new head. An admitted check repair also records the
+//! failed workflow checks it was handed, with their normalized signatures, as
+//! a `pr_auto_fix_head_failure` entry on every watched task: a repair that
+//! does not fix the head holds the run, and only this record tells admission
+//! which failure the task, still in `review`, waits on. The published head is recorded in the
 //! ledger, so a later round or a resume pins the head this run published.
 //! A repair that makes no edit and writes no scope record judged the
 //! failure not caused by the candidate: nothing is committed, the no-edit

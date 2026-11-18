@@ -2,7 +2,8 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
-    DeliveryRefusal, PrAutoFixBaseRed, PrAutoFixBlocker, pr_auto_fix_no_edit_reruns,
+    DeliveryRefusal, PrAutoFixBaseRed, PrAutoFixBlocker, PrAutoFixHeadFailure,
+    pr_auto_fix_no_edit_reruns,
 };
 use serde_json::Value;
 
@@ -300,7 +301,7 @@ pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<H: RuntimeH
         .head_branch
         .as_deref()
         .zip(dependency_base.as_deref());
-    let (evidence, annotations) = match head_check_evidence(
+    let (evidence, annotations, failures) = match head_check_evidence(
         host,
         Path::new(workspace_path),
         &auto_fix.task_ids,
@@ -316,7 +317,8 @@ pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<H: RuntimeH
         HeadCheckEvidence::Repair {
             evidence,
             annotations,
-        } => (evidence, annotations),
+            failures,
+        } => (evidence, annotations, failures),
         HeadCheckEvidence::Stop(reason) => {
             return CheckRepair::Ended(verdict::stopped(pr_number, &reason));
         }
@@ -351,7 +353,28 @@ pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<H: RuntimeH
             head_sha,
             PrAutoFixBlocker::FailedChecks,
         ) {
-            Ok(attempt) => verdict::check_repair_handoff(pr_number, head_sha, &attempt, &evidence),
+            Ok(attempt) => {
+                // [ORB-25510] Keep the failure this repair was handed on the
+                // task: a repair that does not fix the head holds the run in
+                // run state only, while the task keeps its locks in review.
+                if !failures.is_empty() {
+                    let record = PrAutoFixHeadFailure {
+                        pr_number: pr_number.to_string(),
+                        failed_head: head_sha.to_string(),
+                        base_branch: status.base_branch.clone(),
+                        run_id: auto_fix.run_id.clone(),
+                        checks: failures,
+                    };
+                    if let Err(error) = ledger::record_head_failure(host, auto_fix, &record) {
+                        tracing::warn!(
+                            pr_number,
+                            head_sha,
+                            "auto_fix: the repaired head's failure was not recorded: {error}"
+                        );
+                    }
+                }
+                verdict::check_repair_handoff(pr_number, head_sha, &attempt, &evidence)
+            }
             Err(stop) => stop,
         },
     )
