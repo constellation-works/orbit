@@ -103,7 +103,8 @@ pub trait RoutineDispatch {
 /// Options for one sweep pass.
 #[derive(Debug, Clone, Copy)]
 pub struct SweepOptions {
-    /// Report what would fire without recording or dispatching anything.
+    /// Report what would fire without dispatching runs or minting tasks. Host-local
+    /// housekeeping (checkout validation, the scheduler store) still runs.
     pub dry_run: bool,
     /// Cadence of the host clock that invokes this pass. The production
     /// assembly supplies the configured clock cadence; deterministic callers

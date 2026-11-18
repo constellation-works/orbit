@@ -84,7 +84,7 @@ audited verbs rather than by editing the file:
 orbit routine list                          # rendered names, enabled and paused state
 orbit routine enable <routine-name>         # operator only: sets enabled: true
 orbit routine show <routine-name>           # confirm enabled and the effective state
-orbit clock tick --dry-run                  # what would fire on this host; writes nothing
+orbit clock tick --dry-run                  # what would fire on this host; dispatches nothing
 ```
 
 `enable` and `disable` (`orbit routine disable <routine-name>`) need operator
@@ -697,10 +697,14 @@ the sync, or edit it to the state form above by hand.
 ```bash
 orbit routine list                 # every routine: enabled / paused, next due
 orbit routine show <name>          # definition, effective state, recent fires
-orbit clock tick --dry-run         # what would fire; writes nothing
+orbit clock tick --dry-run         # what would fire; dispatches nothing
 orbit clock tick --dry-run --verbose  # include not-due rows
 orbit --workspace <name> clock tick --dry-run  # restrict to one workspace
 ```
+
+A dry tick dispatches no routine and mints no auto-task, but it is not
+write-free: it can still persist the validation status of registered checkouts
+and open or migrate the host's scheduler store.
 
 The global `--workspace` selector narrows a sweep — dry-run or live — to one
 registered workspace's routines; without it the pass covers every registered
