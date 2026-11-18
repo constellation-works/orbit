@@ -347,10 +347,68 @@ fn an_escalation_without_a_handoff_receipt_offers_no_land_answer() {
     }
 }
 
+/// A reject option on a block-triage request is bound to the blocked task, so
+/// answering it must reject that blocked task once: a terminal status, an
+/// auditable history entry, the request answered, and no second answer.
+fn a_reject_option_settles_the_blocked_task_once() {
+    let fx = fixture();
+    let mut decision = data_semantics_decision();
+    decision["options"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("rewrite");
+    decision["options"][0]["action"] = json!({"kind": "reject"});
+    let (task, request_id) = blocked_on_decision(&fx, decision);
+
+    answer(&fx, &request_id, "1", "Superseded by another task.");
+
+    let after = fx.runtime.get_task(&task).unwrap();
+    assert_eq!(after.status, TaskStatus::Rejected);
+    let history = fx.runtime.get_task_history(&task).unwrap();
+    let rejections = history
+        .iter()
+        .filter(|entry| entry.event == "blocked_rejected")
+        .count();
+    assert_eq!(rejections, 1, "{history:?}");
+    assert_eq!(
+        history
+            .iter()
+            .filter(|entry| entry.event == orbit_types::task::DECISION_ANSWERED_EVENT)
+            .count(),
+        1,
+        "{history:?}"
+    );
+    assert_eq!(
+        fx.runtime
+            .get_decision_request(&request_id)
+            .unwrap()
+            .unwrap()
+            .state,
+        DecisionRequestState::Answered
+    );
+    let again = fx
+        .human()
+        .answer_decision_request_as_human(
+            &request_id,
+            "1",
+            None,
+            "human:operator".to_string(),
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(!again.is_empty());
+    assert_eq!(
+        fx.runtime.get_task(&task).unwrap().status,
+        TaskStatus::Rejected
+    );
+}
+
 crate::scenario_table!(
     final_recovery_cards,
     a_decide_decision_opens_one_request_with_summary_options_and_recommendation,
     a_terminal_recovery_option_makes_the_request_irreversible,
+    a_reject_option_settles_the_blocked_task_once,
     a_requeue_option_rewrites_comments_the_choice_and_closes_the_request,
     a_rewrite_only_option_edits_the_task_and_unblocks_it,
     a_split_option_files_a_linked_follow_up_and_narrows_the_task,

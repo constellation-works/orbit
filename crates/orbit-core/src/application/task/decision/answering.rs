@@ -582,7 +582,11 @@ impl OrbitRuntime {
                         answer.id, request.id
                     )
                 });
-                self.reject_task(task_id, reason, Some(comment))?;
+                if blocked {
+                    self.reject_blocked_task_for_triage_decision(task_id, reason, Some(comment))?;
+                } else {
+                    self.reject_task(task_id, reason, Some(comment))?;
+                }
                 return Ok(None);
             }
             Some(DecisionAction::Land) => {
