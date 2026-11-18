@@ -771,7 +771,30 @@ spec:
       the audit records. Do not substitute operational logs or follower data.
       Candidate checks repeatable locally and task records readable through
       the bridge need no such hold. Preserve the explicit Friction criteria
-      and Post-deploy routes below for their landing and deployed evidence.
+      and Post-deploy routes below for their landing and deployed evidence. A
+      hard timing criterion can use a separate host-owned run if that run is
+      authorized and its evidence is reachable by review as specified below.
+    - **Hard timing criteria.** Before promotion, verify that the brief names
+      a disposable, reproducible fixture artifact or exact seed and reset
+      commands, exact build and measurement commands, the baseline and final
+      candidate revision selectors, and matching build profiles and settings.
+      Check that the bounded same-fixture protocol specifies pacing, warmups,
+      samples, repetitions, aggregation and a bound stable against the
+      measured spread of an unchanged build. A one-shot warm ratio is not
+      sufficient. Verify that the named lane and host or host requirements can
+      run the commands with granted access, and that the brief names the owner
+      of any necessary serial host-owned run and the exact log or artifact path
+      available to review. Use the existing evidence route. An empty
+      required-validation list, a behavioral-only command or a future
+      deployment measurement provides no benchmark result for a candidate
+      criterion. For a missing or infeasible route, or a protocol without an
+      unchanged-build control and a bound that its spread supports, emit a
+      `utility_warnings` object with `holds_promotion: true` naming the criterion
+      and the missing details; the authoring guide's informational,
+      deterministic-proxy or measurement-task alternatives are the repair. Use
+      Post-deploy only when the criterion itself needs the deployed
+      build. Informational timings and deterministic behavioral checks do not
+      need a benchmark route.
     - **Operator-only tool mentions.** For every `{criterion, tool}` that
       `partition.operator_tool_candidates` lists for a task, return one
       `operator_tool_classifications` entry with the same `criterion` and
