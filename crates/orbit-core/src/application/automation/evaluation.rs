@@ -233,8 +233,8 @@ impl DeliveryHost for Host<'_> {
         let receipts = self
             .runtime
             .automation_store()?
-            .automation_receipts(&state.consumer, 100)?;
-        let (mut page, record) = self.source.replay_history(branch, state, receipts.len())?;
+            .automation_receipt_count(&state.consumer)?;
+        let (mut page, record) = self.source.replay_history(branch, state, receipts)?;
         provider::attribute(self.runtime, &mut page.deliveries)?;
 
         Ok(delivery::recovery::HistoryReplayInput { page, record })

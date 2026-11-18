@@ -794,7 +794,8 @@ fn drop_name_collisions(collection: &mut RoutineCollection) {
                 path: Some(routine.path.clone()),
                 message: format!(
                     "routine name '{}' is defined by more than one source; names must be \
-                     unique across committed and local origins on a host — defined at: {}",
+                     unique across every workspace's `workspace` and `local` origins on a \
+                     host — defined at: {}",
                     routine.definition.name,
                     sources.join("; ")
                 ),

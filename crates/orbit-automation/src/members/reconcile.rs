@@ -61,11 +61,13 @@ pub(super) fn reconcile(
         // is dropped for re-observation, a withheld one stays pending. The rest
         // keep the attempt; only an emptied batch retires the claim.
         let mut kept = Vec::new();
+        let mut held = Vec::new();
         let mut next = state.clone();
         for member in active.members() {
             match host.admission(member)? {
                 MemberAdmission::Admit => kept.push(member.clone()),
                 MemberAdmission::Withhold(reason) => {
+                    held.push(member.clone());
                     member_state(&mut next)?
                         .withheld
                         .insert(member.key.clone(), reason);
@@ -76,6 +78,16 @@ pub(super) fn reconcile(
                     members.withheld.remove(&member.key);
                 }
             }
+        }
+
+        // A hold is a temporary deferral, not a failure: when no member is
+        // admissible yet but some are only withheld, the claim keeps those and
+        // waits for the hold to clear [ORB-25602]. Retiring it here would write
+        // an exhausted failure record at the unchanged fingerprint, which no
+        // later pass could clear without new input. Only the deadline above
+        // or a settled action exhausts it.
+        if kept.is_empty() {
+            kept = held;
         }
 
         if kept.len() == active.members().len() {
@@ -92,13 +104,7 @@ pub(super) fn reconcile(
             shrunk.members = kept;
             members.active = Some(shrunk);
         } else {
-            for member in shrunk.members() {
-                if members.pending.contains_key(&member.key) {
-                    members
-                        .withheld
-                        .insert(member.key.clone(), "input_stale_or_deadline_expired".into());
-                }
-            }
+            // Every member was retired, and so already left pending.
             retired = Some(shrunk.clone());
             retire_attempt(host, members, shrunk)?;
         }

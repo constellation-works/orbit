@@ -9,10 +9,12 @@ pub struct AutoTaskFireReport {
     /// Definition name.
     pub name: String,
     /// One of: `fired`, `would_fire`, `baselined`, `would_baseline`, `skipped`,
-    /// `error`.
+    /// `error`, or the trigger kind an automation-evaluated definition reports
+    /// its diagnostic under: `delivery` or `condition`.
     pub action: &'static str,
     /// Why, for `skipped` rows; for `fired` rows, when the cursor checkpoint
-    /// after minting failed or a pending mint was reconciled.
+    /// after minting failed or a pending mint was reconciled; for `delivery`
+    /// and `condition` rows, the evaluator's verdict.
     pub reason: Option<String>,
     /// Scheduled slot consumed (RFC 3339, UTC), when a fire was involved.
     pub slot: Option<String>,

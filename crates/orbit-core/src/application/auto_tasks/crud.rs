@@ -702,15 +702,7 @@ impl OrbitRuntime {
                     .join("; ")
             )));
         }
-        let mut names = std::collections::BTreeSet::new();
-        for loaded in &collection.definitions {
-            if !names.insert(&loaded.definition.name) {
-                return Err(OrbitError::InvalidInput(format!(
-                    "auto-task '{}' has more than one definition file",
-                    loaded.definition.name
-                )));
-            }
-        }
+        // Discovery already refuses two files sharing one name, as load errors.
         Ok(collection)
     }
 

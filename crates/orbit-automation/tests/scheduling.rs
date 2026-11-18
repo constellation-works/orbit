@@ -20,8 +20,8 @@ use orbit_automation::members::{
     MemberAdmission, MemberEvaluation, MemberHost, MemberOutcome, MemberPage, evaluate,
 };
 use orbit_automation::routines::due::{
-    DueDecision, due_decision_with_grace, natural_slot_grace_for_cadence, next_occurrence,
-    parse_cron, truncate_to_minute,
+    DueDecision, due_decision_with_grace, missed_slots_through, natural_slot_grace_for_cadence,
+    next_occurrence, parse_cron, truncate_to_minute,
 };
 use orbit_automation::routines::loader::{RoutineCatalogLookup, RoutineSource, collect_routines};
 use orbit_automation::routines::sweep::{
@@ -859,6 +859,92 @@ fn scheduler_ticks_collapse_catch_up_and_wait_for_terminal_overlap() {
         );
         assert!(cursors.definitions["catchup"].pending.is_none());
     }
+}
+
+/// `name.yaml` beside `name.yml` were two definitions of one auto-task: the
+/// enabled alias fired on the cursor the disabled canonical file owns
+/// [ORB-25602]. Both are refused, by file name, and the rest still fire.
+#[test]
+fn two_files_defining_one_auto_task_name_are_both_refused() {
+    if isolated("two_files_defining_one_auto_task_name_are_both_refused") {
+        return;
+    }
+    let root = std::env::current_dir().unwrap().join(".orbit");
+    let dir = root.join("auto_tasks");
+    std::fs::create_dir_all(&dir).unwrap();
+    let body = |name: &str, enabled: bool| {
+        format!(
+            "schemaVersion: 1\nname: {name}\nenabled: {enabled}\nschedule:\n  every_minutes: 60\n\
+             dedupe: always\ntemplate:\n  title: {name} fixture\n"
+        )
+    };
+    std::fs::write(dir.join("twin.yaml"), body("twin", false)).unwrap();
+    std::fs::write(dir.join("twin.yml"), body("twin", true)).unwrap();
+    std::fs::write(dir.join("single.yaml"), body("single", true)).unwrap();
+    let host = AutoHost {
+        root,
+        minted: Cell::new(0),
+        skip_version: RefCell::new(None),
+        blocked: RefCell::new(None),
+    };
+
+    for (now, minted) in [("2026-10-01T00:00:00Z", 0), ("2026-10-01T01:00:00Z", 1)] {
+        let outcome =
+            run_auto_task_scheduler_at(&host, at(now), SchedulerOptions::default()).unwrap();
+        let reported = outcome
+            .reports
+            .iter()
+            .map(|report| (report.name.as_str(), report.action))
+            .collect::<Vec<_>>();
+        assert_eq!(reported.len(), 1, "{now}: {reported:?}");
+        assert_eq!(reported[0].0, "single", "{now}");
+        assert_eq!(host.minted.get(), minted, "{now}: only `single` mints");
+
+        let mut refused = outcome
+            .errors
+            .iter()
+            .map(|error| {
+                assert!(
+                    error.message.contains("twin.yaml") && error.message.contains("twin.yml"),
+                    "{}",
+                    error.message
+                );
+                error.path.as_ref().unwrap().file_name().unwrap().to_owned()
+            })
+            .collect::<Vec<_>>();
+        refused.sort();
+        assert_eq!(refused, ["twin.yaml", "twin.yml"], "{now}");
+    }
+    let cursors = orbit_store::compose::auto_task::load_cursor_state(
+        &orbit_store::compose::auto_task::cursor_state_path(&host.state_dir()),
+    )
+    .unwrap();
+    assert!(!cursors.definitions.contains_key("twin"));
+}
+
+/// A zero-limit walk returned `more: false` without looking, so a due missed
+/// slot read as an empty interval [ORB-25602].
+#[test]
+fn a_zero_limit_missed_slot_walk_still_reports_a_due_slot() {
+    let cron = parse_cron("* * * * *").unwrap();
+    let now = at("2026-10-01T12:00:00Z");
+    let lower = at("2026-10-01T10:00:00Z");
+    let grace = Duration::seconds(90);
+
+    let due = missed_slots_through(&cron, &lower, &now, &now, grace, true, 0).unwrap();
+    assert!(due.slots.is_empty());
+    assert!(due.more, "a past-grace slot after the lower bound is due");
+
+    let empty = missed_slots_through(&cron, &lower, &lower, &now, grace, true, 0).unwrap();
+    assert!(empty.slots.is_empty());
+    assert!(!empty.more, "an empty interval has no further slot");
+
+    let page = missed_slots_through(&cron, &lower, &now, &now, grace, true, 2).unwrap();
+    assert_eq!(
+        page.slots,
+        [at("2026-10-01T10:01:00Z"), at("2026-10-01T10:02:00Z")]
+    );
+    assert!(page.more);
 }
 
 struct CoverageHost {

@@ -2,12 +2,13 @@
 //! evidence [ORB-12295].
 
 use super::delivery::{
-    CONSUMER, Host, evaluate, evaluate_at, landing, now, revision, setup, trigger,
+    CONSUMER, Host, evaluate, evaluate_at, landing, now, revision, setup, setup_raw, trigger,
 };
 use orbit_automation::{
     AutomationError, DeferredReason,
     delivery::{self, recovery, reset},
 };
+use orbit_store::Store;
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::recovery::{
     HistoryMapping, HistoryReplayRecord, RecoveryPreview, RecoveryRecord, RecoveryRequest,
@@ -55,7 +56,19 @@ fn stalled() -> (
     DeliveryTrigger,
     CoverageBatch,
 ) {
-    let (store, host, trigger) = setup();
+    let (_, store, host, trigger, batch) = stalled_raw();
+    (store, host, trigger, batch)
+}
+
+/// [`stalled`], also handing back the SQLite store under it.
+fn stalled_raw() -> (
+    Store,
+    std::sync::Arc<dyn AutomationStoreBackend>,
+    Host,
+    DeliveryTrigger,
+    CoverageBatch,
+) {
+    let (raw, store, host, trigger) = setup_raw();
     host.page(0, 2);
     let batch = evaluate(store.as_ref(), &host, &trigger, true)
         .state
@@ -79,7 +92,162 @@ fn stalled() -> (
     assert_eq!(settled.attempt, 2);
     host.failed.store(false, Ordering::SeqCst);
 
-    (store, host, trigger, batch)
+    (raw, store, host, trigger, batch)
+}
+
+/// Retain one accepted receipt per batch id, each newer than the last, as
+/// that many settled batches would have left them.
+fn seed_receipts(raw: &Store, batch_ids: &[String]) {
+    let connection = raw.connection();
+    let connection = connection.lock().unwrap();
+    for (n, batch_id) in batch_ids.iter().enumerate() {
+        let receipt = AcceptedCoverage {
+            batch_id: batch_id.clone(),
+            action_id: format!("action-{batch_id}"),
+            input_digest: "input".into(),
+            evidence_digest: "evidence".into(),
+            evidence: b"{}".to_vec(),
+            evidence_reference: format!("run:{batch_id}"),
+            submitted_by: "system".into(),
+            accepted_at: now() + chrono::Duration::minutes(n as i64),
+        };
+        connection
+            .execute(
+                "INSERT INTO automation_coverage VALUES (?1,?2,?3,?4,?5)",
+                [
+                    receipt.batch_id.clone(),
+                    CONSUMER.to_string(),
+                    "null".to_string(),
+                    serde_json::to_string(&receipt).unwrap(),
+                    receipt.accepted_at.to_rfc3339(),
+                ],
+            )
+            .unwrap();
+    }
+}
+
+/// Record a waiver per batch id, each newer than the last.
+fn seed_waivers(raw: &Store, batch_ids: &[String]) {
+    let connection = raw.connection();
+    let connection = connection.lock().unwrap();
+    for batch_id in batch_ids {
+        let waiver = BatchWaiver {
+            batch_id: batch_id.clone(),
+            reason: "seeded".into(),
+            by: "operator".into(),
+            at: now(),
+        };
+        connection
+            .execute(
+                "INSERT INTO automation_waivers VALUES (?1,?2,?3,?4)",
+                [
+                    batch_id.clone(),
+                    CONSUMER.to_string(),
+                    "null".to_string(),
+                    serde_json::to_string(&waiver).unwrap(),
+                ],
+            )
+            .unwrap();
+    }
+}
+
+fn seeded_ids(prefix: &str, count: usize) -> Vec<String> {
+    (0..count).map(|n| format!("{prefix}-{n:03}")).collect()
+}
+
+/// Recovery and reset once counted only the newest 100 receipts, and judged
+/// the held action's evidence among them alone [ORB-25602].
+#[test]
+fn recovery_and_reset_count_every_retained_receipt_beyond_a_page() {
+    let (raw, store, _host, trigger, batch) = stalled_raw();
+    // The held batch's own receipt is the oldest of 101.
+    let mut ids = vec![batch.id.clone()];
+    ids.extend(seeded_ids("settled", 100));
+    seed_receipts(&raw, &ids);
+    assert_eq!(
+        store.automation_receipts(CONSUMER, 1000).unwrap().len(),
+        100
+    );
+
+    let reissue = request(false, true);
+    let mut operation = recovery(&trigger, "v1", &reissue);
+    operation.action_terminal = true;
+    operation.action_failed_without_evidence = true;
+    let preview = recovery::preview(store.as_ref(), &operation).unwrap();
+    assert_eq!(preview.debt.receipts, 101);
+    assert!(
+        !preview.action.as_ref().unwrap().reissuable,
+        "an action whose receipt is the 101st newest is evidenced"
+    );
+
+    let state = store.automation_state(CONSUMER).unwrap().unwrap();
+    let reset_request = ResetRequest {
+        reason: "count what a reset would forget".into(),
+        force: false,
+    };
+    let reset_operation = reset::Reset {
+        consumer: CONSUMER,
+        epoch: "v1",
+        trigger: &trigger,
+        host_refusal: None,
+        request: &reset_request,
+        by: "operator",
+        now: now(),
+        baseline: revision(2),
+        released_refs: vec![],
+        inspected_state: Some(&state),
+        action_terminal: true,
+        action_failed_without_evidence: true,
+    };
+    let reset_preview = reset::preview(store.as_ref(), &reset_operation).unwrap();
+    assert_eq!(reset_preview.debt.receipts, 101);
+    assert!(!reset_preview.action.unwrap().reissuable);
+}
+
+/// Replaying a waiver stayed idempotent only while it was among the newest
+/// 100 waivers [ORB-25602]; an unknown batch is still refused.
+#[test]
+fn replaying_a_waiver_displaced_by_newer_waivers_still_succeeds() {
+    let (raw, store, _host, _trigger, batch) = stalled_raw();
+    let waive = |batch_id: &str| {
+        delivery::waive(
+            store.as_ref(),
+            CONSUMER,
+            &WaiveBatchRequest {
+                batch_id: batch_id.into(),
+                reason: "the failed review is examined by hand".into(),
+            },
+            "operator",
+            now(),
+        )
+    };
+    waive(&batch.id).unwrap();
+    seed_waivers(&raw, &seeded_ids("newer", 100));
+    assert!(
+        !store
+            .automation_waivers(CONSUMER, 1000)
+            .unwrap()
+            .iter()
+            .any(|waiver| waiver.batch_id == batch.id),
+        "the recorded waiver is outside the newest page"
+    );
+
+    let generation = store
+        .automation_state(CONSUMER)
+        .unwrap()
+        .unwrap()
+        .generation;
+    waive(&batch.id).expect("replaying a recorded waiver is idempotent");
+    assert_eq!(
+        store
+            .automation_state(CONSUMER)
+            .unwrap()
+            .unwrap()
+            .generation,
+        generation,
+        "a replay writes nothing"
+    );
+    assert!(waive("never-recorded").is_err());
 }
 
 /// The settings the operator retuned tonight: a lower threshold over the same
