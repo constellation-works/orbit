@@ -66,6 +66,7 @@ mod conventions;
 mod draft_handoff;
 mod flaky;
 mod infrastructure;
+#[path = "pr_landing/pull_request/transport.rs"]
 mod landing_transport;
 mod mentions;
 mod merge_in_progress;
