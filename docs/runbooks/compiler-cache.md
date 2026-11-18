@@ -51,7 +51,8 @@ The environment hash covers the installed compiler versions and the
 `CARGO*`/`RUST*`/`CC*` environment. Only the exact key adds a hash of part of
 `Cargo.lock`, the member manifests and every
 `.cargo/config.toml` and `rust-toolchain` / `rust-toolchain.toml` below the
-workspace, hidden directories included. The lock hash is not a hash of the file: the pinned
+workspace, hidden directories included. The lock hash is not a hash of the
+file: the pinned
 action (`config.ts` at `d1527c8`) keeps only the `[[package]]` entries that
 carry a `source` or `checksum` — the registry and git packages, with their
 versions, checksums and dependency edges — and hashes that filtered list.
@@ -107,8 +108,9 @@ prefix-match restore first deletes restored dependency units older than
 one week, so an archive last saved more than a week earlier restores less.
 The *effective key* is the prefix above plus the exact-key inputs (filtered
 lock entries, normalised member manifests, `.cargo/config.toml` and
-`rust-toolchain` / `rust-toolchain.toml` files, and the environment hash). Changing that key
-does not by itself decide a hit or a miss, and it writes no archive. The pinned
+`rust-toolchain` / `rust-toolchain.toml` files, and the environment
+hash). Changing that key does not by itself decide a hit or a miss, and
+it writes no archive. The pinned
 restore (`restore.ts` at `d1527c8`) requests the primary key and treats the
 archive the backend returns as an exact hit only when its key compares
 equal. Both a changed key and an unchanged key hit when an archive for that
