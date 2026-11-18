@@ -294,7 +294,7 @@ A **crew** is a named provider and model. A task runs on its own `crew`, or on
 ```toml
 [crews.sol]
 provider = "codex"
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 effort = "high"
 description = "Systems implementation"
 tags = ["implementation", "review"]

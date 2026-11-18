@@ -433,3 +433,76 @@ fn gpt_6_2_astra_prices_published_rates_from_launch_onward() {
         "historical gpt-6-astra invocations keep their price row"
     );
 }
+
+// [ORB-25509] GPT-6.2 Sol launched 2026-11-17 at the published Standard
+// rates ($2 input / $0.10 cached / $2.50 cache writes / $10 output per
+// million; long-context $4 / $0.20 / $5 / $15 over 272K). The previous
+// gpt-6.1-sol rows stay open for historical invocations.
+#[test]
+fn gpt_6_2_sol_prices_published_rates_from_launch_onward() {
+    let launch: DateTime<Utc> = "2026-11-17T00:00:00Z".parse().unwrap();
+    let mixed = TokenUsage {
+        input: 100_000,
+        cache_read: 20_000,
+        cache_create: 30_000,
+        cache_create_1h: 40_000,
+        output: 5_000,
+    };
+    assert_eq!(
+        derive_cost_usd(
+            "gpt-6.2-sol",
+            launch - chrono::Duration::seconds(1),
+            &mixed,
+            None
+        ),
+        None,
+        "launch pricing must not backdate costs"
+    );
+    // Gross input: the cache buckets sit inside `input`, so 10K tokens bill
+    // at the full input rate and each cache bucket at its own rate.
+    assert_cost(
+        derive_cost_usd("gpt-6.2-sol", launch, &mixed, None),
+        0.247,
+        "gpt-6.2-sol short-context rates",
+    );
+    assert_cost(
+        derive_cost_usd(
+            "gpt-6.2-sol",
+            launch,
+            &TokenUsage {
+                output: 1_000_000,
+                ..Default::default()
+            },
+            Some(&[]),
+        ),
+        10.0,
+        "gpt-6.2-sol output rate",
+    );
+    // A 300K-input request in a 350K-input run bills at the long-context tier.
+    let long_request = TokenUsage {
+        input: 300_000,
+        cache_read: 250_000,
+        output: 2_000,
+        ..TokenUsage::default()
+    };
+    let totals = TokenUsage {
+        input: 350_000,
+        cache_read: 290_000,
+        output: 3_000,
+        ..TokenUsage::default()
+    };
+    assert_cost(
+        derive_cost_usd(
+            "gpt-6.2-sol",
+            "2026-11-18T00:00:00Z".parse().unwrap(),
+            &totals,
+            Some(std::slice::from_ref(&long_request)),
+        ),
+        0.314,
+        "gpt-6.2-sol request over 272K input tokens",
+    );
+    assert!(
+        derive_cost_usd("gpt-6.1-sol", launch, &mixed, None).is_some(),
+        "historical gpt-6.1-sol invocations keep their price row"
+    );
+}

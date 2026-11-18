@@ -90,7 +90,7 @@ effort = "high"              # optional: low, medium, high, xhigh, max
 
 [crews.sol]
 provider = "codex"
-model = "gpt-6.1-sol"        # effort: low, medium, high, xhigh, max
+model = "gpt-6.2-sol"        # effort: low, medium, high, xhigh, max
 
 [crews.muse-spark]
 provider = "muse"
@@ -140,7 +140,7 @@ effort.
 ```toml
 [crews.sol]
 provider = "codex"
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 effort = "high"
 ```
 

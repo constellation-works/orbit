@@ -42,7 +42,7 @@ pub const CLAUDE_HAIKU_MODEL: &str = "haiku";
 pub const CLAUDE_FABLE_MODEL: &str = "claude-fable-5-2";
 
 /// Codex model used by the standard Sol crew.
-pub const CODEX_SOL_MODEL: &str = "gpt-6.1-sol";
+pub const CODEX_SOL_MODEL: &str = "gpt-6.2-sol";
 
 /// Codex model used by the standard Terra crew.
 pub const CODEX_TERRA_MODEL: &str = "gpt-6.1-terra";
