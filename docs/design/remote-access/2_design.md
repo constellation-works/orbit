@@ -44,7 +44,9 @@ Startup:
 
 ### Browser selection
 
-The server publishes only the hint: `is_default` on `GET /api/workspaces` marks that one row, and no row is marked when there is no hint. A missing hint is not the aggregate view. The browser (`initWorkspaceSelector` in `crates/orbit-web/assets/dashboard/app.js`) opens the first of these that applies: a shareable `?workspace=` URL, including `all`; the choice remembered in that browser for the selected host, including All workspaces; an active drain on that host; the hint, when it names an active workspace this host owns; then the first active owned workspace in `/api/workspaces` order. With one owned workspace, the browser opens that workspace and does not consult the hint. All workspaces is therefore reached only by a link, a remembered choice or an explicit selection. The full host and workspace precedence is in [user-interface design §6](../user-interface/2_design.md#6-top-level-navigation).
+The server publishes the hint as `is_default` on one row of `GET /api/workspaces`. An unmatched selector leaves every row unmarked and bypasses the cwd default.
+
+With multiple owned rows, `initWorkspaceSelector` in `crates/orbit-web/assets/dashboard/app.js` tries a valid `?workspace=` link, then the browser's remembered choice for the selected host. Either can select All workspaces. Next it tries a live drain on an active owned workspace, the hint if it names an active owned workspace, and the first active owned row in `/api/workspaces` order. If none are active, it selects the first owned row in that order, even though the board is unavailable. With exactly one owned row, the browser selects it only if active. With zero owned rows, it clears the board selection. See [user-interface design §6](../user-interface/2_design.md#6-top-level-navigation) for host switching and workspace filters.
 
 ### Request state
 

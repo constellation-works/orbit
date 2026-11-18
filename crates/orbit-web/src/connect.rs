@@ -86,10 +86,9 @@ pub struct ConnectArgs {
     #[arg(long, default_value_t = DEFAULT_DASHBOARD_PORT)]
     pub remote_port: u16,
 
-    /// Remote workspace to preselect — a registered name, logical ID (`ws_*`),
-    /// or remote checkout path — passed through to `orbit web serve
-    /// --workspace` on the remote host. Omit to use the remote's default
-    /// workspace resolution.
+    /// Workspace hint passed to `orbit web serve --workspace` when starting
+    /// a remote dashboard. An existing server keeps its hint. Accepts a
+    /// registered name, logical ID (`ws_*`), or remote checkout path.
     #[arg(long, value_name = "SELECTOR")]
     pub workspace: Option<String>,
 

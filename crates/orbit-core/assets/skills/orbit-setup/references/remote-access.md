@@ -155,18 +155,20 @@ orbit web connect <ssh-host> --workspace <remote-workspace-selector>
 
 `orbit --root <ROOT> web serve` serves `<ROOT>/workspaces.json` and nothing from
 the machine-global registry, so an explicit root isolates the dashboard the same
-way it isolates every other command. `--workspace` sets the workspace the
-dashboard prefers to open on, and is what `connect` forwards to the remote
-server; `connect` itself rejects `--root`.
+way it isolates every other command. `--workspace` sets a server hint. An
+unmatched selector clears it. The server looks for a workspace containing its
+current directory only when `--workspace` is omitted. `connect` forwards the
+selector when it starts a remote server and rejects `--root`.
 
-`--workspace` is a hint, not a guarantee. The browser opens on the first of
-these that applies: a `?workspace=` link to a workspace this host serves; the
-choice you last made in that browser for this host, including **All
-workspaces**; an active drain on this host; the hint, when it names a workspace
-this host owns; otherwise the first active workspace this host owns, in registry
-order. When this host owns one workspace, the browser opens it and ignores the
-hint. A missing hint never opens **All workspaces**; choose that entry in the
-picker.
+For a host with multiple owned workspaces, the browser tries a valid
+`?workspace=` link first, including `?workspace=all`, then the choice remembered
+for that host, including **All workspaces**. Next it tries a live drain on an
+active owned workspace, then the server hint if it names an active owned
+workspace. The fallback is the first active owned workspace in registry order.
+If all owned workspaces are unavailable, the picker selects the first owned
+entry in registry order and its board is unavailable. With exactly one owned
+workspace, the browser opens it only if active. With zero owned workspaces,
+there is no board to open.
 
 The default dashboard port is 7878. `connect` reuses an existing remote loopback
 server when available; otherwise it starts one and owns that process's lifetime.

@@ -23,7 +23,7 @@ and tries to open a browser.
 |---|---|
 | `--no-open` | Do not open a browser. |
 | `--port <N>` | Serve on another port. |
-| `--workspace <SELECTOR>` | Prefer this workspace when the dashboard opens: a registered name, `ws_*` ID, or checkout path. It is a preference, not a guarantee; see [Workspace scope](#workspace-scope). If nothing matches, the dashboard does not fall back to the current directory and opens on the first active workspace this host owns, not **All workspaces**. |
+| `--workspace <SELECTOR>` | Set the server's workspace hint by registered name, `ws_*` ID, or checkout path. An unmatched selector clears the hint. See [Workspace scope](#workspace-scope) for what the browser opens. |
 | `--operator` | Grant operator capability, which most write controls need. Nothing else grants it. See [Authorization](#authorization). |
 | `orbit --root <DIR> web serve` | Serve the workspaces in `<DIR>/workspaces.json` instead of `~/.orbit/workspaces.json`. |
 
@@ -46,7 +46,7 @@ opens it. Ctrl-C closes the tunnel, and stops the remote server only if
 |---|---|
 | `--port <N>` | Local port. Default `7878`, or a free port if `7878` is busy. An explicit port that is busy fails. |
 | `--remote-port <N>` | Remote dashboard port. Default `7878`. |
-| `--workspace <SELECTOR>` | Prefer this remote workspace when the dashboard opens; see [Workspace scope](#workspace-scope). `connect` refuses `--root`. |
+| `--workspace <SELECTOR>` | Set the workspace hint when `connect` starts a remote dashboard. An existing server keeps its hint. See [Workspace scope](#workspace-scope). `connect` refuses `--root`. |
 | `--no-operator` | Start the remote server without operator capability. |
 | `--no-open` | Do not open a browser. |
 
@@ -83,18 +83,25 @@ To add, rename, or remove hosts, and to compare their load, use
 
 ## Workspace scope
 
-With more than one workspace registered, the left rail has a workspace picker.
-The dashboard opens on the first of these that applies: a `?workspace=` link,
-the choice you last made in this browser for the selected host (including
-**All workspaces**), a workspace with a live drain on that host, the registry
-default, and then the first active workspace this host owns, in registry order.
-The registry default is the workspace named by `--workspace`, or else the
-workspace whose checkout contains the directory you ran `orbit web serve` from.
-It is used only when this host owns it and it is active. If this host owns one
-workspace, that workspace opens and the default is not consulted. A missing
-default never opens **All workspaces** by itself; choose it in the picker. The
-URL holds the host, workspace, and time window, so a copied link opens the same
-view.
+When the selected host owns more than one workspace, the left rail has a
+workspace picker. The browser tries these in order:
+
+1. A valid `?workspace=` link, including `?workspace=all`.
+2. The choice you last made in this browser for the host, including **All workspaces**.
+3. An active owned workspace with a live drain on that host.
+4. The server's workspace hint, if it names an active owned workspace.
+5. The first active owned workspace in registry order. If every owned workspace
+   is unavailable, the picker selects the first owned entry in registry order
+   and its board is unavailable.
+
+An unmatched `--workspace` selector clears the hint. The server uses the
+current directory to find a hint only when you omit `--workspace`. The browser
+still honors valid links and remembered choices when the hint is absent.
+
+When the host owns exactly one workspace, it opens automatically if active.
+A sole unavailable workspace leaves no board selected, as does a host with
+no owned workspaces. The URL holds the host, workspace, and time window, so a
+copied link can restore that scope.
 
 **All workspaces** is mostly a read view:
 
