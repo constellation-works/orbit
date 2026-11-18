@@ -1,14 +1,14 @@
-use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_store::compose::global_executor_def_store;
 use orbit_types::task::HostOs;
+use orbit_types::timestamp::UtcTimestamp;
 use orbit_types::workflow::ExecutorDef;
 use orbit_types::workflow::ExecutorType;
 use std::collections::{BTreeSet, HashMap};
 use tempfile::tempdir;
 
 fn baseline_def(name: &str) -> ExecutorDef {
-    let now = Utc::now();
+    let now = UtcTimestamp::try_from(std::time::SystemTime::now()).expect("executor timestamp");
     ExecutorDef {
         name: name.to_string(),
         executor_type: ExecutorType::DirectAgent,

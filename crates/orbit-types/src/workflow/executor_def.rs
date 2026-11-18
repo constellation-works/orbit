@@ -1,12 +1,12 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 
-use chrono::{DateTime, Utc};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 
 // ExecutorResourceSpec is the persisted wire shape; ExecutorDef is the runtime shape.
 use crate::resource::ExecutorResourceSpec;
+use crate::timestamp::UtcTimestamp;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -199,9 +199,9 @@ pub struct ExecutorDef {
     )]
     pub host_os: Option<BTreeSet<crate::task::HostOs>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_at: Option<DateTime<Utc>>,
+    pub created_at: Option<UtcTimestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<UtcTimestamp>,
 }
 
 /// Legacy override for an agent family's strong/weak `AgentModelPair`.
@@ -253,11 +253,13 @@ where
 }
 
 impl ExecutorDef {
+    /// Convert a resource into its runtime definition. Each explicit timestamp
+    /// takes precedence over the corresponding resource timestamp.
     pub fn from_resource_spec(
         name: String,
         spec: ExecutorResourceSpec,
-        created_at: Option<DateTime<Utc>>,
-        updated_at: Option<DateTime<Utc>>,
+        created_at: Option<UtcTimestamp>,
+        updated_at: Option<UtcTimestamp>,
     ) -> Self {
         let ExecutorResourceSpec {
             executor_type,
