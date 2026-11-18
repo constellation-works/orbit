@@ -1245,7 +1245,7 @@ function fetchAndRenderTasks({ includeCrews = true } = {}) {
   // /api/crews is per-workspace. Aggregate mode has no ambient workspace, so
   // the single-workspace cache stays empty (a stale registry would make My
   // work and comment authors borrow one workspace). Crews for the rows on
-  // this page are read per workspace below; one failure does not reject this
+  // this page are read together below; one failure does not reject this
   // request. A selected workspace still uses the fetch beside the task list.
   if (aggregate) cacheCrewPayload({ crews: [] });
   // Crew options change with configuration, not with tasks: a refresh that
