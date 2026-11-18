@@ -17,7 +17,7 @@ CONCRETE_ID = re.compile(
 )
 TEST_CFG = "#[cfg(test)]"
 OUTER_ATTRIBUTE = re.compile(r"\s*#\[[^\]]*\]")
-INLINE_MODULE = re.compile(r"\s*(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+\w+\s*\{")
+INLINE_MODULE = re.compile(r"\s*(?:pub(?:\s*\([^)]*\)\s*|\s+))?mod\s+\w+\s*\{")
 BRACE = re.compile(r"[{}]")
 LEXICAL_BOUNDARY = re.compile(r"""//|/\*|['"]""")
 BLOCK_COMMENT_BOUNDARY = re.compile(r"/\*|\*/")

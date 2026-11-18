@@ -3252,6 +3252,29 @@ mod fixtures {
         self.assertIn("ORB-999999", result.stderr)
         self.assertNotIn("ORB-123456", result.stderr)
 
+    def test_public_ids_after_restricted_visibility_test_module_only_flag_production(self):
+        guard = self.root / "scripts/check-public-artifact-ids.py"
+        shutil.copy2(SCRIPTS / guard.name, guard)
+        source = self.root / "crates/fixture/src/lib.rs"
+        source.parent.mkdir(parents=True)
+        test_module = '#[cfg(test)]\npub(crate)mod tests { const LABEL: &str = "ORB-999"; }\n'
+        source.write_text(test_module)
+        ignored_test_id = subprocess.run([sys.executable, str(guard)], capture_output=True, text=True)
+        self.assertEqual(ignored_test_id.returncode, 0,
+                         ignored_test_id.stdout + ignored_test_id.stderr)
+
+        source.write_text(test_module + 'pub const LABEL: &str = "ORB-999";\n')
+        binary = self.root / "fixture-tests"
+        compiled = subprocess.run(["rustc", "--test", str(source), "-o", str(binary)],
+                                 capture_output=True, text=True)
+        self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+
+        production_id = subprocess.run([sys.executable, str(guard)], capture_output=True, text=True)
+        self.assertEqual(production_id.returncode, 1, production_id.stdout + production_id.stderr)
+        self.assertIn("crates/fixture/src/lib.rs:3:", production_id.stderr)
+        self.assertIn("ORB-999", production_id.stderr)
+        self.assertNotIn("crates/fixture/src/lib.rs:2:", production_id.stderr)
+
     def test_public_ids_inside_multiline_strings_are_rejected(self):
         guard = self.root / "scripts/check-public-artifact-ids.py"
         shutil.copy2(SCRIPTS / guard.name, guard)
