@@ -97,8 +97,8 @@ pub(in crate::executor::automation::vcs) fn bounded_publication_value(value: &Va
 
 /// Bound and redact one text field. Ordinary pull-request URLs stay; userinfo,
 /// query and fragment payloads do not, including text that was supposed to be
-/// a branch name. Longer than 512 bytes, the value keeps a prefix and its
-/// original length.
+/// a branch name. When the redacted UTF-8 text exceeds 512 bytes, the value
+/// keeps a prefix and its redacted byte count.
 pub(in crate::executor::automation::vcs) fn redacted_bounded_text(text: &str) -> Value {
     // Retain ordinary PR URLs, but no userinfo, query or fragment payloads in
     // arbitrary text, including fields that were supposed to be branch names.
