@@ -1,3 +1,5 @@
+use std::time::SystemTime;
+
 use orbit_common::OrbitError;
 use orbit_common::protocol::yaml::parse_policy_resource;
 use orbit_store::contracts::PolicyDefStoreBackend;
@@ -13,7 +15,7 @@ pub(crate) fn seed_default_policies(
     store: &dyn PolicyDefStoreBackend,
     overwrite: bool,
 ) -> Result<usize, OrbitError> {
-    let now = PolicyTimestamp::now_utc();
+    let now = PolicyTimestamp::try_from(SystemTime::now())?;
     let mut count = 0;
     for (name, raw) in DEFAULT_POLICY_FILES {
         let shipped = parse_default_policy(name, raw, now)?;

@@ -279,8 +279,12 @@ fn policy_with_profile(name: &str, read: Vec<String>) -> PolicyDef {
         deny_read: Vec::new(),
         deny_modify: Vec::new(),
         fs_profiles,
-        created_at: Some(PolicyTimestamp::now_utc()),
-        updated_at: Some(PolicyTimestamp::now_utc()),
+        created_at: Some(
+            PolicyTimestamp::try_from(std::time::SystemTime::now()).expect("policy timestamp"),
+        ),
+        updated_at: Some(
+            PolicyTimestamp::try_from(std::time::SystemTime::now()).expect("policy timestamp"),
+        ),
     }
 }
 

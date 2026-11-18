@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use tempfile::tempdir;
 
 fn baseline_def(name: &str) -> PolicyDef {
-    let now = PolicyTimestamp::now_utc();
+    let now = PolicyTimestamp::try_from(std::time::SystemTime::now()).expect("policy timestamp");
     PolicyDef {
         name: name.to_string(),
         description: Some("test policy".to_string()),
@@ -147,9 +147,15 @@ fn policy_timestamps_preserve_legacy_records_offsets_precision_merges_and_reject
         ("2026-11-18 05:12:14 UTC", "2026-11-18T05:12:14Z"),
         ("2026-11-18 05:12:14 utc", "2026-11-18T05:12:14Z"),
         ("2026-1-2T3:4:5Z", "2026-01-02T03:04:05Z"),
+        (
+            "2015-06-30T23:59:59.999999999Z",
+            "2015-06-30T23:59:59.999999999Z",
+        ),
         ("2015-06-30T23:59:60Z", "2015-06-30T23:59:60Z"),
         ("2015-06-30T23:59:60.500Z", "2015-06-30T23:59:60.500Z"),
         ("2015-07-01T01:59:60.250+02:00", "2015-06-30T23:59:60.250Z"),
+        ("2015-07-01T00:00:00Z", "2015-07-01T00:00:00Z"),
+        ("1970-01-01T00:00:60Z", "1970-01-01T00:00:60Z"),
         ("0000-01-01T00:00:00Z", "0000-01-01T00:00:00Z"),
         ("-0001-12-31T23:59:59Z", "-0001-12-31T23:59:59Z"),
         ("+10000-01-01T00:00:00Z", "+10000-01-01T00:00:00Z"),
@@ -172,8 +178,13 @@ fn policy_timestamps_preserve_legacy_records_offsets_precision_merges_and_reject
         let new_json = serde_json::to_string(&new_ts).expect("policy serialize");
         assert_eq!(new_json, old_json, "JSON serialization parity for {raw}");
         assert_eq!(
-            new_ts.to_rfc3339(),
-            expected_canonical,
+            serde_json::from_str::<PolicyTimestamp>(&new_json).expect("read serialized timestamp"),
+            new_ts,
+            "timestamp must survive serialization for {raw}"
+        );
+        assert_eq!(
+            new_json,
+            serde_json::to_string(expected_canonical).expect("serialize canonical timestamp"),
             "canonical RFC 3339 for {raw}"
         );
         assert_eq!(
@@ -395,4 +406,18 @@ fn policy_timestamps_preserve_legacy_records_offsets_precision_merges_and_reject
     let encoded = serde_yaml::to_string(&resource).expect("encode resource");
     let decoded = parse_policy_resource(&encoded, "direct").expect("decode resource");
     assert_eq!(decoded, resource);
+}
+
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+#[test]
+fn policy_timestamp_rejects_out_of_range_system_times() {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let outside_policy_range = Duration::from_secs(10_000_000_000_000);
+    assert!(PolicyTimestamp::try_from(UNIX_EPOCH + outside_policy_range).is_err());
+    assert!(PolicyTimestamp::try_from(UNIX_EPOCH - outside_policy_range).is_err());
+    assert_eq!(
+        PolicyTimestamp::try_from(UNIX_EPOCH - Duration::from_millis(1)).expect("pre-epoch"),
+        "1969-12-31T23:59:59.999Z".parse().expect("timestamp")
+    );
 }

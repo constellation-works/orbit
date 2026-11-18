@@ -28,8 +28,12 @@ fn make_def(
         deny_read: deny_read.into_iter().map(String::from).collect(),
         deny_modify: deny_modify.into_iter().map(String::from).collect(),
         fs_profiles,
-        created_at: Some(PolicyTimestamp::now_utc()),
-        updated_at: Some(PolicyTimestamp::now_utc()),
+        created_at: Some(
+            PolicyTimestamp::try_from(std::time::SystemTime::now()).expect("policy timestamp"),
+        ),
+        updated_at: Some(
+            PolicyTimestamp::try_from(std::time::SystemTime::now()).expect("policy timestamp"),
+        ),
     }
 }
 
@@ -53,8 +57,12 @@ fn engine(
         deny_read: deny_read.iter().map(|s| (*s).to_string()).collect(),
         deny_modify: deny_modify.iter().map(|s| (*s).to_string()).collect(),
         fs_profiles,
-        created_at: Some(PolicyTimestamp::now_utc()),
-        updated_at: Some(PolicyTimestamp::now_utc()),
+        created_at: Some(
+            PolicyTimestamp::try_from(std::time::SystemTime::now()).expect("policy timestamp"),
+        ),
+        updated_at: Some(
+            PolicyTimestamp::try_from(std::time::SystemTime::now()).expect("policy timestamp"),
+        ),
     };
     PolicyEngine::from_def(&def).expect("valid policy def")
 }
