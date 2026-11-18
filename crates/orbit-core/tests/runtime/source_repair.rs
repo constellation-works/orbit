@@ -77,8 +77,8 @@ use completion::prerequisite::{
     transient_required_check_and_merge_capability_reads_resume_completion,
 };
 use completion::{
-    changed_base_gets_fresh_native_validation, completion_reuse_refuses_drift,
-    concurrent_and_lost_admission_keep_one_completion_budget,
+    changed_base_gets_fresh_native_validation, completion_observation_requires_a_stopped_owner,
+    completion_reuse_refuses_drift, concurrent_and_lost_admission_keep_one_completion_budget,
     configured_review_requires_unchanged_host_certificate,
     empty_requirements_still_bind_completion_policy,
     moved_base_and_empty_requirements_retry_unchanged_completion,
@@ -994,6 +994,7 @@ crate::scenario_table!(
 crate::scenario_table!(
     published_completion_scenarios_reuse,
     completion_reuse_refuses_drift,
+    completion_observation_requires_a_stopped_owner,
 );
 
 crate::scenario_table!(

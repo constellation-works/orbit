@@ -121,8 +121,14 @@ impl OrbitRuntime {
         let process_owns = source.state == JobRunState::Running
             && source.pid == Some(std::process::id())
             && source.finished_at.is_none();
-        let foreign_live =
-            source.state == JobRunState::Running && source.finished_at.is_none() && !process_owns;
+        // A terminal state alone does not prove its worker stopped. Only
+        // requeue a finished publication after the owner probe confirms the
+        // recorded process is gone; unfinished and unverifiable owners stay
+        // refused.
+        let stopped = source.state.is_terminal()
+            && source.finished_at.is_some()
+            && run_owner_liveness(&source) == RunOwnerLiveness::Stopped;
+        let foreign_live = !process_owns && !stopped;
         if (!observation && (unbound || !process_owns || source.retry_source_run_id.is_some()))
             || (observation && (unbound || foreign_live))
         {
