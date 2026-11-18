@@ -854,10 +854,20 @@ class NextestShardWorkflowTests(unittest.TestCase):
                         time.sleep(0.01)
                     self.assertTrue(path.exists(), f"timed out waiting for {path}")
 
+                def stop_process_group(process):
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        process.wait(timeout=1)
+                    except subprocess.TimeoutExpired as error:
+                        raise AssertionError("workflow step process did not stop") from error
+
                 start = subprocess.Popen(["bash", "-e", "-o", "pipefail", "-c", steps[start_name]["run"]],
                                          cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                          start_new_session=True)
-                self.addCleanup(lambda p=start: os.killpg(p.pid, signal.SIGKILL) if p.poll() is None else None)
+                self.addCleanup(stop_process_group, start)
                 await_file(root / "lock-paused")
                 try:
                     start.wait(timeout=0.5)
@@ -869,7 +879,9 @@ class NextestShardWorkflowTests(unittest.TestCase):
                 self.assertEqual(start.wait(timeout=10), 0)
                 await_file(root / "proof-running")
                 wait = subprocess.Popen(["bash", "-e", "-o", "pipefail", "-c", steps[wait_name]["run"]],
-                                        cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                                        cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                        start_new_session=True)
+                self.addCleanup(stop_process_group, wait)
                 try:
                     self.assertIsNone(wait.poll(), "wait returned while proof was still running")
                 finally:
