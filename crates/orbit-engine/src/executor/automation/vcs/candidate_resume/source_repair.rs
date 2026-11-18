@@ -1,6 +1,6 @@
 //! Continue only the candidate a durable operator reservation admitted.
 use super::super::git::git_output;
-use super::super::pr::read_pr_status;
+use super::super::pr_answers::read_pr_status;
 use super::adopt::{Adoption, adopt_published_branch};
 use super::apply::{Applied, apply, output, record};
 use super::{Candidate, Outcome};
@@ -285,8 +285,8 @@ pub(in crate::executor::automation::vcs) fn publication_lease<H: RuntimeHost + ?
 
 pub(in crate::executor::automation::vcs) fn exact_open_pr(
     binding: &orbit_types::workflow::SourceRepairBinding,
-    pr: &super::super::pr::PullRequestStatus,
+    pr: &super::super::pr_answers::PullRequestStatus,
     expected_head: &str,
 ) -> bool {
-    super::super::pr::source_identity::mismatches(binding, pr, expected_head).is_empty()
+    super::super::pr_answers::identity::mismatches(binding, pr, expected_head).is_empty()
 }

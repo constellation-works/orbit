@@ -61,6 +61,8 @@ SCAN_DIRECTORIES = (
     f"{VCS}/base",
     f"{VCS}/claim",
     f"{VCS}/pr_answers",
+    # candidate_resume must not path-name pr [ORB-25493].
+    f"{VCS}/candidate_resume",
     # The engine dispatch-contract leaf directory [ORB-25491].
     "crates/orbit-engine/src/context",
 )

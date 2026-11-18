@@ -3,8 +3,8 @@ summary: "Activity / Job — Overview"
 type: design
 title: "Activity / Job — Overview"
 owner: codex
-last_updated: 2026-11-16
-last_validated: 2026-11-14
+last_updated: 2026-11-18
+last_validated: 2026-11-18
 status: Draft
 stage: shipped
 next: "Release-readiness example stays disabled until owner prerequisites (ORB-20166)"
@@ -125,7 +125,7 @@ workspace auto run still treats a required child workflow failure as a parent fa
 | Delivery-leaf job ids and membership predicates (one owner for store, runtime, engine and core) | `crates/orbit-types/src/workflow/job.rs` | [ORB-24042] |
 | Shared task projections for delivery conventions, PR rendering, commit and handoff admission (owned by the lower conventions module) | `crates/orbit-engine/src/executor/automation/vcs/conventions.rs` | [ORB-24097] |
 | Shared hosted-check evidence, classification, rerun planning and recovery for landing, PR auto-fix/completion, base refresh and claim | `crates/orbit-engine/src/executor/automation/vcs/checks/` | [ORB-25310] |
-| PR read model (provider answers, merge-state classification, delivery pin, bounded diagnostics) below PR operations | `crates/orbit-engine/src/executor/automation/vcs/pr_answers/` | [ORB-25311] |
+| PR read model (provider answers, merge-state classification, delivery pin, bounded diagnostics, source-repair identity comparison). Order: `pr_answers < candidate_resume < pr` | `crates/orbit-engine/src/executor/automation/vcs/pr_answers/` | [ORB-25311], [ORB-25493] |
 | Seeded reference activities and pipeline jobs | `crates/orbit-core/assets/activities/`, `crates/orbit-core/assets/jobs/` | [T20260419-2347], [T20260419-0622-3], [T20260419-0623] |
 
 ---
@@ -135,7 +135,8 @@ workspace auto run still treats a required child workflow failure as a parent fa
 - **[ORB-24042]** — Give the delivery-leaf job ids one owner in `orbit-types`.
 - **[ORB-24097]** — Cut delivery conventions' dependency on PR rendering: `vcs::conventions` owns the shared task projections; PR rendering, commit admission and handoff admission consume that owner.
 - **[ORB-25310]** — Lift shared hosted-check handling out of landing into `vcs::checks`: landing, PR, base and claim consume it directly. The remaining `checks → pr` read-model dependency is cut by [ORB-25311].
-- **[ORB-25311]** — Move the PR read model to `vcs::pr_answers`. The order is `operations < pr_answers < checks < pr < landing` and `pr_answers < base, push, claim`. `pr` re-exports the old paths as a compatibility shim whose retirement is a follow-up.
+- **[ORB-25311]** — Move the PR read model to `vcs::pr_answers`. The order is `operations < pr_answers < checks < pr < landing`, `pr_answers < base, push, claim`, and `pr_answers < candidate_resume < pr`. `pr` re-exports the old paths as a compatibility shim whose retirement is a follow-up.
+- **[ORB-25493]** — Move the source-repair identity comparison into `vcs::pr_answers` so candidate resume reads it there and no longer names `pr`. `pr` still calls candidate resume for publication admission. The order is `pr_answers < candidate_resume < pr`.
 - **[ORB-25491]** — Put the dispatch contracts below `RuntimeHost` in `context::dispatch_contract`; the dependency guard rejects `context` paths into `activity_job` and any `crate::` path in the leaf. The dispatcher preserves the public paths with explicit re-exports; migrating the remaining consumers and retiring that shim is a follow-up. The remaining activity execution and automation cycle is outside this change.
 - **[T20260418-2010]** — Add the first v2 activity runtime scaffolding.
 - **[T20260418-2018]** — Add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).
