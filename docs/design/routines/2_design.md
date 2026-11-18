@@ -71,7 +71,11 @@ routines start collapsed behind a keyboard- and touch-operable disclosure;
 filtering opens it to show matching paused entries. Group counts include the
 total catalogue and summarize blocked, stalled and repeatedly failing routines
 even when their cards are collapsed or filtered out. The failure warning
-and next-hour timeline always cover the full catalogue. Filter and
+and next-hour timeline always cover the full catalogue. An open breaker contributes
+at most its next eligible trial to the timeline. Trials appear separately from
+scheduled fires. The routine and auto-task timing editors display an existing
+condition's scope and predicate as read-only and preserve the condition settings
+until the operator explicitly replaces the trigger. Filter and
 disclosure choices survive status refreshes and reset on workspace or host
 changes. Filtering is refused only while a trigger editor is on
 screen: close it first. An open editor whose routine is filtered out

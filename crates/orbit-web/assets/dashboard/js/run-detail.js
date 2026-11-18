@@ -379,11 +379,12 @@ export function renderRunDetailMeta() {
   // confirmation reads it off the run it is handed.
   if (!recorded && runIsCancellable(run)) actions.appendChild(buildCancelRunButton({ ...run, pull_claim: detail.pull_claim }, feedback));
   wrap.appendChild(actions);
-  const failure = buildRunFailure(run, Array.isArray(detail.steps) ? detail.steps : []);
+  const steps = Array.isArray(detail.steps) ? detail.steps : [];
+  const failure = buildRunFailure(run, steps);
   if (failure) wrap.appendChild(failure);
   const cancelled = buildRunCancellation(run);
   if (cancelled) wrap.appendChild(cancelled);
-  if (run.state === "held") wrap.appendChild(buildRunHold(run));
+  if (run.state === "held") wrap.appendChild(buildRunHold(run, steps));
   wrap.appendChild(grid);
   const leaves = buildClaimedLeaves(run, Array.isArray(detail.claimed_leaves) ? detail.claimed_leaves : []);
   if (leaves) wrap.appendChild(leaves);
@@ -872,11 +873,19 @@ function buildRunCancellation(run) {
   return box;
 }
 
-function buildRunHold(run) {
+function buildRunHold(run, steps) {
+  const heldStep = steps.findLast(step => step.state === "held" && step.error_code);
+  const cause = heldStep?.error_code || run.error_code;
+  const guidance = cause === "forge_unavailable"
+    ? "The scheduler retries the push with the reviewed candidate. If the retry window expires, resume the held run when the forge is available."
+    : ["review_awaiting_evidence", "review_evidence_pending"].includes(cause)
+      ? "Record the required external evidence for this task. Its receipt queues a fresh review."
+      : "";
+  const message = heldStep?.error_message || run.error_message || (guidance ? "" : "No hold reason was recorded.");
   const box = el("section", { class: "run-hold" }, [
     el("strong", { text: "Delivery held" }),
-    el("pre", { class: "run-hold-message mono", text: run.error_message || "Delivery is awaiting required external evidence." }),
-    el("p", { text: "Record the required external evidence for this task. Its receipt queues a fresh review; delivery resumes when that review clears the hold." }),
+    message ? el("pre", { class: "run-hold-message mono", text: message }) : null,
+    guidance ? el("p", { text: guidance }) : null,
   ]);
   box.setAttribute("aria-label", "Why this run is held");
   return box;

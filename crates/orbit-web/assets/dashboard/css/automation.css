@@ -324,6 +324,7 @@ a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
 .operation-timeline-legend { display: flex; gap: 12px; margin-left: auto; }
 .operation-timeline-key { display: flex; align-items: center; gap: 5px; }
 .operation-timeline-key::before { content: ""; width: 8px; height: 8px; background: var(--border); }
+.operation-timeline-key.trial::before, .operation-timeline-tick.trial .operation-timeline-mark { background: var(--state-pending); }
 .operation-timeline-key.fires::before { background: var(--accent); }
 .operation-timeline-track { position: relative; height: 39px; margin: 0 56px 0 6px; }
 .operation-timeline-axis { position: absolute; left: 0; right: 0; top: 6px; height: 1px; background: var(--border); }

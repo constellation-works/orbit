@@ -95,7 +95,7 @@ export function initTaskCreate({ getWorkspaces }) {
   $('panel').addEventListener('keydown', event => {
     if (event.key !== 'Tab' || event.altKey || event.ctrlKey || event.metaKey) return;
     const controls = [...$('panel').querySelectorAll('select, input, textarea, button, a[href]')]
-      .filter(node => !node.disabled && !node.closest('[hidden]') && node.getClientRects().length);
+      .filter(node => !node.matches(":disabled") && !node.closest('[hidden]') && node.getClientRects().length);
     if (!controls.length) return;
     const active = document.activeElement;
     // Shift+Tab also leaves from the focusable feedback line when every field above it is disabled.

@@ -231,12 +231,13 @@ function commentActionButton(label, description) {
 // page when it is the page on screen) and names the comment, behind the same
 // host, workspace and window query as this address.
 function commentPermalink(task, index) {
-  const href = window.location && window.location.href ? String(window.location.href) : "";
+  const url = new URL(taskHref(task.id, { workspace: task.workspace_id }), window.location.href);
   const id = encodeURIComponent(task.id);
   const route = taskState.taskPageId === task.id
     ? `#tasks/${id}?comment=${index + 1}`
     : `#tasks?open=${id}&comment=${index + 1}`;
-  return `${href.split("#")[0]}${route}`;
+  url.hash = route;
+  return url.href;
 }
 
 function renderedCommentHeadings(view) {

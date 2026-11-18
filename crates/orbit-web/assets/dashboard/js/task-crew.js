@@ -86,12 +86,18 @@ export function myWorkCrewNames() {
   return humans.map((crew) => crew.name);
 }
 
+// Terminal statuses mirror TaskStatus::is_terminal (done, archived, rejected)
+// plus both spellings of cancelled; "All" lists them, but nothing waits on them.
+const TERMINAL_TASK_STATUSES = new Set(["done", "archived", "rejected", "cancelled", "canceled"]);
+export function isOpenTask(t) { return !TERMINAL_TASK_STATUSES.has(t.status); }
+
 // Whether a task is the viewer's own work, from the server-stamped
 // `human_crew` on the task itself. The aggregate view clears the workspace
 // registry, so a name-based check loses every task there; the per-task
 // stamp survives and keeps same-named human/agent crews apart. When the
 // viewer is known only that crew counts, otherwise every human crew does.
 export function isMyWorkTask(task) {
+  if (!isOpenTask(task)) return false;
   const human = humanCrewFor(task);
   if (!human) return false;
   const viewer = taskState.lastCrewPayload && taskState.lastCrewPayload.viewer_human_crew;

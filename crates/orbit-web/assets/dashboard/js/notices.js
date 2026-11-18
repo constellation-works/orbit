@@ -196,8 +196,6 @@ onWorkspaceChange(() => {
   lastPayload = null;
   openedNotices.clear();
   closing = null;
-  const dialog = $("notices-post-dialog");
-  if (dialog?.open) dialog.close();
 });
 
 const noticesOf = (payload, list) => (Array.isArray(payload?.[list]) ? payload[list] : []);
@@ -550,6 +548,11 @@ function wirePostDialog() {
     form.reset();
     $("notices-post-options").open = false;
   };
+  onWorkspaceChange(() => {
+    session = null;
+    if (dialog.open) dialog.close();
+    resetDraft();
+  });
   $("notices-post-toggle")?.addEventListener("click", () => {
     if (!dialog.open) {
       session = { visit: captureWorkspaceVisit() };
@@ -612,7 +615,7 @@ function wirePostDialog() {
     }
     // A dismissed or replaced session leaves the page alone: the sent draft is
     // cleared only when no dialog is open and nothing was typed over it since.
-    if (!session && JSON.stringify(readDraft()) === sent) resetDraft();
+    if (mine.visit.isCurrent() && !session && JSON.stringify(readDraft()) === sent) resetDraft();
     if (mine.visit.isCurrent()) await refreshNoticesAfterWrite();
   });
 }
