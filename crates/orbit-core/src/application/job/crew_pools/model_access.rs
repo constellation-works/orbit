@@ -8,8 +8,8 @@ use orbit_store::contracts::{JobRunOrder, JobRunQuery};
 use orbit_types::identity::Crew;
 use orbit_types::workflow::activity_job::Provider;
 use orbit_types::workflow::{
-    IMPLEMENT_ONE_STEP_ID, JobRunState, MUSE_MODEL_ACCESS_OUTPUT_KEY, MuseModelAccess,
-    TASK_LOCAL_PIPELINE_JOB, TASK_PR_PIPELINE_JOB,
+    CLAIMED_DELIVERY_LEAF_JOBS, IMPLEMENT_ONE_STEP_ID, JobRunState, MUSE_MODEL_ACCESS_OUTPUT_KEY,
+    MuseModelAccess, TASK_LOCAL_PIPELINE_JOB, TASK_PR_PIPELINE_JOB,
 };
 
 use super::draw::auto_task_id;
@@ -99,6 +99,51 @@ impl OrbitRuntime {
             return Ok(MuseModelRefusals::default());
         }
         self.muse_model_refusals_in_runs(&run_ids, None)
+    }
+
+    /// Muse model refusals this follower's own claimed leaves of `task_id`
+    /// recorded in the last [`MUSE_MODEL_REFUSAL_WINDOW_HOURS`] hours, net of
+    /// a newer verified success of the same model and account.
+    ///
+    /// Only claimed delivery leaves this host executed count: the owner's
+    /// runs, another follower's leaves and this host's owner-local runs of a
+    /// same-id local task are not evidence about this host's account for the
+    /// claimed task. A host with no automation identity reads none. The
+    /// window lets a refusal lapse, as on the owner's after-landing review
+    /// pool, because the exclusion itself prevents the success that would
+    /// clear it.
+    pub(super) fn claimed_leaf_muse_model_refusals(
+        &self,
+        task_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<MuseModelRefusals, OrbitError> {
+        let Some(machine) = self.automation_machine_identity() else {
+            return Ok(MuseModelRefusals::default());
+        };
+        let since = now - Duration::hours(MUSE_MODEL_REFUSAL_WINDOW_HOURS);
+        let runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+            task_id: Some(task_id.to_string()),
+            states: vec![JobRunState::Success, JobRunState::Failed, JobRunState::Held],
+            include_steps: false,
+            input_keys: Some(&["task_id", "task_ids"]),
+            ..Default::default()
+        })?;
+        let run_ids = runs
+            .into_iter()
+            .filter(|run| {
+                CLAIMED_DELIVERY_LEAF_JOBS.contains(&run.job_id.as_str())
+                    && run.input.as_ref().and_then(auto_task_id) == Some(task_id)
+                    && run
+                        .executed_on
+                        .as_ref()
+                        .is_some_and(|host| host.machine_id == machine)
+            })
+            .map(|run| run.run_id)
+            .collect::<Vec<_>>();
+        if run_ids.is_empty() {
+            return Ok(MuseModelRefusals::default());
+        }
+        self.muse_model_refusals_in_runs(&run_ids, Some(since))
     }
 
     /// Muse model refusals the owner-local implementation runs of any task

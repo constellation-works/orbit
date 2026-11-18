@@ -146,7 +146,7 @@ pub trait ApplicationPort: Send + Sync {
         crew: Option<&str>,
         crew_source: Option<&CrewSource>,
         complexity: Option<TaskComplexity>,
-    ) -> Option<String>;
+    ) -> Result<Option<String>, OrbitError>;
 }
 
 impl RuntimeKernel {
@@ -308,7 +308,7 @@ impl RuntimeKernel {
         crew: Option<&str>,
         crew_source: Option<&CrewSource>,
         complexity: Option<TaskComplexity>,
-    ) -> Option<String> {
+    ) -> Result<Option<String>, OrbitError> {
         self.application.claimed_leaf_redrawn_crew(
             self,
             input,

@@ -22,7 +22,7 @@ use super::draw::{
     complexity_crews_key, permitted_candidates, pools_from_input, seeded_crew_ticket,
     sole_candidate, weighted_candidates, weighted_draw,
 };
-use super::model_access::{is_muse_crew, model_access_hold};
+use super::model_access::{MuseModelRefusals, is_muse_crew, model_access_hold};
 use super::purpose::task_crew_purpose;
 use super::types::{COMPLEXITIES, CapturedCrewPool, CapturedCrewPools, POOLS_KEY};
 
@@ -356,23 +356,36 @@ impl OrbitRuntime {
         Ok(Some(redraw))
     }
 
-    /// The crew a claimed leaf runs as under this follower's own usage
-    /// pressure [ORB-17773], or `None` to keep the owner's crew from the
-    /// claimed-task snapshot.
+    /// The crew a claimed leaf runs as on this follower, or `None` to keep
+    /// the owner's crew from the claimed-task snapshot.
+    ///
+    /// Two follower-local facts re-draw an automatic assignment:
+    ///
+    /// - [ORB-17773] this follower's own usage pressure, under
+    ///   `usage_pressure` policy;
+    /// - [ORB-25663] a Muse model this follower's own claimed leaves of the
+    ///   task were verified to be refused on the crew's provider account
+    ///   ([`Self::claimed_leaf_muse_model_refusals`]), under any policy.
+    ///   Every member on a refused model and account leaves the draw; when
+    ///   no drawable member remains, the leaf ends on the typed
+    ///   `provider_model_access_hold` error before any provider runs.
+    ///   For a `type:` source, a refusal of the assigned crew opens the
+    ///   named type pool. Usage pressure alone keeps that assignment.
     ///
     /// The re-draw is the [ORB-17770] admission re-draw over a view built
     /// from the snapshot (`crew`, its automatic `crew_source` and
     /// `complexity`): the whole pool its source names, as this follower
     /// captures that pool, narrowed by this host's holds and provider
     /// limits and by the run's crew allowlist, then weighed by this
-    /// host's weekly readings. The owner's readings never reach it. An
-    /// explicit or legacy crew (no automatic source), `static` policy, a
-    /// draw with no pool to weigh, and any failure to
-    /// compute the draw all keep the snapshot crew: a leaf that the owner
-    /// admitted must not fail because an optional re-draw could not run.
-    /// Nothing is persisted — the task lives in the owner's store — and
-    /// the ticket is seeded from the claim, so every resolution of the
-    /// leaf's crew in this run draws the same member.
+    /// host's weekly readings when usage pressure applies. The owner's
+    /// readings and evidence never reach it. An explicit or legacy crew (no
+    /// automatic source) and a run-input `crew` are never re-drawn. Under
+    /// `static` policy with no refusal, a draw with no pool to weigh, and
+    /// any other failure to compute the draw, the snapshot crew is kept: a
+    /// leaf that the owner admitted must not fail because an optional
+    /// re-draw could not run. Nothing is persisted — the task lives in the
+    /// owner's store — and the ticket is seeded from the claim, so every
+    /// resolution of the leaf's crew in this run draws the same member.
     pub(crate) fn claimed_leaf_redrawn_crew(
         &self,
         input: &Value,
@@ -380,21 +393,42 @@ impl OrbitRuntime {
         crew: Option<&str>,
         crew_source: Option<&CrewSource>,
         complexity: Option<TaskComplexity>,
-    ) -> Option<String> {
-        if !self.provider_limit_policy().usage_pressure.applies() {
-            return None;
+    ) -> Result<Option<String>, OrbitError> {
+        let Some(original) = self.crew_unless_retired(crew).and_then(non_empty) else {
+            return Ok(None);
+        };
+        let Some(source) = crew_source.filter(|source| source.is_automatic()) else {
+            return Ok(None);
+        };
+        // A crew the run input names wins over the task's crew.
+        if input
+            .get("crew")
+            .and_then(Value::as_str)
+            .and_then(non_empty)
+            .is_some()
+        {
+            return Ok(None);
         }
-        let original = crew.and_then(non_empty)?;
-        let source = crew_source.filter(|source| source.is_automatic())?;
-        match self.claimed_leaf_redraw(input, task_id, original, source, complexity) {
-            Ok(drawn) => drawn,
+        let refusals = self
+            .claimed_leaf_muse_model_refusals(task_id, chrono::Utc::now())
+            .unwrap_or_else(|error| {
+                tracing::warn!(
+                    task_id,
+                    "could not read this host's Muse model-access evidence for the claimed \
+                     task; drawing without it: {error}"
+                );
+                MuseModelRefusals::default()
+            });
+        match self.claimed_leaf_redraw(input, task_id, original, source, complexity, &refusals) {
+            Ok(drawn) => Ok(drawn),
+            Err(error @ OrbitError::ProviderModelAccessHold(_)) => Err(error),
             Err(error) => {
                 tracing::warn!(
                     task_id,
-                    "could not re-draw the claimed task's crew under this host's usage \
-                     pressure; keeping the owner's crew `{original}`: {error}"
+                    "could not re-draw the claimed task's crew on this host; keeping the \
+                     owner's crew `{original}`: {error}"
                 );
-                None
+                Ok(None)
             }
         }
     }
@@ -406,17 +440,19 @@ impl OrbitRuntime {
         original: &str,
         source: &CrewSource,
         complexity: Option<TaskComplexity>,
+        refusals: &MuseModelRefusals,
     ) -> Result<Option<String>, OrbitError> {
-        // The claimed snapshot carries no tags or context files to classify
-        // the task by, so a type-pool crew keeps the owner's draw.
-        if matches!(source, CrewSource::Type { .. }) {
+        let pressure = self.provider_limit_policy().usage_pressure.applies();
+        let refused = self
+            .resolve_crew_for_task(Some(original), None)
+            .ok()
+            .filter(|crew| refusals.rejects_crew_model(crew))
+            .map(|crew| crew.assignment.model);
+        let type_source = source.type_route().is_some();
+        // Only a verified refusal reopens a type assignment on the follower.
+        if refused.is_none() && (!pressure || type_source) {
             return Ok(None);
         }
-        let pools = if input.get(POOLS_KEY).is_some() {
-            pools_from_input(input)?
-        } else {
-            self.capture_auto_crew_pools(input)?
-        };
         let now = chrono::Utc::now();
         let tags = source
             .purpose()
@@ -451,7 +487,9 @@ impl OrbitRuntime {
             relations: Vec::new(),
             job_run_id: None,
             job_run_machine: None,
-            crew: Some(original.to_string()),
+            // The [ORB-17770] re-draw view: no member, so the draw covers the
+            // source's whole pool.
+            crew: None,
             crew_source: Some(source.clone()),
             orchestrator: None,
             orchestrator_model: None,
@@ -463,22 +501,69 @@ impl OrbitRuntime {
             updated_at: now,
             not_before: None,
         };
-        let Some(redraw) = self.usage_pressure_redraw_view(&view)? else {
-            return Ok(None);
+        let (crews, draw_source) = if type_source {
+            // The source names the pool's type and tier. The follower does
+            // not need the owner's tags or context files to open that pool.
+            self.type_assignment_candidates(&view)?
+                .unwrap_or_else(|| (Vec::new(), source.to_string()))
+        } else {
+            let pools = if input.get(POOLS_KEY).is_some() {
+                pools_from_input(input)?
+            } else {
+                self.capture_auto_crew_pools(input)?
+            };
+            let (crews, draw_source, _) =
+                self.admissible_claimed_leaf_crew_candidates(&view, &pools)?;
+            (crews, draw_source)
         };
-        let (crews, draw_source, _) =
-            self.admissible_claimed_leaf_crew_candidates(&redraw, &pools)?;
         let mut crews = self.reresolve_auto_candidates(crews, &task_auto_effort_subject(&view))?;
+        if type_source {
+            let hold = self.admission_provider_hold(&view);
+            let gate = self.provider_limit_gate(now);
+            crews.retain(|candidate| {
+                hold.as_ref().is_none_or(|hold| {
+                    !hold.excluded_crews.is_empty() && !hold.excludes(&candidate.crew.name)
+                }) && gate.limit_for(&candidate.crew).is_none()
+            });
+        }
+        let allowlist = self.crew_allowlist_from_input(input)?;
+        let drawable = |candidate: &CrewCandidate| {
+            candidate.weight > 0
+                && allowlist
+                    .as_ref()
+                    .is_none_or(|list| list.permits(&candidate.crew))
+        };
+        let mut excluded = refused.into_iter().collect::<BTreeSet<_>>();
+        crews.retain(|candidate| {
+            if !refusals.rejects_crew_model(&candidate.crew) {
+                return true;
+            }
+            if drawable(candidate) {
+                excluded.insert(candidate.crew.assignment.model.clone());
+            }
+            false
+        });
+        if !crews.iter().any(drawable) {
+            if excluded.is_empty() {
+                return Ok(None);
+            }
+            return Err(model_access_hold(&excluded));
+        }
         // This re-draw weighs this host's usage pressure.
         let weighting = weighted_candidates(
             &mut crews,
             &self.provider_limit_policy().usage_pressure,
             || self.usage_pressure_read(chrono::Utc::now()),
         );
-        if weighting.is_none() {
+        if weighting.is_none() && excluded.is_empty() {
             return Ok(None);
         }
-        let allowlist = self.crew_allowlist_from_input(input)?;
+        let draw_source = if excluded.is_empty() {
+            draw_source
+        } else {
+            let models = excluded.into_iter().collect::<Vec<_>>().join(", ");
+            format!("{draw_source}; Muse refused access to {models}")
+        };
         let candidates = permitted_candidates(crews, &draw_source, allowlist.as_ref())?;
         let mut ticket = seeded_crew_ticket(format!("claimed:{task_id}:{source}:{original}"));
         let selected = weighted_draw(&candidates, &draw_source, &mut ticket)?;
@@ -486,7 +571,7 @@ impl OrbitRuntime {
             tracing::info!(
                 task_id,
                 "crew redrawn from {source} (`{original}`) to {source} (`{}`) for the \
-                 claimed leaf under this host's usage pressure",
+                 claimed leaf on this host ({draw_source})",
                 selected.crew.name
             );
         }
