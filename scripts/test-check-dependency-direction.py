@@ -148,7 +148,7 @@ class RelativeImportTests(unittest.TestCase):
             "fn probe() { crate::executor::automation::vcs::pr::Probe; }",
             "use super::pr as renamed;\nfn probe() { renamed::read(); }",
         )
-        for consumer in ("checks/probe.rs", "base/probe.rs"):
+        for consumer in ("checks/probe.rs", "base/probe.rs", "candidate_resume/probe.rs"):
             self.check_rows(
                 [(consumer, source + "\n") for source in named_pr],
                 rejected=True, base=vcs)
@@ -172,6 +172,11 @@ class RelativeImportTests(unittest.TestCase):
              "fn keep(pr: u64) { let _ = pr; }\n"
              'const KEY: &str = "pr";\n'),
             ("base/probe.rs", "fn keep() { let pr = 1; let _ = pr; }\n"),
+            ("candidate_resume/probe.rs",
+             "use super::super::pr_answers::identity::mismatches;\n"
+             "use super::super::pr_answers::PullRequestStatus;\n"
+             "fn keep(pr: u64) { let _ = (pr, mismatches, PullRequestStatus); }\n"
+             'const KEY: &str = "pr";\n'),
         ], rejected=False, base=vcs)
         for relative, source in (
             ("push.rs", "fn keep(pr: u64) { let _ = pr; }\n"),

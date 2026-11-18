@@ -1,13 +1,17 @@
 //! Provider pull-request answers, parsed once, plus the merge-state classifier,
-//! delivery pin and bounded diagnostics those answers feed.
+//! delivery pin, bounded diagnostics and the source-repair identity comparison
+//! those answers feed.
 //!
 //! Private operations below this module produce the JSON. This module is the
 //! one reader of that JSON, so it names no PR, check, landing, base, push or
-//! claim module above it. `pr` re-exports the names so older paths keep
-//! compiling; retire those shims once callers import `pr_answers` directly.
+//! claim module above it. `pr` re-exports the read-model names so older paths
+//! keep compiling; retire those shims once callers import `pr_answers`
+//! directly. Candidate resume reads the identity predicate from here and does
+//! not name `pr`. The order is `pr_answers < candidate_resume < pr`.
 
 pub(in crate::executor::automation::vcs) mod answers;
 pub(in crate::executor::automation::vcs) mod diagnostics;
+pub(in crate::executor::automation::vcs) mod identity;
 pub(in crate::executor::automation::vcs) mod merge_state;
 mod pin;
 

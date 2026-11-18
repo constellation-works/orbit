@@ -1266,8 +1266,9 @@ done
 # [ORB-25311] `vcs::pr_answers` owns the PR read model and sits below checks,
 # pr, landing, base, push and claim. A Rust path segment naming one of those
 # modules is an edge; a bare identifier or a string (a pull-request number,
-# the `checks` field, a `base` pin) is not. checks, base, push and claim
-# publication read the model from pr_answers and must not path-name `pr`.
+# the `checks` field, a `base` pin) is not. checks, base, push, claim
+# publication and candidate_resume read the model from pr_answers and must not
+# path-name `pr` [ORB-25493]. The order is `pr_answers < candidate_resume < pr`.
 # Print every such path as `<file>:<line>:<text>` and exit nonzero when one
 # is found. A missing scan root fails closed.
 module_paths_into() {
@@ -1380,7 +1381,7 @@ if ! module_paths_into "$vcs_src" pr_answers 'pr|checks|landing|base|push|claim'
   echo "orbit-engine vcs pr_answers must not name pr, checks, landing, base, push or claim"
   fail=1
 fi
-for consumer in checks base push.rs claim/published.rs; do
+for consumer in checks base push.rs claim/published.rs candidate_resume; do
   if ! module_paths_into "$vcs_src" "$consumer" pr; then
     echo "orbit-engine vcs ${consumer} must not name pr; read the PR model from pr_answers"
     fail=1
