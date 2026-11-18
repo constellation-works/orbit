@@ -93,7 +93,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net
 tower-http = { version = "0.6", features = ["compression-gzip"] }
 jsonschema = { version = "0.18", default-features = false }
 libc = "0.2"
-rusqlite = { version = "0.41", features = ["bundled", "chrono", "fallible_uint", "trace"] }
+rusqlite = { version = "0.41", features = ["bundled", "fallible_uint", "trace"] }
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 # Native lease-listener TLS; select ring explicitly rather than a process default.
 rustls = { version = "0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
