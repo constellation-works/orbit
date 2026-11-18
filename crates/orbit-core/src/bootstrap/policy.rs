@@ -1,8 +1,9 @@
-use chrono::Utc;
+use std::time::SystemTime;
+
 use orbit_common::OrbitError;
 use orbit_common::protocol::yaml::parse_policy_resource;
 use orbit_store::contracts::PolicyDefStoreBackend;
-use orbit_types::policy::{DEFAULT_POLICY_NAME, PolicyDef};
+use orbit_types::policy::{DEFAULT_POLICY_NAME, PolicyDef, PolicyTimestamp};
 use orbit_types::resource::ResourceKind;
 
 pub(crate) const DEFAULT_POLICY_FILES: &[(&str, &str)] = &[(
@@ -14,7 +15,7 @@ pub(crate) fn seed_default_policies(
     store: &dyn PolicyDefStoreBackend,
     overwrite: bool,
 ) -> Result<usize, OrbitError> {
-    let now = Utc::now();
+    let now = PolicyTimestamp::try_from(SystemTime::now())?;
     let mut count = 0;
     for (name, raw) in DEFAULT_POLICY_FILES {
         let shipped = parse_default_policy(name, raw, now)?;
@@ -43,7 +44,7 @@ pub(crate) fn seed_default_policies(
 fn merge_shipped_policy_defaults(
     mut existing: PolicyDef,
     shipped: &PolicyDef,
-    now: chrono::DateTime<Utc>,
+    now: PolicyTimestamp,
 ) -> Option<PolicyDef> {
     let deny_read_changed = insert_missing_rules(&mut existing.deny_read, &shipped.deny_read);
     let deny_modify_changed = insert_missing_rules(&mut existing.deny_modify, &shipped.deny_modify);
@@ -73,7 +74,7 @@ fn insert_missing_rules(existing: &mut Vec<String>, shipped: &[String]) -> bool 
 fn parse_default_policy(
     name: &str,
     raw: &str,
-    now: chrono::DateTime<Utc>,
+    now: PolicyTimestamp,
 ) -> Result<PolicyDef, OrbitError> {
     let resource = parse_policy_resource(raw, &format!("default policy '{name}'"))?;
     if resource.kind != ResourceKind::Policy {

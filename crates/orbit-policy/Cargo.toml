@@ -20,5 +20,4 @@ orbit-common = { path = "../orbit-common" }
 orbit-types = { path = "../orbit-types" }
 
 [dev-dependencies]
-chrono.workspace = true
 tempfile.workspace = true

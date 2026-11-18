@@ -1,12 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path};
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::policy::PolicyError;
 use crate::policy::fs_rules::CompiledFsRules;
 use crate::policy::glob::validate_glob_rule;
+use crate::policy::{PolicyError, PolicyTimestamp};
 use crate::resource::validate_resource_name;
 
 pub const DEFAULT_POLICY_NAME: &str = "default";
@@ -29,9 +28,9 @@ pub struct PolicyDef {
     )]
     pub fs_profiles: HashMap<String, FsProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_at: Option<DateTime<Utc>>,
+    pub created_at: Option<PolicyTimestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<PolicyTimestamp>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

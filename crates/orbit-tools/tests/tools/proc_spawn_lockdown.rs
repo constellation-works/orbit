@@ -8,11 +8,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_policy::PolicyEngine;
 use orbit_tools::{ToolContext, ToolRegistry};
-use orbit_types::policy::{FsProfile, PolicyDef};
+use orbit_types::policy::{FsProfile, PolicyDef, PolicyTimestamp};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -280,8 +279,12 @@ fn policy_with_profile(name: &str, read: Vec<String>) -> PolicyDef {
         deny_read: Vec::new(),
         deny_modify: Vec::new(),
         fs_profiles,
-        created_at: Some(Utc::now()),
-        updated_at: Some(Utc::now()),
+        created_at: Some(
+            PolicyTimestamp::try_from(std::time::SystemTime::now()).expect("policy timestamp"),
+        ),
+        updated_at: Some(
+            PolicyTimestamp::try_from(std::time::SystemTime::now()).expect("policy timestamp"),
+        ),
     }
 }
 

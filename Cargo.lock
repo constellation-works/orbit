@@ -2228,7 +2228,6 @@ dependencies = [
 name = "orbit-policy"
 version = "0.51.1"
 dependencies = [
- "chrono",
  "orbit-common",
  "orbit-types",
  "tempfile",
@@ -2317,7 +2316,6 @@ dependencies = [
 name = "orbit-tools"
 version = "0.51.1"
 dependencies = [
- "chrono",
  "flate2",
  "jsonschema",
  "libc",
@@ -2351,6 +2349,7 @@ dependencies = [
  "serde_path_to_error",
  "sha2",
  "thiserror",
+ "time",
  "url",
  "yaml_serde",
 ]
