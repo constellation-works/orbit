@@ -18,9 +18,10 @@
 
 use chrono::{
     DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta,
-    TimeZone, Utc,
+    TimeZone, Timelike, Utc,
 };
 use orbit_types::workflow::ProviderLimitFailure;
+use tz::{TimeZoneRef, datetime::FoundDateTimeKind};
 
 /// Phrases that alone say a usage limit was reached. Lowercase, with
 /// typographic apostrophes folded to `'`.
@@ -173,33 +174,63 @@ fn resets_at_zone(folded: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
     let open = rest.find('(')?;
     let close = open + rest[open..].find(')')?;
     let zone_text = rest[open + 1..close].trim();
-    // The text is folded; match the zone's name without case.
-    let zone = chrono_tz::TZ_VARIANTS
-        .iter()
-        .find(|zone| zone.name().eq_ignore_ascii_case(zone_text))?;
+    // Exclude the IANA placeholder and non-name bytes before the database's
+    // case-insensitive lookup, which can equate DEL with an underscore.
+    if zone_text == "factory"
+        || !zone_text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'_' | b'+' | b'-'))
+    {
+        return None;
+    }
+    let zone = *tzdb_data::find_tz(zone_text.as_bytes())?;
     let when = rest[..open].trim().trim_end_matches(',');
     let (date, time) = match when.rsplit_once(", ") {
         Some((date, time)) => (Some(date.trim()), time.trim()),
         None => (None, when),
     };
     let time = parse_clock(time)?;
-    let today = now.with_timezone(zone).date_naive();
+    let observed_offset = zone.find_local_time_type(now.timestamp()).ok()?.ut_offset();
+    let observed_offset = FixedOffset::east_opt(observed_offset)?;
+    let today = now.naive_utc().checked_add_offset(observed_offset)?.date();
     let date = match date {
         Some(date) => nearest_explicit_date(date, today)?,
         None => today,
     };
-    let at = zone
-        .from_local_datetime(&date.and_time(time))
-        .earliest()?
-        .with_timezone(&Utc);
+    let at = resolve_named_reset_utc(zone, date, time)?;
     if at <= now && date == today {
-        let tomorrow = date.succ_opt()?;
-        zone.from_local_datetime(&tomorrow.and_time(time))
-            .earliest()
-            .map(|at| at.with_timezone(&Utc))
+        resolve_named_reset_utc(zone, date.succ_opt()?, time)
     } else {
         Some(at)
     }
+}
+
+fn resolve_named_reset_utc(
+    zone: TimeZoneRef<'_>,
+    date: NaiveDate,
+    time: NaiveTime,
+) -> Option<DateTime<Utc>> {
+    let candidates = tz::DateTime::find(
+        date.year(),
+        date.month() as u8,
+        date.day() as u8,
+        time.hour() as u8,
+        time.minute() as u8,
+        0,
+        0,
+        zone,
+    )
+    .ok()?;
+    // Candidates are in UTC order. Take the first real instant in a fold
+    // and reject a clock time skipped by a forward transition.
+    let at = candidates
+        .into_inner()
+        .into_iter()
+        .find_map(|candidate| match candidate {
+            FoundDateTimeKind::Normal(at) => Some(at),
+            FoundDateTimeKind::Skipped { .. } => None,
+        })?;
+    DateTime::from_timestamp(at.unix_time(), 0)
 }
 
 /// The year-less `Jan 2` occurrence nearest `today`, so a January reset seen in

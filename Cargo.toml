@@ -117,6 +117,9 @@ zstd = "0.14.3"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tz = { package = "tz-rs", version = "0.7", default-features = false, features = ["alloc"] }
+# The lockfile keeps the same IANA release (2025b) as chrono-tz 0.10.4.
+tzdb_data = "0.2.2"
 url = "2"
 wait-timeout = "0.2"
 predicates = "3"
