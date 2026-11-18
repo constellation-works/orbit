@@ -996,6 +996,7 @@ qa host list --format json
 
 # Dashboard QA: serve only the scratch registry, from the scratch repository.
 # Run it in the foreground and stop it with Ctrl-C; it must exit before cleanup.
+# A script that drives a browser uses the lifecycle below instead.
 qa web serve --port 0 --no-open
 
 # Cleanup: once the server has exited, see the managed-lane rule below.
@@ -1007,6 +1008,85 @@ With this explicit-root recipe, `global_root`, `shared_root` and `local_root` mu
 `orbit init` mints the machine identity in the scratch root's global `config.toml` (`$QA_REPO/.orbit` under `--root`); `workspace init` does not. The `qa init` step passes `--non-interactive` with an explicit `--machine-name` and `--task-prefix`, so it never prompts. It runs from `QA_CWD`, not `QA_REPO`: do not run any other Orbit command in `QA_REPO` before `workspace init`. The first such command writes a `.orbit/config.yaml` with a generated workspace identity, and `workspace init` then refuses with an identity conflict. `QA_BASE`, `QA_HOME`, `QA_REPO` and `QA_CWD` all stay under the run's `.orbit/tmp/`, the only scratch location the implement activity allows (never `/tmp`), and outside Bubblewrap's `/tmp` overlay, as the fixtures' homes are. `mktemp` takes that explicit path, so an inherited `TMPDIR` cannot redirect it. Every candidate command uses the cleared environment and explicit root in `qa`. `--root` is resolved before every discovery step, so `qa` commands resolve `$QA_REPO/.orbit` from any working directory. The `QA_REPO` and `QA_CWD` Git repositories also stop the linked-worktree and uninitialized ancestor walks. The initialized-only lookup (`RequireInitialized` in [`resolve.rs`](../crates/orbit-runtime/src/resolve.rs)) walks past a Git boundary, so a command run without `--root` from these directories could reach the checkout's `.orbit/`. The recipe runs none.
 
 Cleanup: once the QA is finished and the server has exited, an operator shell deletes `QA_BASE` with `rm -rf -- "${QA_BASE:?}"`, which removes `QA_REPO` and `QA_CWD` with it. A managed lane must not run `rm -rf`: its cleanup rule forbids raw removal. `QA_BASE` is ignored scratch under the run's `.orbit/tmp/`, which the lane clears with the worktree, so the lane needs no further step.
+
+#### Scripted dashboard QA: spawn, capture and teardown
+
+A script that starts `web serve` for screenshots, instead of a person pressing Ctrl-C, must own the exact child from the spawn onward. The incident this guards against (F2026-11-362): a harness spawned a detached server, awaited readiness before entering its `try/finally`, closed the browser before stopping the server and sent a fallback KILL without waiting for the exit. Two isolated listeners survived with PPID 1. The recipe below keeps the isolation above (`qa`'s cleared environment and explicit `--root`, run from `QA_REPO`) and changes only who owns the process:
+
+- **Arm teardown before the spawn.** The `EXIT` trap is installed first, so a readiness timeout, a browser failure, `set -e` or SIGINT/SIGTERM all reach it.
+- **Record the PID and its start-time token as the next statement.** The server is spawned with `exec` in a backgrounded subshell, so `$!` is the server itself, not a wrapper. Teardown signals only a PID whose token still matches (`/proc/<pid>/stat` field 22, or `ps -o lstart=` where `/proc` is absent), never a name pattern, process group or port owner.
+- **Stop the server on every path, after the browser attempt.** The browser's close is attempted whenever it was started, its failure is recorded without skipping the server stop, and the first nonzero status is the run's status.
+- **Wait for the exit.** SIGTERM, a bounded wait for the exit, then SIGKILL (sent only to the verified PID) and a second bounded wait. A server that survives SIGKILL fails the run loudly and keeps `SERVER_PID` set for a retry; nothing blocks on an unbounded `wait`.
+- **Never delete artifacts.** Teardown touches only the process. Screenshots under `QA_BASE` stay for `orbit.task.artifact` action `put`; the managed-lane rule above still forbids raw removal.
+
+```bash
+# Define once, after `qa workspace init`. Run the capture below as `bash script.sh` or in a ( ) subshell.
+QA_LOG="$QA_BASE/serve.log"; SHOTS="$QA_BASE/shots"; mkdir -p "$SHOTS"
+SERVE_CMD=(env -i PATH=/usr/bin:/bin HOME="$QA_HOME" "$ORBIT_BIN" --root "$QA_REPO/.orbit" web serve --port 0 --no-open)
+SERVER_PID=; SERVER_TOKEN=; QA_PORT=; QA_URL=
+
+# Start-time token: the (pid, token) pair identifies one process, so a reused PID never matches.
+qa_token() {
+  if [ -r "/proc/$1/stat" ]; then sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f20
+  else ps -o lstart= -p "$1" 2>/dev/null; fi
+}
+qa_alive() { [ -n "$SERVER_PID" ] && [ "$(qa_token "$SERVER_PID")" = "$SERVER_TOKEN" ]; }
+qa_wait_gone() {  # bounded poll: $1 = tenths of a second
+  for _ in $(seq "$1"); do qa_alive || return 0; sleep 0.1; done; ! qa_alive
+}
+qa_listening() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+
+# Spawn: `exec` makes the child the server itself, so $! is its PID.
+qa_serve_start() {  # $1 = readiness deadline in seconds
+  : >"$QA_LOG"
+  ( exec "${SERVE_CMD[@]}" ) >"$QA_LOG" 2>&1 </dev/null &
+  SERVER_PID=$!                                   # record before anything can fail
+  SERVER_TOKEN="$(qa_token "$SERVER_PID")"
+  for _ in $(seq $(($1 * 10))); do
+    qa_alive || { echo "server exited before readiness" >&2; return 1; }
+    QA_URL="$(sed -n 's/^Dashboard listening on \(http:\/\/[^ ]*\).*/\1/p' "$QA_LOG" | head -n1)"
+    [ -n "$QA_URL" ] && { QA_PORT="${QA_URL##*:}"; return 0; }
+    sleep 0.1
+  done
+  echo "no readiness announcement within $1s" >&2; return 1
+}
+
+# Teardown: idempotent; signals only the recorded (pid, token); waits for the exit.
+qa_serve_stop() {
+  [ -n "$SERVER_PID" ] || return 0
+  local pid="$SERVER_PID" rc=0
+  if qa_alive; then
+    kill -TERM "$pid" 2>/dev/null
+    if ! qa_wait_gone "${QA_TERM_GRACE:-50}"; then
+      echo "server ignored SIGTERM; sending SIGKILL" >&2
+      qa_alive && kill -KILL "$pid" 2>/dev/null
+      qa_wait_gone 50 || { echo "server $pid survived SIGKILL" >&2; rc=1; }
+    fi
+  fi
+  [ "$rc" -eq 0 ] && { wait "$pid" 2>/dev/null || :; } # reaps it; TERM/KILL wait statuses are expected
+  if [ "$rc" -eq 0 ] && qa_alive; then rc=1; fi
+  if [ -n "$QA_PORT" ] && qa_listening "$QA_PORT"; then echo "port $QA_PORT still listening" >&2; rc=1; fi
+  [ "$rc" -eq 0 ] && SERVER_PID=
+  return "$rc"
+}
+
+# Capture. browser_start, browser_shoot and browser_close are the harness's own commands.
+trap qa_serve_stop EXIT                  # armed before the spawn
+trap 'exit 143' INT TERM
+cd "$QA_REPO"; rc=0
+qa_serve_start 30 || rc=$?                                    # readiness timeout or early exit
+if [ "$rc" -eq 0 ]; then
+  browser_start "$QA_URL" || rc=$?                            # browser initialization failure
+  if [ "$rc" -eq 0 ]; then browser_shoot "$SHOTS/dashboard-dark-1280.png" || rc=$?; fi
+  browser_close || { st=$?; [ "$rc" -ne 0 ] || rc=$st; }      # close failure; still stops the server
+fi
+qa_serve_stop || { st=$?; [ "$rc" -ne 0 ] || rc=$st; }
+exit "$rc"
+```
+
+Calling `qa_serve_stop` explicitly before `exit` reports its failure in the run's status; the trap is the backstop for every earlier exit and is a no-op once the explicit call has cleared `SERVER_PID`. If the script itself is SIGKILLed no trap can run, so check for an orphan afterwards (below).
+
+Verify teardown with probes on the exact child, with no `ps`, `pgrep`, `lsof` or `ss` pattern and nothing global, so they work inside the supported sandbox: record `pid=$SERVER_PID port=$QA_PORT` before stopping, then after it `kill -0 "$pid"` must fail (the child is reaped, not a zombie) and `qa_listening "$port"` must fail (a loopback connect, refused once the listener is closed). To rehearse a failure path, point `SERVE_CMD` at a stub: `(sh -c 'exec sleep 300')` never announces and exercises the readiness timeout; `(sh -c 'trap "" TERM; echo "Dashboard listening on http://127.0.0.1:1"; exec sleep 300')` ignores SIGTERM and exercises the fallback KILL with `QA_TERM_GRACE=5`; a bad flag such as `--port notaport` exits early. A rehearsal on Linux in a disposable workspace (success, browser-init failure, browser-close failure, readiness timeout, early exit and a SIGTERM-ignoring child, plus SIGTERM to the script mid-readiness) left each child gone and each listener closed, with captured files intact.
 
 ## Testing & Coverage
 
