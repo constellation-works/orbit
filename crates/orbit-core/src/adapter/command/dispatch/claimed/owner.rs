@@ -664,6 +664,9 @@ pub(in crate::adapter::command::dispatch) fn execute_brokered(
     };
     let review = matches!(tool, GET | PUT) && super::review::is_review_artifact(&path);
     let binding = claim_binding(runtime, run, review)?;
+    if tool == GET {
+        accept_task_fields(object, &GET_FIELDS)?;
+    }
     if review {
         // Another task's review artifacts are outside the claim for every
         // activity, before any review scope decides [ORB-19289].
@@ -711,7 +714,6 @@ pub(in crate::adapter::command::dispatch) fn execute_brokered(
             input
         }
         GET => {
-            accept_task_fields(object, &GET_FIELDS)?;
             let mut input = input.clone();
             input["path"] = Value::String(path);
             input
