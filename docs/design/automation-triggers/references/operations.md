@@ -2,13 +2,13 @@
 type: design
 summary: "Delivery automation operations [ORB-11330]"
 tags: [automation-triggers]
-last_updated: 2026-11-17
-last_validated: 2026-11-17
+last_updated: 2026-11-18
+last_validated: 2026-11-18
 ---
 
 # Delivery automation operations [ORB-11330]
 
-Delivery triggers are opt-in. The host clock tick evaluates routines and auto-task
+Delivery auto-tasks are opt-in. The host clock tick evaluates routines and auto-task
 definitions in-process. Routines submit ordinary jobs; auto-task definitions mint
 ordinary tasks through the normal approval/admission lifecycle. A `backlog`
 template becomes `proposed` unless its normalized minted tags include
@@ -47,7 +47,7 @@ does not overwrite existing workspace definitions. After-landing review is
 `delivery-code-review`'s own `enabled` flag (`orbit auto-task toggle
 delivery-code-review on|off`) [ORB-13992]; the deprecated
 `operation.review_policy = after-landing` no longer enables it. See the [review
-gate](../review-gate/2_design.md). The shipped defaults carry a
+gate](../../review-gate/2_design.md). The shipped defaults carry a
 `__ORBIT_BASE_BRANCH__` placeholder for `branch`; `orbit workspace init` and
 `orbit workspace sync` render it to the workspace's registered base branch, so a
 `main`-based workspace observes `main` rather than another repository's
@@ -115,7 +115,7 @@ ref is missing after a cursor exists). The row names the observed commit and
 the remote-tracking head. It does not fetch; the observation pass is what
 updates that ref. The same row, `orbit config show` and the drain probe report
 whether it is on and when its next batch is due. See the
-[review gate](../review-gate/2_design.md).
+[review gate](../../review-gate/2_design.md).
 
 The coverage a new delivery trigger may select is `landed_code_review_v1`.
 `integrated_qa_v1` is retired. Persisted batches, coverage evidence, automation
@@ -734,7 +734,7 @@ consumers and this workspace's live pilot runs, keeps every pin an in-flight
 attempt or a live run names, and deletes the rest at their listed commit,
 including a pin that only an accepted assessment names. It reports legacy pins
 and other owners' namespaces as retained without listing their contents
-([health-checks runbook](../../runbooks/health-checks.md#release-leaked-automation-attempt-pins)).
+([health-checks runbook](../../../runbooks/health-checks.md#release-leaked-automation-attempt-pins)).
 
 The source currently understands GitHub PR evidence and authorized local direct
 landings. Other/manual direct changes stay unresolved until an authoritative
@@ -747,7 +747,7 @@ substitutes for review.
 ## Before-PR coverage exclusions [ORB-11333]
 
 Passed before-PR certificates (see the [review
-gate](../review-gate/2_design.md)) are the only exclusion producer.
+gate](../../review-gate/2_design.md)) are the only exclusion producer.
 When observation first sees a landing, Core looks up passed certificates
 whose final tree equals the landed tree, verifies that the certificate's
 objects still exist and every task still has the reviewed meaning, and asks
@@ -757,7 +757,7 @@ reports the landed pull request's head as a certificate's final candidate
 commit, a landing on a base that moved after review is also excluded, with
 assurance `rebased_clean`, if a conflict-free merge of the reviewed change
 onto the actual base reproduces the landed tree exactly ([review gate
-§7](../review-gate/2_design.md#7-delivery-coverage)). A `landed_code_review_v1`
+§7](../../review-gate/2_design.md#7-delivery-coverage)). A `landed_code_review_v1`
 consumer moves an accepted landing into its `excluded` list; it does not
 count toward the threshold, is absent from `examined_deliveries`, and does
 not mint an examination receipt. An exclusively excluded prefix advances the
@@ -773,7 +773,7 @@ excluded landings with their certificate and assurance label.
 
 ## State preparation [ORB-11331]
 
-> Failed-run triage is retired ([distributed-drain §7.2](../distributed-drain/2_design.md#72-failed-run-triage)): the `execution_failed`
+> Failed-run triage is retired ([distributed-drain §7.2](../../distributed-drain/2_design.md#72-failed-run-triage)): the `execution_failed`
 > trigger kind still parses but has no shipped target and fires nothing. `finding_unverified` and
 > `pilot_warnings_held` are retired the same way [ORB-22844]. `preparation_eligible` schedules work.
 
@@ -782,15 +782,15 @@ targeted `job:finding_verification_pipeline` until [ORB-22844] removed that job;
 still parses, observes nothing, and a routine on it loads as retired. It observed review-filed bug findings (type `bug` tagged `code-review`,
 `delivery-code-review`, `security-review` or `qa-sweep`) in `proposed`,
 `someday` or `backlog` that carried no CONFIRMED verdict. See
-[archived finding verification](../_archived/finding-verification/2_design.md#7-state-trigger).
+[archived finding verification](../../_archived/finding-verification/2_design.md#7-state-trigger).
 `pilot_warnings_held` targeted `job:escalation_triage_pipeline` and is retired with its seeded
 `pilot_warning_triage.yaml` [ORB-22844]; the dashboard's Triage action still runs that job for
 one held task. See
-[Pilot warning holds](2_design.md#61-pilot-warning-holds-pilot_warnings_held).
+[Pilot warning holds](../2_design.md#61-pilot-warning-holds-pilot_warnings_held).
 `block_escalated` is retired: final recovery decides blocked tasks, so the
 seeded `blocked_task_triage.yaml` is gone and the loader skips a routine on that
 trigger as inert; see
-[Retired escalated blocks](2_design.md#62-retired-escalated-blocks-block_escalated). Core
+[Retired escalated blocks](../2_design.md#62-retired-escalated-blocks-block_escalated). Core
 supplies authoritative task envelopes, pinned source and run/history evidence;
 `orbit-automation::members` owns due decisions, material fingerprints, incident
 identity, frozen attempts and receipt acceptance. Store uses its existing
@@ -799,11 +799,12 @@ introduced. Source retention uses an owner-scoped pin namespace: each admitted
 attempt pins its source until it settles, exhausts or is retired (see
 [Rollback and limits](#rollback-and-limits)).
 
-Since [ORB-12745] the shipped `task_pilot.yaml` default *is* this form:
-`orbit workspace init` renders `owner_machine` from the host's registered
-machine id and `branch` from the workspace's registered base branch (the
-delivery defaults observe the same branch), and ships it `enabled: false`. The
-cron form it replaces is kept as a superseded template shape, so
+The shipped `task_pilot.yaml` uses this state-triggered form, introduced in
+[ORB-12745]. `orbit workspace init` seeds it with `enabled: true` in new
+workspaces, resolving `owner_machine` from the host's registered machine ID
+and `branch` from the workspace's registered base branch (the same branch the
+delivery defaults observe). Existing workspaces keep their `enabled` setting.
+The cron form it replaces is kept as a superseded template shape, so
 `orbit workspace sync` refreshes an unmodified — or merely opted-in — cron
 `task_pilot.yaml` onto the state form owned by this host, keeping `enabled`; a
 cron file whose template-owned fields were hand-edited is preserved and
@@ -823,7 +824,7 @@ evaluator's dry-run reason, so it never reads as `debouncing`.
 ```yaml
 schemaVersion: 1
 name: task-pilot-<workspace>
-enabled: false
+enabled: true
 target: job:task_pilot_pipeline
 trigger:
   state:
@@ -1036,7 +1037,7 @@ reasons (`batch` in the JSON report). Usage stays unknown when no measurement ex
 positive evidence only; this trigger grants no promotion, commit, merge or
 implementation authority. Operation mode, which once supplied this evaluator a
 grant scope and due interval and let the drain promote in-scope tasks, was
-removed on 2026-09-21 ([orbit-core decisions](../orbit-core/4_decisions.md)).
+removed on 2026-09-21 ([orbit-core decisions](../../orbit-core/4_decisions.md)).
 
 State routine inspection (`orbit routine list` / `show`, dashboard
 `GET /api/routines`, and dry-run clock sweeps) does not fetch origin. A
@@ -1048,13 +1049,13 @@ best-effort fetches before selecting the preparation source; incident routines
 remain local-only. Status polling therefore reflects cached source evidence
 until a real evaluation refreshes it.
 
-Keep definitions disabled for rollout review. Inspect `orbit routine list`,
+To opt out of scheduled task pilots or pause them for rollout review, set
+`enabled: false` in the routine definition. Inspect `orbit routine list`,
 `orbit routine show <name> --json` (which reports the resolved owner, branch and
-eligibility), and the existing `orbit clock tick --dry-run` preview before
-deliberate enablement; the seeded disabled definition reports `disabled`, and an
-enabled one with nothing to prepare reports `fresh`. Timing and eligibility
-edits retain active budgets — an eligibility edit re-fingerprints pending
-members and withholds the ones it no longer admits. Changes to trigger kind,
+eligibility), and `orbit clock tick --dry-run`. A disabled routine reports
+`disabled`. An enabled routine with nothing to prepare reports `fresh`. Timing
+and eligibility edits retain active budgets. An eligibility edit re-fingerprints
+pending members and withholds the ones it no longer admits. Changes to trigger kind,
 owner, target or branch return `definition_changed`; restore the original
 definition to settle it rather than deleting state. (Delivery auto-tasks, by
 contrast, adopt a settings-only edit automatically; see

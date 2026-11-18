@@ -125,7 +125,7 @@ a second time.
 | Selective risk/path rules (removed; history and legacy fields) | [Design §3.3](./2_design.md#33-selective-before-landing-review-orb-20087) | [ORB-20087], [ORB-22808] (removed) |
 | Operating a blocked review | [Review gate runbook](../../runbooks/review-gate.md) | [ORB-13989] |
 | What a validation record establishes | [Design §4](./2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545) | [ORB-11528], [ORB-11545] |
-| After-landing scheduling and coverage consumers | [Delivery automation operations](../automation-triggers/5_operations.md) | [ORB-11331] |
+| After-landing scheduling and coverage consumers | [Delivery automation operations](../automation-triggers/references/operations.md) | [ORB-11331] |
 | `[operation]` key reference | [CONFIG.md](../../CONFIG.md) | [ORB-11333] |
 
 ## Task References

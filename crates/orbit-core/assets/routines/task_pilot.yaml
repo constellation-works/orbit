@@ -37,7 +37,7 @@
 # backlog tasks not tagged `no-diff-expected` / `no-diff-needed` / `no-pilot`, of any type,
 # with no required tags. Narrow it here; changing it invalidates assessments
 # accepted under the old predicate. See
-# docs/design/automation-triggers/5_operations.md.
+# docs/design/automation-triggers/references/operations.md.
 #
 # Only this host evaluates the trigger (`owner_machine`); a second host
 # registering the same workspace seeds its own owner. Explicit task-ID runs

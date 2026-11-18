@@ -189,9 +189,9 @@ conflict so delayed or duplicate submissions cannot overwrite newer state.
 
 Delivery thresholds, preparation eligibility, immutable batches and separate
 successful-coverage checkpoints are implemented on the existing clock. The
-[automation-trigger operations guide](../automation-triggers/5_operations.md#configuration-and-migration)
+[automation-trigger operations guide](../automation-triggers/references/operations.md#configuration-and-migration)
 documents the supported schema-v1 configuration; its
-[state preparation section](../automation-triggers/5_operations.md#state-preparation-orb-11331)
+[state preparation section](../automation-triggers/references/operations.md#state-preparation-orb-11331)
 covers state consumers. The broader
 [automation-trigger design](../automation-triggers/2_design.md#1-current-implementation-and-gaps)
 separately identifies deferred multi-member coordination, automatic policy/host
@@ -356,7 +356,7 @@ Optional `freshness` resolves each key from the routine, then
 does not change the default material fingerprint. `context_files` and `any` are
 the other source sensitivities. These fields guard preparation/apply drift;
 a certified `description` or `criteria` change queues a fresh routine pilot for an already assessed task unless a live execution claim or an unresolved failed pilot holds it; changes to the other fields never queue one through the routine (an `--approve-proposed` drain still repilots a stale assessment automatically). See
-[State preparation](../automation-triggers/5_operations.md#state-preparation-orb-11331)
+[State preparation](../automation-triggers/references/operations.md#state-preparation-orb-11331)
 for all material fields, stale-source checks during apply, limits and rollback.
 
 Inspect `orbit routine list`, `orbit routine show <name> --format json`, and
@@ -401,12 +401,12 @@ for new definitions; `integrated_qa_v1` is retired compatibility data.
 `missed_run` applies to cron slots, not delivery or state eligibility.
 
 The supported ownership/migration rules are in
-[Configuration and migration](../automation-triggers/5_operations.md#configuration-and-migration).
+[Configuration and migration](../automation-triggers/references/operations.md#configuration-and-migration).
 A routine job must return `coverage_evidence` in a persisted step result matching
 its frozen `input.automation` and admitted run; ordinary job success alone is
-insufficient. See [Evidence submission](../automation-triggers/5_operations.md#evidence-submission)
+insufficient. See [Evidence submission](../automation-triggers/references/operations.md#evidence-submission)
 for the exact receipt fields and validation, and
-[Inspection and recovery](../automation-triggers/5_operations.md#inspection-and-recovery)
+[Inspection and recovery](../automation-triggers/references/operations.md#inspection-and-recovery)
 for persisted debt and failure reasons. Auto-tasks use the same delivery object
 under `schedule.deliveries_landed`, creating tasks instead of submitting jobs.
 
@@ -951,7 +951,7 @@ diagnostics without persisting state or dispatching work.
   and exhaustion requires attention. Verified before-PR review certificates may
   exclude review obligations; tags, task completion and no-diff work cannot create
   landings or coverage. See
-  [Delivery identity and source gaps](../automation-triggers/5_operations.md#delivery-identity-and-source-gaps).
+  [Delivery identity and source gaps](../automation-triggers/references/operations.md#delivery-identity-and-source-gaps).
 - **State:** initialization inventories current eligible members in bounded pages,
   persisting scan continuation, material fingerprints, first-seen/change times
   and withheld reasons. Preparation best-effort fetches the configured branch on
@@ -974,7 +974,7 @@ diagnostics without persisting state or dispatching work.
   Timing edits affect pending work while active budgets stay captured. Kind, owner,
   target or branch edits report `definition_changed`; restore the original
   definition to settle it rather than deleting state. See
-  [State preparation](../automation-triggers/5_operations.md#state-preparation-orb-11331)
+  [State preparation](../automation-triggers/references/operations.md#state-preparation-orb-11331)
   for stale-source supersession, per-member reconciliation and capacity limits.
 
 ---
@@ -1004,7 +1004,7 @@ member working sets survive reboot and disablement. There is no automatic
 cross-host transfer. Run history remains ordinary job history, not cron fire rows;
 status merges those automation runs with retained cron history. For source pins,
 recovery and rollback limits see the
-[operations guide](../automation-triggers/5_operations.md#rollback-and-limits).
+[operations guide](../automation-triggers/references/operations.md#rollback-and-limits).
 
 Toggle resolution, in order: `enabled: false` (this checkout's definition) → local
 pause (this host only). `orbit routine list` shows both columns plus computed
