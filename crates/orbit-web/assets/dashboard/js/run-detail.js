@@ -878,7 +878,7 @@ function buildRunHold(run, steps) {
   const cause = heldStep?.error_code || run.error_code;
   const guidance = cause === "forge_unavailable"
     ? "The scheduler retries the push with the reviewed candidate. If the retry window expires, resume the held run when the forge is available."
-    : ["review_awaiting_evidence", "review_evidence_pending"].includes(cause)
+    : cause === "review_awaiting_evidence"
       ? "Record the required external evidence for this task. Its receipt queues a fresh review."
       : "";
   const message = heldStep?.error_message || run.error_message || (guidance ? "" : "No hold reason was recorded.");
