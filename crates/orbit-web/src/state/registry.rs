@@ -204,9 +204,12 @@ impl RegistrySource {
 /// workspace whose repo root or path override is the longest prefix of `cwd`,
 /// if the server was launched inside one. The match is lexical
 /// (`Path::starts_with`) and does not touch the filesystem. An `Invalid`
-/// checkout is never eligible, so a `cwd` beneath a stale checkout yields
-/// `None`. `None` is no hint, not "All workspaces"; see
-/// `default_workspace_selection` for what the browser does next.
+/// checkout candidate is never eligible, but excluding it does not exclude its
+/// descendants: a `cwd` beneath an invalid checkout still matches an eligible
+/// enclosing root or path override if one exists, and yields `None` only when no
+/// eligible enclosing root or override contains it. `None` is no hint, not "All
+/// workspaces"; see `default_workspace_selection` for what the browser does
+/// next.
 pub(crate) fn default_workspace_for_cwd(
     registry: &WorkspaceRegistry,
     cwd: &Path,
@@ -278,9 +281,12 @@ pub(crate) fn default_workspace_selection(
 /// component-wise by [`default_workspace_for_cwd`]. A nonexistent descendant of
 /// an eligible root (e.g. `/registered/missing` under `/registered`) therefore
 /// still selects that root. Only a path lexically outside every eligible root
-/// misses. A checkout whose status is `Invalid` is not eligible, so a path
-/// beneath it misses too. Lexical matching does not resolve `..` components, so
-/// a nonexistent `/registered/../other` still matches `/registered` as written.
+/// misses. An `Invalid` checkout candidate is not eligible, but excluding it
+/// does not exclude its descendants: a path beneath an invalid checkout still
+/// matches an eligible enclosing root or path override if one exists, and misses
+/// only when no eligible enclosing root or override contains it. Lexical
+/// matching does not resolve `..` components, so a nonexistent
+/// `/registered/../other` still matches `/registered` as written.
 fn resolve_selector_path(selector: &Path, cwd: Option<&Path>) -> PathBuf {
     let absolute = if selector.is_absolute() {
         selector.to_path_buf()

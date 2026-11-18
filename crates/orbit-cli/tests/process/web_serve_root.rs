@@ -245,6 +245,113 @@ fn web_serve_rejects_hosts_outside_the_host_gate() {
     }
 }
 
+#[test]
+fn web_serve_overlapping_roots_selects_active_parent_for_selector_under_invalid_child() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let parent_repo = temp.path().join("parent-repo");
+    let child_repo = parent_repo.join("child-repo");
+    std::fs::create_dir_all(&home).expect("create home");
+    std::fs::create_dir_all(&parent_repo).expect("create parent repo");
+    std::fs::create_dir_all(&child_repo).expect("create child repo");
+    crate::git_repo::SeededRepo::new(&parent_repo)
+        .identity("fixture", "fixture@example.com")
+        .no_commit()
+        .build();
+    crate::git_repo::SeededRepo::new(&child_repo)
+        .identity("fixture", "fixture@example.com")
+        .no_commit()
+        .build();
+
+    orbit(
+        &parent_repo,
+        &home,
+        &[
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "web-overlapping-host",
+            "--task-prefix",
+            "WO",
+        ],
+    );
+    orbit(
+        &parent_repo,
+        &home,
+        &["workspace", "init", "--name", "parent"],
+    );
+    orbit(
+        &child_repo,
+        &home,
+        &["workspace", "init", "--name", "child"],
+    );
+
+    // Deleting the nested child repo invalidates the child workspace, but leaves
+    // the parent workspace active and enclosing.
+    std::fs::remove_dir_all(&child_repo).expect("remove child repo");
+
+    let missing_under_child = child_repo.join("missing");
+    let missing_str = missing_under_child.to_string_lossy().into_owned();
+
+    let mut server = BoundServer::spawn(
+        base_command(temp.path(), &home)
+            .args([
+                "web",
+                "serve",
+                "--port",
+                "0",
+                "--no-open",
+                "--workspace",
+                &missing_str,
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+        Announcement::Dashboard,
+    )
+    .expect("spawn orbit web serve");
+    let port = server
+        .wait_for_address(STARTUP_DEADLINE)
+        .expect("dashboard bound")
+        .port();
+
+    let response = http_get(port, "/api/workspaces");
+    stop(&mut server);
+
+    let body = response
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .unwrap_or(&response);
+    let value: Value = serde_json::from_str(body)
+        .unwrap_or_else(|error| panic!("parse /api/workspaces body ({error}): {response}"));
+    let workspaces = value.as_array().expect("workspace array");
+
+    let parent_ws = workspaces
+        .iter()
+        .find(|ws| ws["name"] == "parent")
+        .expect("parent workspace present");
+    let child_ws = workspaces
+        .iter()
+        .find(|ws| ws["name"] == "child")
+        .expect("child workspace present");
+
+    assert_eq!(
+        parent_ws["status"], "active",
+        "parent workspace must be active"
+    );
+    assert_eq!(
+        parent_ws["is_default"], true,
+        "a selector beneath an invalid child checkout must select the eligible active parent"
+    );
+    assert_eq!(
+        child_ws["status"], "invalid",
+        "deleted child checkout must be marked invalid"
+    );
+    assert_eq!(
+        child_ws["is_default"], false,
+        "invalid child workspace must not be default"
+    );
+}
+
 // ── fixture helpers ───────────────────────────────────────────────────────
 
 fn base_command(cwd: &Path, home: &Path) -> Command {
