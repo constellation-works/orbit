@@ -199,17 +199,22 @@ spec:
 
     Hard timing claims
 
-    - For each hard candidate timing criterion, inspect the retained benchmark
-      log or task artifact named in the brief. Record the exact measurement
-      command and cite that evidence in the required validation record. It must
-      identify the declared baseline revision and the reviewed final candidate
-      (the exact fixed tree if you made repairs), matching build profiles and
-      settings, the reproducible fixture and host environment, and samples for
-      both builds under the declared protocol. Check the repetitions,
-      aggregation and whether the margin to the stated bound exceeds the
-      unchanged-build spread. If no matching report exists, including after a
-      repair changes the tree, run the declared benchmark on the final candidate
-      and retain the result when this lane can produce it.
+    - For each hard candidate timing criterion (one that gates acceptance
+      against a stated bound; informational timings are not hard), inspect the
+      retained benchmark log named in the brief. Fetch a task artifact only when
+      its exact path is in the artifact listing, and read a repository path from
+      the candidate tree; a missing or unreadable log is missing evidence. Record
+      the exact measurement command and cite that evidence in the required
+      validation record. It must identify the declared baseline revision and the
+      reviewed final candidate (the exact fixed tree if you made repairs),
+      matching build profiles and settings, the reproducible fixture and host
+      environment, and samples for both builds under the declared protocol. Check
+      the repetitions, aggregation and whether the margin to the stated bound
+      exceeds the unchanged-build spread. If no matching report exists, including
+      after a repair changes the tree, run the declared benchmark on the final
+      candidate only when the brief names this host as the serial owner of that
+      run, and record its outcome in the timing record. Otherwise leave the run
+      to the named owner.
     - For example, a debug candidate measured on a disposable fixture compared
       to a historical live baseline cannot satisfy a hard p95 criterion. A
       `NOT_RUN` timing result with an empty `required_validation_commands` list
@@ -218,9 +223,10 @@ spec:
       with the declared profile and run serially on the declared host and
       fixture, can satisfy it when the samples and unchanged-build control
       support a stable pass at the stated threshold.
-    - If matching evidence is missing or cannot be produced in this lane, keep
-      the required timing record `not_run` (`denied` if the runner refused it)
-      and return `incomplete`. In `escalation`, name the criterion, evidence
+    - If matching evidence is missing or cannot be produced in this lane, file
+      the timing criterion as a required validation record with its exact
+      measurement command and outcome `not_run` (`denied` if the runner refused
+      it), and return `incomplete`. In `escalation`, name the criterion, evidence
       gap, responsible lane or host owner, exact command and expected evidence
       path. Use `external_evidence` only for a supported requirement in the
       declared route. A matching run that misses the bound is a failed required

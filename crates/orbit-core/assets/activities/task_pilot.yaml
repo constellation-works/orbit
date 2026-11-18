@@ -787,9 +787,12 @@ spec:
       available to review. Use the existing evidence route. An empty
       required-validation list, a behavioral-only command or a future
       deployment measurement provides no benchmark result for a candidate
-      criterion. For a missing or infeasible route, emit a `utility_warnings`
-      object with `holds_promotion: true` naming the criterion and the missing
-      details. Use Post-deploy only when the criterion itself needs the deployed
+      criterion. For a missing or infeasible route, or a protocol without an
+      unchanged-build control and a bound that its spread supports, emit a
+      `utility_warnings` object with `holds_promotion: true` naming the criterion
+      and the missing details; the authoring guide's informational,
+      deterministic-proxy or measurement-task alternatives are the repair. Use
+      Post-deploy only when the criterion itself needs the deployed
       build. Informational timings and deterministic behavioral checks do not
       need a benchmark route.
     - **Operator-only tool mentions.** For every `{criterion, tool}` that
