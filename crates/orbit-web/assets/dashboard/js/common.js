@@ -1289,6 +1289,16 @@ export function auditActorLabel(role) {
   return role === "unverified" ? "Unconfirmed caller" : role || "-";
 }
 
+// The five failure classes as Health › Incidents names its tiles. Shared, so the
+// Analytics failure-categories card and the tiles cannot disagree on a name.
+export const INCIDENT_CLASS_TITLES = {
+  unexpected: "Unexpected failures",
+  expected: "Expected refusals",
+  denied: "Policy denials",
+  diagnostic: "Lifecycle diagnostics",
+  deferred: "Deferred, not failed",
+};
+
 export function incidentClassLabel(key, label) {
   return key === "expected" ? "Expected refusal" : label || key || "failure";
 }

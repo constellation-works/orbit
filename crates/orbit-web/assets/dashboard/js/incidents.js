@@ -19,19 +19,12 @@
 // Counts stay per signature: a cause header counts signatures, never runs or
 // events added across them.
 
-import { incidentClassLabel, auditActorLabel, el, fetchJson, syncNodes, getWindow, setWindow, notifyScopeChange, DASHBOARD_WINDOWS, getWorkspace, getHost, getWorkspaceRevision, onWorkspaceChange, formatAge, formatDateTime, bindRunLink, bindTaskLink, makeCopyButton, truncate } from './common.js';
+import { incidentClassLabel, INCIDENT_CLASS_TITLES, auditActorLabel, el, fetchJson, syncNodes, getWindow, setWindow, notifyScopeChange, DASHBOARD_WINDOWS, getWorkspace, getHost, getWorkspaceRevision, onWorkspaceChange, formatAge, formatDateTime, bindRunLink, bindTaskLink, makeCopyButton, truncate } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 const $ = (id) => document.getElementById(id);
 
 const CLASS_ORDER = ["unexpected", "expected", "denied", "diagnostic", "deferred"];
-const CLASS_TITLES = {
-  unexpected: "Unexpected failures",
-  expected: "Expected refusals",
-  denied: "Policy denials",
-  diagnostic: "Lifecycle diagnostics",
-  deferred: "Deferred, not failed",
-};
 const CLASS_NAMES = {
   unexpected: "Unexpected failure",
   expected: "Expected refusal",
@@ -582,7 +575,7 @@ function classTilesNode(payload, window) {
       "aria-pressed": on ? "true" : "false",
       "aria-description": `${incidentClassLabel(key, (payload.class_labels || {})[key])}: ${plural(incidents, "incident")} ${windowPhrase(window)}`,
     }, [
-      el("span", { class: "incident-tile-label" }, [el("span", { class: "incident-dot", "aria-hidden": "true" }), CLASS_TITLES[key]]),
+      el("span", { class: "incident-tile-label" }, [el("span", { class: "incident-dot", "aria-hidden": "true" }), INCIDENT_CLASS_TITLES[key]]),
       el("span", { class: "incident-tile-count" }, [
         el("span", { class: "incident-tile-number", text: number(incidents) }),
         el("span", { text: incidents === 1 ? " incident" : " incidents" }),
@@ -805,7 +798,7 @@ function emptyNode(text, { clear = false, status = false } = {}) {
 
 function footerNodes(payload, cap, ctx) {
   if (!cap.capped) return [];
-  const label = CLASS_TITLES[incidentClass].toLowerCase();
+  const label = INCIDENT_CLASS_TITLES[incidentClass].toLowerCase();
   const nodes = [el("span", { text: `Rows roll up the newest ${number(cap.shown)} of ${number(cap.matching)} ${label}. Sorted by last seen.` })];
   const current = asCount(payload.limit) || INCIDENT_PAGE;
   const next = Math.min(current + INCIDENT_PAGE, INCIDENT_PAGE_MAX);
@@ -1179,7 +1172,7 @@ export function renderIncidents(payload, ctx = {}, { interactive = false } = {})
   renderIncidentWindowHeader(true);
 
   const view = ensureLayout(body);
-  const label = CLASS_TITLES[incidentClass];
+  const label = INCIDENT_CLASS_TITLES[incidentClass];
   view.heading.textContent = label;
   const byCause = groupMode === "cause";
   view.heading.appendChild(el("span", {

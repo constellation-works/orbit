@@ -2,7 +2,7 @@
 // Incidents › Events) and the tool-call summary (Analytics › Reliability › Tools).
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { auditActorLabel, incidentClassLabel, el, fetchJson, fetchJsonPage, fmtDuration, formatAge, formatDateTime, syncNodes, makeToggleRow, pinnedInfoHint, positiveIntParam, isAggregateView, isMultiWorkspace, isWorkspaceListReady, renderPanelPlaceholder, requestPanel, onWorkspaceChange, onWorkspaceNamesChange, workspaceDisplayName, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, runHref, DEFAULT_DASHBOARD_WINDOW } from './common.js';
+import { auditActorLabel, INCIDENT_CLASS_TITLES, el, fetchJson, fetchJsonPage, fmtDuration, formatAge, formatDateTime, syncNodes, makeToggleRow, pinnedInfoHint, positiveIntParam, isAggregateView, isMultiWorkspace, isWorkspaceListReady, renderPanelPlaceholder, requestPanel, onWorkspaceChange, onWorkspaceNamesChange, workspaceDisplayName, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, runHref, DEFAULT_DASHBOARD_WINDOW } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -776,8 +776,9 @@ function renderAuditSummary(data, ctx) {
       `Failure categories · window ${data.window || "24h"}${capped ? " · capped counts" : ""}`,
       renderTable(categoryRows, [
         { key: "label", label: "class", title: "Failure classification", render: (value, row, td) => {
-          td.title = value;
-          return incidentClassLabel(row.key, value);
+          // The full name is visible now, so a tooltip would only repeat it (STD-07 R32).
+          td.removeAttribute("title");
+          return INCIDENT_CLASS_TITLES[row.key] || value;
         } },
         { key: "incidents", label: "inc.", num: true, title: "Incidents" },
         { key: "raw_events", label: "events", num: true, title: "Raw events" },

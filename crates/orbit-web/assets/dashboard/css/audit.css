@@ -496,6 +496,21 @@ td.codebase-empty { padding: 16px 14px; }
 @container (max-width: 420px) {
   .summary-table .summary-secondary { display: none; }
 }
+/* Failure categories at phone width: each class name is the card's text, so it must
+   read in full on one line. Below about 480px of card width the 36% class column is
+   too narrow for the longest name ("Lifecycle diagnostics", about 168px with its
+   padding), so the count columns shrink to their figures and the class column takes the
+   rest. Wider cards keep the 36% split. */
+@container (max-width: 480px) {
+  [data-key="failure-categories"] .summary-table { table-layout: auto; }
+  [data-key="failure-categories"] .summary-table th,
+  [data-key="failure-categories"] .summary-table td {
+    padding-inline: 4px;
+    white-space: nowrap;
+    overflow-wrap: normal;
+  }
+  [data-key="failure-categories"] .summary-table th:first-child { width: auto; }
+}
 .summary-table tr.clickable { cursor: pointer; }
 .summary-table tr.clickable:hover td { background: rgba(110, 159, 255, 0.08); color: var(--accent-hover); }
 
