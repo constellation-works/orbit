@@ -6,7 +6,7 @@
 //! agent pilot's output is supplied as fixture data.
 use chrono::{DateTime, Utc};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams, TaskWriteScreen};
-use orbit_core::{OrbitRuntime, Task, TaskComplexity, TaskStatus};
+use orbit_core::{OrbitError, OrbitRuntime, Task, TaskComplexity, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::JobRunStepParams;
 use orbit_tools::ToolContext;
@@ -245,6 +245,96 @@ impl Workspace {
         params.description = description;
         params.relations = relations;
         self.add(params)
+    }
+    /// Catalog job the observation reads when a run has no pinned snapshot.
+    fn install_delivery_job(&self) {
+        let resources = self.runtime.paths().global_dir.join("resources");
+        std::fs::create_dir_all(resources.join("activities")).unwrap();
+        std::fs::create_dir_all(resources.join("jobs")).unwrap();
+        for activity in ["git_commit", "pr_complete"] {
+            std::fs::copy(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join(format!("assets/activities/{activity}.yaml")),
+                resources.join(format!("activities/{activity}.yaml")),
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            resources.join("jobs/fixture_delivery.yaml"),
+            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: fixture_delivery\nspec:\n  \
+             state: enabled\n  task_delivery: {}\n  steps:\n    - id: commit\n      \
+             target: activity:git_commit\n    - id: complete_pr\n      target: activity:pr_complete\n",
+        )
+        .unwrap();
+    }
+    /// A successful catalog-backed delivery whose merge checkpoint names `landed`.
+    fn record_landed_delivery(&self, task: &Task, landed: &str) {
+        self.install_delivery_job();
+        let mut run = self
+            .runtime
+            .insert_job_run(
+                "fixture_delivery",
+                1,
+                Utc::now(),
+                Some(json!({"task_ids": [task.id]})),
+                None,
+            )
+            .unwrap();
+        run.state = JobRunState::Success;
+        self.runtime
+            .sqlite_store()
+            .unwrap()
+            .upsert_job_run_for_workspace(&self.runtime.workspace_id().unwrap(), &run, None)
+            .unwrap();
+        let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+        for (index, step_id, output) in [
+            (
+                0u32,
+                "commit",
+                json!({
+                    "phase": "commit",
+                    "decision": "performed",
+                    "committed": true,
+                    "commit_sha": landed,
+                    "base_sha": "a".repeat(40),
+                    "job_run_id": run.run_id,
+                    "task_id": task.id,
+                }),
+            ),
+            (
+                1,
+                "complete_pr",
+                json!({
+                    "phase": "complete",
+                    "merge": {"merged": true, "pr_number": "3507", "landed_commit": landed},
+                }),
+            ),
+        ] {
+            state.record_step(index, JobRunState::Success, Some(output.clone()), None);
+            state.record_pipeline_output(step_id, output);
+        }
+        self.runtime.write_run_state(&run.run_id, &state).unwrap();
+    }
+    /// The same delivery job, pinned as a present file that does not parse.
+    fn pin_malformed_delivery(&self, task: &Task) {
+        self.install_delivery_job();
+        let run = self
+            .runtime
+            .insert_job_run(
+                "fixture_delivery",
+                1,
+                Utc::now(),
+                Some(json!({"task_ids": [task.id]})),
+                None,
+            )
+            .unwrap();
+        let path = self
+            .runtime
+            .paths()
+            .job_runs_dir
+            .join(format!("{}.job.yaml", run.run_id));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "kind: Job\nmetadata:\n  name: [broken\n").unwrap();
     }
     fn task_with_crew(
         &self,
@@ -1196,6 +1286,79 @@ fn a_verified_no_diff_citing_only_the_findings_own_commits_is_held() {
         "only the later commit is named as covering: {comment:?}"
     );
 }
+fn an_unreadable_culprit_delivery_holds_a_relation_only_finding() {
+    let ws = Workspace::new();
+    let culprit = ws.commit("the culprit");
+    let fix = ws.commit("the fix");
+    let drain = ws.drain();
+    let never_delivered = ws.readme_task("never delivered");
+    assert!(
+        matches!(
+            ws.runtime.observe_task_delivery(&never_delivered.id, None),
+            Err(OrbitError::TaskDeliveryUnavailable(_))
+        ),
+        "a task with no recorded delivery stays unavailable"
+    );
+    let unreadable_target = ws.readme_task("unreadable delivery");
+    ws.pin_malformed_delivery(&unreadable_target);
+    match ws
+        .runtime
+        .observe_task_delivery(&unreadable_target.id, None)
+    {
+        Err(OrbitError::TaskDeliveryUnavailable(_)) => {
+            panic!("an unreadable delivery definition must not look like no delivery");
+        }
+        Err(OrbitError::InvalidInput(message)) => {
+            assert!(
+                message.contains(".job.yaml"),
+                "the error names the pinned definition: {message}"
+            );
+        }
+        other => panic!("expected a snapshot read error, got {other:?}"),
+    }
+    let readable_target = ws.readme_task("readable delivery");
+    ws.record_landed_delivery(&readable_target, &culprit);
+    let observed = ws
+        .runtime
+        .observe_task_delivery(&readable_target.id, None)
+        .expect("a readable delivery is observed");
+    assert_eq!(
+        observed.landing.landed_commit.as_deref(),
+        Some(culprit.as_str()),
+        "the readable delivery still names its landed commit: {observed:?}"
+    );
+    let relation = |target: &Task| TaskRelation {
+        relation_type: TaskRelationType::RegressionFrom,
+        target: target.id.clone(),
+        regression: None,
+    };
+    let finding = |title: &str, target: &Task| {
+        ws.readme_finding(
+            title,
+            "A finding that names no commit.".into(),
+            vec![relation(target)],
+        )
+    };
+    let unreadable = finding("unreadable culprit", &unreadable_target);
+    let cites_culprit = finding("cites the landed culprit", &readable_target);
+    let later_fix = finding("later fix", &readable_target);
+    let missing = finding("no recorded delivery", &never_delivered);
+    assert_verified_no_diff_outside(
+        &ws,
+        &drain,
+        verified_cases(&[
+            (&unreadable, format!("Commit {culprit} is the culprit.")),
+            (&cites_culprit, format!("Commit {culprit} is the culprit.")),
+            (&later_fix, format!("Commit {fix} repaired the README.")),
+            (&missing, format!("Commit {fix} repaired the README.")),
+        ]),
+        &[&later_fix, &missing],
+        &[
+            (&unreadable, Some("could not be read")),
+            (&cites_culprit, Some("do not count")),
+        ],
+    );
+}
 fn a_culprit_named_by_an_all_digit_abbreviation_still_does_not_count() {
     let ws = Workspace::new();
     // About 4% of 7-char abbreviations are all digits: recommit until one is.
@@ -1544,6 +1707,10 @@ crate::scenario_table!(
     verified_no_diff_merge_proof_uses_only_the_first_parent_change,
     an_auto_minted_verified_no_diff_is_archived_only_with_ancestor_proof,
     a_verified_no_diff_citing_only_the_findings_own_commits_is_held
+);
+crate::scenario_table!(
+    an_unreadable_culprit_delivery_holds_a_relation_only_finding_scenarios,
+    an_unreadable_culprit_delivery_holds_a_relation_only_finding
 );
 crate::scenario_table!(
     a_culprit_named_by_an_all_digit_abbreviation_still_does_not_count_scenarios,

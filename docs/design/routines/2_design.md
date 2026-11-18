@@ -1,7 +1,7 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-11-15
+last_updated: 2026-11-18
 last_validated: 2026-10-19
 status: Accepted
 feature: routines
@@ -612,9 +612,11 @@ After the pilot write the task is archived, with a system comment naming the cov
 commits and the assessment, only when every cited commit exists and at least one is an
 ancestor of the base branch that relates to the finding. The commits the finding itself
 names (any commit in its description, and the landed commit of a `regression_from` target)
-never count, since they are on the base branch by construction. When one is known, a
-covering commit must descend from all of them, and when the task declared path selectors
-it must touch one of those paths. An `--approve-proposed` drain applies the same rule.
+never count, since they are on the base branch by construction. A target with no recorded
+delivery names no commit. A pinned delivery definition that cannot be read or parsed is not
+that case: the proof is refused and the finding stays proposed, so a citation of the culprit
+itself cannot close it. When one is known, a covering commit must descend from all of
+them, and when the task declared path selectors it must touch one of those paths. An `--approve-proposed` drain applies the same rule.
 Without that proof (no commit cited, an unknown SHA, none on the base branch, or only
 commits unrelated to the finding) the task stays proposed with that reason. The routine is a scheduling surface only: an
 operator-triggered run of the job behaves identically to a scheduled fire.

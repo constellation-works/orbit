@@ -24,11 +24,15 @@
 //! A commit on the base branch is not yet a fix: the commit that introduced
 //! the finding is on the base branch by construction. The commits the finding
 //! itself names (any commit in its description, and the landed commit of each
-//! `regression_from` target) never count as covering. When such a commit is
-//! known, a covering commit must also be a strict descendant of every one of
-//! them, and when the task declares path selectors it must touch one of those
-//! paths. A finding that names no commit and declares no path has nothing to
-//! relate a citation to, so it is never proven; anything less is not proof.
+//! `regression_from` target) never count as covering. A target with no
+//! recorded delivery names no commit. A pinned delivery definition that
+//! cannot be read or parsed is not that case: the observation fails and the
+//! proof is refused, so a citation of the culprit itself cannot close the
+//! finding. When a culprit commit is known, a covering commit must also be a
+//! strict descendant of every one of them, and when the task declares path
+//! selectors it must touch one of those paths. A finding that names no commit
+//! and declares no path has nothing to relate a citation to, so it is never
+//! proven; anything less is not proof.
 
 use orbit_common::OrbitError;
 use orbit_types::task::{
@@ -428,9 +432,10 @@ fn hex_tokens<'a>(
 /// The full SHAs of the commits the finding itself names: every commit that
 /// resolves from its description, and the landed commit of each
 /// `regression_from` target that delivery observed as merged. A target never
-/// delivered names no commit; any other observation failure refuses the
-/// proof, since a missed culprit would let a proof citing it close the
-/// finding.
+/// delivered names no commit. An unreadable or unparseable pinned definition
+/// is an observation failure, not a missing delivery; any such failure
+/// refuses the proof, since a missed culprit would let a proof citing it
+/// close the finding.
 fn named_commits(
     runtime: &OrbitRuntime,
     source: &dyn SourceGit,
