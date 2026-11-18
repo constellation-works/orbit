@@ -176,10 +176,13 @@ impl OrbitRuntime {
 
     /// Remove `run_id`'s cycle worktree, if it exists and this run may.
     ///
-    /// A registered worktree is removed only by a successful
-    /// `git worktree remove --force`. Git's refusal leaves the directory and
-    /// its registration untouched. An unregistered directory is removed only
-    /// with the owner record written when this run created it.
+    /// A registered worktree is removed by `git worktree remove --force`. An
+    /// unlocked one has its contents cleared first, so Git only unregisters
+    /// and removes the near-empty directory. A locked one is never cleared, and
+    /// Git's refusal leaves it untouched. If Git refuses an unlocked worktree
+    /// after the clear, its contents are already gone while its registration
+    /// remains. An unregistered directory is removed only with the owner record
+    /// written when this run created it.
     pub(crate) fn remove_resident_cycle_worktree(&self, run_id: &str) -> Result<(), OrbitError> {
         let Some(path) = resident_cycle_worktree_path(&self.paths().worktrees_dir, run_id) else {
             return Ok(());
