@@ -360,3 +360,76 @@ fn gpt_5_6_sol_prices_the_august_21_cut_without_an_unpriced_gap() {
         );
     }
 }
+
+// [ORB-25508] GPT-6.2 Astra launched 2026-11-17 at the published Standard
+// rates ($8 input / $0.40 cached / $10 cache writes / $40 output per million;
+// long-context $16 / $0.80 / $20 / $60 over 272K). The previous gpt-6-astra
+// row stays open for historical invocations.
+#[test]
+fn gpt_6_2_astra_prices_published_rates_from_launch_onward() {
+    let launch: DateTime<Utc> = "2026-11-17T00:00:00Z".parse().unwrap();
+    let mixed = TokenUsage {
+        input: 100_000,
+        cache_read: 20_000,
+        cache_create: 30_000,
+        cache_create_1h: 40_000,
+        output: 5_000,
+    };
+    assert_eq!(
+        derive_cost_usd(
+            "gpt-6.2-astra",
+            launch - chrono::Duration::seconds(1),
+            &mixed,
+            None
+        ),
+        None,
+        "launch pricing must not backdate costs"
+    );
+    // Gross input: the cache buckets sit inside `input`, so 10K tokens bill
+    // at the full input rate and each cache bucket at its own rate.
+    assert_cost(
+        derive_cost_usd("gpt-6.2-astra", launch, &mixed, None),
+        0.988,
+        "gpt-6.2-astra short-context rates",
+    );
+    assert_cost(
+        derive_cost_usd(
+            "gpt-6.2-astra",
+            launch,
+            &TokenUsage {
+                output: 1_000_000,
+                ..Default::default()
+            },
+            Some(&[]),
+        ),
+        40.0,
+        "gpt-6.2-astra output rate",
+    );
+    // A 300K-input request in a 350K-input run bills at the long-context tier.
+    let long_request = TokenUsage {
+        input: 300_000,
+        cache_read: 250_000,
+        output: 2_000,
+        ..TokenUsage::default()
+    };
+    let totals = TokenUsage {
+        input: 350_000,
+        cache_read: 290_000,
+        output: 3_000,
+        ..TokenUsage::default()
+    };
+    assert_cost(
+        derive_cost_usd(
+            "gpt-6.2-astra",
+            "2026-11-18T00:00:00Z".parse().unwrap(),
+            &totals,
+            Some(std::slice::from_ref(&long_request)),
+        ),
+        1.256,
+        "gpt-6.2-astra request over 272K input tokens",
+    );
+    assert!(
+        derive_cost_usd("gpt-6-astra", launch, &mixed, None).is_some(),
+        "historical gpt-6-astra invocations keep their price row"
+    );
+}

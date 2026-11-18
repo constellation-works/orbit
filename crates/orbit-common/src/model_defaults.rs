@@ -51,7 +51,7 @@ pub const CODEX_TERRA_MODEL: &str = "gpt-6.1-terra";
 pub const CODEX_LUNA_MODEL: &str = "gpt-6-luna";
 
 /// Codex model used by the standard Astra crew and provider default.
-pub const CODEX_ASTRA_MODEL: &str = "gpt-6-astra";
+pub const CODEX_ASTRA_MODEL: &str = "gpt-6.2-astra";
 
 /// Default Antigravity (`agy`) model: a slug from `agy models` (verified
 /// against Antigravity CLI 1.1.27). Bare Gemini CLI ids such as
