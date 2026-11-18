@@ -306,6 +306,12 @@ function routineTimeline(routines, now = Date.now()) {
     .flatMap(routine => {
       const breaker = trippedBreaker(routine);
       const active = routineState(routine) === "active";
+      // A trial that has already started is running, not upcoming: the
+      // status projection reports the transition's updated_at as
+      // next_trial_at while trial_started_at is set, and the scheduler
+      // admits no second trial while that one is in flight
+      // (breaker_trial_in_flight). Never count it in the Next hour.
+      if (breaker?.trial_started_at) return [];
       const first = Date.parse(breaker ? breaker.next_trial_at : routineNextAt(routine));
       if (!Number.isFinite(first) || first < now - 60_000 || first > now + horizon || (breaker && !active)) return [];
       const kind = breaker ? "trial" : active ? "fires" : "skipped";
