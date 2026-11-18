@@ -1,8 +1,8 @@
 use std::sync::Mutex;
 
-use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_store::contracts::ExecutorDefStoreBackend;
+use orbit_types::timestamp::UtcTimestamp;
 use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, ExecutorType};
 
 use crate::application::executor::seed_default_executors_for_platform;
@@ -10,7 +10,7 @@ use crate::application::executor::seed_default_executors_for_platform;
 const LINUX: &str = "linux";
 
 fn base_def(name: &str, executor_type: ExecutorType) -> ExecutorDef {
-    let now = Utc::now();
+    let now = UtcTimestamp::try_from(std::time::SystemTime::now()).expect("executor timestamp");
     ExecutorDef {
         name: name.to_string(),
         executor_type,
