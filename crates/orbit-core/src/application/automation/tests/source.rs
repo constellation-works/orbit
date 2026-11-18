@@ -1014,21 +1014,22 @@ fn timed_out_source_reaps_its_leader_and_kills_the_grandchild() {
     // The isolated test child runs from its disposable home, so seed the
     // checkout root from the test runner before re-executing. Keep the value
     // in a test-only variable so the child does not derive it from TMPDIR.
-    let git_ceiling = std::env::var(GIT_CEILING_FOR_ISOLATED_CHILD).unwrap_or_else(|_| {
-        std::env::current_dir()
-            .expect("test runner working directory")
-            .ancestors()
-            .find(|path| path.join(".git").exists())
-            .expect("test runner is inside a Git checkout")
-            .to_str()
-            .expect("Git checkout path is UTF-8")
-            .to_owned()
-    });
+    // A source archive has no checkout ancestor: then there is no checkout
+    // to isolate from, and the fixture parent alone is the ceiling.
+    let git_ceiling: Option<String> = match std::env::var(GIT_CEILING_FOR_ISOLATED_CHILD) {
+        Ok(ceiling) if !ceiling.is_empty() => Some(ceiling),
+        _ => std::env::current_dir().ok().and_then(|cwd| {
+            cwd.ancestors()
+                .find(|path| path.join(".git").exists())
+                .and_then(|path| path.to_str().map(str::to_owned))
+        }),
+    };
+    let git_ceiling = git_ceiling.as_deref().unwrap_or("");
     if crate::application::run_isolated_test_with_env(
         std::any::type_name_of_val(&timed_out_source_reaps_its_leader_and_kills_the_grandchild),
         &[
-            ("GIT_CEILING_DIRECTORIES", git_ceiling.as_str()),
-            (GIT_CEILING_FOR_ISOLATED_CHILD, git_ceiling.as_str()),
+            ("GIT_CEILING_DIRECTORIES", git_ceiling),
+            (GIT_CEILING_FOR_ISOLATED_CHILD, git_ceiling),
         ],
     ) {
         return;
@@ -1041,12 +1042,15 @@ fn timed_out_source_reaps_its_leader_and_kills_the_grandchild() {
     // checkout, and also at the fixture's parent when that path is UTF-8 and
     // colon-free, so a TMPDIR nested in another repository stays isolated.
     let ceilings = match root.path().parent().and_then(|parent| parent.to_str()) {
-        Some(parent) if !parent.contains(':') => format!("{git_ceiling}:{parent}"),
-        _ => git_ceiling.clone(),
+        Some(parent) if !parent.contains(':') && !git_ceiling.is_empty() => {
+            format!("{git_ceiling}:{parent}")
+        }
+        Some(parent) if !parent.contains(':') => parent.to_owned(),
+        _ => git_ceiling.to_owned(),
     };
     let _git_ceiling = orbit_common::test_env::scoped([
         ("GIT_CEILING_DIRECTORIES", Some(ceilings.as_str())),
-        (GIT_CEILING_FOR_ISOLATED_CHILD, Some(git_ceiling.as_str())),
+        (GIT_CEILING_FOR_ISOLATED_CHILD, Some(git_ceiling)),
     ]);
     let source = Source::new(root.path());
     let started = Instant::now();
