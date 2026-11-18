@@ -534,8 +534,18 @@ fn open_decisions_json_for(
     for (other_task, decision_ids) in &wanted {
         let found = by_task.get(other_task).or_else(|| extra.get(other_task));
         let Some(found) = found else { continue };
-        for request in found {
-            if decision_ids.iter().any(|id| id == &request.id) && seen.insert(request.id.clone()) {
+        // The web card listed open decisions only; a checkpoint request that
+        // has since closed must not reappear on the card.
+        let mut matched: Vec<_> = found
+            .iter()
+            .filter(|request| {
+                request.state == DecisionRequestState::Open
+                    && decision_ids.iter().any(|id| id == &request.id)
+            })
+            .collect();
+        matched.sort_by(|a, b| (a.raised_at, &a.id).cmp(&(b.raised_at, &b.id)));
+        for request in matched {
+            if seen.insert(request.id.clone()) {
                 values.push(view::to_json(request));
             }
         }

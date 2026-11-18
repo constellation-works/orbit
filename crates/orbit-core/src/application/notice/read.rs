@@ -219,7 +219,13 @@ impl OrbitRuntime {
             .iter()
             .filter(|row| keys.contains_key(&row.dedupe_key))
         {
-            let mut notice = parse_notice_row(row)?;
+            let mut notice = match parse_notice_row(row) {
+                Ok(notice) => notice,
+                Err(error) => {
+                    tracing::warn!(%error, notice = %row.id, "resident card skipped an unreadable status line");
+                    continue;
+                }
+            };
             notice.resolve_effective_status(now, None);
             let Some(task_id) = keys.get(&row.dedupe_key) else {
                 continue;

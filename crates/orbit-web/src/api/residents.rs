@@ -1,8 +1,10 @@
 //! The Automation › Residents view: set up and manage resident mandates.
 //!
-//! Reads and writes go through the `orbit.resident.*` tools, so the view
-//! reports and changes exactly what `orbit resident list|show|relay|control`
-//! do. Two writes go to core use cases instead. Creation needs a file for
+//! Reads report exactly what `orbit resident list|show` do, and writes go
+//! through the `orbit.resident.*` tools, so the view changes exactly what
+//! `orbit resident list|show|relay|control` do. The list read uses the
+//! batched core card read instead of per-row tool calls. Two writes go to
+//! core use cases instead. Creation needs a file for
 //! `orbit.task.artifact` action `put`; its use case judges the draft with the same
 //! rule every mandate read applies before it writes the tagged assignment
 //! and its `resident/mandate.json`. The grant form goes to the dashboard
