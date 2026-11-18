@@ -369,3 +369,159 @@ fn an_escalated_model_refusal_hold_names_model_access_not_os_tags() {
         "a refused model is not cleared by an OS-matching crew: {body}"
     );
 }
+
+/// Pin `executor` to one host OS, the same way the OS-hold fixture constrains
+/// `muse`. The shipped assets omit `host_os`, so a crew on this executor is
+/// eligible on every OS until this runs.
+fn pin_executor_host_os(fixture: &Fixture, executor: &str, host: orbit_types::task::HostOs) {
+    let runtime = open_runtime(fixture);
+    let mut definition = runtime
+        .list_executor_defs()
+        .expect("list executors")
+        .into_iter()
+        .find(|definition| definition.name == executor)
+        .unwrap_or_else(|| panic!("{executor} seeded"));
+    definition.host_os = Some(std::collections::BTreeSet::from([host]));
+    runtime
+        .upsert_executor_def(&definition)
+        .unwrap_or_else(|error| panic!("pin {executor} host_os: {error}"));
+}
+
+/// [ORB-25599] A Linux-tagged hold whose only OS-eligible reviewer is
+/// model-refused escalates with advice that names a crew passing both filters.
+/// A macOS-only crew with a working model leaves the frozen batch held. A
+/// Linux-capable crew whose model is not refused mints that same batch.
+#[test]
+fn a_linux_tagged_model_refusal_resumes_for_a_crew_that_passes_both_filters() {
+    const TEST: &str = "review_crew_model_access_cli::a_linux_tagged_model_refusal_resumes_for_a_crew_that_passes_both_filters";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+
+    let (fixture, model, account) = consumer_with_pool(r#"["muse-wonder", "muse-alias"]"#);
+    fixture.json(&[
+        "auto-task",
+        "update",
+        CONSUMER,
+        "--tag",
+        "delivery-code-review",
+        "--tag",
+        "no-diff-expected",
+        "--tag",
+        "os:linux",
+        "--json",
+    ]);
+    let access = (model, account);
+    let runtime = open_runtime(&fixture);
+    seed_access(
+        &runtime,
+        TASK_LOCAL_PIPELINE_JOB,
+        &access,
+        true,
+        Duration::minutes(5),
+    );
+    assert_eq!(
+        land_and_evaluate(&fixture, &runtime, "landed\n"),
+        None,
+        "no review task is minted with a refused model"
+    );
+    let hold = hold_of(&fixture);
+    assert_eq!(hold["os_tags"], json!(["os:linux"]), "{hold}");
+    assert_eq!(hold["excluded"], json!([]), "{hold}");
+    assert!(
+        !hold["model_refused"].as_array().unwrap().is_empty(),
+        "{hold}"
+    );
+
+    let body = escalated_hold_body(&fixture, &runtime);
+    let both = "whose executor can run on one of os:linux and whose model is not refused on this \
+                host and account";
+    assert!(
+        body.contains(both),
+        "[ORB-25599] the escalation requires a crew that passes both filters: {body}"
+    );
+    assert!(
+        body.contains("a verified success of its model"),
+        "[ORB-25599] a verified success of the refused model is still a way out: {body}"
+    );
+    assert!(
+        !body.contains("admits a crew whose model is not refused."),
+        "[ORB-25599] resumption must not promise a crew that ignores the OS tags: {body}"
+    );
+    assert!(
+        !body.contains("add a crew to `workflow.purpose_crews.review` whose model is not refused"),
+        "[ORB-25599] the model-only add is not enough when the task is OS-tagged: {body}"
+    );
+    assert!(
+        !body.contains("change the definition's `os:` tags"),
+        "[ORB-25599] editing os tags cannot clear a model refusal: {body}"
+    );
+    assert!(
+        !body.contains("add a crew whose executor can run on one of"),
+        "[ORB-25599] an OS-matching crew that keeps the refused model is not a way out: {body}"
+    );
+
+    let frozen = fixture.json(&["auto-task", "show", CONSUMER, "--json"]);
+    let active = frozen["automation"]["state"]["active"].clone();
+    assert_eq!(active["state"], "claimed", "{frozen}");
+    assert!(active["action_id"].is_null(), "{frozen}");
+
+    // The old advice is satisfied by this crew, and the OS filter still rejects it.
+    pin_executor_host_os(&fixture, "claude", orbit_types::task::HostOs::Macos);
+    set_policy(
+        &fixture,
+        POOL_KEY,
+        r#"["muse-wonder", "muse-alias", "haiku"]"#,
+    );
+    let runtime = open_runtime(&fixture);
+    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let held = evaluate_auto_task(&runtime, &definition, false, Utc::now())
+        .expect("an OS-ineligible replacement does not fail the tick");
+    assert_eq!(held.reason, "stalled: crew_os_ineligible");
+    let still = fixture.json(&["auto-task", "show", CONSUMER, "--json"]);
+    assert_eq!(
+        still["automation"]["state"]["active"]["action_key"], active["action_key"],
+        "{still}"
+    );
+    assert_eq!(
+        still["automation"]["state"]["active"]["batch"], active["batch"],
+        "{still}"
+    );
+    assert!(
+        still["automation"]["state"]["active"]["action_id"].is_null(),
+        "{still}"
+    );
+    let mixed = &still["automation"]["state"]["stall"]["crew_hold"];
+    assert!(
+        mixed["excluded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|crew| crew["crew"] == "haiku"),
+        "haiku is excluded by os:linux: {mixed}"
+    );
+    assert!(
+        !mixed["model_refused"].as_array().unwrap().is_empty(),
+        "the Linux reviewers stay model-refused: {mixed}"
+    );
+
+    // The crew the advice names: it can run on os:linux, and its model is not refused.
+    set_policy(&fixture, "crews.luna.enabled", "true");
+    set_policy(
+        &fixture,
+        POOL_KEY,
+        r#"["muse-wonder", "muse-alias", "haiku", "luna"]"#,
+    );
+    let runtime = open_runtime(&fixture);
+    assert_eq!(
+        minted_crew(&fixture, &runtime),
+        "luna",
+        "the Linux-capable unrefused crew"
+    );
+    let resumed = fixture.json(&["auto-task", "show", CONSUMER, "--json"]);
+    let state = &resumed["automation"]["state"];
+    assert!(state["stall"].is_null(), "{resumed}");
+    assert_eq!(state["active"]["action_key"], active["action_key"]);
+    assert_eq!(state["active"]["batch"], active["batch"]);
+    assert!(state["active"]["action_id"].is_string(), "{resumed}");
+}
