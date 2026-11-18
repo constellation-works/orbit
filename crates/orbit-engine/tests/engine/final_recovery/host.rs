@@ -49,6 +49,9 @@ pub(super) struct RecoveryHost {
     pub(super) primary_root: Option<std::path::PathBuf>,
     pub(super) cli: Option<orbit_engine::ResolvedCliExecutor>,
     pub(super) completion_admission: CompletionObservationAdmission,
+    /// When set, admission classifies these facts instead of
+    /// [`Self::completion_admission`].
+    pub(super) observation: Option<orbit_engine::PublishedCompletionObservation>,
 }
 
 impl RecoveryHost {
@@ -72,6 +75,7 @@ impl RecoveryHost {
             primary_root: None,
             cli: None,
             completion_admission: CompletionObservationAdmission::Unavailable,
+            observation: None,
         }
     }
 
@@ -236,6 +240,10 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost {
         _: &str,
         _: &str,
     ) -> Result<CompletionObservationAdmission, OrbitError> {
+        if let Some(facts) = self.observation.clone() {
+            return orbit_engine::admit_published_completion_observation(facts)
+                .map_err(|message| OrbitError::Execution(message.to_string()));
+        }
         Ok(self.completion_admission.clone())
     }
 

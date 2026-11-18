@@ -1,7 +1,10 @@
 //! Reuse only the successful prefix of this worker's unchanged publication.
 use super::*;
 use crate::application::job::ReviewAdmissionHook;
-use orbit_engine::CompletionObservationAdmission;
+use orbit_engine::{
+    CompletionObservationAdmission, CompletionOwnerLiveness, PublishedCompletionObservation,
+    admit_published_completion_observation,
+};
 use orbit_types::task::ArtifactWriter;
 use orbit_types::workflow::{
     REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, ReviewCertificate, ReviewTiming,
@@ -106,17 +109,22 @@ impl OrbitRuntime {
             .ok_or_else(|| refuse("completion run missing"))?;
         let task = self.get_task(task_id)?;
         self.owner_source_identity(&source, &task)?;
-        // This is an in-worker continuation, never authority to start or rebind a worker.
-        if source.state != JobRunState::Running
-            || source.pid != Some(std::process::id())
-            || source.finished_at.is_some()
-            || source.retry_source_run_id.is_some()
-            || task.job_run_id.as_deref() != Some(run_id)
+        // Authenticate is an in-worker merge continuation: only this process,
+        // on a live run with no retry parent, may take it. Observation may
+        // continue for a stopped run, including a finished retry descendant.
+        // A foreign live execution is still not rebound.
+        let unbound = task.job_run_id.as_deref() != Some(run_id)
             || task.status != TaskStatus::Review
-            || source
-                .input
-                .as_ref()
-                .is_none_or(|i| i["completion"] != "done" || i.get(SOURCE_REPAIR_KEY).is_some())
+            || source.input.as_ref().is_none_or(|input| {
+                input["completion"] != "done" || input.get(SOURCE_REPAIR_KEY).is_some()
+            });
+        let process_owns = source.state == JobRunState::Running
+            && source.pid == Some(std::process::id())
+            && source.finished_at.is_none();
+        let foreign_live =
+            source.state == JobRunState::Running && source.finished_at.is_none() && !process_owns;
+        if (!observation && (unbound || !process_owns || source.retry_source_run_id.is_some()))
+            || (observation && (unbound || foreign_live))
         {
             return Err(refuse("completion no longer belongs to this active owner"));
         }
@@ -387,9 +395,17 @@ impl OrbitRuntime {
                 return Err(refuse("completion review certificate disagrees"));
             }
         }
-        Ok(match policy_change {
-            Some(reason) => CompletionObservationAdmission::PolicyChanged { reason },
-            None => CompletionObservationAdmission::Retry,
+        let liveness = if process_owns {
+            CompletionOwnerLiveness::ProcessOwned
+        } else {
+            CompletionOwnerLiveness::Stopped
+        };
+        admit_published_completion_observation(PublishedCompletionObservation {
+            liveness,
+            candidate_unchanged: true,
+            validation_unchanged: true,
+            policy_change,
         })
+        .map_err(|message| refuse(message.to_string()))
     }
 }

@@ -343,6 +343,41 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
                 };
                 return settlement::conclude(job, ctx, step, activity, &application, None, None);
             }
+            Ok(CompletionObservationAdmission::Stopped { reason }) => {
+                // The worker is gone, so the in-worker retry cannot run. Requeue
+                // the unchanged publication under current policy. This is not a
+                // candidate change and it does not ask for a manual inspect.
+                let application = FinalRecoveryApplication {
+                    task_id,
+                    failed_step_id: step.id.clone(),
+                    decision: FinalRecoveryDecision::Requeue {
+                        reason: format!(
+                            "stopped-run: {reason}; requeue the unchanged publication under current policy"
+                        ),
+                    },
+                    fault: FaultAttribution::unknown(format!(
+                        "run {} step `{}` could not observe completion of an unchanged publication \
+                         after the run stopped: {}",
+                        ctx.run_id,
+                        step.id,
+                        bounded_recovery_text(
+                            "error",
+                            &ctx.run_id,
+                            error_message,
+                            MAX_RECOVERY_ERROR_MESSAGE_BYTES,
+                        )
+                    )),
+                    resume_step_index: None,
+                    preserved_steps: Vec::new(),
+                    repair_commit: None,
+                    resume_context: None,
+                    workspace_path: worktree.workspace_path.into(),
+                    completion_done: ctx.input.get("completion").and_then(Value::as_str)
+                        == Some("done"),
+                    infrastructure: None,
+                };
+                return settlement::conclude(job, ctx, step, activity, &application, None, None);
+            }
             Ok(CompletionObservationAdmission::Unavailable) => {
                 "host has no authenticated completion prefix".to_string()
             }

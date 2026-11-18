@@ -6,7 +6,10 @@
 use chrono::Utc;
 use orbit_common::{ConflictedFile, RecoverableVcsConflict};
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
-use orbit_engine::{CompletionObservationAdmission, DispatchError, FinalRecoveryApplication};
+use orbit_engine::{
+    CompletionObservationAdmission, CompletionOwnerLiveness, DispatchError,
+    FinalRecoveryApplication, PublishedCompletionObservation,
+};
 use orbit_types::workflow::activity_job::{ActivityV2, JobV2, V2AuditEventKind};
 use orbit_types::workflow::{
     FinalRecoveryCheckpoint, FinalRecoveryCheckpointOutcome, FinalRecoveryDecision,
@@ -1396,6 +1399,7 @@ recovery_contracts!(recovery_contracts_1: a_resume_reruns_from_the_named_step_an
 recovery_contracts!(recovery_contracts_2: an_escalation_still_runs_the_failure_handoff, an_error_that_skips_step_recovery_still_reaches_final_recovery, step_recovery_runs_first_and_final_recovery_only_once_it_is_spent, final_recovery_runs_at_most_once_per_run, a_run_resumed_after_a_final_recovery_resume_never_runs_it_again, a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision, an_evidence_hold_after_step_recovery_holds_the_run, a_cancelled_child_after_step_recovery_cancels_the_run);
 recovery_contracts!(recovery_contracts_3: a_provider_authentication_failure_skips_final_recovery, an_empty_crew_pool_skips_final_recovery, a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade, a_resume_to_an_earlier_step_keeps_the_named_target, a_resume_to_an_admission_or_nonexistent_step_is_escalated, a_malformed_decision_is_escalated, a_decision_carries_its_fault_and_one_without_a_fault_escalates, the_recovery_packet_withholds_the_implementers_model);
 recovery_contracts!(recovery_contracts_4: a_stopped_rebase_resumes_its_rebasing_step_without_a_repair_commit, completion_observation_classifies_retry_policy_and_candidate_refusal, a_failure_before_the_worktree_exists_skips_final_recovery, failed_recovery_dispatch_is_injected_before_final_recovery, final_recovery_injects_only_its_runs_bounded_evidence_in_order, final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_evidence_overflows, final_recovery_keeps_post_recovery_output_when_a_later_step_fails, final_recovery_resume_checkpoints_the_latest_conflict_diagnostics, transient_infrastructure_is_escalated_without_an_agent, worktree_setup_dependency_not_found_skips_final_recovery);
+recovery_contracts!(recovery_contracts_5: finished_run_tls_observation_readmits_unchanged_publication);
 
 /// The executor cannot turn a policy refusal into completion authority, and
 /// the deterministic retry spends the existing once-only recovery budget.
@@ -1447,6 +1451,159 @@ fn completion_observation_classifies_retry_policy_and_candidate_refusal() {
         };
         assert!(text.contains(classification), "{text}");
     }
+}
+
+const INSPECT_PUBLICATION: &str = "Inspect the publication and admit current-policy source repair";
+
+fn unchanged_observation(liveness: CompletionOwnerLiveness) -> PublishedCompletionObservation {
+    PublishedCompletionObservation {
+        liveness,
+        candidate_unchanged: true,
+        validation_unchanged: true,
+        policy_change: None,
+    }
+}
+
+/// Run the `pr_complete` step through final recovery with the finished-run
+/// classifier, not an injected admission.
+///
+/// The fixture host scripts the observation fault. The engine action
+/// `pr_complete` does not pass through that host, so the scripted action is
+/// `work` and the failing step id is `pr_complete`. `Reply::Observation`
+/// is the TLS handshake timeout the dispatcher records as
+/// `completion_observation_unavailable`.
+fn observe_finished_completion(
+    facts: PublishedCompletionObservation,
+    replies: Vec<Reply>,
+) -> (RecoveryHost, Run) {
+    let mut host = RecoveryHost::new([("work", replies)]);
+    host.observation = Some(facts);
+    let job = pipeline_step_acting("pr_complete", "work");
+    let observed =
+        orbit_engine::test_support::with_vcs_retry_wait(|_| {}, || run(&job, &host, None));
+    (host, observed)
+}
+
+fn decision_text(decision: &FinalRecoveryDecision) -> String {
+    match decision {
+        FinalRecoveryDecision::Resume { rationale, .. } => rationale.clone(),
+        FinalRecoveryDecision::Requeue { reason } => reason.clone(),
+        FinalRecoveryDecision::Escalate {
+            diagnosis,
+            human_action,
+            ..
+        } => format!("{diagnosis}\n{human_action}"),
+        other => format!("{other:?}"),
+    }
+}
+
+/// A finished `pr_complete` whose only fault is a TLS handshake timeout, with
+/// an unchanged candidate, policy and validation, is requeued. The classifier
+/// reads the finished-run facts; the admission is not an injected `Retry`.
+/// A changed candidate, changed validation, changed policy, foreign live
+/// owner, or non-transient error does not take that requeue.
+fn finished_run_tls_observation_readmits_unchanged_publication() {
+    let stopped = unchanged_observation(CompletionOwnerLiveness::Stopped);
+    let (host, observed) = observe_finished_completion(stopped.clone(), vec![Reply::Observation]);
+    assert_count(&host, "decide", 0);
+    assert_count(&host, "work", 1);
+    assert_count(&host, "handoff", 0);
+    assert_attempts(&observed.attempts, &[("settled", Some("requeue"))]);
+    let application = first_application(&host);
+    assert_eq!(application.failed_step_id, "pr_complete");
+    assert!(
+        application
+            .fault
+            .fault_evidence
+            .contains("TLS handshake timeout"),
+        "{}",
+        application.fault.fault_evidence
+    );
+    let FinalRecoveryDecision::Requeue { reason } = &application.decision else {
+        panic!("finished unchanged observation requeues: {application:?}");
+    };
+    assert!(reason.contains("stopped-run"), "{reason}");
+    assert!(
+        !reason.contains("candidate-changed") && !reason.contains(INSPECT_PUBLICATION),
+        "{reason}"
+    );
+    assert!(!reason.contains("policy-changed"), "{reason}");
+
+    let mut changed_candidate = stopped.clone();
+    changed_candidate.candidate_unchanged = false;
+    let (host, _) = observe_finished_completion(changed_candidate, vec![Reply::Observation]);
+    assert_count(&host, "decide", 0);
+    assert_count(&host, "work", 1);
+    let text = decision_text(&first_application(&host).decision);
+    assert!(
+        text.contains("candidate-changed") && text.contains(INSPECT_PUBLICATION),
+        "{text}"
+    );
+    assert!(!text.contains("stopped-run"), "{text}");
+
+    let mut changed_validation = stopped.clone();
+    changed_validation.validation_unchanged = false;
+    let (host, _) = observe_finished_completion(changed_validation, vec![Reply::Observation]);
+    assert_count(&host, "decide", 0);
+    let text = decision_text(&first_application(&host).decision);
+    assert!(
+        text.contains("candidate-changed")
+            && text.contains("native validation candidate or effective policy changed"),
+        "{text}"
+    );
+    assert!(!text.contains("stopped-run"), "{text}");
+
+    let mut changed_policy = stopped.clone();
+    changed_policy.policy_change = Some("review now required".into());
+    let (host, _) = observe_finished_completion(changed_policy, vec![Reply::Observation]);
+    assert_count(&host, "decide", 0);
+    assert_count(&host, "work", 1);
+    let FinalRecoveryDecision::Requeue { reason } = &first_application(&host).decision else {
+        panic!("a policy change stays a policy requeue, not a stopped-run resume");
+    };
+    assert!(reason.contains("policy-changed"), "{reason}");
+    assert!(
+        !reason.contains("stopped-run") && !reason.contains("candidate-changed"),
+        "{reason}"
+    );
+
+    let (host, _) = observe_finished_completion(stopped.clone(), vec![Reply::Fail]);
+    assert!(
+        host.count("decide") >= 1,
+        "a non-transient pr_complete failure still reaches the recovery agent"
+    );
+    assert_eq!(host.count("work"), 1);
+    let text = decision_text(&first_application(&host).decision);
+    assert!(
+        !text.contains("stopped-run") && !text.contains("transient-observation"),
+        "{text}"
+    );
+
+    let (host, observed) = observe_finished_completion(
+        unchanged_observation(CompletionOwnerLiveness::ProcessOwned),
+        vec![Reply::Observation, Reply::Observation],
+    );
+    assert_count(&host, "decide", 0);
+    assert_count(&host, "work", 2);
+    assert!(observed.result.is_err());
+    let FinalRecoveryDecision::Resume { rationale, .. } = &first_application(&host).decision else {
+        panic!("a process-owned unchanged observation retries in the worker");
+    };
+    assert!(rationale.contains("transient-observation"), "{rationale}");
+    assert!(!rationale.contains("candidate-changed"), "{rationale}");
+
+    let (host, _) = observe_finished_completion(
+        unchanged_observation(CompletionOwnerLiveness::ForeignLive),
+        vec![Reply::Observation],
+    );
+    assert_count(&host, "decide", 0);
+    let text = decision_text(&first_application(&host).decision);
+    assert!(
+        text.contains("candidate-changed")
+            && text.contains("completion no longer belongs to this active owner"),
+        "{text}"
+    );
+    assert!(!text.contains("stopped-run"), "{text}");
 }
 
 /// Commit everything in `repo` as the fixture identity.
