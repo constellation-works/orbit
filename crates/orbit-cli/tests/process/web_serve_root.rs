@@ -148,6 +148,87 @@ fn web_serve_without_an_explicit_root_still_serves_the_global_registry() {
 }
 
 #[test]
+fn web_serve_keeps_replica_role_and_owner_when_its_checkout_is_missing() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let owner_repo = temp.path().join("owner-repo");
+    let replica_repo = temp.path().join("replica-repo");
+    let moved_replica = temp.path().join("replica-repo-moved");
+    std::fs::create_dir_all(&home).expect("create home");
+    for repo in [&owner_repo, &replica_repo] {
+        std::fs::create_dir_all(repo).expect("create repo");
+        crate::git_repo::SeededRepo::new(repo)
+            .identity("fixture", "fixture@example.com")
+            .no_commit()
+            .build();
+    }
+    orbit(
+        &owner_repo,
+        &home,
+        &[
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "web-replica-host",
+            "--task-prefix",
+            "WR",
+        ],
+    );
+    orbit(
+        &owner_repo,
+        &home,
+        &["workspace", "init", "--name", "owned"],
+    );
+    orbit(
+        &replica_repo,
+        &home,
+        &[
+            "workspace",
+            "init",
+            "--name",
+            "mirrored",
+            "--role",
+            "replica",
+            "--owner",
+            "hm_fixture_remote",
+        ],
+    );
+    std::fs::rename(&replica_repo, &moved_replica).expect("move replica checkout aside");
+
+    let mut server = spawn_dashboard(temp.path(), &home, None);
+    let port = server
+        .wait_for_address(STARTUP_DEADLINE)
+        .expect("dashboard bound")
+        .port();
+    let response = http_get(port, "/api/workspaces");
+    stop(&mut server);
+
+    let body = response
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .unwrap_or(&response);
+    let rows: Value = serde_json::from_str(body)
+        .unwrap_or_else(|error| panic!("parse /api/workspaces body ({error}): {response}"));
+    let rows = rows.as_array().expect("workspace array");
+    let replica = rows
+        .iter()
+        .find(|row| row["name"] == "mirrored")
+        .unwrap_or_else(|| panic!("replica row missing: {response}"));
+    assert_eq!(replica["status"], "invalid", "{replica}");
+    assert_eq!(replica["checkout_role"], "replica", "{replica}");
+    assert_eq!(
+        replica["owner_machine_id"], "hm_fixture_remote",
+        "{replica}"
+    );
+    let owned = rows
+        .iter()
+        .find(|row| row["name"] == "owned")
+        .unwrap_or_else(|| panic!("owned row missing: {response}"));
+    assert_eq!(owned["status"], "active", "{owned}");
+    assert_eq!(owned["checkout_role"], "owner", "{owned}");
+}
+
+#[test]
 fn web_serve_approved_hosts_announce_reachable_api_and_health_urls() {
     let temp = tempdir().expect("tempdir");
     let home = temp.path().join("home");

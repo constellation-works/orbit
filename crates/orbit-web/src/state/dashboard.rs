@@ -440,6 +440,8 @@ impl DashboardState {
                 base_branch: None,
             }),
             active: true,
+            checkout_role: None,
+            owner_machine_id: None,
         };
         let monitor = runtime.host_resource_monitor();
         let global_root = runtime.global_root();

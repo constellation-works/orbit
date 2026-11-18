@@ -58,7 +58,7 @@ use orbit_core::application::routines::ClockStatus;
 use orbit_core::runtime::{HostLifetime, WorkspaceRuntimeBinding};
 use orbit_core::{OrbitError, OrbitRuntime, ShipMode};
 use orbit_registry::workspace_registry;
-use orbit_types::workspace::WorkspaceStatus;
+use orbit_types::workspace::{WorkspaceCheckoutRole, WorkspaceStatus};
 use serde_json::json;
 
 use crate::doctor_report::DoctorReports;
@@ -100,7 +100,9 @@ pub(crate) type PrePublishHook = Arc<dyn Fn(&str) + Send + Sync>;
 /// entries carry the complete runtime binding resolved from the logical
 /// workspace and local checkout. Inactive entries — whether their checkout path
 /// is stale or its identity cannot be read — keep no binding: they are listed
-/// but never built.
+/// but never built. `checkout_role` and `owner_machine_id` are registry
+/// metadata and stay on the entry whatever the checkout's availability, so an
+/// unavailable replica is still a replica.
 #[derive(Clone, Debug)]
 pub(crate) struct WsEntry {
     pub(crate) id: String,
@@ -109,6 +111,11 @@ pub(crate) struct WsEntry {
     pub(crate) orbit_dir: PathBuf,
     pub(crate) binding: Option<WorkspaceRuntimeBinding>,
     pub(crate) active: bool,
+    /// This machine's registered role for the checkout; `None` only for a row
+    /// with no recorded role (single-host installs, older registrations).
+    pub(crate) checkout_role: Option<WorkspaceCheckoutRole>,
+    /// Registered owner machine of the logical workspace, if recorded.
+    pub(crate) owner_machine_id: Option<String>,
 }
 
 /// Immutable, atomically-swapped view of the registered workspace set plus the

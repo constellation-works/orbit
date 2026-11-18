@@ -163,6 +163,8 @@ impl RegistrySource {
                     orbit_dir: checkout.orbit_dir.clone(),
                     binding,
                     active,
+                    checkout_role: checkout.role,
+                    owner_machine_id: workspace.owner_machine_id.clone(),
                 }
             })
             .collect();
