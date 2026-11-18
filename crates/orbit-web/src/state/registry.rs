@@ -231,11 +231,14 @@ pub(crate) fn default_workspace_for_cwd(
 /// The selector is a registered name or logical `ws_*` ID first, and a local
 /// checkout path when it is path-shaped
 /// ([`registry_runtime::selector_looks_like_path`]); a path is matched the
-/// same way a cwd is (longest registered prefix), which is what `orbit web
-/// connect` forwards for a remote workspace directory. An unknown bare name is
-/// never joined to cwd — that would preselect the cwd's workspace for a
-/// selector that matched nothing. `workspace_selector` not being given falls
-/// back to the existing cwd-based behavior unchanged.
+/// same way a cwd is (longest registered prefix over the canonicalized path,
+/// or over the lexical absolute path when canonicalization fails — see
+/// [`resolve_selector_path`]), which is what `orbit web connect` forwards for
+/// a remote workspace directory. An explicit but unresolved bare name (path
+/// comparison never runs for it) yields `None` without consulting `cwd` —
+/// that would preselect the cwd's workspace for a selector that matched
+/// nothing. Only an absent selector (`None`, i.e. no `--workspace` flag)
+/// falls back to the existing cwd-based behavior unchanged.
 pub(crate) fn default_workspace_selection(
     registry: &WorkspaceRegistry,
     workspace_selector: Option<&str>,
@@ -264,9 +267,13 @@ pub(crate) fn default_workspace_selection(
 ///
 /// Relative paths are resolved against `cwd` before canonicalization. If
 /// canonicalization fails (path may not exist, or symlink resolution errors),
-/// return the pre-canonical absolute path so behavior for nonexistent paths is
-/// preserved: a raw lexical prefix comparison against a stale/nonexistent path
-/// just misses, which is the existing "All workspaces" fallback.
+/// return the pre-canonical absolute path so it can still be longest-prefix
+/// matched lexically (see [`default_workspace_for_cwd`], which compares with
+/// `Path::starts_with`, i.e. component-wise, not via the filesystem). A
+/// nonexistent descendant of a registered root (e.g. `/registered/missing`
+/// under the active registered root `/registered`) therefore still selects
+/// that root; only a path outside every registered root misses and falls
+/// back to `None` ("All workspaces").
 fn resolve_selector_path(selector: &Path, cwd: Option<&Path>) -> PathBuf {
     let absolute = if selector.is_absolute() {
         selector.to_path_buf()

@@ -111,12 +111,13 @@ pub fn serve_from_env(args: ServeArgs, root_override: Option<&Path>) -> Result<(
 /// reloaded from that same path when `workspaces.json` mtime or length
 /// changes (see [`state::DashboardState::pin`]), so a native `orbit
 /// workspace init/remove` or binding change becomes visible on the next
-/// request without restarting the server. The dropdown's default selection is,
-/// in priority order: the registered/active workspace matching
-/// `workspace_selector` (an explicit
-/// `--workspace`), else the registered workspace containing the cwd (see
-/// `state::registry::default_workspace_for_cwd`), else "All workspaces". See
-/// `state::registry::default_workspace_selection` for the precedence logic.
+/// request without restarting the server. The dropdown's default selection is
+/// the registered/active workspace matching `workspace_selector` when an
+/// explicit `--workspace` was given (a name/`ws_*` ID, or a path-shaped value
+/// longest-prefix matched — with no fallback to the cwd when it misses), else
+/// the registered workspace containing the cwd when no `--workspace` was given
+/// (see `state::registry::default_workspace_for_cwd`), else "All workspaces".
+/// See `state::registry::default_workspace_selection` for the precedence logic.
 ///
 /// The initial load is eager: a malformed registry at startup is fatal, exactly
 /// as before this became refreshable. A malformed *refresh* after a good
