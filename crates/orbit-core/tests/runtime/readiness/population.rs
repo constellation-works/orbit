@@ -36,6 +36,30 @@ impl<S: tracing::Subscriber> Layer<S> for EnvelopeReads {
     }
 }
 
+/// Counts real partition commit-lock acquisitions, excluding re-entrant reads.
+struct ReadinessCommitAcquisitions(Arc<AtomicU64>);
+
+impl<S: tracing::Subscriber> Layer<S> for ReadinessCommitAcquisitions {
+    fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+        if event.metadata().target() != "orbit.common.fs.file_lock" {
+            return;
+        }
+        struct LockPath(String);
+        impl tracing::field::Visit for LockPath {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "lock_path" {
+                    self.0 = format!("{value:?}");
+                }
+            }
+        }
+        let mut path = LockPath(String::new());
+        event.record(&mut path);
+        if path.0.ends_with("/.task-commit.lock") {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 fn add(
     runtime: &OrbitRuntime,
     title: &str,
@@ -77,6 +101,40 @@ fn entry<'a>(readiness: &'a Value, task: &str) -> &'a Value {
         .iter()
         .find(|entry| entry["task_id"] == task)
         .unwrap_or_else(|| panic!("{task} missing from readiness: {readiness}"))
+}
+
+fn fleet_readiness_batches_backlog_commit_lock_acquisitions() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace)
+        .unwrap()
+        .with_host_resource_probe(PressureProbe::calm());
+    for index in 0..8 {
+        add(
+            &runtime,
+            &format!("waiting {index}"),
+            TaskStatus::Backlog,
+            None,
+            &[],
+            &["file:README.md"],
+        );
+    }
+    let facts = runtime.fleet_readiness_facts();
+    runtime.workspace_fleet_readiness(&facts).unwrap();
+    let acquisitions = Arc::new(AtomicU64::new(0));
+    let subscriber =
+        tracing_subscriber::registry().with(ReadinessCommitAcquisitions(Arc::clone(&acquisitions)));
+    let payload = tracing::subscriber::with_default(subscriber, || {
+        runtime.workspace_fleet_readiness(&facts).unwrap()
+    });
+    assert_eq!(payload["tasks"].as_array().unwrap().len(), 8);
+    let taken = acquisitions.load(Ordering::Relaxed);
+    assert!(
+        (1..=3).contains(&taken),
+        "fleet readiness must share commit-lock acquisitions across backlog rows (ORB-25648). Recorded {taken} acquisitions for eight rows"
+    );
 }
 
 fn readiness_reads_open_work_and_the_closed_tasks_its_rules_reach() {
@@ -304,7 +362,8 @@ fn restored_closed_child_retains_inherited_epic_footprint() {
 crate::scenario_table!(
     readiness_reads_open_work_and_the_closed_tasks_its_rules_reach_scenarios,
     readiness_reads_open_work_and_the_closed_tasks_its_rules_reach,
-    restored_closed_child_retains_inherited_epic_footprint
+    restored_closed_child_retains_inherited_epic_footprint,
+    fleet_readiness_batches_backlog_commit_lock_acquisitions,
 );
 
 /// A finished drain's retained forecast still names a done task. The admission
