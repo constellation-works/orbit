@@ -58,6 +58,8 @@ mod resumed_in_place;
 mod resumed_recovery;
 #[path = "source_repair/review_requeue.rs"]
 mod review_requeue;
+#[path = "source_repair/reviewer_push.rs"]
+mod reviewer_push;
 #[path = "source_repair/reviewers.rs"]
 mod reviewers;
 #[path = "source_repair/unresumable_requeue.rs"]

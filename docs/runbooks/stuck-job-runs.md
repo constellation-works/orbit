@@ -989,7 +989,10 @@ otherwise refuses with nothing written:
   discarded;
 - the run's checkpoints authenticate the branch, and the pull request is open
   and unmerged at the head they record, with that head still on the local
-  branch and the remote;
+  branch and the remote. The one exception is an incomplete before-landing
+  review whose failure handoff pushed its reviewer commit as a fast-forward of
+  that head: the requeue then resumes the pull request at that attested
+  reviewer head, as [review-gate.md](review-gate.md) describes;
 - the forge reports every required check on exactly that head as passed: none
   failed, none unfinished, and at least one reported. Checks on another head
   describe a different candidate and are refused.
@@ -1003,8 +1006,9 @@ pushes and lands it afresh. The stopped run's worktree does not have to exist.
 When checks are still running, requeue once they pass. When the candidate
 needs source changes, use the explicit repair protocol below. A pull
 request that already merged is settled with `orbit task settle-merged
-<task-id>`; a closed one, a moved head or a changed specification leaves
-`--discard-candidate` as the exit. A run whose receipt was written before the
+<task-id>`; a closed one, a head that moved to anything other than an attested
+reviewer commit, or a changed specification leaves `--discard-candidate` as
+the exit. A run whose receipt was written before the
 receipt named its run and specification is refused the same way.
 
 Do not resume such a run with `orbit job resume`. Its checkpoints reuse the
@@ -1803,7 +1807,8 @@ An operator attempting to recover a held or blocked delivery may meet two common
   A `held` run is eligible to preserve its published candidate only when it has finished, its
   worker is gone, and its recorded steps identify the before-landing review-decision hold. In
   that case, `orbit task requeue <task-id>` authenticates the candidate and resumes its pull
-  request when it remains open at the recorded head with every required check passed. An
+  request when it remains open at the recorded head, or at the reviewer commit its failure
+  handoff attested ([review-gate.md](review-gate.md)), with every required check passed. An
   unfinished run or a held run without that recorded decision still refuses candidate
   preservation. **Workaround:** If the candidate should be retired, save its patch first as a
   task artifact using `orbit task artifact put` (or `orbit task update --artifact`), then discard

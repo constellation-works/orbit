@@ -170,6 +170,14 @@ revalidation, `push_lease_lost` or `review_repair_after_merge` still ends the ru
 `failed`. The last of those also blocks the task; the others leave it in
 `review`.
 
+When the handoff's `reviewer_push` records the reviewer commit as a
+fast-forward of the published head on the PR branch, an operator requeue of
+the task, or the decision answer that requeues it, resumes the same PR at that
+reviewer head. Its required checks must have passed there. The next run then
+validates and reviews it afresh. A requeue is refused when the local or remote
+branch, or the PR head, is anywhere else, when the receipt names another
+published head, branch or run, or when the task specification changed.
+
 A reviewer that exits cleanly with only its initial placeholder report is
 released, not settled: the refusal leads with `review_abandoned:`, the failure
 handoff takes the same `landing_review_failure` path, and the candidate's one
