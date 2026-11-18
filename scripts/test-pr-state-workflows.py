@@ -816,13 +816,22 @@ class NextestShardWorkflowTests(unittest.TestCase):
             path.write_text(record)
             path.chmod(0o755)
 
-    def run_step(self, job, name, expected_status=0):
+    @staticmethod
+    def resolve_download_path(expression, download_outputs):
+        """Evaluate `${{ a || b }}` over download-path outputs: the first output that was set wins."""
+        assert expression.startswith("${{") and expression.endswith("}}"), expression
+        terms = [term.strip() for term in expression[3:-2].split("||")]
+        return next((download_outputs[term] for term in terms if term in download_outputs), "")
+
+    def run_step(self, job, name, expected_status=0, *, download_outputs=None):
         step = next(step for step in job["steps"] if step.get("name") == name)
         self.calls.write_text("")
         env = dict(PATH=f"{self.root / 'bin'}:{os.environ['PATH']}", RUNNER_TEMP=str(self.root),
                    SHARD_FIXTURE_EXIT=str(expected_status),
                    **self.document["env"], **job.get("env", {}))
-        env.update(step.get("env", {}))
+        env.update({key: self.resolve_download_path(value, download_outputs or {})
+                    if "outputs.download-path" in str(value) else value
+                    for key, value in step.get("env", {}).items()})
         cwd = self.root / step.get("working-directory", ".")
         cwd.mkdir(parents=True, exist_ok=True)
         if step.get("working-directory"):
@@ -854,6 +863,24 @@ class NextestShardWorkflowTests(unittest.TestCase):
             text=True, capture_output=True)
         self.assertEqual(result.returncode, expected_status, result.stdout + result.stderr)
         return [json.loads(line) for line in self.calls.read_text().splitlines()]
+
+    def test_extraction_reads_the_download_attempt_that_succeeded(self):
+        # Each attempt downloads into its own directory, and extraction must read
+        # the one that passed. Run 44227650517 held a shard in one unbounded download.
+        job = self.document["jobs"]["test-1"]
+        attempts = ["nextest-archive-download", "nextest-archive-download-2", "nextest-archive-download-3"]
+        extract = next(step for step in job["steps"] if step.get("name") == "Extract nextest archive")
+        self.assertEqual(
+            [term.strip() for term in extract["env"]["NEXTEST_ARCHIVE_DIR"][3:-2].split("||")],
+            [f"steps.{step_id}.outputs.download-path" for step_id in reversed(attempts)],
+            "extraction must prefer the latest attempt; a later attempt runs only after an earlier one failed")
+        for succeeded, step_id in enumerate(attempts, 1):
+            with self.subTest(attempt=succeeded):
+                directory = self.root / f"attempt-{succeeded}"
+                [extract_call] = self.run_step(
+                    job, "Extract nextest archive",
+                    download_outputs={f"steps.{step_id}.outputs.download-path": str(directory)})
+                self.assertEqual(Path(extract_call[2]).parent, directory)
 
     def test_shard_jobs_partition_once_each_and_the_check_job_awaits_all_of_them(self):
         shards = int(self.document["env"]["NEXTEST_SHARDS"])
@@ -887,9 +914,13 @@ class NextestShardWorkflowTests(unittest.TestCase):
                 self.assertNotIn("strategy", job, "Orbit's rerun certification needs literal shard jobs")
                 self.assertEqual(job["steps"], shard_jobs["test-1"]["steps"], "every shard runs the same steps")
                 [nextest] = self.run_step(job, "Run nextest shard")
-                [extract] = self.run_step(job, "Extract nextest archive")
+                download_directory = self.root / "verified-download"
+                [extract] = self.run_step(
+                    job, "Extract nextest archive",
+                    download_outputs={"steps.nextest-archive-download.outputs.download-path": str(download_directory)})
                 self.assertEqual(extract[:2], [pack[0], "extract"])
-                self.assertEqual(extract[2:], [pack[3], str(self.root), "--parts", str(parts)])
+                self.assertEqual(extract[2:], [str(download_directory / Path(pack[3]).name),
+                                               str(self.root), "--parts", str(parts)])
                 downloads = [step for step in job["steps"]
                              if str(step.get("name", "")).startswith("Download nextest archive")]
                 self.assertEqual(
@@ -900,13 +931,23 @@ class NextestShardWorkflowTests(unittest.TestCase):
                     "run 42657013708 failed GetSignedArtifactURL with ECONNRESET and had no retry")
                 uploaded = {step["with"]["name"] for other in jobs.values() for step in other["steps"]
                             if step.get("uses", "").startswith("actions/upload-artifact@")}
+                download_paths = {download["with"]["path"] for download in downloads}
+                self.assertEqual(len(download_paths), len(downloads),
+                                 "extraction cannot reuse parts from a timed-out download")
                 for download in downloads:
                     self.assertTrue(download["with"]["merge-multiple"])
-                    self.assertEqual(download["with"]["path"], "${{ runner.temp }}")
+                    self.assertTrue(download["with"]["path"].startswith("${{ runner.temp }}/"))
+                    self.assertGreater(
+                        download.get("timeout-minutes", 0), 0,
+                        "run 44227650517 held the required Check job in a single unbounded download")
                     self.assertTrue(str(download.get("uses", "")).startswith("actions/download-artifact@"))
                     self.assertEqual(
                         {name for name in uploaded if fnmatch.fnmatchcase(name, download["with"]["pattern"])},
                         names, "every shard downloads every part and nothing else")
+                self.assertLess(
+                    sum(download["timeout-minutes"] for download in downloads), job["timeout-minutes"],
+                    "the download attempts must fit the shard's job timeout, or the job timeout cancels "
+                    "a stalled shard before its last attempt fails the gate")
                 self.assertEqual({step["uses"] for step in downloads}, {downloads[0]["uses"]})
                 self.assertIs(downloads[0].get("continue-on-error"), True)
                 self.assertIs(downloads[1].get("continue-on-error"), True)
@@ -988,7 +1029,9 @@ class NextestShardWorkflowTests(unittest.TestCase):
                           ("test-1", "Extract nextest archive"),
                           ("test-1", "Run nextest shard")):
             with self.subTest(step=step):
-                self.run_step(self.document["jobs"][job], step, expected_status=7)
+                self.run_step(self.document["jobs"][job], step, expected_status=7,
+                              download_outputs={"steps.nextest-archive-download.outputs.download-path":
+                                                str(self.root / "verified-download")})
 
     def test_an_affected_crates_archive_passes_empty_partitions_and_gates_only_orbit_exec(self):
         jobs = self.document["jobs"]
