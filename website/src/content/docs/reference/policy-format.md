@@ -37,16 +37,15 @@ fsProfiles:
   reviewer:
     read: [./**]
     modify: []
-  implementer:
+  docs_writer:
     read: [./**]
     modify:
-      - crates/**
       - docs/**
       - "!docs/drafts/**"
 ```
 
 Rules run in order and the last rule that matches a path decides it. A rule
-that starts with `!` carves a path out of an earlier grant, so `implementer`
+that starts with `!` carves a path out of an earlier grant, so `docs_writer`
 cannot modify `docs/drafts/`. Every `modify` rule must be covered by a `read`
 rule, and a profile rule may not repeat a global deny entry.
 
@@ -59,7 +58,9 @@ spec:
 ```
 
 Orbit's default policy defines `implementer`, `reviewer`, `docs_writer` and
-`pure_compute`. An activity that names no profile gets `unrestricted`: read and
+`pure_compute`. `implementer` may read and modify `./**`, `reviewer` may only
+read `./**`, and `pure_compute` may not read or modify. `docs_writer` is the
+profile above. An activity that names no profile gets `unrestricted`: read and
 modify access to everything the global denies leave open.
 
 To test a path against a profile, run `orbit doctor fs-access <profile> <path>`.
