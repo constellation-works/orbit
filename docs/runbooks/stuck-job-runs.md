@@ -988,14 +988,16 @@ otherwise refuses with nothing written:
   stopped, still the task's newest execution, and its candidate was not
   discarded;
 - the run's checkpoints authenticate the branch, and the pull request is open
-  and unmerged at the head they record, with that head still on the local
-  branch and the remote. The one exception is an incomplete before-landing
-  review whose failure handoff pushed its reviewer commit as a fast-forward of
-  that head: the requeue then resumes the pull request at that attested
-  reviewer head, as [review-gate.md](review-gate.md) describes;
-- the forge reports every required check on exactly that head as passed: none
-  failed, none unfinished, and at least one reported. Checks on another head
-  describe a different candidate and are refused.
+  and unmerged at the authenticated published head: the recorded pushed head,
+  followed through any recorded `pr_auto_fix_pushed` entries and any
+  host-attested reviewer fast-forward pushed by an incomplete before-landing
+  review's failure handoff ([review-gate.md](review-gate.md)). That published
+  identity must match the remote branch and pull request exactly, while the
+  retained local branch matches either that published head or a host-certified
+  clean base-chase tip;
+- the forge reports every required check on exactly that published head as passed:
+  none failed, none unfinished, and at least one reported. Checks on another
+  head describe a different candidate and are refused.
 
 It writes the same `requeued` decision and publication-preservation record a
 final-recovery requeue writes, and the answer's `resumes.source` is
@@ -1006,10 +1008,11 @@ pushes and lands it afresh. The stopped run's worktree does not have to exist.
 When checks are still running, requeue once they pass. When the candidate
 needs source changes, use the explicit repair protocol below. A pull
 request that already merged is settled with `orbit task settle-merged
-<task-id>`; a closed one, a head that moved to anything other than an attested
-reviewer commit, or a changed specification leaves `--discard-candidate` as
-the exit. A run whose receipt was written before the
-receipt named its run and specification is refused the same way.
+<task-id>`; a closed one, an unexplained moved head or remote drift (a head that
+moved to anything other than a recorded auto-fix or an attested reviewer
+commit), or a changed specification leaves `--discard-candidate` as the exit. A
+run whose receipt was written before the receipt named its run and
+specification is refused the same way.
 
 Do not resume such a run with `orbit job resume`. Its checkpoints reuse the
 stopped run's worktree, and a resume whose recorded worktree no longer exists
@@ -1063,9 +1066,11 @@ final recovery does not run a second time. The task stays in `review` with the
 PR open, often red, after Orbit's own auto-fix attempts. Inspect that same
 publishing run. The host's receipt on the run's checkpoints must be an applied
 `resume` for this task, keyed to this run, that carried no host repair commit,
-beside the kept-publication receipt. The binding's head is the PR's current head,
-reached only through the `pr_auto_fix_pushed` entries the run recorded from the
-originally pushed head; a move another run, actor or nothing recorded refuses.
+beside the kept-publication receipt. The binding's head is the PR's current published
+head, reached only through the `pr_auto_fix_pushed` entries the run recorded from the
+originally pushed head and any host-attested reviewer fast-forward pushed by an
+incomplete review's failure handoff; an unexplained move another run, actor or nothing
+recorded refuses as drift.
 Submit with the usual explicit `unmet_acceptance` and inspected `policy_digest`.
 The repair is review-only: `completion: "review"`, `auto_fix: false`, no merge or
 completion authority, no historical deadline renewed and no auto-fix ledger entry
@@ -1348,13 +1353,15 @@ recovery budgets retain their existing charges. The original execution records
 and retained checkout remain available; branch adoption renames the old local
 branch aside without changing its commit or files.
 
-If Orbit's own auto-fix moved the published branch before the requeue, the
-next run adopts the head that auto-fix recorded. That is a
-`pr_auto_fix_pushed` record written by Orbit for the same run and pull
-request, starting from the published head. When the repair changed files the
-task does not declare, the next run's commit adds them to the task's context
-files as usual, and that addition does not void the adoption. A published
-branch move with no such record is still refused.
+If Orbit's own auto-fix moved the published branch before the requeue, or an
+incomplete before-landing review's failure handoff pushed its reviewer commit as
+a fast-forward, the next run adopts the authenticated published head reached
+through those steps: the `pr_auto_fix_pushed` records written by Orbit for the
+same run and pull request, followed by any host-attested reviewer push receipt.
+When an auto-fix repair changed files the task does not declare, the next run's
+commit adds them to the task's context files as usual, and that addition does
+not void the adoption. A published branch move with no such recorded provenance
+is an unexplained move and is refused as drift.
 
 A requeue that kept its publication does not wait behind other tasks' context
 locks. In a PR-mode workspace, `orbit run readiness` and the dashboard show
@@ -1807,9 +1814,10 @@ An operator attempting to recover a held or blocked delivery may meet two common
   A `held` run is eligible to preserve its published candidate only when it has finished, its
   worker is gone, and its recorded steps identify the before-landing review-decision hold. In
   that case, `orbit task requeue <task-id>` authenticates the candidate and resumes its pull
-  request when it remains open at the recorded head, or at the reviewer commit its failure
-  handoff attested ([review-gate.md](review-gate.md)), with every required check passed. An
-  unfinished run or a held run without that recorded decision still refuses candidate
+  request when it remains open at the authenticated published head — the recorded head, or a
+  head advanced by recorded auto-fix (`pr_auto_fix_pushed`) or an attested reviewer commit
+  ([review-gate.md](review-gate.md)) — with every required check passed. An unfinished run, an
+  unexplained moved head, or a held run without that recorded decision still refuses candidate
   preservation. **Workaround:** If the candidate should be retired, save its patch first as a
   task artifact using `orbit task artifact put` (or `orbit task update --artifact`), then discard
   the candidate to implement fresh:
