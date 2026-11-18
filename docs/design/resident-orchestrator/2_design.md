@@ -374,7 +374,8 @@ maintenance notice in a covered workspace (or the global scope) empties the righ
 unreadable notice store narrows too. The brief carries the mandate, the grant, the latest full checkpoint and up to four earlier summaries, open requests, comments since the last cycle, the wake, the notices (title and body as
 `untrusted_*`), and for a recovery cycle the dead cycle's ledger rows. Standing goals and the skill
 reference arrive with [ORB-21250]. Observe also makes a detached managed checkout of the registered
-workspace's current `HEAD` for this cycle and includes its path in the brief; the job forwards that
+workspace's current `HEAD` for this cycle (with Git's parallel checkout workers, which write the
+same files) and includes its path in the brief; the job forwards that
 path to the cycle activity as both `workspace_path` and `repo_root`, so the agent-launch integrity
 check can validate the distinct checkout. A resumed run that already holds its cycle reuses
 that checkout, including its scratch. If the workspace has no checkoutable `HEAD` or checkout
@@ -387,7 +388,9 @@ none (its `actions[]` from the ledger rows under the cycle's keys), clears the l
 discards its managed checkout. If finalize never runs, the next observe treats the predecessor as
 dead, synthesizes its checkpoint and discards its checkout during recovery before starting a new
 cycle. Removal is best-effort: failures are logged and may leave a checkout on disk, but its contents
-are never committed or delivered.
+are never committed or delivered. An unlocked registered checkout's contents are cleared in
+parallel before `git worktree remove --force` unregisters it; a locked checkout is never cleared
+first, so Git's refusal leaves it untouched and is reported.
 
 **Tool guard.** Core, not the activity's tool list, scopes the cycle. A tool call carries the run id
 from the trusted managed-run binding, never from input. For a `resident_cycle_pipeline` run, reads
