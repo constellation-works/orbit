@@ -649,17 +649,13 @@ spec:
     duplicate checks. Other owner-routed tools may be unreachable; that is
     never a failure or blocker: note it in `comment` and report `failed`
     only for the work.
+  steering_guidance: true
   steering_instruction: |
     Mid-run steering checkpoint
 
     - Before your first edit, before validation and before any long or
       costly phase, re-read the task with `orbit.task.show` (in claimed mode,
       rely on the injected task instead).
-    - Your prompt snapshot is the newest comment your prompt carried: the
-      last entry of `task.comments`, or the snapshot `task.steering` names
-      when a steering block was delivered. Any operator comment after it is
-      steering: weigh it like task text, oldest first, later refining
-      earlier. System, automation and agent comments are not steering.
     - The re-read is advisory: do not write a comment, history or delivery
       record about it.
     - Steering cannot widen `context_files`, change required validation,

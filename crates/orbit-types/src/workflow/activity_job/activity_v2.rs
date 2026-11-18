@@ -58,6 +58,15 @@ pub struct AgentLoopSpec {
     /// instruction is byte-identical to `instruction` alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steering_instruction: Option<String>,
+    /// Opt into the engine's built-in operator-steering definition. Dispatch
+    /// inserts it immediately before [`Self::steering_instruction`] only when
+    /// `workflow.mid_run_steering` is enabled, so a disabled workspace stays
+    /// byte-identical. The text says what the prompt snapshot is, which
+    /// comments after it are steering, and the oldest-first order. The
+    /// activity's own checkpoint may name a different watermark or a per-task
+    /// scope; that local rule decides the snapshot.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub steering_guidance: bool,
     /// Which of the engine's built-in fleet-notice instructions this
     /// activity opts into. A non-empty [`Self::notice_instruction`] or
     /// [`Self::notice_posting_instruction`] replaces the matching built-in
@@ -638,6 +647,7 @@ impl Default for AgentLoopSpec {
         Self {
             instruction: String::new(),
             steering_instruction: None,
+            steering_guidance: false,
             fleet_notices: FleetNoticeGuidance::None,
             notice_instruction: None,
             notice_posting_instruction: None,

@@ -72,6 +72,16 @@ The common `agent_loop` fields are:
   `crates/orbit-engine/assets/provider_denial/guidance.txt`, to the
   instruction. The activity's own instruction still names what else a denial
   never excuses. The implement, review-repair and recovery activities opt in)
+- `steering_guidance` (default `false`; when `true` and
+  `workflow.mid_run_steering.enabled` is on, dispatch inserts the engine's
+  built-in operator-steering definition,
+  `crates/orbit-engine/assets/steering/guidance.txt`, immediately before
+  `steering_instruction`. With steering off the rendered prompt stays
+  byte-identical. The text says what the prompt snapshot is, which comments
+  after it are steering, and the oldest-first order. A checkpoint that names
+  a different watermark or a per-task scope decides the snapshot. The
+  implement, review-repair, final-recovery and step-failure-recovery
+  activities opt in)
 
 A former `Groundhog(GroundhogSpec)` variant (a sibling activity kind from [T20260420-0510-2]) was removed as unused in [ORB-10332]; activity specs are now only `agent_loop` and `deterministic`.
 
