@@ -993,8 +993,9 @@ otherwise refuses with nothing written:
   host-attested reviewer fast-forward pushed by an incomplete before-landing
   review's failure handoff ([review-gate.md](review-gate.md)). That published
   identity must match the remote branch and pull request exactly, while the
-  retained local branch matches either that published head or a host-certified
-  clean base-chase tip;
+  retained local branch matches that published head, a host-certified clean
+  base-chase tip, or the identical-tree commit a footprint-held run that adopted
+  this source recorded at its own `commit` checkpoint;
 - the forge reports every required check on exactly that published head as passed:
   none failed, none unfinished, and at least one reported. Checks on another
   head describe a different candidate and are refused.
@@ -1054,7 +1055,9 @@ also points to P. It may instead
 point to an unpublished candidate tip T when the source run's current
 host-certified clean base-chase checkpoints form an unambiguous chain from P
 to T and T still contains the last chase's target base. The binding records T
-as `candidate_head_sha`; publication uses a lease on P. Any other local branch
+as `candidate_head_sha`; publication uses a lease on P. A same-tree recommit of P
+that a footprint-held run which adopted this source recorded at its own `commit`
+checkpoint is also accepted, with P kept as the candidate. Any other local branch
 movement is refused. Missing, contradictory or
 ambiguous evidence refuses before any source effect; no replacement PR is
 created. A dirty retained checkout also needs explicit reconciliation.
@@ -1069,8 +1072,8 @@ publishing run. The host's receipt on the run's checkpoints must be an applied
 beside the kept-publication receipt. The binding's head is the PR's current published
 head, reached only through the `pr_auto_fix_pushed` entries the run recorded from the
 originally pushed head and any host-attested reviewer fast-forward pushed by an
-incomplete review's failure handoff; an unexplained move another run, actor or nothing
-recorded refuses as drift.
+incomplete review's failure handoff; any other move, whether another run or actor
+recorded it or nothing did, refuses as drift.
 Submit with the usual explicit `unmet_acceptance` and inspected `policy_digest`.
 The repair is review-only: `completion: "review"`, `auto_fix: false`, no merge or
 completion authority, no historical deadline renewed and no auto-fix ledger entry
