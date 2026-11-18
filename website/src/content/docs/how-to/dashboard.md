@@ -23,7 +23,7 @@ and tries to open a browser.
 |---|---|
 | `--no-open` | Do not open a browser. |
 | `--port <N>` | Serve on another port. |
-| `--workspace <SELECTOR>` | Open on this workspace: a registered name, `ws_*` ID, or checkout path. If nothing matches, the dashboard opens on **All workspaces**. |
+| `--workspace <SELECTOR>` | Prefer this workspace when the dashboard opens: a registered name, `ws_*` ID, or checkout path. It is a preference, not a guarantee; see [Workspace scope](#workspace-scope). If nothing matches, the dashboard does not fall back to the current directory and opens on the first active workspace this host owns, not **All workspaces**. |
 | `--operator` | Grant operator capability, which most write controls need. Nothing else grants it. See [Authorization](#authorization). |
 | `orbit --root <DIR> web serve` | Serve the workspaces in `<DIR>/workspaces.json` instead of `~/.orbit/workspaces.json`. |
 
@@ -46,7 +46,7 @@ opens it. Ctrl-C closes the tunnel, and stops the remote server only if
 |---|---|
 | `--port <N>` | Local port. Default `7878`, or a free port if `7878` is busy. An explicit port that is busy fails. |
 | `--remote-port <N>` | Remote dashboard port. Default `7878`. |
-| `--workspace <SELECTOR>` | Open on this remote workspace. `connect` refuses `--root`. |
+| `--workspace <SELECTOR>` | Prefer this remote workspace when the dashboard opens; see [Workspace scope](#workspace-scope). `connect` refuses `--root`. |
 | `--no-operator` | Start the remote server without operator capability. |
 | `--no-open` | Do not open a browser. |
 
@@ -84,10 +84,17 @@ To add, rename, or remove hosts, and to compare their load, use
 ## Workspace scope
 
 With more than one workspace registered, the left rail has a workspace picker.
-A `?workspace=` link wins, then the workspace you last chose in this browser
-for the selected host, then a workspace with a live drain, then the registry
-default. The URL holds the host, workspace, and time window, so a copied link
-opens the same view.
+The dashboard opens on the first of these that applies: a `?workspace=` link,
+the choice you last made in this browser for the selected host (including
+**All workspaces**), a workspace with a live drain on that host, the registry
+default, and then the first active workspace this host owns, in registry order.
+The registry default is the workspace named by `--workspace`, or else the
+workspace whose checkout contains the directory you ran `orbit web serve` from.
+It is used only when this host owns it and it is active. If this host owns one
+workspace, that workspace opens and the default is not consulted. A missing
+default never opens **All workspaces** by itself; choose it in the picker. The
+URL holds the host, workspace, and time window, so a copied link opens the same
+view.
 
 **All workspaces** is mostly a read view:
 

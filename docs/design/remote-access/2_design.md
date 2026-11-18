@@ -1,8 +1,8 @@
 ---
 title: "Remote Access — Design"
 owner: codex
-last_updated: 2026-11-09
-last_validated: 2026-11-14
+last_updated: 2026-11-17
+last_validated: 2026-11-17
 status: Implemented
 feature: remote-access
 doc_role: design
@@ -33,14 +33,18 @@ The Web tunnel is not shared with MCP. MCP remote mode is direct ssh -T stdio ow
 
 ## 2. orbit web serve
 
-orbit web serve always builds registry-backed multi-workspace state and may run from any directory. The accepted --global flag is a compatibility no-op. A top-level --root selects which registry is served, exactly as it does for every other root-aware command: the server enumerates <root>/workspaces.json and never reads the machine-global registry. It does not register a workspace. Which workspace the dashboard opens on is a separate option, --workspace.
+orbit web serve always builds registry-backed multi-workspace state and may run from any directory. The accepted --global flag is a compatibility no-op. A top-level --root selects which registry is served, exactly as it does for every other root-aware command: the server enumerates <root>/workspaces.json and never reads the machine-global registry. It does not register a workspace. Which workspace the browser opens on is a separate option, --workspace, which supplies only a registry default hint (see Browser selection below).
 
 Startup:
 
 1. orbit-registry loads the registry under the resolved Orbit root: <--root>/workspaces.json when the flag is given, the machine-global ~/.orbit/workspaces.json otherwise. orbit-cmd global_root_for owns that resolution for every command, Web included.
 2. Local workspace checkouts become dashboard entries. Invalid paths remain visible as inactive entries and are not opened.
-3. With --workspace, the workspace it names becomes the default; the selector is a registered name or ws_* ID first and a checkout path when it is path-shaped, and an unmatched value opens aggregate mode rather than falling back to cwd. Without --workspace, the workspace containing cwd becomes the default when one matches.
+3. With --workspace, the workspace it names becomes the registry default hint once the selector resolves: an active registered name or ws_* ID first, else a checkout path when the value is path-shaped, matched by longest lexical prefix over eligible roots. An unmatched value sets no hint and does not fall back to cwd. Without --workspace, the eligible workspace whose repo root or path override contains cwd becomes the hint when one matches. `Invalid` checkouts are never eligible, and the hint is dropped when its workspace's runtime binding fails at load. The hint is only a preference; the browser's choice is described below.
 4. Orbit Web accepts only `127.0.0.1` and `::1` binds before opening the listener, matching the IP addresses approved by the request Host gate. Other addresses in `127.0.0.0/8` are refused so the announced dashboard URL can pass that gate.
+
+### Browser selection
+
+The server publishes only the hint: `is_default` on `GET /api/workspaces` marks that one row, and no row is marked when there is no hint. A missing hint is not the aggregate view. The browser (`initWorkspaceSelector` in `crates/orbit-web/assets/dashboard/app.js`) opens the first of these that applies: a shareable `?workspace=` URL, including `all`; the choice remembered in that browser for the selected host, including All workspaces; an active drain on that host; the hint, when it names an active workspace this host owns; then the first active owned workspace in `/api/workspaces` order. With one owned workspace, the browser opens that workspace and does not consult the hint. All workspaces is therefore reached only by a link, a remembered choice or an explicit selection. The full host and workspace precedence is in [user-interface design §6](../user-interface/2_design.md#6-top-level-navigation).
 
 ### Request state
 

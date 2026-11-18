@@ -93,7 +93,8 @@ pub fn serve(runtime: &OrbitRuntime, args: ServeArgs) -> Result<(), OrbitError> 
 /// here exactly what it means everywhere else in the CLI: the Orbit data
 /// directory to read, so the dashboard serves `<root>/workspaces.json` and
 /// nothing from the machine-global registry (ORB-11388). Which workspace the
-/// dropdown opens on is a separate question, answered by `--workspace`.
+/// browser opens on is a separate question: `--workspace` only supplies the
+/// registry default hint described on `build_state`.
 pub fn serve_from_env(args: ServeArgs, root_override: Option<&Path>) -> Result<(), OrbitError> {
     heap::configure();
     let state = build_state(root_override, args.workspace.as_deref())?;
@@ -111,13 +112,25 @@ pub fn serve_from_env(args: ServeArgs, root_override: Option<&Path>) -> Result<(
 /// reloaded from that same path when `workspaces.json` mtime or length
 /// changes (see [`state::DashboardState::pin`]), so a native `orbit
 /// workspace init/remove` or binding change becomes visible on the next
-/// request without restarting the server. The dropdown's default selection is
-/// the registered/active workspace matching `workspace_selector` when an
-/// explicit `--workspace` was given (a name/`ws_*` ID, or a path-shaped value
-/// longest-prefix matched — with no fallback to the cwd when it misses), else
-/// the registered workspace containing the cwd when no `--workspace` was given
-/// (see `state::registry::default_workspace_for_cwd`), else "All workspaces".
-/// See `state::registry::default_workspace_selection` for the precedence logic.
+/// request without restarting the server. The registry default is only a hint
+/// for the browser. `state::registry::default_workspace_selection` sets it from
+/// `workspace_selector` when an explicit `--workspace` was given: an active
+/// workspace matched by name or `ws_*` ID, else a path-shaped value matched
+/// against eligible roots by longest lexical prefix. A selector that matches
+/// nothing sets no hint and does not fall back to the cwd. Without
+/// `--workspace`, the hint is the cwd's match (see
+/// `state::registry::default_workspace_for_cwd`). `RegistrySource::load` drops
+/// the hint when that workspace's runtime binding fails, so the hint can be
+/// absent even when a selector matched.
+///
+/// No hint does not mean "All workspaces". The dashboard then marks no row
+/// `is_default`, and the browser picks the board to open. Its order is: a
+/// `?workspace=` link, the choice remembered for the host (including All
+/// workspaces), an active drain on the host, the hint when it names a workspace
+/// the host owns, and otherwise the first active owned workspace in
+/// `/api/workspaces` order. With one owned workspace, the browser opens that
+/// workspace and ignores the hint. See `initWorkspaceSelector` in
+/// `crates/orbit-web/assets/dashboard/app.js`.
 ///
 /// The initial load is eager: a malformed registry at startup is fatal, exactly
 /// as before this became refreshable. A malformed *refresh* after a good

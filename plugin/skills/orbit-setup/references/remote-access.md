@@ -155,9 +155,18 @@ orbit web connect <ssh-host> --workspace <remote-workspace-selector>
 
 `orbit --root <ROOT> web serve` serves `<ROOT>/workspaces.json` and nothing from
 the machine-global registry, so an explicit root isolates the dashboard the same
-way it isolates every other command. `--workspace` picks which of the served
-workspaces the dashboard opens on, and is what `connect` forwards to the remote
+way it isolates every other command. `--workspace` sets the workspace the
+dashboard prefers to open on, and is what `connect` forwards to the remote
 server; `connect` itself rejects `--root`.
+
+`--workspace` is a hint, not a guarantee. The browser opens on the first of
+these that applies: a `?workspace=` link to a workspace this host serves; the
+choice you last made in that browser for this host, including **All
+workspaces**; an active drain on this host; the hint, when it names a workspace
+this host owns; otherwise the first active workspace this host owns, in registry
+order. When this host owns one workspace, the browser opens it and ignores the
+hint. A missing hint never opens **All workspaces**; choose that entry in the
+picker.
 
 The default dashboard port is 7878. `connect` reuses an existing remote loopback
 server when available; otherwise it starts one and owns that process's lifetime.
@@ -179,10 +188,12 @@ fragment, choose the suggested entry and confirm the full task page opens; then
 enter a known run ID, press Enter and confirm the full run page opens.
 
 In the left rail, the **Workspace** picker is single-select. It lists the workspaces
-for the selected host, marks unavailable ones *(unavailable)* and leaves them
-unchosen, and offers **All workspaces** as its first option. Its button shows the
-chosen workspace's name, or **All workspaces** when none is chosen. Choose a
-workspace to open its board, or choose **All workspaces** for the aggregate view.
+the selected host owns (a replica checkout is not listed), marks unavailable ones
+*(unavailable)* and leaves them unchosen, and offers **All workspaces** as its
+first option. Its button shows the chosen workspace's name. It shows **All
+workspaces** only after that entry is chosen, through the picker, a shared link or
+a remembered choice. Choose a workspace to open its board, or choose **All
+workspaces** for the aggregate view.
 
 In the Tasks list, the **Workspaces** chip sits beside **More** and appears only
 under **All workspaces** when the host has more than one active workspace. It is
