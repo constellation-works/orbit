@@ -315,7 +315,7 @@ A cron routine runs on every machine that has this checkout registered as an own
 | `policy.retries.max` | `0` | Re-dispatches after the first fire fails. |
 | `policy.retries.backoff_minutes` | `2` | Minutes before a re-dispatch. At most 10080. |
 
-A `hosts:` key is retired: the file loads, and the key is ignored with a warning. `orbit doctor` warns when an enabled routine's last success is older than three times its schedule interval. After three fires in a row fail with the same error class, this host stops firing that routine until a trial succeeds; see [Recover a tripped routine](/how-to/recurring-work/#recover-a-tripped-routine). `orbit clock tick --dry-run --verbose` prints the decision for every routine and auto-task and writes nothing.
+A `hosts:` key is retired: the file loads, and the key is ignored with a warning. `orbit doctor` warns when an enabled routine's last success is older than three times its schedule interval. After three fires in a row fail with the same error class, this host stops firing that routine until a successful trial or an operator reset closes the breaker; see [Recover a tripped routine](/how-to/recurring-work/#recover-a-tripped-routine). `orbit clock tick --dry-run --verbose` prints the decision for every routine and auto-task and writes nothing.
 
 ### One trigger
 
