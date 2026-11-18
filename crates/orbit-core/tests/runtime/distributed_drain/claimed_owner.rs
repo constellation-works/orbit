@@ -186,6 +186,21 @@ fn a_claimed_workers_model_free_friction_uses_claim_attribution() {
     assert_eq!(stored["during_task"], leaf.task, "{stored}");
     assert_eq!(friction_count(), before + 1);
 
+    // A caller-supplied `model` is not attribution: the record carries the
+    // claim's attribution, exactly as the model-free call does.
+    let spoofed = leaf
+        .bound
+        .run_tool(
+            "orbit.friction.add",
+            json!({
+                "body": "Friction naming a model the caller chose.",
+                "model": "gpt-5-caller-spoof",
+            }),
+        )
+        .expect("a friction call that names a model");
+    assert_eq!(spoofed["model"], model, "{spoofed}");
+    assert_eq!(friction_count(), before + 2);
+
     let (_, worker) = leaf.claim();
     owner
         .mutate_execution_claim(
@@ -208,7 +223,7 @@ fn a_claimed_workers_model_free_friction_uses_claim_attribution() {
     assert!(stale.contains("stale_claim"), "{stale}");
     assert_eq!(
         friction_count(),
-        before + 1,
+        before + 2,
         "a refused claim files no friction"
     );
 }
