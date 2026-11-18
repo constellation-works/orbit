@@ -174,6 +174,7 @@ mod provider_limit_admission;
 mod provider_limit_budget;
 mod provider_limit_hold;
 mod purpose_crews;
+#[path = "readiness/population.rs"]
 mod readiness_population;
 #[cfg(unix)]
 mod recovery_provider_auth;
