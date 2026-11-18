@@ -16,6 +16,7 @@ use super::browser_kit::browser_kit_rows;
 use super::git_protection::git_protection_row;
 use super::host_workspaces::host_workspace_convergence_row;
 use super::permissions::state_directory_permissions_row;
+use super::scan_workers::{forced_pool_size, spawn_scan_worker};
 use super::script_grants::script_grant_rows;
 use super::worker_containment::worker_containment_row;
 use super::{DoctorProbe, WORKSPACE_PROBES, WorkspaceDoctorResult, WorkspaceDoctorStatus};
@@ -178,11 +179,13 @@ pub fn run_doctor_report(runtime: &OrbitRuntime, deep: bool) -> Vec<WorkspaceDoc
     // within the slow and the cheap probes.
     let mut dispatch = (0..probes.len()).collect::<Vec<_>>();
     dispatch.sort_by_key(|&index| !probes[index].is_slow());
-    let workers = std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(1)
-        .clamp(1, MAX_PARALLEL_PROBES)
-        .min(probes.len());
+    let workers = forced_pool_size(MAX_PARALLEL_PROBES, probes.len()).unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1)
+            .clamp(1, MAX_PARALLEL_PROBES)
+            .min(probes.len())
+    });
     if workers <= 1 {
         return probes
             .iter()
@@ -191,31 +194,34 @@ pub fn run_doctor_report(runtime: &OrbitRuntime, deep: bool) -> Vec<WorkspaceDoc
     }
     let next = std::sync::atomic::AtomicUsize::new(0);
     let mut slots: Vec<Option<Vec<WorkspaceDoctorResult>>> = vec![None; probes.len()];
+    let work = || {
+        let mut done = Vec::new();
+        loop {
+            let turn = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let Some(&index) = dispatch.get(turn) else {
+                return done;
+            };
+            done.push((index, probes[index].run(runtime, deep)));
+        }
+    };
     let finished = std::thread::scope(|scope| {
-        let handles = (0..workers)
-            .map(|_| {
-                scope.spawn(|| {
-                    let mut done = Vec::new();
-                    loop {
-                        let turn = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let Some(&index) = dispatch.get(turn) else {
-                            return done;
-                        };
-                        done.push((index, probes[index].run(runtime, deep)));
-                    }
-                })
-            })
+        // The OS may refuse a thread. A worker that cannot start leaves its
+        // probes to the others, and the calling thread works the same queue,
+        // so every probe still runs, and reports in table order, with none.
+        let workers = (1..workers)
+            .filter_map(|_| spawn_scan_worker(scope, work).ok())
             .collect::<Vec<_>>();
-        handles
-            .into_iter()
-            .map(|handle| {
-                handle
+        let mut finished = work();
+        for worker in workers {
+            finished.extend(
+                worker
                     .join()
-                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-            })
-            .collect::<Vec<_>>()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+            );
+        }
+        finished
     });
-    for (index, rows) in finished.into_iter().flatten() {
+    for (index, rows) in finished {
         slots[index] = Some(rows);
     }
     slots.into_iter().flatten().flatten().collect()

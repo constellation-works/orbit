@@ -509,11 +509,7 @@ fn scan_subtrees(
             links,
         }
     };
-    let threads = std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(1)
-        .clamp(1, MAX_OBJECT_SCAN_THREADS)
-        .min(subtrees.len());
+    let threads = scan_thread_count(subtrees.len());
     if threads <= 1 {
         let mut scans = Vec::with_capacity(subtrees.len());
         for (path, metadata) in subtrees {
@@ -528,36 +524,39 @@ fn scan_subtrees(
     }
     let next = AtomicUsize::new(0);
     let first_failure = AtomicUsize::new(usize::MAX);
+    let work = || {
+        let mut done = Vec::new();
+        loop {
+            let index = next.fetch_add(1, Ordering::Relaxed);
+            let Some((path, metadata)) = subtrees.get(index) else {
+                return done;
+            };
+            if index > first_failure.load(Ordering::Relaxed) {
+                continue;
+            }
+            let scan = scan_one(path, metadata);
+            if scan.result.is_err() {
+                first_failure.fetch_min(index, Ordering::Relaxed);
+            }
+            done.push((index, scan));
+        }
+    };
     let mut finished = std::thread::scope(|scope| {
-        let workers = (0..threads)
-            .map(|_| {
-                scope.spawn(|| {
-                    let mut done = Vec::new();
-                    loop {
-                        let index = next.fetch_add(1, Ordering::Relaxed);
-                        let Some((path, metadata)) = subtrees.get(index) else {
-                            return done;
-                        };
-                        if index > first_failure.load(Ordering::Relaxed) {
-                            continue;
-                        }
-                        let scan = scan_one(path, metadata);
-                        if scan.result.is_err() {
-                            first_failure.fetch_min(index, Ordering::Relaxed);
-                        }
-                        done.push((index, scan));
-                    }
-                })
-            })
+        // The OS may refuse a thread; a worker that cannot be created leaves
+        // its subtrees to the others. The calling thread works the same queue,
+        // so every subtree is scanned even when no worker could start.
+        let workers = (1..threads)
+            .filter_map(|_| spawn_scan_worker(scope, work).ok())
             .collect::<Vec<_>>();
-        workers
-            .into_iter()
-            .flat_map(|worker| {
+        let mut finished = work();
+        for worker in workers {
+            finished.extend(
                 worker
                     .join()
-                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-            })
-            .collect::<Vec<_>>()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+            );
+        }
+        finished
     });
     finished.sort_by_key(|(index, _)| *index);
     // Every index up to the first failure was scanned, so the prefix is
@@ -568,6 +567,80 @@ fn scan_subtrees(
         .take_while(|(index, _)| *index <= cutoff)
         .map(|(_, scan)| scan)
         .collect()
+}
+
+/// Threads to scan `subtrees` on, the calling thread included.
+fn scan_thread_count(subtrees: usize) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    if worker_spawn_refused_for_test() {
+        return subtrees.min(MAX_OBJECT_SCAN_THREADS);
+    }
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
+        .clamp(1, MAX_OBJECT_SCAN_THREADS)
+        .min(subtrees)
+}
+
+/// Start one scoped scan worker, reporting the OS refusing the thread instead
+/// of panicking as `Scope::spawn` does.
+fn spawn_scan_worker<'scope, 'env, T: Send + 'scope>(
+    scope: &'scope std::thread::Scope<'scope, 'env>,
+    work: impl FnOnce() -> T + Send + 'scope,
+) -> io::Result<std::thread::ScopedJoinHandle<'scope, T>> {
+    #[cfg(any(test, feature = "test-support"))]
+    if refuse_worker_spawn_for_test() {
+        return Err(io::Error::from(io::ErrorKind::WouldBlock));
+    }
+    std::thread::Builder::new()
+        .name("orbit-git-scan".into())
+        .spawn_scoped(scope, work)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static REFUSED_SPAWNS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Per-thread seam that makes every scan worker spawn fail the way an
+/// exhausted thread limit does, without placing load on the host. While held,
+/// the scan always takes its threaded path so the failure is reached.
+#[cfg(any(test, feature = "test-support"))]
+pub struct GitWorkerSpawnRefusal;
+
+#[cfg(any(test, feature = "test-support"))]
+impl GitWorkerSpawnRefusal {
+    pub fn install() -> Self {
+        REFUSED_SPAWNS.with(|slot| slot.set(Some(0)));
+        Self
+    }
+
+    /// Worker spawns refused since [`Self::install`].
+    pub fn refused(&self) -> usize {
+        REFUSED_SPAWNS.with(|slot| slot.get().unwrap_or(0))
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Drop for GitWorkerSpawnRefusal {
+    fn drop(&mut self) {
+        REFUSED_SPAWNS.with(|slot| slot.set(None));
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn worker_spawn_refused_for_test() -> bool {
+    REFUSED_SPAWNS.with(|slot| slot.get().is_some())
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn refuse_worker_spawn_for_test() -> bool {
+    REFUSED_SPAWNS.with(|slot| {
+        slot.get().is_some_and(|count| {
+            slot.set(Some(count + 1));
+            true
+        })
+    })
 }
 
 fn metadata_error(path: &Path, error: std::io::Error) -> OrbitError {

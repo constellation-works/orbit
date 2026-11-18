@@ -99,6 +99,31 @@ fn doctor_returns_the_cli_report_rows_with_remediation() {
     );
 }
 
+/// The OS can refuse a doctor worker thread. The report must still hold every
+/// check, in the same order, instead of unwinding the request.
+#[cfg(unix)]
+#[test]
+fn doctor_report_is_complete_and_ordered_when_workers_cannot_start() {
+    isolated(
+        "doctor::doctor_report_is_complete_and_ordered_when_workers_cannot_start",
+        || {
+            let fixture = Fixture::new();
+            let expected = orbit_cmd::run_doctor_report(&fixture.runtime, false)
+                .iter()
+                .map(|row| row.check_name.clone())
+                .collect::<Vec<_>>();
+
+            let refusal = orbit_cmd::DoctorWorkerSpawnRefusal::install();
+            let degraded = orbit_cmd::run_doctor_report(&fixture.runtime, false)
+                .iter()
+                .map(|row| row.check_name.clone())
+                .collect::<Vec<_>>();
+            assert!(refusal.refused() > 0, "the spawn failure must be exercised");
+            assert_eq!(degraded, expected);
+        },
+    );
+}
+
 /// The poll's peek never runs doctor; a plain read reuses the last report;
 /// only an explicit refresh runs it again.
 #[test]

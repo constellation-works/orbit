@@ -47,6 +47,8 @@ pub mod workspace_removal;
 #[cfg(test)]
 mod tests;
 
+#[cfg(feature = "test-support")]
+pub use doctor::DoctorWorkerSpawnRefusal;
 pub use doctor::{
     DoctorCommands, DoctorProbe, OrphanTaskStoreRemoval, RetiredConfigKeyRepair,
     WorkspaceDoctorResult, WorkspaceDoctorStatus, doctor_report_probes, doctor_row_json,

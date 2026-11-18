@@ -256,6 +256,50 @@ fn linux_worktree_sandbox_preparation_revalidates_disappearing_git_entries() {
     }
 }
 
+/// When the OS refuses a Git scan worker, sandbox preparation still scans the
+/// store on the calling thread: an aliased object is refused through the
+/// typed refusal path, never skipped as success.
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_worktree_sandbox_preparation_refuses_git_aliases_when_scan_workers_cannot_start() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &linux_worktree_sandbox_preparation_refuses_git_aliases_when_scan_workers_cannot_start,
+    )) {
+        return;
+    }
+
+    use crate::runtime::git_sandbox::GitWorkerSpawnRefusal;
+
+    let (_root, runtime, repo_root) = runtime_with_workspace_layout();
+    let repo_root = repo_root.canonicalize().unwrap();
+    let objects = repo_root.join(".git/objects");
+    for fan_out in ["61", "62", "63"] {
+        std::fs::create_dir_all(objects.join(fan_out)).unwrap();
+        std::fs::write(objects.join(fan_out).join("object"), "loose object").unwrap();
+    }
+    seed_executor(
+        &runtime,
+        "claude",
+        Some(orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap),
+    );
+    let refusal = GitWorkerSpawnRefusal::install();
+    runtime
+        .resolve_executor_sandbox("claude", None, None)
+        .expect("a clean store prepares without scan workers");
+    assert!(refusal.refused() > 0, "the spawn failure must be exercised");
+
+    let outside = repo_root.join("outside-object");
+    std::fs::write(&outside, "host state").unwrap();
+    std::fs::hard_link(&outside, objects.join("62/escaped")).unwrap();
+    let error = runtime
+        .resolve_executor_sandbox("claude", None, None)
+        .expect_err("an aliased object must refuse preparation, not pass unscanned");
+    assert!(
+        error.to_string().contains("escaped"),
+        "the refusal names the offending object: {error}"
+    );
+}
+
 /// Seed Orbit's shipped executors as `orbit init` would on `target_os`.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn seed_shipped_executors(runtime: &crate::OrbitRuntime, target_os: &str) {
