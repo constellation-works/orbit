@@ -75,9 +75,7 @@ pub(in crate::executor::automation::vcs) fn mismatches(
 }
 
 /// One provider field as present or missing, after the bounded projection.
-pub(in crate::executor::automation::vcs) fn publication_field_observed(
-    value: Option<&Value>,
-) -> Value {
+fn publication_field_observed(value: Option<&Value>) -> Value {
     match value {
         Some(value) => json!({"presence":"present", "value":bounded_publication_value(value)}),
         None => json!({"presence":"missing"}),
