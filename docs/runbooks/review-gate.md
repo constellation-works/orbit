@@ -176,14 +176,24 @@ the task, or the decision answer that requeues it, resumes the same PR at that
 reviewer head. Its required checks must have passed there. The requeue
 authenticates only that prior push — that the reviewer commit is the
 receipt-attested fast-forward of the published head — not that the successor
-will review it. The next run validates the adopted head afresh, and reviews
-it afresh only when the successor run itself captures before-landing review
-(`review.timing = "before_landing"`, for example `--review before-landing` on
-the successor run). When the successor captures review off (the workspace
-default), `landing_review_gate_admit` reports `applies: false`
-(`review_before_landing_off`) and the `landing_review` step is skipped, so the
-adopted reviewer head lands without an independent review of its own. To obtain
-independent review on the successor, select before-landing review for that
+will review it. The next run validates the adopted head afresh. Whether that head
+is reviewed again is decided by the successor's own captured review timing, not
+by the requeue, and the prior publication is authenticated independently of that
+timing:
+
+- `review.timing = "off"` (the workspace default) skips independent review.
+  `landing_review_gate_admit` reports `applies: false` (`review_before_landing_off`)
+  and the `landing_review` step is skipped, so the adopted reviewer head lands
+  without an independent review of its own.
+- `review.timing = "before_landing"` (for example `--review before-landing` on the
+  successor run, the recommended layer) reviews the published candidate in the
+  before-landing review of its open pull request.
+- The supported legacy `review.timing = "before_pr"` (or an admitted
+  `--review before-pr` request) gates the adopted candidate at `review_gate_admit`,
+  before push, and the landing step reports `reviewed_before_pr`. The requeue does
+  not skip that gate.
+
+To obtain independent review on the successor, select a review layer for that
 run. A requeue is refused when the local or remote
 branch, or the PR head, is anywhere else, when the receipt names another
 published head, branch or run, or when the task specification changed.
@@ -903,11 +913,14 @@ Identify the failed step from `orbit run show`, then act:
   re-implement it with
   `orbit task requeue <task-id> --reason '<why it can continue>'` once the
   task's run has stopped. The next run adopts the same branch, head and pull
-  request, then validates it afresh and lands it, reviewing it afresh only
-  when the successor run itself captures before-landing review
-  (`review.timing = "before_landing"`, for example `--review before-landing`
-  on the successor run). Requeue authentication preserves the publication; it
-  does not select review for the successor. A changed task
+  request, then validates it afresh and lands it. Review follows the successor
+  run's own captured `review.timing`, as described earlier in this runbook: `off`
+  skips independent review (`review_before_landing_off`), `before_landing` (for
+  example `--review before-landing` on the successor run) reviews the published
+  candidate in its before-landing review, and the supported legacy `before_pr`
+  (or `--review before-pr`) gates it before push. Requeue authentication
+  preserves the publication independently of that timing; it does not select
+  review for the successor. A changed task
   specification is refused with `--discard-candidate` as the exit, which
   closes the task's undelivered Orbit pull requests and reruns from scratch. See
   [stuck job runs](./stuck-job-runs.md#requeue-a-failure-handoff-task-onto-its-published-candidate).
