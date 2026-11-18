@@ -731,6 +731,16 @@ The **Next hour** strip shows each routine due in the next hour: solid if it
 will fire, hollow if it is paused. A paused routine's slot is skipped, not
 queued. An enabled routine that cannot take effect shows a **blocked** pill.
 
+A routine with an open circuit breaker contributes at most its next eligible
+trial to the strip: one amber **breaker trial** mark at the next trial time.
+The strip summary counts trials separately from scheduled fires (for example,
+`2 fires from 1 active routine · 1 breaker trial`). While the breaker is open
+the strip hides that routine's repeated cron projection and plots only the
+single trial; an enabled tripped routine's card reports **Next trial**
+instead of **Next fire**. A trial that succeeds closes the breaker and the
+routine fires as scheduled again; see
+[Recover a tripped routine](/how-to/recurring-work/#recover-a-tripped-routine).
+
 ### Scheduler clock
 
 The bar above the routines shows this host's scheduler clock. **Pause
