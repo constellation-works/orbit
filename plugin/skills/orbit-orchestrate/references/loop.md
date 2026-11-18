@@ -266,7 +266,7 @@ Read PR head to task, attempt, checks, and hold with supported commands:
    orbit decision show <request-id>
    ```
 
-   The task's `open_decisions` and `completion_hold` name the same hold. A
+   The task's `open_decisions` and `completion_hold` are distinct holds; read each separately. A
    green head held for review or a `completion.hold` rule is a review hold,
    not a passing delivery: the next action belongs to whoever owns the gate.
 
