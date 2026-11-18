@@ -101,7 +101,7 @@ one week, so an archive last saved more than a week earlier restores less.
 The *effective key* is the prefix above plus the exact-key inputs (filtered
 lock entries, normalised member manifests, `.cargo/config.toml` and
 `rust-toolchain.toml` files, and the environment hash). Changing that key
-does not by itself miss, and it does not write an archive. The pinned
+does not by itself decide a hit or a miss, and it writes no archive. The pinned
 restore (`restore.ts` at `d1527c8`) requests the primary key and treats the
 archive the backend returns as an exact hit only when its key compares
 equal. Both a changed key and an unchanged key hit when an archive for that
