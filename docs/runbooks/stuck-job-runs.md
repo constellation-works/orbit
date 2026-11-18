@@ -999,12 +999,20 @@ otherwise refuses with nothing written:
   host-attested reviewer fast-forward pushed by an incomplete before-landing
   review's failure handoff ([review-gate.md](review-gate.md)). That published
   identity must match the remote branch and pull request exactly, while the
-  retained local branch matches that published head, a host-certified clean
-  base-chase tip, or the identical-tree commit a footprint-held run that adopted
-  this source recorded at its own `commit` checkpoint;
+  retained local branch matches that published head or a host-certified clean
+  base-chase tip;
 - the forge reports every required check on exactly that published head as passed:
   none failed, none unfinished, and at least one reported. Checks on another
   head describe a different candidate and are refused.
+
+Requeue resolves the task's bound execution, and that execution must be the
+stopped failed run or review-decision hold that published the candidate, still
+the task's newest execution. A footprint-held run that adopted the publication
+and recommitted it is bound to the task after terminal cleanup, and it is
+neither a failed run nor a review-decision hold, so requeue refuses it. Its
+identical-tree commit is not a requeue input. The next ordinary delivery adopts
+the publication through that run instead (see *A cancelled published source
+repair*).
 
 It writes the same `requeued` decision and publication-preservation record a
 final-recovery requeue writes, and the answer's `resumes.source` is
@@ -1066,12 +1074,22 @@ also points to P. It may instead
 point to an unpublished candidate tip T when the source run's current
 host-certified clean base-chase checkpoints form an unambiguous chain from P
 to T and T still contains the last chase's target base. The binding records T
-as `candidate_head_sha`; publication uses a lease on P. A same-tree recommit of P
-that a footprint-held run which adopted this source recorded at its own `commit`
-checkpoint is also accepted, with P kept as the candidate. Any other local branch
+as `candidate_head_sha`; publication uses a lease on P. Any other local branch
 movement is refused. Missing, contradictory or
 ambiguous evidence refuses before any source effect; no replacement PR is
 created. A dirty retained checkout also needs explicit reconciliation.
+
+The lineage check is separate from the publication checks above, and it runs
+first. Every newer execution of the task must be an acknowledged replacement: a
+conclusively stopped, cancelled or owner-local failed run (a failed one with a
+settled final recovery). For an inline
+publication, a completion retry whose publication checkpoints match the original
+is also acknowledged. The task must be bound to the newest of them. A
+footprint-held run is `held`, so it is not an acknowledged replacement, and its
+recommitted `commit` checkpoint does not match the original for a completion
+retry either. Inspection therefore refuses before the branch is bound, and the
+identical-tree recommit is not an input here. The next ordinary delivery adopts
+it instead (see *A cancelled published source repair*).
 
 **Final recovery resumed the run in place, then it failed again.** A final-recovery
 `resume` continues the same run, so a later completion failure leaves the run
@@ -1411,6 +1429,16 @@ Another resumed run that still waits for its own footprint holds no file and is
 no holder, so two overlapping resumed runs take the footprint one after the
 other instead of refusing each other; the run that took it excludes the other
 until it ends. The run's reservation is released when the run ends.
+
+A footprint-held run that adopted the publication may instead have recommitted
+the unchanged published patch. The retained branch then names a different commit
+with the identical tree (same content, different timestamp). On automatic
+adoption, the next ordinary delivery accepts that tip and keeps the published
+head P as its candidate, but only when that held run's own `commit` checkpoint
+names the tip and the held run neither pushed nor opened a pull request itself. Any
+other branch move is still refused. Green requeue and explicit source repair do
+not accept this tip; see *An escalated run that published its own pull request*
+and *Repair a kept inline publication after completion expired*.
 
 A missing task-meaning binding, changed task/head, incomplete publication,
 foreign source or ambiguous association stops admission. It never authorizes
