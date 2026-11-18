@@ -1,7 +1,7 @@
 ---
 title: Fleet Notices — Decisions
 owner: claude
-last_updated: 2026-11-15
+last_updated: 2026-11-18
 last_validated: 2026-11-15
 status: Draft
 feature: fleet-notices
@@ -313,9 +313,49 @@ re-posted lapses after 72 hours.
 Cost: `warn` sorts ahead of `incident`, so a reader who wants incidents first filters by kind.
 An older binary reading a `warn` notice from a newer owner fails to parse its kind.
 
+## Release-QA exception: the notices fixture may close its own notice over HTTP
+
+**Recorded:** 2026-11-18 · [ORB-25724]
+
+### Context
+
+AGENTS.md's Tests and QA rule admits tests only for an observed, reproduced defect and forbids
+speculative coverage for features, refactors or chores. The post-deployment sweep for [ORB-25717]
+on b4945b4a19edfc43fc66f00e065e52e447fc6778 recorded `api:/notices` and `api:/notices/{id}/close`
+as required capability gaps: no permanent check exercised a successful operator close over HTTP.
+The only evidence was a one-off dashboard run in a disposable home, which every release candidate
+would have to repeat by hand.
+
+### Decision
+
+The owner granted one exception to the defect-only rule for this release-QA row. The maintained
+`http_api` notices fixture (`notices::operator_closes_notice_over_http_and_unprivileged_close_is_denied`)
+may create its own test-owned notice over HTTP in the isolated fixture, close it through the governed
+operator server, read it back in `open` and `recent`, and check that an ordinary caller's close is
+refused with `403 authorization_denied`. The fixture runs with no live notice state, no extra operator
+server and no role override. The exception stops there: it admits no other new HTTP case, and the
+defect-only rule still governs every other test.
+
+A later release-QA gap of this kind needs its own owner exception recorded here. This entry does not
+make the fixture a pattern to extend.
+
+Rejected: **manual QA of each release candidate**, which produces one-off receipts that repeat by hand
+and reopen the same gap on every sweep; and **an exception for the whole notices surface**, since the
+owner named one fixture and two routes.
+
+### Consequences
+
+The two notice routes have a permanent, candidate-bound check in the `api-process-boundary` QA
+scenario, so the release-QA row no longer depends on a hand-run receipt.
+
+Cost: one more permanent HTTP case in the `http_api` target to keep working, and a documented exception
+that reviewers must check any future test against.
+
 ## Task References
 
 - [ORB-21207] — designed fleet notices and recorded these decisions
 - [ORB-21208] — orbit-office scribe `#board` routing, the first client of the notice tools
+- [ORB-25717] — the post-deployment sweep that recorded the notice-close gap
+- [ORB-25724] — the owner exception recorded in the release-QA entry above
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

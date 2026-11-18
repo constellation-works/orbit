@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit agent guide: rules, branching, gates, code and test standards, local CodeQL"
-last_validated: 2026-11-14
+last_validated: 2026-11-18
 ---
 
 # Orbit — agent guide
@@ -50,7 +50,7 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`. For any Orbit lifecycle work, invoke
 ## Tests and QA
 
 - Never add UI tests: no browser, Playwright or DOM-stub tests of the dashboard, web pages, docs site or desktop UI, not even for a bug fix. Check UI changes through manual QA and screenshots.
-- Add tests only for an observed, reproduced defect: a focused regression check at a public CLI/API boundary that fails before the fix and passes after. No private-function tests (private fixtures driving public behavior are fine) and no speculative coverage for features, refactors or chores. This supersedes broader admission guidance in [test_strategy.md](docs/design-patterns/test_strategy.md), which still governs coverage priorities, retirement evidence and timing.
+- Add tests only for an observed, reproduced defect: a focused regression check at a public CLI/API boundary that fails before the fix and passes after. No private-function tests (private fixtures driving public behavior are fine) and no speculative coverage for features, refactors or chores. This supersedes broader admission guidance in [test_strategy.md](docs/design-patterns/test_strategy.md), which still governs coverage priorities, retirement evidence and timing. One owner exception to this rule is recorded in the [release-QA entry](docs/design/fleet-notices/4_decisions.md#release-qa-exception-the-notices-fixture-may-close-its-own-notice-over-http) (ORB-25724): the `notices::operator_closes_notice_over_http_and_unprivileged_close_is_denied` case in `crates/orbit-web/tests/http_api/notices.rs` may create, close and read back its own test-owned notice over HTTP to cover the `api:/notices` and `api:/notices/{id}/close` routes, with the isolated fixture's governed operator server and no role override or live state. It admits no other new test.
 - Every test exercises behavior a guarantee depends on. No text-matching tests (`include_str!` + `contains()` over source, assets or UI copy), except a narrow structural safety guard (CSP, sanitizer wrapper, no raw `innerHTML`) whose message names what it protects. Don't pin config or prompt policy (crew, model, schedule, complexity, wording); if a pin is warranted, cite its incident in the assertion message.
 - The Check / Clippy / Test job has a hard budget of 400 seconds wall time at p90 over PR runs (queue wait reported separately). Fix slow or flaky tests at their cause; retries, hidden skips, weaker assertions or dropped checks don't count. Retire redundant cases with measured changes that name the surviving coverage, never the only guard of a security invariant, recovery path or known incident.
 - Admitted unit tests live in a sibling `tests/` dir mirroring source filenames ([`test_layout.md`](docs/design-patterns/test_layout.md)); crate-root `tests/` is integration only. Fixtures that mutate Orbit state run in an isolated child process ([DEVELOPMENT.md](docs/DEVELOPMENT.md#safe-mutable-cli-fixtures)).
