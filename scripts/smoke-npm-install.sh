@@ -51,8 +51,11 @@ run_version_assertion_test() {
 assert_registry_isolated() {
   local registry="$1"
   local scratch out err status
-  mkdir -p "$(dirname "$registry")"
-  scratch="$(mktemp -d "$(dirname "$registry")/registry-check.XXXXXX")"
+  mkdir -p "$(dirname "$registry")" 2>/dev/null || true
+  if ! scratch="$(mktemp -d "$(dirname "$registry")/registry-check.XXXXXX" 2>/dev/null)" || [[ -z "$scratch" || ! -d "$scratch" ]]; then
+    echo "FAIL: diagnostic scratch allocation failed" >&2
+    return 1
+  fi
   out="$scratch/out"
   err="$scratch/err"
   status=0
@@ -97,8 +100,13 @@ run_registry_isolation_test() {
   registered="$scratch/registered.json"
   printf '%s\n' '{"workspaces":[],"checkouts":[]}' >"$empty"
   printf '%s\n' '{"workspaces":[{"path":"/tmp/x"}],"checkouts":[]}' >"$registered"
-  if ! assert_registry_isolated "$empty"; then
-    echo "FAIL: empty registry was reported as registered" >&2
+  status=0
+  output="$(assert_registry_isolated "$empty" 2>&1)" || status=$?
+  if [[ "$status" -ne 0 ]]; then
+    if [[ "$output" != *"diagnostic scratch allocation failed"* ]]; then
+      echo "FAIL: empty registry was reported as registered" >&2
+    fi
+    printf '%s\n' "$output" >&2
     rm -rf "$scratch"
     return 1
   fi
@@ -106,6 +114,17 @@ run_registry_isolation_test() {
   output="$(assert_registry_isolated "$registered" 2>&1)" || status=$?
   if [[ "$status" -eq 0 || "$output" != *"FAIL:"* || "$output" != *"/tmp/x"* ]]; then
     echo "FAIL: registry isolation did not reject a registered workspace and report it" >&2
+    printf '%s\n' "$output" >&2
+    rm -rf "$scratch"
+    return 1
+  fi
+  status=0
+  output="$(
+    mktemp() { return 1; }
+    assert_registry_isolated "$empty" 2>&1
+  )" || status=$?
+  if [[ "$status" -eq 0 || "$output" != *"FAIL:"* || "$output" != *"diagnostic scratch allocation failed"* ]]; then
+    echo "FAIL: registry isolation did not reject scratch allocation failure" >&2
     printf '%s\n' "$output" >&2
     rm -rf "$scratch"
     return 1

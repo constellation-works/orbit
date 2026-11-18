@@ -3325,6 +3325,40 @@ mod fixtures {
                     self.assertEqual(result.stdout, "")
                     self.assertFalse(marker.exists(), "derived a path before rejecting HOME")
 
+    def test_smoke_npm_registry_isolation_rejects_scratch_allocation_failure(self):
+        script = SCRIPTS / "smoke-npm-install.sh"
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        real_mktemp = shutil.which("mktemp")
+        self.assertIsNotNone(real_mktemp)
+        mktemp_stub = bin_dir / "mktemp"
+        mktemp_stub.write_text(f"""#!/bin/sh
+for arg in "$@"; do
+    case "$arg" in
+        *registry-check*)
+            exit 1
+            ;;
+    esac
+done
+exec {shlex.quote(real_mktemp)} "$@"
+""")
+        mktemp_stub.chmod(0o755)
+
+        env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
+        result = subprocess.run(
+            ["/bin/bash", str(script), "--dry-run-registry-isolation"],
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("FAIL:", result.stderr)
+        self.assertIn("diagnostic scratch allocation failed", result.stderr)
+        self.assertNotIn("refused workspace init still registered a workspace", result.stderr)
+        self.assertNotIn("empty registry was reported as registered", result.stderr)
+        self.assertFalse(Path("/out").exists(), "opened /out on the host")
+        self.assertFalse(Path("/err").exists(), "opened /err on the host")
+
 
 class DoctestFenceGuardTests(unittest.TestCase):
     """Script boundary for runnable fences in line and block doc comments."""
