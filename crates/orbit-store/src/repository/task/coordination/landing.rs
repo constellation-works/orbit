@@ -12,6 +12,7 @@
 //! cannot reach `review -> done` through this path either.
 use chrono::Utc;
 use orbit_common::{ClaimRefusalKind, OrbitError};
+use orbit_types::plugin::is_full_commit_id;
 use orbit_types::task::{TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::PostDeployRecord;
 use orbit_types::workflow::handoff::*;
@@ -499,12 +500,7 @@ impl TaskCommitBoundary {
                 .map(|raw| decode::<LandingAttempt>(&raw.payload_json))
                 .transpose()?
                 .is_some_and(|attempt| attempt.state == LandingAttemptState::Stopped);
-            if !stopped
-                || !verified_candidate_head.is_some_and(|head| {
-                    matches!(head.len(), 40 | 64)
-                        && head.bytes().all(|byte| byte.is_ascii_hexdigit())
-                })
-            {
+            if !stopped || !verified_candidate_head.is_some_and(is_full_commit_id) {
                 return Err(invalid(
                     "handoff completion authority is not revoked; a stopped attempt and owner-verified candidate head are required",
                 ));

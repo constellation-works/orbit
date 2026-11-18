@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::identity::{validate_machine_id, validate_registry_identifier};
+use crate::plugin::is_full_commit_id;
 use crate::workspace::WorkspaceError;
 
 /// Default ordinary branch for a dedicated publication repository.
@@ -182,8 +183,7 @@ pub fn validate_publication_remote(remote: &str) -> Result<(), WorkspaceError> {
 }
 
 pub fn validate_git_commit_id(commit: &str) -> Result<(), WorkspaceError> {
-    let valid_len = commit.len() == 40 || commit.len() == 64;
-    if valid_len && commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if is_full_commit_id(commit) {
         return Ok(());
     }
     Err(WorkspaceError::Invalid(

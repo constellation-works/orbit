@@ -17,6 +17,7 @@ use orbit_common::OrbitError;
 use orbit_common::fs::selector::canonical_selector_in_workspace;
 use orbit_common::security::redaction::redact_all;
 use orbit_types::identity::lower_hex;
+use orbit_types::plugin::is_sha1_commit_id;
 use orbit_types::task::{TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::LandingObservationStatus;
 use serde_json::Value;
@@ -125,7 +126,7 @@ pub(crate) fn bounded_error(message: &str) -> String {
 
 /// Whether `value` is a full 40-character hexadecimal revision.
 pub(crate) fn full_revision(value: &str) -> bool {
-    value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    is_sha1_commit_id(value)
 }
 
 /// Read the merged landed commit for `task_id`, if delivery evidence is valid.

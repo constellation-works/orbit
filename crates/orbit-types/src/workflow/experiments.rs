@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 use super::{TagInstruction, TagInstructionRecord, TagInstructionRole};
 use crate::identity::lower_hex;
+use crate::plugin::is_sha1_commit_id;
 
 /// One task's treatment. The overlay is captured even for control.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -272,8 +273,7 @@ impl ExperimentSkillBundle {
                 .bytes()
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
             || !safe_path(&self.path)
-            || self.revision.len() != 40
-            || !self.revision.bytes().all(|b| b.is_ascii_hexdigit())
+            || !is_sha1_commit_id(&self.revision)
         {
             return Err("invalid skill bundle identity or repository path".into());
         }

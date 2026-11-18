@@ -23,7 +23,7 @@ pub use build::{
     PLUGIN_BUILD_TIMEOUT_CEILING_MS, PluginBuildConsent, PluginBuildOutput,
     PluginBuildOutputRecord, PluginBuildProgram, PluginBuildRecord, PluginBuildSpec,
     artifact_digest_preimage, format_plugin_build_argv, git_commit_source, is_full_commit_id,
-    render_build_argv,
+    is_sha1_commit_id, render_build_argv,
 };
 pub use conformance::{
     FIXTURE_SECRET_VERSION, PluginTestCase, PluginTestErrorExpectation, PluginTestExpectation,

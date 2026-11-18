@@ -1,4 +1,5 @@
 //! Unchanged-head CI retries, reserved before external mutation.
+use crate::plugin::is_sha1_commit_id;
 use crate::task::{TaskDecision, TaskHistoryEntry};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -379,7 +380,7 @@ impl CiCheckRerunRecord {
     /// `None` when the receipt omitted or malformed either.
     pub fn action_identity(&self) -> Option<(&str, u64)> {
         let head = self.head.as_deref()?;
-        let valid = head.len() == 40 && head.bytes().all(|byte| byte.is_ascii_hexdigit());
+        let valid = is_sha1_commit_id(head);
         valid.then_some((head, self.run_id?))
     }
 
