@@ -180,8 +180,9 @@ function aggregateCrewSignature() {
   return JSON.stringify(rows);
 }
 
-// Refresh represented workspaces together. Missing registries remain unavailable;
-// a failed request marks each requested workspace unavailable independently.
+// Refresh represented workspaces together. Missing registries remain unavailable.
+// A failed batch read is retried per workspace, so one failing workspace
+// disables only its own select; older forwarded hosts take the same path.
 export async function loadAggregateCrews(tasks, { force = false } = {}) {
   const hostRevision = getHostRevision();
   dropAggregateCrewsForOtherHosts(hostRevision);
@@ -204,21 +205,18 @@ export async function loadAggregateCrews(tasks, { force = false } = {}) {
       }
     }
   } catch (error) {
-    if (error.routeMissing) {
-      // Older forwarded hosts do not have the aggregate endpoint.
-      await Promise.all([...pending].map(async (id) => {
-        try {
-          const payload = await fetchJson(`/api/crews?workspace=${encodeURIComponent(id)}`);
-          rememberAggregateCrew(id, hostRevision, payload);
-        } catch (failure) {
-          rememberAggregateCrewFailure(id, hostRevision);
-          console.error(failure);
-        }
-      }));
-      return;
-    }
-    for (const id of pending) rememberAggregateCrewFailure(id, hostRevision);
-    console.error(error);
+    // A missing route (older forwarded host) is expected; any other failure is
+    // logged. Either way the batch is not a registry verdict for every workspace.
+    if (!error.routeMissing) console.error(error);
+    await Promise.all([...pending].map(async (id) => {
+      try {
+        const payload = await fetchJson(`/api/crews?workspace=${encodeURIComponent(id)}`);
+        rememberAggregateCrew(id, hostRevision, payload);
+      } catch (failure) {
+        rememberAggregateCrewFailure(id, hostRevision);
+        console.error(failure);
+      }
+    }));
   }
 }
 
