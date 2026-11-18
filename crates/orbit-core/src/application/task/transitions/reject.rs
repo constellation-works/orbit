@@ -13,9 +13,10 @@ impl OrbitRuntime {
     /// Reject a `blocked` task on the operator's answer to its block-triage
     /// decision. The public reject refuses `blocked`, but that request is
     /// bound to the blocked status, so an offered reject option would never
-    /// settle. This write keeps the same status guard as every other reject
-    /// (`expected_status`), so a task that moved since the answer was
-    /// validated is refused rather than rejected.
+    /// settle. The answer holds the task's write lock from its status check
+    /// through this write, so the status written here is the one validated.
+    /// A live local run that still owns the task refuses the reject, as it
+    /// refuses the archive and requeue answers on the same request.
     pub(crate) fn reject_blocked_task_for_triage_decision(
         &self,
         id: &str,
@@ -74,6 +75,9 @@ impl OrbitRuntime {
             let task = self.get_task(id)?;
             #[cfg(test)]
             self.apply_transition_read_hook(id)?;
+            if allow_blocked {
+                ensure_status_change_not_run_owned(self, id)?;
+            }
             let previous_status = task.status;
             let status_event = match task.status {
                 TaskStatus::Proposed => "proposal_rejected",
