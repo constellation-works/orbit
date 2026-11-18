@@ -231,3 +231,46 @@ fn git_scan_survives_worker_spawn_failure_with_the_same_refusals() {
     assert_eq!(refused.to_string(), threaded.to_string());
     assert_eq!(fs::read_to_string(outside).unwrap(), "host state");
 }
+
+/// A store with the full fan-out spread over subtrees must keep complete
+/// cross-subtree link counts with one effective worker: a name pair split
+/// across distant fan-outs passes, and an escaped name is still refused.
+#[test]
+fn git_scan_many_fan_outs_keep_complete_cross_subtree_link_counts() {
+    use std::fs;
+
+    use super::super::git_sandbox::{GitWorkerSpawnRefusal, append_git_denies};
+    use orbit_types::policy::ResolvedFsProfile;
+
+    let temp = short_socket_dir();
+    let workspace = temp.path().join("workspace");
+    let objects = workspace.join(".git/objects");
+    for index in 0..256u16 {
+        let fan_out = objects.join(format!("{index:02x}"));
+        fs::create_dir_all(&fan_out).unwrap();
+        fs::write(fan_out.join("object"), "loose object").unwrap();
+    }
+    fs::hard_link(objects.join("00/object"), objects.join("ff/linked")).unwrap();
+    let scan = || {
+        let mut profile = ResolvedFsProfile {
+            name: "test".to_string(),
+            read: Vec::new(),
+            modify: Vec::new(),
+        };
+        append_git_denies(&workspace, &mut profile)
+    };
+    let refusal = GitWorkerSpawnRefusal::install();
+    scan().expect("a cross-subtree pair passes with one effective worker");
+    assert!(refusal.refused() > 0, "the spawn failure must be exercised");
+    drop(refusal);
+    scan().expect("a cross-subtree pair passes on the threaded scan");
+
+    let outside = temp.path().join("outside-object");
+    fs::write(&outside, "host state").unwrap();
+    fs::hard_link(&outside, objects.join("80/escaped")).unwrap();
+    let refused = scan().expect_err("an escaped object name stays refused");
+    assert!(
+        matches!(refused, orbit_common::OrbitError::PolicyDenied(_)),
+        "{refused}"
+    );
+}
