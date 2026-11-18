@@ -854,6 +854,66 @@ fn a_preexisting_git_directory_is_not_adopted_as_a_resident_worktree() {
 }
 
 #[test]
+fn a_preexisting_registered_worktree_is_preserved_without_ownership_proof() {
+    let fx =
+        isolated_fixture!(a_preexisting_registered_worktree_is_preserved_without_ownership_proof);
+    let (_watched, mandate) = fx.watched_mandate("Ship scribe v2 slice 4");
+    let run = fx.cycle_run(&mandate, "resident-cycle-planted-registered");
+    let planted = fx
+        .repo
+        .join(format!(".orbit/state/worktrees/resident-{run}"));
+    std::fs::create_dir_all(planted.parent().unwrap()).unwrap();
+    let add = crate::git_test_support::command()
+        .args([
+            "worktree",
+            "add",
+            "--detach",
+            planted.to_str().unwrap(),
+            "HEAD",
+        ])
+        .current_dir(&fx.repo)
+        .status()
+        .unwrap();
+    assert!(add.success(), "plant a foreign registered worktree");
+    std::fs::write(planted.join("investigation.txt"), "preserve").unwrap();
+
+    let brief = fx.begin_cycle(&run, Utc::now());
+    assert_eq!(brief["cycle_count"], 1, "{brief}");
+    assert!(brief["workspace_path"].is_null(), "{brief}");
+    assert!(
+        brief["worktree_error"]
+            .as_str()
+            .is_some_and(|error| error.contains("preserved")),
+        "observe reports the foreign worktree: {brief}"
+    );
+
+    let finished = fx.runtime.finish_resident_cycle(&run).unwrap();
+    assert_eq!(finished["finalized"], true, "{finished}");
+    assert!(
+        finished["worktree_removal_error"]
+            .as_str()
+            .is_some_and(|error| error.contains("preserved")),
+        "finalize reports the foreign worktree: {finished}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(planted.join("investigation.txt")).unwrap(),
+        "preserve"
+    );
+    let listed = crate::git_test_support::command()
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(&fx.repo)
+        .output()
+        .unwrap();
+    assert!(listed.status.success(), "git worktree list");
+    assert!(
+        String::from_utf8(listed.stdout)
+            .unwrap()
+            .contains(&planted.display().to_string()),
+        "Git still registers the foreign worktree"
+    );
+}
+
+#[test]
 fn a_mandate_fires_only_on_change_after_its_floor_and_never_beside_a_live_cycle() {
     let fx = isolated_fixture!(
         a_mandate_fires_only_on_change_after_its_floor_and_never_beside_a_live_cycle

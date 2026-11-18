@@ -213,6 +213,9 @@ impl OrbitRuntime {
         target: &str,
         locked: bool,
     ) -> Result<(), OrbitError> {
+        if let Ownership::Denied(reason) = ownership(&self.paths().state_dir, run_id, path) {
+            return Err(preserved(target, &reason));
+        }
         // Git refuses a locked worktree and that refusal must leave its
         // contents untouched, so only an unlocked worktree is cleared
         // first. Clearing is best-effort: on any failure Git's own removal
@@ -428,10 +431,11 @@ fn remove_worktree_entry(entry: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Delete everything under a registered worktree except its `.git` link,
-/// fanning the entries one level down across threads. Git then only has to
-/// unregister and remove the near-empty directory. Symlinks are unlinked,
-/// never followed.
+/// Delete everything under a registered worktree except its `.git` link and
+/// owner nonce, fanning the entries one level down across threads. Keeping
+/// the nonce until Git confirms removal lets a restarted cleanup prove
+/// ownership after an interrupted clear. Git then only has to unregister
+/// and remove the near-empty directory. Symlinks are unlinked, never followed.
 fn clear_worktree_contents(path: &Path) -> std::io::Result<()> {
     // Work units are the entries one level down (plus top-level files):
     // a single top-level directory can hold most of the checkout, so
@@ -455,7 +459,12 @@ fn clear_worktree_contents(path: &Path) -> std::io::Result<()> {
             Ok(children) => {
                 let mut any = false;
                 for child in children {
-                    entries.push(child?.path());
+                    let child = child?;
+                    if entry.file_name() == ".orbit" && child.file_name() == OWNER_NONCE_FILE {
+                        any = true;
+                        continue;
+                    }
+                    entries.push(child.path());
                     any = true;
                 }
                 if any {

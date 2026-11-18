@@ -390,7 +390,9 @@ dead, synthesizes its checkpoint and discards its checkout during recovery befor
 cycle. Removal is best-effort: failures are logged and may leave a checkout on disk, but its contents
 are never committed or delivered. An unlocked registered checkout's contents are cleared in
 parallel before `git worktree remove --force` unregisters it; a locked checkout is never cleared
-first, so Git's refusal leaves it untouched and is reported.
+first, so Git's refusal leaves it untouched and is reported. Cleanup requires matching owner
+evidence even for a registered checkout. The parallel clear retains its owner nonce until Git
+confirms removal, so a restarted cleanup can still verify ownership after an interrupted clear.
 
 **Tool guard.** Core, not the activity's tool list, scopes the cycle. A tool call carries the run id
 from the trusted managed-run binding, never from input. For a `resident_cycle_pipeline` run, reads
