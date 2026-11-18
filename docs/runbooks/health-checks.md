@@ -5,7 +5,7 @@ tags: [operations, health, doctor, dashboard, routines]
 paths: ["crates/orbit-cmd/src/doctor/mod.rs", "crates/orbit-core/src/application/job/run/reconcile.rs"]
 related_features: [orbit-core, activity-job, routines]
 related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986, ORB-11791, ORB-12109, ORB-12223, ORB-12244, ORB-12968]
-last_validated: 2026-11-16
+last_validated: 2026-11-18
 ---
 
 # Check Orbit Health
@@ -148,10 +148,16 @@ fields; statuses are lowercase and `remediation` is `null` for healthy/skipped r
 output prints the same guidance as an `Action:` line and includes elapsed seconds on rows
 that take more than one second. Durations include unsuccessful and skipped probes; multiple
 rows emitted by a single probe share its duration, so row durations are not additive.
-The CLI runs the read-only probes concurrently, up to eight at a time and the tree-walking
-and task-scanning ones first, then reports their rows in the fixed order above; a row's
-duration is that probe's own wall time, and the durations overlap rather than sum to the
-command's elapsed time.
+When the host reports more than one available CPU, the CLI runs read-only probes on up to
+eight worker threads, dispatching the slow probes first. With one available CPU, or when
+the CPU-count query fails, it runs probes serially in report order. The JSON array preserves
+that report order: workspace probes first, followed by host and other report probes such as
+`build-budget`, so its order does not exactly match this table. Human-readable rows are
+sorted by severity (`ERROR`, `WARNING`, `OK`, `INFO`, then `SKIPPED`), retaining report order
+within each severity. Each row's duration is its probe's own wall time. In parallel mode
+probe durations can overlap; the command's elapsed time depends on work spread across the
+worker threads and need not equal either their sum or their maximum. In serial mode they do
+not overlap, so elapsed time tracks their sum plus command overhead.
 Lock files flagged by `stale-locks`
 include holder diagnostics. Run `orbit doctor --fix-stale-locks` to clear a dead holder's
 record after acquiring the advisory lock and rechecking the holder. The repair preserves

@@ -3,8 +3,8 @@ summary: "Policy & Sandboxing — Design"
 type: design
 title: "Policy & Sandboxing — Design"
 owner: claude
-last_updated: 2026-11-08
-last_validated: 2026-11-08
+last_updated: 2026-11-18
+last_validated: 2026-11-18
 status: Draft
 feature: policy-sandbox
 doc_role: design
@@ -411,10 +411,16 @@ the same scan on the registered checkout, and `orbit run auto` and
 OS-sandboxed executor, so a refusing host is not admitted rather than failing
 each claimed task into `blocked`. The subdirectories directly under `objects/`
 (the loose-object fan-out holds nearly every metadata entry) are scanned on up
-to eight threads, each against the directory identities pinned so far; their
-results, identities and link counts are folded back in directory order, so a
-scan refuses the same first entry, and accepts the same split names of one
-inode, as a one-thread walk.
+to eight threads, each against the directory identities pinned so far. For an
+object store that stays unchanged during the scan, subtree results, identities
+and link counts are folded back in `read_dir` order, preserving the same first
+traversal refusal and acceptance of fully contained split names as a sequential
+walk using that enumeration order. This guarantee does not define an order
+independent of filesystem enumeration across runs. After a complete traversal,
+a separate hard-link escape check compares the counted in-store names with each
+inode's link count. If several inodes have names outside the store, the first
+one reported comes from hash-map iteration, so its selection is not ordered by
+traversal and may vary.
 
 Host Git operations can remove a transient entry such as `maintenance.lock`
 between directory enumeration and inspection. Preparation restarts the whole
