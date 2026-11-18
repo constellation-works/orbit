@@ -29,9 +29,9 @@
 //! prose, not an answer: normalization retains it for invocation traces and
 //! operator diagnostics (see [`muse_terminal_failure_diagnostic`]), while
 //! the answer projection above still reduces it to empty, so it can never
-//! satisfy the completion envelope. Classification of that prose (say, as
-//! an authentication failure) stays with the engine's shared
-//! provider-failure machinery, never with this reducer.
+//! satisfy the completion envelope. The engine classifies authentication
+//! failures. For model access, [`muse_terminal_rejects_model`] checks Muse's
+//! refusal against the requested model.
 //! Every stdout line must be a record: a line that is not a JSON object with
 //! a string `payload_type` means the stream cannot be trusted, and the whole
 //! output reduces to empty, which carries no envelope and so fails closed.
@@ -260,6 +260,45 @@ pub fn muse_terminal_failure_diagnostic(provider: Provider, stdout: &[u8]) -> Op
         None => format!("Muse run ended with terminal {terminal} and no failure text"),
     };
     Some(bound_terminal_error(&text))
+}
+
+/// Whether Muse's failed terminal says the requested model is inaccessible
+/// to this account. Require the exact model and the provider's refusal form.
+pub fn muse_terminal_rejects_model(stdout: &[u8], model: &str) -> bool {
+    last_terminal(stdout).is_some_and(|info| {
+        if info.terminal.as_deref() != Some("failed") {
+            return false;
+        }
+        let Some(text) = info.text() else {
+            return false;
+        };
+        let text = text.strip_suffix('.').unwrap_or(text);
+        let reason = match text.split_once(" [request_id=") {
+            Some((reason, request)) => {
+                if !request.strip_suffix(']').is_some_and(|id| {
+                    !id.is_empty()
+                        && id
+                            .bytes()
+                            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+                }) {
+                    return false;
+                }
+                reason
+            }
+            None => text,
+        };
+        let Some(reported_model) = reason
+            .strip_prefix("model ")
+            .and_then(|text| text.strip_suffix(" does not exist or you lack access"))
+        else {
+            return false;
+        };
+        reported_model
+            .strip_prefix('`')
+            .and_then(|model| model.strip_suffix('`'))
+            .unwrap_or(reported_model)
+            == model
+    })
 }
 
 fn bound_terminal_error(text: &str) -> String {

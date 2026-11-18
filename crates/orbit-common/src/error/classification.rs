@@ -97,6 +97,9 @@ impl OrbitError {
             OrbitError::OutcomeUnknown { .. } => "outcome_unknown",
             OrbitError::RemoteTool { code, .. } => code.as_str(),
             OrbitError::DeliveryRefused { refusal, .. } => refusal.error_code(),
+            OrbitError::ProviderModelAccessHold(_) => {
+                orbit_types::workflow::PROVIDER_MODEL_ACCESS_HOLD_CODE
+            }
             OrbitError::Execution(_)
             | OrbitError::FootprintUnavailable(_)
             | OrbitError::UpgradeAdmissionRefused(_)

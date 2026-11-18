@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use orbit_store::contracts::TaskRow;
 
 use chrono::{DateTime, Utc};
+use orbit_common::OrbitError;
 use orbit_types::identity::same_crew_family;
 use orbit_types::task::{
     EpicHierarchyNode, Task, TaskReferenceIndex, TaskStatus, inherited_only_epic_roots,
@@ -516,11 +517,30 @@ pub(super) fn backlog_snapshot_in_mode(
         }
         | BacklogReadMode::Admission { .. } => runtime.unset_crew_env(),
     };
+    let has_muse = LazyCell::new(|| {
+        runtime
+            .context
+            .settings()
+            .crews()
+            .values()
+            .any(|crew| crew.enabled && crew.assignment.provider == "muse")
+    });
     backlog.retain(|task| {
-        if allowlist.is_none() && crew_unset.is_empty() {
+        let model_access_applies = task.job_run_id.is_some() && *has_muse;
+        if allowlist.is_none() && crew_unset.is_empty() && !model_access_applies {
             return true;
         }
         let resolution = runtime.auto_task_crew_candidates(task, pools, None, allowlist);
+        if let Err(OrbitError::ProviderModelAccessHold(detail)) = &resolution {
+            excluded.push(BacklogTaskExclusion {
+                id: task.id.clone(),
+                reason: BacklogTaskExclusionReason::ProviderModelAccessHold,
+                conflicts: Vec::new(),
+                crew: None,
+                detail: Some(detail.clone()),
+            });
+            return false;
+        }
         if let Ok((crews, _, _)) = &resolution {
             let candidates = crews
                 .iter()

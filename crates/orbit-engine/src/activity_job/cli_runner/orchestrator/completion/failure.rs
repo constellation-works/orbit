@@ -22,8 +22,8 @@ use orbit_common::security::redaction::PatternRedactor;
 use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider};
 use orbit_types::workflow::{
     CLI_PROVIDER_ERROR_SEPARATOR, CLI_STDERR_TAIL_SEPARATOR, ProviderFailureClass,
-    ProviderLimitFailure, STALLED_MARKER, TRANSIENT_FAILURE_MARKER, provider_failure_text,
-    with_failed_account,
+    ProviderLimitFailure, STALLED_MARKER, StepFailureCode, TRANSIENT_FAILURE_MARKER,
+    provider_failure_text, with_failed_account,
 };
 use serde_json::Value;
 use std::time::Duration;
@@ -50,6 +50,7 @@ pub(super) struct CompletionFailureInput<'a> {
     pub(super) provider_limit: Option<String>,
     pub(super) structured_output_exhaustion: Option<String>,
     pub(super) muse_terminal_failure: Option<String>,
+    pub(super) muse_model_refused: bool,
     pub(super) provider_result_terminal_error: Option<String>,
     pub(super) sandbox_write_diagnostic: &'a Option<String>,
     pub(super) print_timeout: Option<Duration>,
@@ -64,7 +65,7 @@ pub(super) struct CompletionFailureInput<'a> {
 pub(super) struct CompletionFailure {
     pub(super) message: Option<String>,
     pub(super) failure_class: Option<ProviderFailureClass>,
-    pub(super) failure_code: Option<orbit_types::workflow::StepFailureCode>,
+    pub(super) failure_code: Option<StepFailureCode>,
     pub(super) observed_limit: Option<(ProviderLimitFailure, String)>,
 }
 
@@ -91,6 +92,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
         provider_limit,
         structured_output_exhaustion,
         muse_terminal_failure,
+        muse_model_refused,
         provider_result_terminal_error,
         sandbox_write_diagnostic,
         print_timeout,
@@ -147,6 +149,15 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
             "cli subprocess exceeded {}s wall-clock timeout",
             timeout_seconds
         ))
+    } else if muse_model_refused && let Some(diagnostic) = &muse_terminal_failure {
+        // Muse can report HTTP 403 for model access. The failed terminal
+        // identifies this model's refusal even when the shared auth reader
+        // sees that status.
+        let reason = bounded_diagnostic(diagnostic, redaction);
+        Some(match exit_code.filter(|code| *code != 0) {
+            Some(code) => format!("cli subprocess exited with code {code} {reason}"),
+            None => reason,
+        })
     } else if let Some(diagnostic) = provider_auth_error {
         failure_class = Some(ProviderFailureClass::Unavailable);
         Some(provider_failure_text(
@@ -484,7 +495,12 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
     CompletionFailure {
         message,
         failure_class,
-        failure_code: declared_failure_code(declared_failure.as_ref()),
+        failure_code: if muse_model_refused {
+            Some(StepFailureCode::MuseModelAccessRefused)
+        } else {
+            declared_failure_code(declared_failure.as_ref())
+                .filter(|code| *code != StepFailureCode::MuseModelAccessRefused)
+        },
         observed_limit,
     }
 }

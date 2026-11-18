@@ -192,6 +192,9 @@ pub enum OrbitError {
     },
     #[error("execution failed: {0}")]
     Execution(String),
+    /// No configured automatic crew remains after recorded model refusals.
+    #[error("{0}")]
+    ProviderModelAccessHold(String),
     /// A resumed published delivery's deferred footprint was still held by
     /// another task when its wait expired. Displays exactly as
     /// [`Self::Execution`]; the variant carries the typed

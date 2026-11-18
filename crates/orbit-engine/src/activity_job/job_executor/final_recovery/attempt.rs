@@ -91,6 +91,9 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
             UnrepairableFailure::ProviderUnavailable => {
                 "the provider could not be used on this host; the candidate was not judged"
             }
+            UnrepairableFailure::MuseModelAccessRefused => {
+                "Muse refused access to the selected model"
+            }
             UnrepairableFailure::ProviderRefusal => {
                 "the provider's content policy refused the turn; the candidate was not judged"
             }

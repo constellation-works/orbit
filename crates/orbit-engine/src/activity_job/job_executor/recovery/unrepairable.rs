@@ -2,8 +2,7 @@
 //!
 //! Step recovery and final recovery stop on these classes; they used to keep
 //! separate copies of the list. Add a new "do not spend a repair agent on
-//! this" class here only. The retry wrapper stops only on the agent's own
-//! declarations (blocker, upgrade refusal) and tests those two predicates
+//! this" class here. The retry wrapper tests its own stop conditions
 //! directly: the table returns the first matching class, and a blocker's
 //! free-text evidence may quote another class's marker.
 
@@ -18,6 +17,8 @@ pub(in crate::activity_job::job_executor) enum UnrepairableFailure {
     ProviderLimit,
     /// The provider could not be used on this host.
     ProviderUnavailable,
+    /// Muse refused access to the selected model.
+    MuseModelAccessRefused,
     /// The provider's content policy refused the turn.
     ProviderRefusal,
     /// Required validation could not run in the lane that tried it.
@@ -66,6 +67,8 @@ pub(in crate::activity_job::job_executor) fn unrepairable_failure(
         Some(UnrepairableFailure::BlockedByAgent)
     } else if orbit_types::workflow::is_upgrade_pending(error_code, message) {
         Some(UnrepairableFailure::UpgradePending)
+    } else if code == Some(&StepFailureCode::MuseModelAccessRefused) {
+        Some(UnrepairableFailure::MuseModelAccessRefused)
     } else if orbit_types::workflow::is_provider_capacity_exhausted(error_code, message) {
         Some(UnrepairableFailure::ProviderCapacityExhausted)
     } else if orbit_types::workflow::is_provider_limit(error_code, message) {
