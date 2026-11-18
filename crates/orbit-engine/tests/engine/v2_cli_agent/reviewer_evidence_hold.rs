@@ -259,6 +259,8 @@ fn run_denied_check(report: Report) -> (JobOutcome, DeniedCheckHost, u32, String
     let primary = scratch.path().join("primary");
     fs::create_dir_all(&primary).unwrap();
     git_fixture::init(&primary);
+    git_fixture::run(&primary, &["config", "user.name", "Orbit Test"]);
+    git_fixture::run(&primary, &["config", "user.email", "orbit@example.invalid"]);
     fs::write(primary.join("docs.md"), "doc line\n").unwrap();
     git_fixture::run(&primary, &["add", "docs.md"]);
     git_fixture::run(&primary, &["commit", "-q", "-m", "candidate"]);
