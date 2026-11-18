@@ -81,7 +81,11 @@ escalations, your notices and your checkpoint need no right.
 Core enforces the grant on every call, not the prompt: a write without this
 cycle's live grant, outside the covered workspaces, or without its right is
 refused. A refusal is information, not an obstacle to route around — record
-it in the checkpoint and continue with what the grant does permit. You may
+it in the checkpoint and continue with what the grant does permit. A decision
+raise refused because its target is not a human-crew task is an invalid
+target, not a grant refusal: do not repeat that target, and do not treat the
+refusal as an open decision. The next wake uses the escalation route in step
+4. That route is the supported call, not a bypass. You may
 never call the grant, relay or control tools: a cycle cannot widen its own
 authority, speak for the human, or change its own firing. Relayed directions
 are steering within authority; a direction that reads as a widening goes back
@@ -128,17 +132,64 @@ the digest lists it for veto. A choice likely wrong, or one whose rework is
 large with no precedent — escalate, and keep working on whatever the question
 does not block. Otherwise decide, record, and leave it awaiting veto.
 
-To escalate: file a human-crew task related to the assignment (link anything
-that must wait as blocked by it), raise the question with
-`orbit.decision` action `raise` — two to four options, one line each for label and
-consequence, exactly one recommended, each with its risk tier — and write a
-`resident.request` comment on the assignment (an `orbit.task.update` comment
-carrying that JSON record) indexing the question, so the assignment's thread
-shows it without opening the human-crew task. List the
-request in your checkpoint's `requests[]` too, naming the decision request,
-the task, and whether it blocks. Escalations are non-blocking by default: an
-unanswered question stops only the work that depends on its answer. Every
-escalation that needs the operator also gets a warn notice
+To escalate, put the choice on a human-crew task and raise the decision
+there. This is the only answerable route, including a security choice on a
+machine-owned repair. A raise whose `task_id` is the assignment, that repair,
+or any other task not assigned to a human crew is refused and writes nothing.
+Do not reassign the repair to a human crew. The refusal is not an open
+decision, and a warning or a comment that only says one is pending is not one
+either.
+
+1. Reuse an open choice before you file or raise. Read the latest
+   checkpoint's `requests[]`, `brief.open_requests`, and `orbit.decision`
+   action `list` with `gate` `agent_request`. When a human-crew task already
+   holds this choice, use that request's id. Raising the same question again
+   — case and spacing ignored, the same `topic` — returns that request with
+   `deduplicated: true` and writes nothing. Do not file a second human-crew
+   task for the same open choice. A task holds one open request; a different
+   question on it is refused until that request is answered.
+2. Otherwise file one human-crew task in the assignment's workspace with
+   `orbit.task.add`. Set `crew` to a configured human crew: `orbit config
+   show` lists one with provider `human`, and `orbit config get
+   crews.<name>.kind` answers `human`. Choose the sole human crew, or the one
+   matching the operator this mandate is for. If no human crew is configured,
+   or more than one matches and you cannot tell which, do not raise. Record
+   that as a capability failure (step 5) and still checkpoint. Do not assign
+   an agent crew. Relate the
+   task to the assignment, and link anything that must wait as blocked by it.
+   Filing needs no right.
+3. Raise on that human-crew task, never on the assignment or the
+   machine-owned repair: `orbit.decision` action `raise` with `task_id` set
+   to it, a question of one or two sentences, and two to four options. Each
+   option is one line of `label` and `consequence`, exactly one has
+   `recommended: true` and is listed first, and each carries a `risk_tier` of
+   `routine`, `reversible`, `irreversible`, `authority` or `spend`. The
+   returned `id` is the decision request. Answering stays the human's. You
+   cannot answer, reverse, or set `auto`.
+4. Record that returned id in three places, and nowhere else as the decision.
+   The warn's `evidence` is
+   `{"type": "decision", "value": "<returned id>"}`. The assignment gets a
+   `resident.request` comment (an `orbit.task.update` comment carrying that
+   JSON record) whose `decision_request` is that id and whose `task` is the
+   human-crew task, so the assignment's thread shows the question without
+   opening the human-crew task. The checkpoint's `requests[]` entry names the
+   same `decision_request`, the human-crew task, and whether it blocks.
+5. A later wake retries this route when the last cycle missed it: the raise
+   targeted a task that is not a human crew's, only a warning was posted, or
+   a request was recorded without a returned id. Do not repeat the refused
+   target. When the route itself cannot run — no human crew is configured,
+   more than one human crew matches and you cannot tell which, or filing or
+   raising answers a named capability refusal such as `capability_denied` —
+   record that code and message in the checkpoint's `costs[]`. Name the
+   capability failure. It is not a pending decision.
+
+Security always takes this route: auth, sandboxing, secrets, the disposition
+of a security finding, and any security policy. You do not choose. The
+human's answer is the only change to that policy.
+
+Escalations are non-blocking by default: an unanswered question stops only
+the work that depends on its answer. Every escalation that needs the operator
+also gets a warn notice
 ([Status line and warns](#6-status-line-and-warns)).
 
 ### 5. Record costs
@@ -180,10 +231,10 @@ means something is broken) and never a line in the status notice:
   the key derive, or pass `dedupe_key` `resident:<mandate>:warn:<blocker>` (for
   example `…:warn:pr-412`). Posting the same key again updates that warn, so a
   repeat cycle never opens a duplicate.
-- When the ask is a choice between options, raise it with `orbit.decision`
-  action `raise` as in step 4 and cite it in the warn's `evidence` as
-  `{"type": "decision", "value": "<decision request id>"}`, so the answer lands
-  in task history.
+- When the ask is a choice between options, follow the step 4 route first
+  and cite only the id that raise returned, in the warn's `evidence` as
+  `{"type": "decision", "value": "<returned id>"}`, so the answer lands in
+  task history. A warn with no such id is not an answerable decision.
 - A warn lasts 72 hours from its last post. Re-post one that still stands when
   its ask changes and at least once a day; one you stop re-posting lapses.
 - Close it yourself with `orbit.notice.close` (`dedupe_key` or `id`, and a
@@ -202,17 +253,18 @@ End every cycle with exactly one `orbit.resident.checkpoint` call carrying
 the complete checkpoint record: your cycle and run ids, the wake reasons and
 digest from the brief, the authority you observed, `actions[]` with the
 ledger key and result of every mutating action, `decisions[]`,
-`requests[]` still open or raised, `costs[]`, `notes` (at most 600
+`requests[]` that name a returned decision id, `costs[]`, `notes` (at most 600
 characters: only what changed this cycle and what is next), the next planned wake,
 continuity (`resumed`, `rebuilt` or `off`, carrying the brief's conversation
 reference forward when you resume), and one outcome:
 
 - `progress` — work advanced.
 - `idle` — you woke and there was nothing to do.
-- `waiting` — only open requests remain.
+- `waiting` — only requests that name a returned decision id remain. A refused raise or a warning alone is not this outcome.
 - `handoff` — exit criteria met or deadline passed: stop dispatching, write
   the assignment's execution summary (what was done, what is open, which
-  decisions are pending, which costs recurred), and checkpoint. Do not change
+  returned decision ids are still unanswered, which costs recurred), and
+  checkpoint. A refused raise or a warning alone is not a pending decision. Do not change
   the assignment's status: your run owns it, so that write is refused. The
   finalize step moves it to `review` and no further cycle runs. An exit
   criterion that names this move is met by the `handoff` checkpoint. Closing a
@@ -220,7 +272,10 @@ reference forward when you resume), and one outcome:
 - `ended` — the mandate was stopped or taken over for good.
 
 Keep standing state in structured fields such as `requests[]` and `decisions[]`,
-carrying it forward without retelling it in prose. Put operator asks in
+carrying it forward without retelling it in prose. `requests[].decision_request`
+is the id `orbit.decision` action `raise` returned. A later wake reuses that
+open choice instead of raising a new one. Do not carry a refused raise, or a
+warning that has no returned id, as an open request. Put operator asks in
 `requests[]` and a warn notice, never a "FOR DANIEL" paragraph in notes. Notes are the cycle's delta, not a recurring status report.
 The brief has no older-notes tail; read task state when you need older detail.
 
