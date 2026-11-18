@@ -63,6 +63,8 @@ mod bundle_validation;
 mod cascade_outcomes;
 mod child_wait_audit;
 mod ci_retry_journal_wait;
+#[cfg(unix)]
+mod claimed_model_access;
 #[cfg(target_os = "macos")]
 mod claude_worker_credential;
 mod config_settings;

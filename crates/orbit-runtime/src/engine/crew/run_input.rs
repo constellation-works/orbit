@@ -241,8 +241,10 @@ impl RuntimeKernel {
             }
             let crew = match claimed.filter(|snapshot| snapshot.id == task_id) {
                 // [ORB-17773] An automatic assignment is re-drawn under
-                // this follower's own usage pressure; `None` keeps the
-                // owner's crew exactly as the snapshot carries it.
+                // this follower's own usage pressure, and [ORB-25663] around
+                // a Muse model this follower was verified to be refused;
+                // `None` keeps the owner's crew exactly as the snapshot
+                // carries it. A refusal that leaves no crew is a typed hold.
                 Some(snapshot) => self
                     .claimed_leaf_redrawn_crew(
                         input,
@@ -250,7 +252,7 @@ impl RuntimeKernel {
                         snapshot.crew(),
                         snapshot.crew_source.as_ref(),
                         snapshot.complexity,
-                    )
+                    )?
                     .or_else(|| snapshot.crew().map(ToOwned::to_owned)),
                 None => match self.stores().tasks().get_task(&task_id)? {
                     Some(task) => normalized_task_crew(task.crew.as_deref()),
