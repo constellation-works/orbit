@@ -103,14 +103,31 @@ pub fn parse_cron(expression: &str) -> Result<Cron, OrbitError> {
     let invalid = |reason: &dyn std::fmt::Display| {
         OrbitError::InvalidInput(format!("invalid cron expression '{expression}': {reason}"))
     };
-    let startless_step = expression
-        .split_whitespace()
+    let fields: Vec<&str> = expression.split_whitespace().collect();
+    // Croner only honors `+` as the very first character of the weekday field
+    // (parser.rs strips that one leading `+`, then rejects any other `+` as an
+    // illegal character). When the expression holds a `+` anywhere else, no
+    // startless-step correction yields a valid cron: fixing one step would leave
+    // the misplaced plus behind. Skip the suggestion so croner's
+    // illegal-character error names the plus.
+    let weekday_index = if fields.len() == 5 {
+        4
+    } else if fields.len() >= 6 {
+        5
+    } else {
+        usize::MAX
+    };
+    let leading_weekday_plus = fields
+        .get(weekday_index)
+        .is_some_and(|field| field.starts_with('+'));
+    let misplaced_plus = expression.matches('+').count() > usize::from(leading_weekday_plus);
+    let startless_step = fields
+        .iter()
         .flat_map(|field| field.split(','))
-        .find(|item| {
-            // Croner's weekday AND modifier is stripped before component parsing, so a
-            // startless `+/n` otherwise reaches sloppy_ranges as `/n` and becomes `*/n`.
-            item.strip_prefix('+').unwrap_or(item).starts_with('/')
-        });
+        // Croner's weekday AND modifier is stripped before component parsing, so a
+        // startless `+/n` otherwise reaches sloppy_ranges as `/n` and becomes `*/n`.
+        .find(|item| item.strip_prefix('+').unwrap_or(item).starts_with('/'))
+        .filter(|_| !misplaced_plus);
     if let Some(item) = startless_step {
         // Keep the weekday AND modifier in the suggestion: plain `*/n` drops it and
         // turns the day-of-month AND into an OR.

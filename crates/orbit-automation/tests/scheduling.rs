@@ -393,6 +393,68 @@ fn cron_validation_rejects_startless_weekday_steps_and_keeps_supported_steps() {
     }
 }
 
+#[test]
+fn cron_misplaced_plus_never_suggests_illegal_correction() {
+    // A `+` is only legal at the very start of the whole weekday field. Any
+    // other `+` must not be "corrected" to a `+*/n` suggestion that croner
+    // still rejects; the error must name the illegal plus or offer a fix the
+    // public validator accepts. The valid weekday AND step beside a misplaced
+    // plus is the case that once slipped through: its suggestion fixes only
+    // the weekday step and leaves the other plus behind.
+    for cron in [
+        "+/2 * * * *",
+        "0 9 1 * 1,+/2",
+        "+/2 9 1 * +/3",
+        "+/2 * * * /3",
+        "0 9 1 * +/2,+/3",
+    ] {
+        let error = match parse_cron(cron) {
+            Ok(value) => panic!("misplaced plus '{cron}' is rejected, got {value:?}"),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+        if let Some(suggestion) = extract_wildcard_suggestion(&message) {
+            let item = extract_startless_item(&message)
+                .unwrap_or_else(|| panic!("suggestion without a step in: {message}"));
+            let fixed = cron.replacen(item, suggestion, 1);
+            parse_cron(&fixed).unwrap_or_else(|error| {
+                panic!("suggestion '{suggestion}' for '{cron}' still fails: {error}")
+            });
+        } else {
+            assert!(
+                message.contains("illegal character '+'")
+                    || message.contains("illegal character `+'"),
+                "misplaced plus '{cron}' names the illegal plus: {message}",
+            );
+        }
+        validate_schedule(&AutoTaskSchedule::cron(cron))
+            .expect_err("auto-task validation rejects a misplaced plus");
+    }
+
+    let error = match parse_cron("0 9 1 * +/2") {
+        Ok(value) => panic!("startless weekday AND step is rejected, got {value:?}"),
+        Err(error) => error,
+    };
+    assert!(
+        error.to_string().contains("'+*/2'"),
+        "weekday AND position still suggests '+*/2': {error}",
+    );
+    parse_cron("0 9 1 * +*/2")
+        .unwrap_or_else(|error| panic!("suggested weekday AND form is rejected: {error}"));
+}
+
+fn extract_startless_item(message: &str) -> Option<&str> {
+    let start = message.find("step '")? + "step '".len();
+    let end = message[start..].find('\'')?;
+    Some(&message[start..start + end])
+}
+
+fn extract_wildcard_suggestion(message: &str) -> Option<&str> {
+    let start = message.find("use '")? + "use '".len();
+    let end = message[start..].find('\'')?;
+    Some(&message[start..start + end])
+}
+
 /// Berlin's 2025 rule: CET (+01) with CEST (+02) from 02:00 on the last
 /// Sunday of March to 03:00 on the last Sunday of October.
 const BERLIN_POSIX_TZ: &str = "CET-1CEST,M3.5.0,M10.5.0/3";
