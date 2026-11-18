@@ -272,8 +272,10 @@ pub(crate) fn default_workspace_selection(
 /// `Path::starts_with`, i.e. component-wise, not via the filesystem). A
 /// nonexistent descendant of a registered root (e.g. `/registered/missing`
 /// under the active registered root `/registered`) therefore still selects
-/// that root; only a path outside every registered root misses and falls
-/// back to `None` ("All workspaces").
+/// that root; only a path lexically outside every registered root misses and
+/// falls back to `None` ("All workspaces"). Lexical matching does not resolve
+/// `..` components, so a nonexistent `/registered/../other` still matches
+/// `/registered` as written.
 fn resolve_selector_path(selector: &Path, cwd: Option<&Path>) -> PathBuf {
     let absolute = if selector.is_absolute() {
         selector.to_path_buf()
