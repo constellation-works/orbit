@@ -153,11 +153,11 @@ eight worker threads, dispatching the slow probes first. With one available CPU,
 the CPU-count query fails, it runs probes serially in report order. The JSON array preserves
 that report order: workspace probes first, followed by host and other report probes such as
 `build-budget`, so its order does not exactly match this table. Human-readable rows are
-sorted by severity (`ERROR`, `WARNING`, `OK`, `INFO`, then `SKIPPED`), retaining report order
-within each severity. Each row's duration is its probe's own wall time. In parallel mode
-probe durations can overlap; the command's elapsed time depends on work spread across the
-worker threads and need not equal either their sum or their maximum. In serial mode they do
-not overlap, so elapsed time tracks their sum plus command overhead.
+sorted by severity (`ERROR`, then `warning`, `ok`, `info` and `skipped`, the labels the table
+prints), retaining report order within each severity. Each row's duration is its probe's own
+wall time. In parallel mode the durations overlap: the command's elapsed time is at least the
+longest single row duration and, apart from command overhead, at most their sum. In serial
+mode they do not overlap, so elapsed time tracks their sum plus command overhead.
 Lock files flagged by `stale-locks`
 include holder diagnostics. Run `orbit doctor --fix-stale-locks` to clear a dead holder's
 record after acquiring the advisory lock and rechecking the holder. The repair preserves
