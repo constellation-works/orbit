@@ -8,7 +8,7 @@
 use std::fs;
 use std::io::Write as _;
 
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use orbit_core::application::automation::{consumer_key, evaluate_auto_task};
 use orbit_types::workflow::automation::BatchState;
 use serde_json::{Value, json};
@@ -113,6 +113,30 @@ pub(super) fn minted_crew(fixture: &Fixture, runtime: &orbit_core::OrbitRuntime)
     let task = fixture.json(&["task", "show", &task_id, "--json"]);
     assert_eq!(task["crew_source"], POOL_KEY, "{task}");
     task["crew"].as_str().unwrap().to_string()
+}
+
+/// Evaluate the consumer one hour after its last held tick, so the stall it has
+/// held since then escalates, and return the body of the friction filed for it.
+pub(super) fn escalated_hold_body(fixture: &Fixture, runtime: &orbit_core::OrbitRuntime) -> String {
+    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let later = Utc::now() + Duration::minutes(61);
+    let held = evaluate_auto_task(runtime, &definition, false, later)
+        .expect("a held batch does not fail the tick");
+    assert_eq!(held.reason, "stalled: crew_os_ineligible");
+    let frictions = fixture.json(&["friction", "list", "--status", "all", "--json"]);
+    let filed = frictions
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|friction| {
+            friction["title"]
+                .as_str()
+                .is_some_and(|title| title.contains("is stalled on delivery-code-review"))
+        })
+        .unwrap_or_else(|| panic!("the escalated hold is filed as a friction: {frictions}"));
+    let id = filed["id"].as_str().unwrap().to_string();
+    let shown = fixture.json(&["friction", "show", &id, "--json"]);
+    shown["body"].as_str().unwrap().to_string()
 }
 
 /// [ORB-17104] The owner's pool drew `muse-wonder` for a batch whose review
@@ -276,6 +300,19 @@ fn a_pool_no_host_can_run_holds_the_batch_until_configuration_admits_a_crew() {
                 .iter()
                 .any(|problem| problem.as_str().unwrap().contains("muse-calm"))),
         "{config}"
+    );
+
+    // Past the escalation window the same hold is filed with the way out an OS
+    // exclusion needs, and names no refused model.
+    let body = escalated_hold_body(&fixture, &runtime);
+    assert!(
+        body.contains("change the definition's `os:` tags"),
+        "{body}"
+    );
+    assert!(body.contains("os:linux"), "{body}");
+    assert!(
+        !body.contains("refused until"),
+        "an OS-only hold names no refused model: {body}"
     );
 
     // Adding a crew a linux host can run to the pool mints the held batch on

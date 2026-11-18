@@ -22,7 +22,7 @@ use crate::review_after_landing_cli::{
     commit, enable_review_crew, in_isolated_child, land_and_evaluate, open_runtime, retarget,
     set_policy, toggle, trigger,
 };
-use crate::review_crew_os_cli::{minted_crew, reclaim};
+use crate::review_crew_os_cli::{escalated_hold_body, minted_crew, reclaim};
 
 const CONSUMER: &str = "delivery-code-review";
 const POOL_KEY: &str = "workflow.purpose_crews.review";
@@ -311,4 +311,61 @@ fn a_pool_whose_every_model_is_refused_holds_the_batch_until_the_refusal_clears(
     let minted = released.active.expect("the batch is minted");
     assert_eq!(minted.action_key, active.action_key);
     assert_eq!(minted.batch, active.batch);
+}
+
+/// [ORB-25584] A hold that only a refused model causes, once it escalates past
+/// the window, is filed with the model-access way out and names no `os:` tag
+/// remediation: editing tags cannot clear a refusal.
+#[test]
+fn an_escalated_model_refusal_hold_names_model_access_not_os_tags() {
+    const TEST: &str = "review_crew_model_access_cli::an_escalated_model_refusal_hold_names_model_access_not_os_tags";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+
+    let (fixture, model, account) = consumer_with_pool(r#"["muse-wonder", "muse-alias"]"#);
+    let access = (model.clone(), account);
+    let runtime = open_runtime(&fixture);
+    seed_access(
+        &runtime,
+        TASK_LOCAL_PIPELINE_JOB,
+        &access,
+        true,
+        Duration::minutes(5),
+    );
+    assert_eq!(
+        land_and_evaluate(&fixture, &runtime, "landed\n"),
+        None,
+        "no review task is minted with a refused model"
+    );
+    let hold = hold_of(&fixture);
+    assert_eq!(hold["excluded"], json!([]), "{hold}");
+
+    let body = escalated_hold_body(&fixture, &runtime);
+    let refused = hold["model_refused"].as_array().unwrap();
+    assert_eq!(refused.len(), 2, "{hold}");
+    for crew in refused {
+        let name = crew["crew"].as_str().unwrap();
+        let clears_at = crew["clears_at"].as_str().unwrap();
+        let until = chrono::DateTime::parse_from_rfc3339(clears_at)
+            .unwrap()
+            .to_rfc3339();
+        assert!(
+            body.contains(name) && body.contains(&model) && body.contains(&until),
+            "the escalation names `{name}` with its model and when it lapses: {body}"
+        );
+    }
+    assert!(
+        body.contains("whose model is not refused")
+            && body.contains("a verified success of its model"),
+        "the escalation offers model-access remediation: {body}"
+    );
+    assert!(
+        !body.contains("`os:` tags"),
+        "a refused model is not cleared by editing os tags: {body}"
+    );
+    assert!(
+        !body.contains("executor can run on one of"),
+        "a refused model is not cleared by an OS-matching crew: {body}"
+    );
 }
