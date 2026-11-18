@@ -1033,14 +1033,21 @@ fn timed_out_source_reaps_its_leader_and_kills_the_grandchild() {
     ) {
         return;
     }
-    let _git_ceiling = orbit_common::test_env::scoped([
-        ("GIT_CEILING_DIRECTORIES", Some(git_ceiling.as_str())),
-        (GIT_CEILING_FOR_ISOLATED_CHILD, Some(git_ceiling.as_str())),
-    ]);
     // SAFETY: this isolated child adopts orphaned grandchildren so the test
     // can reap them and prove they are gone, even with a non-reaping PID 1.
     assert_eq!(unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) }, 0);
     let root = tempfile::tempdir().unwrap();
+    // Git splits GIT_CEILING_DIRECTORIES on colons. Stop discovery at the
+    // checkout, and also at the fixture's parent when that path is UTF-8 and
+    // colon-free, so a TMPDIR nested in another repository stays isolated.
+    let ceilings = match root.path().parent().and_then(|parent| parent.to_str()) {
+        Some(parent) if !parent.contains(':') => format!("{git_ceiling}:{parent}"),
+        _ => git_ceiling.clone(),
+    };
+    let _git_ceiling = orbit_common::test_env::scoped([
+        ("GIT_CEILING_DIRECTORIES", Some(ceilings.as_str())),
+        (GIT_CEILING_FOR_ISOLATED_CHILD, Some(git_ceiling.as_str())),
+    ]);
     let source = Source::new(root.path());
     let started = Instant::now();
     let result = source.git(&[
