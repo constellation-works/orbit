@@ -11,10 +11,16 @@
 //! `resident_observe` therefore creates a detached worktree of the
 //! workspace `HEAD` under `.orbit/state/worktrees/resident-<run_id>` — the
 //! root sandbox resolution already recognizes as a managed worktree — and
-//! the brief names it as the cycle's `workspace_path`. `resident_finalize`
-//! removes it when Git accepts the removal. A registered worktree Git
-//! refuses (a lock, or any other refusal) stays in place and the refusal is
-//! reported. A directory that is not a registered worktree is removed only
+//! the brief names it as the cycle's `workspace_path`. The checkout uses
+//! Git's parallel checkout workers: on a representative checkout that is
+//! most of observe's cost, and the files written are identical.
+//! `resident_finalize` removes it when Git accepts the removal. For an
+//! unlocked registered worktree it first clears the contents in parallel
+//! (Git's own deletion walks the tree serially) and then lets
+//! `git worktree remove --force` unregister and remove the directory, so
+//! Git remains the arbiter of the removal. A locked worktree is never
+//! cleared first: it goes straight to Git, whose refusal stays in place
+//! and is reported. A directory that is not a registered worktree is removed only
 //! when this run's owner record proves the run created it [ORB-24317]; the
 //! directory name is not that proof. Nothing the agent writes in the
 //! worktree is committed or delivered.
@@ -145,9 +151,15 @@ impl OrbitRuntime {
             return Err(error);
         }
         let target = utf8_path(&path)?;
+        let workers = format!(
+            "checkout.workers={}",
+            std::thread::available_parallelism().map_or(1, |count| count.get().clamp(1, 16))
+        );
         let output = run_git_within(
             &self.paths().repo_root,
-            &["worktree", "add", "--detach", "--quiet", &target, head],
+            &[
+                "-c", &workers, "worktree", "add", "--detach", "--quiet", &target, head,
+            ],
             GIT_CHECKOUT_TIMEOUT,
         )
         .map_err(|error| OrbitError::Execution(error.to_string()))?;
@@ -184,10 +196,13 @@ impl OrbitRuntime {
         }
         let state_dir = &self.paths().state_dir;
         let repo_root = &self.paths().repo_root;
-        if worktree_is_registered(repo_root, &path)? {
-            self.remove_registered_worktree(run_id, &path, &target)
-        } else {
-            remove_if_owned(repo_root, state_dir, run_id, &path, &target)
+        match registered_worktree_state(repo_root, &path)? {
+            RegisteredWorktree::Registered { locked } => {
+                self.remove_registered_worktree(run_id, &path, &target, locked)
+            }
+            RegisteredWorktree::NotRegistered => {
+                remove_if_owned(repo_root, state_dir, run_id, &path, &target)
+            }
         }
     }
 
@@ -196,7 +211,18 @@ impl OrbitRuntime {
         run_id: &str,
         path: &Path,
         target: &str,
+        locked: bool,
     ) -> Result<(), OrbitError> {
+        if let Ownership::Denied(reason) = ownership(&self.paths().state_dir, run_id, path) {
+            return Err(preserved(target, &reason));
+        }
+        // Git refuses a locked worktree and that refusal must leave its
+        // contents untouched, so only an unlocked worktree is cleared
+        // first. Clearing is best-effort: on any failure Git's own removal
+        // below still runs and reports the outcome.
+        if !locked {
+            let _ = clear_worktree_contents(path);
+        }
         let path_arg = utf8_path(path)?;
         let output = run_git_within(
             &self.paths().repo_root,
@@ -319,7 +345,23 @@ fn warn_if_prune_fails(repo_root: &Path, target: &str) {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RegisteredWorktree {
+    NotRegistered,
+    Registered { locked: bool },
+}
+
 fn worktree_is_registered(repo_root: &Path, path: &Path) -> Result<bool, OrbitError> {
+    Ok(matches!(
+        registered_worktree_state(repo_root, path)?,
+        RegisteredWorktree::Registered { .. }
+    ))
+}
+
+fn registered_worktree_state(
+    repo_root: &Path,
+    path: &Path,
+) -> Result<RegisteredWorktree, OrbitError> {
     let output = run_git(repo_root, &["worktree", "list", "--porcelain"])
         .map_err(|error| OrbitError::Execution(error.to_string()))?;
     if !output.success {
@@ -331,32 +373,166 @@ fn worktree_is_registered(repo_root: &Path, path: &Path) -> Result<bool, OrbitEr
             ),
         ));
     }
-    porcelain_lists(&output.stdout, path)
+    porcelain_state(&output.stdout, path)
 }
 
-fn porcelain_lists(porcelain: &str, path: &Path) -> Result<bool, OrbitError> {
+fn porcelain_state(porcelain: &str, path: &Path) -> Result<RegisteredWorktree, OrbitError> {
+    // Porcelain records are blank-line separated: a `worktree <path>` line
+    // opens a record and its attribute lines (including `locked`) follow.
+    let mut records: Vec<(&Path, bool)> = Vec::new();
+    let mut current: Option<(&Path, bool)> = None;
+    for line in porcelain.lines() {
+        if let Some(recorded) = line.strip_prefix("worktree ") {
+            if let Some(record) = current.take() {
+                records.push(record);
+            }
+            if !recorded.is_empty() {
+                current = Some((Path::new(recorded), false));
+            }
+        } else if (line == "locked" || line.starts_with("locked "))
+            && let Some((_, locked)) = &mut current
+        {
+            *locked = true;
+        }
+    }
+    if let Some(record) = current.take() {
+        records.push(record);
+    }
+    // Fast path: Git lists the canonical absolute path, so raw equality
+    // normally settles this without resolving every registered worktree
+    // on the host (there may be many) through the filesystem.
+    for (recorded_path, locked) in &records {
+        if *recorded_path == path {
+            return Ok(RegisteredWorktree::Registered { locked: *locked });
+        }
+    }
     let canonical = std::fs::canonicalize(path).map_err(|error| {
         preserved(
             &path_text(path),
             &format!("could not resolve it to compare with git's worktree list: {error}"),
         )
     })?;
-    for line in porcelain.lines() {
-        let Some(recorded) = line.strip_prefix("worktree ") else {
-            continue;
-        };
-        if recorded.is_empty() {
-            continue;
-        }
-        let recorded_path = Path::new(recorded);
-        if recorded_path == path || recorded_path == canonical {
-            return Ok(true);
-        }
-        if std::fs::canonicalize(recorded_path).ok().as_ref() == Some(&canonical) {
-            return Ok(true);
+    for (recorded_path, locked) in &records {
+        if *recorded_path == canonical
+            || std::fs::canonicalize(recorded_path).ok().as_ref() == Some(&canonical)
+        {
+            return Ok(RegisteredWorktree::Registered { locked: *locked });
         }
     }
-    Ok(false)
+    Ok(RegisteredWorktree::NotRegistered)
+}
+
+fn remove_worktree_entry(entry: &Path) -> std::io::Result<()> {
+    let metadata = std::fs::symlink_metadata(entry)?;
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        std::fs::remove_dir_all(entry)
+    } else {
+        std::fs::remove_file(entry)
+    }
+}
+
+/// Delete everything under a registered worktree except its `.git` link and
+/// owner nonce, fanning the entries one level down across threads. Keeping
+/// the nonce until Git confirms removal lets a restarted cleanup prove
+/// ownership after an interrupted clear. Git then only has to unregister
+/// and remove the near-empty directory. Symlinks are unlinked, never followed.
+fn clear_worktree_contents(path: &Path) -> std::io::Result<()> {
+    // Work units are the entries one level down (plus top-level files):
+    // a single top-level directory can hold most of the checkout, so
+    // fanning out only at the top level would leave one thread with
+    // nearly all the deletion while the rest idle.
+    let mut entries: Vec<PathBuf> = Vec::new();
+    let mut parents: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.file_name() == ".git" {
+            continue;
+        }
+        let entry_path = entry.path();
+        let is_dir = std::fs::symlink_metadata(&entry_path)
+            .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink());
+        if !is_dir {
+            entries.push(entry_path);
+            continue;
+        }
+        match std::fs::read_dir(&entry_path) {
+            Ok(children) => {
+                let mut any = false;
+                for child in children {
+                    let child = child?;
+                    if entry.file_name() == ".orbit" && child.file_name() == OWNER_NONCE_FILE {
+                        any = true;
+                        continue;
+                    }
+                    entries.push(child.path());
+                    any = true;
+                }
+                if any {
+                    parents.push(entry_path);
+                } else {
+                    entries.push(entry_path);
+                }
+            }
+            Err(_) => entries.push(entry_path),
+        }
+    }
+    let workers = std::thread::available_parallelism().map_or(1, |count| count.get().clamp(1, 8));
+    if workers <= 1 || entries.len() <= 1 {
+        for entry in &entries {
+            remove_worktree_entry(entry)?;
+        }
+        for parent in &parents {
+            let _ = std::fs::remove_dir(parent);
+        }
+        return Ok(());
+    }
+    let chunks: Vec<Vec<PathBuf>> = (0..workers)
+        .map(|index| {
+            entries
+                .iter()
+                .skip(index)
+                .step_by(workers)
+                .cloned()
+                .collect()
+        })
+        .filter(|chunk: &Vec<PathBuf>| !chunk.is_empty())
+        .collect();
+    std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for chunk in &chunks {
+            handles.push(scope.spawn(move || {
+                let mut first_error: Option<std::io::Error> = None;
+                for entry in chunk {
+                    if let Err(error) = remove_worktree_entry(entry) {
+                        first_error.get_or_insert(error);
+                    }
+                }
+                first_error
+            }));
+        }
+        let mut first_error: Option<std::io::Error> = None;
+        for handle in handles {
+            match handle.join() {
+                Ok(Some(error)) => {
+                    first_error.get_or_insert(error);
+                }
+                Ok(None) => {}
+                Err(_) => {
+                    first_error.get_or_insert_with(|| {
+                        std::io::Error::other("worktree clear worker panicked")
+                    });
+                }
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    })?;
+    for parent in &parents {
+        let _ = std::fs::remove_dir(parent);
+    }
+    Ok(())
 }
 
 fn git_failure_detail(output: &GitCommandOutput) -> String {

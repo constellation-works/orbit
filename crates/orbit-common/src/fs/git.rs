@@ -274,6 +274,8 @@ fn looks_like_remote_auth_or_network_failure(stderr_lower: &str) -> bool {
 const ADMITTED_CONFIG_OVERRIDES: &[(&str, Option<&str>)] = &[
     ("core.hooksPath", Some("/dev/null")),
     ("core.fsmonitor", Some("false")),
+    // An integer worker count for parallel checkout; it names no program.
+    ("checkout.workers", None),
     ("gc.auto", None),
     ("protocol.file.allow", None),
     ("user.name", None),
