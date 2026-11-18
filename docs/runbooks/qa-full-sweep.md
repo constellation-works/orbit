@@ -4,8 +4,8 @@ summary: Mint, execute, and judge the workspace-local complete pre-release Orbit
 tags: [operations, qa, release, automation]
 paths: [".orbit/auto_tasks/qa-full-sweep.yaml", "scripts/qa-full-sweep*", "crates/orbit-core/assets/auto_tasks/qa-full-sweep.yaml"]
 related_features: [auto-tasks, activity-job, dashboard, task-publication]
-related_artifacts: [ORB-12010, ORB-15327]
-last_validated: 2026-11-08
+related_artifacts: [ORB-12010, ORB-15327, ORB-25434, ORB-25557, F2026-11-348]
+last_validated: 2026-11-18
 ---
 
 # Full pre-release QA sweep
@@ -274,6 +274,138 @@ with `cargo test -p <crate>`, which reuses the macOS job's per-crate builds;
 `ci-guardrails.sh` passes `--workspace-build` instead so the Linux `ci` job
 lists from the workspace test build its nextest pass already made rather than
 compiling the crates a second time under per-crate feature resolution.
+
+## Interrupted candidate builds and verified recovery
+
+When executing `--build-candidate` in the foreground, external signals or supervisor timeouts
+can terminate the compilation process before any test scenario executes. This section documents
+how to distinguish such interruptions from genuine scenario failures, retain attempt evidence,
+execute the bounded recovery route, handle stripped browser environments, and verify cleanup.
+
+### Distinguishing interrupted builds from failed scenarios
+
+An interrupted foreground build and a scenario failure differ in origin, observable symptoms,
+and reporting:
+
+- **Terminated foreground build**: An external signal (such as `SIGTERM`, signal 15, yielding
+  native exit status 143) or executor timeout terminates the process during candidate
+  compilation or harness initialization. Crucially, **no report is produced** (`report_produced`
+  is false), and no scenario assertions are evaluated. The failure reflects an environment or
+  process-group disruption during fresh candidate compilation (for example `last_observed_phase:
+  "isolated cargo build, orbit-core compilation"`). It is **not** evidence of a product defect
+  or candidate regression. Speculative bug tasks must not be filed for an uncompleted build.
+- **Failed scenario**: The candidate builds cleanly, source provenance passes, and scenarios
+  execute under harness supervision. Even when commands exit nonzero or assertions fail, the
+  harness completes and generates `qa-full-sweep-report.json`, recording structured `FAIL`,
+  `BLOCKED`, or `NOT_RUN` outcomes in `results[]` alongside scenario logs in `sweep-logs/`.
+
+When an interrupted build occurs:
+1. Retain the attempt execution logs (for example `sweep-command.log` and `sweep-retry.log`) under
+   `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`).
+2. Record the attempt metadata in a task artifact, such as `interrupted-attempts.json`, capturing
+   `source_revision`, `candidate_id` (if available), native exit code (e.g. 143), `report_produced: false`,
+   the last observed compilation phase, and retained scratch directories under `.orbit/tmp/`
+   (for example `.orbit/tmp/orbit-qa-full-<unique>`).
+3. If the signal sender or trigger cannot be definitively determined, record the cause honestly as
+   unknown or unconfirmed (for example `"Unconfirmed external SIGTERM; not evidence of a product defect"`).
+   Never invent an unverified cause, culprit daemon, or false bug finding.
+4. Inspect the post-exit process table (e.g. `pgrep -fa cargo`) to confirm that no detached or
+   orphan worker processes survived the termination before retrying.
+
+### Bounded permitted foreground route
+
+When native shell foreground executions are subject to external signal termination, the permitted
+recovery route is to run the candidate build and sweep through the Orbit `proc.spawn` tool:
+
+- **Bounded timeout**: `proc.spawn` accepts an explicit `timeout_ms` parameter. Inside a managed
+  activity, the timeout ceiling is clamped to the activity's remaining wall-clock budget (reported
+  as `timeout_ceiling_ms`), up to a 45-minute ceiling (2,700,000 ms). Set an explicit timeout
+  sufficient for a clean build and full sweep (for example `timeout_ms: 1800000`, 30 minutes; a typical
+  full build and sweep takes 600–700 seconds).
+- **Build-budget admission**: The command must remain admitted through the repository build budget.
+  Prepend `scripts/build-budget.py --` to the command line:
+  ```bash
+  scripts/build-budget.py -- ./scripts/qa-full-sweep.sh --build-candidate \
+    --run-commands --website-build \
+    --output .orbit/tmp/qa-full-sweep/qa-full-sweep-report.json
+  ```
+- **Tool invocation**: Dispatch `proc.spawn` via `orbit tool run proc.spawn --input-file <file>`
+  using structured JSON inputs:
+  ```json
+  {
+    "program": "bash",
+    "args": [
+      "/absolute/path/to/.orbit/tmp/qa-full-sweep/run-sweep-budgeted.sh"
+    ],
+    "timeout_ms": 1800000
+  }
+  ```
+  The runner script under `.orbit/tmp/` sets `PYTHONUNBUFFERED=1`, invokes the admitted command,
+  captures exit status, and preserves output logs.
+
+### Browser kit inputs under sanitized process execution
+
+`proc.spawn` launches child processes with a sanitized environment that does not inherit caller
+environment variables. In particular, `ORBIT_BROWSER_KIT_ENV`, `PLAYWRIGHT_MODULE`,
+`PLAYWRIGHT_BROWSERS_PATH`, and `LD_LIBRARY_PATH` are stripped unless explicitly handled. If
+`qa-full-sweep.sh` runs without browser kit arguments, `ux-measurement-browser` cannot discover
+Chromium and reports `NOT_RUN`.
+
+Two recovery approaches are permitted:
+
+1. **Explicit argument declaration in runner**: Source `ORBIT_BROWSER_KIT_ENV` inside the runner
+   script or resolve the paths in advance and pass them as explicit CLI arguments to
+   `qa-full-sweep.sh`:
+   - `--playwright-module "$PLAYWRIGHT_MODULE"`
+   - `--playwright-browsers-path "$PLAYWRIGHT_BROWSERS_PATH"`
+   - `--browser-ld-library-path "$LD_LIBRARY_PATH"` (on Linux)
+   - `--browser-fontconfig-file "$FONTCONFIG_FILE"` (if configured)
+   - `--browser-evidence-dir .orbit/tmp/qa-full-sweep/browser`
+2. **Targeted follow-up fulfillment**: If the initial budgeted sweep ran with a sanitized
+   environment and produced a complete report where `ux-measurement-browser` remained `NOT_RUN`
+   solely due to missing kit environment:
+   - Preserve the initial report as an artifact (e.g. `qa-full-sweep-original.json.gz`).
+   - Execute a foreground follow-up script with the declared kit sourced:
+     ```bash
+     source "$ORBIT_BROWSER_KIT_ENV"
+     python3 .orbit/tmp/qa-full-sweep/run-browser-inventory.py
+     ```
+   - The follow-up script imports `scripts/test-qa-full-sweep.py`, inspects browser capability with
+     `inspect_browser_capability()`, runs the exact inventory command expanded with `{playwright_module}`
+     and `{evidence_dir}`, validates TAP results with `validate_node_test_evidence()`, verifies
+     source candidate continuity (`candidate_source()['candidate_id'] == report['candidate']['id']`),
+     and records `harness-result.json` and file digests in `retained_evidence`.
+   - Update `results[]` for `ux-measurement-browser`, update `browser` capability metadata, and
+     recalculate `decision` (`PASS` if full else `INCOMPLETE`).
+   - Document the replacement in `evidence_updates` in `qa-full-sweep-report.json`, recording the
+     scenario ID, exact follow-up command, reason, log artifact (`browser-inventory.log`), scratch
+     root, and `cleanup_verified`.
+
+### Verification of report and cleanup
+
+Before handoff, verify both report integrity and complete process cleanup without relaxing scenario
+or cleanup requirements:
+
+- **Report integrity**:
+  - Reopen `qa-full-sweep-report.json` and confirm `candidate.id` matches the source revision hash.
+  - Check that all inventory scenarios are accounted for in `results[]` (78+ PASS, declared capability
+    gaps recorded as NOT_RUN/BLOCKED).
+  - Verify that `decision` is `INCOMPLETE` whenever required capability gaps (such as macOS on Linux or
+    unprivileged user namespaces) remain; follow-up execution must not convert genuine host gaps to PASS.
+  - If `evidence_updates` is present, confirm that each updated scenario names its exact command,
+    log artifact, and reason.
+  - Verify that every referenced log in `sweep-logs/` and `retained_evidence` exists under `.orbit/tmp/`
+    and matches its recorded SHA256 digest.
+- **Cleanup verification**:
+  - Confirm `cleanup_verified` is true on all executed scenario rows and follow-up executions.
+  - Check the report's `scratch_cleanup`: verify that `detached_workers` is empty, `unverified_commands`
+    is empty, and `observation_complete` is true.
+  - Confirm no candidate binaries, Node processes, Chromium instances, or Cargo build processes
+    remain in the process table.
+  - Scratch roots from earlier interrupted attempts (e.g. `.orbit/tmp/orbit-qa-full-*`) remain ignored
+    under `.orbit/tmp/` as audit evidence; verify they hold no live processes.
+  - Never execute destructive cleanup (such as raw `rm -rf` on workspace paths or untracked directories);
+    rely on the harness supervisor's process-group settlement and isolated scratch roots.
 
 ## Executed cases and retained evidence
 
