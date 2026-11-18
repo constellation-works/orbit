@@ -14,7 +14,10 @@
 //!    with the task's `os:` tags drops out: no host could run that task.
 //!    This is a hard filter. With no member left,
 //!    the consumer holds the batch and reports which crews were excluded;
-//!    a single crew is never replaced by another;
+//!    a single crew is never replaced by another. A Muse member whose exact
+//!    model this host's provider account was verified to refuse in the last
+//!    [`MUSE_MODEL_REFUSAL_WINDOW_HOURS`] hours (unless a newer success cleared
+//!    it) drops out the same way, whichever task observed the refusal;
 //! 1. a member holding no ticket, or one this host cannot run (undefined or
 //!    disabled), drops out;
 //! 2. a member whose provider is at its usage limit here drops out, unless
@@ -33,16 +36,18 @@
 
 use std::collections::BTreeSet;
 
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_config::{PRE_LANDING_REVIEW_CREW_KEY, REVIEW_CREW_KEY, canonical_crew_pool};
+use orbit_types::identity::{AutoEffortChoice, Crew};
 use orbit_types::task::TaskOsRequirement;
 use orbit_types::workflow::ReviewCrewPoolMember;
-use orbit_types::workflow::automation::recovery::OsExcludedCrew;
+use orbit_types::workflow::automation::recovery::{ModelRefusedCrew, OsExcludedCrew};
 
 use crate::OrbitRuntime;
 use crate::application::contracts::CrewCandidate;
 use crate::application::contracts::CrewPoolDraw;
+use crate::application::job::crew_pools::{MUSE_MODEL_REFUSAL_WINDOW_HOURS, is_muse_crew};
 
 /// How each review picks from a pool, as `orbit config show` and `orbit
 /// doctor` state it.
@@ -76,22 +81,7 @@ impl OrbitRuntime {
         let mut candidates = Vec::new();
         let mut refusal = None;
         for member in pool.iter().filter(|member| member.weight > 0) {
-            // A `<crew>@auto` member resolves without a subject here, to its
-            // crew's configured effort; the review gate re-resolves it
-            // against the reviewable diff ([`Self::review_auto_effort_subject`]).
-            let resolved = match orbit_types::identity::auto_effort_base(&member.name) {
-                Some(base) => self
-                    .resolve_crew_for_task(Some(base), None)
-                    .map(|crew| {
-                        let choice = self.resolve_auto_effort(&crew, None);
-                        self.resolve_crew_for_task(Some(&choice.resolved), None)
-                            .map(|crew| (crew, Some(choice)))
-                    })
-                    .and_then(|resolved| resolved),
-                None => self
-                    .resolve_crew_for_task(Some(&member.name), None)
-                    .map(|crew| (crew, None)),
-            };
+            let resolved = self.resolve_review_pool_member(&member.name);
             match resolved {
                 Ok((crew, auto_effort)) => candidates.push(CrewCandidate {
                     crew,
@@ -111,6 +101,82 @@ impl OrbitRuntime {
             }));
         }
         Ok(candidates)
+    }
+
+    /// The crew a pool member names on this host, with how `<crew>@auto`
+    /// resolved it.
+    ///
+    /// A `<crew>@auto` member resolves without a subject here, to its crew's
+    /// configured effort; the review gate re-resolves it against the
+    /// reviewable diff ([`Self::review_auto_effort_subject`]).
+    fn resolve_review_pool_member(
+        &self,
+        name: &str,
+    ) -> Result<(Crew, Option<AutoEffortChoice>), OrbitError> {
+        match orbit_types::identity::auto_effort_base(name) {
+            Some(base) => self
+                .resolve_crew_for_task(Some(base), None)
+                .map(|crew| {
+                    let choice = self.resolve_auto_effort(&crew, None);
+                    self.resolve_crew_for_task(Some(&choice.resolved), None)
+                        .map(|crew| (crew, Some(choice)))
+                })
+                .and_then(|resolved| resolved),
+            None => self
+                .resolve_crew_for_task(Some(name), None)
+                .map(|crew| (crew, None)),
+        }
+    }
+
+    /// Step 0b, for an after-landing review task: drop the members whose
+    /// Muse model this host's provider account was verified to refuse in an
+    /// owner-local implementation run within
+    /// [`MUSE_MODEL_REFUSAL_WINDOW_HOURS`], unless a newer success of it
+    /// cleared the refusal. A member this host cannot resolve stays: step 1
+    /// reports it. The scan reads run history only when a member is a Muse
+    /// crew.
+    pub(crate) fn review_pool_minus_refused_models(
+        &self,
+        pool: Vec<ReviewCrewPoolMember>,
+        now: DateTime<Utc>,
+    ) -> Result<(Vec<ReviewCrewPoolMember>, Vec<ModelRefusedCrew>), OrbitError> {
+        let resolved = pool
+            .into_iter()
+            .map(|member| {
+                let crew = self
+                    .resolve_review_pool_member(&member.name)
+                    .ok()
+                    .map(|(crew, _)| crew);
+                (member, crew)
+            })
+            .collect::<Vec<_>>();
+        if !resolved
+            .iter()
+            .any(|(_, crew)| crew.as_ref().is_some_and(is_muse_crew))
+        {
+            return Ok((
+                resolved.into_iter().map(|(member, _)| member).collect(),
+                Vec::new(),
+            ));
+        }
+        let refusals = self.workspace_muse_model_refusals(now)?;
+        let window = Duration::hours(MUSE_MODEL_REFUSAL_WINDOW_HOURS);
+        let mut kept = Vec::new();
+        let mut refused = Vec::new();
+        for (member, crew) in resolved {
+            match crew
+                .as_ref()
+                .and_then(|crew| refusals.refused_at(crew).map(|at| (crew, at)))
+            {
+                Some((crew, refused_at)) => refused.push(ModelRefusedCrew {
+                    crew: member.name,
+                    model: crew.assignment.model.clone(),
+                    clears_at: refused_at + window,
+                }),
+                None => kept.push(member),
+            }
+        }
+        Ok((kept, refused))
     }
 
     /// Steps 2 to 4 over candidates [`Self::review_crew_candidates`] left.

@@ -86,7 +86,7 @@ fn linux_tagged_consumer() -> Fixture {
 
 /// Put the consumer's batch back in the shape a failed mint leaves: claimed
 /// under `action_key`, with no action.
-fn reclaim(runtime: &orbit_core::OrbitRuntime, action_key: &str) {
+pub(super) fn reclaim(runtime: &orbit_core::OrbitRuntime, action_key: &str) {
     let consumer = consumer_key(runtime, "auto-task", CONSUMER).unwrap();
     let store = runtime.automation_store().unwrap();
     let before = store.automation_state(&consumer).unwrap().unwrap();
@@ -101,7 +101,7 @@ fn reclaim(runtime: &orbit_core::OrbitRuntime, action_key: &str) {
 
 /// Evaluate once, which must not fail, and return the crew of the review
 /// task the resumed claim minted.
-fn minted_crew(fixture: &Fixture, runtime: &orbit_core::OrbitRuntime) -> String {
+pub(super) fn minted_crew(fixture: &Fixture, runtime: &orbit_core::OrbitRuntime) -> String {
     let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
     let diagnostic = evaluate_auto_task(runtime, &definition, false, Utc::now())
         .expect("a resumed claim evaluates without an error");

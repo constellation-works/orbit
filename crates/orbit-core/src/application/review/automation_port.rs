@@ -2,10 +2,12 @@
 
 use std::collections::BTreeSet;
 
+use chrono::{DateTime, Utc};
+
 use orbit_automation::AutomationError;
 use orbit_common::OrbitError;
 use orbit_types::workflow::ReviewCrewPoolMember;
-use orbit_types::workflow::automation::recovery::OsExcludedCrew;
+use orbit_types::workflow::automation::recovery::{ModelRefusedCrew, OsExcludedCrew};
 use orbit_types::workflow::automation::{AutomationState, SourcePage};
 
 use super::coverage::exclusions;
@@ -40,6 +42,14 @@ impl AutomationReviewPort for OrbitRuntime {
         tags: &[String],
     ) -> Result<(Vec<ReviewCrewPoolMember>, Vec<OsExcludedCrew>), OrbitError> {
         self.review_pool_by_os(pool, tags)
+    }
+
+    fn review_pool_without_refused_models(
+        &self,
+        pool: Vec<ReviewCrewPoolMember>,
+        now: DateTime<Utc>,
+    ) -> Result<(Vec<ReviewCrewPoolMember>, Vec<ModelRefusedCrew>), OrbitError> {
+        self.review_pool_minus_refused_models(pool, now)
     }
 
     fn review_pool_candidates(
