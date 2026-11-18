@@ -78,15 +78,18 @@ pub(super) fn claude_structured_output_exhaustion(provider: &str, stdout: &[u8])
     if provider != "claude" {
         return None;
     }
-    let mut frames = serde_json::Deserializer::from_slice(stdout).into_iter::<Value>();
-    let mut terminal = frames.next()?.ok()?;
-    for frame in frames {
-        if provider_failure(provider, &terminal).is_some()
-            || terminal.get("type").and_then(Value::as_str) == Some("result")
+    let raw = serde_json::Deserializer::from_slice(stdout).into_iter::<Value>();
+    let mut frames: Vec<Value> = Vec::new();
+    for item in raw {
+        frames.push(item.ok()?);
+    }
+    let terminal = frames.last()?.clone();
+    for earlier in &frames[..frames.len().saturating_sub(1)] {
+        if provider_failure(provider, earlier).is_some()
+            || earlier.get("type").and_then(Value::as_str) == Some("result")
         {
             return None;
         }
-        terminal = frame.ok()?;
     }
     if terminal.get("schemaVersion").is_some()
         || terminal.get("type").and_then(Value::as_str) != Some("result")
@@ -110,6 +113,36 @@ pub(super) fn claude_structured_output_exhaustion(provider: &str, stdout: &[u8])
             .is_some_and(|value| !value.is_null() && value.as_str() != Some("tool_use"))
     {
         return None;
+    }
+    // A `tool_use` stop reason alone is not evidence of a formatting-only
+    // failure: the retry budget was spent on an assistant tool attempt, so
+    // require that attempt in the stream. A bare single-frame terminal keeps
+    // the ORB-24697 naming path with its stderr tail as secondary detail.
+    if terminal.get("stop_reason").and_then(Value::as_str) == Some("tool_use") {
+        let has_tool_attempt = frames[..frames.len().saturating_sub(1)]
+            .iter()
+            .any(|frame| {
+                frame.get("type").and_then(Value::as_str) == Some("assistant")
+                    && (frame
+                        .pointer("/message/content")
+                        .and_then(Value::as_array)
+                        .is_some_and(|content| {
+                            content.iter().any(|item| {
+                                item.get("type").and_then(Value::as_str) == Some("tool_use")
+                            })
+                        })
+                        || frame
+                            .get("content")
+                            .and_then(Value::as_array)
+                            .is_some_and(|content| {
+                                content.iter().any(|item| {
+                                    item.get("type").and_then(Value::as_str) == Some("tool_use")
+                                })
+                            }))
+            });
+        if !has_tool_attempt {
+            return None;
+        }
     }
     let errors = terminal.get("errors").filter(|value| !value.is_null());
     let error_messages = match errors {
