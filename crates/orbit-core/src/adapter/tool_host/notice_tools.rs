@@ -146,6 +146,7 @@ fn list_filter(input: &OperationInput) -> Result<NoticeListFilter, OrbitError> {
             })
             .transpose()?,
         host: input.optional_string("host")?,
+        ended_since: None,
         limit,
     })
 }

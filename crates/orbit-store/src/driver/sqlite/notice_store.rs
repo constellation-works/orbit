@@ -179,18 +179,38 @@ impl NoticeStoreBackend for Store {
         include_global: bool,
     ) -> Result<Vec<NoticeRow>, OrbitError> {
         let conn = self.read()?;
-        let rows = query_rows(
+        let Some(workspace_ids) = workspace_ids else {
+            return query_rows(
+                &conn,
+                &format!("SELECT {NOTICE_COLUMNS} FROM notices ORDER BY updated_at DESC, id"),
+                [],
+            );
+        };
+        // Select in SQL rather than reading every retained row and
+        // discarding other workspaces in memory.
+        let mut sql = format!("SELECT {NOTICE_COLUMNS} FROM notices WHERE (");
+        if workspace_ids.is_empty() {
+            sql.push_str("1 = 0");
+        } else {
+            sql.push_str("workspace_id IN (");
+            for index in 0..workspace_ids.len() {
+                if index > 0 {
+                    sql.push_str(", ");
+                }
+                sql.push('?');
+            }
+            sql.push(')');
+        }
+        sql.push(')');
+        if include_global {
+            sql.push_str(" OR scope = 'global'");
+        }
+        sql.push_str(" ORDER BY updated_at DESC, id");
+        query_rows(
             &conn,
-            &format!("SELECT {NOTICE_COLUMNS} FROM notices ORDER BY updated_at DESC, id"),
-            [],
-        )?;
-        Ok(rows
-            .into_iter()
-            .filter(|row| {
-                workspace_ids.is_none_or(|ids| ids.contains(&row.workspace_id))
-                    || (include_global && row.scope == "global")
-            })
-            .collect())
+            &sql,
+            rusqlite::params_from_iter(workspace_ids.iter()),
+        )
     }
 
     fn notices_linked_to(&self, task_id: &str) -> Result<Vec<NoticeRow>, OrbitError> {
