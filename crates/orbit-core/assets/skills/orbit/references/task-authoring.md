@@ -56,6 +56,22 @@ pickup. Do not confuse a task description with a design document or a transcript
   When no such stable bound is known yet, make the timing result informational,
   gate on a deterministic proxy (operation, request or payload counts), or file
   a measurement task first that establishes the fixture, spread and margin.
+  Before promotion, put the evidence route for each hard timing criterion in
+  the brief. Name the fixture artifact or exact seed and reset commands for a
+  disposable workspace and data set, the exact build and measurement commands,
+  and how to select the baseline revision and reviewed final candidate revision
+  with matching build profiles and settings. Specify the bounded same-fixture
+  protocol for both builds, including pacing, warmups, samples, repetitions,
+  aggregation and the unchanged-build control. Name the lane and host or host
+  requirements that can actually run it, who owns any necessary serial
+  host-owned run, and the exact log or task-artifact path the reviewer will use.
+  Have that run retain the resolved revisions, profiles, host environment,
+  fixture identity, samples, aggregate and unchanged-build spread at that path.
+  Use required validation only if its configured command runs this benchmark
+  on the reviewed candidate and retains the evidence. An empty command list or
+  a passing behavioral check supplies no timing result. Use the existing
+  post-deploy route only for a criterion that needs the deployed build, and
+  record that measurement as owed until it is run.
 
 Split work when independently deliverable outcomes or real dependency boundaries
 justify it. A coherent cross-layer change can remain one task; file count and
