@@ -102,7 +102,7 @@ export async function fetchAndRenderHosts({ probe = probeNext } = {}) {
   }
   if (checking) {
     try {
-      const payload = await fetchJson("/api/hosts");
+      const payload = await fetchJson("/api/hosts?probe=true");
       if (pendingProbe !== checking) return;
       const targets = new Map((lastPayload.hosts || []).map((row) => [row.machine_id, row.ssh]));
       live = new Map([...live].filter(([id, seen]) => targets.get(id) === seen.ssh));

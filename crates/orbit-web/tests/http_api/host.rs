@@ -465,3 +465,113 @@ exit 99
         },
     );
 }
+
+fn get_hosts_timed(origin: &str, path: &str) -> (Value, Duration) {
+    let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .unwrap();
+    let started = Instant::now();
+    let body = json_ok(client.get(format!("{origin}{path}")).send().unwrap());
+    (body, started.elapsed())
+}
+
+fn remote_row(body: &Value) -> &Value {
+    body["hosts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|host| host["name"] == "remote")
+        .expect("remote row")
+}
+
+/// Ordinary `GET /api/hosts` reads must not repeat a timed-out SSH probe:
+/// they return the cached inventory fast and truthfully unprobed, while an
+/// explicit `probe=true` still spends its budget and re-probes every time
+/// (so recovery is seen as soon as the remote answers again).
+#[cfg(unix)]
+#[test]
+fn ordinary_hosts_reads_do_not_probe_but_explicit_probe_reprobes() {
+    isolated(
+        "host::ordinary_hosts_reads_do_not_probe_but_explicit_probe_reprobes",
+        || {
+            use std::os::unix::fs::PermissionsExt;
+            let fixture = Fixture::new();
+            write_host_entry(&fixture, "remote", "hm_0000000000000099", "RR", 0);
+            let bin = fixture.path("timeout-bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            let script = bin.join("ssh");
+            std::fs::write(
+                &script,
+                "#!/bin/sh\nprintf 'probe\\n' >> \"$HOST_TIMEOUT_SSH_LOG\"\nsleep 1\nexit 99\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let log = fixture.path("timeout-ssh.log");
+            let server = fixture.server_with_path_envs(
+                false,
+                &bin,
+                &[("HOST_TIMEOUT_SSH_LOG", log.as_os_str())],
+            );
+            let ssh_calls = || {
+                std::fs::read_to_string(&log)
+                    .map(|calls| calls.lines().count())
+                    .unwrap_or(0)
+            };
+
+            // Repeated ordinary reads: cached, fast, no SSH, not probed.
+            let mut ordinary = Vec::new();
+            for _ in 0..10 {
+                let (body, elapsed) = get_hosts_timed(&server.origin, "/api/hosts");
+                ordinary.push(elapsed);
+                assert_eq!(remote_row(&body)["reachable"], json!(null), "{body}");
+                assert_eq!(remote_row(&body)["error"], json!(null), "{body}");
+            }
+            ordinary.sort();
+            let p95 = ordinary[(ordinary.len() * 95).div_ceil(100) - 1];
+            assert!(
+                p95 < Duration::from_millis(500),
+                "ordinary Hosts reads must return within 500 ms p95, got {p95:?} from {ordinary:?}"
+            );
+            assert_eq!(ssh_calls(), 0, "ordinary reads must open no SSH session");
+
+            // A deliberate fresh probe spends its budget and reports truthfully.
+            let (probed, elapsed) = get_hosts_timed(&server.origin, "/api/hosts?probe=true");
+            assert!(
+                elapsed >= Duration::from_millis(500),
+                "explicit probe should spend its probe budget, took {elapsed:?}"
+            );
+            assert!(ssh_calls() >= 1, "explicit probe must open an SSH session");
+            assert_eq!(remote_row(&probed)["reachable"], json!(false), "{probed}");
+            assert_eq!(
+                remote_row(&probed)["error"]["code"],
+                json!("unreachable_destination"),
+                "{probed}"
+            );
+            let after_first_probe = ssh_calls();
+
+            // The recent failure does not make later ordinary reads slow or
+            // falsely probed, and is not latched against the next fresh probe.
+            for _ in 0..5 {
+                let (body, elapsed) = get_hosts_timed(&server.origin, "/api/hosts");
+                assert!(
+                    elapsed < Duration::from_millis(500),
+                    "ordinary read after a timeout took {elapsed:?}"
+                );
+                assert_eq!(remote_row(&body)["reachable"], json!(null), "{body}");
+            }
+            assert_eq!(ssh_calls(), after_first_probe);
+            let (reprobed, _) = get_hosts_timed(&server.origin, "/api/hosts?probe=true");
+            assert!(
+                ssh_calls() > after_first_probe,
+                "a fresh probe must re-probe so recovery is visible"
+            );
+            assert_eq!(
+                remote_row(&reprobed)["reachable"],
+                json!(false),
+                "{reprobed}"
+            );
+        },
+    );
+}

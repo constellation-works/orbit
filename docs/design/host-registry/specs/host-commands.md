@@ -203,7 +203,7 @@ Status: implemented ([ORB-14451], on the [ORB-14448] operations).
 
 | Route | Effect |
 |---|---|
-| `GET /api/hosts[?probe=false]` | Same rows and JSON shape as `orbit host list --json` |
+| `GET /api/hosts[?probe=true]` | Same rows and JSON shape as `orbit host list --json`; without `probe=true` the cached inventory only (`orbit host list --no-probe --json`, no SSH session), so repeated ordinary reads never wait on a timed-out target. Only an explicit `probe=true` is a deliberate fresh probe and may spend the full probe budget |
 | `GET /api/hosts/:host` | `orbit host show --json`, dependents included |
 | `POST /api/hosts` with `{ssh, name?}` | `orbit host add` |
 | `PATCH /api/hosts/:host` with `{name}` | `orbit host rename` |
@@ -251,7 +251,8 @@ The view is Observe › Fleet (`#fleet`). Legacy `#config/hosts` links normalize
 - Keyboard and focus behave as in [user-interface 2_design §6](../../user-interface/2_design.md#6-top-level-navigation).
 - Opening the view and its Reload button first list registered hosts with `probe=false`,
   show checking reachability for pending remote probes, then fill in live fields when the
-  probe finishes. An unreachable destination gets a plain-language explanation with a
+  explicit `probe=true` follow-up finishes. Ordinary reads of `GET /api/hosts` without
+  `probe=true` return that same cached inventory and open no session. An unreachable destination gets a plain-language explanation with a
   network and SSH check and a Reload step; the probe diagnostic remains in the host dialog's failure disclosure. An add shows the new host as its identity probe found it.
   The dashboard's periodic refresh lists with `probe=false` and keeps each row's last probed
   fields, so identity discovery is not repeated in the background. A row marked not probed has not been

@@ -257,8 +257,10 @@ fn dashboard_host_api_runs_the_cli_operations_with_its_shape_errors_and_bytes() 
         Some(json!({ "ssh": "beta", "name": "build-box" })),
     ));
 
-    // List and show: the rows `orbit host list|show --json` prints.
-    let listed = ok(dashboard.get("/api/hosts"));
+    // List and show: the rows `orbit host list|show --json` prints. The
+    // probed comparison needs the explicit fresh probe; the bare read is
+    // the cached inventory.
+    let listed = ok(dashboard.get("/api/hosts?probe=true"));
     let cli = fleet.json(&["host", "list", "--json"]);
     assert_eq!(listed["hosts"], cli["hosts"], "same rows as the CLI");
     assert_eq!(listed["host_file"], cli["host_file"]);
@@ -268,7 +270,7 @@ fn dashboard_host_api_runs_the_cli_operations_with_its_shape_errors_and_bytes() 
     assert_eq!(host_row(&listed, "alpha")["workspaces"][0]["role"], "owner");
 
     fleet.unroute("beta");
-    let listed = ok(dashboard.get("/api/hosts"));
+    let listed = ok(dashboard.get("/api/hosts?probe=true"));
     let beta_row = host_row(&listed, "build-box");
     assert_eq!(beta_row["reachable"], false, "{beta_row}");
     assert_eq!(beta_row["error"]["code"], "unreachable_destination");

@@ -59,13 +59,10 @@ pub(super) fn host_resources_json(state: &DashboardState) -> Result<Value, Orbit
 
 #[derive(Debug, Deserialize)]
 pub(super) struct HostListQuery {
-    /// `false` lists cached fields only and opens no session.
-    #[serde(default = "probe_by_default")]
+    /// `false` (the default) lists cached fields only and opens no session;
+    /// only an explicit `probe=true` spends the probe timeout budget.
+    #[serde(default)]
     probe: bool,
-}
-
-fn probe_by_default() -> bool {
-    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,9 +88,13 @@ pub(super) struct HostRenameBody {
     name: String,
 }
 
-/// `GET /api/hosts[?probe=false]`: `orbit host list --json`, read from the
+/// `GET /api/hosts[?probe=true]`: `orbit host list --json`, read from the
 /// last valid host file, plus the error of a newer file that failed to load
-/// and whether this session may edit it.
+/// and whether this session may edit it. Without `probe=true` this is the
+/// cached inventory (`orbit host list --no-probe --json`): no SSH session is
+/// opened, so a recently timed-out target cannot stall repeated reads.
+/// An explicit `probe=true` is the deliberate fresh probe and may spend
+/// the full probe timeout budget.
 pub(super) async fn list_hosts(
     State(state): State<DashboardState>,
     Query(query): Query<HostListQuery>,
