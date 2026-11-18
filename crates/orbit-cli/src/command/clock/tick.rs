@@ -27,7 +27,7 @@ use crate::command::{Block, CommandOut, Payload};
                   Pass the global `--workspace <selector>` to evaluate only that workspace."
 )]
 pub struct ClockTickArgs {
-    /// Report what would fire without recording, dispatching, or minting anything.
+    /// Report what would fire without dispatching or minting it. Still persists checkout validation and opens the scheduler store.
     #[arg(long)]
     pub dry_run: bool,
     /// Print every routine and auto-task row, including skipped/not-due ones.

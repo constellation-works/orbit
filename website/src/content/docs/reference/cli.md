@@ -205,7 +205,7 @@ The [dashboard](/how-to/dashboard/) shows the same rankings.
 
 | Command | Purpose |
 |---|---|
-| `orbit clock tick` | Run one scheduler pass: fire due routines and mint due auto-tasks. `--dry-run` only reports. Alias: `orbit sweep`. |
+| `orbit clock tick` | Run one scheduler pass: fire due routines and mint due auto-tasks. `--dry-run` fires and mints nothing, but still persists checkout validation and opens the scheduler store. Alias: `orbit sweep`. |
 | `orbit clock status\|pause\|enable\|repair` \| `set --cadence-seconds <n>` | Inspect and control the host scheduler clock. `repair` rewrites a clock unit that names a missing, moved or stale program. |
 | `orbit routine list` \| `show <name>` | List routines with their next-due time and last fire, or show one. |
 | `orbit routine enable\|disable\|pause\|resume <name>` | `enable` and `disable` change the routine's versioned definition (operator only); `pause` and `resume` act on this host only. |

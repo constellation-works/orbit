@@ -38,9 +38,13 @@ Pausing the clock leaves each routine's own pause state alone, and a manual
 To see what a change would do, run a tick by hand:
 
 ```bash
-orbit clock tick --dry-run --verbose     # what would fire; writes nothing
+orbit clock tick --dry-run --verbose     # what would fire; dispatches nothing
 orbit --workspace <name> clock tick      # only that workspace's schedules
 ```
+
+A dry-run tick dispatches no routine and mints no auto-task, but it is not
+write-free: it still persists the validation status of registered checkouts and
+opens or migrates the host's scheduler store.
 
 The clock starts runs without your login shell. If scheduled runs need a
 provider token or a `GITHUB_TOKEN`, set up
@@ -566,5 +570,7 @@ Check in this order:
    error class and the next trial; [recover it](#recover-a-tripped-routine).
 
 `orbit clock tick --dry-run --verbose` shows the decision for every routine
-and auto-task. The [CLI reference](/reference/cli/#scheduler) lists every
+and auto-task without dispatching any of them. It is not write-free: it still
+persists the validation status of registered checkouts and opens or migrates
+the scheduler store. The [CLI reference](/reference/cli/#scheduler) lists every
 scheduler command.
