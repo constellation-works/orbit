@@ -613,9 +613,13 @@ configuration admits an OS-capable crew. A model-refusal hold clears once a
 refusal lapses, once a verified success of its model lands on this host and
 account, or once the pool admits an OS-capable crew whose model is not
 refused there; editing `os:` tags alone cannot clear a refusal. A mixed hold
-needs a replacement crew that passes both. No recovery or reset is needed,
-and its friction (after the window) names the configuration change that
-clears it instead of those commands.
+also clears when an existing OS-compatible member becomes eligible because
+its model refusal expires or a newer verified success for that model is
+recorded on this host and account; adding a compatible replacement is
+optional. Each tick recomputes both filters, and the held batch mints once any
+positive-weight member passes both. No recovery or reset is needed, and its
+friction (after the window) names the configuration change that clears it
+instead of those commands.
 
 ### Resetting a consumer whose debt cannot be reconciled [ORB-12346]
 
