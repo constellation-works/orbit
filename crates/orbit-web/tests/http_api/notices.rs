@@ -27,6 +27,16 @@ fn operator_caller() -> NoticeCaller {
 }
 
 fn post(runtime: &OrbitRuntime, kind: NoticeKind, title: &str, dedupe_key: &str) -> String {
+    post_linked(runtime, kind, title, dedupe_key, None)
+}
+
+fn post_linked(
+    runtime: &OrbitRuntime,
+    kind: NoticeKind,
+    title: &str,
+    dedupe_key: &str,
+    linked_task: Option<String>,
+) -> String {
     runtime
         .post_notice(
             &operator_caller(),
@@ -36,7 +46,7 @@ fn post(runtime: &OrbitRuntime, kind: NoticeKind, title: &str, dedupe_key: &str)
                 body: None,
                 scope: None,
                 dedupe_key: Some(dedupe_key.to_string()),
-                linked_task: None,
+                linked_task,
                 close_on_linked_done: None,
                 evidence: Vec::new(),
                 hosts: Vec::new(),
@@ -360,6 +370,80 @@ fn aggregate_notices_report_broken_config_and_recover_without_warming() {
             std::fs::write(second_work.join("config.toml"), "# repaired config\n").unwrap();
             let payload = read();
             assert_notice_ids(&payload, "open", &[&first, &second]);
+            assert_eq!(payload["degraded"], json!([]));
+        },
+    );
+}
+
+/// Same-payload fixture for the perf work: five open notices whose links
+/// repeat one task and also name a distinct one. Every row must keep its
+/// linked-task status, with repeated links sharing one consistent status.
+#[test]
+fn repeated_and_distinct_linked_notices_keep_linked_status() {
+    isolated(
+        "notices::repeated_and_distinct_linked_notices_keep_linked_status",
+        || {
+            use orbit_core::application::task::TaskAddParams;
+            let fixture = Fixture::new();
+            let repeated = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Repeated linked task".to_string(),
+                    description: "Fixture task linked by three notices.".to_string(),
+                    ..Default::default()
+                })
+                .unwrap()
+                .id;
+            let distinct = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Distinct linked task".to_string(),
+                    description: "Fixture task linked by two notices.".to_string(),
+                    ..Default::default()
+                })
+                .unwrap()
+                .id;
+            let mut expected: Vec<(String, String)> = Vec::new();
+            for index in 0..3 {
+                let id = post_linked(
+                    &fixture.runtime,
+                    NoticeKind::Info,
+                    &format!("repeated link {index}"),
+                    &format!("repeated-link-{index}"),
+                    Some(repeated.clone()),
+                );
+                expected.push((id, repeated.clone()));
+            }
+            for index in 0..2 {
+                let id = post_linked(
+                    &fixture.runtime,
+                    NoticeKind::Info,
+                    &format!("distinct link {index}"),
+                    &format!("distinct-link-{index}"),
+                    Some(distinct.clone()),
+                );
+                expected.push((id, distinct.clone()));
+            }
+            let server = fixture.server(false);
+            let payload = json_ok(server.get("/api/notices"));
+            let open = payload["open"].as_array().unwrap();
+            assert_eq!(open.len(), expected.len(), "{payload}");
+            for (notice_id, task_id) in &expected {
+                let notice = open
+                    .iter()
+                    .find(|notice| notice["id"] == *notice_id)
+                    .unwrap_or_else(|| panic!("{notice_id} missing: {payload}"));
+                assert_eq!(notice["linked_task"]["id"], *task_id, "{payload}");
+                let status = notice["linked_task"]["status"].as_str().unwrap_or("");
+                assert!(!status.is_empty() && status != "unknown", "{payload}");
+            }
+            // Repeated links resolve to one consistent status value.
+            let repeated_statuses: std::collections::BTreeSet<&str> = open
+                .iter()
+                .filter(|notice| notice["linked_task"]["id"] == repeated)
+                .map(|notice| notice["linked_task"]["status"].as_str().unwrap())
+                .collect();
+            assert_eq!(repeated_statuses.len(), 1, "{payload}");
             assert_eq!(payload["degraded"], json!([]));
         },
     );
