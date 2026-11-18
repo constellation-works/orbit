@@ -1,7 +1,7 @@
 // Serves the dashboard asset tree the way `orbit web serve` does, for the
 // workspace visual fixture (scripts/visual-fixture-front.mjs):
 // `/static/<path>` and `/` map to assets/dashboard, and
-// `/static/dashboard.css` joins css/ in the order `DASHBOARD_CSS` in lib.rs
+// `/static/dashboard.css` joins css/ in the order `DASHBOARD_CSS` in assets.rs
 // lists the files. `dashboardCsp()` is the page policy `DASHBOARD_CSP` in
 // assets.rs sends. `dashboardDeclaredRoutes()` is the embedded route list.
 // `dashboardDeclaredAsset()` returns one of those routes or throws when the
@@ -12,15 +12,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const assets = fileURLToPath(new URL('../../assets/dashboard/', import.meta.url));
-const libRs = fileURLToPath(new URL('../lib.rs', import.meta.url));
 const assetsRs = fileURLToPath(new URL('../assets.rs', import.meta.url));
 
 function joinedStylesheet() {
-  const source = fs.readFileSync(libRs, 'utf8');
+  const source = fs.readFileSync(assetsRs, 'utf8');
   const start = source.indexOf('DASHBOARD_CSS: &str = concat!(');
-  const block = source.slice(start, source.indexOf(');', start));
+  const end = start < 0 ? -1 : source.indexOf(');', start);
+  const block = start < 0 || end < 0 ? '' : source.slice(start, end);
   const files = [...block.matchAll(/include_str!\("\.\.\/assets\/dashboard\/(css\/[^"]+)"\)/g)].map(match => match[1]);
-  if (start < 0 || files.length === 0) throw new Error('DASHBOARD_CSS file list not found in lib.rs');
+  if (files.length === 0) throw new Error('DASHBOARD_CSS file list not found in assets.rs');
   return Buffer.concat(files.map(file => fs.readFileSync(path.join(assets, file))));
 }
 
