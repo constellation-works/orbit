@@ -2,8 +2,8 @@
 type: design
 summary: "Delivery automation operations [ORB-11330]"
 tags: [automation-triggers]
-last_updated: 2026-11-16
-last_validated: 2026-11-16
+last_updated: 2026-11-17
+last_validated: 2026-11-17
 ---
 
 # Delivery automation operations [ORB-11330]
@@ -604,10 +604,10 @@ and the consumer records a stall whose `crew_hold` names the definition, the
 pool key, each OS-excluded crew with its executor and `host_os`, each
 model-refused crew with its model and when the refusal lapses, and the tags;
 the tick reports `stalled: crew_os_ineligible` instead of an error. Every
-later tick asks again and refreshes the names. The hold clears, minting the
-frozen batch in the same pass, once an evaluation admits a positive-weight
-crew that passes both filters the hold still applies: the task's effective
-`os:` tags, and provider-model access on this host and account. An OS-only
+later tick asks again and refreshes the names. The hold clears once an
+evaluation admits a positive-weight crew that passes both filters the hold
+still applies: the task's effective `os:` tags, and provider-model access
+on this host and account. An OS-only
 hold (nothing model-refused) clears at the first evaluation whose
 configuration admits an OS-capable crew. A model-refusal hold clears once a
 refusal lapses, once a verified success of its model lands on this host and
@@ -617,9 +617,28 @@ also clears when an existing OS-compatible member becomes eligible because
 its model refusal expires or a newer verified success for that model is
 recorded on this host and account; adding a compatible replacement is
 optional. Each tick recomputes both filters, and the held batch mints once any
-positive-weight member passes both. No recovery or reset is needed, and its
-friction (after the window) names the configuration change that clears it
-instead of those commands.
+positive-weight member passes both.
+
+Clearing the hold and minting the claim are separate steps. The pass that
+clears the hold continues into admission, so an attempt that is out of backoff
+and still within its deadline mints in that same pass. A retry (attempt 2 or
+later) whose deadline passed while it was held mints nothing. That pass marks
+the attempt `exhausted` with reason `retry_deadline_expired`, clears the stall
+and reports `retry_deadline_expired`. The deadline is `retry_until`, 24 hours
+after the batch is created, or the reissue window when an operator reissued the
+attempt. Ticks after that report `needs_attention` until an operator reissues
+the attempt over the same frozen obligations with
+`orbit auto-task recover <name> --reissue-action --reason <why>`. While the hold
+persists the deadline is not checked: each tick keeps reporting
+`stalled: crew_os_ineligible`, so an expired retry surfaces only on the tick
+that clears the hold. Read-only inspection does not wait for the hold: it reads
+the deadline from persisted state and can show `retry_deadline_expired` for that
+claim before the tick does. A first attempt has no deadline check at admission and
+mints when the hold clears, however long it waited.
+
+No recovery or reset is needed for the hold itself, and its friction (after the
+window) names the configuration change that clears it instead of those commands.
+An expired retry deadline is the exception: it needs the reissue above.
 
 ### Resetting a consumer whose debt cannot be reconciled [ORB-12346]
 
