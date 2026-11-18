@@ -152,8 +152,10 @@ contains compatible units avoids those rebuilds without publishing anything.
 Refresh is the successful production of an archive for a missing key. It is
 not the next effective-key change, and it is not the next `Cargo.lock` edit.
 A filtered lock-entry, normalised member-manifest, config/toolchain, prefix
-or environment change ends repeated rebuilding only when that push's
-eligible save produces the archive. An unchanged-key push — such as a release
+or environment change can end repeated rebuilding when the restored archive
+contains the needed compatible units; that does not require publishing a new
+archive. Refreshing a missing key still requires an eligible save to
+successfully produce its archive. An unchanged-key push — such as a release
 bump that rewrites the lock file without moving the effective key — cannot
 replace an existing archive while that outdated exact archive remains. But
 once that archive is evicted or if an earlier save failed, an unchanged-key
