@@ -78,6 +78,10 @@ pub use workspace::{
 mod tests;
 // Mutable adapter fixtures share the application fixtures' isolation launcher.
 #[cfg(test)]
-pub(crate) use tests::{run_isolated_test, run_isolated_test_with_env};
+pub(crate) use tests::run_isolated_test;
+// The env variant's only caller is the Linux-only process-cleanup test, so
+// its re-export carries the same target gate.
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) use tests::run_isolated_test_with_env;
 
 pub mod automation;
