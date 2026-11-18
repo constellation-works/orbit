@@ -90,6 +90,7 @@ fn a_cancelled_review_keeps_its_repair_and_findings_for_the_next_claim() {
     let admitted = reviewed.admit_review();
     assert_eq!(admitted["applies"], true, "{admitted}");
     let attempt = admitted["attempt_id"].as_str().unwrap().to_string();
+    let reviewer_model = admitted["reviewer"]["model"].as_str().unwrap();
     record_step(&reviewed.pair, &leaf, "review_gate_admit", &admitted);
     // The reviewer persisted a report with an open finding, then was
     // stopped with its fix unfinished and uncommitted.
@@ -128,7 +129,8 @@ fn a_cancelled_review_keeps_its_repair_and_findings_for_the_next_claim() {
     // [ORB-16768] The detached repair names the reviewer's resolved model
     // under the reviewer role address; the committer stays Orbit.
     assert_eq!(
-        author, "orbit[gpt-6.1-sol] <reviewer@orbit.invalid>",
+        author,
+        format!("orbit[{reviewer_model}] <reviewer@orbit.invalid>"),
         "{identity}"
     );
     assert_eq!(committer, "orbit <orbit@orbit.invalid>", "{identity}");
