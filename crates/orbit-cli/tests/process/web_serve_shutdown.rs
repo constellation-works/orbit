@@ -581,7 +581,21 @@ def classify(pid):
         return "zombie_left_by_harness"
     return "reaped"
 
+def proc_identity(pid):
+    # (process group, start time) from one read of /proc/<pid>/stat, so the
+    # group and the incarnation come from the same observation. None once the
+    # process is gone; any other read failure propagates as an OSError.
+    try:
+        with open(f"/proc/{pid}/stat") as handle:
+            stat = handle.read()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    fields = stat.rsplit(")", 1)[1].split()
+    return int(fields[2]), int(fields[19])
+
 def group_members(pgid):
+    # Members of the group as (pid, starttime), or None when the table cannot
+    # be read, which callers count as unverified rather than empty.
     try:
         names = os.listdir("/proc")
     except OSError:
@@ -594,10 +608,11 @@ def group_members(pgid):
         if pid <= 1:
             continue
         try:
-            if os.getpgid(pid) == pgid:
-                members.append(pid)
-        except OSError:
-            continue
+            identity = proc_identity(pid)
+        except (OSError, IndexError, ValueError):
+            return None
+        if identity is not None and identity[0] == pgid:
+            members.append((pid, identity[1]))
     return members
 
 def others_alive():
@@ -605,10 +620,10 @@ def others_alive():
     if members is None:
         return True
     me = os.getpid()
-    return any(pid != me for pid in members)
+    return any(pid != me for pid, _ in members)
 
 reaped_status = {}
-term_watch = {"after_term": "missing", "reaped_by": ""}
+term_watch = {"after_term": "missing", "reaped_by": "", "unverified": 0}
 
 def note_reap(pid, status):
     if pid > 0:
@@ -671,17 +686,49 @@ def reaped_signal(pid):
         return "exit:%d" % os.WEXITSTATUS(status)
     return "unknown"
 
+def signal_confirmed(pid, starttime, pgid, sig):
+    # Signal only through a pidfd bound to the observed incarnation, as
+    # scripts/test-qa-full-sweep.py _signal_confirmed does: a bare kill(pid)
+    # can reach an unrelated process when a member exits and its PID is
+    # reused between observation and delivery. Returns "sent", "gone" (the
+    # observed incarnation is no longer a member, nothing was signalled) or
+    # "unverified" (no identity-bound handle: nothing is sent).
+    if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+        return "unverified"
+    try:
+        pidfd = os.pidfd_open(pid, 0)
+    except ProcessLookupError:
+        return "gone"
+    except OSError:
+        return "unverified"
+    try:
+        try:
+            identity = proc_identity(pid)
+        except (OSError, IndexError, ValueError):
+            return "unverified"
+        if identity != (pgid, starttime):
+            return "gone"
+        try:
+            signal.pidfd_send_signal(pidfd, sig)
+        except ProcessLookupError:
+            return "gone"
+        except OSError:
+            return "unverified"
+        return "sent"
+    finally:
+        os.close(pidfd)
+
 def signal_others(sig):
-    members = group_members(os.getpgrp())
+    # Every refused or unobservable delivery is counted as unverified cleanup.
+    pgid = os.getpgrp()
+    members = group_members(pgid)
     if members is None:
+        term_watch["unverified"] += 1
         return False
     me = os.getpid()
-    for pid in members:
-        if pid != me:
-            try:
-                os.kill(pid, sig)
-            except OSError:
-                pass
+    for pid, starttime in members:
+        if pid != me and signal_confirmed(pid, starttime, pgid, sig) == "unverified":
+            term_watch["unverified"] += 1
     return True
 
 def finish(proc, rc, descendant_pid):
@@ -781,6 +828,7 @@ print(f"descendant_reaped_by={term_watch['reaped_by']}")
 print(f"child_after={after(child)}")
 print(f"descendant_after={after(descendant)}")
 print(f"group_survived={1 if others_alive() else 0}")
+print(f"cleanup_unverified={term_watch['unverified']}")
 sys.stdout.flush()
 "#;
     let child_pid_file = qa_base.join("child.pid");
@@ -911,6 +959,11 @@ sys.stdout.flush()
         field("group_survived="),
         "0",
         "{boundary}: owned process group still has a member: {stdout} {stderr}"
+    );
+    assert_eq!(
+        field("cleanup_unverified="),
+        "0",
+        "{boundary}: a group member was signalled without a confirmed identity or could not be observed: {stdout} {stderr}"
     );
     // The held stub must not publish. The normal run publishes the same PID
     // the parent recorded.
