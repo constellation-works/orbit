@@ -161,6 +161,33 @@ fn claimed_task_detail_pages_preserve_broker_scope_and_owner_validation() {
             assert!(error.contains(accepted), "accepted {accepted}: {error}");
         }
     }
+    // A `task_id` alias is refused, and the refusal names the field a task
+    // read accepts instead [ORB-25666]. With `id` already present the hint is
+    // not given; the refusal lists the accepted fields instead.
+    let error = call(json!({"task_id": id})).unwrap_err();
+    assert!(
+        error.contains("does not accept `task_id`") && error.contains("pass the task as `id`"),
+        "{error}"
+    );
+    let error = call(json!({"id": id, "task_id": id})).unwrap_err();
+    assert!(
+        error.contains("does not accept `task_id`") && error.contains("accepted fields"),
+        "{error}"
+    );
+    assert!(!error.contains("pass the task as `id`"), "{error}");
+    let error = call(json!({"id": id, "snapshot": true})).unwrap_err();
+    assert!(
+        error.contains("does not accept `snapshot`") && error.contains("accepted fields"),
+        "{error}"
+    );
+    let error = raw_call(
+        &fixture,
+        broker.socket_path(),
+        GET,
+        json!({"task_id": id, "path": "page-0.txt"}),
+    )
+    .unwrap_err();
+    assert!(error.contains("pass the task as `id`"), "{error}");
     assert_eq!(
         owner.calls.load(Ordering::SeqCst),
         before,

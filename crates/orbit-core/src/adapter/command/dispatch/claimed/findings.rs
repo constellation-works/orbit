@@ -24,7 +24,7 @@ use orbit_types::tool::{ToolSessionContext, WorkerInvocation};
 use orbit_types::workflow::{REVIEW_EVIDENCE_FINDINGS_ARTIFACT, ReviewEvidenceFindings};
 use serde_json::{Map, Value, json};
 
-use super::owner::{GET, accept_fields, require_claimed_task};
+use super::owner::{self, GET, require_claimed_task};
 use super::review::{artifact_bytes, denied};
 use crate::OrbitRuntime;
 use crate::runtime::tool_exec::CapabilityEnforcement;
@@ -45,7 +45,7 @@ pub(super) fn execute_findings_read(
     path: &str,
     session: ToolSessionContext,
 ) -> Result<Value, OrbitError> {
-    accept_fields(object, &["id", "path", "model"])?;
+    owner::accept_task_fields(object, &["id", "path", "model"])?;
     require_claimed_task(object, binding)?;
     if object.get("path").and_then(Value::as_str) != Some(path) {
         return Err(denied(&format!(

@@ -29,7 +29,7 @@ use orbit_types::workflow::{
 };
 use serde_json::{Map, Value, json};
 
-use super::owner::{GET, PUT, TASK_SHOW, accept_fields, require_claimed_task};
+use super::owner::{self, GET, PUT, TASK_SHOW, require_claimed_task};
 use crate::OrbitRuntime;
 use crate::application::job::claimed::ClaimedLeaf;
 use crate::runtime::tool_exec::CapabilityEnforcement;
@@ -107,7 +107,7 @@ pub(super) fn execute_review_read(
         )));
     }
     let leaf = recovering_leaf(runtime, run).map_err(|why| super::review::denied(&why))?;
-    accept_fields(object, &["id", "path", "model"])?;
+    owner::accept_task_fields(object, &["id", "path", "model"])?;
     require_claimed_task(object, binding)?;
     let spelled = object.get("path").and_then(Value::as_str);
     if tool != GET || spelled != Some(path) || !RECOVERY_REVIEW_READS.contains(&path) {
