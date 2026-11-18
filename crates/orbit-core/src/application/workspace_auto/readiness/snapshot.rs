@@ -1,10 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::TaskStatus;
-use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -15,33 +13,29 @@ use crate::application::admission::claim_holders::ClaimHolders;
 use crate::application::admission::cpu_light::ResourceGate;
 use crate::application::admission::leaf_occupancy::{occupancy_json, read_leaf_occupancy};
 use crate::application::admission::pass_error::PassError;
-use crate::application::job::drain_deadline;
 use crate::runtime::engine::crew::CrewAllowlist;
 
-use super::approvals::readiness_approvals;
-use super::classify::{
+use super::super::approvals::readiness_approvals;
+use super::super::classify::{
     DEFAULT_CANDIDATE_POOL, candidate_pool_limit, leaf_load_failure_holds,
     retain_leaf_load_failure_holds,
 };
-use super::drains::{
-    ActiveDrain, DRAIN_JOB_NAME, LEAF_JOB_NAME, drain_ceiling, live_pull_drain,
-    read_live_leaf_runs, shared_leaf_occupancy, workspace_drains,
+use super::super::drains::{
+    DRAIN_JOB_NAME, drain_ceiling, live_pull_drain, read_live_leaf_runs, shared_leaf_occupancy,
+    workspace_drains,
 };
-use super::wave::{AdmissionWave, AdmissionWaveInput, unreserved_admission_slots};
+use super::super::live_agents;
+use super::super::wave::{AdmissionWave, AdmissionWaveInput, unreserved_admission_slots};
 
-const MAX_READINESS_LIMIT: usize = 500;
+use super::api::FleetReadinessFacts;
+use super::drain_progress::{self, DrainProgress};
+use super::{hosts, projection};
 
-/// Host-wide facts one fleet read fetches once and hands to every workspace's
-/// row. A fact that could not be read is absent, and each row reads its own and
-/// reports its own failure.
-#[derive(Default)]
-pub struct FleetReadinessFacts {
-    status_index: Option<BTreeMap<String, TaskStatus>>,
-}
+pub(super) const MAX_READINESS_LIMIT: usize = 500;
 
 /// How much of the readiness snapshot its reader consumes.
 #[derive(Clone, Copy)]
-enum ReadinessDepth<'a> {
+pub(super) enum ReadinessDepth<'a> {
     Full,
     /// A fleet row: admission facts only, without the claim, approval and
     /// validation diagnostics a row does not report.
@@ -52,7 +46,7 @@ enum ReadinessDepth<'a> {
 /// dashboard's unavailable marker when that projection's id is not in the
 /// workspace. Invalid selections stay on this path so a missing `also_task`
 /// cannot fail the bounded listing.
-enum ReadinessDetail {
+pub(super) enum ReadinessDetail {
     Tasks(Vec<Value>),
     Unavailable { task_id: String },
 }
@@ -108,33 +102,7 @@ fn readiness_selected_ids(
     Ok(ids)
 }
 
-fn attach_readiness_runtime_fields(runtime: &OrbitRuntime, payload: &mut Value) {
-    payload["replica"] = json!(runtime.replica_owner_machine().is_some());
-    payload["validation_env_warning"] = json!(runtime.readiness_validation_env_warning());
-}
-
-/// Explain the same snapshot that auto-drain uses without performing its
-/// stale-run reconciliation. This is deliberately an observation API: it
-/// neither reserves work nor creates a pipeline run, and its answer can go
-/// stale immediately after the stores are read.
-pub fn explain_workspace_auto_readiness(
-    runtime: &OrbitRuntime,
-    task_ids: &[String],
-    max_active_leaf_runs: Option<u32>,
-    limit: usize,
-    allowed_crews: &[String],
-) -> Result<Value, OrbitError> {
-    readiness_snapshot(
-        runtime,
-        task_ids,
-        max_active_leaf_runs,
-        limit,
-        allowed_crews,
-        ReadinessDepth::Full,
-    )
-}
-
-fn readiness_snapshot(
+pub(super) fn readiness_snapshot(
     runtime: &OrbitRuntime,
     task_ids: &[String],
     max_active_leaf_runs: Option<u32>,
@@ -161,7 +129,7 @@ fn readiness_snapshot(
 /// the bounded listing does not already hold — a closed task, or one this
 /// workspace does not have — therefore cannot change that listing, its totals
 /// or its forecast titles.
-fn readiness_snapshot_with_detail(
+pub(super) fn readiness_snapshot_with_detail(
     runtime: &OrbitRuntime,
     task_ids: &[String],
     detail_task_ids: &[String],
@@ -197,7 +165,7 @@ fn readiness_snapshot_with_detail(
         admitted_workers,
         running_admitted_workers,
         phase: drain_phase,
-    } = drain_progress(runtime, active_drain.as_ref())?;
+    } = drain_progress::drain_progress(runtime, active_drain.as_ref())?;
     let status_run_id = active_drain
         .as_ref()
         .map(|drain| drain.run_id.as_str())
@@ -375,15 +343,15 @@ fn readiness_snapshot_with_detail(
     // The follower census and the recorded forecast views are the same for both
     // projections; reading them again made `also_task` about twice the plain read.
     let host_os_limits = runtime.executor_host_os_limits().unwrap_or_default();
-    let follower_evidence = super::readiness_hosts::FollowerEvidence::read(runtime);
+    let follower_evidence = hosts::FollowerEvidence::read(runtime);
     let project_tasks = |snapshot: &BacklogSnapshot,
                          ids: &[String],
                          build_views: bool|
      -> Result<ProjectedReadinessTasks, OrbitError> {
         let selected_ids = readiness_selected_ids(snapshot, ids, limit)?;
-        let mut tasks = super::projection::project_readiness_tasks(
+        let mut tasks = projection::project_readiness_tasks(
             runtime,
-            super::projection::ReadinessProjection {
+            projection::ReadinessProjection {
                 snapshot,
                 selected_ids: &selected_ids,
                 pools: &pools,
@@ -406,7 +374,7 @@ fn readiness_snapshot_with_detail(
             },
         );
         let (forecast_view, last_forecast_view) = if build_views {
-            super::projection::project_readiness_forecasts(
+            projection::project_readiness_forecasts(
                 runtime,
                 snapshot,
                 &status_state,
@@ -418,11 +386,7 @@ fn readiness_snapshot_with_detail(
         } else {
             // Detail keeps the per-task annotation and skips the forecast views
             // the bounded payload already owns.
-            super::projection::annotate_readiness_task_forecasts(
-                &status_state,
-                drain_phase,
-                &mut tasks,
-            );
+            projection::annotate_readiness_task_forecasts(&status_state, drain_phase, &mut tasks);
             (None, None)
         };
         // `total` describes the current view: the full backlog for the default
@@ -656,231 +620,9 @@ fn readiness_snapshot_with_detail(
     // be read, so an older client and a failed observation both leave the row
     // off. Fleet rows do not report it.
     if matches!(depth, ReadinessDepth::Full)
-        && let Some(counts) = super::live_agents::observe_live_agents(runtime)
+        && let Some(counts) = live_agents::observe_live_agents(runtime)
     {
         payload["live_agents"] = counts;
     }
     Ok((payload, detail))
-}
-
-/// The status drain's progress: the most recent finished drain when no local
-/// drain is live, the status drain's pipeline state, its window deadline and
-/// workers, and the phase readiness reports. Readiness and the dashboard's
-/// change stream read the phase from here, so they never disagree.
-pub(super) struct DrainProgress {
-    pub(super) recent_drain: Option<JobRun>,
-    pub(super) status_state: Option<PipelineState>,
-    pub(super) ends_at: Option<String>,
-    pub(super) admitted_workers: usize,
-    pub(super) running_admitted_workers: usize,
-    pub(super) phase: &'static str,
-}
-
-pub(super) fn drain_progress(
-    runtime: &OrbitRuntime,
-    active_drain: Option<&ActiveDrain>,
-) -> Result<DrainProgress, OrbitError> {
-    let recent_drain = if active_drain.is_none() {
-        runtime
-            .stores()
-            .jobs()
-            .list_job_runs_filtered(&JobRunQuery {
-                job_id: Some(DRAIN_JOB_NAME.to_string()),
-                terminal_only: true,
-                limit: Some(1),
-                include_steps: false,
-                ..JobRunQuery::default()
-            })?
-            .into_iter()
-            .next()
-    } else {
-        None
-    };
-    let status_run_id = active_drain
-        .map(|drain| drain.run_id.as_str())
-        .or_else(|| recent_drain.as_ref().map(|run| run.run_id.as_str()));
-    let status_state = status_run_id
-        .map(|run_id| runtime.stores().jobs().read_run_state(run_id))
-        .transpose()?
-        .flatten();
-    // The open-window checkpoint is the actual server-stamped deadline, not
-    // the submission time plus a browser's chosen duration, unless an
-    // operator has since extended it [ORB-15383].
-    let ends_at = status_state
-        .as_ref()
-        .and_then(drain_deadline)
-        .map(|deadline| deadline.to_rfc3339_opts(SecondsFormat::Secs, true));
-    let (admitted_workers, running_admitted_workers) = if let Some(state) = &status_state {
-        let created_since = active_drain
-            .map(|drain| drain.created_at)
-            .or_else(|| recent_drain.as_ref().map(|run| run.created_at));
-        let states = [
-            JobRunState::Pending,
-            JobRunState::Running,
-            JobRunState::Success,
-            JobRunState::Failed,
-            JobRunState::Timeout,
-            JobRunState::Skipped,
-            JobRunState::Retrying,
-            JobRunState::Cancelled,
-            JobRunState::Interrupted,
-            JobRunState::Held,
-        ]
-        .into_iter()
-        .filter(|state| !state.is_terminal())
-        .collect();
-        let running_ids: BTreeSet<_> = runtime
-            .stores()
-            .jobs()
-            .list_job_runs_filtered(&JobRunQuery {
-                job_id: Some(LEAF_JOB_NAME.to_string()),
-                states,
-                created_since,
-                include_steps: false,
-                input_keys: Some(&[]),
-                ..JobRunQuery::default()
-            })?
-            .into_iter()
-            .map(|run| run.run_id)
-            .collect();
-        let workers = state
-            .child_dispatches
-            .iter()
-            .filter(|dispatch| dispatch.job_name == LEAF_JOB_NAME)
-            .collect::<Vec<_>>();
-        let running = workers
-            .iter()
-            .filter(|dispatch| running_ids.contains(&dispatch.child_run_id))
-            .count();
-        (workers.len(), running)
-    } else {
-        (0, 0)
-    };
-    let window_open = ends_at
-        .as_deref()
-        .and_then(|deadline| DateTime::parse_from_rfc3339(deadline).ok())
-        .is_none_or(|deadline| deadline > Utc::now());
-    let phase = if active_drain.is_some_and(|drain| !drain.admissions_stopped()) && window_open {
-        "draining"
-    } else if running_admitted_workers > 0 {
-        "winding_down"
-    } else {
-        "idle"
-    };
-    Ok(DrainProgress {
-        recent_drain,
-        status_state,
-        ends_at,
-        admitted_workers,
-        running_admitted_workers,
-        phase,
-    })
-}
-
-impl OrbitRuntime {
-    /// Read-only projection of the current auto-drain admission snapshot.
-    pub fn workspace_auto_readiness(
-        &self,
-        task_ids: &[String],
-        max_active_leaf_runs: Option<u32>,
-        limit: usize,
-        allowed_crews: &[String],
-    ) -> Result<Value, OrbitError> {
-        let mut payload = explain_workspace_auto_readiness(
-            self,
-            task_ids,
-            max_active_leaf_runs,
-            limit,
-            allowed_crews,
-        )?;
-        attach_readiness_runtime_fields(self, &mut payload);
-        Ok(payload)
-    }
-
-    /// [`Self::workspace_auto_readiness`] plus one task's entry under
-    /// `detail_tasks`, from a single read of the shared admission snapshot.
-    ///
-    /// `detail_task_id` is the dashboard's `also_task` id. An id this workspace
-    /// does not have leaves the snapshot in place and sets `detail_unavailable`
-    /// (`reason: task_not_found`) instead of failing the listing. `None`
-    /// is [`Self::workspace_auto_readiness`].
-    pub fn workspace_auto_readiness_with_detail(
-        &self,
-        task_ids: &[String],
-        detail_task_id: Option<&str>,
-        max_active_leaf_runs: Option<u32>,
-        limit: usize,
-        allowed_crews: &[String],
-    ) -> Result<Value, OrbitError> {
-        let Some(detail_task_id) = detail_task_id else {
-            return self.workspace_auto_readiness(
-                task_ids,
-                max_active_leaf_runs,
-                limit,
-                allowed_crews,
-            );
-        };
-        let detail_ids = vec![detail_task_id.to_string()];
-        let (mut payload, detail) = readiness_snapshot_with_detail(
-            self,
-            task_ids,
-            &detail_ids,
-            max_active_leaf_runs,
-            limit,
-            allowed_crews,
-            ReadinessDepth::Full,
-        )?;
-        attach_readiness_runtime_fields(self, &mut payload);
-        if let Some(detail) = detail {
-            match detail {
-                ReadinessDetail::Tasks(tasks) => payload["detail_tasks"] = json!(tasks),
-                ReadinessDetail::Unavailable { task_id } => {
-                    payload["detail_tasks"] = json!([]);
-                    payload["detail_unavailable"] = json!({
-                        "task_id": task_id,
-                        "reason": "task_not_found",
-                    });
-                }
-            }
-        }
-        Ok(payload)
-    }
-
-    /// The registry-global facts one fleet read shares across its workspaces.
-    #[must_use]
-    pub fn fleet_readiness_facts(&self) -> FleetReadinessFacts {
-        // A replica's own reads hide task statuses, and that says nothing
-        // about the other workspaces this fact would serve.
-        let status_index = self
-            .coordination_task_reads_visible()
-            .then(|| self.task_status_index().ok())
-            .flatten();
-        FleetReadinessFacts { status_index }
-    }
-
-    /// The readiness snapshot a fleet row summarizes: the same admission
-    /// decisions and holds as [`Self::workspace_auto_readiness`] over the
-    /// default listing, without the diagnostics a row does not report
-    /// (`approvals` is null; `blocking_claims`, `replica` and
-    /// `validation_env_warning` are absent). Read-only like that snapshot.
-    pub fn workspace_fleet_readiness(
-        &self,
-        facts: &FleetReadinessFacts,
-    ) -> Result<Value, OrbitError> {
-        readiness_snapshot(
-            self,
-            &[],
-            None,
-            MAX_READINESS_LIMIT,
-            &[],
-            ReadinessDepth::FleetRow(facts),
-        )
-    }
-
-    /// The workspace's drain phase as readiness reports it (`draining`,
-    /// `winding_down` or `idle`), without the rest of the readiness snapshot.
-    pub fn workspace_drain_phase(&self) -> Result<&'static str, OrbitError> {
-        let (active_drain, _) = workspace_drains(self)?;
-        Ok(drain_progress(self, active_drain.as_ref())?.phase)
-    }
 }

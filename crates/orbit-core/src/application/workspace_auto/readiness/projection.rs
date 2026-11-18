@@ -17,9 +17,9 @@ use crate::application::distributed::RESOURCE_THROTTLED;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::host_signal::HOST_SHUTDOWN_SCHEDULED;
 
-use super::readiness_hosts::{self, FollowerEvidence, FollowerEvidenceStatus};
+use super::hosts::{self, FollowerEvidence, FollowerEvidenceStatus};
 
-use super::drains::LiveLeafRun;
+use super::super::drains::LiveLeafRun;
 use crate::application::admission::auto_admission::AdmissionSelection;
 use crate::application::admission::backlog_exclusion::BacklogSnapshot;
 use crate::application::job::crew_pools::CapturedCrewPools;
@@ -239,7 +239,7 @@ pub(super) fn project_readiness_tasks(
                             // the snapshot and no follower is declared ready.
                             object.insert("reason".to_string(), json!("follower_admission_pending"));
                             if !snapshot.published_resumes.contains_key(&task.id) {
-                                let conflicts = readiness_hosts::follower_footprint_conflicts(runtime, task, holders);
+                                let conflicts = hosts::follower_footprint_conflicts(runtime, task, holders);
                                 if !conflicts.is_empty() {
                                     let blocking_ids = conflicts.iter().map(|conflict| conflict.blocking_task_id.as_str()).collect::<BTreeSet<_>>();
                                     let claims = claim_holders.json_for(blocking_ids.iter().copied());

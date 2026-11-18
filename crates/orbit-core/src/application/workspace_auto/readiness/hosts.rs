@@ -9,14 +9,13 @@ use orbit_store::contracts::{
 };
 use orbit_types::task::{ExecutorOsLimit, TagLabelRequirements, Task};
 use serde::Serialize;
-use serde_json::json;
 
 use crate::OrbitRuntime;
 
 /// Read once per readiness response. Historical claims and host reachability
 /// cannot establish the capability of a currently pulling drain.
 pub(super) struct FollowerEvidence {
-    rows: Result<Vec<(ExecutorCensusEntry, FollowerReportState)>, OrbitError>,
+    pub(super) rows: Result<Vec<(ExecutorCensusEntry, FollowerReportState)>, OrbitError>,
     limits: Result<BTreeMap<String, ExecutorOsLimit>, OrbitError>,
     /// The owner's tag policy, so a follower's labels are judged as pull
     /// admission judges them.
@@ -25,7 +24,7 @@ pub(super) struct FollowerEvidence {
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-enum FollowerReportState {
+pub(super) enum FollowerReportState {
     Stopped,
     Unavailable,
     Stale,
@@ -222,27 +221,6 @@ fn capability_refusal(
                 .as_ref()
                 .and_then(|crews| crews.unrunnable_reason(task.crew.as_deref()))
         })
-}
-
-impl OrbitRuntime {
-    /// Observation keys for changes to follower capabilities, drain identity,
-    /// local stop evidence or freshness. Used by the dashboard change stream;
-    /// reads no remote host and changes neither census nor admission state.
-    pub fn executor_readiness_change_keys(&self) -> Result<Vec<String>, OrbitError> {
-        let evidence = FollowerEvidence::read(self);
-        let rows = evidence
-            .rows
-            .as_ref()
-            .map_err(|error| OrbitError::Store(error.to_string()))?;
-        Ok(rows
-            .iter()
-            .map(|(row, state)| {
-                json!({"machine": row.machine_id, "run": row.run_id,
-            "capability": row.capability, "state": state})
-                .to_string()
-            })
-            .collect())
-    }
 }
 
 /// Use the same normalized selectors and lock modes as local admission, with
