@@ -10,6 +10,7 @@ use orbit_types::task::{
     EpicHierarchyNode, Task, TaskReferenceIndex, TaskStatus, inherited_only_epic_roots,
     is_no_diff_expected, task_dependencies_ready_with_index,
 };
+use orbit_types::workflow::activity_job::Provider;
 use orbit_types::workflow::{REVIEW_RUN_OPTION_SOURCE, ReviewAdmission, ReviewLayer, ShipMode};
 
 use super::super::claim_holders::{self, ClaimHolders};
@@ -518,12 +519,11 @@ pub(super) fn backlog_snapshot_in_mode(
         | BacklogReadMode::Admission { .. } => runtime.unset_crew_env(),
     };
     let has_muse = LazyCell::new(|| {
-        runtime
-            .context
-            .settings()
-            .crews()
-            .values()
-            .any(|crew| crew.enabled && crew.assignment.provider == "muse")
+        runtime.context.settings().crews().values().any(|crew| {
+            crew.enabled
+                && Provider::parse(&crew.assignment.provider)
+                    .is_ok_and(|provider| provider == Provider::Muse)
+        })
     });
     backlog.retain(|task| {
         let model_access_applies = task.job_run_id.is_some() && *has_muse;
