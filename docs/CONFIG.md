@@ -2309,7 +2309,7 @@ Both OS sandboxes (macOS `sandbox-exec`, Linux Bubblewrap) let workers share one
 | `$CARGO_HOME/credentials.toml`, `$CARGO_HOME/credentials` | read-denied |
 | `$CARGO_HOME`, `$CARGO_HOME/.global-cache` | read-only |
 
-`$CARGO_HOME` is the child's variable if passed through `[execution.env].pass`, else `~/.cargo`. The grant applies only to profiles that already grant some write (`implementer`, `unrestricted`, `docs_writer`, …); read-only profiles such as `reviewer` and `pure_compute` get none. On Linux, a cache path missing on the host is skipped, not created.
+`$CARGO_HOME` is the child's variable if passed through `[execution.env].pass`, else `~/.cargo`. The grant applies only to profiles that already grant some write (`implementer`, `unrestricted`, `docs_writer`, …); read-only profiles such as `reviewer` and `pure_compute` get none. `reviewer` reads the workspace but writes nothing; `pure_compute` neither reads nor writes the workspace. On Linux, a cache path missing on the host is skipped, not created.
 
 ## Sandbox pseudo-tty allocation (macOS)
 

@@ -1504,7 +1504,9 @@ is read-only. `$CARGO_HOME` is the child's variable when
 `[execution.env].pass` names it, else `~/.cargo`. There is no executor field
 for this: the grant applies only to profiles that already grant some write
 (`implementer`, `unrestricted`, `docs_writer`, …) and never to read-only
-profiles. On Linux a cache path missing on the host is skipped, not created.
+profiles: `reviewer` reads the workspace but writes nothing, and
+`pure_compute` neither reads nor writes the workspace, so neither gets the
+grant. On Linux a cache path missing on the host is skipped, not created.
 
 To use a non-default cache location, pass it through
 `[execution.env].pass`; to change what a worker may write, change the
@@ -2015,8 +2017,11 @@ A policy defines the filesystem profiles activities run under.
 orbit doctor fs-access <profile> <path>    # dry-run a workspace-relative path against the profile rules
 ```
 
-Shipped profiles: `reviewer` and `pure_compute` (read-only), `docs_writer`
-(scoped writes), `implementer` (workspace writes), `unrestricted`.
+Shipped profiles: `reviewer` (reads the workspace, writes nothing),
+`pure_compute` (neither reads nor writes the workspace, so pick it only for an
+activity that needs no workspace files), `docs_writer` (scoped writes),
+`implementer` (workspace writes), `unrestricted`. A read-only activity that
+opens workspace files should use `reviewer`; `pure_compute` denies those reads too.
 
 The trap worth knowing: an activity that omits `fsProfile` falls back to
 the `unrestricted` profile. A read-only activity must declare its profile
