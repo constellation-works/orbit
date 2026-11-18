@@ -292,9 +292,14 @@ pub(super) const REPILOT: TaskOperation = TaskOperation {
     verb: TaskVerb::Repilot,
     cli_path: &["repilot"],
     tool_name: "orbit.task.repilot",
-    tool_description: "Explicitly request one new pilot assessment for a proposed or backlog task. Only the first assessment is automatic; requirements edits do not request another pilot. When the latest assessment holds promotion, the pilot re-checks its holding findings and keeps the fields the task's changes leave untouched, falling back to a full assessment when the repository moved at its footprint, the scope changed beyond a bounded edit, or the prior assessment is too old or was itself a re-check; `full` forces a full assessment. Requires operator authority on the owner. Refuses pending or running pilots, live delivery, human crews and replica checkouts. Never promotes or dispatches the task.",
+    tool_description: "Explicitly request one new pilot assessment for a proposed or backlog task. Eligible tasks can also receive an automatic re-pilot after edits to their description or acceptance criteria. When the latest assessment holds promotion, the pilot re-checks its holding findings and keeps the fields the task's changes leave untouched, falling back to a full assessment when the repository moved at its footprint, the scope changed beyond a bounded edit, or the prior assessment is too old or was itself a re-check; `full` forces a full assessment. Requires operator authority on the owner. Refuses pending or running pilots, live delivery, human crews and replica checkouts. Never promotes or dispatches the task.",
     cli_about: "Explicitly request one new pilot assessment",
-    cli_help: CliHelp::NONE,
+    cli_help: CliHelp {
+        long_about: Some(
+            "Explicitly request one new pilot assessment for a proposed or backlog task. Eligible tasks can also receive an automatic re-pilot after edits to their description or acceptance criteria.",
+        ),
+        ..CliHelp::NONE
+    },
     effect: Effect::Write,
     params: &[&[
         HOST_PARAM,

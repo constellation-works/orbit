@@ -18,7 +18,7 @@ related_artifacts: [ORB-11315, ORB-11314, ORB-11316]
 
 **Delivery triggers are implemented in [ORB-11330]; bounded state consumers in [ORB-11331].**
 The supported configuration, evidence contract and operational limits are in
-[Operations](5_operations.md). Later sections retain the broader design intent;
+[Operations](references/operations.md). Later sections retain the broader design intent;
 the schema-v2 YAML in section 8 is illustrative and is not accepted configuration.
 Historical ADRs are not inputs to this design.
 
@@ -211,7 +211,7 @@ For six deliveries with four valid review exclusions, review threshold three see
 two; the next uncovered delivery makes it due. QA can count all seven.
 [ORB-11333] implements this: certificates are produced by the before-PR gate
 and consumed as `excluded` state and batch `exclusions`; see
-[Operations](./5_operations.md#before-pr-coverage-exclusions-orb-11333).
+[Operations](./references/operations.md#before-pr-coverage-exclusions-orb-11333).
 
 ## 4. Observation, dispatch, and successful coverage
 
@@ -756,7 +756,7 @@ as task input evidence without invoking a job. [ORB-11330] implemented delivery
 batch attachment, and [ORB-11331] implemented
 state preparation input; [ORB-12746] extended it to batches of explicit task IDs.
 The schema-v2 spelling above remains illustrative; the accepted schema-v1 forms
-are in [Operations](./5_operations.md).
+are in [Operations](./references/operations.md).
 Time alternatives are `trigger: {kind: cron, cron: "0 6 * * *", missed_run: catch_up_once}`
 or `trigger: {kind: interval, every_minutes: 360}`. UTC slot identity and existing
 host-local cron/DST behavior remain; intervals retain a fixed baseline and do not

@@ -26,7 +26,7 @@
 //! crew, the stall clears and the held claim is admitted in the same pass,
 //! unless it is a retry whose deadline passed while held. That pass exhausts
 //! the retry with `retry_deadline_expired` instead of minting (see the crew
-//! hold section of `docs/design/automation-triggers/5_operations.md`).
+//! hold section of `docs/design/automation-triggers/references/operations.md`).
 
 use super::{DeliveryHost, Evaluation, recovery};
 use crate::checkpoint::diagnostic;

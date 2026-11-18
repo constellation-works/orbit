@@ -1,8 +1,8 @@
 ---
 title: Automation Triggers — Overview
 owner: codex
-last_updated: 2026-11-16
-last_validated: 2026-11-16
+last_updated: 2026-11-18
+last_validated: 2026-11-18
 status: Draft
 stage: shipped
 next: "—"
@@ -26,11 +26,11 @@ target is not shipped. Failed runs leave their task blocked with the failure
 attached; re-backlogging remains a deliberate human transition. The shared
 `orbit-automation` domain uses the existing sweep clock, Core action adapters
 and Store checkpoints. See
-[Operations](5_operations.md) for accepted configuration and limits. Batched pilot
+[Operations](references/operations.md) for accepted configuration and limits. Batched pilot
 preparation shipped in [ORB-12746]; [ORB-16839] added mixed-crew
 partitioning. Broader coordination and illustrative schema-v2 examples remain
-future intent, while operation mode was retired. No live definition is
-automatically enabled.
+future intent, while operation mode was retired. New workspaces seed the
+`task_pilot` routine enabled. Existing workspaces keep their setting.
 
 ## 1. Motivation
 
@@ -81,8 +81,8 @@ review coverage remains uncovered.
 | Concern | File | Task and disposition |
 | --- | --- | --- |
 | Shared evaluator, delivery batches and coverage | [Design](./2_design.md) | [ORB-11330] implemented (done) |
-| State preparation and per-member settlement | [Operations](./5_operations.md#state-preparation-orb-11331) | [ORB-11331] implemented (done); failure triage later retired |
-| Batched and mixed-crew pilot preparation | [Operations](./5_operations.md#state-preparation-orb-11331) | [ORB-12746] batched members; [ORB-16839] partitioned crews (done) |
+| State preparation and per-member settlement | [Operations](./references/operations.md#state-preparation-orb-11331) | [ORB-11331] implemented (done); failure triage later retired |
+| Batched and mixed-crew pilot preparation | [Operations](./references/operations.md#state-preparation-orb-11331) | [ORB-12746] batched members; [ORB-16839] partitioned crews (done) |
 | Alternatives, proposed YAML and future coordination | [Vision](./3_vision.md), [Design](./2_design.md) | [ORB-11315] authored the proposal (done) |
 | Review-policy relationship | [Review gate](../review-gate/2_design.md) | [ORB-11333] implemented coverage exclusions (done) |
 | Condition predicates | [Condition triggers](../condition-triggers/1_scope.md) | [ORB-19288] scoped the separate feature (done) |

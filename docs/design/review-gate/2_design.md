@@ -71,7 +71,7 @@ names no crew, so each minted task is unassigned and draws from the complexity
 pool for its complexity. Changing `review_crew` changes only future mints, never the
 consumer's epoch or its retained debt. The consumer admits only on the machine
 that owns the workspace (see [delivery automation
-operations](../automation-triggers/5_operations.md)). After-landing review
+operations](../automation-triggers/references/operations.md)). After-landing review
 never affects delivery admission, local or distributed.
 
 `orbit config show` (`review` in `--json`), `orbit doctor` (the `review`
@@ -1966,7 +1966,7 @@ non-branch ref on the same repository.
 Existing runs without a `review` snapshot behave exactly as before. The
 seeded cron `code-review` auto-task and any custom definition stay untouched;
 migrating to delivery-triggered review remains the explicit edit described in
-[delivery automation operations](../automation-triggers/5_operations.md).
+[delivery automation operations](../automation-triggers/references/operations.md).
 To roll back, set `review.timing = "off"` (and toggle the
 `delivery-code-review` consumer on for after-landing review, §1): future
 submissions capture the new value, admitted runs keep their gate, and
