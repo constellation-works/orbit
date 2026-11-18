@@ -98,38 +98,53 @@ each version and source). TOML formatting and comments do not count.
 The action prunes `target/` to dependency artifacts before it saves. A
 prefix-match restore first deletes restored dependency units older than
 one week, so an archive last saved more than a week earlier restores less.
-On a protected push, a change to the *effective key* misses the exact key, so
-the save step writes a new archive. The effective key is the prefix above plus
-the exact-key inputs (filtered lock entries, normalised member manifests,
-`.cargo/config.toml` and `rust-toolchain.toml` files, and the environment
-hash). A push that only edits `Cargo.lock` bytes outside the filtered entries
-gets an exact hit when its archive exists, and the pinned action's save step
-(`save.ts` at `d1527c8`) reports the cache up-to-date and saves nothing; an
-exact hit can never replace the existing archive. An unchanged key still saves
-when no archive exists for it, for example when the run that should have
-written it saved nothing or the archive was evicted. File touches
-therefore overstate refresh frequency. Recounting 2026-09-01 to 2026-11-18
-under the current derivation: 162 commits touched `Cargo.lock`, but only
-118 of them changed the effective key (the filtered lock list, a normalised
-member manifest, a config/toolchain file, or the prefix); the other 44 —
-mostly release version bumps, such as `eb08b2af1` — left it unchanged.
-Neither number is a save count: not every commit was a protected push, and
-the historical environment hash is assumed unchanged. Cargo's unit
-fingerprints, not the cache key, decide whether a restored unit is reused.
-A restored unit built for other features, profile settings, compiler or
-flags is never linked.
+The *effective key* is the prefix above plus the exact-key inputs (filtered
+lock entries, normalised member manifests, `.cargo/config.toml` and
+`rust-toolchain.toml` files, and the environment hash). Changing that key
+does not by itself miss, and it does not write an archive. The pinned
+restore (`restore.ts` at `d1527c8`) requests the primary key and treats the
+archive the backend returns as an exact hit only when its key compares
+equal. Both a changed key and an unchanged key hit when an archive for that
+exact key still exists. A revert to a retained key is one such hit: a
+profile, patch or resolver edit from A to B and back to A, with the other
+inputs held constant, recomputes A's prefix. The Check and Test producers
+pass that same `prefix-key` into the pinned action
+(`.github/workflows/ci.yml`), so the primary key is A's again while archive
+A remains. The pinned save (`save.ts` at `d1527c8`) then reports the cache
+up-to-date and writes nothing; an exact hit can never replace the existing
+archive. On a protected push, an eligible save is attempted on an exact
+miss, including when a prefix match was restored instead. An exact miss is
+a requested key that has no archive of its own, whether the key changed,
+the earlier run saved nothing, or the archive was evicted. The post step is
+eligible only when `save-if` is true and the cache backend is available.
+Even then `saveCache` can fail, so a key change is not a successful fresh
+archive. File touches therefore overstate
+refresh frequency. Recounting 2026-09-01 to 2026-11-18 under the current
+derivation: 162 commits touched `Cargo.lock`, but only 118 of them changed
+the effective key (the filtered lock list, a normalised member manifest, a
+config/toolchain file, or the prefix); the other 44 — mostly release
+version bumps, such as `eb08b2af1` — left it unchanged. Neither number is a
+save count: not every commit was a protected push, a changed key can hit a
+retained archive, and the historical environment hash is assumed unchanged.
+Cargo's unit fingerprints, not the cache key, decide whether a restored
+unit is reused. A restored unit built for other features, profile settings,
+compiler or flags is never linked.
 
-Residual: any edit in `[workspace.dependencies]` that leaves the filtered lock
-entries unchanged, such as a feature or `default-features` change, also keeps
-the exact key — the lock file need not be byte-identical, only its hashed
-entries. The protected push then gets an exact hit and saves nothing, so each
-job rebuilds the affected units and their dependents. That lasts until the
-next change to the effective key — a filtered lock-entry, normalised
-member-manifest, config/toolchain, prefix or environment change — not merely
-the next `Cargo.lock` edit: a release bump rewrites the lock file without
-moving any of those, so it does not end the residual. Two of the 98
-root-manifest commits from 2026-08-01 to 2026-11-18 were feature edits of this
-kind (`c05c3103e`, `600a0a711`); both left the exact key unchanged. The version
+Residual: any edit in `[workspace.dependencies]` that leaves the filtered
+lock entries unchanged, such as a feature or `default-features` change,
+also keeps the exact key — the lock file need not be byte-identical, only
+its hashed entries. When that archive still exists, the protected push gets
+an exact hit and saves nothing, so each job rebuilds the affected units and
+their dependents, and those rebuilt units are not published. Refresh is the
+successful production of an archive for a missing key. It is not the next
+effective-key change, and it is not the next `Cargo.lock` edit. A filtered
+lock-entry, normalised member-manifest, config/toolchain, prefix or
+environment change ends the residual only when that push's eligible save
+produces the archive. A change that returns to a retained key is an exact
+hit and does not. A release bump rewrites the lock file without moving the
+effective key, so it does not either. Two of the 98 root-manifest commits
+from 2026-08-01 to 2026-11-18 were feature edits of this kind
+(`c05c3103e`, `600a0a711`); both left the exact key unchanged. The version
 switch in `b38186846` (2026-11-01) did the same.
 
 The Check job's trusted `.orbit/tmp/dependency-producer` checkout adds that
