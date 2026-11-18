@@ -363,8 +363,9 @@ intent from bytes:
   read of any other task. A listing that scans the partition is the one bounded
   exception: see the freshness probe below.
 - Reads of the **envelope alone** need no lock. `task.yaml` is renamed into
-  place atomically, so a single file is always self-consistent; the index
-  freshness scan every listing performs reads envelopes lock-free.
+  place atomically, so a single file is always self-consistent. Listing
+  freshness scans read envelopes lock-free. An aggregate task board request
+  can use one freshness scan per workspace for its indexed status sections.
 - The read lock is not the create/delete sentinel, which keys on the bundle
   directory. Readers never block a task's creation or removal, and those
   transient states stay governed by the existing skip tolerance

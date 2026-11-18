@@ -314,6 +314,13 @@ impl TaskStoreBackend for TaskV2Store {
     ) -> Result<Option<crate::contracts::TaskCandidateKeys>, OrbitError> {
         self.observe_task_candidate_keys(filter, limit)
     }
+    fn observe_task_candidate_key_pages(
+        &self,
+        pages: &[(crate::contracts::TaskListFilter, usize)],
+    ) -> Result<Option<Vec<Result<crate::contracts::TaskCandidateKeys, OrbitError>>>, OrbitError>
+    {
+        self.observe_task_candidate_key_pages(pages)
+    }
     fn registered_task_bundle_ids(&self) -> Result<Option<Vec<String>>, OrbitError> {
         self.in_boundary(|| self.registered_task_bundle_ids())
     }

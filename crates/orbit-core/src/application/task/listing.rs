@@ -350,6 +350,28 @@ impl OrbitRuntime {
             .observe_task_candidate_keys(filter, limit)
     }
 
+    /// Observe several indexed task pages in request order using one
+    /// workspace freshness read. `None` asks the caller to use envelope
+    /// selection. Query errors are scoped to their page; a freshness error
+    /// applies to the workspace.
+    pub fn observe_task_candidate_key_pages(
+        &self,
+        pages: &[(TaskListFilter, usize)],
+    ) -> Result<Option<Vec<Result<TaskCandidateKeys, OrbitError>>>, OrbitError> {
+        super::candidate_checkpoint::notify_candidate_selection()?;
+        if !self.coordination_task_reads_visible() {
+            return Ok(Some(
+                pages
+                    .iter()
+                    .map(|_| Ok(TaskCandidateKeys::default()))
+                    .collect(),
+            ));
+        }
+        self.stores()
+            .tasks()
+            .observe_task_candidate_key_pages(pages)
+    }
+
     /// Return the bounded registry status projection needed to label one
     /// task's dependency and relation targets. The registry resolves target
     /// ids across workspace partitions without hydrating their bundles.
