@@ -207,7 +207,7 @@ fn overlapping_pilot_graphs_lock_in_order_and_refuse_the_closing_edge() {
                         discovered.wait();
                     }
                     Point::Locked => first_locked.send(()).expect("signal first locks"),
-                    Point::BeforeFindingRejection => {}
+                    Point::BeforeDiscovery | Point::BeforeFindingRejection => {}
                 }
             })));
             let output =
@@ -483,4 +483,29 @@ fn a_finding_changed_after_the_pilot_write_is_not_rejected() {
             }
         }
     }
+}
+
+/// [ORB-25722] A task deleted after assess and before graph discovery is a
+/// stale `task_deleted` outcome, as it is under the locks, not `apply_failed`.
+#[test]
+fn a_task_deleted_before_graph_discovery_is_stale() {
+    let workspace = workspace(None);
+    let task = add_task(&workspace.runtime, "deleted", TaskStatus::Proposed);
+    let prepared = prepare(&workspace, &task.id);
+    let paths = workspace.runtime.paths().clone();
+    let id = task.id.clone();
+    lock_hook::set(Some(Box::new(move |point| {
+        if point == Point::BeforeDiscovery {
+            OrbitRuntime::from_roots(&paths.global_dir, &paths.orbit_dir)
+                .expect("runtime")
+                .delete_task(&id)
+                .expect("delete the task");
+        }
+    })));
+    let applied = apply_naming_blockers(&workspace.runtime, &prepared, &[]);
+    lock_hook::set(None);
+    let applied = applied.expect("apply reports the deleted task");
+    let outcome = &applied["task_outcomes"][0];
+    assert_eq!(outcome["outcome"], "stale", "{applied}");
+    assert_eq!(outcome["reason"], "task_deleted", "{applied}");
 }

@@ -811,6 +811,9 @@ Task list/detail JSON and MCP expose the same `pilot_warnings` array of
 A proposed task whose referenced pilot assessment artifact is missing, unreadable
 or does not match its receipt reports one `pilot_assessment_unavailable` entry in
 its own `pilot_warnings`; the other tasks in the same list or page are unaffected.
+Automatic pilot discovery likewise excludes only that task, counted under
+`pilot_assessment_unavailable` in its `excluded_by_reason`, and keeps preparing
+the rest.
 The dashboard drain payload omits per-finding text.
 
 Task rows and details also show a blue **triaging** pill while a triage or

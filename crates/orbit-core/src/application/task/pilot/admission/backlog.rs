@@ -71,9 +71,11 @@ struct OperatorToolClassification {
 
 /// Whether `assessment` classifies `requirement` as the change's subject.
 ///
-/// Fails safe: a missing field, a malformed entry, a `subject` without a
-/// reason, or any `invoke` (or unknown) classification for the same mention
-/// keeps the requirement, so the task holds as before.
+/// Fails safe: a missing field, no reasoned `subject` entry, a `subject`
+/// without a reason, or any well-formed `invoke` (or unknown) classification
+/// for the same mention keeps the requirement, so the task holds as before.
+/// A malformed entry is skipped: it cannot keep a requirement that a
+/// well-formed, reasoned `subject` entry for the same mention drops.
 fn classified_as_subject(assessment: &Value, requirement: &OperatorValidationRequirement) -> bool {
     let Some(entries) = assessment
         .get(OPERATOR_TOOL_CLASSIFICATIONS)
@@ -650,7 +652,10 @@ impl OrbitRuntime {
                 self.record_pilot_operator_handoff(id, &hold)?;
                 wrote = true;
             }
-            if self.decision_channel_enabled() && !pilot_decision_request_open(row) {
+            if hold.is_resolvable()
+                && self.decision_channel_enabled()
+                && !pilot_decision_request_open(row)
+            {
                 self.raise_pilot_decision_request(id)?;
                 wrote = true;
             }
@@ -698,7 +703,8 @@ impl OrbitRuntime {
     /// request, because one assessment can persist successive holds and
     /// answering one only resolves the hold admission then reported. A
     /// newer assessment raises a fresh request and the earlier one then
-    /// reads as superseded. Disabled, nothing is written.
+    /// reads as superseded. A hold no answer resolves (a stale assessment,
+    /// which needs a new pilot) raises nothing. Disabled, nothing is written.
     pub(crate) fn raise_pilot_decision_request(&self, task_id: &str) -> Result<(), OrbitError> {
         if !self.decision_channel_enabled() {
             return Ok(());
@@ -706,7 +712,10 @@ impl OrbitRuntime {
         self.stores()
             .tasks()
             .with_task_write_lock(task_id, &mut || {
-                let Some(hold) = self.pilot_admission_hold(task_id)? else {
+                let Some(hold) = self
+                    .pilot_admission_hold(task_id)?
+                    .filter(PilotAdmissionHold::is_resolvable)
+                else {
                     return Ok(());
                 };
                 let comments = self.get_task_comments(task_id)?;

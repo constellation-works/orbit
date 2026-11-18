@@ -153,6 +153,15 @@ fn attach_host_findings(
             json!(pilot_normalizations),
         );
     }
+    // The context audit fields are host-owned too: a pilot-supplied value
+    // never survives, even when the host found nothing.
+    for field in [
+        CONTEXT_CREATION_RETAINED,
+        CONTEXT_EVIDENCE_RETAINED,
+        CONTEXT_REAUTHORIZATION_REQUIRED,
+    ] {
+        fields.remove(field);
+    }
     if !scope.retained.is_empty() {
         fields.insert(CONTEXT_CREATION_RETAINED.to_string(), json!(scope.retained));
     }

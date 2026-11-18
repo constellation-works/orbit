@@ -248,8 +248,26 @@ pub(super) fn holding_findings(assessment: &Value) -> Vec<Value> {
             "finding": duplicate,
         }));
     }
+    // Admission holds on any non-null `already_landed`, whatever its shape.
+    if let Some(landed) = assessment
+        .get(ALREADY_LANDED)
+        .filter(|value| !value.is_null())
+    {
+        findings.push(json!({
+            "id": ALREADY_LANDED,
+            "category": ALREADY_LANDED,
+            "text": landed["evidence"]
+                .as_str()
+                .map_or_else(|| "already landed".to_string(), |evidence| format!("already landed: {evidence}")),
+            "evidence": landed.get("evidence").cloned().unwrap_or(Value::Null),
+            "finding": landed,
+        }));
+    }
     findings
 }
+
+/// The single-valued finding that the work is already on the base.
+const ALREADY_LANDED: &str = "already_landed";
 
 /// Repository paths the assessment's selectors anchor.
 fn footprint_paths(assessment: &Value) -> Vec<String> {
@@ -511,7 +529,7 @@ pub(super) fn complete_recheck(assessment: &mut Value, recheck: &Value) -> Resul
 
 fn kept_value(key: &str, value: &Value, verdicts: &BTreeMap<String, Value>) -> Value {
     let verdict = |id: &str| verdicts.get(id).map(|verdict| verdict["status"].as_str());
-    if key == "duplicate_of" {
+    if key == "duplicate_of" || key == ALREADY_LANDED {
         return match verdict(key) {
             Some(Some("resolved")) => Value::Null,
             Some(Some("changed")) => verdicts[key]["current"].clone(),

@@ -691,6 +691,30 @@ fn missing_assessment_artifact_degrades_only_its_own_readout() {
         json!(false),
         "{shown}"
     );
+
+    // [ORB-25722] Automatic discovery excludes only the broken task.
+    let discovered = workspace
+        .runtime
+        .run_deterministic(
+            "prepare_task_pilot",
+            &json!({}),
+            &json!({
+                "workspace_path": workspace.repo.canonicalize().expect("canonicalize repo"),
+                "base_branch": "main",
+            }),
+            ToolContext::default(),
+        )
+        .expect("automatic discovery must survive one unreadable pilot audit");
+    assert_eq!(
+        discovered["excluded_by_reason"]["pilot_assessment_unavailable"], 1,
+        "{discovered}"
+    );
+    assert!(
+        discovered["task_ids"]
+            .as_array()
+            .is_some_and(|ids| ids.contains(&json!(healthy.id))),
+        "{discovered}"
+    );
 }
 
 fn unreadable_assessment_degrades_show_and_refuses_admission() {
