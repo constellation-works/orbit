@@ -738,8 +738,7 @@ The strip summary counts trials separately from scheduled fires (for example,
 the strip hides that routine's repeated cron projection and plots only the
 single trial; an enabled tripped routine's card reports **Next trial**
 instead of **Next fire**. A trial that succeeds closes the breaker and the
-routine fires
-as scheduled again; see
+routine fires as scheduled again; see
 [Recover a tripped routine](/how-to/recurring-work/#recover-a-tripped-routine).
 
 ### Scheduler clock
