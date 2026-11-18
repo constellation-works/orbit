@@ -368,6 +368,12 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<Option<String>, OrbitError> {
         NullRuntimeHost::review_report_correction(self, request)
     }
+    fn review_report_evidence_hold(
+        &self,
+        request: &ReviewReportCorrectionRequest,
+    ) -> Result<Option<String>, OrbitError> {
+        NullRuntimeHost::review_report_evidence_hold(self, request)
+    }
     fn handoff_landing_context(
         &self,
         handoff_id: &str,

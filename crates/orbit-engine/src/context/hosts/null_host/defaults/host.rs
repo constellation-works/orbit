@@ -424,6 +424,13 @@ pub trait NullRuntimeHost: Send + Sync {
         Ok(None)
     }
 
+    fn review_report_evidence_hold(
+        &self,
+        _request: &ReviewReportCorrectionRequest,
+    ) -> Result<Option<String>, OrbitError> {
+        Ok(None)
+    }
+
     // ── Owner landing consumer [ORB-12499] ─────────────────────────────
 
     fn handoff_landing_context(

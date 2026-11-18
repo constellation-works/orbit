@@ -1,7 +1,7 @@
 ---
 title: Review Gate — Design
 owner: codex
-last_updated: 2026-11-15
+last_updated: 2026-11-18
 last_validated: 2026-11-14
 status: Implemented
 feature: review-gate
@@ -1640,6 +1640,20 @@ attempt with its verdict, keeping the runtime already charged and adding the
 reviewer runtime it records; a released attempt that a later start superseded
 is stale.
 
+A reviewer whose envelope declares failure (`status: "failed"`, exit 0)
+because a required check could not run on its host still leaves its report
+[ORB-25667]. Before the step's failure stands, the engine asks the host
+whether that report is a readable report for the open attempt on the admitted
+candidate (uncommitted reviewer repairs included), of a single task, with an
+`incomplete` verdict, no open finding, and records that establish the
+candidate once every external check it names passes. Only then does the
+reviewer step succeed, with `reviewer_declared_failure` in its output, so the
+gate's own settlement authenticates the report, commits the repairs and
+decides the evidence hold as for any report. A timeout, a reserved or typed
+failure code, a missing or mismatched report, a reject, an open finding or
+any gap beyond the named checks keeps the step failed and releases the
+attempt as above.
+
 `review.minutes` is a wall-clock limit on the candidate's review. Each
 reviewer invocation records its start, and the ledger sets its deadline to
 the seconds the candidate has left; the engine sets the reviewer's wall clock
@@ -2073,6 +2087,7 @@ candidate is the handed-off head. External pushes and rebases remain stale.
 - [ORB-14434] — a reviewer's host-verified claim that a failed required check fails the same way on the pinned base holds the task for the red base instead of blocking it.
 - [ORB-14334] — a Linux owner fulfils held `host_sandbox_test` evidence that nested agent sandboxes cannot produce, and a pass that deferred its sandbox-confined path no longer counts as executing it.
 - [ORB-14616] — a counterfactual names mutation targets apart from its sources, and one shape defect returns to the reviewer once.
+- [ORB-25667] — a reviewer that declared failure over a host-denied check reaches settlement when its report is evidence-only, instead of failing the run.
 - [ORB-14632] — settlement compares each mutation target with rename detection off, so a modified, deleted or moved target fails.
 - [ORB-14684] — a failed check the owner trusts (`workflow.required_validation_commands` or `review.baseline_commands`) can no longer be filed as a `diagnostic`; the baseline list is captured with the admission and recorded on the certificate.
 - [ORB-14849] — adds `review.before_landing`: the reviewer reviews the open PR while hosted CI runs, completion merges only the head it settled, any other outcome keeps the PR open in review, and a claimed leaf reviews its PR before handing it off.

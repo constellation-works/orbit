@@ -117,7 +117,7 @@ pub(super) fn run_target(
     let Dispatched {
         outcome: mut dispatch,
         timed_out,
-        ..
+        reviewer,
     } = dispatched;
     persist_dispatch_invocation(ctx, &step.id, &dispatched_input, &dispatch);
     // [ORB-24154] A correction that completed without a successful response
@@ -133,6 +133,9 @@ pub(super) fn run_target(
             refusal: orbit_types::workflow::ReviewGateRefusal::TimeoutIncomplete,
             message: "review_timeout_incomplete: reviewer exceeded its wall clock; partial report retained for continuation".into(),
         });
+    }
+    if reviewer {
+        hold_failed_reviewer_for_evidence(ctx, &dispatched_input, &mut dispatch);
     }
     let (success, message) = apply_implementer_blocker(
         step,
@@ -306,27 +309,7 @@ fn dispatch_once(
 /// returned, when the reviewer can still correct it [ORB-14616]. A failed
 /// check is logged and leaves the report to settlement.
 fn report_correction(ctx: &ExecCtx<'_>, input: &Value) -> Option<String> {
-    let field = |key: &str| {
-        input
-            .get(key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-    };
-    let request = crate::context::ReviewReportCorrectionRequest {
-        run_id: ctx.run_id.clone(),
-        lineage_key: field("lineage_key")?,
-        attempt_id: field("attempt_id")?,
-        task_ids: input
-            .get("task_ids")
-            .and_then(Value::as_array)?
-            .iter()
-            .filter_map(Value::as_str)
-            .map(ToOwned::to_owned)
-            .collect(),
-        workspace_path: field("workspace_path")?.into(),
-    };
+    let request = review_report_request(ctx, input)?;
     ctx.host
         .review_report_correction(&request)
         .unwrap_or_else(|error| {
@@ -339,6 +322,113 @@ fn report_correction(ctx: &ExecCtx<'_>, input: &Value) -> Option<String> {
             );
             None
         })
+}
+
+/// The host's question about the report of the reviewer `input` dispatched;
+/// `None` when the input names no admitted attempt.
+fn review_report_request(
+    ctx: &ExecCtx<'_>,
+    input: &Value,
+) -> Option<crate::context::ReviewReportCorrectionRequest> {
+    let field = |key: &str| {
+        input
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    };
+    Some(crate::context::ReviewReportCorrectionRequest {
+        run_id: ctx.run_id.clone(),
+        lineage_key: field("lineage_key")?,
+        attempt_id: field("attempt_id")?,
+        task_ids: input
+            .get("task_ids")
+            .and_then(Value::as_array)?
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect(),
+        workspace_path: field("workspace_path")?.into(),
+    })
+}
+
+/// Output key naming the declared failure of a reviewer whose report the
+/// host admitted to settlement as evidence-only [ORB-25667].
+const REVIEWER_DECLARED_FAILURE_KEY: &str = "reviewer_declared_failure";
+
+/// [ORB-25667] A reviewer whose envelope declared failure (`status:
+/// "failed"`, exit 0) because a required check could not run on its host
+/// still leaves its report behind. When the host finds that report a valid
+/// incomplete verdict whose only gap is the external checks it names
+/// ([`RuntimeHost::review_report_evidence_hold`]), the step succeeds so the
+/// gate's settlement runs: it authenticates the report, commits the
+/// reviewer's repairs and decides the evidence hold as for any report.
+/// Anything else — a timeout, a reserved or typed code, no or a mismatched
+/// report, a reject, an open finding, a gap beyond the named checks, or a
+/// host that cannot judge — keeps the declared failure.
+fn hold_failed_reviewer_for_evidence(
+    ctx: &ExecCtx<'_>,
+    input: &Value,
+    dispatch: &mut super::super::dispatcher::DispatchOutcome,
+) {
+    if dispatch.success {
+        return;
+    }
+    let Some(orbit_types::workflow::StepFailureCode::Other(code)) = dispatch.failure_code.as_ref()
+    else {
+        return;
+    };
+    if orbit_types::workflow::is_reserved_declared_failure_code(code.trim()) {
+        return;
+    }
+    // Only a declared `status: "failed"` envelope records this evidence.
+    let Some(message) = dispatch
+        .output
+        .get(DECLARED_FAILURE_EVIDENCE_KEY)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let Some(request) = review_report_request(ctx, input) else {
+        return;
+    };
+    let evidence = match ctx.host.review_report_evidence_hold(&request) {
+        Ok(Some(evidence)) => evidence,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.engine.job_executor",
+                run_id = %request.run_id,
+                attempt_id = %request.attempt_id,
+                error = %error,
+                "could not judge a failed reviewer's report for an evidence hold"
+            );
+            return;
+        }
+    };
+    let declared = serde_json::json!({
+        "code": code,
+        "message": message,
+        "named_evidence": evidence,
+    });
+    if !dispatch.output.is_object() {
+        dispatch.output = Value::Object(serde_json::Map::new());
+    }
+    if let Some(output) = dispatch.output.as_object_mut() {
+        output.insert(REVIEWER_DECLARED_FAILURE_KEY.to_string(), declared);
+    }
+    tracing::info!(
+        target: "orbit.engine.job_executor",
+        run_id = %request.run_id,
+        attempt_id = %request.attempt_id,
+        code = %code,
+        "a failed reviewer left an evidence-only report; settlement decides the hold"
+    );
+    dispatch.success = true;
+    dispatch.message = None;
+    dispatch.failure_code = None;
 }
 
 /// Fail an implementer step whose output fields break the declared shape.
