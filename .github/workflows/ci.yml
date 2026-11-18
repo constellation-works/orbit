@@ -891,6 +891,29 @@ jobs:
       - name: Pack nextest archive for transfer
         run: python3 .orbit/tmp/workflow-ci/scripts/ci-repack-nextest.py pack "$RUNNER_TEMP/nextest-archive.tar.zst" "$RUNNER_TEMP/nextest-transfer.tar.zst" --parts "$NEXTEST_ARCHIVE_PARTS"
 
+      # The partition proof reads only the original archive, never the
+      # transfer parts, so it runs while the network-bound uploads below do
+      # instead of after them: every test job waits for this whole job, and
+      # the proof took 7-11 s of it hosted. The background subshell itself
+      # holds an exclusive lock on partition-proof/lock until it has recorded
+      # the proof's status and exited (each step runs in its own shell, so a
+      # lock held by this step's shell would release when this step ends).
+      # "Prove the shards cover every test" blocks on that lock, prints the
+      # proof's output and exits with its status.
+      - name: Start the shard coverage proof
+        env:
+          CI_TEST_SCOPE: ${{ needs.scope.outputs.mode }}
+        run: |
+          set -euo pipefail
+          proof="$RUNNER_TEMP/partition-proof"
+          mkdir "$proof"
+          (
+            flock 9
+            status=0
+            ./scripts/ci-guardrails.sh --test-partitions "$RUNNER_TEMP/nextest-archive.tar.zst" || status=$?
+            echo "$status" >"$proof/status"
+          ) 9>"$proof/lock" >"$proof/output" 2>&1 </dev/null &
+
       # The transfer is already zstd-compressed. The steps run in order; the
       # test jobs `needs:` this job, so they start once all of it has finished.
       - name: Upload nextest archive part 1/4
@@ -929,18 +952,9 @@ jobs:
           retention-days: 1
           compression-level: 0
 
-      # Lists the uploaded archive once whole and once per count partition,
-      # from one extraction, and fails unless the partitions cover every
-      # test exactly once. It runs after the upload and before the test jobs
-      # start. A failure here fails this job, so every test job's first step
-      # and the Check job's wait fail too.
-      - name: Prove the shards cover every test
-        env:
-          CI_TEST_SCOPE: ${{ needs.scope.outputs.mode }}
-        run: ./scripts/ci-guardrails.sh --test-partitions "$RUNNER_TEMP/nextest-archive.tar.zst"
-
       # Cargo's unit timings identify compilation bottlenecks without hiding
-      # them inside the macOS-filter helper's captured Cargo output.
+      # them inside the macOS-filter helper's captured Cargo output. Uploaded
+      # before the proof's wait below, so it overlaps the proof too.
       - name: Upload test build timings
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -949,6 +963,26 @@ jobs:
           path: target/cargo-timings/
           if-no-files-found: warn
           retention-days: 14
+
+      # The proof started before the uploads lists the archive the transfer
+      # encodes once whole and once per count partition, from one extraction,
+      # and fails unless the partitions cover every test exactly once. This
+      # step waits for it after the last upload and before the test jobs
+      # start. A failure here fails this job, so every test job's first step
+      # and the Check job's wait fail too, as does a proof that ended without
+      # recording its status.
+      - name: Prove the shards cover every test
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          proof="$RUNNER_TEMP/partition-proof"
+          flock "$proof/lock" true
+          cat "$proof/output"
+          if [[ ! -s "$proof/status" ]]; then
+            echo "ci-guardrails: the shard coverage proof ended without an exit status" >&2
+            exit 1
+          fi
+          exit "$(cat "$proof/status")"
 
       - name: Save workspace test outputs
         if: ${{ github.event_name == 'push' && steps.workspace-test-cache.outputs.cache-hit != 'true' }}

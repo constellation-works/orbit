@@ -1083,6 +1083,94 @@ under the [hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff)
 reporting coverage, gaps (skipped, cancelled, missing) and queue time
 separately.
 
+### Partition proof overlaps the uploads (2026-11-18)
+
+ORB-25680 follows the ORB-25678 watch: the latest 20 completed PR `ci.yml`
+runs, 18 executed Checks (15 success, three failure), two skipped, none
+cancelled or missing; nearest-rank p90 **528 s**, median 348 s, maximum
+552 s. In three broad warm runs (44266480859, 44276039854, 44275501415: both
+caches restored; full, 11 and 19 affected crates) the folded list-build took
+217, 251 and 290 s.
+
+**The folded build.** The fixture replays run 44275501415's selection: the
+19-crate `affected:` scope through `ci-guardrails.sh --test-archive` at base
+`8e1a03f76`, Rust 1.98.1, the `ci.yml` profile environment,
+`ORBIT_COMPILER_CACHE=0` and build-budget admission (4 Cargo jobs), on a
+shared 32-thread host. Dependencies and workspace units are warm, then
+`crates/orbit-common/src/lib.rs` is touched so every workspace unit rebuilds,
+as a change low in the graph does hosted. Cargo's unit timings: 76 workspace
+units, 457.9 summed unit-seconds, a 137.4 s makespan (list-build phase 138 s),
+and 102 idle slot-seconds. Between 45 and 80 s only about two of the four slots
+are busy. The critical chain is `orbit-common` → `orbit-store` (rmeta) →
+`orbit-engine` (rmeta) → `orbit-runtime` (rmeta) → the `orbit-core` library
+(31.6 s to rmeta, 11 s more for codegen, from the artifact times) → the
+`orbit-core` library's unit-test harness (58 s), which ends the build. That
+harness starts only when the whole `orbit-core` rlib exists. Every other crate's
+harness starts before its own library finishes (`orbit-store`'s at 17.5 s,
+while its library ran to 24.3 s), but `orbit-core`'s self dev-dependency
+(`orbit-core = { path = ".", features = ["test-support"] }`) gives Cargo an
+edge from every `orbit-core` test target to that library. The integration
+tests call `orbit_core::test_support`, so the edge cannot go without moving
+tests or splitting the crate; this pass leaves it. The post-`orbit-core` tail
+holds about 229 slot-seconds over four slots, so even without the edge the
+fixture's floor is about 121 s.
+
+No unit was built twice: each workspace (package, target, mode) appears once
+in the timings, and the archive step's fingerprint log reports no dirty unit.
+Two other levers were measured and not taken. Compiling non-test libraries
+with plain rustc instead of `clippy-driver` took 5.5 s off the `orbit-core`
+library (49.3 → 43.8 s) and 138 → 129 s in one run. That pass is the only lint
+of `test-support`-only library code, though: unit-test harnesses allow
+`unwrap`/`expect` crate-wide, and production Clippy does not compile it.
+`cargo nextest archive --zstd-level 1` (the pack step re-encodes the archive
+anyway, to byte-identical transfer parts) cut archive CPU from 8.2–11.5 to
+4.9–6.8 user-seconds. Pinned to four CPUs, though, it moved the archive's wall
+time only from 5.26–5.82 s to 4.10–5.18 s.
+
+**The change.** Since ORB-24733 every test job `needs:` the whole build job, so
+the partition proof that followed the four uploads sat on the path to every
+test job. The proof reads only the original archive, never the transfer
+parts. `Start the shard coverage proof` now launches
+`ci-guardrails.sh --test-partitions` in the background right after the pack.
+The four part uploads and `Upload test build timings` run meanwhile. `Prove
+the shards cover every test` still follows the last upload, blocks on the
+lock the proof holds until it exits, prints the proof's output and exits
+with its status (or fails if none was recorded). Hosted step spans from the
+three runs:
+
+| Run | Pack | Four uploads | Timings upload | Proof | Proof time the overlap can hide |
+|---|---|---|---|---|---|
+| 44266480859 | 12.65 s | 16.78 s | 1.80 s | 7.18 s | 7.18 s |
+| 44276039854 | 16.51 s | 9.63 s | 1.36 s | 9.80 s | 9.80 s |
+| 44275501415 | 12.99 s | 7.86 s | 0.89 s | 11.04 s | 8.75 s |
+
+The job's serial tail goes from pack + uploads + proof + timings to pack + max(uploads + timings, proof). These are projections from logged spans, not a
+hosted measurement. A local replay runs each revision's own `run:` bodies
+from `Pack nextest archive for transfer` through both the timings upload and the
+proof, on the fixture's archive, pinned to four CPUs, sequentially and
+alternating. Each upload is stood in for by reading its file, then 2 s (the
+hosted per-part span). The tail took 21.52, 24.13, 22.09 and 21.93 s before and 17.36,
+17.39, 16.53 and 17.20 s after. The proof's 5.2–5.9 s left the serial path,
+and the wait step returned in 0.01 s. A failing proof still fails the wait step
+with the proof's own output, and a proof killed before it records a status
+fails it with `the shard coverage proof ended without an exit status`.
+
+What runs is unchanged: the same affected or full selection, the folded
+all-targets Clippy lint and the workflow selector guard (the list-build is
+untouched), the same archive and the exact-once partition proof over it
+(still a failure of `Test build` and so of every test job's first step and
+the Check job's wait), shard 1's sandbox and Landlock gate, and every test.
+No test was retired, skipped, retried or weakened. **Hosted compliance remains
+open.** The largest measured lever is still the `orbit-core` chain above.
+After publication, once the latest 20 completed PR `ci.yml` runs carry this
+revision, the operator runs
+`python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` under the
+[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff). They
+report executed, failed, skipped, cancelled and missing counts, nearest-rank
+p90, median and maximum, and Check's queue wait and awaited jobs' queue
+overlap separately from elapsed time. They also report each `Test build` run's
+proof and upload step spans, so the overlap is measured, not projected.
+
 ## Why
 
 On 2026-10-03, unit tests under `crates/*/src/**` were about 295k lines and 7,675 test functions, more lines than the production code they covered. Crate-root integration tests were 37k lines. Most unit tests pinned internals, so a refactor that kept behaviour unchanged still broke dozens of them, and each break cost an agent tokens to repair a test rather than find a bug. A review of all of them kept 180 (2.3%).
