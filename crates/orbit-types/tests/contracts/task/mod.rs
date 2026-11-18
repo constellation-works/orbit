@@ -1,4 +1,5 @@
 mod artifacts;
+#[path = "context/creation.rs"]
 mod context_creation;
 mod dependency_cycles;
 mod dependency_satisfaction;

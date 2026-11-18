@@ -5,6 +5,7 @@ mod commit_message;
 mod delivery_conventions;
 mod final_recovery;
 mod gate_note;
+#[path = "handoff/clean_tree.rs"]
 mod handoff;
 mod host_evidence;
 mod job;

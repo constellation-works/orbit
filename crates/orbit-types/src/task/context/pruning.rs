@@ -11,7 +11,7 @@
 //! shape: the only decoder reads the historical note text directly, and no
 //! writer for this event remains.
 
-use super::TaskHistoryEntry;
+use crate::task::TaskHistoryEntry;
 
 /// History event written by the retired filesystem-existence pruning path.
 pub const CONTEXT_FILES_PRUNED_EVENT: &str = "context_files_pruned";

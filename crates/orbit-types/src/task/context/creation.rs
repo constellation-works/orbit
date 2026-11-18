@@ -21,7 +21,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::TaskError;
+use crate::task::TaskError;
 
 /// History event whose note is a [`ContextCreationGrant`].
 pub const CONTEXT_CREATION_AUTHORIZED_EVENT: &str = "context_creation_authorized";

@@ -1,9 +1,7 @@
 //! Domain contracts for this Orbit types module.
 
 mod artifacts;
-mod context_creation;
-mod context_pruning;
-mod context_widening;
+mod context;
 mod decision;
 mod epic;
 mod error;
@@ -35,13 +33,11 @@ pub use resolves::{
     resolves_relation_targets,
 };
 
-pub use context_creation::{
-    CONTEXT_CREATION_AUTHORIZED_EVENT, CONTEXT_CREATION_GRANT_VERSION, ContextCreationGrant,
-    ContextCreationState, MAX_CONTEXT_CREATION_SELECTORS, context_files_sha256,
-};
-pub use context_pruning::{CONTEXT_FILES_PRUNED_EVENT, LegacyContextPruningRecord};
-pub use context_widening::{
-    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep,
+pub use context::{
+    CONTEXT_CREATION_AUTHORIZED_EVENT, CONTEXT_CREATION_GRANT_VERSION, CONTEXT_FILES_PRUNED_EVENT,
+    CONTEXT_FILES_WIDENED_EVENT, ContextCreationGrant, ContextCreationState, ContextFilesWidening,
+    ContextWideningStep, LegacyContextPruningRecord, MAX_CONTEXT_CREATION_SELECTORS,
+    context_files_sha256,
 };
 pub use decision::{
     ACCEPT_FINDINGS_ANSWER_ID, AGENT_DECISION_MAX_OPTIONS, AGENT_DECISION_MIN_OPTIONS,

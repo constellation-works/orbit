@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{TaskDecision, TaskHistoryEntry};
+use crate::task::{TaskDecision, TaskHistoryEntry};
 
 /// History event recording selectors appended for agent-changed paths.
 pub const CONTEXT_FILES_WIDENED_EVENT: &str = "context_files_widened";
