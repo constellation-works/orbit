@@ -80,11 +80,28 @@ jobs:
           components: rustfmt, clippy
           targets: aarch64-apple-darwin
 
+      # rust-cache hashes every .cargo/config.toml and rust-toolchain.toml below
+      # the workspace into its exact key, hidden directories included. The
+      # Check job's trusted dependency-producer checkout adds that tree's
+      # copies, so the seeder makes the same checkout to compute Check's key.
+      - name: Check out dependency evidence producer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: .orbit/tmp/dependency-producer
+          persist-credentials: false
+
+      # Every dependency-cache producer and seeder takes its prefix from this
+      # helper, so keys stay identical (docs/runbooks/compiler-cache.md).
+      - name: Derive Rust dependency cache identity
+        id: rust-dependency-key
+        run: python3 scripts/ci-rust-dependency-cache-key.py --manifest Cargo.toml
+
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         id: lookup
         continue-on-error: true
         with:
-          prefix-key: v1-rust-${{ hashFiles('Cargo.toml') }}
+          prefix-key: ${{ steps.rust-dependency-key.outputs.prefix-key }}
           shared-key: rust-1.98.1-checks
           lookup-only: true
           save-if: false
@@ -120,7 +137,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: ${{ steps.lookup.outputs.cache-hit != 'true' }}
         with:
-          prefix-key: v1-rust-${{ hashFiles('Cargo.toml') }}
+          prefix-key: ${{ steps.rust-dependency-key.outputs.prefix-key }}
           shared-key: rust-1.98.1-checks
           save-if: ${{ github.event_name == 'push' }}
 
@@ -159,11 +176,17 @@ jobs:
           toolchain: "1.98.1"
           components: clippy
 
+      # Every dependency-cache producer and seeder takes its prefix from this
+      # helper, so keys stay identical (docs/runbooks/compiler-cache.md).
+      - name: Derive Rust dependency cache identity
+        id: rust-dependency-key
+        run: python3 scripts/ci-rust-dependency-cache-key.py --manifest Cargo.toml
+
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         id: lookup
         continue-on-error: true
         with:
-          prefix-key: v1-rust-${{ hashFiles('Cargo.toml') }}
+          prefix-key: ${{ steps.rust-dependency-key.outputs.prefix-key }}
           shared-key: rust-1.98.1
           lookup-only: true
           save-if: false
@@ -173,7 +196,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: ${{ steps.lookup.outputs.cache-hit != 'true' }}
         with:
-          prefix-key: v1-rust-${{ hashFiles('Cargo.toml') }}
+          prefix-key: ${{ steps.rust-dependency-key.outputs.prefix-key }}
           shared-key: rust-1.98.1
           save-if: ${{ github.event_name == 'push' }}
 

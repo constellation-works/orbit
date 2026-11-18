@@ -2,7 +2,7 @@
 type: runbook
 summary: Manage the opt-in host Rust compiler cache and understand hosted dependency and content-verified workspace-output caches.
 tags: [operations, rust, cache, worktrees, sandbox, linux]
-paths: ["scripts/rustc-compiler-cache.sh", "scripts/compiler-cache.sh", "scripts/test-compiler-cache.sh", "scripts/test-compiler-cache-namespaces.sh", "scripts/bench-compiler-cache.sh", "scripts/cross-revision-check.sh", "scripts/test-cross-revision-check.sh", "scripts/ci-workspace-cache.py", "scripts/test-ci-workspace-cache.py", ".cargo/config.toml", ".github/workflows/ci.yml"]
+paths: ["scripts/rustc-compiler-cache.sh", "scripts/compiler-cache.sh", "scripts/test-compiler-cache.sh", "scripts/test-compiler-cache-namespaces.sh", "scripts/bench-compiler-cache.sh", "scripts/cross-revision-check.sh", "scripts/test-cross-revision-check.sh", "scripts/ci-workspace-cache.py", "scripts/ci-rust-dependency-cache-key.py", "scripts/test-ci-workspace-cache.py", ".cargo/config.toml", ".github/workflows/ci.yml"]
 related_features: [policy-sandbox, executors]
 related_artifacts: [ORB-11259, ORB-11755, ORB-11981]
 last_validated: 2026-11-12
@@ -41,18 +41,63 @@ a host that can create Linux mount namespaces.
 Hosted CI keeps no compiler-object cache. The Rust build caches in
 `.github/workflows/ci.yml` are the `Swatinem/rust-cache` dependency archives:
 `rust-1.98.1` for **Test build**, `rust-1.98.1-checks` for **Check / Clippy /
-Test**, and the MSRV job's entry for its own toolchain. All three use
-`prefix-key: v1-rust-${{ hashFiles('Cargo.toml') }}`: the complete virtual-root
-manifest, including workspace dependencies and build profiles, is an explicit
-cache input. The pinned action discovers manifests through Cargo's packages;
-that omits a virtual workspace root. Its `key` input would also be ignored
-beside `shared-key`, so the root digest belongs in `prefix-key`. A root change
-invalidates both the exact key and its fallback prefix; even a comment change
-starts a new namespace. Unchanged root bytes keep the same namespace.
+Test**, `rust-1.98.1-guards` for **CI guardrails**, and the MSRV job's entry
+for its own toolchain.
 
-The action additionally keys each dependency archive on the installed compiler versions,
-`Cargo.lock`, member manifests and the `CARGO*`/`RUST*` environment, and prunes
-`target/` to dependency artifacts before it saves.
+The pinned action (v2.9.3) tries the exact key first. It then restores the
+newest archive whose key starts with
+`<prefix-key>-<shared-key>-<OS>-<arch>-<environment hash>`, a prefix match.
+The environment hash covers the installed compiler versions and the
+`CARGO*`/`RUST*`/`CC*` environment. Only the exact key adds a hash of
+`Cargo.lock`'s registry and git packages, the member manifests and every
+`.cargo/config.toml` and `rust-toolchain.toml` below the workspace, hidden
+directories included. The action never reads the virtual workspace root, and
+its `key` input is ignored beside `shared-key`, so the root manifest enters
+through `prefix-key`.
+
+Every producer and seeder step runs `scripts/ci-rust-dependency-cache-key.py`
+first and takes its `prefix-key` output (`v2-rust-<digest>`). The digest covers
+the root settings that make restored third-party units unusable, or that no
+other key part records: build profiles, `[patch]`, `[replace]`, the resolver
+and any other root setting. It leaves out `[workspace]` `members`, `exclude`
+and `default-members` (the member manifests are in the exact key),
+`[workspace.package]` and `[workspace.lints]` (inherited by members only),
+`[workspace.metadata]`, and `[workspace.dependencies]` (`Cargo.lock` records
+each version and source). TOML formatting and comments do not count.
+
+- A profile, patch or resolver change starts a new namespace. Unless an
+  archive for those settings already exists, nothing is restored and every
+  dependency is rebuilt.
+- Adding, removing or upgrading a dependency changes `Cargo.lock`, so the
+  exact key misses but the prefix still matches. A pull request restores the
+  newest archive from that namespace, and Cargo rebuilds only the units whose
+  version, source, features, profile or environment changed. Before
+  ORB-25561 the whole-root digest also moved the prefix, so PR #9937 restored
+  nothing and compiled for 524/518 s (runs 44236419113 and 44234277166).
+- A release version bump, lint edit or comment keeps the exact key.
+
+The action prunes `target/` to dependency artifacts before it saves. A
+prefix-match restore first deletes restored dependency units older than
+one week, so an archive last saved more than a week earlier restores less.
+Pushes that change `Cargo.lock` save a new archive (161 commits changed it
+between 2026-09-01 and 2026-11-18). Cargo's unit fingerprints, not the
+cache key, decide whether a restored unit is reused. A restored unit built
+for other features, profile settings, compiler or flags is never linked.
+
+Residual: a feature or `default-features` edit in `[workspace.dependencies]`
+that leaves `Cargo.lock` unchanged also keeps the exact key. The protected
+push then gets an exact hit and saves nothing, so each job rebuilds the
+affected units and their dependents. That lasts until the next
+`Cargo.lock`, member-manifest, toolchain or environment change saves a new
+archive. Four of the 97 root-manifest commits from 2026-08-01 to 2026-11-18
+were edits of this kind.
+
+The Check job's trusted `.orbit/tmp/dependency-producer` checkout adds that
+tree's `.cargo/config.toml` and `rust-toolchain.toml` to Check's exact key.
+Hosted run 44234785691 lists them under "Lockfiles considered". The Check
+seeder makes the same checkout before its lookup. Without that checkout its
+exact key differed from the Check job's key, so neither could find the
+other's archive as an exact hit.
 The separate Test build workspace-output cache retains `target/`, including
 workspace units and `target/.orbit-source-inputs.json`. Its namespace binds the
 runner OS, pinned compiler, Cargo manifests/lock/configuration, lint wrapper,
@@ -107,8 +152,8 @@ available.
   without duplicate seed builds; scope errors or an empty mode admit full CI
   and no seeders.
 
-  Each seeder uses its corresponding Check/Test build toolchain, root prefix,
-  compiler environment and shared key. A read-only `lookup-only` action
+  Each seeder uses its corresponding Check/Test build toolchain, `prefix-key`
+  helper, extra key-file checkouts, compiler environment and shared key. A read-only `lookup-only` action
   avoids downloads; an exact hit skips restore, cleanup and compilation.
   Prefix/missing/error/empty results run the bounded producer and a push-only
   rust-cache save on success. Check produces the existing production Clippy
@@ -136,8 +181,8 @@ available.
   seeded by ordinary full pushes. The two optional seeders do not warm the
   independent MSRV archive; an MSRV miss still rebuilds on its next full run.
 - **Misses and failures.** A missed key restores the newest entry that shares
-  its toolchain and environment prefix, or nothing, and Cargo rebuilds every
-  dependency the restored `target/` lacks or holds stale. A restore error is
+  its root-settings, toolchain and environment prefix, or nothing, and Cargo
+  rebuilds every dependency the restored `target/` lacks or holds stale. A restore error is
   logged and the job continues uncached. Either way the result is an ordinary
   cold build.
 - **Test build** sets `ORBIT_COMPILER_CACHE=0`. The repository wrapper
@@ -215,6 +260,56 @@ Its original measurements on 2026-10-19 covered the 100 successful `ci.yml` runs
   PR, which then rebuilds everything (mean −14%). Even a layer at each PR's
   own merge base saves a median 23%, short of 30%, because most PRs change
   `orbit-core` or a crate below it.
+
+### Manifest-change measurements (ORB-25561)
+
+Hosted baseline, 2026-11-18, Test build on 4-vCPU `ubuntu26/20261111.196.1`
+runners (AMD EPYC 7763), Rust 1.98.1, full scope:
+
+- The two revisions of PR #9937 (root `Cargo.toml` and `Cargo.lock` changed;
+  runs 44236419113 and 44234277166) logged `No cache found.` for the
+  dependency archive and missed the workspace outputs. Their
+  `Build and archive workspace tests` step took 524 s and 518 s (job
+  build 585/580 s).
+- Matching-runner control 44234785691 hit both caches. It restored a 299 MB
+  dependency archive in about 5 s (download 3.5 s, extract 1.9 s), and
+  compile-and-archive took 311 s (build 407 s). Over the 17 double-hit jobs
+  of that window, medians were 216 s and 304 s.
+
+The local reproduction ran on 2026-11-18 with Rust 1.98.1 under the
+`ci.yml` Test build environment (`CARGO_INCREMENTAL=0`, dev/test debuginfo
+off and stripped, `ORBIT_COMPILER_CACHE=0`, folded lint wrapper). It used
+4 Cargo jobs under `scripts/build-budget.py` on a 32-core Linux host. The
+command was `scripts/with-test-build-lint.sh cargo test --no-run --locked
+--workspace --lib --bins --tests --examples`, with one fixed source path. It
+went from base 72698e68d (the parent of #9937) to #9937's 70125bf5f.
+rust-cache's save-time pruning and prefix-match pre-clean were ported from
+the pinned action source.
+
+| Phase | Dependency cache state | Wall | Third-party units fresh / total |
+| --- | --- | --- | --- |
+| Base, cold | none | 243.2 s | 0 / 349 |
+| #9937, cold (old key: nothing restored) | none | 234.5 s | 0 / 351 |
+| #9937, prefix match on the base archive | 223 MB zstd, pruned | 139.1 s | 349 / 351 |
+| Base, exact hit (unchanged-manifest control) | same archive | 137.0 s | 349 / 349 |
+
+With the prefix match, only the two added crates (`tz`, `tzdb_data`) were
+compiled. The rebuilt `orbit-agent` library's fingerprint depends on `tz`
+and `tzdb_data` and no longer on `chrono_tz`, and its DST reset tests pass.
+The same checks ran on the `orbit-agent` lib and test scope:
+
+- Removing the dependency (#9937's archive restored onto the base) kept
+  172 of 172 units fresh, and `orbit-agent` linked `chrono_tz` again.
+- Adding `std` to `tz`'s features rebuilt `tz` and `tzdb_data` only.
+- A `[profile.dev.package."*"]` opt-level change rebuilt all 169 units
+  (59.2 s against 48.6 s cold), which is why profiles stay in the prefix.
+
+Limits: workspace members still rebuild cold, because the workspace-output
+cache keeps its manifest/lock partition. Hosted transfer, runner model and
+pruning age are not reproduced locally. The first runs after the key change
+find no `v2-rust` archive until a protected push saves one. Neither the
+hosted reduction nor the 400 s p90 budget is established until the operator
+measures a 20-PR window after merge.
 
 ## Ownership and location
 

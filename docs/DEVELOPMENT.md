@@ -415,8 +415,8 @@ PR jobs use two revisions: the primary checkout, build and tests use
 `github.event.pull_request.head.sha`, while workflow orchestration helpers use
 `github.sha`, the revision supplying the workflow (the PR merge ref). In
 `ci.yml`, a separate sparse checkout under `.orbit/tmp/workflow-ci` supplies
-`ci-download-verified.sh`, `ci-repack-nextest.py`, `ci-probe-bubblewrap.sh` and
-`ci-workspace-cache.py`; their invocations use that path. The Check job's
+`ci-download-verified.sh`, `ci-repack-nextest.py`, `ci-probe-bubblewrap.sh`,
+`ci-rust-dependency-cache-key.py` and `ci-workspace-cache.py`; their invocations use that path. The Check job's
 `Await the test build and nextest shards` step instead runs
 `scripts/ci-await-jobs.py` as a dependency-producer from a full checkout of the
 base revision under `.orbit/tmp/dependency-producer`. The scope job checks out `github.sha` directly. Keep this rule when adding
@@ -729,9 +729,12 @@ the original command exit status. They let bounded hosted excerpts retain build/
 separately from nextest testcase sums and the full GitHub job elapsed time.
 
 The Rust dependency caches are the `Swatinem/rust-cache`
-archives, one each for `Test build` and the Check job in `ci.yml`, plus the MSRV
-entry saved by `msrv.yml` push runs (same key). They hold dependency artifacts
-only. Each step sets `save-if: ${{ github.event_name == 'push' }}`, so a
+archives, one each for `Test build`, the Check job and CI guardrails in `ci.yml`,
+plus the MSRV entry saved by `msrv.yml` push runs. They hold dependency artifacts
+only. Every one, and each seeder in `ci-cache-seed.yml`, takes its `prefix-key`
+from `scripts/ci-rust-dependency-cache-key.py`, so a dependency added to the
+root manifest keeps the restore namespace while a profile change starts a
+new one. Each step sets `save-if: ${{ github.event_name == 'push' }}`, so a
 pull request restores the base branch's entries and never writes one: only a
 push to `main` or `agent-main` saves. A missed key or a failed restore leaves a
 cold or partial `target/`, and Cargo rebuilds what is missing. Hosted CI keeps
