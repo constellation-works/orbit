@@ -463,6 +463,7 @@ fn ensure_invocation_schema_v1(conn: &Connection) -> Result<(), OrbitError> {
 }
 
 fn ensure_learning_index_schema(conn: &Connection) -> Result<(), OrbitError> {
+    // Per ADR-004, ranking and full-text search over body content are deferred.
     conn.execute_batch(
         r#"
             -- Project-learnings envelope index. YAML records live on disk under
@@ -470,7 +471,7 @@ fn ensure_learning_index_schema(conn: &Connection) -> Result<(), OrbitError> {
             -- this table indexes the envelope fields for fast scope-glob
             -- lookups. Arrays are stored as JSON strings for the same reason
             -- the ADR index does it: phase-1 corpora are small and a junction
-            -- table is overkill. Per ADR-004, ranking and FTS over body
+            -- table is overkill. Ranking and FTS over body
             -- content are deferred to phase 2.
             CREATE TABLE IF NOT EXISTS learnings_index (
                 id          TEXT PRIMARY KEY,

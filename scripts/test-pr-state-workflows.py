@@ -1284,6 +1284,40 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         self.assertEqual(self.push("README.md", "docs/dev/qa/path-leases-listener-sudo.md"), "full")
         self.assertEqual(self.classify("push", {}, SHA=self.SHA, BEFORE=self.BEFORE), "full")
 
+    def test_cargo_read_markdown_is_not_docs_only(self):
+        """Every Markdown path FILE_READERS names stays out of docs mode.
+
+        The classifier derives that exclusion from the list, so a new reader
+        fails here until both sides agree. docs/design/auto-tasks/1_overview.md
+        selects the same crates as an orbit-core change; a push of it is full.
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "ci_test_affected", ROOT / "scripts/ci-test-affected.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        core_scope = self.pull_request("crates/orbit-core/src/lib.rs")
+        saw_overview = False
+        for prefix, _readers in module.FILE_READERS:
+            text = prefix.as_posix()
+            if text.startswith(("crates/", "plugin/")):
+                continue
+            if text.endswith(".md"):
+                candidates = [text]
+            elif (ROOT / prefix).is_dir():
+                candidates = [f"{text}/cargo-read.md"]
+            else:
+                continue
+            for candidate in candidates:
+                with self.subTest(path=candidate):
+                    self.assertNotEqual(self.pull_request(candidate), "docs")
+                    self.assertNotEqual(self.push(candidate), "docs")
+            if text == "docs/design/auto-tasks/1_overview.md":
+                saw_overview = True
+                self.assertEqual(self.pull_request(text), core_scope)
+                self.assertEqual(self.push(text), "full")
+        self.assertTrue(saw_overview, "FILE_READERS no longer names the auto-task overview")
+
     def test_docs_push_after_untested_before_runs_full_gate(self):
         jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
         # A pending code push may be replaced before its checks even exist.

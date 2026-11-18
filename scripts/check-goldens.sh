@@ -90,7 +90,9 @@ run_golden_test() {
 # Every invocation selects `-p orbit-cli` as the feature anchor so they all
 # resolve one workspace feature set (resolver v2 unifies over the selected
 # packages). The explicit `--test` / `--lib` selector keeps each run to its
-# golden target: Cargo only errors when no selected package has it.
+# golden target: Cargo only errors when no selected package has it, so the
+# two sandbox golden targets are separate invocations. One combined `-p`
+# list would still pass after either target was deleted.
 run_golden_test "$cargo" test -p orbit-core -p orbit-cli --test ci_failure_goldens \
   ci_failure_fixture_goldens -- --exact
 # One filter per invocation: libtest runs the union of its filters, so a
@@ -103,7 +105,8 @@ run_golden_test "$cargo" test -p orbit-cli --test output -- help_goldens::
 run_golden_test "$cargo" test -p orbit-cli --test output -- output_goldens::
 run_golden_test "$cargo" test -p orbit-cli --test mcp \
   mcp_roundtrip::mcp_serve_tools_list_matches_production_snapshot -- --exact
-run_golden_test "$cargo" test -p orbit-exec -p orbit-core -p orbit-cli --test sandbox_profile_goldens
+run_golden_test "$cargo" test -p orbit-exec -p orbit-cli --test sandbox_profile_goldens
+run_golden_test "$cargo" test -p orbit-core -p orbit-cli --test sandbox_profile_goldens
 
 run_golden_test "$cargo" test -p orbit-store -p orbit-cli --lib \
   driver::sqlite::migration::tests::ledger::registry::store_schema_prefix_goldens -- --exact

@@ -53,6 +53,8 @@ jobs:
           EVENT: ${{ github.event_name }}
           SHA: ${{ github.sha }}
           BEFORE: ${{ github.event.before }}
+        # Markdown paths named by FILE_READERS in scripts/ci-test-affected.py
+        # are not docs-only; the classifier derives that exclusion.
         run: scripts/ci-change-scope.sh
 
   seed-check:

@@ -113,9 +113,11 @@ jobs:
           fi
 
   # Narrows the run before allocating build runners (scripts/ci-change-scope.sh).
-  # `docs`: every changed path is Markdown outside crates/ and plugin/, so only
-  # `Docs guards` runs; a push also requires a successful completed full check
-  # on its BEFORE commit, since that commit's pending run may be replaced.
+  # `docs`: every changed path is Markdown outside crates/, plugin/ and the
+  # FILE_READERS prefixes in scripts/ci-test-affected.py, so only `Docs guards`
+  # runs; a push also requires a successful completed full check on its BEFORE
+  # commit, since that commit's pending run may be replaced. Markdown a Cargo
+  # test reads is not docs-only.
   # `affected:<crate>,...`: a PR whose changed paths sit in crates/ (Markdown
   # aside); every job runs, but the test build archives only those crates.
   # `skip`: a push whose tree is exactly a merged PR head that already passed
@@ -156,6 +158,8 @@ jobs:
           PR_CHANGED_FILES: ${{ needs.pr-state.outputs.changed_files }}
           SHA: ${{ github.sha }}
           BEFORE: ${{ github.event.before }}
+        # Markdown paths named by FILE_READERS in scripts/ci-test-affected.py
+        # are not docs-only; the classifier derives that exclusion.
         run: scripts/ci-change-scope.sh
 
   # A docs-only change still runs the file and metadata repository guards

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Reject concrete workspace-local IDs embedded in shipped Rust string literals."""
+"""Reject concrete workspace-local IDs embedded in shipped Rust string literals.
+
+A literal may span lines. An ID on an interior line of a normal or raw string
+is the same leak as one on the line that opens the literal. Line comments and
+block comments are provenance and are not scanned.
+"""
 
 from pathlib import Path
 import re
@@ -63,6 +68,141 @@ def strip_line_comment(line: str) -> str:
     return line
 
 
+def skip_char_or_lifetime(line: str, index: int) -> int:
+    """Advance past a character literal or lifetime that starts at index."""
+    nxt = index + 1
+    if nxt >= len(line):
+        return len(line)
+    if line[nxt] == "\\":
+        if nxt + 2 < len(line) and line[nxt + 1] == "u" and line[nxt + 2] == "{":
+            close = line.find("}", nxt + 3)
+            nxt = len(line) if close == -1 else close + 1
+        elif nxt + 1 < len(line) and line[nxt + 1] == "x":
+            nxt = min(len(line), nxt + 4)
+        else:
+            nxt = min(len(line), nxt + 2)
+        if nxt < len(line) and line[nxt] == "'":
+            return nxt + 1
+        return index + 1
+    if nxt + 1 < len(line) and line[nxt + 1] == "'":
+        return nxt + 2
+    if line[nxt].isalpha() or line[nxt] == "_":
+        nxt += 1
+        while nxt < len(line) and (line[nxt].isalnum() or line[nxt] == "_"):
+            nxt += 1
+        return nxt
+    return index + 1
+
+
+def raw_opener_at(line: str, quote: int):
+    """Hash count when the quote opens an r/br/cr string, else None.
+
+    `foo_r"` is an ordinary string: only the exact prefixes `r`, `br` and `cr`
+    are raw. `b"` and `c"` are ordinary escaped strings.
+    """
+    hashes = 0
+    index = quote - 1
+    while index >= 0 and line[index] == "#":
+        hashes += 1
+        index -= 1
+    end = index + 1
+    while index >= 0 and (line[index].isalnum() or line[index] == "_"):
+        index -= 1
+    if line[index + 1:end] in {"r", "br", "cr"}:
+        return hashes
+    return None
+
+
+def strings_in_line(line: str, pending, block_depth: int):
+    """Return literal contents on this line and the lexer state for the next.
+
+    Rust comments are skipped, including nested block comments. This keeps an
+    artifact ID in provenance from being mistaken for text when another string
+    literal happens to share the line.
+    """
+    contents = []
+    if pending is not None:
+        content, closed, remainder = close_open_string(line, pending[0], pending[1])
+        contents.append(content)
+        if not closed:
+            return contents, pending, block_depth
+        pending = None
+        line = remainder
+
+    index = 0
+    while index < len(line):
+        if block_depth > 0:
+            if line.startswith("*/", index):
+                block_depth -= 1
+                index += 2
+                continue
+            if line.startswith("/*", index):
+                block_depth += 1
+                index += 2
+                continue
+            index += 1
+            continue
+        if line.startswith("//", index):
+            break
+        if line.startswith("/*", index):
+            block_depth += 1
+            index += 2
+            continue
+        if line[index] == "'":
+            index = skip_char_or_lifetime(line, index)
+            continue
+        if line[index] == '"':
+            hashes = raw_opener_at(line, index)
+            if hashes is not None:
+                closer = '"' + ("#" * hashes)
+                end = line.find(closer, index + 1)
+                if end == -1:
+                    contents.append(line[index + 1:])
+                    return contents, ("raw", closer), block_depth
+                contents.append(line[index + 1:end])
+                index = end + len(closer)
+                continue
+            start = index + 1
+            end = index + 1
+            while end < len(line):
+                if line[end] == "\\":
+                    end += 2
+                    continue
+                if line[end] == '"':
+                    contents.append(line[start:end])
+                    index = end + 1
+                    break
+                end += 1
+            else:
+                contents.append(line[start:])
+                return contents, ("normal", '"'), block_depth
+            continue
+        index += 1
+    return contents, None, block_depth
+
+
+def close_open_string(line: str, kind: str, closer: str):
+    """Split a continuation line into content, whether it closed, and the rest.
+
+    A raw closer of `"` and an ordinary closer of `"` are not the same: raw
+    text does not treat a backslash as an escape.
+    """
+    if kind == "raw":
+        end = line.find(closer)
+        if end == -1:
+            return line, False, ""
+        return line[:end], True, line[end + len(closer):]
+    index = 0
+    while index < len(line):
+        if line[index] == "\\":
+            index += 2
+            continue
+        if line[index] == '"':
+            return line[:index], True, line[index + 1:]
+        index += 1
+    return line, False, ""
+
+
 def main() -> int:
     violations = []
     for source_root in SOURCE_ROOTS:
@@ -70,15 +210,16 @@ def main() -> int:
             relative = path.relative_to(ROOT)
             if "tests" in relative.parts:
                 continue
+            pending = None
+            block_depth = 0
             for line_number, line in production_lines(path):
-                # Internal provenance belongs in ordinary source comments, which
-                # are intentionally outside this shipped-string guard.
-                code = strip_line_comment(line)
-                if '"' not in code:
-                    continue
-                if match := CONCRETE_ID.search(code):
+                contents, pending, block_depth = strings_in_line(line, pending, block_depth)
+                for content in contents:
+                    if not (match := CONCRETE_ID.search(content)):
+                        continue
                     violations.append(
-                        f"{relative}:{line_number}: concrete artifact ID {match.group(0)!r} in a shipped string literal"
+                        f"{relative}:{line_number}: concrete artifact ID {match.group(0)!r} "
+                        "in a shipped string literal"
                     )
 
     if violations:
