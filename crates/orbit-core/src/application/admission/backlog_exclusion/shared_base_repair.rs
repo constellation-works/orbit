@@ -37,10 +37,15 @@
 //! the selector, the failure evidence and which task owns the repair in the
 //! exclusion's `detail`. The owner's admission pass also files one human-crew
 //! task and raises one `agent_request` decision on it that names the blocker
-//! and asks the operator to choose the single owner; its id is recorded on the
-//! repair as a `shared_base_repair_wait` entry, so a later pass with the same
-//! holder, head, failure and selectors raises nothing again. Answering it
-//! records the choice and completes that task; nothing is applied to either
+//! and asks the operator to choose the single owner. The task carries the
+//! wait's identity on a `Wait identity:` line, so the wait is durable on the
+//! task itself: a pass that finds an open task with that identity reuses it.
+//! A refused raise (a decision cap), a crash between filing and raising, and a
+//! crash after raising therefore all replay to the same task, and the raise
+//! returns the request already held there. The raised request is recorded on
+//! the repair as a `shared_base_repair_wait` entry, so a recorded wait raises
+//! nothing again. Answering it records the choice and completes that task;
+//! nothing is applied to either
 //! task automatically. Without a configured human crew no request can be
 //! held, so the detail says so and nothing is recorded. Once the PR lands or
 //! leaves `review`, or pushes a new head, the cycle is no longer proven and
@@ -102,10 +107,12 @@ pub(crate) enum SharedFailureProof {
 /// The operator request a proven wait raised, as recorded on the repair.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct SharedBaseDecision {
-    /// The human-crew task holding the decision.
+    /// The human-crew task holding the decision. Filed once per wait.
     pub(crate) task_id: String,
-    /// The decision request on it.
-    pub(crate) request_id: String,
+    /// The decision request on it. Absent while the raise is refused (a
+    /// decision cap); later passes retry the raise on the same task.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) request_id: Option<String>,
 }
 
 /// A proven circular wait between a base repair and a red PR task.
@@ -196,9 +203,16 @@ impl SharedBaseRepairWait {
 
     fn request_state(&self) -> String {
         match &self.decision {
-            Some(decision) => format!(
-                "the owner decision is decision request {} on {}",
-                decision.request_id, decision.task_id
+            Some(SharedBaseDecision {
+                task_id,
+                request_id: Some(request_id),
+            }) => format!("the owner decision is decision request {request_id} on {task_id}"),
+            Some(SharedBaseDecision {
+                task_id,
+                request_id: None,
+            }) => format!(
+                "the owner decision task {task_id} is filed, and its decision request is not \
+                 raised yet: admission retries it on each pass"
             ),
             None => String::from(
                 "no owner decision is recorded yet: the owner's admission pass raises one on a \
@@ -282,7 +296,8 @@ impl SharedBaseRepairWait {
              Answer the decision request on this task to choose the single owner. Orbit grants \
              neither task an overlapping write, keeps {holder}'s candidate and pull request, \
              and applies nothing on its own: the chosen owner's next step stays an operator \
-             action through the usual run, review and CI.",
+             action through the usual run, review and CI.\n\n{identity}",
+            identity = wait_identity_line(&self.key()),
             repair = self.repair_task_id,
             holder = self.holding_task_id,
             key = self.failure_key,
@@ -295,6 +310,12 @@ impl SharedBaseRepairWait {
 
 fn short(sha: &str) -> &str {
     sha.get(..12).unwrap_or(sha)
+}
+
+/// The line that carries a wait's identity on its decision task. A pass finds
+/// the open task by this exact line, so a replay reuses that task.
+fn wait_identity_line(key: &str) -> String {
+    format!("Wait identity: {key}")
 }
 
 /// Annotate every lock-conflict exclusion that is a proven shared-base wait
@@ -370,13 +391,30 @@ pub(super) fn annotate_shared_base_repair_waits(
         let Some(mut wait) = wait else {
             continue;
         };
-        wait.decision = recorded_decision(&repair_history, &wait.key());
-        if record && wait.decision.is_none() {
+        wait.decision = match recorded_decision(&repair_history, &wait.key()) {
+            Some(decision) => Some(decision),
+            None => match filed_decision(runtime, &wait.key()) {
+                Ok(filed) => filed,
+                Err(error) => {
+                    tracing::warn!(
+                        task_id = %wait.repair_task_id,
+                        "could not read the filed shared base repair decision: {error}"
+                    );
+                    None
+                }
+            },
+        };
+        let already_requested = wait
+            .decision
+            .as_ref()
+            .is_some_and(|decision| decision.request_id.is_some());
+        if record && !already_requested {
             match raise_decision_once(runtime, &wait) {
-                Ok(decision) => wait.decision = decision,
+                Ok(Some(decision)) => wait.decision = Some(decision),
+                Ok(None) => {}
                 Err(error) => tracing::warn!(
                     task_id = %wait.repair_task_id,
-                    "could not raise the shared base repair decision: {error}"
+                    "could not file the shared base repair decision: {error}"
                 ),
             }
         }
@@ -558,10 +596,12 @@ fn current_shared_failure(history: &[TaskHistoryEntry], signature: &str) -> Opti
     None
 }
 
-/// The decision a `shared_base_repair_wait` entry recorded for `key`.
+/// The decision the latest `shared_base_repair_wait` entry recorded for `key`,
+/// once its request was raised.
 fn recorded_decision(repair_history: &[TaskHistoryEntry], key: &str) -> Option<SharedBaseDecision> {
     repair_history
         .iter()
+        .rev()
         .filter(|entry| entry.event == SHARED_BASE_REPAIR_WAIT_EVENT)
         .filter_map(|entry| entry.note.as_deref())
         .filter_map(|note| serde_json::from_str::<Value>(note).ok())
@@ -569,7 +609,7 @@ fn recorded_decision(repair_history: &[TaskHistoryEntry], key: &str) -> Option<S
         .and_then(|note| {
             Some(SharedBaseDecision {
                 task_id: note["decision"]["task_id"].as_str()?.to_string(),
-                request_id: note["decision"]["request_id"].as_str()?.to_string(),
+                request_id: Some(note["decision"]["request_id"].as_str()?.to_string()),
             })
         })
 }
@@ -587,10 +627,13 @@ fn decision_human_crew(runtime: &OrbitRuntime) -> Option<String> {
     })
 }
 
-/// File one human-crew task for `wait` and raise its decision request,
-/// unless one is already recorded on the repair. A workspace lock serializes
-/// admission passes, so concurrent passes raise one request; the repair's
-/// history is re-read under it. `Ok(None)` when no human crew can hold it.
+/// Raise the decision request for `wait` on its human-crew task, filing that
+/// task only when no open task carries the wait's identity. The identity is
+/// the durable record: a refused raise (a decision cap), a crash between filing
+/// and raising, and a crash after raising all replay to the same task, and the
+/// raise returns the request already held there. A workspace lock serializes
+/// admission passes; the repair's history is re-read under it. `Ok(None)` when
+/// no human crew can hold it.
 fn raise_decision_once(
     runtime: &OrbitRuntime,
     wait: &SharedBaseRepairWait,
@@ -618,71 +661,135 @@ fn raise_decision_once(
                 outcome = Some(decision);
                 return Ok(());
             }
-            let task = runtime.add_task(TaskAddParams {
-                title: format!(
-                    "Choose who repairs the base failure {} and {} wait on",
-                    wait.repair_task_id, wait.holding_task_id
-                ),
-                description: wait.decision_task_description(),
-                relations: vec![
-                    TaskRelation {
-                        relation_type: TaskRelationType::RelatedTo,
-                        target: wait.repair_task_id.clone(),
-                        regression: None,
-                    },
-                    TaskRelation {
-                        relation_type: TaskRelationType::RelatedTo,
-                        target: wait.holding_task_id.clone(),
-                        regression: None,
-                    },
-                ],
-                tags: vec![SHARED_BASE_REPAIR_DECISION_TAG.to_string()],
-                priority: TaskPriority::High,
-                complexity: TaskComplexity::Low,
-                task_type: Some(TaskType::Chore),
-                status: Some(TaskStatus::Backlog),
-                system_created: true,
-                crew: Some(crew.clone()),
-                origin: Some(TaskOrigin::Automation),
-                ..TaskAddParams::default()
-            })?;
-            let raised = runtime.raise_agent_decision_request(AgentDecisionRaise {
-                task_id: task.id.clone(),
+            let task_id = match filed_decision(runtime, &key)? {
+                Some(filed) => filed.task_id,
+                None => file_decision_task(runtime, wait, &crew)?.id,
+            };
+            let decision = match runtime.raise_agent_decision_request(AgentDecisionRaise {
+                task_id: task_id.clone(),
                 question: wait.question(),
                 options: wait.options(),
                 topic: None,
                 filer: SHARED_BASE_REPAIR_FILER.to_string(),
-            })?;
-            let decision = SharedBaseDecision {
-                task_id: task.id.clone(),
-                request_id: raised.request.id.clone(),
+            }) {
+                Ok(raised) => {
+                    let raised_decision = SharedBaseDecision {
+                        task_id,
+                        request_id: Some(raised.request.id.clone()),
+                    };
+                    record_wait(runtime, wait, &key, &raised_decision)?;
+                    raised_decision
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        task_id = %wait.repair_task_id,
+                        "the shared base repair decision on {} is not raised yet: {error}",
+                        task_id
+                    );
+                    SharedBaseDecision {
+                        task_id,
+                        request_id: None,
+                    }
+                }
             };
-            let mut recorded = wait.clone();
-            recorded.decision = Some(decision.clone());
-            let note = serde_json::to_string(
-                &serde_json::json!({"key": key, "decision": decision, "wait": recorded}),
-            )
-            .map_err(|error| OrbitError::Execution(format!("encode wait note: {error}")))?;
-            runtime.stores().task_records().update(
-                &wait.repair_task_id,
-                TaskRecordUpdateParams {
-                    actor: SYSTEM_ACTOR_LABEL.to_string(),
-                    append_history: vec![TaskHistoryEntry {
-                        at: Utc::now(),
-                        by: SYSTEM_ACTOR_LABEL.to_string(),
-                        event: SHARED_BASE_REPAIR_WAIT_EVENT.to_string(),
-                        note: Some(note),
-                        from_status: None,
-                        to_status: None,
-                        operation_id: None,
-                        decision: None,
-                    }],
-                    ..Default::default()
-                },
-            )?;
             outcome = Some(decision);
             Ok(())
         },
     )?;
     Ok(outcome)
+}
+
+/// File the human-crew task that holds the owner decision for `wait`.
+fn file_decision_task(
+    runtime: &OrbitRuntime,
+    wait: &SharedBaseRepairWait,
+    crew: &str,
+) -> Result<Task, OrbitError> {
+    runtime.add_task(TaskAddParams {
+        title: format!(
+            "Choose who repairs the base failure {} and {} wait on",
+            wait.repair_task_id, wait.holding_task_id
+        ),
+        description: wait.decision_task_description(),
+        relations: vec![
+            TaskRelation {
+                relation_type: TaskRelationType::RelatedTo,
+                target: wait.repair_task_id.clone(),
+                regression: None,
+            },
+            TaskRelation {
+                relation_type: TaskRelationType::RelatedTo,
+                target: wait.holding_task_id.clone(),
+                regression: None,
+            },
+        ],
+        tags: vec![SHARED_BASE_REPAIR_DECISION_TAG.to_string()],
+        priority: TaskPriority::High,
+        complexity: TaskComplexity::Low,
+        task_type: Some(TaskType::Chore),
+        status: Some(TaskStatus::Backlog),
+        system_created: true,
+        crew: Some(crew.to_string()),
+        origin: Some(TaskOrigin::Automation),
+        ..TaskAddParams::default()
+    })
+}
+
+/// The open decision task already filed for the wait `key`, found by its
+/// identity line. A closed task holds no answer, so it does not count.
+fn filed_decision(
+    runtime: &OrbitRuntime,
+    key: &str,
+) -> Result<Option<SharedBaseDecision>, OrbitError> {
+    let identity = wait_identity_line(key);
+    Ok(runtime
+        .list_tasks()?
+        .into_iter()
+        .find(|task| {
+            task.tags
+                .iter()
+                .any(|tag| tag == SHARED_BASE_REPAIR_DECISION_TAG)
+                && !matches!(
+                    task.status,
+                    TaskStatus::Done | TaskStatus::Archived | TaskStatus::Rejected
+                )
+                && task.description.lines().any(|line| line == identity)
+        })
+        .map(|task| SharedBaseDecision {
+            task_id: task.id,
+            request_id: None,
+        }))
+}
+
+/// Append the wait's `decision` to the repair's history, keyed by the wait.
+fn record_wait(
+    runtime: &OrbitRuntime,
+    wait: &SharedBaseRepairWait,
+    key: &str,
+    decision: &SharedBaseDecision,
+) -> Result<(), OrbitError> {
+    let mut recorded = wait.clone();
+    recorded.decision = Some(decision.clone());
+    let note = serde_json::to_string(
+        &serde_json::json!({"key": key, "decision": decision, "wait": recorded}),
+    )
+    .map_err(|error| OrbitError::Execution(format!("encode wait note: {error}")))?;
+    runtime.stores().task_records().update(
+        &wait.repair_task_id,
+        TaskRecordUpdateParams {
+            actor: SYSTEM_ACTOR_LABEL.to_string(),
+            append_history: vec![TaskHistoryEntry {
+                at: Utc::now(),
+                by: SYSTEM_ACTOR_LABEL.to_string(),
+                event: SHARED_BASE_REPAIR_WAIT_EVENT.to_string(),
+                note: Some(note),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            }],
+            ..Default::default()
+        },
+    )?;
+    Ok(())
 }

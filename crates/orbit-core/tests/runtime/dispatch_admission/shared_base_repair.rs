@@ -12,12 +12,12 @@
 //! is filed with the creation identity CI-failure filing records.
 
 use chrono::Utc;
-use orbit_core::application::task::TaskAddParams;
+use orbit_core::application::task::{AgentDecisionRaise, TaskAddParams};
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{
-    CiFailureIdentity, CiFailureSource, ContextWideningStep, DecisionGate, DecisionRequest,
-    DecisionRequestState, Task, TaskDecision, TaskHistoryEntry,
+    AgentDecisionOptionInput, CiFailureIdentity, CiFailureSource, ContextWideningStep,
+    DecisionGate, DecisionRequest, DecisionRequestState, Task, TaskDecision, TaskHistoryEntry,
 };
 use orbit_types::workflow::{
     PR_AUTO_FIX_BASE_RED_EVENT, PR_AUTO_FIX_HEAD_FAILURE_EVENT, PR_AUTO_FIX_PUSHED_EVENT,
@@ -406,9 +406,125 @@ fn the_cycle_ends_with_a_new_head_and_the_repair_admits_once_the_lock_frees() {
     );
 }
 
+/// A decision cap that refuses the owner's raise files the decision task once:
+/// later passes retry the raise on that task instead of filing another one,
+/// and the cycle stays named on every pass.
+fn a_refused_decision_raise_retries_the_one_filed_task() {
+    let (_root, runtime, repo) = runtime_with_human_crew();
+    write_files(&repo, &["Cargo.lock", "src/feature.rs"]);
+    let pr = red_pr(&runtime, Proof::HeadFailure);
+    let repair = sweep_repair(&runtime, "shared repair", SIGNATURE);
+    // The owner's filer already holds its cap of five open agent requests.
+    for index in 0..5 {
+        let held = runtime
+            .add_task(TaskAddParams {
+                title: format!("held decision {index}"),
+                crew: Some("dk".into()),
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            })
+            .unwrap();
+        runtime
+            .raise_agent_decision_request(AgentDecisionRaise {
+                task_id: held.id.clone(),
+                question: format!("Which held slice {index} ships next?"),
+                options: vec![
+                    AgentDecisionOptionInput {
+                        label: "Keep the slice".into(),
+                        consequence: "No change.".into(),
+                        risk_tier: None,
+                        recommended: false,
+                    },
+                    AgentDecisionOptionInput {
+                        label: "Ship the slice".into(),
+                        consequence: "The slice ships.".into(),
+                        risk_tier: None,
+                        recommended: true,
+                    },
+                ],
+                topic: None,
+                filer: "orbit-admission".into(),
+            })
+            .unwrap();
+    }
+    let tasks_before = runtime.list_tasks().unwrap().len();
+    for pass in 0..3 {
+        let output = list_backlog_tasks(&runtime, json!({}));
+        assert_eq!(
+            open_requests(&runtime).len(),
+            5,
+            "pass {pass}: the capped filer raises nothing more"
+        );
+        assert_eq!(
+            runtime.list_tasks().unwrap().len(),
+            tasks_before + 1,
+            "pass {pass}: one decision task is filed, not one per pass"
+        );
+        let detail = excluded_entry(&output, &repair.id)["detail"]
+            .as_str()
+            .unwrap_or_else(|| panic!("pass {pass}: the cycle is named: {output}"))
+            .to_string();
+        assert!(detail.contains(&pr.id), "pass {pass}: {detail}");
+    }
+    assert_eq!(
+        recorded_waits(&runtime, &repair.id),
+        0,
+        "no request is recorded while the cap refuses"
+    );
+
+    // Later success: a human answers one held request, freeing a slot under
+    // the cap. The next pass raises on the same filed task, so no task is
+    // added; a replay after that raises nothing more.
+    let held = open_requests(&runtime).remove(0);
+    runtime
+        .answer_decision_request_as_human(
+            &held.id,
+            &held.answers[0].id,
+            None,
+            "human:daniel".into(),
+            None,
+        )
+        .unwrap();
+    let output = list_backlog_tasks(&runtime, json!({}));
+    assert_eq!(
+        open_requests(&runtime).len(),
+        5,
+        "the freed slot holds the wait's request: {output}"
+    );
+    assert_eq!(
+        runtime.list_tasks().unwrap().len(),
+        tasks_before + 1,
+        "the later pass reuses the filed task"
+    );
+    assert_eq!(
+        recorded_waits(&runtime, &repair.id),
+        1,
+        "the raised request is recorded once"
+    );
+    let detail = excluded_entry(&output, &repair.id)["detail"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the cycle is named: {output}"))
+        .to_string();
+    assert!(detail.contains(&pr.id), "{detail}");
+
+    list_backlog_tasks(&runtime, json!({}));
+    assert_eq!(
+        open_requests(&runtime).len(),
+        5,
+        "a replay raises nothing more"
+    );
+    assert_eq!(
+        runtime.list_tasks().unwrap().len(),
+        tasks_before + 1,
+        "a replay files nothing more"
+    );
+    assert_eq!(recorded_waits(&runtime, &repair.id), 1);
+}
+
 crate::scenario_table!(
     shared_base_repair_scenarios,
     a_red_pr_and_its_shared_base_repair_name_their_cycle_once,
     a_known_red_base_proves_the_cycle_and_no_human_crew_files_nothing,
     the_cycle_ends_with_a_new_head_and_the_repair_admits_once_the_lock_frees,
+    a_refused_decision_raise_retries_the_one_filed_task,
 );
