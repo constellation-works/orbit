@@ -1019,6 +1019,13 @@ fn timed_out_source_reaps_its_leader_and_kills_the_grandchild() {
     // can reap them and prove they are gone, even with a non-reaping PID 1.
     assert_eq!(unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) }, 0);
     let root = tempfile::tempdir().unwrap();
+    // TMPDIR can sit inside an enclosing checkout, and the alias runs from the
+    // repository root Git discovers. Git never chdirs up into a ceiling, so
+    // the ceiling must be the directory holding this fixture (not the fixture
+    // itself): discovery then stops before the checkout.
+    let git_ceiling = root.path().parent().unwrap().to_str().unwrap();
+    let _git_ceiling =
+        orbit_common::test_env::scoped([("GIT_CEILING_DIRECTORIES", Some(git_ceiling))]);
     let source = Source::new(root.path());
     let started = Instant::now();
     let result = source.git(&[
