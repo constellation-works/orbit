@@ -27,7 +27,7 @@ orbit routine pause <name>          # this machine only, not in the file; resume
 
 `orbit workspace init` seeds the shipped definitions. The `worktree-gc`, `task-pilot` and `crew-memory-dream` routines start enabled, and the rest start disabled, including the `host-health` auto-task. A seeded routine is named `<stem>-<workspace>`; `orbit routine list` prints the names. `orbit workspace sync` refreshes a seeded file without turning a routine on. It does turn off a `host-health` auto-task that no operator has configured; `orbit auto-task toggle host-health on` turns it on and keeps it on.
 
-A replica checkout schedules only its worktree-GC and store-GC routines.
+A replica checkout schedules only a cron routine whose target is the worktree-GC or store-GC job. A delivery, state or condition trigger stays with the owner, even on those jobs.
 
 ## Auto-task definitions
 
@@ -315,7 +315,7 @@ A cron routine runs on every machine that has this checkout registered as an own
 | `policy.retries.max` | `0` | Re-dispatches after the first fire fails. |
 | `policy.retries.backoff_minutes` | `2` | Minutes before a re-dispatch. At most 10080. |
 
-A `hosts:` key is retired: the file loads, and the key is ignored with a warning. `orbit doctor` warns when an enabled routine's last success is older than three times its schedule interval. `orbit clock tick --dry-run --verbose` prints the decision for every routine and auto-task and writes nothing.
+A `hosts:` key is retired: the file loads, and the key is ignored with a warning. `orbit doctor` warns when an enabled routine's last success is older than three times its schedule interval. After three fires in a row fail with the same error class, this host stops firing that routine until a trial succeeds; see [Recover a tripped routine](/how-to/recurring-work/#recover-a-tripped-routine). `orbit clock tick --dry-run --verbose` prints the decision for every routine and auto-task and writes nothing.
 
 ### One trigger
 

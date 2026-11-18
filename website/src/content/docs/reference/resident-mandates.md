@@ -77,16 +77,21 @@ fails these rules shows as `invalid` and cannot be widened.
 ### When a resident wakes
 
 Besides the tasks in `watch`, a resident watches the tasks its cycles acted
-on until they close. For those it reacts only to a change of state: a task
-blocking, entering review, getting a review decision, finishing or being
-rejected, or one of its decision requests being answered or expiring. Edits,
-retried runs and moves between proposed, backlog and in-progress do not wake
-it. Any non-info notice (`warn`, `incident` or `maintenance`) opening or
-clearing, an answered request on the assignment, a comment on the assignment and
-a mandate or authority change also wake it. Info notices do not wake it.
+on until they are done, archived or rejected. For one already in that set, a
+wake is a change of state class, a pull-request status change, or a decision
+request leaving open (answered, superseded or expired). Proposed, backlog and
+in-progress are one class, so moves among them, edits and retried runs do not
+wake it. Joining the set wakes it only when the task is blocked or in review.
+Moving to someday wakes it, and the task stays watched. Any non-info notice
+(`warn`, `incident` or `maintenance`) opening or clearing, an answered request
+on the assignment, a comment on the assignment and a mandate or authority
+change also wake it. Info notices do not wake it.
 Notices under a `resident:` key (such as status lines) and notices authored by
 the mandate's own assignment task are excluded from wake evaluation so a cycle's
 own reports do not trigger immediate re-wakes.
+
+A live cycle may read runtime attention for its own workspace and the
+workspaces its grant covers. That read does not widen what it can write.
 
 Each cycle's checkpoint plans the next wake in `next_wake.not_before`. Without
 a change that wakes it sooner, the next cycle starts then, but never sooner
