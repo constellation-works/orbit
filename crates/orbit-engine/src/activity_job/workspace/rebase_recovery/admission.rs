@@ -7,7 +7,7 @@ use crate::context::{RebaseRecoveryAttemptScope, RuntimeHost};
 use crate::executor::automation::vcs::absorbed::task_scope_digest;
 use crate::executor::automation::vcs::recovery_published_head;
 
-use super::super::fingerprint::{GitWorktreeFingerprint, git_output_raw, git_stdout};
+use super::super::fingerprint::{GitWorktreeFingerprint, git_is_ancestor, git_stdout};
 use super::super::{DispatchError, WorktreeBoundaryGuard};
 use super::checkpoint::RebaseRecoveryCheckpoint;
 use super::git::{
@@ -280,16 +280,7 @@ impl WorktreeBoundaryGuard {
             return Ok(false);
         };
         Ok(after.head != checkpoint.target_base_sha
-            && git_output_raw(
-                &self.assigned_root,
-                &[
-                    "merge-base",
-                    "--is-ancestor",
-                    &checkpoint.target_base_sha,
-                    "HEAD",
-                ],
-            )?
-            .success)
+            && git_is_ancestor(&self.assigned_root, &checkpoint.target_base_sha, "HEAD")?)
     }
 
     /// Whether the assigned worktree is still inside this recovery's pinned

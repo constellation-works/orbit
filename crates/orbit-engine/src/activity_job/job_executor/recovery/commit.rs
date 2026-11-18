@@ -15,7 +15,7 @@ use crate::executor::automation::vcs::{
 
 use super::super::final_recovery::RunWorktree;
 use super::*;
-use crate::executor::automation::vcs::git::{git_command_success, git_output};
+use crate::executor::automation::vcs::git::{git_command_success, git_output, is_ancestor};
 
 /// Commit what `recovery` left in the worktree when the failed step runs on
 /// a committed candidate. Nothing happens before the candidate's commit or
@@ -251,9 +251,7 @@ pub(in crate::activity_job::job_executor) fn commit_final_recovery_repair(
         .base_sha
         .as_deref()
         .ok_or_else(|| refused("final recovery has no pinned base for its file repair"))?;
-    if !git_command_success(root, &["merge-base", "--is-ancestor", base, head_before])
-        .map_err(|error| refused(&error.to_string()))?
-    {
+    if !is_ancestor(root, base, head_before).map_err(|error| refused(&error.to_string()))? {
         return Err(refused(
             "final recovery candidate does not descend from its pinned base",
         ));

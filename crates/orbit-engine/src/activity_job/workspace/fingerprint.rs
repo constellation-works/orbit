@@ -857,6 +857,24 @@ pub(crate) fn git_output_raw(root: &Path, args: &[&str]) -> Result<GitBytesOutco
     git_output_with_optional_stdin(root, args, None)
 }
 
+pub(crate) fn git_is_ancestor(
+    root: &Path,
+    ancestor: &str,
+    descendant: &str,
+) -> Result<bool, DispatchError> {
+    Ok(git_output_raw(
+        root,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            "--end-of-options",
+            ancestor,
+            descendant,
+        ],
+    )?
+    .success)
+}
+
 fn git_output_with_stdin(
     root: &Path,
     args: &[&str],
