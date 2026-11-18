@@ -26,6 +26,7 @@ use super::exclusions::{
 use super::listing::active_pilot_preparations;
 use super::ordering::task_root_id;
 use super::population::admission_population;
+use super::shared_base_repair;
 use super::{
     BacklogSnapshot, BacklogTaskConflict, BacklogTaskExclusion, BacklogTaskExclusionReason,
     sort_tasks_for_automatic_dispatch,
@@ -734,6 +735,16 @@ pub(super) fn backlog_snapshot_in_mode(
         });
         false
     });
+    // [ORB-25510] A base repair held behind a red PR's recovery-widened lock,
+    // while that PR waits for the same repair, is named as the cycle it is,
+    // and the owner's admission pass records one operator request for it.
+    let shared_base_waits = shared_base_repair::annotate_shared_base_repair_waits(
+        runtime,
+        &task_lookup,
+        &mut excluded,
+        lock_modes,
+        matches!(read_mode, BacklogReadMode::Admission { .. }),
+    );
     excluded.sort_by(|a, b| a.id.cmp(&b.id));
     let footprint_waits = footprint_waits(runtime, action, backlog.iter().copied(), Utc::now())?;
     let admissible_leaves = backlog.into_iter().map(|task| task.id.clone()).collect();
@@ -748,6 +759,7 @@ pub(super) fn backlog_snapshot_in_mode(
         dispatch_order,
         footprint_waits,
         published_resumes,
+        shared_base_waits,
     })
 }
 

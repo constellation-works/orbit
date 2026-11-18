@@ -503,6 +503,16 @@ Two of its answers separate contention from capacity:
   reserving task reports `context_lock_conflict` with a `detail` saying it
   reserves. At most two tasks reserve per pass; work that does not overlap a
   reserved surface admits normally.
+- A `ci-failure-sweep` repair whose `context_lock_conflict` carries a
+  `shared_base_repair` object (and a `detail` starting `shared base failure:`)
+  waits on a `review` task that waits on it: the holder holds a selector its
+  own recovery added, and its latest base-red record names the repair's exact
+  failure signature on its current head. The repair owns the fix. Admission
+  still grants no overlapping write. The owner's admission pass records one
+  `shared_base_repair_wait` history entry and one `Operator decision needed`
+  comment on the repair for each holder, head, failure and selector. Choose the
+  owner there: free the holder's lock without discarding its candidate or pull
+  request, let the holder's PR carry the repair, or keep waiting.
 - `published_delivery` (text: `resuming published delivery (PR #N)`) marks a
   backlog task whose final-recovery requeue kept its pull request. Its next
   run adopts that branch and pull request before it edits anything, so it is

@@ -5,6 +5,7 @@ use orbit_types::task::{Task, TaskReferenceIndex, TaskStatus};
 use serde::Serialize;
 
 use super::super::unknown_footprint::FootprintWait;
+use super::shared_base_repair::SharedBaseRepairWait;
 use crate::application::job::PublishedResume;
 use crate::runtime::task::locks::TaskLockOverlap;
 
@@ -221,4 +222,9 @@ pub(crate) struct BacklogSnapshot {
     /// own selectors are reserved at admission; an agent edit they make
     /// later takes the footprint locks first.
     pub(crate) published_resumes: BTreeMap<String, PublishedResume>,
+    /// Lock-conflict exclusions that are a proven circular wait between a
+    /// CI-failure sweep repair and a red PR task holding a selector its
+    /// recovery added, by repair task [ORB-25510]. Their exclusions' `detail`
+    /// already says so; readiness also reports the structured evidence.
+    pub(crate) shared_base_waits: BTreeMap<String, SharedBaseRepairWait>,
 }
