@@ -64,7 +64,8 @@ impl OrbitError {
             OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
             OrbitError::SensitiveInput { .. } => "sensitive_input",
             OrbitError::SkillValidation(_) | OrbitError::JobValidation(_) => "validation_failed",
-            OrbitError::SourceRepairRunStateRefused { .. } => "validation_failed",
+            OrbitError::SourceRepairRunStateRefused { .. }
+            | OrbitError::SourceRepairOperatorDecisionRefused { .. } => "validation_failed",
             OrbitError::SourceRepairAuthorityRefused(code) => {
                 if code.reports_as_execution() {
                     "execution_failed"
@@ -602,7 +603,10 @@ impl OrbitError {
             Self::SourceRepairAuthorityRefused(code) if !code.reports_as_execution() => {
                 Some(code.message().into())
             }
-            Self::SourceRepairRunStateRefused { message, .. } => Some(message.as_str().into()),
+            Self::SourceRepairRunStateRefused { message, .. }
+            | Self::SourceRepairOperatorDecisionRefused { message } => {
+                Some(message.as_str().into())
+            }
             _ => None,
         }
     }

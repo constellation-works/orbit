@@ -155,7 +155,7 @@ impl OrbitRuntime {
                 // The immediate predecessor has no publication evidence. Its
                 // liveness cannot identify the older publisher; require the
                 // operator to select that source explicitly.
-                return Err(refuse(format!(
+                return Err(refuse_operator_decision(format!(
                     "a published candidate predates the current binding; predecessor \
                      '{source_id}' has no publication evidence; stop any newer attempts, \
                      then select the older publishing run for explicit source \
@@ -168,7 +168,7 @@ impl OrbitRuntime {
             return Ok(None);
         }
         if matching.len() != 1 {
-            return Err(refuse(format!(
+            return Err(refuse_operator_decision(format!(
                 "published candidate lacks a unique requeue binding; inspect explicit source \
                  repair for publishing run '{source_id}', or discard the candidate (orbit task \
                  update {} --status backlog --discard-candidate) so the next run implements fresh",
@@ -196,7 +196,7 @@ impl OrbitRuntime {
                 e.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT && e.at >= source.created_at
             })
         {
-            return Err(refuse(
+            return Err(refuse_operator_decision(
                 "published source is live, discarded, changed, or lacks an applied requeue",
             ));
         }

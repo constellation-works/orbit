@@ -461,6 +461,14 @@ pub enum OrbitError {
         reason: SourceRepairRunStateRefusal,
         message: String,
     },
+    /// A source-repair refusal that waits on an operator decision (discard
+    /// the candidate or select an explicit source). Displays, reports and
+    /// serializes exactly as the [`Self::JobValidation`] carrying `message`;
+    /// the variant is attached where the refusal is decided, so callers
+    /// never classify it from the text.
+    #[error("job validation failed: {message}")]
+    #[serde(untagged, serialize_with = "serialize_source_repair_operator_decision")]
+    SourceRepairOperatorDecisionRefused { message: String },
     /// No delivery run submitted this task in the selected workspace.
     /// Retains the invalid-input wire contract while surfaces render their
     /// own task-read remedy from the task ID.
@@ -618,6 +626,13 @@ fn source_repair_refusal_legacy_error(code: SourceRepairAuthorityRefusal) -> Orb
 
 fn serialize_source_repair_run_state_refusal<S: serde::Serializer>(
     _reason: &SourceRepairRunStateRefusal,
+    message: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    OrbitError::JobValidation(message.to_string()).serialize(serializer)
+}
+
+fn serialize_source_repair_operator_decision<S: serde::Serializer>(
     message: &str,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {

@@ -45,36 +45,30 @@ pub(super) fn refuse(message: impl Into<String>) -> OrbitError {
     OrbitError::JobValidation(format!("source repair refused: {}", message.into()))
 }
 
-/// Operator-decision refusals `candidate_resume` raises for a published
-/// candidate. Matched only by [`hold_operator_source_repair_refusal`], and
-/// only on the text [`refuse`] already stored. Integrity and authority
-/// refusals are absent here and stay failures.
-const OPERATOR_SOURCE_REPAIR_DECISIONS: &[&str] = &[
-    "published candidate lacks a unique requeue binding",
-    "a published candidate predates the current binding",
-    "retained local branch moved",
-    "published candidate is not an exact owner-local single-task execution",
-    "published source is live, discarded, changed, or lacks an applied requeue",
-];
+/// A refusal that waits on an operator decision (discard the candidate or
+/// select an explicit source). Reports exactly as the [`refuse`] text it
+/// carries; only [`hold_operator_source_repair_refusal`] classifies it.
+/// Integrity and authority refusals use [`refuse`] and stay failures.
+pub(super) fn refuse_operator_decision(message: impl Into<String>) -> OrbitError {
+    OrbitError::SourceRepairOperatorDecisionRefused {
+        message: format!("source repair refused: {}", message.into()),
+    }
+}
 
 /// Hold an operator-decision source-repair refusal without changing its text.
 ///
-/// Only `owner_published_candidate` applies this. Shared helpers keep
-/// returning [`OrbitError::JobValidation`], so requeue, explicit source
+/// Only `owner_published_candidate` applies this. Shared helpers keep the
+/// refusal reporting as a job-validation error, so requeue, explicit source
 /// repair, handoff and completion stay failures.
 pub(super) fn hold_operator_source_repair_refusal(error: OrbitError) -> OrbitError {
-    let OrbitError::JobValidation(message) = &error else {
-        return error;
-    };
-    if !OPERATOR_SOURCE_REPAIR_DECISIONS
-        .iter()
-        .any(|marker| message.contains(marker))
-    {
-        return error;
-    }
-    OrbitError::DeliveryRefused {
-        refusal: workflow::DeliveryRefusal::SourceRepairDecision,
-        message: message.clone(),
+    match error {
+        OrbitError::SourceRepairOperatorDecisionRefused { message } => {
+            OrbitError::DeliveryRefused {
+                refusal: workflow::DeliveryRefusal::SourceRepairDecision,
+                message,
+            }
+        }
+        other => other,
     }
 }
 
