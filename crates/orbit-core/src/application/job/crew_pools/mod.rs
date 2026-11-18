@@ -32,6 +32,7 @@ mod draw;
 #[cfg(feature = "test-support")]
 mod draw_quantile;
 mod host_os_wait;
+mod model_access;
 mod purpose;
 #[cfg(feature = "test-support")]
 mod selection_checkpoint;

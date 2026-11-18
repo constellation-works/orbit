@@ -29,7 +29,9 @@ impl OrbitRuntime {
             return Ok(task.clone());
         }
         let pools = self.auto_crew_pools_for_input(&Value::Null)?;
-        let (candidates, source, _) = self.auto_task_crew_candidates(task, &pools, None, None)?;
+        // The claim's executor owns its provider context.
+        let (candidates, source, _) =
+            self.auto_task_crew_candidates_before_model_access(task, &pools, None, None)?;
         let runnable = candidates
             .iter()
             .filter(|candidate| {

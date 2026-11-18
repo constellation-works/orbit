@@ -22,13 +22,14 @@ use crate::activity_job::dispatcher::{DispatchError, DispatchInvocationTrace, Di
 use orbit_agent::{
     ParsedStdout, antigravity_background_task_diagnostic, antigravity_terminal_error_diagnostic,
     assign_recorded_tool_calls, is_missing_envelope_violation, is_success_carrying_error_violation,
-    latest_assistant_message, muse_terminal_failure_diagnostic, normalize_cli_stdout,
-    project_cli_response, provider_authentication_failure, provider_capacity_exhausted,
-    provider_content_refusal, provider_invocation_diagnostic, provider_long_prompt_requests,
-    provider_quota_exceeded, provider_usage_limit,
+    latest_assistant_message, muse_terminal_failure_diagnostic, muse_terminal_rejects_model,
+    normalize_cli_stdout, project_cli_response, provider_authentication_failure,
+    provider_capacity_exhausted, provider_content_refusal, provider_invocation_diagnostic,
+    provider_long_prompt_requests, provider_quota_exceeded, provider_usage_limit,
 };
 use orbit_common::security::redaction::redact_all_json;
 use orbit_types::workflow::activity_job::Provider;
+use orbit_types::workflow::{MUSE_MODEL_ACCESS_OUTPUT_KEY, MuseModelAccess};
 use serde_json::Value;
 use std::time::Duration;
 
@@ -134,6 +135,7 @@ fn retained_claude_terminal_result(provider: Provider, answer_text: &str) -> boo
 /// `response_result_fields`. The drop below and every write share this slice,
 /// so a new Orbit key cannot be offered as the agent's answer.
 const ORBIT_OWNED_STEP_OUTPUT_KEYS: &[&str] = &[
+    MUSE_MODEL_ACCESS_OUTPUT_KEY,
     "build_budget_waits",
     "timed_out",
     "stalled",
@@ -360,6 +362,13 @@ pub(in super::super) fn project_completion(
     // reason stays with the shared readers above and below.
     let muse_terminal_failure =
         muse_terminal_failure_diagnostic(provider_enum, stdout.protocol_bytes());
+    let muse_model_refused = muse_terminal_failure.is_some()
+        && !timed_out
+        && !stalled
+        && sandbox_write_diagnostic.is_none()
+        && model
+            .as_deref()
+            .is_some_and(|model| muse_terminal_rejects_model(stdout.protocol_bytes(), model));
     // [ORB-24697] A provider `result` terminal's error subtype/reason, for
     // naming a non-zero exit before its stderr tail. Read from the retained
     // protocol tail, so a truncated capture still names its final frame.
@@ -604,6 +613,7 @@ pub(in super::super) fn project_completion(
         provider_limit,
         structured_output_exhaustion,
         muse_terminal_failure,
+        muse_model_refused,
         provider_result_terminal_error,
         sandbox_write_diagnostic: &sandbox_write_diagnostic,
         print_timeout,
@@ -667,6 +677,22 @@ pub(in super::super) fn project_completion(
     } else {
         Value::Null
     };
+    if provider_enum == Provider::Muse
+        && let Some(model) = &model
+        && (muse_model_refused || (success && response_envelope_valid))
+    {
+        insert_orbit_owned_output(
+            &mut output,
+            MUSE_MODEL_ACCESS_OUTPUT_KEY,
+            serde_json::json!(MuseModelAccess {
+                model: model.clone(),
+                crew_account: spec.crew_account.clone(),
+                started_at,
+                finished_at,
+                refused: muse_model_refused,
+            }),
+        );
+    }
     // These are supervisor observations, so an agent result cannot override
     // them or make a spent provider budget appear complete.
     insert_orbit_owned_output(

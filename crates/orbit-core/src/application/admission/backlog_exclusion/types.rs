@@ -37,6 +37,9 @@ pub(crate) struct BacklogTaskExclusion {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum BacklogTaskExclusionReason {
     ContextLockConflict,
+    /// All eligible automatic crews are excluded by a recorded model refusal
+    /// in this host's provider context.
+    ProviderModelAccessHold,
     /// The task carries the reserved `no-drain` tag: no automatic drain,
     /// pull-drain follower or automatic admission pass admits it. An
     /// explicit `orbit run ship <id>` still runs it, and removing the tag

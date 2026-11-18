@@ -1,5 +1,6 @@
 //! Failure markers and claim failure classification.
 
+use super::super::MUSE_MODEL_ACCESS_REFUSED_ERROR_CODE;
 use super::super::failure_classification_text;
 use serde::{Deserialize, Serialize};
 
@@ -208,10 +209,9 @@ pub fn is_footprint_unavailable(error_code: Option<&str>, _message: Option<&str>
 
 /// The typed code a step failure carries beside its message.
 ///
-/// Parsed once where a step failure is ingested — from the declared
-/// envelope's `error.code` or from an `OrbitError` — and recorded on the
-/// step record, so recovery and classification branch on the code instead
-/// of recovering it from message text. Serializes as its plain code
+/// Assigned at the step boundary from a provider outcome, declared
+/// envelope or `OrbitError`. The step record retains it for recovery and
+/// classification. Serializes as its plain code
 /// string, so persisted and wire shapes keep the code's existing form.
 /// New named codes join this enum as their markers are converted; an
 /// arbitrary agent-declared code is preserved verbatim by
@@ -227,6 +227,8 @@ pub enum StepFailureCode {
     /// A resumed published delivery's deferred footprint stayed held past
     /// its wait ([`FOOTPRINT_UNAVAILABLE_ERROR_CODE`]). The run holds.
     FootprintUnavailable,
+    /// Muse's failed terminal refused access to the invoked model.
+    MuseModelAccessRefused,
     /// Any other agent- or host-declared code, preserved as declared.
     Other(String),
 }
@@ -240,6 +242,7 @@ impl StepFailureCode {
             OWNER_ROUTE_UNAVAILABLE_ERROR_CODE => Self::OwnerRouteUnavailable,
             OWNER_SIGNOFF_REQUIRED_ERROR_CODE => Self::OwnerSignoffRequired,
             FOOTPRINT_UNAVAILABLE_ERROR_CODE => Self::FootprintUnavailable,
+            MUSE_MODEL_ACCESS_REFUSED_ERROR_CODE => Self::MuseModelAccessRefused,
             other => Self::Other(other.to_string()),
         }
     }
@@ -251,6 +254,7 @@ impl StepFailureCode {
             Self::OwnerRouteUnavailable => OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
             Self::OwnerSignoffRequired => OWNER_SIGNOFF_REQUIRED_ERROR_CODE,
             Self::FootprintUnavailable => FOOTPRINT_UNAVAILABLE_ERROR_CODE,
+            Self::MuseModelAccessRefused => MUSE_MODEL_ACCESS_REFUSED_ERROR_CODE,
             Self::Other(code) => code,
         }
     }
@@ -280,6 +284,7 @@ impl From<String> for StepFailureCode {
             OWNER_ROUTE_UNAVAILABLE_ERROR_CODE => Self::OwnerRouteUnavailable,
             OWNER_SIGNOFF_REQUIRED_ERROR_CODE => Self::OwnerSignoffRequired,
             FOOTPRINT_UNAVAILABLE_ERROR_CODE => Self::FootprintUnavailable,
+            MUSE_MODEL_ACCESS_REFUSED_ERROR_CODE => Self::MuseModelAccessRefused,
             _ => Self::Other(code),
         }
     }

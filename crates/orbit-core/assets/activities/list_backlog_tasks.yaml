@@ -185,6 +185,7 @@ spec:
                 - local_route_before_pr
                 - provider_backoff
                 - provider_limit
+                - provider_model_access_hold
                 - scheduled
                 - surface_reserved
                 - unassessed_complexity

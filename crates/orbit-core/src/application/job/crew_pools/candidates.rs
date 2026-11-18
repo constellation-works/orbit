@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use orbit_common::OrbitError;
 use orbit_config::{
     CrewPoolEntry, canonical_crew_pool, canonical_crew_pool_entries, executor_host_os,
@@ -20,6 +22,7 @@ use super::draw::{
     complexity_crews_key, permitted_candidates, pools_from_input, seeded_crew_ticket,
     sole_candidate, weighted_candidates, weighted_draw,
 };
+use super::model_access::{is_muse_crew, model_access_hold};
 use super::purpose::task_crew_purpose;
 use super::types::{COMPLEXITIES, CapturedCrewPool, CapturedCrewPools, POOLS_KEY};
 
@@ -168,6 +171,70 @@ impl OrbitRuntime {
     /// A `<crew>@auto` member resolves against the task here
     /// ([`task_auto_effort_subject`]), whichever fallback produced it.
     pub(crate) fn auto_task_crew_candidates(
+        &self,
+        task: &Task,
+        pools: &CapturedCrewPools,
+        explicit: Option<&str>,
+        allowlist: Option<&CrewAllowlist>,
+    ) -> Result<(Vec<CrewCandidate>, String, Option<RedrawReason>), OrbitError> {
+        let (mut candidates, mut source, mut reason) =
+            self.auto_task_crew_candidates_before_model_access(task, pools, explicit, allowlist)?;
+        let drawable = |candidate: &CrewCandidate| {
+            candidate.weight > 0 && allowlist.is_none_or(|list| list.permits(&candidate.crew))
+        };
+        if explicit.is_some()
+            || !candidates
+                .iter()
+                .any(|c| drawable(c) && is_muse_crew(&c.crew))
+        {
+            return Ok((candidates, source, reason));
+        }
+        let crew_source = self.task_crew_source(task)?;
+        let assigned = self
+            .crew_unless_retired(task.crew.as_deref())
+            .and_then(non_empty)
+            .is_some();
+        if assigned && !crew_source.as_ref().is_some_and(CrewSource::is_automatic) {
+            return Ok((candidates, source, reason));
+        }
+        let refusals = self.task_muse_model_refusals(&task.id)?;
+        let mut excluded = BTreeSet::new();
+        let mut keep = |candidate: &CrewCandidate| {
+            if !refusals.rejects_crew_model(&candidate.crew) {
+                return true;
+            }
+            if drawable(candidate) {
+                excluded.insert(candidate.crew.assignment.model.clone());
+            }
+            false
+        };
+        candidates.retain(&mut keep);
+        if !candidates.iter().any(drawable) && assigned {
+            // Static selection keeps a valid persisted assignment as a
+            // singleton. Retry its ordinary route with no preferred member.
+            let mut redraw = task.clone();
+            redraw.crew = None;
+            redraw.crew_source = crew_source;
+            (candidates, source, reason) = self.auto_task_crew_candidates_before_model_access(
+                &redraw, pools, explicit, allowlist,
+            )?;
+            candidates.retain(keep);
+        }
+        if excluded.is_empty() {
+            return Ok((candidates, source, reason));
+        }
+        if !candidates.iter().any(drawable) {
+            return Err(model_access_hold(&excluded));
+        }
+        let models = excluded.into_iter().collect::<Vec<_>>().join(", ");
+        Ok((
+            candidates,
+            format!("{source}; Muse refused access to {models}"),
+            reason,
+        ))
+    }
+
+    pub(super) fn auto_task_crew_candidates_before_model_access(
         &self,
         task: &Task,
         pools: &CapturedCrewPools,

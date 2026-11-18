@@ -3,10 +3,12 @@
 //! deterministic without consuming provider quota or relying on host load.
 
 use chrono::{Duration, Utc};
-use orbit_core::TaskStatus;
 use orbit_core::application::job::{JobRunListParams, job_run_to_json};
+use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::metrics::reliability::ReliabilityWindow;
+use orbit_core::{OrbitRuntime, TaskStatus};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_tools::ToolContext;
 use orbit_types::resource::ExecutorResource;
 use orbit_types::workflow::activity_job::Provider;
 use orbit_types::workflow::{
@@ -15,6 +17,299 @@ use orbit_types::workflow::{
 use serde_json::json;
 
 use super::provider_failure_hold::{FakeCodex, fixture, implementation_job};
+
+#[test]
+fn muse_model_refusal_routes_the_requeued_task_around_its_recorded_pool_assignment() {
+    const TEST: &str = "local_provider_holds::muse_model_refusal_routes_the_requeued_task_around_its_recorded_pool_assignment";
+    if !super::dispatch_admission::isolated(TEST) {
+        return;
+    }
+    if let Ok(run) = std::env::var("ORBIT_TEST_MUSE_MODEL_ACCESS_RUN") {
+        let global = std::env::var_os("ORBIT_TEST_MUSE_MODEL_ACCESS_GLOBAL").unwrap();
+        let workspace = std::env::var_os("ORBIT_TEST_MUSE_MODEL_ACCESS_WORKSPACE").unwrap();
+        let runtime = OrbitRuntime::from_roots(global.as_ref(), workspace.as_ref()).unwrap();
+        runtime.execute_pipeline_run_worker(&run).unwrap();
+        return;
+    }
+    let fx = fixture(
+        r#"[workflow]
+default_crew = "wonder"
+medium_complexity_crews = ["wonder@high"]
+crew_selection = "static"
+
+[crews.wonder]
+provider = "muse"
+model = "muse-wonder-full-1.0"
+
+[crews.wonder-alias]
+provider = "muse"
+model = "muse-wonder-full-1.0"
+
+[crews.spark]
+provider = "muse"
+model = "muse-spark-1.3"
+"#,
+    );
+    let reason = "model `muse-wonder-full-1.0` does not exist or you lack access [request_id=12345678-1234-1234-1234-123456789abc]";
+    let failed = json!({
+        "payload_type": "run.terminal.completed",
+        "payload": {"terminal": "failed", "text": reason, "status": 403}
+    });
+    let completed = json!({
+        "payload_type": "run.terminal.completed",
+        "payload": {"terminal": "completed", "text": json!({
+            "schemaVersion": 1, "status": "success", "result": {"note": reason}, "error": null
+        }).to_string()}
+    });
+    let cli = FakeCodex::named(&fx.repo, "muse", "");
+    let launches = fx.repo.join("muse-launches");
+    let recovered = fx.repo.join("muse-access-restored");
+    std::fs::write(
+        &cli.path,
+        format!(
+            "#!/bin/sh\nwhile [ \"$1\" != --model ]; do [ \"$#\" -gt 0 ] || exit 2; shift; done\n\
+             printf '%s\\n' \"$2\" >> '{}'\n\
+             if [ \"$2\" = muse-wonder-full-1.0 ] && [ ! -e '{}' ]; then printf '%s\\n' '{failed}'; exit 1; fi\n\
+             printf '%s\\n' '{completed}'\n",
+            launches.display(),
+            recovered.display(),
+        ),
+    )
+    .unwrap();
+    let mut executor: ExecutorResource =
+        serde_yaml::from_str(include_str!("../../assets/executors/muse.yaml")).unwrap();
+    executor.spec.command = Some(cli.path.display().to_string());
+    executor.spec.sandbox = Some(ExecutorSandboxKind::Off);
+    fx.runtime
+        .upsert_executor_def(&ExecutorDef::from_resource_spec(
+            executor.metadata.name,
+            executor.spec,
+            None,
+            None,
+        ))
+        .unwrap();
+
+    let jobs = fx.runtime.global_root().join("resources/jobs");
+    std::fs::create_dir_all(&jobs).unwrap();
+    let mut job = implementation_job(Provider::Muse);
+    job.steps.remove(0);
+    job.steps[0].recovery_activity = None;
+    job.steps[0].resolved_recovery_activity = None;
+    job.failure_activity = None;
+    job.resolved_failure_activity = None;
+    job.final_recovery_activity = None;
+    job.resolved_final_recovery_activity = None;
+    let claimed_job_path = jobs.join("task_claimed_local_pipeline.yaml");
+    std::fs::write(
+        &claimed_job_path,
+        json!({
+            "schemaVersion": 2, "kind": "Job", "metadata": {"name": "task_claimed_local_pipeline"},
+            "spec": job,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut owner_job = json!(job);
+    owner_job["steps"] = json!([{
+        "id": "implement_bundle",
+        "loop": {"items": "{{ input.task_ids }}", "max_iterations": 1, "steps": job.steps},
+    }]);
+    std::fs::write(
+        jobs.join("task_local_pipeline.yaml"),
+        json!({
+            "schemaVersion": 2, "kind": "Job", "metadata": {"name": "task_local_pipeline"},
+            "spec": owner_job,
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let task = fx.tagged_task(&[], None);
+    assert_eq!(task.crew.as_deref(), Some("wonder@high"));
+    assert_eq!(task.crew_source.unwrap().to_string(), "pool:medium");
+    let input = json!({
+        "task_ids": [task.id],
+        "crew": "wonder@high",
+        "medium_complexity_crews": ["wonder@high:1", "wonder-alias:3", "spark:1"],
+        "crew_selection": {"task_id": task.id, "source": "pool:medium", "crew": "wonder@high"},
+    });
+    let run = fx
+        .runtime
+        .insert_job_run(
+            "task_local_pipeline",
+            1,
+            Utc::now(),
+            Some(input.clone()),
+            None,
+        )
+        .unwrap();
+    fx.runtime
+        .write_run_state(
+            &run.run_id,
+            &PipelineState::new(run.run_id.clone(), run.job_id, input),
+        )
+        .unwrap();
+    fx.runtime
+        .apply_task_automation_update(
+            &task.id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::InProgress),
+                job_run_id: Some(run.run_id.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    // Requeue waits for the recorded run owner to exit. Run this worker in
+    // its own joined child so the fixture follows the same handoff.
+    let mut worker = std::process::Command::new(std::env::current_exe().unwrap());
+    worker
+        .args(["--exact", TEST, "--nocapture"])
+        .env("ORBIT_TEST_MUSE_MODEL_ACCESS_RUN", &run.run_id)
+        .env(
+            "ORBIT_TEST_MUSE_MODEL_ACCESS_GLOBAL",
+            fx.runtime.global_root(),
+        )
+        .env(
+            "ORBIT_TEST_MUSE_MODEL_ACCESS_WORKSPACE",
+            fx.repo.join(".orbit"),
+        );
+    let output = orbit_common::test_env::run_child_test(&mut worker, TEST, &fx.repo);
+    orbit_common::test_env::assert_child_test_passed(
+        TEST,
+        output.status,
+        &output.stdout,
+        &output.stderr,
+    );
+    let stored = fx.runtime.show_job_run(&run.run_id).unwrap();
+    assert_eq!(stored.state, JobRunState::Failed, "{:?}", stored.steps);
+    assert_eq!(
+        stored.steps.last().unwrap().error_code.as_deref(),
+        Some("muse_model_access_refused"),
+    );
+    let message = stored
+        .steps
+        .last()
+        .unwrap()
+        .error_message
+        .as_deref()
+        .unwrap();
+    assert!(message.contains(reason), "{message}");
+    assert!(!message.contains("muse login"), "{message}");
+    fx.runtime
+        .requeue_blocked_task_as(&task.id, "retry", false, Some("human:test"))
+        .unwrap();
+
+    let hold = fx.exclusion(&task.id, &[]);
+    assert_eq!(hold["reason"], "provider_model_access_hold", "{hold}");
+    let detail = hold["detail"].as_str().unwrap();
+    assert!(detail.contains("muse-wonder-full-1.0"), "{detail}");
+    assert!(detail.contains("successful invocation"), "{detail}");
+    assert_eq!(
+        std::fs::read_to_string(&launches).unwrap(),
+        "muse-wonder-full-1.0\n"
+    );
+
+    let different_host =
+        OrbitRuntime::from_roots(&fx.runtime.global_root(), &fx.repo.join(".orbit"))
+            .unwrap()
+            .with_automation_machine_identity(Some("hm_model_access_fixture".into()));
+    let backlog = different_host
+        .run_deterministic(
+            "list_backlog_tasks",
+            &json!({}),
+            &json!({}),
+            ToolContext::default(),
+        )
+        .unwrap();
+    assert!(
+        backlog["task_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(task.id)),
+        "{backlog}"
+    );
+
+    let replay = fx.runtime.replay_job_run(&run.run_id).unwrap();
+    assert!(replay.success, "{replay:?}");
+    let admitted = fx
+        .runtime
+        .show_job_run(&replay.run_id)
+        .unwrap()
+        .input
+        .unwrap();
+    assert_eq!(
+        admitted["crew_selection"]["eligible_pool"],
+        json!([{"name": "spark", "weight": 1}]),
+    );
+    assert_eq!(
+        std::fs::read_to_string(&launches).unwrap(),
+        "muse-wonder-full-1.0\nmuse-spark-1.3\n",
+    );
+    assert_eq!(
+        fx.exclusion(&task.id, &[])["reason"],
+        "provider_model_access_hold"
+    );
+    let replay = fx.runtime.replay_job_run(&run.run_id).unwrap();
+    assert!(
+        replay.success,
+        "the completed answer cannot exclude Spark: {replay:?}"
+    );
+
+    // A deliberate task pin can verify access on the original account.
+    fx.runtime
+        .update_task_as_human(
+            &task.id,
+            TaskUpdateParams {
+                crew: Some(Some("wonder@high".into())),
+                ..Default::default()
+            },
+            "human:test".into(),
+        )
+        .unwrap();
+    std::fs::write(&recovered, "").unwrap();
+    let replay = fx.runtime.replay_job_run(&run.run_id).unwrap();
+    assert!(replay.success, "{replay:?}");
+    assert_eq!(
+        std::fs::read_to_string(launches).unwrap(),
+        "muse-wonder-full-1.0\nmuse-spark-1.3\nmuse-spark-1.3\nmuse-wonder-full-1.0\n",
+    );
+    fx.runtime
+        .update_task_as_human(
+            &task.id,
+            TaskUpdateParams {
+                crew: Some(None),
+                ..Default::default()
+            },
+            "human:test".into(),
+        )
+        .unwrap();
+    assert!(
+        fx.admitted(&task.id, &[]),
+        "the newer same-model success clears the hold"
+    );
+
+    // The claimed delivery has the same provider diagnostic and failed run
+    // outcome. Even on this fixture's host, it is a separate routing surface.
+    std::fs::remove_file(recovered).unwrap();
+    let claimed = fx
+        .runtime
+        .run_job_v2_from_yaml(
+            &claimed_job_path,
+            json!({"task_ids": [task.id], "crew": "wonder@high"}),
+        )
+        .unwrap();
+    let recorded = fx.runtime.show_job_run(&claimed.run_id).unwrap();
+    assert_eq!(recorded.state, JobRunState::Failed);
+    assert_eq!(
+        recorded.steps.last().unwrap().error_code.as_deref(),
+        Some("muse_model_access_refused"),
+    );
+    assert!(claimed.message.unwrap().contains(reason));
+    assert!(
+        fx.admitted(&task.id, &[]),
+        "claimed evidence cannot hold local admission"
+    );
+}
 
 fn local_provider_outcome(detail: &str, class: Option<ProviderFailureClass>) {
     let fx = fixture(
