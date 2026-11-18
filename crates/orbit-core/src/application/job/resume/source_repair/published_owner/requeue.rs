@@ -267,7 +267,9 @@ impl OrbitRuntime {
                 continue;
             }
             if matching.replace(existing).is_some() {
-                return Err(refuse("published candidate lacks a unique requeue binding"));
+                return Err(refuse_operator_decision(
+                    "published candidate lacks a unique requeue binding",
+                ));
             }
         }
         match matching {
@@ -391,7 +393,7 @@ impl OrbitRuntime {
             Some(OwnerSourceIdentityRefusal::LocalIdentityMissing) => {
                 Err(refuse("local identity missing"))
             }
-            Some(reason) => Err(refuse(format!(
+            Some(reason) => Err(refuse_operator_decision(format!(
                 "published candidate is not an exact owner-local single-task execution: {reason}"
             ))),
         }

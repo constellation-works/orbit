@@ -373,6 +373,11 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
                 message: redact(&message),
             }
         }
+        OrbitError::SourceRepairOperatorDecisionRefused { message } => {
+            OrbitError::SourceRepairOperatorDecisionRefused {
+                message: redact(&message),
+            }
+        }
         // A static code: its text is fixed and carries no caller input.
         refusal @ OrbitError::SourceRepairAuthorityRefused(_) => refusal,
     }

@@ -74,14 +74,14 @@ impl OrbitRuntime {
                 Err(error) if allow_missing_branch && error.code() == git2::ErrorCode::NotFound => {
                     None
                 }
-                _ => return Err(refuse("retained local branch moved")),
+                _ => return Err(refuse_operator_decision("retained local branch moved")),
             }
         };
         if let Some(tip) = candidate_head
             && (!observation::resolves_to_commit(repo, &tip.head)?
                 || !observation::is_git_ancestor(repo, &tip.target_base, &tip.head)?)
         {
-            return Err(refuse("retained local branch moved"));
+            return Err(refuse_operator_decision("retained local branch moved"));
         }
         if observation::read_git_observation(
             repo,
