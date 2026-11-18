@@ -20,7 +20,8 @@
       "source": "https://registry.npmjs.org/marked/-/marked-18.2.0.tgz",
       "npm_file": "lib/marked.umd.js",
       "path": "marked.umd.js",
-      "sha256": "392f4df89533b50f1dadff3f6dc0952350bd39c9f17def50a0374ef47d6147ef"
+      "patch": "marked-list-setext-tabs",
+      "sha256": "08c83a01c00d142e01a736f3d297ea33f45dda5c00c033cbbab79d3e873c4a7a"
     }
   ]
 }
