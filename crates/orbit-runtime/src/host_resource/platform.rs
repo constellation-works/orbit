@@ -56,6 +56,13 @@ struct NativeCache {
 }
 
 impl HostResourceProbe for NativeProbe {
+    fn cached_sample_at(&self, _paths: &[PathBuf]) -> Option<chrono::DateTime<chrono::Utc>> {
+        let guard = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
+        let cache = guard.as_ref()?;
+        ((self.now)().saturating_duration_since(cache.at) < super::RESOURCE_CACHE_TTL)
+            .then_some(cache.sampled_at)
+    }
+
     fn sample(&self, paths: &[PathBuf]) -> HostResourceSample {
         self.sample_with_cpu_history(paths, &mut HostCpuTickHistory::default())
     }
@@ -129,6 +136,10 @@ impl HostResourceProbe for NativeProbe {
                     .collect(),
             };
         };
+        // Many watched paths (every workspace root and its worktrees dir)
+        // share one filesystem. Probe each distinct nearest existing
+        // ancestor once per sample instead of statvfs-ing every path.
+        let mut percent_by_ancestor: BTreeMap<PathBuf, Option<f64>> = BTreeMap::new();
         let disks = paths
             .iter()
             .map(|path| {
@@ -136,7 +147,13 @@ impl HostResourceProbe for NativeProbe {
                     if cache.disks.len() >= 256 {
                         cache.disks.pop_first();
                     }
-                    cache.disks.insert(path.clone(), disk_percent(path));
+                    let percent = match nearest_existing_ancestor(path) {
+                        Some(ancestor) => *percent_by_ancestor
+                            .entry(ancestor.clone())
+                            .or_insert_with(|| disk_percent_at(&ancestor)),
+                        None => None,
+                    };
+                    cache.disks.insert(path.clone(), percent);
                 }
                 DiskSample {
                     path: path.clone(),
@@ -185,12 +202,12 @@ fn parse_io_full_avg60(data: &str) -> Option<f64> {
         .ok()
 }
 
-pub(super) fn disk_percent(path: &Path) -> Option<f64> {
-    // The worktrees directory may not exist yet; use its nearest existing
-    // ancestor's filesystem without creating anything. Permission/I/O failures
-    // are unknown rather than being disguised by a fallback.
-    let existing = nearest_existing_ancestor(path)?;
-    let stat = fs2::statvfs(&existing).ok()?;
+/// Used percent of the filesystem containing the already-resolved `existing`.
+/// The worktrees directory may not exist yet; callers resolve its nearest
+/// existing ancestor first, without creating anything. Permission/I/O
+/// failures are unknown rather than being disguised by a fallback.
+fn disk_percent_at(existing: &Path) -> Option<f64> {
+    let stat = fs2::statvfs(existing).ok()?;
     let total = stat.total_space();
     (total > 0).then(|| 100.0 * total.saturating_sub(stat.available_space()) as f64 / total as f64)
 }

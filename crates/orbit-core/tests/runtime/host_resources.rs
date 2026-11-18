@@ -3,6 +3,7 @@ use chrono::{Duration, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::host_resource::{
     DiskSample, HostResourceProbe, HostResourceSample, ResourceSeverity,
+    host_resource_probe_with_clock,
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -139,6 +140,53 @@ fn native_sampler_observes_the_host_and_missing_directory_filesystem() {
             "native Mach tick deltas must report aggregate host CPU after warmup"
         );
     }
+}
+
+/// Between ordinary sample renewals a status read presents the probe's
+/// cached sample; it must still answer, but must not repeat the shared
+/// history file's lock/read/write cycle that taxes every dashboard poll.
+#[cfg(unix)]
+#[test]
+fn cached_sample_statuses_do_not_rewrite_shared_history() {
+    use std::os::unix::fs::MetadataExt;
+
+    let offset_ms = Arc::new(AtomicU64::new(0));
+    let origin = std::time::Instant::now();
+    let clock = Arc::clone(&offset_ms);
+    let runtime = OrbitRuntime::in_memory().unwrap().with_host_resource_probe(
+        host_resource_probe_with_clock(Arc::new(move || {
+            origin + std::time::Duration::from_millis(clock.load(Ordering::SeqCst))
+        })),
+    );
+    let history = runtime
+        .global_root()
+        .join("cache/host-resource-pressure.json");
+
+    let first = runtime.host_resource_status();
+    let first_ino = std::fs::metadata(&history).unwrap().ino();
+    let second = runtime.host_resource_status();
+    assert_eq!(second.sampled_at, first.sampled_at);
+    assert_eq!(
+        std::fs::metadata(&history).unwrap().ino(),
+        first_ino,
+        "a status presenting an already-synced cached sample rewrote the shared history"
+    );
+
+    offset_ms.store(
+        u64::try_from(
+            (orbit_core::runtime::host_resource::RESOURCE_CACHE_TTL
+                + std::time::Duration::from_millis(1))
+            .as_millis(),
+        )
+        .unwrap(),
+        Ordering::SeqCst,
+    );
+    runtime.host_resource_status();
+    assert_ne!(
+        std::fs::metadata(&history).unwrap().ino(),
+        first_ino,
+        "a renewed sample must sync through the shared history again"
+    );
 }
 
 fn first_admission_in_a_fresh_process_reads_host_cpu() {

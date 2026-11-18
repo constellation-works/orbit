@@ -33,10 +33,13 @@ pub(super) async fn resources(State(state): State<DashboardState>) -> Response {
 /// The `/host/resources` body, which the change stream's `host.resources`
 /// notice also carries. Samples the host, so call it off the request worker.
 pub(super) fn host_resources_json(state: &DashboardState) -> Result<Value, OrbitError> {
-    let status = state.host_resource_status()?;
+    // One pin for both reads: each pin re-stats the registry file and every
+    // registered checkout, so pinning twice taxed the poll per workspace.
+    let pinned = state.pin();
+    let status = state.host_resource_status_pinned(&pinned)?;
     let mut body = to_json(&status)?;
     if let Some(object) = body.as_object_mut() {
-        if let Some(Value::Object(limits)) = state.host_provider_limits() {
+        if let Some(Value::Object(limits)) = state.host_provider_limits_pinned(&pinned) {
             object.extend(limits);
         } else {
             for key in ["provider_limits", "provider_pressures", "crew_pressures"] {

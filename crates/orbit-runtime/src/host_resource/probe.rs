@@ -33,6 +33,13 @@ impl CachedHostResourceProbe {
 }
 
 impl HostResourceProbe for CachedHostResourceProbe {
+    fn cached_sample_at(&self, disk_paths: &[PathBuf]) -> Option<chrono::DateTime<chrono::Utc>> {
+        let guard = self.cached.lock().unwrap_or_else(PoisonError::into_inner);
+        let (at, paths, sample) = guard.as_ref()?;
+        ((self.now)().saturating_duration_since(*at) < RESOURCE_CACHE_TTL && paths == disk_paths)
+            .then_some(sample.sampled_at)
+    }
+
     fn sample(&self, disk_paths: &[PathBuf]) -> HostResourceSample {
         let mut guard = self.cached.lock().unwrap_or_else(PoisonError::into_inner);
         let fresh = (self.now)();

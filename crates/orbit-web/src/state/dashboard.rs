@@ -573,12 +573,14 @@ impl DashboardState {
         &self.inner.global_root
     }
 
-    /// Sample the serving host independently of the request's workspace selector.
-    /// This performs file/kernel reads and must be called through `blocking`.
-    pub(crate) fn host_resource_status(
+    /// Sample the serving host independently of the request's workspace
+    /// selector, against an already-pinned snapshot, so a combined read pays
+    /// the registry/checkout fingerprint check once. This performs
+    /// file/kernel reads and must be called through `blocking`.
+    pub(crate) fn host_resource_status_pinned(
         &self,
+        pinned: &Pinned,
     ) -> Result<orbit_core::runtime::host_resource::HostResourceStatus, OrbitError> {
-        let pinned = self.pin();
         let mut paths = self.inner.host_disk_paths.clone();
         paths.push(self.inner.global_root.clone());
         for entry in &pinned.snapshot.entries {
@@ -613,10 +615,9 @@ impl DashboardState {
     /// pressures, as readiness lists them, for the top bar. The store is host-wide;
     /// thresholds and crew coverage come from the default workspace's effective config, so with no
     /// servable workspace (or an unreadable store) this is `None` and the bar
-    /// shows the readings as unavailable. May read files and must be called
-    /// through `blocking`.
-    pub(crate) fn host_provider_limits(&self) -> Option<serde_json::Value> {
-        let pinned = self.pin();
+    /// shows the readings as unavailable, against an already-pinned
+    /// snapshot. May read files and must be called through `blocking`.
+    pub(crate) fn host_provider_limits_pinned(&self, pinned: &Pinned) -> Option<serde_json::Value> {
         let runtime = pinned.runtime_for(pinned.default_workspace()?).ok()?;
         let view = runtime.provider_limits_view(chrono::Utc::now());
         if let Some(error) = &view.error {

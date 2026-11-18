@@ -78,6 +78,14 @@ pub struct HostCpuTickHistory {
 pub trait HostResourceProbe: Send + Sync {
     fn sample(&self, disk_paths: &[PathBuf]) -> HostResourceSample;
 
+    /// `sampled_at` of the sample a [`Self::sample`] call for `disk_paths`
+    /// would reuse without taking a new observation, when this probe caches.
+    /// `None` (the default) means every sample is a fresh observation, so
+    /// callers must not coalesce work keyed on the sample's identity.
+    fn cached_sample_at(&self, _disk_paths: &[PathBuf]) -> Option<DateTime<Utc>> {
+        None
+    }
+
     /// Sample with the host's persisted CPU window. Injected probes that do not
     /// measure tick deltas retain their ordinary sampling behavior.
     fn sample_with_cpu_history(
