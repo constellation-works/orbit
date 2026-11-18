@@ -141,7 +141,7 @@ fn accept_findings_answer() -> DecisionAnswer {
     DecisionAnswer {
         id: ACCEPT_FINDINGS_ANSWER_ID.into(),
         label: summary.into(),
-        consequence: "The open findings are recorded as accepted. The description and acceptance criteria stay unchanged, and the same candidate returns to the backlog for review and landing.".into(),
+        consequence: "The open findings are accepted; the description and acceptance criteria stay unchanged. The successor delivery validates this candidate; any fresh independent review follows its selected review policy, which may be off.".into(),
         risk_tier: DecisionRiskTier::Reversible,
         option: Some(DecisionOption {
             summary: summary.into(),

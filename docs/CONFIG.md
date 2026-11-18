@@ -1907,8 +1907,9 @@ captures still require their original full policy digest to match.
 
 A changed review obligation (timing, reviewer pool, budget, baseline commands or
 host evidence) refuses completion reuse and records `policy-changed`. The
-existing bounded requeue preserves the branch and PR for a fresh run under
-current policy, with fresh validation and review. Changed candidate/base
+existing bounded requeue preserves the branch and PR for a successor delivery
+with fresh validation. Any fresh independent review follows that delivery's
+selected review policy, which may be off. Changed candidate/base
 bindings, mutation or rewrite provenance, and missing or stale evidence
 retain their refusals, recorded as `candidate-changed`. Conflicts, red checks
 and permission failures keep their existing recovery path; a lost mutation

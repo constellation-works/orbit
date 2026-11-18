@@ -123,8 +123,10 @@ also completes the preserved backlog task; it needs no forced status transition.
 When the latest review left a finding open and the reviewed candidate can still
 return to the backlog, the block decision also offers an answer that accepts
 those findings and resumes the same candidate. It does not change the task
-description or acceptance criteria. The next run validates and reviews that
-candidate again, then lands it. An option whose rewrite would change the
+description or acceptance criteria. The successor delivery validates the
+candidate and follows its selected review policy; a fresh independent review
+runs only when that policy calls for one. The normal landing gates still apply.
+An option whose rewrite would change the
 description or acceptance criteria says that the reviewed candidate is
 discarded, and choosing it discards the candidate even when required checks
 have not passed. A run that has not stopped is refused until it stops; that

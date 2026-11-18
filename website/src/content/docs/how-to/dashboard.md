@@ -277,7 +277,7 @@ Then choose by what the evidence shows:
 
 | Action | Use when | Effect |
 |---|---|---|
-| **Resume candidate** | The cause is fixed and the candidate is sound. | Returns the task to backlog and keeps the candidate and pull request its stopped run published. The next run validates, reviews, and lands them. |
+| **Resume candidate** | The cause is fixed and the candidate is sound. | Returns the task to backlog and keeps the candidate and pull request its stopped run published. The next delivery validates it and follows the review policy selected for that delivery; when review is off, no fresh independent review runs. |
 | **Discard and re-implement** | The candidate is wrong or stale. | Discards the candidate, closes the task's undelivered pull requests, and returns the task to backlog. The next run implements from scratch. The dashboard cannot undo this. |
 | **Settle merged PR** | You merged the delivery pull request yourself. | Moves the task to `done` with a landing note naming the pull request and merge commit. If the pull request has not merged, nothing changes. |
 
