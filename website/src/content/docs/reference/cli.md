@@ -116,7 +116,7 @@ an exact time.
 
 | Command | Purpose |
 |---|---|
-| `orbit run ship [task_id ...]` | [Ship](/getting-started/workflows/) the named tasks, or the ready backlog, through the gated pipeline. Named tasks ship even when a drain would wait on them (scheduled start, unassessed complexity, no context files, context locks another in-flight task holds); their history records the overridden gates and lock holders. `--mode pr\|local` chooses a pull request or in-place delivery. |
+| `orbit run ship [task_id ...]` | [Ship](/getting-started/workflows/) the named tasks, or the ready backlog, through the gated pipeline. Named tasks ship even when a drain would wait on them (scheduled start, unassessed complexity, no context files, context locks another in-flight task holds); their history records the overridden gates and lock holders. Other holds, including an active pilot, still apply. A wholly held request reports known holds immediately; a mixed request starts eligible tasks and records undispatched IDs and reasons in `orbit run show`. Check that run for holds that arise after submission, and retry held tasks when ready. `--mode pr\|local` chooses a pull request or in-place delivery. |
 | `orbit run auto [--for <duration>] [--concurrency <n>]` | [Drain the backlog](/how-to/continuous-delivery/) for a time window; one pass without `--for`. |
 | `orbit run auto --approve-proposed` | Also [approve `proposed` tasks](/how-to/continuous-delivery/#2-authorize-the-backlog) that pass task-pilot verification. |
 | `orbit run auto --auto-fix` | Also [repair failing checks and conflicts](/how-to/continuous-delivery/#repair-blocked-pull-requests) on the pull requests the drain opens. |

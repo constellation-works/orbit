@@ -74,3 +74,26 @@ fn nonempty_allowed_set_admits_only_its_members() {
         .expect_err("a non-member of the allowed set is refused");
     assert_unknown_id(error, "unknown");
 }
+
+#[test]
+fn named_omissions_report_the_hold_after_eligible_bundles() {
+    let (_root, runtime) = runtime();
+    let result = runtime.run_deterministic(
+        "validate_bundles",
+        &json!({}),
+        &json!({
+            "bundles": [["eligible"]], "max_bundle_size": 5,
+            "known_task_ids": ["eligible"], "requested_task_ids": ["eligible", "held"],
+            "excluded": [{"id": "held", "reason": "active_pilot_preparation", "detail": "retry after pilot settles"}]
+        }),
+        ToolContext::default(),
+    );
+    let error = result
+        .expect_err("an omitted named task must not be reported as successful")
+        .to_string();
+    assert!(
+        error.contains("held") && error.contains("active_pilot_preparation"),
+        "{error}"
+    );
+    assert!(!error.contains("eligible"), "{error}");
+}
