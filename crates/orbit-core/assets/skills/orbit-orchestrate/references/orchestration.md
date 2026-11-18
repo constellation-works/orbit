@@ -503,6 +503,21 @@ Two of its answers separate contention from capacity:
   reserving task reports `context_lock_conflict` with a `detail` saying it
   reserves. At most two tasks reserve per pass; work that does not overlap a
   reserved surface admits normally.
+- A `ci-failure-sweep` repair whose `context_lock_conflict` carries a
+  `shared_base_repair` object (and a `detail` starting `shared base failure:`)
+  waits on a `review` task that waits on it. The holder holds a selector its
+  own recovery added, and its current head fails with the repair's exact
+  failure signature: either the failure its admitted auto-fix check repair was
+  handed (`pr_auto_fix_head_failure`) or a `known_red_base` hold. The repair
+  owns the fix. Admission still grants no overlapping write. For each holder,
+  head, failure and selector, the owner's admission pass files one human-crew
+  task tagged `shared-base-repair-decision` and raises one `agent_request`
+  decision on it. The decision asks who owns the repair: free the holder's
+  lock without discarding its candidate or pull request, let the holder's PR
+  carry the repair, or keep waiting. The `detail` names that task and
+  request. Answering records the choice and completes the task; Orbit applies
+  nothing to either task. With no human crew configured, nothing is filed and
+  the `detail` says so.
 - `published_delivery` (text: `resuming published delivery (PR #N)`) marks a
   backlog task whose final-recovery requeue kept its pull request. Its next
   run adopts that branch and pull request before it edits anything, so it is

@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use orbit_common::{OrbitError, ProviderReadThrottle};
-use orbit_types::workflow::CiRerunRoot;
+use orbit_types::workflow::{CiRerunRoot, PrAutoFixFailedCheck};
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
@@ -31,6 +31,9 @@ pub(in crate::executor::automation::vcs) enum HeadCheckEvidence {
     Repair {
         evidence: String,
         annotations: Vec<Value>,
+        /// The workflow-job failures read from their logs, with their
+        /// normalized signatures. Annotation-only checks are not listed.
+        failures: Vec<PrAutoFixFailedCheck>,
     },
     /// Not a failure a code repair can clear, or not one this read could
     /// establish, for this reason.
@@ -167,6 +170,7 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
     let mut details = Vec::new();
     let mut waits = Vec::new();
     let mut annotations = Vec::new();
+    let mut failures = Vec::new();
     // Cancelled and timed-out jobs are not candidate failures. They stop
     // repair only when nothing else in the set is a source failure, so a
     // mixed failure is still classified from its log.
@@ -284,6 +288,11 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
                 deadline_ms,
             )
         });
+        failures.push(PrAutoFixFailedCheck {
+            check: job_label(job),
+            step: failed_step(job).to_string(),
+            signature: signature.text.clone(),
+        });
         details.push(format!(
             "'{}' failed in step `{}` on head {head} (run {run_id}, job {job_id}) with signature `{}`; log excerpt:\n{}",
             job_label(job),
@@ -304,6 +313,7 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
     HeadCheckEvidence::Repair {
         evidence: details.join("\n"),
         annotations,
+        failures,
     }
 }
 

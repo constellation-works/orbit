@@ -2,7 +2,8 @@
 
 use super::*;
 use orbit_types::workflow::{
-    PR_AUTO_FIX_BASE_RED_EVENT, PrAutoFixBaseRed, PrAutoFixReadDeferral, PrAutoFixReadReset,
+    PR_AUTO_FIX_BASE_RED_EVENT, PrAutoFixBaseRed, PrAutoFixHeadFailure, PrAutoFixReadDeferral,
+    PrAutoFixReadReset,
 };
 use std::io::Write as _;
 
@@ -2910,6 +2911,49 @@ fn auto_fix_repairs_untouched_failure_on_green_base_first_poll() {
                     .history(TASK_ID)
                     .iter()
                     .any(|entry| entry.event == "pr_auto_fix_base_red")
+            );
+        },
+    );
+}
+
+/// [ORB-25510] An admitted check repair leaves the failure it was handed on
+/// the task, typed, with the same signature its handoff names: a repair that
+/// cannot clear the head holds the run in run state only, and admission
+/// reads this record to prove a sweep repair of the base shares the failure.
+#[test]
+fn admitted_check_repair_records_the_head_failure_it_was_handed() {
+    auto_fix_table(
+        "auto_fix::admitted_check_repair_records_the_head_failure_it_was_handed",
+        "green_base",
+        |case, row| {
+            let (fx, host) = docs_only_pr(row);
+            let log = "error: source failure\n --> src/contract:1:1\n";
+            plant_commit_ci(&fx, &fx.candidate, 11, "failure", log);
+            plant_commit_ci(&fx, &fx.base_sha, 21, "success", log);
+            fx.script_checks(&["failure"]);
+            let error = action(
+                &host,
+                "pr_complete",
+                &waited_auto_fix_input(&fx, 15, Some(5)),
+            )
+            .expect_err(case)
+            .to_string();
+            assert!(is_check_repair(&error), "{error}");
+            let records = host
+                .history(TASK_ID)
+                .iter()
+                .filter_map(PrAutoFixHeadFailure::from_entry)
+                .collect::<Vec<_>>();
+            assert_eq!(records.len(), 1, "{case}: one typed record: {records:?}");
+            let record = &records[0];
+            assert_eq!(record.failed_head, fx.candidate, "{case}");
+            assert_eq!(record.pr_number, PR_NUMBER, "{case}");
+            assert_eq!(record.checks.len(), 1, "{case}: {record:?}");
+            let check = &record.checks[0];
+            assert!(!check.signature.is_empty(), "{case}: {record:?}");
+            assert!(
+                error.contains(&format!("with signature `{}`", check.signature)),
+                "{case}: the record keeps the signature the repair was handed: {error}"
             );
         },
     );

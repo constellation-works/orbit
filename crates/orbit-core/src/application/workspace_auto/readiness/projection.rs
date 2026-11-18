@@ -344,6 +344,11 @@ pub(super) fn project_readiness_tasks(
                         if let Some(detail) = &excluded.detail {
                             object.insert("detail".to_string(), json!(detail));
                         }
+                        // [ORB-25510] A proven circular wait with a red PR
+                        // that holds a selector its recovery added.
+                        if let Some(wait) = snapshot.shared_base_waits.get(&excluded.id) {
+                            object.insert("shared_base_repair".to_string(), json!(wait));
+                        }
                     }
                 }
                 return Value::Object(object.clone());

@@ -2084,7 +2084,13 @@ existing recovery activities, final validation and push do the repair:
   a head is recorded that way (`pr_auto_fix_base_red`), a later poll that
   cannot read the base evidence again keeps waiting instead of repairing. A
   distinct candidate failure keeps the ordinary repair path and three-attempt
-  budget. A conflict is rebased onto the current base by PR conflict recovery.
+  budget. When a check repair is admitted, every watched task records
+  `pr_auto_fix_head_failure`: the PR, the failed head, and each failed workflow
+  check with its failed step and normalized error signature. A repair that
+  cannot clear the head holds the run, and the task stays in `review` with its
+  locks. If a `ci-failure-sweep` repair with that exact signature then waits on
+  a selector the task's recovery added, admission reports the circular wait
+  and raises one owner decision on a human-crew task. A conflict is rebased onto the current base by PR conflict recovery.
   If a published check repair then conflicts, recovery follows the contiguous
   auto-fix pushes recorded by the host for that PR and this run or its
   authenticated retry ancestors. The stopped rebase's branch and original head
