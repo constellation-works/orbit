@@ -214,6 +214,17 @@ pub trait TaskStoreBackend: Send + Sync {
         filter: &crate::contracts::TaskListFilter,
         limit: usize,
     ) -> Result<Option<crate::contracts::TaskCandidateKeys>, OrbitError>;
+    /// Observe several indexed pages in request order through one freshness
+    /// validation. If the index cannot serve all filters, return `None` so
+    /// the caller can use envelope selection. A freshness failure applies to
+    /// the whole batch, while an indexed query failure belongs to its page.
+    fn observe_task_candidate_key_pages(
+        &self,
+        _pages: &[(crate::contracts::TaskListFilter, usize)],
+    ) -> Result<Option<Vec<Result<crate::contracts::TaskCandidateKeys, OrbitError>>>, OrbitError>
+    {
+        Ok(None)
+    }
     /// Select a fully indexed page from the generated index alone, reading no
     /// envelope; `None` when the filter or the index cannot answer that way.
     fn task_candidate_keys(

@@ -1,11 +1,12 @@
 //! `GET /api/tasks/all`: tasks merged across every registered workspace.
 
 use std::collections::{BTreeMap, HashSet};
+use std::sync::Arc;
 
 use axum::extract::{RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_core::OrbitRuntime;
-use orbit_core::application::task::{TaskCandidateKey, TaskCandidateKeys};
+use orbit_core::application::task::{TaskCandidateKey, TaskCandidateKeys, TaskListFilter};
 use serde_json::{Value, json};
 
 use super::super::pagination::TaskPageQuery;
@@ -13,7 +14,7 @@ use super::super::{bad_request, blocking, server_error};
 use super::fan_out::fan_out;
 use super::list::{abbreviate_home, entry_is_owned};
 use crate::projections::{TaskListProjection, cached_riskiness_model};
-use crate::state::{DashboardState, Pinned};
+use crate::state::{DashboardState, Pinned, WsEntry};
 
 /// `GET /api/tasks/all` — dashboard tasks aggregated across active workspaces.
 ///
@@ -55,11 +56,27 @@ pub(in crate::api) async fn list_all_tasks(
         query
             .bind_cursor(&scope)
             .map_err(orbit_core::OrbitError::InvalidInput)?;
-        aggregate_resume_index(&aggregate_task_entries(&pinned, &query), &query)?;
+        let entries = aggregate_task_entries(&pinned, &query);
+        let resume_index = aggregate_resume_index(&entries, &query)?;
         if query.groups_by_status() {
-            return Ok(all_task_sections_json(&state, &pinned, &query, &scope));
+            return Ok(all_task_sections_json(
+                &state,
+                &pinned,
+                &query,
+                &scope,
+                &entries,
+                resume_index,
+            ));
         }
-        Ok(all_tasks_json(&state, &pinned, &query, &scope))
+        let selections = select_workspace_task_pages(&pinned, &entries, &[&query], resume_index);
+        Ok(all_tasks_json(
+            &state,
+            &query,
+            &scope,
+            &entries,
+            resume_index,
+            selections.into_iter().next().unwrap_or_default(),
+        ))
     })
     .await
     {
@@ -70,10 +87,7 @@ pub(in crate::api) async fn list_all_tasks(
 }
 
 /// The workspaces `/api/tasks/all` reads, in `/api/workspaces` order.
-fn aggregate_task_entries<'a>(
-    pinned: &'a Pinned,
-    query: &TaskPageQuery,
-) -> Vec<&'a crate::state::WsEntry> {
+fn aggregate_task_entries<'a>(pinned: &'a Pinned, query: &TaskPageQuery) -> Vec<&'a WsEntry> {
     pinned
         .entries()
         .iter()
@@ -87,7 +101,7 @@ fn aggregate_task_entries<'a>(
 /// but contribute no rows. The cursor's own workspace resumes after its last
 /// row, and later workspaces start from their newest task.
 fn aggregate_resume_index(
-    entries: &[&crate::state::WsEntry],
+    entries: &[&WsEntry],
     query: &TaskPageQuery,
 ) -> Result<usize, orbit_core::OrbitError> {
     let Some(cursor) = query.cursor() else {
@@ -126,13 +140,19 @@ fn all_task_sections_json(
     pinned: &Pinned,
     query: &TaskPageQuery,
     scope: &str,
+    entries: &[&WsEntry],
+    resume_index: usize,
 ) -> Result<Value, orbit_core::OrbitError> {
+    let section_queries = query.status_section_queries();
+    let queries: Vec<_> = section_queries.iter().map(|(_, query)| query).collect();
+    let selections = select_workspace_task_pages(pinned, entries, &queries, resume_index);
     let mut sections = Vec::new();
     let mut total = 0_u64;
     let mut unavailable = Vec::new();
     let mut unavailable_ids = HashSet::new();
-    for (status, section_query) in query.status_section_queries() {
-        let mut section = all_tasks_json(state, pinned, &section_query, scope)?;
+    for ((status, section_query), pages) in section_queries.into_iter().zip(selections) {
+        let mut section =
+            all_tasks_json(state, &section_query, scope, entries, resume_index, pages)?;
         if let Value::Object(map) = &mut section {
             if let Some(Value::Array(sources)) = map.remove("unavailable") {
                 for source in sources {
@@ -159,11 +179,104 @@ fn all_task_sections_json(
     }))
 }
 
+type WorkspaceSelection = Result<(Arc<OrbitRuntime>, TaskCandidateKeys), String>;
+
+/// Visit each workspace once, then transpose the results into section order.
+/// Within each section the workspace order and its individual errors remain
+/// independent of the order in which the workers finish.
+fn select_workspace_task_pages(
+    pinned: &Pinned,
+    entries: &[&WsEntry],
+    queries: &[&TaskPageQuery],
+    resume_index: usize,
+) -> Vec<Vec<WorkspaceSelection>> {
+    let Some(first) = queries.first() else {
+        return Vec::new();
+    };
+    let batch_indexed = queries.len() > 1 && !first.pilot_warnings();
+    let selections = fan_out(entries.len(), |index| {
+        let entry = entries[index];
+        if !entry.active {
+            return Err("workspace is unavailable".to_string());
+        }
+        let runtime = pinned.runtime_for(&entry.id).map_err(|_| {
+            tracing::warn!(workspace = %entry.id, "fleet task list could not open a workspace");
+            "failed to open workspace".to_string()
+        })?;
+        let filters: Vec<_> = queries
+            .iter()
+            .map(|query| workspace_task_filter(query, index, resume_index))
+            .collect();
+        let pages = if batch_indexed {
+            let indexed_pages = runtime.observe_task_candidate_key_pages(&filters).map_err(|error| {
+                tracing::warn!(workspace = %entry.id, %error, "fleet task list skipped a workspace");
+                error.to_string()
+            })?;
+            indexed_pages.unwrap_or_else(|| {
+                filters
+                    .into_iter()
+                    .map(|(filter, limit)| workspace_observed_task_keys(&runtime, &filter, limit))
+                    .collect()
+            })
+        } else {
+            queries
+                .iter()
+                .zip(filters)
+                .map(|(query, (filter, limit))| workspace_task_keys(&runtime, query, filter, limit))
+                .collect()
+        };
+        Ok(pages
+            .into_iter()
+            .map(|page| {
+                page.map(|page| (Arc::clone(&runtime), page))
+                    .map_err(|error| {
+                        tracing::warn!(workspace = %entry.id, %error, "fleet task list skipped a workspace");
+                        error.to_string()
+                    })
+            })
+            .collect::<Vec<_>>())
+    });
+    let mut by_section: Vec<_> = queries
+        .iter()
+        .map(|_| Vec::with_capacity(entries.len()))
+        .collect();
+    for selection in selections {
+        match selection {
+            Ok(pages) => {
+                for (section, page) in by_section.iter_mut().zip(pages) {
+                    section.push(page);
+                }
+            }
+            Err(error) => {
+                for section in &mut by_section {
+                    section.push(Err(error.clone()));
+                }
+            }
+        }
+    }
+    by_section
+}
+
+fn workspace_task_filter(
+    query: &TaskPageQuery,
+    index: usize,
+    resume_index: usize,
+) -> (TaskListFilter, usize) {
+    match index.cmp(&resume_index) {
+        // Only the total is read from a spent workspace.
+        std::cmp::Ordering::Less => (query.filter_scanning_before(None), 1),
+        std::cmp::Ordering::Equal => (query.filter(), query.limit()),
+        std::cmp::Ordering::Greater => (query.filter_scanning_before(None), query.limit()),
+    }
+}
+
 fn all_tasks_json(
     state: &DashboardState,
-    pinned: &Pinned,
     query: &TaskPageQuery,
     scope: &str,
+    entries: &[&WsEntry],
+    resume_index: usize,
+    selections: Vec<WorkspaceSelection>,
 ) -> Result<Value, orbit_core::OrbitError> {
     let home = orbit_common::fs::path::home_dir().ok();
     let mut candidates = Vec::new();
@@ -171,44 +284,6 @@ fn all_tasks_json(
     let mut remaining = 0;
     let mut unavailable = Vec::new();
     let mut unavailable_ids = HashSet::new();
-    let entries = aggregate_task_entries(pinned, query);
-    let resume_index = aggregate_resume_index(&entries, query)?;
-    let resume_before = query
-        .cursor()
-        .map(|cursor| (cursor.created_at, cursor.id.clone()));
-    // Each workspace's candidate keys are selected concurrently (its own
-    // runtime and store); the fold below runs in pinned entry order, so
-    // totals, candidates and `unavailable` keep their serial order.
-    let selections = fan_out(entries.len(), |index| {
-        let entry = &entries[index];
-        if !entry.active {
-            return Err("workspace is unavailable".to_string());
-        }
-        let runtime = match pinned.runtime_for(&entry.id) {
-            Ok(runtime) => runtime,
-            Err(_) => {
-                tracing::warn!(workspace = %entry.id, "fleet task list could not open a workspace");
-                return Err("failed to open workspace".to_string());
-            }
-        };
-        let (filter, limit) = match index.cmp(&resume_index) {
-            // Only the total is read from a spent workspace.
-            std::cmp::Ordering::Less => (query.filter_scanning_before(None), 1),
-            std::cmp::Ordering::Equal => (
-                query.filter_scanning_before(resume_before.clone()),
-                query.limit(),
-            ),
-            std::cmp::Ordering::Greater => (query.filter_scanning_before(None), query.limit()),
-        };
-        // One broken workspace must not take down the fleet-wide list.
-        match workspace_task_keys(&runtime, query, filter, limit) {
-            Ok(page) => Ok((runtime, page)),
-            Err(error) => {
-                tracing::warn!(workspace = %entry.id, %error, "fleet task list skipped a workspace");
-                Err(error.to_string())
-            }
-        }
-    });
     for (index, (entry, selection)) in entries.iter().zip(selections).enumerate() {
         let (runtime, page) = match selection {
             Ok(selection) => selection,
@@ -363,7 +438,7 @@ fn all_tasks_json(
 fn record_unavailable(
     unavailable: &mut Vec<Value>,
     recorded: &mut HashSet<String>,
-    entry: &crate::state::WsEntry,
+    entry: &WsEntry,
     error: &str,
 ) {
     if recorded.insert(entry.id.clone()) {
@@ -389,7 +464,7 @@ fn record_unavailable(
 fn workspace_task_keys(
     runtime: &OrbitRuntime,
     query: &TaskPageQuery,
-    filter: orbit_core::application::task::TaskListFilter,
+    filter: TaskListFilter,
     limit: usize,
 ) -> Result<TaskCandidateKeys, orbit_core::OrbitError> {
     if query.pilot_warnings() {
@@ -415,7 +490,15 @@ fn workspace_task_keys(
     if let Some(keys) = runtime.observe_task_candidate_keys(&filter, limit)? {
         return Ok(keys);
     }
-    let page = runtime.observe_task_candidates(&filter, limit)?;
+    workspace_observed_task_keys(runtime, &filter, limit)
+}
+
+fn workspace_observed_task_keys(
+    runtime: &OrbitRuntime,
+    filter: &TaskListFilter,
+    limit: usize,
+) -> Result<TaskCandidateKeys, orbit_core::OrbitError> {
+    let page = runtime.observe_task_candidates(filter, limit)?;
     Ok(TaskCandidateKeys {
         items: page
             .items
