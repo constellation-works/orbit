@@ -382,6 +382,66 @@ proposed follow-ups yourself; enabling a sweep does not approve them.
   proposals. It leaves dependencies under a security advisory to security
   work.
 
+## Blind regression-label audit
+
+Check whether recorded regression labels would be labeled the same way by
+someone who has not seen them. A regression link's escape, nature and
+severity decide which role is charged and how much, and the agent that filed
+the link sets all three. Use this audit when you want a second opinion on
+that accuracy without touching the recorded data.
+
+It ships disabled, as a medium-priority chore that files weekly on Monday at
+07:30 host-local time, with `skip-if-open` dedupe. Each pass samples up to
+10 regression links filed in the previous 7 days and reports how often an
+independent re-judgement disagrees on escape, nature and severity. A short
+sample still succeeds and names its eligible population, and a first pass
+with no prior artifact succeeds as a baseline.
+
+Run it from your registered owner checkout, with the
+[clock installed](#1-install-the-clock):
+
+```bash
+orbit workspace sync --check                 # after an upgrade; exits 3 when changes are pending
+orbit workspace sync
+orbit auto-task show regression-label-audit
+orbit auto-task mint regression-label-audit   # file one audit now
+# After reviewing that pass, optionally change the cadence, then enable.
+orbit auto-task update regression-label-audit --cron "30 7 * * 1"
+orbit auto-task toggle regression-label-audit on
+```
+
+Minting files one pass immediately. It ignores the schedule, the dedupe
+policy and `enabled`, and does not move the next scheduled fire. Turning the
+definition off does not cancel passes already filed. `workspace sync`
+refreshes the shipped instructions and keeps your cadence, enabled state,
+crew, priority and complexity; editing its body or criteria makes it a local
+fork that sync no longer refreshes.
+
+The pass stays blind: a different model family re-labels each sampled link
+from an evidence packet of titles, descriptions, acceptance criteria and
+context files only. The packet carries neither the recorded labels nor any
+model, provider or crew name, and the second labels are saved before
+anything is compared. A link whose packet leaks that information is excluded
+and replaced, and links your own family filed or a previous pass already
+judged are left out of the draw.
+
+Find the passes and read the result:
+
+```bash
+orbit task list --tag auto-task:regression-label-audit
+```
+
+Open the pass task's artifacts and execution summary in the
+[dashboard](/how-to/dashboard/). Each pass attaches
+`regression-label-audit.json`, with the sampled links, the second labels,
+the recorded labels, agreement per field, and the three disagreement rates
+for escape, nature and severity, each with its disagreed and judged counts.
+The execution summary reports the sample size, the eligible population and
+the same three rates.
+
+The audit changes nothing it measures: it edits no regression link and no
+scorecard or rank number.
+
 ## Host-health auto-task
 
 `host-health` reads a machine's health and files tasks for what it finds. It
