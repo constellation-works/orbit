@@ -36,15 +36,6 @@ fn exclusion(reason: &str) -> Vec<CrewExclusion> {
 }
 
 fn seed_run(jobs: &dyn orbit_store::contracts::JobRunStoreBackend, run_id: &str, reason: &str) {
-    seed_crew_run(jobs, run_id, CREW, reason);
-}
-
-fn seed_crew_run(
-    jobs: &dyn orbit_store::contracts::JobRunStoreBackend,
-    run_id: &str,
-    crew: &str,
-    reason: &str,
-) {
     let mut state = PipelineState::new(
         run_id.to_string(),
         "workspace_auto_pipeline".to_string(),
@@ -52,7 +43,7 @@ fn seed_crew_run(
     );
     let ago = Utc::now() - Duration::minutes(3);
     state.pull_drain.crew_pool_exclusions.insert(
-        crew.to_string(),
+        CREW.to_string(),
         CrewPoolExclusion {
             since: ago,
             last_observed_at: ago,
@@ -60,32 +51,6 @@ fn seed_crew_run(
             reason: reason.to_string(),
         },
     );
-    jobs.write_run_state(run_id, &state)
-        .expect("seed run state");
-}
-
-fn seed_crew_runs(
-    jobs: &dyn orbit_store::contracts::JobRunStoreBackend,
-    run_id: &str,
-    seeds: &[(&str, &str)],
-) {
-    let mut state = PipelineState::new(
-        run_id.to_string(),
-        "workspace_auto_pipeline".to_string(),
-        json!({}),
-    );
-    let ago = Utc::now() - Duration::minutes(3);
-    for (crew, reason) in seeds {
-        state.pull_drain.crew_pool_exclusions.insert(
-            crew.to_string(),
-            CrewPoolExclusion {
-                since: ago,
-                last_observed_at: ago,
-                passes: 1,
-                reason: reason.to_string(),
-            },
-        );
-    }
     jobs.write_run_state(run_id, &state)
         .expect("seed run state");
 }
@@ -243,159 +208,5 @@ fn concurrent_drains_with_same_crew_and_cause_file_one_friction() {
         open_pool_crew_frictions(&runtime, CREW).len(),
         1,
         "ORB-22391: drains racing on the same crew and cause must leave exactly one open friction"
-    );
-}
-
-#[test]
-fn intentional_allowlist_restriction_keeps_warning_without_friction() {
-    if crate::application::run_isolated_test(std::any::type_name_of_val(
-        &intentional_allowlist_restriction_keeps_warning_without_friction,
-    )) {
-        return;
-    }
-    let (_temp, runtime, _repo) = runtime_with_workspace_layout();
-    let jobs = runtime.stores().jobs();
-    let pool_input = json!({
-        "auto_crew_pools": {
-            "hard": {
-                "crews": [{"name": "haiku", "weight": 1}, {"name": "sol", "weight": 1}],
-                "source": "test"
-            }
-        }
-    });
-    // The operator's `--allow-crew` window is stored on the run, as the pull
-    // drain refill reads it there [ORB-25555].
-    let stored_input = json!({ "allowed_crews": ["sol"] });
-    let run = jobs
-        .insert_job_run(
-            "workspace_auto_pipeline",
-            1,
-            Utc::now(),
-            Some(stored_input),
-            None,
-        )
-        .expect("insert run");
-    seed_crew_run(
-        jobs,
-        &run.run_id,
-        "haiku",
-        "crew is outside this drain's allowed window",
-    );
-
-    record_pool_crew_health(&runtime, &run.run_id, &pool_input, None, &[]);
-
-    let state = runtime
-        .read_run_state(&run.run_id)
-        .expect("read run")
-        .expect("run state");
-    assert!(
-        state
-            .pull_drain
-            .crew_pool_exclusions
-            .get("haiku")
-            .is_some_and(|streak| streak
-                .reason
-                .contains("outside this drain's allowed window")),
-        "ORB-25555: the intentionally restricted crew stays visibly excluded"
-    );
-    assert!(
-        !state.pull_drain.crew_pool_exclusions.contains_key("sol"),
-        "ORB-25555: the permitted crew is not excluded"
-    );
-    let warnings = state.pull_drain.pool_crew_exclusion_warnings();
-    assert!(
-        warnings.iter().any(|warning| warning.contains("haiku")
-            && warning.contains("outside this drain's allowed window")),
-        "ORB-25555: the run warning still reports the intentional restriction"
-    );
-    assert_eq!(
-        open_pool_crew_frictions(&runtime, "haiku").len(),
-        0,
-        "ORB-25555: an intentional restriction files no env-repair friction"
-    );
-}
-
-#[test]
-fn missing_credential_still_files_with_allowlist_window() {
-    if crate::application::run_isolated_test(std::any::type_name_of_val(
-        &missing_credential_still_files_with_allowlist_window,
-    )) {
-        return;
-    }
-    const SOURCE: &str = "FIXTURE_ORB_25555_MISSING";
-    let _env = orbit_common::test_env::unset([SOURCE]);
-    // A crew `env` source is read only from the global config, so the
-    // fixture writes it there like the dispatch-admission readiness tests.
-    let config = format!(
-        "[crews.sol]\nprovider = \"codex\"\nmodel = \"fixture-shared\"\n\
-         [crews.needs-secret]\nprovider = \"codex\"\nmodel = \"fixture-secret\"\n\
-         env = [\"OPENAI_API_KEY={SOURCE}\"]\n\
-         [workflow]\ndefault_crew = \"sol\"\n"
-    );
-    let root = tempfile::tempdir().expect("fixture tempdir");
-    let global = root.path().join("home/.orbit");
-    let workspace = root.path().join("repo/.orbit");
-    std::fs::create_dir_all(&global).expect("global orbit dir");
-    std::fs::create_dir_all(&workspace).expect("workspace orbit dir");
-    std::fs::write(global.join("config.toml"), config).expect("global config");
-    let runtime = crate::OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
-    let _temp = root;
-    let jobs = runtime.stores().jobs();
-    let pool_input = json!({
-        "auto_crew_pools": {
-            "hard": {
-                "crews": [{"name": "sol", "weight": 1}, {"name": "needs-secret", "weight": 1}],
-                "source": "test"
-            }
-        }
-    });
-    let allowlist = runtime
-        .crew_allowlist(&["needs-secret".to_string()])
-        .expect("build allowlist")
-        .expect("non-empty allowlist");
-    let run = jobs
-        .insert_job_run("workspace_auto_pipeline", 1, Utc::now(), None, None)
-        .expect("insert run");
-    seed_crew_runs(
-        jobs,
-        &run.run_id,
-        &[
-            ("sol", "crew is outside this drain's allowed window"),
-            ("needs-secret", "seeded unset"),
-        ],
-    );
-
-    record_pool_crew_health(&runtime, &run.run_id, &pool_input, Some(&allowlist), &[]);
-
-    let state = runtime
-        .read_run_state(&run.run_id)
-        .expect("read run")
-        .expect("run state");
-    let warnings = state.pull_drain.pool_crew_exclusion_warnings();
-    assert!(
-        warnings.iter().any(|warning| warning.contains("`sol`")
-            && warning.contains("outside this drain's allowed window")),
-        "ORB-25555: the intentional restriction stays visible alongside the failure"
-    );
-    assert!(
-        warnings
-            .iter()
-            .any(|warning| warning.contains("needs-secret") && warning.contains(SOURCE)),
-        "ORB-25555: the missing credential stays visible when a window is set"
-    );
-    assert_eq!(
-        open_pool_crew_frictions(&runtime, "sol").len(),
-        0,
-        "ORB-25555: the intentionally restricted crew files no friction"
-    );
-    let broken = open_pool_crew_frictions(&runtime, "needs-secret");
-    assert_eq!(
-        broken.len(),
-        1,
-        "ORB-25555: a missing credential still files its repair signal with a window set"
-    );
-    assert!(
-        broken[0].record.body.contains(SOURCE),
-        "ORB-25555: the filed friction names the missing source"
     );
 }

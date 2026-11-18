@@ -606,3 +606,195 @@ model = "fixture-beta"
         "a provider quota window lifts at its reset, so it files no friction: {filed:?}"
     );
 }
+
+#[test]
+fn intentional_allowlist_restriction_files_no_env_repair_friction() {
+    if !isolated(
+        "dispatch_admission::crew_env::intentional_allowlist_restriction_files_no_env_repair_friction",
+    ) {
+        return;
+    }
+    let config = r#"
+[workflow]
+default_crew = "sol"
+medium_complexity_crews = ["sol", "restricted-alpha", "restricted-beta"]
+[crews.sol]
+provider = "codex"
+model = "fixture-shared"
+[crews.restricted-alpha]
+provider = "claude"
+model = "fixture-alpha"
+[crews.restricted-beta]
+provider = "claude"
+model = "fixture-beta"
+"#;
+    let (_root, runtime, _) = configured_runtime(config, &["src/fixture.rs"]);
+    runtime
+        .add_task(TaskAddParams {
+            title: "Operator allowlist restriction fixture".into(),
+            description: "Reproduce an operator --allow-crew window leaving pool crews out".into(),
+            acceptance_criteria: vec![
+                "An intentional restriction files no env-repair friction".into(),
+            ],
+            plan: "Observe admission".into(),
+            complexity: TaskComplexity::Medium,
+            context_files: vec!["file:src/fixture.rs".into()],
+            crew: Some("sol".into()),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap();
+    // The operator's `--allow-crew sol` is stored on the run, as the drain reads it.
+    let drain = running_run(
+        &runtime,
+        "workspace_auto_pipeline",
+        json!({
+            "allowed_crews": ["sol"],
+            "auto_crew_pools": runtime.workspace_complexity_crew_pools().unwrap(),
+        }),
+    );
+    classify(&runtime, &drain);
+    // Backdate the first observation so both streaks are sustained, without sleeping.
+    let mut state = runtime.read_run_state(&drain).unwrap().unwrap();
+    for streak in state.pull_drain.crew_pool_exclusions.values_mut() {
+        streak.since -= chrono::Duration::seconds(121);
+    }
+    runtime.write_run_state(&drain, &state).unwrap();
+    classify(&runtime, &drain);
+    let state = runtime.read_run_state(&drain).unwrap().unwrap();
+    for crew in ["restricted-alpha", "restricted-beta"] {
+        let streak = &state.pull_drain.crew_pool_exclusions[crew];
+        assert_eq!(
+            streak.passes, 2,
+            "the operator's window excludes {crew} on both passes"
+        );
+        assert!(
+            streak
+                .reason
+                .contains("outside this drain's allowed window"),
+            "{crew} stays visibly excluded with its restriction: {}",
+            streak.reason
+        );
+    }
+    assert!(
+        !state.pull_drain.crew_pool_exclusions.contains_key("sol"),
+        "the permitted crew is not excluded"
+    );
+    assert_eq!(
+        state.pull_drain.pool_crew_exclusion_warnings().len(),
+        2,
+        "the run still reports both intentional restrictions"
+    );
+    let frictions = orbit_store::friction_store::FrictionStore::open(
+        runtime.sqlite_store().unwrap(),
+        runtime.workspace_id().unwrap(),
+        runtime.data_root().join("frictions"),
+    )
+    .unwrap();
+    let filed: Vec<String> = frictions
+        .list(&orbit_store::contracts::FrictionListFilter::default())
+        .unwrap()
+        .into_iter()
+        .map(|row| row.record.body)
+        .collect();
+    assert!(
+        filed.is_empty(),
+        "[ORB-25555] an intentional --allow-crew restriction is working as requested, so it files no env-repair friction: {filed:?}"
+    );
+}
+
+#[test]
+fn missing_credential_still_files_with_an_allowlist_window() {
+    if !isolated(
+        "dispatch_admission::crew_env::missing_credential_still_files_with_an_allowlist_window",
+    ) {
+        return;
+    }
+    let config = format!(
+        r#"
+[workflow]
+default_crew = "sol"
+medium_complexity_crews = ["sol", "credits", "unset-outside"]
+[crews.sol]
+provider = "codex"
+model = "fixture-shared"
+[crews.credits]
+provider = "codex"
+model = "fixture-credits"
+env = ["OPENAI_API_KEY={SOURCE}"]
+[crews.unset-outside]
+provider = "codex"
+model = "fixture-unset-outside"
+env = ["OPENAI_API_KEY={SOURCE}"]
+"#
+    );
+    let (_root, runtime, _) = configured_runtime(&config, &["src/fixture.rs"]);
+    runtime
+        .add_task(TaskAddParams {
+            title: "Missing credential under an allowlist window fixture".into(),
+            description: "Reproduce a missing source on a permitted crew beside an operator window"
+                .into(),
+            acceptance_criteria: vec!["The missing source still files its repair signal".into()],
+            plan: "Observe admission".into(),
+            complexity: TaskComplexity::Medium,
+            context_files: vec!["file:src/fixture.rs".into()],
+            crew: Some("sol".into()),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap();
+    // The window permits `credits` only. `sol` is left out on purpose; `credits`
+    // and `unset-outside` both lack their source, and the unset reason wins.
+    let drain = running_run(
+        &runtime,
+        "workspace_auto_pipeline",
+        json!({
+            "allowed_crews": ["credits"],
+            "auto_crew_pools": runtime.workspace_complexity_crew_pools().unwrap(),
+        }),
+    );
+    classify(&runtime, &drain);
+    let mut state = runtime.read_run_state(&drain).unwrap().unwrap();
+    for streak in state.pull_drain.crew_pool_exclusions.values_mut() {
+        streak.since -= chrono::Duration::seconds(121);
+    }
+    runtime.write_run_state(&drain, &state).unwrap();
+    classify(&runtime, &drain);
+    let state = runtime.read_run_state(&drain).unwrap().unwrap();
+    let warnings = state.pull_drain.pool_crew_exclusion_warnings();
+    assert!(
+        warnings.iter().any(|warning| warning.contains("`sol`")
+            && warning.contains("outside this drain's allowed window")),
+        "[ORB-25555] the intentional restriction stays visible beside the failure: {warnings:?}"
+    );
+    let frictions = orbit_store::friction_store::FrictionStore::open(
+        runtime.sqlite_store().unwrap(),
+        runtime.workspace_id().unwrap(),
+        runtime.data_root().join("frictions"),
+    )
+    .unwrap();
+    let filed: Vec<String> = frictions
+        .list(&orbit_store::contracts::FrictionListFilter::default())
+        .unwrap()
+        .into_iter()
+        .map(|row| row.record.body)
+        .collect();
+    assert_eq!(
+        filed.len(),
+        2,
+        "[ORB-25555] a missing credential files its repair signal even with a window set, \
+         and so does an unset crew the window leaves out: {filed:?}"
+    );
+    for crew in ["credits", "unset-outside"] {
+        assert!(
+            filed
+                .iter()
+                .any(|body| body.contains(&format!("Pool crew `{crew}`")) && body.contains(SOURCE)),
+            "[ORB-25555] the friction for {crew} names the missing source: {filed:?}"
+        );
+    }
+    assert!(
+        !filed.iter().any(|body| body.contains("Pool crew `sol`")),
+        "[ORB-25555] the intentionally restricted crew files no friction: {filed:?}"
+    );
+}
