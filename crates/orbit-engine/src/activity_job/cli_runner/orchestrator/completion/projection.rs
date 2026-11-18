@@ -18,6 +18,7 @@ use super::frames::{
     structured_provider_quota_error, structured_provider_refusal,
 };
 use super::{failure, frames};
+use crate::activity_job::DECLARED_FAILURE_EVIDENCE_KEY;
 use crate::activity_job::dispatcher::{DispatchError, DispatchInvocationTrace, DispatchOutcome};
 use orbit_agent::{
     ParsedStdout, antigravity_background_task_diagnostic, antigravity_terminal_error_diagnostic,
@@ -135,6 +136,7 @@ fn retained_claude_terminal_result(provider: Provider, answer_text: &str) -> boo
 /// `response_result_fields`. The drop below and every write share this slice,
 /// so a new Orbit key cannot be offered as the agent's answer.
 const ORBIT_OWNED_STEP_OUTPUT_KEYS: &[&str] = &[
+    DECLARED_FAILURE_EVIDENCE_KEY,
     MUSE_MODEL_ACCESS_OUTPUT_KEY,
     "build_budget_waits",
     "timed_out",
@@ -590,6 +592,7 @@ pub(in super::super) fn project_completion(
         message,
         failure_class,
         failure_code,
+        declared_failure_evidence,
         observed_limit,
     } = failure::completion_failure(failure::CompletionFailureInput {
         provider: provider_enum,
@@ -706,6 +709,13 @@ pub(in super::super) fn project_completion(
         Value::Bool(timed_out || print_timeout_reached),
     );
     insert_orbit_owned_output(&mut output, "stalled", Value::Bool(stalled));
+    if let Some(evidence) = declared_failure_evidence {
+        insert_orbit_owned_output(
+            &mut output,
+            DECLARED_FAILURE_EVIDENCE_KEY,
+            Value::String(evidence),
+        );
+    }
     if spec.incomplete_continuation.is_some() {
         insert_orbit_owned_output(
             &mut output,

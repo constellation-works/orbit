@@ -695,3 +695,201 @@ fn declared_blocker_holds_the_local_run_and_passes_parent_guard() {
         );
     }
 }
+
+#[test]
+fn unresolved_policy_decision_holds_the_run_and_keeps_the_candidate() {
+    if !super::dispatch_admission::isolated(
+        "local_provider_holds::unresolved_policy_decision_holds_the_run_and_keeps_the_candidate",
+    ) {
+        return;
+    }
+
+    const CODE: &str = "unresolved_policy_decision";
+    const EVIDENCE: &str = "The fix is prepared, but the required check remains red pending the unresolved operator decision";
+    let fx = fixture(
+        "[workflow]\ndefault_crew = \"fixture\"\n\n[crews.fixture]\nprovider = \"codex\"\nmodel = \"fixture-model\"\n",
+    );
+    let git = |repo: &std::path::Path, args: &[&str]| {
+        let output = crate::git_test_support::run(repo, args).unwrap();
+        assert!(output.success, "{args:?}: {}", output.stderr);
+        output.stdout.trim().to_string()
+    };
+    git(&fx.repo, &["init", "-b", "main"]);
+    git(
+        &fx.repo,
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "base",
+        ],
+    );
+    let base = git(&fx.repo, &["rev-parse", "HEAD"]);
+    let cli = FakeCodex::named(&fx.repo, "codex", "");
+    let mut executor: ExecutorResource =
+        serde_yaml::from_str(include_str!("../../assets/executors/codex.yaml")).unwrap();
+    executor.spec.command = Some(cli.path.display().to_string());
+    executor.spec.sandbox = Some(ExecutorSandboxKind::Off);
+    fx.runtime
+        .upsert_executor_def(&ExecutorDef::from_resource_spec(
+            executor.metadata.name,
+            executor.spec,
+            None,
+            None,
+        ))
+        .unwrap();
+
+    let resources = fx.runtime.global_root().join("resources");
+    let activities = resources.join("activities");
+    std::fs::create_dir_all(&activities).unwrap();
+    for (name, content) in [
+        (
+            "worktree_setup.yaml",
+            include_str!("../../assets/activities/worktree_setup.yaml"),
+        ),
+        (
+            "pr_failure_handoff.yaml",
+            include_str!("../../assets/activities/pr_failure_handoff.yaml"),
+        ),
+    ] {
+        std::fs::write(activities.join(name), content).unwrap();
+    }
+    let jobs = resources.join("jobs");
+    std::fs::create_dir_all(&jobs).unwrap();
+    let agent = orbit_types::workflow::activity_job::ActivityV2Spec::AgentLoop(
+        orbit_types::workflow::activity_job::AgentLoopSpec::for_provider(
+            "implement the task".to_string(),
+            Provider::Codex,
+            30,
+        ),
+    );
+    let job = jobs.join("task_pr_pipeline.yaml");
+    std::fs::write(
+        &job,
+        json!({
+            "schemaVersion": 2, "kind": "Job", "metadata": {"name": "task_pr_pipeline"},
+            "spec": {"state": "enabled", "kind": "workflow", "failure_activity": "pr_failure_handoff",
+                "steps": [
+                    {"id": "worktree", "target": "activity:worktree_setup",
+                     "default_input": {"task_ids": "{{ input.task_ids }}", "base": "main", "base_sync": "local"}},
+                    {"id": "implement_one", "spec": agent, "default_input": {
+                        "workspace_path": "{{ steps.worktree.output.workspace_path }}",
+                        "repo_root": "{{ steps.worktree.output.workspace_path }}"}}
+                ]}
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let run = |reply: serde_json::Value, ending: &str| {
+        std::fs::write(
+            &cli.path,
+            format!("#!/bin/sh\ncat > /dev/null\nprintf 'partial candidate\\n' > candidate.txt\nprintf '%s\\n' '{reply}'\n{ending}\n"),
+        )
+        .unwrap();
+        let task = fx.task("fixture");
+        let outcome = fx
+            .runtime
+            .run_job_v2_from_yaml(&job, json!({"task_ids": [task], "crew": "fixture"}))
+            .unwrap();
+        let stored = fx.runtime.show_job_run(&outcome.run_id).unwrap();
+        (task, stored)
+    };
+
+    let error = |code| json!({"code": code, "message": EVIDENCE});
+    let failed =
+        |error| json!({"schemaVersion": 1, "status": "failed", "result": {}, "error": error});
+    let mut incomplete = failed(error("implementation_incomplete"));
+    incomplete["result"]["remaining_work"] = json!(["finish the repair"]);
+    let mut timeout = failed(error(CODE));
+    timeout["status"] = json!("timeout");
+    for reply in [
+        failed(json!({"code": CODE})),
+        failed(json!({"code": CODE, "message": "  "})),
+        failed(json!({"code": CODE, "message": 42})),
+        failed(error("unresolved_policy_decision_error")),
+        timeout,
+        incomplete,
+    ] {
+        let (_, stored) = run(reply.clone(), "exit 0");
+        assert_eq!(
+            stored.state,
+            JobRunState::Failed,
+            "{reply}: {:?}",
+            stored.steps
+        );
+        let message = stored
+            .steps
+            .last()
+            .unwrap()
+            .error_message
+            .as_deref()
+            .unwrap();
+        assert!(
+            message.contains("declared envelope status="),
+            "{reply}: {message}"
+        );
+    }
+    let (_, provider) = run(failed(error("provider_unavailable")), "exit 0");
+    assert_eq!(provider.state, JobRunState::Held, "{:?}", provider.steps);
+    assert_eq!(
+        provider.steps.last().unwrap().error_code.as_deref(),
+        Some("provider_unavailable")
+    );
+
+    let (_, nonzero) = run(failed(error(CODE)), "exit 1");
+    assert_eq!(nonzero.state, JobRunState::Failed, "{:?}", nonzero.steps);
+    let (_, auth_failure) = run(
+        failed(error(CODE)),
+        "echo 'OAuth session expired' >&2\nexit 1",
+    );
+    assert_eq!(
+        auth_failure.state,
+        JobRunState::Held,
+        "{:?}",
+        auth_failure.steps
+    );
+    assert_eq!(
+        auth_failure.steps.last().unwrap().error_code.as_deref(),
+        Some("provider_unavailable")
+    );
+
+    let (task, stored) = run(failed(error(CODE)), "exit 0");
+    assert_eq!(stored.state, JobRunState::Held, "{:?}", stored.steps);
+    assert_eq!(
+        stored.steps.last().unwrap().error_code.as_deref(),
+        Some("task_blocked_by_agent")
+    );
+    assert_eq!(fx.status(&task), TaskStatus::Blocked);
+    let history = fx.runtime.get_task_history(&task).unwrap();
+    assert!(
+        history.iter().any(|entry| matches!(
+            &entry.decision,
+            Some(orbit_types::task::TaskDecision::AgentBlocked { blocker })
+                if blocker.kind == CODE && blocker.evidence == EVIDENCE
+        )),
+        "{history:?}"
+    );
+    let state = fx.runtime.read_run_state(&stored.run_id).unwrap().unwrap();
+    let handoff = state.failure_activity_checkpoint.as_ref().unwrap();
+    assert_eq!(handoff.failed_step_id, "implement_one");
+    assert_eq!(handoff.output["decision"], "blocked_by_agent");
+    assert_eq!(handoff.output["pr_created"], false);
+    let worktree = state.pipeline_step_output("worktree").unwrap()["workspace_path"]
+        .as_str()
+        .unwrap();
+    let worktree = std::path::Path::new(worktree);
+    assert_eq!(git(worktree, &["rev-parse", "HEAD"]), base);
+    assert_eq!(
+        git(worktree, &["status", "--short", "--", "candidate.txt"]),
+        "?? candidate.txt"
+    );
+    assert_eq!(
+        std::fs::read_to_string(worktree.join("candidate.txt")).unwrap(),
+        "partial candidate\n"
+    );
+}
