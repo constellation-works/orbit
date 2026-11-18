@@ -54,6 +54,8 @@ libc.workspace = true
 
 [dev-dependencies]
 orbit-web = { path = ".", features = ["test-support"] }
+# Doctor worker spawn-failure seam for the report regression.
+orbit-cmd = { path = "../orbit-cmd", features = ["test-support"] }
 # Exercise production lock-denial writes through the runner action in HTTP fixtures.
 orbit-engine = { path = "../orbit-engine" }
 orbit-store = { path = "../orbit-store" }

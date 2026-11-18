@@ -1,3 +1,4 @@
+use super::scan_workers::{forced_pool_size, spawn_scan_worker};
 use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
 use orbit_core::{OrbitError, OrbitRuntime};
 
@@ -287,43 +288,49 @@ fn visit_fanned(
             }
         }
     }
-    let threads = std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(1)
-        .clamp(1, MAX_SCAN_THREADS);
-    if children.len() < FAN_OUT_MIN_CHILDREN || threads <= 1 {
+    let forced = forced_pool_size(MAX_SCAN_THREADS, children.len());
+    let threads = forced.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1)
+            .clamp(1, MAX_SCAN_THREADS)
+    });
+    if (forced.is_none() && children.len() < FAN_OUT_MIN_CHILDREN) || threads <= 1 {
         for child in &children {
             visit_fanned(child, true, seen, writable)?;
         }
     } else {
         let prior: &std::collections::BTreeSet<std::path::PathBuf> = seen;
+        let scan_run = move |run: &[std::path::PathBuf]| {
+            let mut run_seen = std::collections::BTreeSet::new();
+            let mut run_writable = Vec::new();
+            let result = run.iter().try_for_each(|child| {
+                visit(
+                    child,
+                    true,
+                    prior,
+                    &mut run_seen,
+                    &mut run_writable,
+                    &mut |_| {},
+                )
+            });
+            (result, run_seen, run_writable)
+        };
         let runs = std::thread::scope(|scope| {
+            // The OS may refuse a thread. A run whose worker cannot start is
+            // scanned on this thread, in its place in `read_dir` order, so
+            // the fold below sees what the threaded walk would have produced.
             let workers = children
                 .chunks(children.len().div_ceil(threads))
-                .map(|run| {
-                    scope.spawn(move || {
-                        let mut run_seen = std::collections::BTreeSet::new();
-                        let mut run_writable = Vec::new();
-                        let result = run.iter().try_for_each(|child| {
-                            visit(
-                                child,
-                                true,
-                                prior,
-                                &mut run_seen,
-                                &mut run_writable,
-                                &mut |_| {},
-                            )
-                        });
-                        (result, run_seen, run_writable)
-                    })
-                })
+                .map(|run| (run, spawn_scan_worker(scope, move || scan_run(run)).ok()))
                 .collect::<Vec<_>>();
             workers
                 .into_iter()
-                .map(|worker| {
-                    worker
+                .map(|(run, worker)| match worker {
+                    Some(worker) => worker
                         .join()
-                        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                        .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+                    None => scan_run(run),
                 })
                 .collect::<Vec<_>>()
         });
@@ -387,12 +394,6 @@ fn visit(
     Ok(())
 }
 
-#[cfg(all(test, unix))]
-pub(super) type ScanReport = (
-    std::collections::BTreeSet<std::path::PathBuf>,
-    Vec<(std::path::PathBuf, u32)>,
-);
-
 /// Test seam for filesystem ownership and deterministic disappearance races.
 #[cfg(all(test, unix))]
 pub(super) fn scan_with_hook(
@@ -412,3 +413,9 @@ pub(super) fn scan_with_hook(
     )?;
     Ok((seen, writable))
 }
+
+#[cfg(all(test, unix))]
+pub(super) type ScanReport = (
+    std::collections::BTreeSet<std::path::PathBuf>,
+    Vec<(std::path::PathBuf, u32)>,
+);
