@@ -123,7 +123,7 @@ fn inspect_state_directories(runtime: &OrbitRuntime) -> Result<PermissionScan, O
         }
         for (root, descend) in roots {
             let before = scan.writable.len();
-            visit(&root, descend, &mut seen, &mut scan.writable, &mut |_| {}).map_err(|error| {
+            visit_fanned(&root, descend, &mut seen, &mut scan.writable).map_err(|error| {
                 OrbitError::Io(format!(
                     "could not inspect Orbit state directory '{}': {error}",
                     root.display()
@@ -220,19 +220,137 @@ fn present<T>(result: std::io::Result<T>) -> std::io::Result<Option<T>> {
     }
 }
 
+/// A directory with at least this many child directories has its subtrees
+/// split across threads; the task store holds one per task.
+#[cfg(unix)]
+const FAN_OUT_MIN_CHILDREN: usize = 64;
+
+/// Most threads one directory's subtrees are split across.
+#[cfg(unix)]
+const MAX_SCAN_THREADS: usize = 8;
+
+/// [`visit`], with the subtrees of a wide directory scanned on a few threads.
+/// Each thread walks a contiguous run of children sequentially, and the runs
+/// are folded back in `read_dir` order, so the paths seen, the writable list
+/// and the first error are the ones the sequential walk would produce.
+#[cfg(unix)]
+fn visit_fanned(
+    path: &std::path::Path,
+    descend: bool,
+    seen: &mut std::collections::BTreeSet<std::path::PathBuf>,
+    writable: &mut Vec<(std::path::PathBuf, u32)>,
+) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    if excluded(path) || !seen.insert(path.to_path_buf()) {
+        return Ok(());
+    }
+    let Some(metadata) = present(std::fs::symlink_metadata(path))? else {
+        return Ok(());
+    };
+    if !metadata.is_dir() {
+        return Ok(());
+    }
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode & 0o022 != 0 {
+        writable.push((path.to_path_buf(), mode));
+    }
+    if !descend {
+        return Ok(());
+    }
+    let Some(entries) = present(std::fs::read_dir(path))? else {
+        // It vanished after stat; do not report a directory the operator cannot fix.
+        if mode & 0o022 != 0 {
+            writable.pop();
+        }
+        return Ok(());
+    };
+    // The sequential walk visits each child as it lists it, so a listing
+    // error only surfaces after the children before it.
+    let mut children = Vec::new();
+    let mut listing_error = None;
+    for entry in entries {
+        let entry = match present(entry) {
+            Ok(Some(entry)) => entry,
+            Ok(None) => continue,
+            Err(error) => {
+                listing_error = Some(error);
+                break;
+            }
+        };
+        match present(entry.file_type()) {
+            Ok(kind) if kind.is_some_and(|kind| kind.is_dir()) => children.push(entry.path()),
+            Ok(_) => {}
+            Err(error) => {
+                listing_error = Some(error);
+                break;
+            }
+        }
+    }
+    let threads = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
+        .clamp(1, MAX_SCAN_THREADS);
+    if children.len() < FAN_OUT_MIN_CHILDREN || threads <= 1 {
+        for child in &children {
+            visit_fanned(child, true, seen, writable)?;
+        }
+    } else {
+        let prior: &std::collections::BTreeSet<std::path::PathBuf> = seen;
+        let runs = std::thread::scope(|scope| {
+            let workers = children
+                .chunks(children.len().div_ceil(threads))
+                .map(|run| {
+                    scope.spawn(move || {
+                        let mut run_seen = std::collections::BTreeSet::new();
+                        let mut run_writable = Vec::new();
+                        let result = run.iter().try_for_each(|child| {
+                            visit(
+                                child,
+                                true,
+                                prior,
+                                &mut run_seen,
+                                &mut run_writable,
+                                &mut |_| {},
+                            )
+                        });
+                        (result, run_seen, run_writable)
+                    })
+                })
+                .collect::<Vec<_>>();
+            workers
+                .into_iter()
+                .map(|worker| {
+                    worker
+                        .join()
+                        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                })
+                .collect::<Vec<_>>()
+        });
+        for (result, run_seen, run_writable) in runs {
+            seen.extend(run_seen);
+            writable.extend(run_writable);
+            result?;
+        }
+    }
+    listing_error.map_or(Ok(()), Err)
+}
+
 /// No symlink traversal: worktree contents and Cargo output are outside Orbit's ownership.
+/// `prior` holds paths an enclosing scan already visited; `seen` gains this walk's own.
 /// The callback permits deterministic stat/read_dir race injection in sibling tests.
 #[cfg(unix)]
 fn visit(
     path: &std::path::Path,
     descend: bool,
+    prior: &std::collections::BTreeSet<std::path::PathBuf>,
     seen: &mut std::collections::BTreeSet<std::path::PathBuf>,
     writable: &mut Vec<(std::path::PathBuf, u32)>,
     before_read_dir: &mut impl FnMut(&std::path::Path),
 ) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
-    if excluded(path) || !seen.insert(path.to_path_buf()) {
+    if excluded(path) || prior.contains(path) || !seen.insert(path.to_path_buf()) {
         return Ok(());
     }
     let Some(metadata) = present(std::fs::symlink_metadata(path))? else {
@@ -263,7 +381,7 @@ fn visit(
         // DirEntry normally knows the type without another stat. NotFound at either
         // boundary is harmless when a concurrent process removes the directory.
         if present(entry.file_type())?.is_some_and(|kind| kind.is_dir()) {
-            visit(&entry.path(), true, seen, writable, before_read_dir)?;
+            visit(&entry.path(), true, prior, seen, writable, before_read_dir)?;
         }
     }
     Ok(())
@@ -283,6 +401,14 @@ pub(super) fn scan_with_hook(
 ) -> std::io::Result<ScanReport> {
     let mut seen = std::collections::BTreeSet::new();
     let mut writable = Vec::new();
-    visit(path, true, &mut seen, &mut writable, before_read_dir)?;
+    let prior = std::collections::BTreeSet::new();
+    visit(
+        path,
+        true,
+        &prior,
+        &mut seen,
+        &mut writable,
+        before_read_dir,
+    )?;
     Ok((seen, writable))
 }

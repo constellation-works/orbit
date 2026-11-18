@@ -148,6 +148,10 @@ fields; statuses are lowercase and `remediation` is `null` for healthy/skipped r
 output prints the same guidance as an `Action:` line and includes elapsed seconds on rows
 that take more than one second. Durations include unsuccessful and skipped probes; multiple
 rows emitted by a single probe share its duration, so row durations are not additive.
+The CLI runs the read-only probes concurrently, up to eight at a time and the tree-walking
+and task-scanning ones first, then reports their rows in the fixed order above; a row's
+duration is that probe's own wall time, and the durations overlap rather than sum to the
+command's elapsed time.
 Lock files flagged by `stale-locks`
 include holder diagnostics. Run `orbit doctor --fix-stale-locks` to clear a dead holder's
 record after acquiring the advisory lock and rechecking the holder. The repair preserves
