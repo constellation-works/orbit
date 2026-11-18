@@ -460,13 +460,15 @@ rights or workspaces, and a direction the resident reads as a widening goes back
 ### 6.1 The dashboard path
 
 The dashboard's Tasks dock › Residents tab is the human's own surface for the same records, so a
-mandate can be set up and steered without a manager session ([ORB-21649]). Every read and write goes
-through the `orbit.resident.*` tools, and every write also leaves a `dashboard.operations` audit row
-under the governed operation `resident.write` (operator session only):
+mandate can be set up and steered without a manager session ([ORB-21649]). The list read uses the
+batched core card read (`list_resident_mandate_cards`); writes go through the `orbit.resident.*`
+tools or the governed core operations beside them, and every write also leaves a
+`dashboard.operations` audit row under the governed operation `resident.write` (operator session
+only):
 
 | View action | Route | Mechanism |
 |---|---|---|
-| List mandates, ended ones included, with state, stalled flag, effective rights and workspaces, deadline, open requests, live cycle and latest checkpoint | `GET /api/residents?all=true` | `orbit.resident.list`, then `orbit.resident.show` per mandate |
+| List mandates, ended ones included, with state, stalled flag, effective rights and workspaces, deadline, open requests, live cycle and latest checkpoint | `GET /api/residents?all=true` | Batched core card read `list_resident_mandate_cards`: what `orbit.resident.show` reports, plus `goal`, `open_decisions` and `cycle_authority`, in one bundle read per mandate and one notice scan |
 | Show one mandate, with its grant and narrow history and the latest checkpoint's wake digest | `GET /api/residents/{id}` | `orbit.resident.show` |
 | Create a mandate | `POST /api/residents` | One action: the `resident`-tagged assignment and its `resident/mandate.json`. The draft is checked first by the rule every mandate read applies (the `resident.mandate/v1` parser plus a configured crew), and a refused draft returns that message and writes nothing |
 | Widen | `POST /api/residents/{id}/grant` with rights or workspaces to add and a quote | The request-and-answer of [§3](#3-authority), recorded `via: decision:<id>` |
