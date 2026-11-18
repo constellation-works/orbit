@@ -395,8 +395,8 @@ fn exercise_stalled_peer(name: &str, sse: bool, prefix: &'static [u8]) {
 /// `timeout` leave that child and a SIGTERM-ignoring descendant alive, and
 /// the parent must notice and sweep the process group it owns. The descendant
 /// inherits that ignore disposition before the stub publishes readiness, and
-/// both cases require the disposition to be set before teardown, the
-/// descendant to survive the group's SIGTERM, and SIGKILL to reap it.
+/// both cases require the disposition to be set before teardown, SIGTERM to be
+/// sent to the descendant, the descendant to survive it, and SIGKILL to reap it.
 /// `wrapper_stall`
 /// stops the outer wrapper just after it starts the caller's job, before the
 /// recipe runs: the runner times out, and the sweep must reap the wrapper and
@@ -975,6 +975,15 @@ sys.stdout.flush()
         expected_descendant_after,
         "{boundary}: descendant was not reaped: {stdout} {stderr}"
     );
+    // Checked before cleanup_unverified: an unverified TERM also counts as
+    // unverified cleanup, which would otherwise be the only failure reported.
+    if matches!(boundary, "unreaped" | "timeout") {
+        assert_eq!(
+            field("descendant_term="),
+            "sent",
+            "{boundary}: SIGTERM was not sent to the recorded descendant: {stdout} {stderr}"
+        );
+    }
     assert_eq!(
         field("group_survived="),
         "0",
@@ -1033,11 +1042,6 @@ sys.stdout.flush()
             field("descendant_ignores_term="),
             "1",
             "{boundary}: descendant must ignore SIGTERM before teardown: {stdout} {stderr}"
-        );
-        assert_eq!(
-            field("descendant_term="),
-            "sent",
-            "{boundary}: SIGTERM was not sent to the recorded descendant: {stdout} {stderr}"
         );
         assert_eq!(
             field("descendant_after_term="),
