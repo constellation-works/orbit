@@ -79,6 +79,13 @@ pub struct AgentLoopSpec {
     /// untrusted-data handling above stays conditional on a brief.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notice_posting_instruction: Option<String>,
+    /// Opt into the engine's built-in provider CLI permission-denial
+    /// guidance, appended to the instruction on every dispatch. The text
+    /// says what a provider CLI denial covers and when a tool counts as
+    /// unavailable; each activity keeps its own instruction line naming
+    /// what else a denial never excuses.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub provider_denial_guidance: bool,
     /// Tool allowlist (§6). Custom activities keep this exact allowlist
     /// contract. An empty list with no `tool_disallow_list` is deprecated:
     /// asset load warns and enforcement keeps its legacy behaviour until the
@@ -634,6 +641,7 @@ impl Default for AgentLoopSpec {
             fleet_notices: FleetNoticeGuidance::None,
             notice_instruction: None,
             notice_posting_instruction: None,
+            provider_denial_guidance: false,
             tools: Vec::new(),
             tool_disallow_list: None,
             on_denial: OnDenial::Terminate,

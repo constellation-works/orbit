@@ -1,0 +1,9 @@
+Provider CLI permission denials
+
+A provider CLI permission denial (distinct from a sandbox or runner denial
+such as EPERM) covers only the one command it refused: rerun the needed work
+with commands that avoid the denied path, and keep using the shell. This
+never permits a workaround your instructions forbid. Report a tool
+unavailable only after a trivial call to it (for the shell, `true`) is also
+denied, quoting that denial. A denial never excuses skipping required
+validation.
