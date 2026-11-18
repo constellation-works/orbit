@@ -7,8 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use chrono::{DateTime, Duration, Utc};
-use chrono_tz::{Europe::Berlin, Tz, UTC};
+use chrono::{DateTime, Duration, Local, TimeZone, Utc};
 use orbit_automation::AutomationError;
 use orbit_automation::auto_tasks::schedule::{
     AutoTaskDueDecision, decide_due, next_scheduled_slot, validate_schedule,
@@ -74,17 +73,26 @@ fn at(value: &str) -> DateTime<Utc> {
 /// Re-exec only the requested test, without the enclosing managed run's authority.
 /// The shared child-test hang guard kills and reaps the child on overrun.
 fn isolated(test: &str) -> bool {
+    isolated_in_zone(test, "UTC")
+}
+
+/// [`isolated`], with the child's host-local zone (`TZ`) set to `zone`.
+fn isolated_in_zone(test: &str, zone: &str) -> bool {
     if std::env::var("ORBIT_AUTOMATION_TEST_CHILD").as_deref() == Ok(test) {
         return false;
     }
     let fixture = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
-    run_child(test, fixture.path());
+    run_child_in_zone(test, fixture.path(), zone);
     true
 }
 
 /// Run one isolated child of `test` with `dir` as its working directory, so
 /// successive children can share a fixture root.
 fn run_child(test: &str, dir: &Path) {
+    run_child_in_zone(test, dir, "UTC");
+}
+
+fn run_child_in_zone(test: &str, dir: &Path, zone: &str) {
     let home = dir.join("home");
     std::fs::create_dir_all(&home).unwrap();
     let mut command = Command::new(std::env::current_exe().unwrap());
@@ -97,7 +105,7 @@ fn run_child(test: &str, dir: &Path) {
         .env("HOME", &home)
         .env("USERPROFILE", &home)
         .env_remove("ORBIT_HOME")
-        .env("TZ", "UTC")
+        .env("TZ", zone)
         .env("ORBIT_AUTOMATION_TEST_CHILD", test);
     let logs = tempfile::tempdir().unwrap();
     let output = test_env::run_child_test(&mut command, test, logs.path());
@@ -111,9 +119,23 @@ fn run_child(test: &str, dir: &Path) {
 
 #[test]
 fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
+    // Cron is evaluated in host-local time, so the DST rows run in a child
+    // whose host zone is Berlin's rule (as a POSIX TZ string, so no system
+    // zoneinfo is needed); the UTC rows evaluate in `Utc`.
+    if isolated_in_zone(
+        "due_decisions_respect_dst_cadence_and_collapse_downtime",
+        BERLIN_POSIX_TZ,
+    ) {
+        return;
+    }
+    assert_host_zone_is_berlin();
+    enum Zone {
+        Utc,
+        Berlin,
+    }
     struct Case {
         name: &'static str,
-        zone: Tz,
+        zone: Zone,
         cron: &'static str,
         policy: MissedRunPolicy,
         cadence: u64,
@@ -125,7 +147,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
     let cases = [
         Case {
             name: "delayed five-minute poll remains natural",
-            zone: UTC,
+            zone: Zone::Utc,
             cron: "5 * * * *",
             policy: Skip,
             cadence: 300,
@@ -135,7 +157,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         },
         Case {
             name: "inclusive cadence grace",
-            zone: UTC,
+            zone: Zone::Utc,
             cron: "5 * * * *",
             policy: Skip,
             cadence: 300,
@@ -145,7 +167,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         },
         Case {
             name: "real downtime skips",
-            zone: UTC,
+            zone: Zone::Utc,
             cron: "5 * * * *",
             policy: Skip,
             cadence: 300,
@@ -155,7 +177,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         },
         Case {
             name: "real downtime catches up once",
-            zone: UTC,
+            zone: Zone::Utc,
             cron: "5 * * * *",
             policy: CatchUpOnce,
             cadence: 300,
@@ -165,7 +187,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         },
         Case {
             name: "week collapses to latest cron slot",
-            zone: UTC,
+            zone: Zone::Utc,
             cron: "0 22 * * *",
             policy: CatchUpOnce,
             cadence: 60,
@@ -175,7 +197,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         },
         Case {
             name: "consumed slot never refires",
-            zone: UTC,
+            zone: Zone::Utc,
             cron: "0 22 * * *",
             policy: CatchUpOnce,
             cadence: 60,
@@ -185,7 +207,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         },
         Case {
             name: "fold first occurrence fires",
-            zone: Berlin,
+            zone: Zone::Berlin,
             cron: "30 2 * * *",
             policy: Skip,
             cadence: 60,
@@ -197,7 +219,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         // wall-clock 02:30 must not fire the already-consumed daily schedule.
         Case {
             name: "fold second occurrence does not duplicate",
-            zone: Berlin,
+            zone: Zone::Berlin,
             cron: "30 2 * * *",
             policy: Skip,
             cadence: 60,
@@ -206,21 +228,22 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
             fire: None,
         },
         Case {
-            // Croner's backward search resolves a fixed wall time in the gap
-            // to the last real minute before it. Guard that real slot and its
-            // consumption rather than constructing a nonexistent local time.
-            name: "fixed spring gap resolves to a real preceding minute",
-            zone: Berlin,
+            // A fixed wall time inside the spring gap runs at the first real
+            // instant after it (03:00 CEST), as classic cron does, and the
+            // forward projection below names the same slot. Guard that real
+            // slot and its consumption rather than a nonexistent local time.
+            name: "fixed spring gap resolves to the first real minute after it",
+            zone: Zone::Berlin,
             cron: "30 2 * * *",
             policy: CatchUpOnce,
             cadence: 60,
             lower: "2025-03-29T01:30:00Z",
             now: "2025-03-30T01:30:45Z",
-            fire: Some(("2025-03-30T00:59:00Z", true)),
+            fire: Some(("2025-03-30T01:00:00Z", true)),
         },
         Case {
             name: "spring gap crosses directly to the next real slot",
-            zone: Berlin,
+            zone: Zone::Berlin,
             cron: "*/30 * * * *",
             policy: CatchUpOnce,
             cadence: 60,
@@ -230,7 +253,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         },
         Case {
             name: "consumed spring boundary cannot invent a gap slot",
-            zone: Berlin,
+            zone: Zone::Berlin,
             cron: "*/30 * * * *",
             policy: CatchUpOnce,
             cadence: 60,
@@ -240,7 +263,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         },
         Case {
             name: "day after spring gap fires",
-            zone: Berlin,
+            zone: Zone::Berlin,
             cron: "30 2 * * *",
             policy: Skip,
             cadence: 60,
@@ -250,66 +273,138 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         },
     ];
     for case in cases {
-        let cron = parse_cron(case.cron).unwrap();
-        let lower = at(case.lower).with_timezone(&case.zone);
-        let now = at(case.now).with_timezone(&case.zone);
-        let actual = due_decision_with_grace(
-            &cron,
-            case.policy,
-            &lower,
-            &now,
-            natural_slot_grace_for_cadence(case.cadence).unwrap(),
-        )
-        .unwrap_or_else(|error| panic!("{}: {error}", case.name));
-        let expected = if case.name == "real downtime skips" {
-            DueDecision::RecordSkip {
-                slot: at("2026-09-07T01:05:00Z").with_timezone(&case.zone),
-            }
-        } else {
-            case.fire
-                .map_or(DueDecision::NotDue, |(slot, is_catch_up)| {
-                    DueDecision::Fire {
-                        slot: at(slot).with_timezone(&case.zone),
-                        is_catch_up,
-                    }
-                })
+        let row = DueRow {
+            name: case.name,
+            cron: case.cron,
+            policy: case.policy,
+            cadence: case.cadence,
+            lower: case.lower,
+            now: case.now,
+            fire: case.fire,
+            skip: (case.name == "real downtime skips").then_some("2026-09-07T01:05:00Z"),
         };
-        assert_eq!(actual, expected, "{}", case.name);
-        let consumed = match &actual {
-            DueDecision::Fire { slot, .. } | DueDecision::RecordSkip { slot } => Some(*slot),
-            DueDecision::NotDue => None,
-        };
-        if let Some(slot) = consumed {
-            assert_eq!(
-                due_decision_with_grace(
-                    &cron,
-                    case.policy,
-                    &slot,
-                    &now,
-                    natural_slot_grace_for_cadence(case.cadence).unwrap()
-                )
-                .unwrap(),
-                DueDecision::NotDue,
-                "{}: consuming the latest slot must collapse every older slot",
-                case.name,
-            );
+        match case.zone {
+            Zone::Utc => row.check(&Utc),
+            Zone::Berlin => row.check(&Local),
         }
     }
     let cron = parse_cron("*/30 * * * *").unwrap();
     assert_eq!(
-        next_occurrence(&cron, &at("2025-03-30T00:59:45Z").with_timezone(&Berlin))
+        next_occurrence(&cron, &at("2025-03-30T00:59:45Z").with_timezone(&Local))
             .unwrap()
             .with_timezone(&Utc),
         at("2025-03-30T01:00:00Z"),
         "the spring projection jumps from 01:59 to the real 03:00 slot",
     );
+    assert_eq!(
+        next_occurrence(
+            &parse_cron("30 2 * * *").unwrap(),
+            &at("2025-03-30T00:30:45Z").with_timezone(&Local),
+        )
+        .unwrap()
+        .with_timezone(&Utc),
+        at("2025-03-30T01:00:00Z"),
+        "a fixed slot in the spring gap projects to the slot the due path fires",
+    );
+    // croner 4's strict default refuses the single-start step `a/n` that
+    // croner 3 accepted, so stored definitions using it must still parse
+    // [ORB-25521]; a step with no start stays refused as before.
+    let single_start = parse_cron("5/20 * * * *").expect("stored `a/n` steps still parse");
+    assert_eq!(
+        next_occurrence(
+            &single_start,
+            &at("2026-09-07T00:26:00Z").with_timezone(&Utc)
+        )
+        .unwrap(),
+        at("2026-09-07T00:45:00Z"),
+        "`5/20` steps from minute 5 to the field's end",
+    );
+    assert!(
+        parse_cron("/20 * * * *").is_err(),
+        "a startless step stays invalid"
+    );
     for slot in ["2025-10-26T00:30:00Z", "2025-10-26T01:30:00Z"] {
-        let slot = at(slot).with_timezone(&Berlin);
+        let slot = at(slot).with_timezone(&Local);
         assert_eq!(
             truncate_to_minute(slot + Duration::seconds(45)),
             slot,
             "fold slot retains its offset"
         );
+    }
+}
+
+/// Berlin's 2025 rule: CET (+01) with CEST (+02) from 02:00 on the last
+/// Sunday of March to 03:00 on the last Sunday of October.
+const BERLIN_POSIX_TZ: &str = "CET-1CEST,M3.5.0,M10.5.0/3";
+
+/// The DST rows mean nothing if the child's host zone silently fell back to
+/// UTC, so prove the zone first.
+fn assert_host_zone_is_berlin() {
+    for (instant, hours) in [("2025-01-15T12:00:00Z", 1), ("2025-07-15T12:00:00Z", 2)] {
+        assert_eq!(
+            at(instant).with_timezone(&Local).offset().local_minus_utc(),
+            hours * 3600,
+            "host-local zone must follow {BERLIN_POSIX_TZ} at {instant}",
+        );
+    }
+}
+
+/// One due-decision row evaluated in zone `Tz`, with every time given in UTC.
+struct DueRow {
+    name: &'static str,
+    cron: &'static str,
+    policy: MissedRunPolicy,
+    cadence: u64,
+    lower: &'static str,
+    now: &'static str,
+    fire: Option<(&'static str, bool)>,
+    skip: Option<&'static str>,
+}
+
+impl DueRow {
+    fn check<Tz: TimeZone>(&self, zone: &Tz) {
+        let cron = parse_cron(self.cron).unwrap();
+        let grace = natural_slot_grace_for_cadence(self.cadence).unwrap();
+        let lower = at(self.lower).with_timezone(zone);
+        let now = at(self.now).with_timezone(zone);
+        let actual = due_decision_with_grace(&cron, self.policy, &lower, &now, grace)
+            .unwrap_or_else(|error| panic!("{}: {error}", self.name));
+        let expected = match (self.skip, self.fire) {
+            (Some(slot), _) => DueDecision::RecordSkip { slot: at(slot) },
+            (None, Some((slot, is_catch_up))) => DueDecision::Fire {
+                slot: at(slot),
+                is_catch_up,
+            },
+            (None, None) => DueDecision::NotDue,
+        };
+        assert_eq!(in_utc(actual.clone()), expected, "{}", self.name);
+        let consumed = match actual {
+            DueDecision::Fire { slot, .. } | DueDecision::RecordSkip { slot } => Some(slot),
+            DueDecision::NotDue => None,
+        };
+        if let Some(slot) = consumed {
+            let again = due_decision_with_grace(&cron, self.policy, &slot, &now, grace).unwrap();
+            assert_eq!(
+                in_utc(again),
+                DueDecision::NotDue,
+                "{}: consuming the latest slot must collapse every older slot",
+                self.name,
+            );
+        }
+    }
+}
+
+/// A decision with its slot reported in UTC, as the stores record it.
+fn in_utc<Tz: TimeZone>(decision: DueDecision<Tz>) -> DueDecision<Utc> {
+    match decision {
+        DueDecision::NotDue => DueDecision::NotDue,
+        DueDecision::Fire { slot, is_catch_up } => DueDecision::Fire {
+            slot: slot.with_timezone(&Utc),
+            is_catch_up,
+        },
+        DueDecision::RecordSkip { slot } => DueDecision::RecordSkip {
+            slot: slot.with_timezone(&Utc),
+        },
     }
 }
 
