@@ -133,7 +133,8 @@ per request:
   It requeues with no field rewrite. The acceptance is a `finding_acceptance`
   history event and the answer comment; the description and acceptance criteria
   are unchanged, so the same candidate stays resumable. The next run carries it
-  through validation and review again, then landing. Agents cannot propose this
+  through validation, then landing; any fresh independent review follows that
+  run's selected review policy, which may be off. Agents cannot propose this
   answer, and automatic corpus rules cannot choose it.
 - **A rewrite that strands a preserved candidate:** when a block option's rewrite
   changes the description or acceptance criteria a preserved candidate implements,

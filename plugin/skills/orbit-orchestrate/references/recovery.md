@@ -126,12 +126,12 @@ those findings and resumes the same candidate. It does not change the task
 description or acceptance criteria. The successor delivery validates the
 candidate and follows its selected review policy; a fresh independent review
 runs only when that policy calls for one. The normal landing gates still apply.
-An option whose rewrite would change the
-description or acceptance criteria says that the reviewed candidate is
-discarded, and choosing it discards the candidate even when required checks
-have not passed. A run that has not stopped is refused until it stops; that
-refusal is not the rewrite. On the dashboard the refusal stays on the
-decision card across a detail refresh until it is dismissed or it expires.
+An option whose rewrite would change the description or acceptance criteria
+says that the reviewed candidate is discarded, and choosing it discards the
+candidate even when required checks have not passed. A run that has not
+stopped is refused until it stops; that refusal is not the rewrite. On the
+dashboard the refusal stays on the decision card across a detail refresh
+until it is dismissed or it expires.
 
 When a run stops on a rebase conflict, final recovery can repair the conflict
 files and resume. The next conflict recovery adopts those repairs and continues
