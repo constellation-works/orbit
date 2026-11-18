@@ -234,12 +234,21 @@ fn worker_friction_add(
 /// bound run crew model wins, then the claimed task's resolved crew, and
 /// finally the receiving (owner) process's resolved actor, the documented
 /// fallback ordinary friction creation uses.
+///
+/// Run IDs are machine-local: the bound run lives only on the execution
+/// machine. Only an owner-local claim may read it from this (owner) store;
+/// a follower claim must not win an unrelated owner-local run that happens
+/// to share the ID [ORB-25701, ORB-14635]. An unknown local identity cannot
+/// establish the match, mirroring `task_run_is_local`.
 fn claimed_friction_model(runtime: &OrbitRuntime, binding: &WorkerInvocation) -> String {
     let trimmed = |value: &str| {
         let value = value.trim();
         (!value.is_empty()).then(|| value.to_string())
     };
-    if let Ok(Some(run)) = runtime.get_job_run_backend(&binding.bound_run_id)
+    let bound_run_is_local =
+        runtime.automation_machine_identity() == Some(binding.execution.machine_id.as_str());
+    if bound_run_is_local
+        && let Ok(Some(run)) = runtime.get_job_run_backend(&binding.bound_run_id)
         && let Some(model) = run.crew_model.as_deref().and_then(trimmed)
     {
         return model;
