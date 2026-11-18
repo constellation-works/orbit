@@ -58,13 +58,12 @@ impl<'a> Source<'a> {
             return Err(AutomationError::Deferred(DeferredReason::RepositoryChanged));
         }
 
-        self.git(&[
-            "merge-base",
-            "--is-ancestor",
-            &state.observed.commit,
-            &head.commit,
-        ])
-        .map_err(|_| AutomationError::Deferred(DeferredReason::HistoryDiverged))?;
+        if !matches!(
+            self.is_ancestor(&state.observed.commit, &head.commit),
+            Ok(true)
+        ) {
+            return Err(AutomationError::Deferred(DeferredReason::HistoryDiverged));
+        }
 
         let range = format!("{}..{}", state.observed.commit, head.commit);
 

@@ -203,10 +203,11 @@ impl VerifiedNoDiff {
         let on_base = cited
             .into_iter()
             .filter(|(_, full)| {
-                pinned_revision.is_none_or(|revision| is_ancestor(source, full, revision))
+                pinned_revision
+                    .is_none_or(|revision| matches!(source.is_ancestor(full, revision), Ok(true)))
                     && base_refs
                         .iter()
-                        .any(|reference| is_ancestor(source, full, reference))
+                        .any(|reference| matches!(source.is_ancestor(full, reference), Ok(true)))
             })
             .collect::<Vec<_>>();
         if on_base.is_empty() {
@@ -225,7 +226,7 @@ impl VerifiedNoDiff {
                 !named.contains(full)
                     && named
                         .iter()
-                        .all(|culprit| is_ancestor(source, culprit, full))
+                        .all(|culprit| matches!(source.is_ancestor(culprit, full), Ok(true)))
                     && (paths.is_empty() || touches_paths(source, full, paths))
             })
             .collect::<Vec<_>>();
@@ -459,12 +460,6 @@ fn resolve_commit(source: &dyn SourceGit, revision: &str) -> Option<String> {
         ])
         .ok()
         .filter(|sha| !sha.is_empty())
-}
-
-fn is_ancestor(source: &dyn SourceGit, ancestor: &str, descendant: &str) -> bool {
-    source
-        .git(&["merge-base", "--is-ancestor", ancestor, descendant])
-        .is_ok()
 }
 
 /// Whether `commit` changes a path any of the task's selectors cover. A merge

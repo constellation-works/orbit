@@ -122,15 +122,10 @@ pub(super) fn observe(
         }
 
         // An intent is not a landing: only exact, reachable source objects qualify.
-        if source
-            .git(&[
-                "merge-base",
-                "--is-ancestor",
-                &delivery.after.commit,
-                &page.through.commit,
-            ])
-            .is_err()
-        {
+        if !matches!(
+            source.is_ancestor(&delivery.after.commit, &page.through.commit),
+            Ok(true)
+        ) {
             continue;
         }
 

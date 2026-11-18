@@ -74,18 +74,17 @@ impl<'a> LandedRepairs<'a> {
             let Some(landed) = landed_task_commit(self.runtime, &task.id) else {
                 continue;
             };
-            if landed == cluster.tested_commit || !self.descends(&cluster.tested_commit, &landed) {
+            if landed == cluster.tested_commit
+                || !matches!(
+                    self.source.is_ancestor(&cluster.tested_commit, &landed),
+                    Ok(true)
+                )
+            {
                 continue;
             }
             return Ok(Some(pending_entry(cluster, task, &landed)));
         }
         Ok(None)
-    }
-
-    fn descends(&self, ancestor: &str, descendant: &str) -> bool {
-        self.source
-            .git(&["merge-base", "--is-ancestor", ancestor, descendant])
-            .is_ok()
     }
 }
 

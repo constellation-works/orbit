@@ -40,15 +40,10 @@ impl<'a> Source<'a> {
                 refusal::HISTORY_CONTRACT_DRIFT.into(),
             ));
         }
-        if source
-            .git(&[
-                "merge-base",
-                "--is-ancestor",
-                &old_observed.commit,
-                &head.commit,
-            ])
-            .is_ok()
-        {
+        if matches!(
+            source.is_ancestor(&old_observed.commit, &head.commit),
+            Ok(true)
+        ) {
             return Err(AutomationError::Refused(
                 refusal::HISTORY_NOT_DIVERGED.into(),
             ));
@@ -65,14 +60,7 @@ impl<'a> Source<'a> {
                 }))
         {
             if !matches!(source.revision(&boundary.commit), Ok(actual) if actual == *boundary)
-                || source
-                    .git(&[
-                        "merge-base",
-                        "--is-ancestor",
-                        &boundary.commit,
-                        &head.commit,
-                    ])
-                    .is_err()
+                || !matches!(source.is_ancestor(&boundary.commit, &head.commit), Ok(true))
             {
                 return Err(AutomationError::Refused(
                     refusal::HISTORY_BOUNDARY_UNREACHABLE.into(),
@@ -81,15 +69,10 @@ impl<'a> Source<'a> {
         }
 
         let base_commit = source.git(&["merge-base", &old_observed.commit, &head.commit])?;
-        if source
-            .git(&[
-                "merge-base",
-                "--is-ancestor",
-                &state.covered.commit,
-                &base_commit,
-            ])
-            .is_err()
-        {
+        if !matches!(
+            source.is_ancestor(&state.covered.commit, &base_commit),
+            Ok(true)
+        ) {
             return Err(AutomationError::Refused(
                 refusal::HISTORY_BOUNDARY_UNREACHABLE.into(),
             ));
