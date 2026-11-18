@@ -74,6 +74,7 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         )
         .route("/notices/{id}/close", post(notices::close_notice))
         .route("/crews", get(crews::list_crews))
+        .route("/crews/all", get(crews::list_all_crews))
         // Config inspection and editing [ORB-12724]. Workspace-scoped like the
         // rest of the API: `?workspace=` selects which `.orbit/config.toml`
         // layers over the global file.

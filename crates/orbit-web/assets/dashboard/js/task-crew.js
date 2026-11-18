@@ -180,31 +180,46 @@ function aggregateCrewSignature() {
   return JSON.stringify(rows);
 }
 
-// Read `/api/crews` for each workspace that has a task on this page. A failed
-// workspace is recorded and does not reject the caller, so the task list still
-// renders. `force` refetches, matching a refresh that asks for crew options;
-// otherwise a stored entry for this host is reused.
+// Refresh represented workspaces together. Missing registries remain unavailable;
+// a failed request marks each requested workspace unavailable independently.
 export async function loadAggregateCrews(tasks, { force = false } = {}) {
   const hostRevision = getHostRevision();
   dropAggregateCrewsForOtherHosts(hostRevision);
-  const pending = [];
-  const seen = new Set();
+  const pending = new Set();
   for (const task of Array.isArray(tasks) ? tasks : []) {
     const id = task && task.workspace_id ? String(task.workspace_id) : "";
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    if (!force && aggregateCrewEntry(id)) continue;
-    pending.push(id);
+    if (id && (force || !aggregateCrewEntry(id))) pending.add(id);
   }
-  await Promise.all(pending.map(async (id) => {
-    try {
-      const payload = await fetchJson(`/api/crews?workspace=${encodeURIComponent(id)}`);
-      rememberAggregateCrew(id, hostRevision, payload);
-    } catch (error) {
-      rememberAggregateCrewFailure(id, hostRevision);
-      console.error(error);
+  if (!pending.size) return;
+  try {
+    const query = new URLSearchParams();
+    for (const id of pending) query.append("workspaces", id);
+    const response = await fetchJson(`/api/crews/all?${query}`);
+    const registries = response && response.workspaces || {};
+    for (const id of pending) {
+      if (Object.hasOwn(registries, id) && registries[id]) {
+        rememberAggregateCrew(id, hostRevision, registries[id]);
+      } else {
+        rememberAggregateCrewFailure(id, hostRevision);
+      }
     }
-  }));
+  } catch (error) {
+    if (error.routeMissing) {
+      // Older forwarded hosts do not have the aggregate endpoint.
+      await Promise.all([...pending].map(async (id) => {
+        try {
+          const payload = await fetchJson(`/api/crews?workspace=${encodeURIComponent(id)}`);
+          rememberAggregateCrew(id, hostRevision, payload);
+        } catch (failure) {
+          rememberAggregateCrewFailure(id, hostRevision);
+          console.error(failure);
+        }
+      }));
+      return;
+    }
+    for (const id of pending) rememberAggregateCrewFailure(id, hostRevision);
+    console.error(error);
+  }
 }
 
 export function hasCrewOptions() {

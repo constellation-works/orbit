@@ -8,7 +8,7 @@
 
 mod all_job_runs;
 mod all_tasks;
-mod fan_out;
+pub(super) mod fan_out;
 mod fleet_drains;
 mod list;
 
