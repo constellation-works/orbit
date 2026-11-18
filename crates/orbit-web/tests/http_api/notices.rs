@@ -1,4 +1,4 @@
-//! `GET /api/notices`: complete aggregate reads and retained-history visibility.
+//! Fleet notices HTTP API: aggregate reads, operator post and operator close.
 
 use chrono::{Duration, Utc};
 use orbit_core::application::notice::{NoticeCaller, NoticePostRequest, NoticeSelector};
@@ -277,6 +277,49 @@ fn post_notice_refusals_carry_the_core_invalid_field_code() {
             assert!(payload["notice"].get("ended_at").is_some());
             assert_eq!(payload["notice"]["scope"], "workspace");
             assert_eq!(payload["notice"]["evidence"], json!([]));
+            let created_id = payload["notice"]["id"].as_str().unwrap();
+
+            // Unprivileged close is refused with 403 authorization_denied.
+            let unprivileged_server = fixture.server(false);
+            let unprivileged_response = unprivileged_server.send(
+                "POST",
+                &format!("/api/notices/{created_id}/close"),
+                json!({"reason": "unauthorized attempt"}),
+            );
+            assert_eq!(unprivileged_response.status().as_u16(), 403);
+            let denied: Value = unprivileged_response.json().unwrap();
+            assert_eq!(denied["code"], "authorization_denied");
+
+            // Operator closes the notice through the public HTTP route.
+            let closed_payload = json_ok(server.send(
+                "POST",
+                &format!("/api/notices/{created_id}/close"),
+                json!({"reason": "resolved in test"}),
+            ));
+            assert_eq!(closed_payload["notice"]["id"], created_id);
+            assert_eq!(closed_payload["notice"]["status"], "closed");
+            assert_eq!(closed_payload["already_inactive"], false);
+
+            // Re-closing an already inactive notice reports already_inactive without error.
+            let reclosed_payload = json_ok(server.send(
+                "POST",
+                &format!("/api/notices/{created_id}/close"),
+                json!({"reason": "already inactive"}),
+            ));
+            assert_eq!(reclosed_payload["already_inactive"], true);
+
+            // The closed notice transitions to recent in the public list.
+            let list_payload = json_ok(server.get("/api/notices"));
+            let recent_ids: Vec<&str> = list_payload["recent"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|notice| notice["id"].as_str())
+                .collect();
+            assert!(
+                recent_ids.contains(&created_id),
+                "closed notice must transition to recent: {list_payload}"
+            );
         },
     );
 }
