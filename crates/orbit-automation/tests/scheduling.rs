@@ -398,8 +398,16 @@ fn cron_misplaced_plus_never_suggests_illegal_correction() {
     // A `+` is only legal at the very start of the whole weekday field. Any
     // other `+` must not be "corrected" to a `+*/n` suggestion that croner
     // still rejects; the error must name the illegal plus or offer a fix the
-    // public validator accepts.
-    for cron in ["+/2 * * * *", "0 9 1 * 1,+/2"] {
+    // public validator accepts. The valid weekday AND step beside a misplaced
+    // plus is the case that once slipped through: its suggestion fixes only
+    // the weekday step and leaves the other plus behind.
+    for cron in [
+        "+/2 * * * *",
+        "0 9 1 * 1,+/2",
+        "+/2 9 1 * +/3",
+        "+/2 * * * /3",
+        "0 9 1 * +/2,+/3",
+    ] {
         let error = match parse_cron(cron) {
             Ok(value) => panic!("misplaced plus '{cron}' is rejected, got {value:?}"),
             Err(error) => error,

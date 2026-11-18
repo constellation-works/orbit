@@ -104,12 +104,12 @@ pub fn parse_cron(expression: &str) -> Result<Cron, OrbitError> {
         OrbitError::InvalidInput(format!("invalid cron expression '{expression}': {reason}"))
     };
     let fields: Vec<&str> = expression.split_whitespace().collect();
-    // Croner only honors `+` at the very start of the whole weekday field
-    // (parser.rs strips one leading `+` from that field, then rejects any
-    // remaining `+` as an illegal character). A `+` anywhere else — another
-    // field, or a later `,` item inside the weekday field — is an illegal
-    // plus, not a startless step, so it falls through to croner's
-    // illegal-character error below.
+    // Croner only honors `+` as the very first character of the weekday field
+    // (parser.rs strips that one leading `+`, then rejects any other `+` as an
+    // illegal character). When the expression holds a `+` anywhere else, no
+    // startless-step correction yields a valid cron: fixing one step would leave
+    // the misplaced plus behind. Skip the suggestion so croner's
+    // illegal-character error names the plus.
     let weekday_index = if fields.len() == 5 {
         4
     } else if fields.len() >= 6 {
@@ -117,29 +117,18 @@ pub fn parse_cron(expression: &str) -> Result<Cron, OrbitError> {
     } else {
         usize::MAX
     };
+    let leading_weekday_plus = fields
+        .get(weekday_index)
+        .is_some_and(|field| field.starts_with('+'));
+    let misplaced_plus = expression.matches('+').count() > usize::from(leading_weekday_plus);
     let startless_step = fields
         .iter()
-        .enumerate()
-        .flat_map(|(field_index, field)| {
-            field
-                .split(',')
-                .enumerate()
-                .map(move |(item_index, item)| (field_index, item_index, *field, item))
-        })
-        .find(|(field_index, item_index, field, item)| {
-            // Croner's weekday AND modifier is stripped before component parsing, so a
-            // startless `+/n` otherwise reaches sloppy_ranges as `/n` and becomes `*/n`.
-            let stripped = item.strip_prefix('+').unwrap_or(item);
-            if !stripped.starts_with('/') {
-                return false;
-            }
-            if item.starts_with('+') {
-                *field_index == weekday_index && *item_index == 0 && field.starts_with('+')
-            } else {
-                true
-            }
-        });
-    if let Some((_, _, _, item)) = startless_step {
+        .flat_map(|field| field.split(','))
+        // Croner's weekday AND modifier is stripped before component parsing, so a
+        // startless `+/n` otherwise reaches sloppy_ranges as `/n` and becomes `*/n`.
+        .find(|item| item.strip_prefix('+').unwrap_or(item).starts_with('/'))
+        .filter(|_| !misplaced_plus);
+    if let Some(item) = startless_step {
         // Keep the weekday AND modifier in the suggestion: plain `*/n` drops it and
         // turns the day-of-month AND into an OR.
         let (modifier, step) = match item.strip_prefix('+') {
