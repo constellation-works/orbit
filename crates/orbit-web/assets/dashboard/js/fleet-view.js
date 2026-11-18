@@ -21,9 +21,11 @@ export function fleetFacts(rows) {
   ])));
 }
 
-/// A host's health reading is still pending until hosts.js lands its fan-out:
-/// there is no entry for it yet, or its probe is in flight (`checking`). Only
-/// a settled reading may state that a host has no drain or no telemetry.
+/// A host's health reading is still pending until hosts.js lands it: there is
+/// no entry for it yet, or its probe is in flight (`checking`). hosts.js lands
+/// rows that need no resource read before the fan-out, so only a host whose
+/// read is outstanding is pending. Only a settled reading may state that a host
+/// has no drain or no telemetry.
 const readingPending = reading => !reading || reading.kind === 'checking';
 
 const expandedLists = new Set();

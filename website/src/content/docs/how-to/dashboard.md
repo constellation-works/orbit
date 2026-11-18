@@ -848,7 +848,8 @@ unreachable example.
 Each host is a card with its machine ID, SSH target, task prefix, and Orbit
 version, and with CPU, memory, disk, and I/O readings. A card shows
 `Reading telemetry…` until its first readings arrive, and an unreachable host
-shows its error instead of readings. **Drains** lists the live owner and pull
+shows its error instead of readings. A host that has not been probed is never
+read, so its card shows `Telemetry unavailable` without waiting. **Drains** lists the live owner and pull
 drains across the hosts. It omits queued windows and any host whose drain
 reading is unavailable. While readings are still loading it shows
 `Checking drains…`, and it shows `No live drains.` only once every host's
