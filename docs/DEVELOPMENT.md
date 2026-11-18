@@ -1022,6 +1022,8 @@ A script that starts `web serve` for screenshots, instead of a person pressing C
 - **Wait for the exit.** SIGTERM, a bounded wait for the exit, then SIGKILL (sent only to the verified PID) and a second bounded wait. A server that survives SIGKILL fails the run loudly and keeps `SERVER_PID` set for a retry; nothing blocks on an unbounded `wait`.
 - **Never delete artifacts.** Teardown touches only the process. Screenshots under `QA_BASE` stay for `orbit.task.artifact` action `put`; the managed-lane rule above still forbids raw removal.
 
+For a static Jobs screenshot, use the prepared Playwright kit and wait for the rendered panel instead of page or network quiescence. The browser deadline is 20 seconds from Chromium launch. Navigate with `waitUntil: "domcontentloaded"`, observe the real `/api/events/stream` response, then wait for `#jobs-live-body .operation-running` to be visible and `#jobs-live-count` to be populated. That pair means the Jobs Live request rendered; the `EventSource` remains open. `browser.close()` runs in `finally`, then `qa_serve_stop` sends TERM, waits at most five seconds, escalates to KILL, reaps the exact server child and confirms its port closed. A screenshot from a static fixture that stubs `/api/events/stream` proves only the rendered state; keep event delivery, reconnect and resync checks on the real stream.
+
 ```bash
 # Define once, after `qa workspace init`. Run the capture below as `bash script.sh` or in a ( ) subshell.
 QA_LOG="$QA_BASE/serve.log"; SHOTS="$QA_BASE/shots"; mkdir -p "$SHOTS"
@@ -1089,15 +1091,66 @@ qa_serve_stop() {
   return "$rc"
 }
 
-# Capture. browser_start, browser_shoot and browser_close are the harness's own commands.
+browser_shoot() {  # $1 = dashboard URL; $2 = screenshot; $3 = elapsed-time evidence JSON
+  . "$ORBIT_BROWSER_KIT_ENV"
+  node --input-type=module - "$@" <<'NODE'
+import { writeFile } from 'node:fs/promises';
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE);
+const [baseUrl, screenshotPath, evidencePath] = process.argv.slice(2);
+const started = performance.now();
+const deadline = Date.now() + 20_000;
+const remaining = () => {
+  const ms = deadline - Date.now();
+  if (ms <= 0) throw new Error('20-second screenshot deadline expired');
+  return ms;
+};
+let browser;
+let streamClosed = false;
+try {
+  browser = await chromium.launch({ timeout: remaining(), args: ['--no-zygote', '--disable-gpu', '--disable-dev-shm-usage'] });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const streamPromise = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname === '/api/events/stream' && (response.headers()['content-type'] || '').includes('text/event-stream');
+  }, { timeout: remaining() });
+  await page.goto(`${baseUrl}/#jobs/live`, { waitUntil: 'domcontentloaded', timeout: remaining() });
+  const stream = await streamPromise;
+  if (stream.status() !== 200) throw new Error(`event stream returned ${stream.status()}`);
+  void stream.finished().then(() => { streamClosed = true; }, () => { streamClosed = true; });
+  await page.waitForSelector('#jobs-live-body .operation-running', { state: 'visible', timeout: remaining() });
+  await page.waitForFunction(() => {
+    const count = document.querySelector('#jobs-live-count')?.textContent?.trim();
+    return Boolean(count && count !== '-');
+  }, undefined, { timeout: remaining() });
+  await page.screenshot({ path: screenshotPath, fullPage: false, timeout: remaining() });
+  if (streamClosed) throw new Error('dashboard event stream closed before screenshot capture');
+  const evidence = {
+    url: `${baseUrl}/#jobs/live`,
+    readiness: '#jobs-live-body .operation-running visible and #jobs-live-count populated',
+    event_stream_url: stream.url(),
+    event_stream_status: stream.status(),
+    event_stream_content_type: stream.headers()['content-type'],
+    event_stream_open_at_screenshot: !streamClosed,
+    viewport: { width: 1280, height: 900 },
+    screenshot: screenshotPath,
+    elapsed_ms: Math.round(performance.now() - started),
+    deadline_ms: 20_000,
+  };
+  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  console.log(JSON.stringify(evidence));
+} finally {
+  if (browser) await browser.close();
+}
+NODE
+}
+
+# Capture. The browser helper owns Chromium; the EXIT trap owns the server child.
 trap qa_serve_stop EXIT                  # armed before the spawn
 trap 'exit 143' INT TERM
 cd "$QA_REPO"; rc=0
 qa_serve_start 30 || rc=$?                                    # readiness timeout or early exit
 if [ "$rc" -eq 0 ]; then
-  browser_start "$QA_URL" || rc=$?                            # browser initialization failure
-  if [ "$rc" -eq 0 ]; then browser_shoot "$SHOTS/dashboard-dark-1280.png" || rc=$?; fi
-  browser_close || { st=$?; [ "$rc" -ne 0 ] || rc=$st; }      # close failure; still stops the server
+  browser_shoot "$QA_URL" "$SHOTS/jobs-live-dark-1280.png" "$QA_BASE/jobs-live-capture.json" || rc=$?
 fi
 qa_serve_stop || { st=$?; [ "$rc" -ne 0 ] || rc=$st; }
 exit "$rc"
