@@ -530,10 +530,12 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   its post-upload partition proof.
 - `Test shard k/N` jobs, one per shard, each need the `Test build` job (`needs: [pr-state, scope, test-build]`), so each starts once the whole build job has finished, including its post-upload partition proof. If the build did not succeed, the job fails in its first step, `Require a successful test build`, with `ci-await: Test build concluded <result>: <run url>`. Each job then downloads every part at once (one
   stream per artifact; a single stream ran at 3–10 MB/s on some runners),
-  in at most three download attempts. The first two attempts continue on
-  error; the third fails the job, so nextest does not run without the
-  archive. It decodes their concatenation once and extracts it under the
-  checkout's `target/` with
+  in at most three download attempts of three minutes each. Each attempt
+  downloads to its own directory and verifies artifact digests. A failure or
+  timeout in the first two attempts triggers the next one. A failed or timed-out
+  third attempt fails the job before extraction. The shard reads every required
+  part from the successful attempt's directory, decodes their concatenation
+  once and extracts it under the checkout's `target/` with
   `ci-repack-nextest.py extract SOURCE DESTINATION --parts N` (only regular
   files and directories under `target/`, through tarfile's `data` filter),
   and runs `cargo nextest run --profile ci --partition count:k/N` from that
@@ -556,9 +558,8 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   Repacking preserves every tar byte; it never extracts members or replaces
   an existing destination. Both zstd stages must succeed before publishing
   the destination, and corrupt input, a missing part, missing zstd or encoder
-  failure fails the job. Download artifact digest verification still precedes conversion;
-  nextest retains responsibility for safe extraction. The original build-side
-  archive remains the input to the partition proof. The transfer's larger
+  failure fails the job. The original build-side archive remains the input
+  to the partition proof. The transfer's larger
   window cannot be passed directly to nextest's default decoder.
   Extracting into the checkout puts `target/debug/orbit` and the test binaries
   at the paths they were built for. Each shard uploads its nextest JUnit report
