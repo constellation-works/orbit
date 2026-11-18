@@ -595,16 +595,27 @@ provably reachable from the branch head again, which moves no debt and needs no
 audit.
 
 `crew_os_ineligible` is a held admission rather than a deferred reason. Before
-it mints a claimed batch's review task, the evaluator asks Core whether any
-`workflow.purpose_crews.review` member's executor can run under the
-definition's `os:` tags. When none can, the claim stays as it is and the
-consumer records a stall whose `crew_hold` names the definition, the pool key,
-each excluded crew with its executor and `host_os`, and the tags; the tick
-reports `stalled: crew_os_ineligible` instead of an error. Every later tick
-asks again and refreshes the names, and the first one whose configuration
-admits a crew clears the stall and mints the held batch in the same pass. No
-recovery or reset is needed, and its friction (after the window) names the
-configuration change that clears it instead of those commands.
+it mints a claimed batch's review task, the evaluator runs the review-pool
+query: it first drops every `workflow.purpose_crews.review` member whose
+executor declares a `host_os` outside the definition's `os:` tags, then drops
+every remaining member whose Muse model this host's provider account was
+verified to refuse. When no eligible member remains, the claim stays as it is
+and the consumer records a stall whose `crew_hold` names the definition, the
+pool key, each OS-excluded crew with its executor and `host_os`, each
+model-refused crew with its model and when the refusal lapses, and the tags;
+the tick reports `stalled: crew_os_ineligible` instead of an error. Every
+later tick asks again and refreshes the names. The hold clears, minting the
+frozen batch in the same pass, once an evaluation admits a positive-weight
+crew that passes both filters the hold still applies: the task's effective
+`os:` tags, and provider-model access on this host and account. An OS-only
+hold (nothing model-refused) clears at the first evaluation whose
+configuration admits an OS-capable crew. A model-refusal hold clears once a
+refusal lapses, once a verified success of its model lands on this host and
+account, or once the pool admits an OS-capable crew whose model is not
+refused there; editing `os:` tags alone cannot clear a refusal. A mixed hold
+needs a replacement crew that passes both. No recovery or reset is needed,
+and its friction (after the window) names the configuration change that
+clears it instead of those commands.
 
 ### Resetting a consumer whose debt cannot be reconciled [ORB-12346]
 
