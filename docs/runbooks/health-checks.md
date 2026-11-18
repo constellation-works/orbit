@@ -144,20 +144,29 @@ $ orbit doctor --format table
 
 The command exits nonzero only when at least one check is `ERROR`; warnings and skips exit
 zero. `--json` emits an array of objects with `check`, `status`, `message`, `remediation`, and `duration_ms`
-fields; statuses are lowercase and `remediation` is `null` for healthy/skipped rows. Human
-output prints the same guidance as an `Action:` line and includes elapsed seconds on rows
-that take more than one second. Durations include unsuccessful and skipped probes; multiple
-rows emitted by a single probe share its duration, so row durations are not additive.
-When the host reports more than one available CPU, the CLI runs read-only probes on up to
-eight worker threads, dispatching the slow probes first. With one available CPU, or when
-the CPU-count query fails, it runs probes serially in report order. The JSON array preserves
-that report order: workspace probes first, followed by host and other report probes such as
-`build-budget`, so its order does not exactly match this table. Human-readable rows are
-sorted by severity (`ERROR`, then `warning`, `ok`, `info` and `skipped`, the labels the table
-prints), retaining report order within each severity. Each row's duration is its probe's own
-wall time. In parallel mode the durations overlap: the command's elapsed time is at least the
-longest single row duration and, apart from command overhead, at most their sum. In serial
-mode they do not overlap, so elapsed time tracks their sum plus command overhead.
+fields; statuses are lowercase and `remediation` is `null` for healthy/skipped rows. The
+array starts with the `resource-throttle` info row, whose `duration_ms` is `0`. Repair rows
+requested on the same invocation follow it, in the order the command runs them, and appear
+only when repair flags are passed. Then come the workspace probe rows, followed by the report
+probe rows, which begin with host-level checks such as `build-budget`. The JSON array keeps
+this order, which differs from the table's. Human-readable rows are sorted by severity
+(`ERROR`, then `warning`, `ok`, `info` and `skipped`, the labels the table prints), retaining
+report order within each severity. Human output prints the same guidance as an `Action:`
+line and includes elapsed seconds on rows that take more than one second.
+
+Each probe runs once per invocation, and its `duration_ms` is that invocation's wall time.
+A probe that emits several rows copies that one duration onto each row. For example, a
+`retired-config-keys` probe that finds two unknown keys produces two rows that both carry
+its duration. Row durations therefore repeat the same measurement and are not additive:
+summing them overcounts, including in serial mode. Durations include unsuccessful and
+skipped probes. When the host reports more than one available CPU, the CLI runs read-only
+probes on up to eight worker threads, dispatching the slow probes first. With one available
+CPU, or when the CPU-count query fails, it runs probes serially in report order, still
+invoking each probe once. Describe wall time per distinct probe invocation in both modes:
+in serial mode, elapsed time tracks the sum of those invocation durations plus command
+overhead. In parallel mode the invocations overlap, so elapsed time is at least the longest
+single probe duration and, apart from command overhead, at most the sum of the invocation
+durations.
 Lock files flagged by `stale-locks`
 include holder diagnostics. Run `orbit doctor --fix-stale-locks` to clear a dead holder's
 record after acquiring the advisory lock and rechecking the holder. The repair preserves
