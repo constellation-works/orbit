@@ -12,6 +12,8 @@ import tempfile
 import time
 import unittest
 
+import dependency_guard_fixture
+
 
 SCRIPTS = Path(__file__).resolve().parent
 
@@ -44,67 +46,9 @@ class RelativeImportTests(unittest.TestCase):
         cargo.chmod(0o755)
         self.env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}",
                         GUARD_TEST_METADATA=str(metadata))
-        self.app = self.root / "crates/orbit-core/src/application"
-        for directory in (
-            "crates/orbit-core/src/application/agents",
-            "crates/orbit-core/src/application/experiment",
-            "crates/orbit-core/src/application/contracts",
-            "crates/orbit-core/src/application/task",
-            "crates/orbit-core/src/application/job",
-            "crates/orbit-core/src/application/job/run",
-            "crates/orbit-core/src/application/automation",
-            "crates/orbit-core/src/application/auto_tasks",
-            "crates/orbit-core/src/application/review",
-            "crates/orbit-core/src/application/distributed",
-            "crates/orbit-core/src/application/pull_drain",
-            "crates/orbit-core/src/application/admission",
-            "crates/orbit-core/src/application/workspace_auto",
-            "crates/orbit-core/src/application/backlog_forecast",
-            "crates/orbit-core/src/application/codebase",
-            "crates/orbit-core/src/application/resident",
-            "crates/orbit-core/src/application/search",
-            "crates/orbit-core/src/application/sweep_filing",
-            "crates/orbit-core/src/application/notice",
-            "crates/orbit-core/src/application/evolution",
-            "crates/orbit-core/src/application/landing",
-            "crates/orbit-core/src/application/routines",
-            "crates/orbit-core/src/application/job/pipeline",
-            "crates/orbit-core/src/composition",
-            "crates/orbit-core/src/runtime",
-            "crates/orbit-core/src/adapter", "crates/orbit-core/src/bootstrap",
-            "crates/orbit-runtime/src", "crates/orbit-automation/src",
-            "crates/orbit-store/src/contracts", "crates/orbit-store/src/driver/file",
-            "crates/orbit-store/src/driver/sqlite", "crates/orbit-store/src/fs",
-        ):
-            (self.root / directory).mkdir(parents=True, exist_ok=True)
-        # The guard scans this single-file module and fails closed when it is
-        # absent [ORB-23019]. agent_corpus is the same shape: the upper-module
-        # list names it without the .rs suffix.
-        (self.app / "tag_instructions.rs").write_text("")
-        (self.app / "agent_corpus.rs").write_text("")
-        # [ORB-24097] The vcs conventions guard scans these engine files
-        # directly; they must exist (empty) so ripgrep reports no match and
-        # no IO error on stderr.
-        for relative in (
-            "crates/orbit-engine/src/executor/automation/vcs/conventions.rs",
-            "crates/orbit-engine/src/executor/automation/vcs/handoff.rs",
-            "crates/orbit-engine/src/executor/automation/vcs/commit/actions.rs",
-            "crates/orbit-engine/src/executor/automation/vcs/commit/summary.rs",
-            "crates/orbit-engine/src/executor/automation/vcs/commit/already_resolved.rs",
-        ):
-            path = self.root / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("")
-        vcs = self.root / "crates/orbit-engine/src/executor/automation/vcs"
-        for module in ("checks", "pr", "base", "claim", "pr_answers"):
-            (vcs / module).mkdir()
-        (vcs / "push.rs").write_text("")
-        (vcs / "claim" / "published.rs").write_text("")
-        context = self.root / "crates/orbit-engine/src/context"
-        context.mkdir(parents=True)
-        (context / "dispatch_contract.rs").write_text("")
-        self.prepare_config_paths()
-        self.prepare_web_paths()
+        self.app = self.root / dependency_guard_fixture.CORE_APPLICATION
+        # The mandatory scan roots are shared with test-ci-fast-guards.py.
+        dependency_guard_fixture.create_scan_layout(self.root)
 
     def test_engine_context_dispatch_contract_direction(self):
         # RuntimeHost owns the contracts below dispatch, including its null
@@ -252,30 +196,8 @@ class RelativeImportTests(unittest.TestCase):
         finally:
             path.write_text(original)
 
-    def prepare_web_paths(self):
-        # [ORB-25492] The orbit-web module-direction scan fails closed when a
-        # leaf is missing, so every case's fixture has the empty roots.
-        src = self.root / "crates/orbit-web/src"
-        (src / "state").mkdir(parents=True, exist_ok=True)
-        (src / "lease").mkdir(parents=True, exist_ok=True)
-        for name in (
-            "why_stuck.rs", "projections.rs", "connect.rs", "host_tunnels.rs",
-            "health.rs", "assets.rs", "run_failure.rs", "shutdown.rs",
-        ):
-            path = src / name
-            if not path.exists():
-                path.write_text("")
-
     def prepare_config_paths(self):
-        src = self.root / "crates/orbit-config/src"
-        for relative in ("aliases.rs", "seeding.rs", "config_document.rs", "plugin_enablement.rs",
-                         "unknown.rs", "config_io.rs", "crew_defaults.rs", "resolved/compatibility.rs"):
-            path = src / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if not path.exists():
-                path.write_text("")
-        for relative in ("crew", "operation", "provider_limit", "layering", "registry"):
-            (src / relative).mkdir(exist_ok=True)
+        dependency_guard_fixture.create_config_paths(self.root)
 
     def test_missing_config_scan_paths_fail_closed(self):
         src = self.root / "crates/orbit-config/src"

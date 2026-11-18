@@ -14,6 +14,8 @@ import tempfile
 import time
 import unittest
 
+import dependency_guard_fixture
+
 
 SCRIPTS = Path(__file__).resolve().parent
 
@@ -1599,85 +1601,10 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertIn(["cargo-deny.sh", "check"], calls)
 
     def dependency_result(self, owner, dependency, kind=None):
-        # The guard scans this single-file module and fails closed when it is
-        # absent [ORB-23019]; the stubbed rg finds no matches in the empty file.
-        app = self.root / "crates/orbit-core/src/application"
-        app.mkdir(parents=True, exist_ok=True)
-        # The architecture scan walks these module roots even in this small
-        # manifest fixture. Keep the same empty paths as
-        # test-check-dependency-direction.py so missing-path controls remain
-        # meaningful without turning unrelated scans into failures.
-        for relative in (
-            "crates/orbit-core/src/application/agents",
-            "crates/orbit-core/src/application/experiment",
-            "crates/orbit-core/src/application/contracts",
-            "crates/orbit-core/src/application/task",
-            "crates/orbit-core/src/application/job",
-            "crates/orbit-core/src/application/job/run",
-            "crates/orbit-core/src/application/automation",
-            "crates/orbit-core/src/application/auto_tasks",
-            "crates/orbit-core/src/application/review",
-            "crates/orbit-core/src/application/distributed",
-            "crates/orbit-core/src/application/pull_drain",
-            "crates/orbit-core/src/application/admission",
-            "crates/orbit-core/src/application/workspace_auto",
-            "crates/orbit-core/src/application/backlog_forecast",
-            "crates/orbit-core/src/application/codebase",
-            "crates/orbit-core/src/application/resident",
-            "crates/orbit-core/src/application/search",
-            "crates/orbit-core/src/application/sweep_filing",
-            "crates/orbit-core/src/application/notice",
-            "crates/orbit-core/src/application/evolution",
-            "crates/orbit-core/src/application/landing",
-            "crates/orbit-core/src/application/routines",
-            "crates/orbit-core/src/application/job/pipeline",
-            "crates/orbit-core/src/composition",
-            "crates/orbit-core/src/runtime",
-            "crates/orbit-core/src/adapter",
-            "crates/orbit-core/src/bootstrap",
-            "crates/orbit-runtime/src",
-            "crates/orbit-automation/src",
-            "crates/orbit-store/src/contracts",
-            "crates/orbit-store/src/driver/file",
-            "crates/orbit-store/src/driver/sqlite",
-            "crates/orbit-store/src/fs",
-        ):
-            (self.root / relative).mkdir(parents=True, exist_ok=True)
-        (app / "tag_instructions.rs").write_text("")
-        (app / "agent_corpus.rs").write_text("")
-        # [ORB-25311] The vcs pr_answers guard scans these engine paths
-        # directly via python and fails closed when absent; they must exist
-        # (empty) so the fixture reports no match, mirroring
-        # test-check-dependency-direction.py setUp.
-        vcs = self.root / "crates/orbit-engine/src/executor/automation/vcs"
-        for module in ("checks", "pr", "base", "claim", "pr_answers"):
-            (vcs / module).mkdir(parents=True, exist_ok=True)
-        (vcs / "push.rs").write_text("")
-        (vcs / "claim" / "published.rs").write_text("")
-        # [ORB-25491] The engine dispatch-contract leaf is scanned directly and
-        # fails closed when its directory or dispatch_contract.rs is absent;
-        # create both (empty) so the fixture reports no match, mirroring
-        # test-check-dependency-direction.py setUp.
-        context = self.root / "crates/orbit-engine/src/context"
-        context.mkdir(parents=True, exist_ok=True)
-        (context / "dispatch_contract.rs").touch()
-        config = self.root / "crates/orbit-config/src"
-        for relative in ("aliases.rs", "seeding.rs", "config_document.rs", "plugin_enablement.rs",
-                         "unknown.rs", "resolved/compatibility.rs", "config_io.rs", "crew_defaults.rs"):
-            path = config / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.touch()
-        for relative in ("crew", "operation", "provider_limit", "layering", "registry"):
-            (config / relative).mkdir(exist_ok=True)
-        # [ORB-25492] The orbit-web module-direction scan fails closed when a
-        # leaf is missing, so create the same empty roots that
-        # test-check-dependency-direction.py prepare_web_paths creates.
-        web = self.root / "crates/orbit-web/src"
-        (web / "state").mkdir(parents=True, exist_ok=True)
-        (web / "lease").mkdir(parents=True, exist_ok=True)
-        for relative in ("why_stuck.rs", "projections.rs", "connect.rs", "host_tunnels.rs",
-                         "health.rs", "assets.rs", "run_failure.rs", "shutdown.rs"):
-            (web / relative).touch()
+        # The guard fails closed on an absent scan path; the empty layout is
+        # shared with test-check-dependency-direction.py, each suite keeping its
+        # own temporary root.
+        dependency_guard_fixture.create_scan_layout(self.root)
         (self.root / "Cargo.toml").write_text(
             '[workspace]\n[workspace.dependencies]\ntempfile = "3"\n'
         )
