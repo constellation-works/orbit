@@ -1017,7 +1017,7 @@ Cleanup: once the QA is finished and the server has exited, an operator shell de
 A script that starts `web serve` for screenshots, instead of a person pressing Ctrl-C, must own the exact child from the spawn onward. The incident this guards against (F2026-11-362): a harness spawned a detached server, awaited readiness before entering its `try/finally`, closed the browser before stopping the server and sent a fallback KILL without waiting for the exit. Two isolated listeners survived with PPID 1. The recipe below keeps the isolation above (`qa`'s cleared environment and explicit `--root`, run from `QA_REPO`) and changes only who owns the process:
 
 - **Arm teardown before the spawn.** The `EXIT` trap is installed first, so a readiness timeout, a browser failure, `set -e` or SIGINT/SIGTERM all reach it.
-- **Record the PID and its start-time token as the next statements, with signals deferred across that interval.** The server is spawned with `exec` in a backgrounded subshell, so `$!` is the server itself, not a wrapper. SIGINT/SIGTERM arriving between the spawn and the token capture is recorded, not acted on, until the `(pid, token)` pair exists; the start then fails at once and teardown runs. Teardown signals only a PID whose token still matches (`/proc/<pid>/stat` field 22, or `ps -o lstart=` where `/proc` is absent), never a name pattern, process group or port owner. While the token is still empty the recorded PID is this script's own unreaped child, so it cannot have been reused and `kill -0` alone identifies it; teardown may also recover that PID from `$!` when the assignment itself was interrupted.
+- **Record the PID and its start-time token as the next statements, with signals deferred across that interval.** The server is spawned with `exec` in a backgrounded subshell, so `$!` is the server itself, not a wrapper. SIGINT/SIGTERM arriving between the spawn and the token capture is recorded, not acted on, until the `(pid, token)` pair exists; the start then fails at once and teardown runs. Teardown signals only a PID whose token still matches (`/proc/<pid>/stat` field 22, or `ps -o lstart=` where `/proc` is absent), never a name pattern, process group or port owner. While the token is still empty the recorded PID is this script's own unreaped child, so it cannot have been reused and `kill -0` alone identifies it; teardown may also recover that PID from `$!` when the assignment itself was interrupted, but only once the start has armed that recovery and only when `$!` is not the caller's own earlier background job: a `( )` subshell inherits the caller's last background PID in `$!`, and with an empty token existence alone would accept it, so a cancellation before the spawn would SIGTERM a job the script never started.
 - **Stop the server on every path, after the browser attempt.** The browser's close is attempted whenever it was started, its failure is recorded without skipping the server stop, and the first nonzero status is the run's status.
 - **Wait for the exit.** SIGTERM, a bounded wait for the exit, then SIGKILL (sent only to the verified PID) and a second bounded wait. A server that survives SIGKILL fails the run loudly and keeps `SERVER_PID` set for a retry; nothing blocks on an unbounded `wait`.
 - **Never delete artifacts.** Teardown touches only the process. Screenshots under `QA_BASE` stay for `orbit.task.artifact` action `put`; the managed-lane rule above still forbids raw removal.
@@ -1026,7 +1026,7 @@ A script that starts `web serve` for screenshots, instead of a person pressing C
 # Define once, after `qa workspace init`. Run the capture below as `bash script.sh` or in a ( ) subshell.
 QA_LOG="$QA_BASE/serve.log"; SHOTS="$QA_BASE/shots"; mkdir -p "$SHOTS"
 SERVE_CMD=(env -i PATH=/usr/bin:/bin HOME="$QA_HOME" "$ORBIT_BIN" --root "$QA_REPO/.orbit" web serve --port 0 --no-open)
-SERVER_PID=; SERVER_TOKEN=; QA_PORT=; QA_URL=; QA_DEFERRED_SIGNAL=; QA_STOPPED_PID=
+SERVER_PID=; SERVER_TOKEN=; QA_PORT=; QA_URL=; QA_DEFERRED_SIGNAL=; QA_STOPPED_PID=; QA_SPAWN_ARMED=; QA_SPAWN_PRIOR=
 
 # Start-time token: the (pid, token) pair identifies one process, so a reused PID never matches.
 qa_token() {
@@ -1053,6 +1053,11 @@ qa_serve_start() {  # $1 = readiness deadline in seconds
   # this interval would run teardown with no PID, or with a PID and no token.
   QA_DEFERRED_SIGNAL=
   trap qa_defer_signal INT TERM
+  # A ( ) subshell inherits the caller's last background PID in $!. Remember it
+  # (only while that job is alive, so it cannot be our child) and arm the $!
+  # recovery in qa_serve_stop only now: before this point no server exists.
+  QA_SPAWN_PRIOR=; if [ -n "${!:-}" ] && kill -0 "$!" 2>/dev/null; then QA_SPAWN_PRIOR="$!"; fi
+  QA_SPAWN_ARMED=1
   ( exec "${SERVE_CMD[@]}" ) >"$QA_LOG" 2>&1 </dev/null &
   SERVER_PID=$!
   SERVER_TOKEN="$(qa_token "$SERVER_PID")"
@@ -1070,9 +1075,12 @@ qa_serve_start() {  # $1 = readiness deadline in seconds
 # Teardown: idempotent; signals only the recorded (pid, token); waits for the exit.
 qa_serve_stop() {
   local pid="$SERVER_PID" rc=0
-  # Interrupted before the assignment above: $! still names the spawned child,
-  # which is unreaped and identified by existence while it has no token yet.
-  if [ -z "$pid" ] && [ -n "${!:-}" ] && [ -z "$SERVER_TOKEN" ] && [ "${!:-}" != "$QA_STOPPED_PID" ]; then pid="$!"; SERVER_PID="$pid"; fi
+  # Interrupted before the assignment above, after the spawn was armed: $! names
+  # the spawned child, which is unreaped and identified by existence while it
+  # has no token yet. Never adopt the caller's earlier job that a ( ) subshell
+  # inherits in $!, nor any $! before the spawn is armed.
+  if [ -z "$pid" ] && [ -n "$QA_SPAWN_ARMED" ] && [ -n "${!:-}" ] && [ "${!:-}" != "$QA_SPAWN_PRIOR" ] \
+     && [ -z "$SERVER_TOKEN" ] && [ "${!:-}" != "$QA_STOPPED_PID" ]; then pid="$!"; SERVER_PID="$pid"; fi
   [ -n "$pid" ] || return 0
   if qa_alive; then
     kill -TERM "$pid" 2>/dev/null
@@ -1105,7 +1113,7 @@ exit "$rc"
 
 Calling `qa_serve_stop` explicitly before `exit` reports its failure in the run's status; the trap is the backstop for every earlier exit and is a no-op once the explicit call has cleared `SERVER_PID`. If the script itself is SIGKILLed no trap can run, so check for an orphan afterwards (below).
 
-Verify teardown with probes on the exact child, with no `ps`, `pgrep`, `lsof` or `ss` pattern and nothing global, so they work inside the supported sandbox: record `pid=$SERVER_PID port=$QA_PORT` before stopping, then after it `kill -0 "$pid"` must fail (the child is reaped, not a zombie) and `qa_listening "$port"` must fail (a loopback connect, refused once the listener is closed). To rehearse a failure path, point `SERVE_CMD` at a stub: `(sh -c 'exec sleep 300')` never announces and exercises the readiness timeout; `(sh -c 'trap "" TERM; echo "Dashboard listening on http://127.0.0.1:1"; exec sleep 300')` ignores SIGTERM and exercises the fallback KILL with `QA_TERM_GRACE=5`; a bad flag such as `--port notaport` exits early. A rehearsal on Linux in a disposable workspace (success, browser-init failure, browser-close failure, readiness timeout, early exit and a SIGTERM-ignoring child, plus SIGTERM to the script mid-readiness) left each child gone and each listener closed, with captured files intact. The `dashboard_qa_recipe_reaps_child_when_interrupted_at_identity_boundaries` regression in `crates/orbit-cli/tests/process/web_serve_shutdown.rs` drives the extracted recipe deterministically: a Bash `DEBUG` hook (with `set -T`) sends SIGTERM just before the PID assignment and just before the token assignment, and a Linux subreaper parent asserts the harness exits within its shutdown bound, the exact stub child is reaped (not merely dead) and the capture directory survives.
+Verify teardown with probes on the exact child, with no `ps`, `pgrep`, `lsof` or `ss` pattern and nothing global, so they work inside the supported sandbox: record `pid=$SERVER_PID port=$QA_PORT` before stopping, then after it `kill -0 "$pid"` must fail (the child is reaped, not a zombie) and `qa_listening "$port"` must fail (a loopback connect, refused once the listener is closed). To rehearse a failure path, point `SERVE_CMD` at a stub: `(sh -c 'exec sleep 300')` never announces and exercises the readiness timeout; `(sh -c 'trap "" TERM; echo "Dashboard listening on http://127.0.0.1:1"; exec sleep 300')` ignores SIGTERM and exercises the fallback KILL with `QA_TERM_GRACE=5`; a bad flag such as `--port notaport` exits early. A rehearsal on Linux in a disposable workspace (success, browser-init failure, browser-close failure, readiness timeout, early exit and a SIGTERM-ignoring child, plus SIGTERM to the script mid-readiness) left each child gone and each listener closed, with captured files intact. The `dashboard_qa_recipe_reaps_child_when_interrupted_at_identity_boundaries` regression in `crates/orbit-cli/tests/process/web_serve_shutdown.rs` drives the extracted recipe deterministically: a Bash `DEBUG` hook (with `set -T`) sends SIGTERM just before the spawn, just before the PID assignment and just before the token assignment. The recipe runs in a `( )` subshell with a caller background job started first, and a Linux subreaper parent asserts the harness exits within its shutdown bound, the exact stub child is reaped (not merely dead), the caller's job is untouched and the capture directory survives.
 
 ## Testing & Coverage
 
