@@ -50,15 +50,21 @@ newest archive whose key starts with
 The environment hash covers the installed compiler versions and the
 `CARGO*`/`RUST*`/`CC*` environment. Only the exact key adds a hash of part of
 `Cargo.lock`, the member manifests and every
-`.cargo/config.toml` and `rust-toolchain.toml` below the workspace, hidden
-directories included. The lock hash is not a hash of the file: the pinned
+`.cargo/config.toml` and `rust-toolchain` / `rust-toolchain.toml` below the
+workspace, hidden directories included. The lock hash is not a hash of the
+file: the pinned
 action (`config.ts` at `d1527c8`) keeps only the `[[package]]` entries that
 carry a `source` or `checksum` — the registry and git packages, with their
 versions, checksums and dependency edges — and hashes that filtered list.
 Workspace members are path packages with neither field, so an edit that
 changes only their entries (a release version bump is the routine case)
-leaves the lock hash unchanged. Member manifests are hashed parsed, with
-`package.version` and path-dependency versions normalised away, so a member
+leaves the lock hash unchanged. Member manifests are hashed parsed: the pinned
+action (`config.ts` at `d1527c8`) visits only the top-level `dependencies`,
+`build-dependencies` and `dev-dependencies` tables — `[target.*]` tables are
+not visited — and for an entry containing `path` it replaces both the `version`
+and the `path` values, so changing just the path string (for example the
+`orbit-engine` path entry in `crates/orbit-web/Cargo.toml`) leaves the parsed
+hash input unchanged. `package.version` is likewise normalised away, so a member
 version bump does not move the exact key either. The action never reads the
 virtual workspace root, and its `key` input is ignored beside `shared-key`,
 so the root manifest enters through `prefix-key`.
@@ -87,8 +93,10 @@ each version and source). TOML formatting and comments do not count.
   where the old and new versions both remain in the lock — keeps the exact
   key instead; see the residual below. A member's own manifest is hashed, so
   its feature edits and registry version requirements move the exact key even
-  when the lock is unchanged; only package and path-dependency versions are
-  normalised out.
+  when the lock is unchanged; only `package.version` and the `version` and
+  `path` of top-level path dependencies (in `dependencies`,
+  `build-dependencies` and `dev-dependencies`; `[target.*]` tables are not
+  visited) are normalised out.
 - A release version bump, lint edit or comment keeps the exact key: the root
   version lives in `[workspace.package]`, which the prefix derivation omits,
   member versions are normalised out of the member-manifest hash, and the
@@ -100,8 +108,9 @@ prefix-match restore first deletes restored dependency units older than
 one week, so an archive last saved more than a week earlier restores less.
 The *effective key* is the prefix above plus the exact-key inputs (filtered
 lock entries, normalised member manifests, `.cargo/config.toml` and
-`rust-toolchain.toml` files, and the environment hash). Changing that key
-does not by itself decide a hit or a miss, and it writes no archive. The pinned
+`rust-toolchain` / `rust-toolchain.toml` files, and the environment
+hash). Changing that key does not by itself decide a hit or a miss, and
+it writes no archive. The pinned
 restore (`restore.ts` at `d1527c8`) requests the primary key and treats the
 archive the backend returns as an exact hit only when its key compares
 equal. Both a changed key and an unchanged key hit when an archive for that
@@ -148,7 +157,8 @@ from 2026-08-01 to 2026-11-18 were feature edits of this kind
 switch in `b38186846` (2026-11-01) did the same.
 
 The Check job's trusted `.orbit/tmp/dependency-producer` checkout adds that
-tree's `.cargo/config.toml` and `rust-toolchain.toml` to Check's exact key.
+tree's `.cargo/config.toml` and `rust-toolchain` / `rust-toolchain.toml` to
+Check's exact key.
 Hosted run 44234785691 lists them under "Lockfiles considered". The Check
 seeder makes the same checkout before its lookup. Without that checkout its
 exact key differed from the Check job's key, so neither could find the
