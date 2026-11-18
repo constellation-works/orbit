@@ -92,6 +92,7 @@ WEB_DIRECTORIES = ("state", "lease")
 WEB_FILES = (
     "why_stuck.rs", "projections.rs", "connect.rs", "host_tunnels.rs",
     "health.rs", "assets.rs", "run_failure.rs", "shutdown.rs",
+    "runtime_memo.rs",
 )
 
 
