@@ -102,16 +102,19 @@ pub enum StepRecoveryDecisionRead {
 /// Who still owns the run whose completion observation failed.
 ///
 /// Process ownership ignores a retry parent. A finished record is
-/// [`Stopped`](CompletionOwnerLiveness::Stopped) even when its pid is this
-/// process. [`ForeignLive`](CompletionOwnerLiveness::ForeignLive) is another
-/// process that has not finished.
+/// [`Stopped`](CompletionOwnerLiveness::Stopped) only when the owner probe
+/// confirms the recorded process is gone. A finished record whose owner probes
+/// alive or unverifiable is [`ForeignLive`](CompletionOwnerLiveness::ForeignLive)
+/// and is refused, even when its pid is this process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompletionOwnerLiveness {
     /// This process is the running owner.
     ProcessOwned,
     /// The run has stopped. Observation may requeue an unchanged publication.
     Stopped,
-    /// Another live execution owns the run. Observation must not rebind it.
+    /// A live or unverifiable owner still holds the run: another process that
+    /// has not finished, or a finished record whose owner is not confirmed
+    /// gone. Observation must not rebind it.
     ForeignLive,
 }
 

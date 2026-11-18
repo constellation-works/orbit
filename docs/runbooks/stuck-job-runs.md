@@ -785,12 +785,14 @@ continuation, blocks the task with the refusal as its diagnosis and preserves
 the publication for explicit governed source repair. The agent cannot override
 that refusal by requesting the same stale prefix. A foreign execution whose
 record is still running cannot acquire that continuation. A finished run is
-not refused only because it is no longer the active owner: when the only fault
-is a transient completion observation and the published candidate, policy and
-validation are unchanged, final recovery requeues that publication under
-current policy. That requeue is not a candidate-changed escalation and does not
-ask an operator to inspect the publication and admit source repair. It does
-not grant merge authority. A changed candidate, a changed policy, or a
+not refused only because it is no longer the active owner, provided its owner
+probe confirms the recorded worker is gone. When the only fault is a transient
+completion observation and the published candidate, policy and validation are
+unchanged, final recovery requeues that publication under current policy. A
+finished record whose owner probes alive or unverifiable keeps the refusal.
+That requeue is not a candidate-changed escalation and does not ask an
+operator to inspect the publication and admit source repair. It does not
+grant merge authority. A changed candidate, a changed policy, or a
 non-transient error keeps its existing refusal: policy drift requeues as a
 policy change, and the other refusals stay candidate-changed or ordinary
 failures. Authenticating the tail for a merge continuation still requires this
