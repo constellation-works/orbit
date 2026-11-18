@@ -26,6 +26,9 @@ pub(crate) const OPERATOR_READINESS_OVERRIDE_INPUT: &str = "operator_readiness_o
 
 /// Admission decisions a job's gate calls, implemented by `admission`.
 pub(in crate::application) trait JobAdmissionPort {
+    /// Preview named admission without reserving a wave.
+    fn preview_named_ship(&self, input: &Value) -> Result<Value, OrbitError>;
+
     /// The reservation a gate takes for a resumed published delivery the
     /// ordinary reservation in `denied` refused, with the publication it
     /// carries, or `None` when `input` is not such a delivery.

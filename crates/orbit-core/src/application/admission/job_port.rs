@@ -16,6 +16,11 @@ use crate::application::job::JobAdmissionPort;
 use crate::runtime::task::locks::ReservationOutcome;
 
 impl JobAdmissionPort for OrbitRuntime {
+    fn preview_named_ship(&self, input: &Value) -> Result<Value, OrbitError> {
+        crate::application::admission::backlog_exclusion::preview_named_backlog_tasks(self, input)
+            .map_err(|error| OrbitError::PolicyDenied(error.to_string()))
+    }
+
     fn published_delivery_reservation(
         &self,
         input: &Value,

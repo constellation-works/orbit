@@ -75,7 +75,25 @@ pub(crate) fn list_backlog_tasks(
     action: &str,
     input: &Value,
 ) -> Result<Value, DispatchError> {
-    runtime.reclaim_worktrees_on_admission();
+    list_backlog_tasks_impl(runtime, action, input, false)
+}
+
+pub(crate) fn preview_named_backlog_tasks(
+    runtime: &OrbitRuntime,
+    input: &Value,
+) -> Result<Value, DispatchError> {
+    list_backlog_tasks_impl(runtime, "ship preflight", input, true)
+}
+
+fn list_backlog_tasks_impl(
+    runtime: &OrbitRuntime,
+    action: &str,
+    input: &Value,
+    preview: bool,
+) -> Result<Value, DispatchError> {
+    if !preview {
+        runtime.reclaim_worktrees_on_admission();
+    }
     let max_tasks = input
         .get("max_tasks")
         .and_then(Value::as_u64)
@@ -183,12 +201,14 @@ pub(crate) fn list_backlog_tasks(
     } else {
         // Discovery records handoffs inside the admission snapshot. An
         // explicit ship never builds that snapshot, so it records here.
-        runtime
-            .record_backlog_pilot_operator_handoffs()
-            .map_err(|error| DispatchError::DeterministicActionFailed {
-                action: action.into(),
-                message: format!("record pilot operator handoffs: {error}"),
-            })?;
+        if !preview {
+            runtime
+                .record_backlog_pilot_operator_handoffs()
+                .map_err(|error| DispatchError::DeterministicActionFailed {
+                    action: action.into(),
+                    message: format!("record pilot operator handoffs: {error}"),
+                })?;
+        }
         let mut tasks = Vec::new();
         let mut excluded = Vec::new();
         // [ORB-12500] An override picks which task ships; it does not let a
@@ -241,7 +261,9 @@ pub(crate) fn list_backlog_tasks(
             // Submission refused a scheduled task unless the operator's
             // override is on record; this catches a run resumed or replayed
             // after `not_before` was set.
-            if let Some(exclusion) = scheduled_exclusion(runtime, &task) {
+            if !(preview && operator_override)
+                && let Some(exclusion) = scheduled_exclusion(runtime, &task)
+            {
                 excluded.push(exclusion);
                 continue;
             }
@@ -403,14 +425,18 @@ pub(crate) fn list_backlog_tasks(
                 },
             })
             .collect::<Vec<_>>();
-        let admissions = runtime
-            .stores()
-            .tasks()
-            .admit_owner_wave(&candidates)
-            .map_err(|error| DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: format!("admit explicit tasks through the admission section: {error}"),
-            })?;
+        let admissions = if preview {
+            Vec::new()
+        } else {
+            runtime
+                .stores()
+                .tasks()
+                .admit_owner_wave(&candidates)
+                .map_err(|error| DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: format!("admit explicit tasks through the admission section: {error}"),
+                })?
+        };
         for admission in admissions {
             let Some(claim) = admission.blocked_by else {
                 continue;

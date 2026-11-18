@@ -63,6 +63,34 @@ pub(crate) fn validate_bundles(action: &str, input: &Value) -> Result<Value, Dis
             format!("invalid bundles: {}", violations.join("; ")),
         ));
     }
+    // This optional check runs after fan-out, so a withheld named task
+    // cannot prevent its eligible siblings from starting.
+    if let Some(requested) = input.get("requested_task_ids").and_then(Value::as_array) {
+        let excluded = input.get("excluded").and_then(Value::as_array);
+        let missing: Vec<String> = requested
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|id| !seen.contains(*id))
+            .map(|id| {
+                let reason = excluded
+                    .and_then(|rows| {
+                        rows.iter()
+                            .find(|row| row.get("id").and_then(Value::as_str) == Some(id))
+                    })
+                    .map_or_else(
+                        || "dispatch limit or changed eligibility; retry the task".to_string(),
+                        |row| row.to_string(),
+                    );
+                format!("{id}: {reason}")
+            })
+            .collect();
+        if !missing.is_empty() {
+            return Err(DispatchError::action_failed(
+                action,
+                format!("named tasks not dispatched: {}", missing.join("; ")),
+            ));
+        }
+    }
     Ok(serde_json::json!({
         "bundles": bundles,
         "bundle_count": bundles.len(),

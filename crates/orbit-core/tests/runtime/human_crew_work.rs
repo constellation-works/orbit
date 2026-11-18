@@ -503,6 +503,25 @@ fn a_task_pilot_run_keeps_an_agent_crew_when_its_task_crew_is_human() {
     );
 }
 
+fn named_human_work_reports_its_hold_at_submission() {
+    let fx = HumanCrewFixture::new();
+    let human = fx.task("Renew the domain", Some("dk"));
+    let error = fx
+        .runtime
+        .submit_ship_run(orbit_core::ShipRunRequest {
+            mode: orbit_core::ShipMode::Local,
+            task_ids: std::slice::from_ref(&human),
+            operator_override: true,
+            ..Default::default()
+        })
+        .expect_err("a named human task must be reported at submission")
+        .to_string();
+    assert!(
+        error.contains(&human) && error.contains("human_crew"),
+        "{error}"
+    );
+}
+
 fn an_experiment_arm_cannot_draw_a_human_crew() {
     let fx = HumanCrewFixture::new();
     let actor = ExperimentActor {
@@ -634,6 +653,7 @@ crate::scenario_table!(
     an_operator_moves_a_human_crew_task_to_any_status_and_an_agent_cannot,
     the_task_pilot_never_assesses_a_human_crew_task,
     a_task_pilot_run_keeps_an_agent_crew_when_its_task_crew_is_human,
+    named_human_work_reports_its_hold_at_submission,
     an_experiment_arm_cannot_draw_a_human_crew,
     crew_analytics_leave_human_crew_tasks_out,
     filing_a_human_crew_task_warns_unless_the_body_is_short_with_steps_commands_and_verify,
