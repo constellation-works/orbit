@@ -4,6 +4,7 @@
 //! is parsed, and a human's answer applies the chosen option's rewrite and
 //! action, records the choice, and closes the request in one operation.
 
+use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::task::{DecisionGate, DecisionRequestState, TaskRelationType, TaskStatus};
 use orbit_types::workflow::FinalRecoveryDecision;
 use serde_json::{Value, json};
@@ -347,10 +348,138 @@ fn an_escalation_without_a_handoff_receipt_offers_no_land_answer() {
     }
 }
 
+/// A reject option on a block-triage request is bound to the blocked task, so
+/// answering it must reject that blocked task once: a terminal status, an
+/// auditable history entry, the request answered, and no second answer.
+fn a_reject_option_settles_the_blocked_task_once() {
+    let fx = fixture();
+    let mut decision = data_semantics_decision();
+    decision["options"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("rewrite");
+    decision["options"][0]["action"] = json!({"kind": "reject"});
+    let (task, request_id) = blocked_on_decision(&fx, decision);
+
+    answer(&fx, &request_id, "1", "Superseded by another task.");
+
+    let after = fx.runtime.get_task(&task).unwrap();
+    assert_eq!(after.status, TaskStatus::Rejected);
+    let history = fx.runtime.get_task_history(&task).unwrap();
+    let rejections = history
+        .iter()
+        .filter(|entry| entry.event == "blocked_rejected")
+        .count();
+    assert_eq!(rejections, 1, "{history:?}");
+    assert_eq!(
+        history
+            .iter()
+            .filter(|entry| entry.event == orbit_types::task::DECISION_ANSWERED_EVENT)
+            .count(),
+        1,
+        "{history:?}"
+    );
+    assert_eq!(
+        fx.runtime
+            .get_decision_request(&request_id)
+            .unwrap()
+            .unwrap()
+            .state,
+        DecisionRequestState::Answered
+    );
+    let again = fx
+        .human()
+        .answer_decision_request_as_human(
+            &request_id,
+            "1",
+            None,
+            "human:operator".to_string(),
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(
+            again,
+            OrbitError::DecisionRefused {
+                code: DecisionRefusalCode::RequestSuperseded,
+                ..
+            }
+        ),
+        "a second answer is refused as superseded: {again}"
+    );
+    assert_eq!(
+        fx.runtime.get_task(&task).unwrap().status,
+        TaskStatus::Rejected
+    );
+}
+
+/// A block-triage reject is refused while a live local run still owns the
+/// blocked task, as the archive and requeue answers on the same request are:
+/// the request stays open and the task stays blocked.
+fn a_reject_option_is_refused_while_a_live_run_owns_the_blocked_task() {
+    let fx = fixture();
+    let mut decision = data_semantics_decision();
+    decision["options"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("rewrite");
+    decision["options"][0]["action"] = json!({"kind": "reject"});
+    let (task, request_id) = blocked_on_decision(&fx, decision);
+    let jobs = fx.runtime.stores().jobs();
+    let now = chrono::Utc::now();
+    let run = jobs
+        .insert_job_run(
+            "task_pr_pipeline",
+            1,
+            now,
+            Some(json!({"task_ids": [task]})),
+            None,
+        )
+        .unwrap();
+    jobs.mark_job_run_running(&run.run_id, now, std::process::id())
+        .unwrap();
+
+    let refused = fx
+        .human()
+        .answer_decision_request_as_human(
+            &request_id,
+            "1",
+            Some("Superseded by another task.".to_string()),
+            "human:operator".to_string(),
+            Some("cli".to_string()),
+        )
+        .unwrap_err();
+    let refusal = refused
+        .force_overridable()
+        .expect("a live run refuses the reject with a typed refusal");
+    assert_eq!(
+        refusal.kind,
+        orbit_common::ForceOverridableKind::RunStillOwnsTask
+    );
+    assert_eq!(fx.status(&task), "blocked");
+    assert_eq!(
+        fx.runtime
+            .get_decision_request(&request_id)
+            .unwrap()
+            .unwrap()
+            .state,
+        DecisionRequestState::Open
+    );
+    let history = fx.runtime.get_task_history(&task).unwrap();
+    assert!(
+        history
+            .iter()
+            .all(|entry| entry.event != "blocked_rejected"),
+        "{history:?}"
+    );
+}
+
 crate::scenario_table!(
     final_recovery_cards,
     a_decide_decision_opens_one_request_with_summary_options_and_recommendation,
     a_terminal_recovery_option_makes_the_request_irreversible,
+    a_reject_option_settles_the_blocked_task_once,
+    a_reject_option_is_refused_while_a_live_run_owns_the_blocked_task,
     a_requeue_option_rewrites_comments_the_choice_and_closes_the_request,
     a_rewrite_only_option_edits_the_task_and_unblocks_it,
     a_split_option_files_a_linked_follow_up_and_narrows_the_task,

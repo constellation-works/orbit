@@ -10,6 +10,22 @@ impl OrbitRuntime {
         self.reject_task_with_identity(id, note, comment, None, None)
     }
 
+    /// Reject a `blocked` task on the operator's answer to its block-triage
+    /// decision. The public reject refuses `blocked`, but that request is
+    /// bound to the blocked status, so an offered reject option would never
+    /// settle. The answer holds the task's write lock from its status check
+    /// through this write, so the status written here is the one validated.
+    /// A live local run that still owns the task refuses the reject, as it
+    /// refuses the archive and requeue answers on the same request.
+    pub(crate) fn reject_blocked_task_for_triage_decision(
+        &self,
+        id: &str,
+        note: String,
+        comment: Option<String>,
+    ) -> Result<Task, OrbitError> {
+        self.reject_task_in_status(id, note, comment, None, None, true)
+    }
+
     pub(crate) fn reject_task_with_identity(
         &self,
         id: &str,
@@ -17,6 +33,18 @@ impl OrbitRuntime {
         comment: Option<String>,
         agent: Option<String>,
         model: Option<String>,
+    ) -> Result<Task, OrbitError> {
+        self.reject_task_in_status(id, note, comment, agent, model, false)
+    }
+
+    fn reject_task_in_status(
+        &self,
+        id: &str,
+        note: String,
+        comment: Option<String>,
+        agent: Option<String>,
+        model: Option<String>,
+        allow_blocked: bool,
     ) -> Result<Task, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let (canonical_agent, canonical_model) =
@@ -47,12 +75,16 @@ impl OrbitRuntime {
             let task = self.get_task(id)?;
             #[cfg(test)]
             self.apply_transition_read_hook(id)?;
+            if allow_blocked {
+                ensure_status_change_not_run_owned(self, id)?;
+            }
             let previous_status = task.status;
             let status_event = match task.status {
                 TaskStatus::Proposed => "proposal_rejected",
                 TaskStatus::Review => "review_rejected",
                 TaskStatus::Backlog => "backlog_rejected",
                 TaskStatus::InProgress => "in_progress_rejected",
+                TaskStatus::Blocked if allow_blocked => "blocked_rejected",
                 other => {
                     return Err(OrbitError::InvalidInput(format!(
                         "task '{id}' is in status '{other}'; reject requires 'proposed', 'review', 'backlog', or 'in-progress'"
