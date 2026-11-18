@@ -276,7 +276,8 @@ Attribute the next action to its actor once the attempt has stopped:
 |---|---|
 | Red required checks, classified candidate-owned | Orchestrator routes a repair through [recovery.md](recovery.md); the next run repairs the kept candidate rather than re-implementing. |
 | Red required checks, classified inherited, transient, or base-suspect | Owner landing or the base owns the wait or bounded rerun per the diagnosis; do not run candidate recovery first. |
-| Green checks held by an open decision request or `completion.hold` rule | The human or operator who owns the gate; agents read the request and report its id, gate, and allowed answers, never answer it. |
+| Green checks held by an open decision request | The human or operator who owns the gate; report the request's ID, gate, and allowed answers, and never answer it. If a completion hold is also current, report that hold separately. |
+| Green checks held by a current `completion.hold` rule | The human or operator who owns the review; report the current PR number, URL and head together with the task's `completion_hold` rule, matched field, configured pattern, matched value and run. The operator reviews it by merging the open PR (or landing the local candidate) and approving the task with `orbit task update <task-id> --approve`; agents do not merge or approve. |
 | Held on a delivery-refusal code (draft, closed, moved head, stale pins, conflict) | Whoever the code names in [delivery-refusal holds](run-debugging.md#delivery-refusal-holds); start the named new attempt rather than resuming the held run. |
 | Failure-handoff or preserved candidate with work remaining | The salvage route in [recovery.md](recovery.md#salvage-an-incomplete-candidate); resume or requeue the kept candidate, discarding it only deliberately. |
 | Merged delivery | Settlement via `orbit task settle-merged <task-id>` or the drain's own pass, per [recovery.md](recovery.md#close-a-rescued-blocked-task). |
