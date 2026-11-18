@@ -472,11 +472,12 @@ name it as an evidence gap rather than declaring its missing selector, and
 never invent a filename.
 
 A builtin MCP tool surface change has companions that authors usually do not
-declare. When a plan adds, removes or renames a builtin MCP tool, changes its
-advertised placement, or changes its id route, locate these companions at the
-revision being scoped (`rg -l` on the named test or table, `rg --files` for a
-named golden file) and declare each as a `file:` selector in a workspace that
-keeps them. Four kinds apply:
+declare. When a plan adds, removes or renames a builtin MCP tool, or changes
+its advertised placement, id route, advertised description or input schema,
+locate the applicable companions at the revision being scoped (`rg -l` on the
+named test or table, `rg --files` for a named golden file), then declare each
+as a `file:` selector only when its trigger below applies. Do so only in a
+workspace that keeps the companion. The first four kinds apply:
 
 - The handwritten exact advertised-name list, asserted by the test
   `canonical_builtin_definitions_preserve_the_exact_workspace_surface`, changes
@@ -503,7 +504,23 @@ keeps them. Four kinds apply:
   does not change it.
 
 A body-only tool edit that keeps the name, verbs, placement and id route
-declares none of these.
+declares none of these four companions.
+
+The fifth companion is the handwritten per-role MCP surface budget
+(`mcp_role_budgets.json`, in the `orbit-mcp` crate's `tests/boundary/`
+directory), read by `role_surface_budget` in `role_surface.rs`.
+Locate it at the revision being scoped with `rg --files -g 'mcp_role_budgets.json'`,
+verify the matching include in `role_surface.rs`, and declare its exact
+workspace-relative path as a `file:` selector. Its ceilings bound each role's
+tool count and approximate tokens (serialized name, description and
+input-schema byte count divided by four). Declare this fixture when a plan adds,
+removes or renames a builtin MCP tool, or changes its advertised description or input
+schema. A placement-only change, id-route-only change, or implementation-only
+edit that leaves the advertised name, description and input schema unchanged
+does not trigger it. Keep the measured surface within the recorded ceilings.
+If a change requires more surface, raise only the affected ceiling in this
+file as a reviewed decision and explain in the PR why the role needs the extra
+surface, as the file comment requires.
 
 When the planned change establishes a new or renamed action, or a changed
 cross-module interface, follow it through the existing registration wiring
