@@ -312,7 +312,7 @@ export function appendRecoveryControls(actions, task, detail, context, mutable) 
     const resume = el("button", {
       class: "action requeue-resume",
       text: "Resume candidate",
-      "aria-description": disabledDescription || "Return this blocked task to the backlog keeping its published candidate: the next run adopts that candidate and pull request without re-implementing, then validates, reviews and lands it afresh",
+      "aria-description": disabledDescription || "Return this blocked task to the backlog with its published candidate. The next delivery adopts it and its pull request without re-implementing, then validates it. Any fresh independent review follows that delivery's selected review policy, which may be off.",
     });
     resume.disabled = !mutable;
     resume.addEventListener("click", (e) => { e.stopPropagation(); runRecovery(task, detail, resume, context, "resume"); });
@@ -367,7 +367,7 @@ async function runRecovery(task, detail, btnNode, context, kind) {
     const discard = kind === "discard";
     const explain = discard
       ? `Discard and re-implement ${task.id}? This discards the candidate its stopped run published, closes the task's undelivered pull requests, and returns the task to the backlog so the next run implements fresh.`
-      : `Resume candidate for ${task.id}? This returns the blocked task to the backlog keeping the candidate its stopped run published: the next run adopts that candidate and pull request without re-implementing, then validates, reviews and lands it afresh.`;
+      : `Resume candidate for ${task.id}? This returns the blocked task to the backlog with its stopped run's candidate. The next delivery adopts it and its pull request without re-implementing, then validates it. Any fresh independent review follows that delivery's selected review policy, which may be off. The normal landing gates still apply.`;
     if (typeof window.confirm !== "function" || !window.confirm(explain)) return;
     if (typeof window.prompt !== "function") return;
     const reason = window.prompt(`Reason for requeueing ${task.id} (recorded in task history):`, "");

@@ -9,7 +9,8 @@
 //! authorize source work separately under fresh operator policy.
 //! A requeue resumes it exactly as a final-recovery requeue would: it records
 //! the same publication-preservation record, and the next run adopts the
-//! branch and PR, then validates, reviews and lands afresh.
+//! branch and PR, then validates it. Any fresh independent review follows that
+//! run's selected review policy, which may be off.
 //!
 //! The requeue widens what an escalation leaves to an operator, so it is
 //! admitted only while the publication is still what the run recorded and

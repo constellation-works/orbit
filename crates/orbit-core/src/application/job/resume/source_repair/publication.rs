@@ -185,7 +185,8 @@ const LANDING_SETTLE: &str = "landing_review_gate_settle";
 /// on the published head, when this run's own failure handoff attests that
 /// it pushed exactly that commit onto `published`: the head the branch and
 /// pull request now carry. The push certifies nothing about the commit, so
-/// the run that adopts it validates and reviews it afresh.
+/// the successor delivery validates it. Any fresh independent review follows
+/// that delivery's selected review policy, which may be off.
 ///
 /// `None` when the handoff pushed nothing (no receipt, no reviewer commit,
 /// or a push it could not make), which keeps `published` and every refusal

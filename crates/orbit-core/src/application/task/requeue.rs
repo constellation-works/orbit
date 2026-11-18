@@ -548,7 +548,9 @@ impl OrbitRuntime {
         let next_step = match (&resume, &kept) {
             _ if discard => "The next run implements fresh.".to_string(),
             (Some(_), _) => "The next run adopts this candidate and pull request without \
-                             re-implementing, then validates, reviews and lands it afresh."
+                             re-implementing, then validates it and lands it through the normal \
+                             gates. Any fresh independent review follows the next run's selected \
+                             review policy, which may be off."
                 .to_string(),
             (None, Some(kept)) if !owner_local => {
                 let claimed = if kept.candidate.durable() {
@@ -559,7 +561,9 @@ impl OrbitRuntime {
                 format!(
                     "The next owner-local run implements fresh. {claimed} the candidate at {} \
                      kept from run '{}' on machine '{}', \
-                     then validates, reviews and lands it afresh.{}",
+                     then validates it and lands it through the normal gates. Any fresh \
+                     independent review follows the next run's selected review policy, which \
+                     may be off.{}",
                     kept.candidate.head_sha,
                     kept.candidate.source_run_id.as_deref().unwrap_or("unknown"),
                     kept.machine_id,
@@ -576,20 +580,23 @@ impl OrbitRuntime {
                 kept.machine_id
             ),
             (None, Some(_)) => "The next run, claimed or local, continues this candidate \
-                                instead of implementing fresh, then validates, reviews and \
-                                lands it afresh."
+                                instead of implementing fresh, then validates it and lands it \
+                                through the normal gates. Any fresh independent review follows \
+                                the next run's selected review policy, which may be off."
                 .to_string(),
             (None, None) if held.is_some() => {
                 let held = held.as_ref();
                 if held.is_some_and(|held| held.durable_ref.is_some()) {
                     "The next run, claimed or local, continues the candidate its stopped \
-                     run held instead of implementing fresh, then validates, reviews and \
-                     lands it afresh."
+                     run held instead of implementing fresh, then validates it and lands it \
+                     through the normal gates. Any fresh independent review follows the next \
+                     run's selected review policy, which may be off."
                         .to_string()
                 } else if held_owner_local {
                     "The next run on this host continues the candidate its stopped run \
-                     held instead of implementing fresh, then validates, reviews and \
-                     lands it afresh."
+                     held instead of implementing fresh, then validates it and lands it \
+                     through the normal gates. Any fresh independent review follows the next \
+                     run's selected review policy, which may be off."
                         .to_string()
                 } else {
                     format!(

@@ -401,8 +401,9 @@ and leaves the request open.
 When a reviewed candidate can still return to the backlog, its block decision
 offers an answer that accepts the open findings and resumes that same
 candidate. Choosing it does not change the task's description or acceptance
-criteria. The next run carries the candidate through validation and review
-again, then lands it.
+criteria. The successor delivery validates the candidate and follows its
+selected review policy; a fresh independent review runs only when that policy
+calls for one. The normal landing gates still apply.
 
 An option that would change the description or acceptance criteria says that
 the reviewed candidate is discarded. Choosing it discards the candidate and
