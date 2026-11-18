@@ -370,6 +370,69 @@ fn local_auto_ship_and_readiness_wait_for_an_active_pilot_checkpoint() {
         )
         .unwrap();
     let holder = workspace.hold(&[&task.id]);
+    let activities = workspace.runtime.global_root().join("resources/activities");
+    for name in ["list_backlog_tasks", "validate_bundles", "invoke_and_wait"] {
+        let file = format!("{name}.yaml");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("assets/activities")
+                .join(&file),
+            activities.join(file),
+        )
+        .unwrap();
+    }
+    let jobs = workspace.runtime.global_root().join("resources/jobs");
+    std::fs::create_dir_all(&jobs).unwrap();
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/jobs/task_auto_pipeline.yaml"),
+        jobs.join("task_auto_pipeline.yaml"),
+    )
+    .unwrap();
+    let run = workspace
+        .jobs
+        .insert_job_run(
+            "task_auto_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({"task_ids": [task.id], "mode": "pr", "max_tasks": 50,
+            "max_bundle_size": 5, "allowed_crews": [], "operator_readiness_override": true})),
+            None,
+        )
+        .unwrap();
+    let error = workspace
+        .runtime
+        .execute_pipeline_run_worker(&run.run_id)
+        .expect_err("a named shipment held by a pilot must not succeed");
+    let shown = workspace.runtime.show_job_run(&run.run_id).unwrap();
+    let evidence = format!("{shown:?}");
+    assert!(error.to_string().contains("active_pilot_preparation"));
+    assert!(
+        evidence.contains(&task.id),
+        "the run must name the held task: {evidence}"
+    );
+    assert!(
+        evidence.contains("active_pilot_preparation"),
+        "the run must name the hold: {evidence}"
+    );
+    let empty = workspace
+        .jobs
+        .insert_job_run(
+            "task_auto_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({"task_ids": [], "mode": "pr", "max_tasks": 50,
+            "max_bundle_size": 5, "allowed_crews": [], "operator_readiness_override": false})),
+            None,
+        )
+        .unwrap();
+    workspace
+        .runtime
+        .execute_pipeline_run_worker(&empty.run_id)
+        .expect("an unseeded scan with no eligible work succeeds");
+    assert_eq!(
+        workspace.runtime.show_job_run(&empty.run_id).unwrap().state,
+        JobRunState::Success
+    );
     for input in [json!({}), json!({"task_ids": [task.id]})] {
         let output = workspace.action("list_backlog_tasks", input);
         assert_eq!(output["task_ids"], json!([]), "{output}");
@@ -396,7 +459,7 @@ fn local_auto_ship_and_readiness_wait_for_an_active_pilot_checkpoint() {
         .finalize_job_run(&holder, JobRunState::Success, Utc::now(), None)
         .unwrap();
     assert_eq!(
-        workspace.action("list_backlog_tasks", json!({}))["task_ids"],
+        workspace.action("list_backlog_tasks", json!({"task_ids": [task.id]}))["task_ids"],
         json!([task.id])
     );
 }

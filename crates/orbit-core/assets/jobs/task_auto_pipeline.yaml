@@ -85,6 +85,8 @@ spec:
         bundles: "{{ steps.list_backlog.output.bundles }}"
         max_bundle_size: "{{ input.max_bundle_size }}"
         known_task_ids: "{{ steps.list_backlog.output.task_ids }}"
+        requested_task_ids: "{{ input.task_ids }}"
+        excluded: "{{ steps.list_backlog.output.excluded }}"
 
     - id: dispatch
       fan_out:

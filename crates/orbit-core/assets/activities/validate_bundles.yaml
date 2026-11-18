@@ -12,7 +12,8 @@ spec:
     set. An empty `known_task_ids` set admits no task, so only an empty
     bundle plan passes. Pass-through on success so the fan_out can consume
     the same `bundles` shape without unwrapping a wrapper object — prevents a
-    misgrouped backlog from silently dispatching.
+    misgrouped backlog from silently dispatching. Named requests also fail
+    with their exclusion reasons if any selected task cannot be dispatched.
   input_schema_json:
     type: object
     required: [bundles, max_bundle_size, known_task_ids]
@@ -29,6 +30,14 @@ spec:
         type: array
         items:
           type: string
+      requested_task_ids:
+        type: array
+        items:
+          type: string
+      excluded:
+        type: array
+        items:
+          type: object
   output_schema_json:
     type: object
     required: [bundles, bundle_count]

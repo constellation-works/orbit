@@ -63,6 +63,31 @@ pub(crate) fn validate_bundles(action: &str, input: &Value) -> Result<Value, Dis
             format!("invalid bundles: {}", violations.join("; ")),
         ));
     }
+    // A named request is a promise to dispatch every selected task. The
+    // listing step can withhold one after submission (for example while a
+    // pilot is applying its assessment); an empty discovery scan is normal.
+    if let Some(requested) = input.get("requested_task_ids").and_then(Value::as_array) {
+        let excluded = input.get("excluded").and_then(Value::as_array);
+        let missing: Vec<String> = requested
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|id| !seen.contains(*id))
+            .map(|id| {
+                excluded
+                    .and_then(|entries| entries.iter().find(|entry| entry["id"] == id))
+                    .map(Value::to_string)
+                    .unwrap_or_else(|| {
+                        format!("{id}: not selected (dispatch limit or eligibility changed)")
+                    })
+            })
+            .collect();
+        if !missing.is_empty() {
+            return Err(DispatchError::action_failed(
+                action,
+                format!("named tasks not dispatched: {}", missing.join("; ")),
+            ));
+        }
+    }
     Ok(serde_json::json!({
         "bundles": bundles,
         "bundle_count": bundles.len(),
