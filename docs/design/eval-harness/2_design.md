@@ -122,7 +122,7 @@ This agrees with the starting view. It is deliberately not the base the original
 
 ### 3.3 The snapshot
 
-Task history cannot rebuild a task's text. An `updated` event names the documents that changed (`task fields updated: plan`), not their old or new content (`crates/orbit-types/src/task/fields_updated.rs`). History does record tag values (`tags_at`, `crates/orbit-types/src/task/tags_changed.rs`) and the selectors a run added afterwards (`crates/orbit-types/src/task/context_widening.rs`).
+Task history cannot rebuild a task's text. An `updated` event names the documents that changed (`task fields updated: plan`), not their old or new content (`crates/orbit-types/src/task/fields_updated.rs`). History does record tag values (`tags_at`, `crates/orbit-types/src/task/tags_changed.rs`) and the selectors a run added afterwards (`crates/orbit-types/src/task/context/widening.rs`).
 
 The exact source is the run audit. Since 2026-10-29 ([ORB-20006]) every provider invocation records a `task_scope_blob_ref`: the "bounded, redacted task scope as delivered at dispatch, not a later mutable task projection" (`CliInvocationStarted`, `crates/orbit-types/src/workflow/activity_job/audit_envelope.rs:358-372`). The snapshot is built in this order:
 
