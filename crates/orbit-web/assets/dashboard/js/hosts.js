@@ -204,7 +204,7 @@ function renderDialog() {
   const content = el("div", { class: "fleet-dialog-body" });
   const title = editing ? `${editing.kind === "add" ? "Add host" : editing.kind === "rename" ? "Rename" : "Remove"}${row ? ` · ${row.name}` : ""}` : row.name;
   if (editing && editing.kind !== "add" && !row) {
-    content.append(el("p", { class: "config-note", role: "status", text: "This host is no longer registered. Waiting for the current change to finish." }));
+    content.append(el("p", { class: "config-note", role: "status", text: "Host removed. Waiting for the change to finish." }));
   } else if (editing) {
     content.append(el("span", { class: "muted", text: `Registry on ${local?.name || "the serving host"}` }));
     content.append(editing.kind === "add" ? addSection() : editing.kind === "rename" ? renameEditor(row) : removeEditor(row));
