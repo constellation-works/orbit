@@ -1,8 +1,10 @@
 //! The Automation › Residents view: set up and manage resident mandates.
 //!
-//! Reads and writes go through the `orbit.resident.*` tools, so the view
-//! reports and changes exactly what `orbit resident list|show|relay|control`
-//! do. Two writes go to core use cases instead. Creation needs a file for
+//! Reads report exactly what `orbit resident list|show` do, and writes go
+//! through the `orbit.resident.*` tools, so the view changes exactly what
+//! `orbit resident list|show|relay|control` do. The list read uses the
+//! batched core card read instead of per-row tool calls. Two writes go to
+//! core use cases instead. Creation needs a file for
 //! `orbit.task.artifact` action `put`; its use case judges the draft with the same
 //! rule every mandate read applies before it writes the tagged assignment
 //! and its `resident/mandate.json`. The grant form goes to the dashboard
@@ -396,26 +398,7 @@ pub(super) async fn list_residents(
     let operator = state.operator_session();
     let include_ended = query.all;
     match blocking("resident list", move || {
-        let session = dashboard_session(operator);
-        let listed = runtime.run_tool_with_session(
-            "orbit.resident.list",
-            json!({"include_ended": include_ended}),
-            session.clone(),
-        )?;
-        let mut mandates = Vec::new();
-        for row in listed["mandates"].as_array().into_iter().flatten() {
-            let Some(task_id) = row["task_id"].as_str() else {
-                continue;
-            };
-            let mut shown = runtime.run_tool_with_session(
-                "orbit.resident.show",
-                json!({"task_id": task_id}),
-                session.clone(),
-            )?;
-            shown["goal"] = row["goal"].clone();
-            attach_resident_card(&runtime, &mut shown);
-            mandates.push(shown);
-        }
+        let mandates = runtime.list_resident_mandate_cards(include_ended)?;
         let crews = serde_json::to_value(runtime.configured_crew_registry_projection())
             .unwrap_or(Value::Null);
         let crew_names: Vec<Value> = crews["crews"]
