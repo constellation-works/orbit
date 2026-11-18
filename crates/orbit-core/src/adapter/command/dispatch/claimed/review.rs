@@ -26,9 +26,7 @@ use orbit_types::workflow::{
 };
 use serde_json::{Map, Value, json};
 
-use super::owner::{
-    GET, PUT, accept_fields, artifact_put_input, put_content, require_claimed_task,
-};
+use super::owner::{self, GET, PUT, artifact_put_input, put_content, require_claimed_task};
 use crate::OrbitRuntime;
 
 /// The review contract's artifacts the reviewer may always read: its pinned
@@ -138,9 +136,9 @@ pub(super) fn execute_brokered(
     let path = canonical_review_path(path)?;
     let scope = ClaimedReviewScope::derive(runtime, run, binding)?;
     if tool == PUT {
-        accept_fields(object, &["id", "path", "content_base64", "model"])?;
+        owner::accept_task_fields(object, &["id", "path", "content_base64", "model"])?;
     } else {
-        accept_fields(object, &["id", "path", "model"])?;
+        owner::accept_task_fields(object, &["id", "path", "model"])?;
     }
     require_claimed_task(object, binding)?;
     if tool == PUT && path != REVIEW_REPORT_ARTIFACT {
