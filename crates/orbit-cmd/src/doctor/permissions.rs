@@ -95,6 +95,8 @@ struct PermissionScan {
 #[cfg(unix)]
 fn inspect_state_directories(runtime: &OrbitRuntime) -> Result<PermissionScan, OrbitError> {
     let mut seen = std::collections::BTreeSet::new();
+    // One worker budget per scan, read on the first wide directory it meets.
+    let thread_budget = std::cell::OnceCell::new();
     let mut scan = PermissionScan {
         writable: Vec::new(),
         offenders: Vec::new(),
@@ -124,7 +126,14 @@ fn inspect_state_directories(runtime: &OrbitRuntime) -> Result<PermissionScan, O
         }
         for (root, descend) in roots {
             let before = scan.writable.len();
-            visit_fanned(&root, descend, &mut seen, &mut scan.writable).map_err(|error| {
+            visit_fanned(
+                &root,
+                descend,
+                &mut seen,
+                &mut scan.writable,
+                &thread_budget,
+            )
+            .map_err(|error| {
                 OrbitError::Io(format!(
                     "could not inspect Orbit state directory '{}': {error}",
                     root.display()
@@ -234,12 +243,15 @@ const MAX_SCAN_THREADS: usize = 8;
 /// Each thread walks a contiguous run of children sequentially, and the runs
 /// are folded back in `read_dir` order, so the paths seen, the writable list
 /// and the first error are the ones the sequential walk would produce.
+/// `thread_budget` is shared by the whole scan and filled by [`host_scan_threads`]
+/// the first time a directory is wide enough to need it.
 #[cfg(unix)]
 fn visit_fanned(
     path: &std::path::Path,
     descend: bool,
     seen: &mut std::collections::BTreeSet<std::path::PathBuf>,
     writable: &mut Vec<(std::path::PathBuf, u32)>,
+    thread_budget: &std::cell::OnceCell<usize>,
 ) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -288,16 +300,16 @@ fn visit_fanned(
             }
         }
     }
+    // Narrow directories never query the host, so only wide ones read the budget.
     let forced = forced_pool_size(MAX_SCAN_THREADS, children.len());
-    let threads = forced.unwrap_or_else(|| {
-        std::thread::available_parallelism()
-            .map(std::num::NonZeroUsize::get)
-            .unwrap_or(1)
-            .clamp(1, MAX_SCAN_THREADS)
-    });
-    if (forced.is_none() && children.len() < FAN_OUT_MIN_CHILDREN) || threads <= 1 {
+    let threads = match forced {
+        Some(threads) => threads,
+        None if children.len() < FAN_OUT_MIN_CHILDREN => 1,
+        None => *thread_budget.get_or_init(host_scan_threads),
+    };
+    if threads <= 1 {
         for child in &children {
-            visit_fanned(child, true, seen, writable)?;
+            visit_fanned(child, true, seen, writable, thread_budget)?;
         }
     } else {
         let prior: &std::collections::BTreeSet<std::path::PathBuf> = seen;
@@ -341,6 +353,17 @@ fn visit_fanned(
         }
     }
     listing_error.map_or(Ok(()), Err)
+}
+
+/// Threads a wide directory's subtrees are split across: the host's parallelism,
+/// clamped to [`MAX_SCAN_THREADS`]. Callers read it through a scan's budget, so
+/// a complete scan queries the host at most once.
+#[cfg(unix)]
+fn host_scan_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
+        .clamp(1, MAX_SCAN_THREADS)
 }
 
 /// No symlink traversal: worktree contents and Cargo output are outside Orbit's ownership.
