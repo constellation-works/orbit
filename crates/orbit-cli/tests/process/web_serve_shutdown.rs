@@ -393,7 +393,10 @@ fn exercise_stalled_peer(name: &str, sse: bool, prefix: &'static [u8]) {
 /// before it can publish its PID; the hook records `$!`, and a Linux
 /// subreaper parent proves that exact child was reaped. `unreaped` and
 /// `timeout` leave that child and a SIGTERM-ignoring descendant alive, and
-/// the parent must notice and sweep the process group it owns.
+/// the parent must notice and sweep the process group it owns. `wrapper_stall`
+/// stops the outer wrapper just after it starts the caller's job, before the
+/// recipe runs: the runner times out, and the sweep must reap the wrapper and
+/// that job so output collection reaches EOF (ORB-25620).
 #[cfg(target_os = "linux")]
 #[test]
 fn dashboard_qa_recipe_reaps_child_when_interrupted_at_identity_boundaries() {
@@ -404,6 +407,7 @@ fn dashboard_qa_recipe_reaps_child_when_interrupted_at_identity_boundaries() {
         "none",
         "unreaped",
         "timeout",
+        "wrapper_stall",
     ] {
         exercise_qa_recipe_boundary(boundary);
     }
@@ -514,6 +518,7 @@ set -T
         r#"sleep 300 &
 caller_job=$!
 echo "caller_job_pid=$caller_job"
+[ "$QA_BOUNDARY" = wrapper_stall ] && kill -STOP "$$"
 (
 {recipe}
 )
@@ -671,7 +676,7 @@ while True:
         if boundary == "timeout" and os.path.isfile(observed_pid_file) and os.path.getsize(observed_pid_file) > 0:
             timed_out = 1
             break
-        if time.monotonic() - start > 10:
+        if time.monotonic() - start > float(os.environ.get("QA_RUNNER_TIMEOUT", "10")):
             timed_out = 1
             break
 observed = read_pid(observed_pid_file)
@@ -720,6 +725,16 @@ sys.stdout.flush()
         .env("QA_REPO", &qa_repo)
         .env("QA_BOUNDARY", boundary)
         .env("QA_TERM_GRACE", "5")
+        // The stalled wrapper never reaches the recipe, so only the runner
+        // timeout ends it; keep that wait short.
+        .env(
+            "QA_RUNNER_TIMEOUT",
+            if boundary == "wrapper_stall" {
+                "2"
+            } else {
+                "10"
+            },
+        )
         .env("ORBIT_BIN", "/bin/true")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -740,7 +755,11 @@ sys.stdout.flush()
         status.success(),
         "{boundary}: runner failed: {stdout} {stderr}"
     );
-    let expect_timeout = if boundary == "timeout" { "1" } else { "0" };
+    let expect_timeout = if matches!(boundary, "timeout" | "wrapper_stall") {
+        "1"
+    } else {
+        "0"
+    };
     assert_eq!(
         field("harness_timeout="),
         expect_timeout,
@@ -752,7 +771,7 @@ sys.stdout.flush()
     );
     // The timeout sweep stops the recipe before its epilogue can report the
     // caller's job. Every path that returns to the outer script must leave it.
-    if boundary != "timeout" {
+    if !matches!(boundary, "timeout" | "wrapper_stall") {
         assert_eq!(
             field("caller_job="),
             "alive",
@@ -762,7 +781,7 @@ sys.stdout.flush()
     let expected_rc = match boundary {
         "none" => Some("0"),
         "unreaped" => Some("137"),
-        "timeout" => None,
+        "timeout" | "wrapper_stall" => None,
         _ => Some("143"),
     };
     if let Some(expected_rc) = expected_rc {
@@ -773,7 +792,7 @@ sys.stdout.flush()
         );
     }
     let expected_child = match boundary {
-        "before_spawn" => "missing",
+        "before_spawn" | "wrapper_stall" => "missing",
         "unreaped" | "timeout" => "alive",
         _ => "reaped",
     };
@@ -782,7 +801,7 @@ sys.stdout.flush()
         expected_child,
         "{boundary}: unexpected child state: {stdout} {stderr}"
     );
-    let expected_after = if boundary == "before_spawn" {
+    let expected_after = if matches!(boundary, "before_spawn" | "wrapper_stall") {
         "missing"
     } else {
         "gone"
@@ -844,7 +863,13 @@ sys.stdout.flush()
             "{boundary}: pid file exists: {published_on_disk:?}"
         );
     }
-    if boundary != "before_spawn" {
+    if boundary == "wrapper_stall" {
+        // The wrapper stopped before the recipe, so the caller's job is the
+        // fixture-owned process the sweep must have reaped.
+        let caller_pid: libc::pid_t = field("caller_job_pid=").parse().expect("caller job pid");
+        assert_pid_gone(caller_pid, "wrapper_stall caller job");
+    }
+    if !matches!(boundary, "before_spawn" | "wrapper_stall") {
         let child_pid = field("child_pid=");
         let caller_pid = field("caller_job_pid=");
         assert!(
@@ -861,7 +886,8 @@ sys.stdout.flush()
     // The log is created by the start itself, so it exists only after the spawn.
     assert!(
         shots.join("sentinel.txt").exists()
-            && (boundary == "before_spawn" || qa_base.join("serve.log").exists()),
+            && (matches!(boundary, "before_spawn" | "wrapper_stall")
+                || qa_base.join("serve.log").exists()),
         "{boundary}: teardown must leave artifacts in place: {stdout}"
     );
     if boundary == "none" {
