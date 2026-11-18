@@ -1613,6 +1613,10 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
             (vcs / module).mkdir(parents=True, exist_ok=True)
         (vcs / "push.rs").write_text("")
         (vcs / "claim" / "published.rs").write_text("")
+        # [ORB-25491] The engine dispatch-contract leaf is scanned directly and
+        # fails closed when its directory or dispatch_contract.rs is absent;
+        # create both (empty) so the fixture reports no match, mirroring
+        # test-check-dependency-direction.py setUp.
         context = self.root / "crates/orbit-engine/src/context"
         context.mkdir(parents=True, exist_ok=True)
         (context / "dispatch_contract.rs").touch()
