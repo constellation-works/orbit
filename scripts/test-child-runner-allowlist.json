@@ -231,13 +231,6 @@
     "reason": "Isolated --exact fixture waited with .output() and assert_child_test_passed."
   },
   {
-    "path": "crates/orbit-core/src/application/tests/mod.rs",
-    "function": "run_isolated_test",
-    "call": ".output()",
-    "ordinal": 0,
-    "reason": "Isolated --exact fixture waited with .output(). Baselined until it moves to run_child_test."
-  },
-  {
     "path": "crates/orbit-core/tests/runtime/actor_identity.rs",
     "function": "agent_envelopes_never_fall_back_to_human_attribution",
     "call": ".output()",

@@ -78,6 +78,6 @@ pub use workspace::{
 mod tests;
 // Mutable adapter fixtures share the application fixtures' isolation launcher.
 #[cfg(test)]
-pub(crate) use tests::run_isolated_test;
+pub(crate) use tests::{run_isolated_test, run_isolated_test_with_env};
 
 pub mod automation;
