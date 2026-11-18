@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: MCP roles — every tool in one toolset, roles as named toolset sets, --role and machine.mcp.role, refusal, remote and federated forwarding, size budgets"
-last_updated: 2026-11-05
+last_updated: 2026-11-17
 last_validated: 2026-11-14
 title: Spec — MCP roles and toolsets
 owner: claude
@@ -60,6 +60,7 @@ Roles are defined in one place, `McpRole::toolsets`:
 their own allowlists, which still decide what a managed run may call. The
 `resident` toolset (`orbit.resident.grant`, `show` and `list` from [ORB-21242];
 `relay` and `control` from [ORB-21245]) is in `manager` and `resident`.
+The `notice` toolset ([ORB-21211]) is in `manager`, `resident` and `agent`.
 The roles, not another add-on toolset, are how those surfaces are served.
 
 ## Selection

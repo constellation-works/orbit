@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Vision
 owner: codex
-last_updated: 2026-10-28
-last_validated: 2026-11-09
+last_updated: 2026-11-17
+last_validated: 2026-11-17
 status: Draft
 feature: mcp-bridge
 doc_role: vision
@@ -102,5 +102,6 @@ transport and kernel contract is [`references/conformance-v1.yaml`](./references
 - [ORB-11011] implemented the federated MCP mux.
 - [ORB-11016] registered federated serve and documented its implementation.
 - [ORB-14449] added task-ID prefix routing for id-only calls.
+- [ORB-23052] made the TCP listener admit only a same-uid peer, which the transport section above relies on.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

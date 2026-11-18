@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Overview
 owner: grok
-last_updated: 2026-11-05
-last_validated: 2026-11-08
+last_updated: 2026-11-17
+last_validated: 2026-11-17
 status: Draft
 stage: shipped
 next: "—"
@@ -40,7 +40,7 @@ Full definitions live in [references/glossary.md](./references/glossary.md). The
 | Concern | File | Task |
 |---------|------|------|
 | Mux vs fleet registry; selector identity; list schema; fail-closed errors | [specs/federated-workspace-mcp.md](./specs/federated-workspace-mcp.md) | [ORB-11009], [ORB-11010] |
-| Shipped mux design | [2_design.md](./2_design.md) | [ORB-11011]–[ORB-11017] |
+| Shipped mux design | [2_design.md](./2_design.md) | [ORB-11011], [ORB-11012], [ORB-11013], [ORB-11016], [ORB-11017], [ORB-24377], [ORB-24631] |
 | MCP role and toolset selection | [specs/mcp-roles.md](./specs/mcp-roles.md) | [ORB-21263] |
 | Open questions (auth, expiry, freshness, cloud store) | [3_vision.md](./3_vision.md) | [ORB-11009] |
 | Standing rules and rejected alternatives | [4_decisions.md](./4_decisions.md) | [ORB-11009], [ORB-11010] |
@@ -63,5 +63,7 @@ Full definitions live in [references/glossary.md](./references/glossary.md). The
 - [ORB-11017] — host-qualified federated `workspace` parameter
 - [ORB-11044] — implicit local membership for federated serve
 - [ORB-21263] — applied MCP role and toolset selection across the federated surface
+- [ORB-24377] — reused one idle SSH MCP session per destination across routed calls
+- [ORB-24631] — re-landed that session pool with a bounded reuse health check
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

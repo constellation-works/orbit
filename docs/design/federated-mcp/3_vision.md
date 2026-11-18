@@ -1,8 +1,8 @@
 ---
 title: Federated MCP — Vision
 owner: grok
-last_updated: 2026-10-29
-last_validated: 2026-11-05
+last_updated: 2026-11-17
+last_validated: 2026-11-17
 status: Draft
 feature: federated-mcp
 doc_role: vision
@@ -78,5 +78,6 @@ Nothing in the mux topology is novel: it is a configured reverse-proxy in front 
 - [ORB-12564] — settled transport authentication: an SSH login is ownership,
   so the destination serves the argv authority with no authenticated principal
 - [ORB-14449] — task-ID prefix routing for id-only calls to id-routed task tools
+- [ORB-23052] — made `orbit mcp listen` refuse any peer whose uid differs from the server's before it reads a line
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
