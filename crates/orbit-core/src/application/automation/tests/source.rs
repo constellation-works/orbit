@@ -1010,22 +1010,37 @@ use std::time::{Duration, Instant};
 #[cfg(target_os = "linux")]
 #[test]
 fn timed_out_source_reaps_its_leader_and_kills_the_grandchild() {
-    if crate::application::run_isolated_test(std::any::type_name_of_val(
-        &timed_out_source_reaps_its_leader_and_kills_the_grandchild,
-    )) {
+    const GIT_CEILING_FOR_ISOLATED_CHILD: &str = "ORBIT_TEST_SOURCE_GIT_CEILING";
+    // The isolated test child runs from its disposable home, so seed the
+    // checkout root from the test runner before re-executing. Keep the value
+    // in a test-only variable so the child does not derive it from TMPDIR.
+    let git_ceiling = std::env::var(GIT_CEILING_FOR_ISOLATED_CHILD).unwrap_or_else(|_| {
+        std::env::current_dir()
+            .expect("test runner working directory")
+            .ancestors()
+            .find(|path| path.join(".git").exists())
+            .expect("test runner is inside a Git checkout")
+            .to_str()
+            .expect("Git checkout path is UTF-8")
+            .to_owned()
+    });
+    if crate::application::run_isolated_test_with_env(
+        std::any::type_name_of_val(&timed_out_source_reaps_its_leader_and_kills_the_grandchild),
+        &[
+            ("GIT_CEILING_DIRECTORIES", git_ceiling.as_str()),
+            (GIT_CEILING_FOR_ISOLATED_CHILD, git_ceiling.as_str()),
+        ],
+    ) {
         return;
     }
+    let _git_ceiling = orbit_common::test_env::scoped([
+        ("GIT_CEILING_DIRECTORIES", Some(git_ceiling.as_str())),
+        (GIT_CEILING_FOR_ISOLATED_CHILD, Some(git_ceiling.as_str())),
+    ]);
     // SAFETY: this isolated child adopts orphaned grandchildren so the test
     // can reap them and prove they are gone, even with a non-reaping PID 1.
     assert_eq!(unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) }, 0);
     let root = tempfile::tempdir().unwrap();
-    // TMPDIR can sit inside an enclosing checkout, and the alias runs from the
-    // repository root Git discovers. Git never chdirs up into a ceiling, so
-    // the ceiling must be the directory holding this fixture (not the fixture
-    // itself): discovery then stops before the checkout.
-    let git_ceiling = root.path().parent().unwrap().to_str().unwrap();
-    let _git_ceiling =
-        orbit_common::test_env::scoped([("GIT_CEILING_DIRECTORIES", Some(git_ceiling))]);
     let source = Source::new(root.path());
     let started = Instant::now();
     let result = source.git(&[
