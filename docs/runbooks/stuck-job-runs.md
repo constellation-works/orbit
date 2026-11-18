@@ -995,9 +995,10 @@ otherwise refuses with nothing written:
   discarded;
 - the run's checkpoints authenticate the branch, and the pull request is open
   and unmerged at the authenticated published head: the recorded pushed head,
-  followed through any recorded `pr_auto_fix_pushed` entries and any
-  host-attested reviewer fast-forward pushed by an incomplete before-landing
-  review's failure handoff ([review-gate.md](review-gate.md)). That published
+  followed through any recorded `pr_auto_fix_pushed` entries and, only for a
+  review-decision hold (an incomplete before-landing review, which ends its run
+  `held`), the host-attested reviewer fast-forward its failure handoff pushed
+  ([review-gate.md](review-gate.md)). That published
   identity must match the remote branch and pull request exactly, while the
   retained local branch matches that published head or a host-certified clean
   base-chase tip;
@@ -1100,9 +1101,13 @@ publishing run. The host's receipt on the run's checkpoints must be an applied
 `resume` for this task, keyed to this run, that carried no host repair commit,
 beside the kept-publication receipt. The binding's head is the PR's current published
 head, reached only through the `pr_auto_fix_pushed` entries the run recorded from the
-originally pushed head and any host-attested reviewer fast-forward pushed by an
-incomplete review's failure handoff; any other move, whether another run or actor
-recorded it or nothing did, refuses as drift.
+originally pushed head; any other move, whether another run or actor recorded it or
+nothing did, refuses as drift. This route never admits a host-attested reviewer
+fast-forward. An incomplete before-landing review pushes its reviewer commit in its
+failure handoff, but that run ends `held` with `review_decision_pending`, not
+`failed`, and this in-place repair admits only a `failed` run. That push belongs to
+the stopped review-decision hold route, where requeue resumes the pull request at the
+attested reviewer head ([review-gate.md](review-gate.md)).
 Submit with the usual explicit `unmet_acceptance` and inspected `policy_digest`.
 The repair is review-only: `completion: "review"`, `auto_fix: false`, no merge or
 completion authority, no historical deadline renewed and no auto-fix ledger entry
