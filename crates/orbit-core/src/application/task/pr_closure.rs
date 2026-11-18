@@ -189,6 +189,21 @@ impl OrbitRuntime {
                 return false;
             }
         };
+        // A rejected task can be reconsidered while the forge is listing.
+        // Check its revision only after the list is captured: a replacement
+        // published after this read cannot be among these candidates. Do not
+        // hold the task write lock across forge calls.
+        if task.status == TaskStatus::Rejected {
+            match self.get_task(&task.id) {
+                Ok(current)
+                    if current.status == task.status && current.updated_at == task.updated_at => {}
+                Ok(_) => return true,
+                Err(error) => {
+                    self.warn_pr_closure(&task.id, None, &error);
+                    return false;
+                }
+            }
+        }
         let candidates = open
             .into_iter()
             .filter(|pr| {
