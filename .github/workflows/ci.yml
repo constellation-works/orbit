@@ -193,6 +193,7 @@ jobs:
             /scripts/ci-download-verified.sh
             /scripts/ci-repack-nextest.py
             /scripts/ci-probe-bubblewrap.sh
+            /scripts/ci-rust-dependency-cache-key.py
             /scripts/ci-workspace-cache.py
 
       - name: Restore ripgrep archive cache
@@ -314,6 +315,12 @@ jobs:
           components: rustfmt, clippy
           targets: aarch64-apple-darwin
 
+      # Every dependency-cache producer and seeder takes its prefix from this
+      # helper, so keys stay identical (docs/runbooks/compiler-cache.md).
+      - name: Derive Rust dependency cache identity
+        id: rust-dependency-key
+        run: python3 .orbit/tmp/workflow-ci/scripts/ci-rust-dependency-cache-key.py --manifest Cargo.toml
+
       # [DANI-10428] Rust 1.98.1 dependency cache. rust-cache prunes target/
       # to dependency artifacts and the registry to crates Cargo.lock still
       # references before saving, so the archive stays far below the 10 GB
@@ -327,7 +334,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         id: rust-cache
         with:
-          prefix-key: v1-rust-${{ hashFiles('Cargo.toml') }}
+          prefix-key: ${{ steps.rust-dependency-key.outputs.prefix-key }}
           shared-key: rust-1.98.1-checks
           cache-on-failure: true
           save-if: ${{ github.event_name == 'push' }}
@@ -561,12 +568,18 @@ jobs:
           toolchain: "1.98.1"
           components: rustfmt, clippy
 
+      # Every dependency-cache producer and seeder takes its prefix from this
+      # helper, so keys stay identical (docs/runbooks/compiler-cache.md).
+      - name: Derive Rust dependency cache identity
+        id: rust-dependency-key
+        run: python3 .orbit/tmp/workflow-ci/scripts/ci-rust-dependency-cache-key.py --manifest Cargo.toml
+
       # Guards read Cargo metadata and a few self-tests drive small Cargo
       # targets, so this job keeps its own small registry and target entry.
       # Pull requests restore only; pushes to main and agent-main save.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          prefix-key: v1-rust-${{ hashFiles('Cargo.toml') }}
+          prefix-key: ${{ steps.rust-dependency-key.outputs.prefix-key }}
           shared-key: rust-1.98.1-guards
           cache-on-failure: true
           save-if: ${{ github.event_name == 'push' }}
@@ -773,6 +786,12 @@ jobs:
           toolchain: "1.98.1"
           components: clippy
 
+      # Every dependency-cache producer and seeder takes its prefix from this
+      # helper, so keys stay identical (docs/runbooks/compiler-cache.md).
+      - name: Derive Rust dependency cache identity
+        id: rust-dependency-key
+        run: python3 .orbit/tmp/workflow-ci/scripts/ci-rust-dependency-cache-key.py --manifest Cargo.toml
+
       # [DANI-10428] Rust 1.98.1 build cache. rust-cache prunes target/
       # to dependency artifacts and the registry to crates Cargo.lock still
       # references before saving, so the archive stays far below the 10 GB
@@ -787,7 +806,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         id: rust-cache
         with:
-          prefix-key: v1-rust-${{ hashFiles('Cargo.toml') }}
+          prefix-key: ${{ steps.rust-dependency-key.outputs.prefix-key }}
           shared-key: rust-1.98.1
           cache-on-failure: true
           save-if: ${{ github.event_name == 'push' }}
