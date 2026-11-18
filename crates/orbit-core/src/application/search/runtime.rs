@@ -1,4 +1,5 @@
 use orbit_common::OrbitError;
+use orbit_store::contracts::TaskListFilter;
 
 use crate::OrbitRuntime;
 
@@ -46,6 +47,23 @@ impl OrbitRuntime {
 
     pub fn search_index_stats(&self) -> Result<orbit_search::SearchIndexStats, OrbitError> {
         self.stores().lexical_index().store()?.stats()
+    }
+
+    /// Report lexical index stats and the local task count for coverage checks.
+    ///
+    /// Reindexing uses the workspace's physical task store, including on
+    /// replicas where coordination listings hide local task records. Count
+    /// that same corpus through the store's observational metadata path.
+    pub fn search_index_coverage(
+        &self,
+    ) -> Result<(orbit_search::SearchIndexStats, usize), OrbitError> {
+        let stats = self.search_index_stats()?;
+        let tasks = self
+            .stores()
+            .tasks()
+            .observe_task_candidates(&TaskListFilter::default(), 0)?
+            .total;
+        Ok((stats, tasks))
     }
 
     /// Unified search entry point.

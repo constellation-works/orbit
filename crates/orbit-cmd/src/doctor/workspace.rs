@@ -299,20 +299,9 @@ pub(super) fn doctor_check_disk_space(runtime: &OrbitRuntime) -> WorkspaceDoctor
     disk_space_check(&root)
 }
 
-/// Tasks stored in this workspace, counted from the validated task index
-/// without hydrating any bundle.
-fn stored_task_count(runtime: &OrbitRuntime) -> Result<usize, orbit_common::OrbitError> {
-    Ok(runtime
-        .task_candidates(&orbit_core::application::task::TaskListFilter::default(), 0)?
-        .total)
-}
-
-/// Cheap chunk coverage check against the authoritative task store.
+/// Compare lexical index coverage with the workspace's local search corpus.
 pub(super) fn doctor_check_search_index(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
-    match runtime
-        .search_index_stats()
-        .and_then(|stats| Ok((stats, stored_task_count(runtime)?)))
-    {
+    match runtime.search_index_coverage() {
         Err(error) => check(
             "search-index",
             WorkspaceDoctorStatus::Warning,
