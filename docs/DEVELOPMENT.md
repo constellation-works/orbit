@@ -1022,7 +1022,7 @@ A script that starts `web serve` for screenshots, instead of a person pressing C
 - **Wait for the exit.** SIGTERM, a bounded wait for the exit, then SIGKILL (sent only to the verified PID) and a second bounded wait. A server that survives SIGKILL fails the run loudly and keeps `SERVER_PID` set for a retry; nothing blocks on an unbounded `wait`.
 - **Never delete artifacts.** Teardown touches only the process. Screenshots under `QA_BASE` stay for `orbit.task.artifact` action `put`; the managed-lane rule above still forbids raw removal.
 
-For a static Jobs screenshot, use the prepared Playwright kit and wait for the rendered panel instead of page or network quiescence. The browser deadline is 20 seconds from Chromium launch. Navigate with `waitUntil: "domcontentloaded"`, observe the real `/api/events/stream` response, then wait for `#jobs-live-body .operation-running` to be visible and `#jobs-live-count` to be populated. That pair means the Jobs Live request rendered; the `EventSource` remains open. `browser.close()` runs in `finally`, then `qa_serve_stop` sends TERM, waits at most five seconds, escalates to KILL, reaps the exact server child and confirms its port closed. A screenshot from a static fixture that stubs `/api/events/stream` proves only the rendered state; keep event delivery, reconnect and resync checks on the real stream.
+For a static Jobs screenshot, use the prepared Playwright kit and wait for the rendered panel instead of page or network quiescence. The capture deadline is 20 seconds from Chromium launch, including page creation and evidence writing. Browser cleanup has a separate five-second bound; the Node process exits after that bound even if Playwright retains open handles, allowing server teardown to start. Navigate with `waitUntil: "domcontentloaded"`, observe the real `/api/events/stream` response, then wait for `#jobs-live-body .operation-running` to be visible and `#jobs-live-count` to be populated. That pair means the Jobs Live request rendered; the `EventSource` remains open. `browser.close()` runs in `finally`, then `qa_serve_stop` sends TERM, waits at most five seconds, escalates to KILL, reaps the exact server child and confirms its port closed. A screenshot from a static fixture that stubs `/api/events/stream` proves only the rendered state; keep event delivery, reconnect and resync checks on the real stream.
 
 ```bash
 # Define once, after `qa workspace init`. Run the capture below as `bash script.sh` or in a ( ) subshell.
@@ -1103,6 +1103,8 @@ browser_shoot() {  # $1 = dashboard URL; $2 = screenshot; $3 = elapsed-time evid
   . "$ORBIT_BROWSER_KIT_ENV"
   node --input-type=module - "$@" <<'NODE'
 import { writeFile } from 'node:fs/promises';
+import { writeSync } from 'node:fs';
+import { inspect } from 'node:util';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE);
 const [baseUrl, screenshotPath, evidencePath] = process.argv.slice(2);
 const started = performance.now();
@@ -1114,13 +1116,17 @@ const remaining = () => {
 };
 let browser;
 let streamClosed = false;
-try {
+let captureTimer;
+let cleanupTimer;
+const capture = async () => {
   browser = await chromium.launch({ timeout: remaining(), args: ['--no-zygote', '--disable-gpu', '--disable-dev-shm-usage'] });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const streamPromise = page.waitForResponse((response) => {
     const url = new URL(response.url());
     return url.pathname === '/api/events/stream' && (response.headers()['content-type'] || '').includes('text/event-stream');
   }, { timeout: remaining() });
+  // Attach a rejection handler immediately, including when navigation fails first.
+  void streamPromise.catch(() => {});
   await page.goto(`${baseUrl}/#jobs/live`, { waitUntil: 'domcontentloaded', timeout: remaining() });
   const stream = await streamPromise;
   if (stream.status() !== 200) throw new Error(`event stream returned ${stream.status()}`);
@@ -1145,10 +1151,40 @@ try {
     deadline_ms: 20_000,
   };
   await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
-  console.log(JSON.stringify(evidence));
+  writeSync(1, `${JSON.stringify(evidence)}\n`);
+};
+let captureError;
+let cleanupError;
+try {
+  await Promise.race([
+    capture(),
+    new Promise((_, reject) => {
+      captureTimer = setTimeout(() => reject(new Error('20-second screenshot deadline expired')), remaining());
+    }),
+  ]);
+} catch (error) {
+  captureError = error;
 } finally {
-  if (browser) await browser.close();
+  clearTimeout(captureTimer);
+  if (browser) {
+    try {
+      await Promise.race([
+        browser.close(),
+        new Promise((_, reject) => {
+          cleanupTimer = setTimeout(() => reject(new Error('5-second browser cleanup deadline expired')), 5_000);
+        }),
+      ]);
+    } catch (error) {
+      cleanupError = error;
+    } finally {
+      clearTimeout(cleanupTimer);
+    }
+  }
 }
+if (captureError) writeSync(2, `Screenshot capture failed: ${inspect(captureError)}\n`);
+if (cleanupError) writeSync(2, `Browser cleanup failed: ${inspect(cleanupError)}\n`);
+// Playwright can retain handles after a timeout. Do not let them delay server teardown.
+process.exit(captureError || cleanupError ? 1 : 0);
 NODE
 }
 
