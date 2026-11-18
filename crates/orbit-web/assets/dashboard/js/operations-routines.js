@@ -297,6 +297,22 @@ function watchRoutineTimelineSize(track) {
   if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => layoutRoutineTimelineLabels(track));
 }
 
+// The scheduler's trial is the first non-skipped fire created after the
+// admission (breaker.rs open_gate); recent_fires is newest first.
+function breakerTrialDispatched(routine, breaker) {
+  const admitted = Date.parse(breaker.trial_started_at);
+  const fires = routine.recent_fires || (routine.last_fire ? [routine.last_fire] : []);
+  return fires.some(fire => fire.state !== "skipped" && Date.parse(fire.started_at) > admitted);
+}
+
+// When an admitted, undispatched trial fires: the next sweep tick for an
+// operator bypass, else the routine's next schedule slot. next_due, not
+// routineNextAt: while the breaker is tripped, next_evaluation carries the
+// admission time.
+function armedTrialAt(routine, breaker, now) {
+  return breaker.trial_reason === "bypass" ? new Date(now).toISOString() : routine.next_due || null;
+}
+
 // The next hour as a strip: where each routine's slots land, with paused
 // routines drawn hollow so an operator sees skipped slots, not only live ones.
 // A routine due several times in the hour is drawn at each of its slots.
@@ -306,13 +322,16 @@ function routineTimeline(routines, now = Date.now()) {
     .flatMap(routine => {
       const breaker = trippedBreaker(routine);
       const active = routineState(routine) === "active";
-      // A trial that has already started is running, not upcoming: the
-      // status projection reports the transition's updated_at as
-      // next_trial_at while trial_started_at is set, and the scheduler
-      // admits no second trial while that one is in flight
-      // (breaker_trial_in_flight). Never count it in the Next hour.
-      if (breaker?.trial_started_at) return [];
-      const first = Date.parse(breaker ? breaker.next_trial_at : routineNextAt(routine));
+      // An admitted trial (trial_started_at set) is upcoming until its fire
+      // is dispatched: the scheduler stores the admission before it evaluates
+      // the schedule, so between slots the trial waits for the next slot. The
+      // status projection reports the admission's updated_at as next_trial_at
+      // and next_evaluation, which is not when it fires. Once a non-skipped
+      // fire exists after the admission, the trial is running and the
+      // scheduler admits no second one (breaker_trial_in_flight): it is no
+      // longer upcoming.
+      if (breaker?.trial_started_at && breakerTrialDispatched(routine, breaker)) return [];
+      const first = Date.parse(breaker?.trial_started_at ? armedTrialAt(routine, breaker, now) : breaker ? breaker.next_trial_at : routineNextAt(routine));
       if (!Number.isFinite(first) || first < now - 60_000 || first > now + horizon || (breaker && !active)) return [];
       const kind = breaker ? "trial" : active ? "fires" : "skipped";
       const times = breaker ? [first] : routineFireTimes(routine, first, now + horizon);
