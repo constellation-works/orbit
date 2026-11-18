@@ -67,6 +67,11 @@ The common `agent_loop` fields are:
   says `success` and carries `error`, or a clean prose ending with no envelope,
   inside its own wall-clock budget — see §7.6a; `task_pilot`
   declare it)
+- `provider_denial_guidance` (default `false`; when `true`, every dispatch
+  appends the engine's built-in provider CLI permission-denial text,
+  `crates/orbit-engine/assets/provider_denial/guidance.txt`, to the
+  instruction. The activity's own instruction still names what else a denial
+  never excuses. The implement, review-repair and recovery activities opt in)
 
 A former `Groundhog(GroundhogSpec)` variant (a sibling activity kind from [T20260420-0510-2]) was removed as unused in [ORB-10332]; activity specs are now only `agent_loop` and `deterministic`.
 

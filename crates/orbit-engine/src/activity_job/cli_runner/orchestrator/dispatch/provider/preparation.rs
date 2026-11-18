@@ -16,6 +16,11 @@ use orbit_types::workflow::{
 };
 use serde_json::Value;
 
+/// The built-in provider CLI permission-denial guidance an activity with
+/// `provider_denial_guidance: true` receives on every dispatch.
+const PROVIDER_DENIAL_GUIDANCE: &str =
+    include_str!("../../../../../../assets/provider_denial/guidance.txt");
+
 pub(super) struct ProviderEnvelope {
     pub(super) envelope_spec: AgentLoopSpec,
     pub(super) staged_images: Option<StagedImages>,
@@ -59,6 +64,12 @@ pub(super) fn prepare_provider_envelope<'a>(
     envelope_spec.instruction = envelope_spec
         .envelope_instruction(host.mid_run_steering_enabled())
         .into_owned();
+    if spec.provider_denial_guidance {
+        envelope_spec.instruction.push_str("\n\n");
+        envelope_spec
+            .instruction
+            .push_str(PROVIDER_DENIAL_GUIDANCE.trim_end());
+    }
     if let Some(tools) = &inspection_tools {
         envelope_spec.instruction.push_str("\n\n");
         envelope_spec.instruction.push_str(tools.instruction);
