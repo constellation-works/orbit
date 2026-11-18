@@ -353,21 +353,30 @@ fn body(report: &StallReport<'_>, key: &str) -> String {
 
 /// When a `crew_os_ineligible` hold clears by itself. An OS exclusion alone
 /// clears once the configuration admits a crew. A refused model also clears as
-/// its refusal lapses or a verified success of that model lands, and the pool
-/// admitting a crew whose model is not refused clears it too.
-fn hold_resumption(hold: &CrewOsHold) -> &'static str {
+/// its refusal lapses or a verified success of that model lands. The pool
+/// admitting a crew clears it only when that crew can run under the task's
+/// effective `os:` tags and its model is not refused on this host and account.
+fn hold_resumption(hold: &CrewOsHold) -> String {
     if hold.model_refused.is_empty() {
-        "It resumes on its own at the first evaluation after the configuration admits a crew."
-    } else {
-        "It resumes on its own once a refusal above lapses, once a verified success of its model \
-         lands on this host and account, or once the pool admits a crew whose model is not \
-         refused."
+        return "It resumes on its own at the first evaluation after the configuration admits a crew."
+            .to_string();
     }
+    let replacement = if hold.os_tags.is_empty() {
+        "whose model is not refused".to_string()
+    } else {
+        os_and_model_replacement(&hold.os_tags)
+    };
+    format!(
+        "It resumes on its own once a refusal above lapses, once a verified success of its model \
+         lands on this host and account, or once the pool admits a crew {replacement}."
+    )
 }
 
-/// The ways out of a `crew_os_ineligible` hold, naming only the causes it
-/// carries: a refused model, an OS exclusion, or both. Editing `os:` tags cannot
-/// clear a refusal, so they are offered only when a crew is OS-excluded.
+/// The ways out of a `crew_os_ineligible` hold. A replacement crew has to pass
+/// every filter the hold still applies: the task's effective `os:` tags, when
+/// it has any, and provider-model access on this host and account, when a
+/// model is refused. Editing `os:` tags cannot clear a refusal, so that option
+/// and an OS-only crew add are offered only when no model is refused.
 fn hold_remediation(hold: &CrewOsHold, definition: &str) -> String {
     let mut options = Vec::new();
     if !hold.model_refused.is_empty() {
@@ -376,12 +385,14 @@ fn hold_remediation(hold: &CrewOsHold, definition: &str) -> String {
              host and account"
                 .to_string(),
         );
-        options.push(format!(
-            "add a crew to `{}` whose model is not refused on this host and account",
-            hold.pool_key
-        ));
+        let replacement = if hold.os_tags.is_empty() {
+            "whose model is not refused on this host and account".to_string()
+        } else {
+            os_and_model_replacement(&hold.os_tags)
+        };
+        options.push(format!("add a crew to `{}` {replacement}", hold.pool_key));
     }
-    if !hold.excluded.is_empty() {
+    if !hold.excluded.is_empty() && hold.model_refused.is_empty() {
         options.push(format!(
             "add a crew whose executor can run on one of {} to `{}`",
             hold.os_tags.join(", "),
@@ -393,6 +404,16 @@ fn hold_remediation(hold: &CrewOsHold, definition: &str) -> String {
         ));
     }
     format!("Resolve it with one of:\n- {}.", options.join(";\n- "))
+}
+
+/// A replacement crew that passes both filters the evaluator applies: the
+/// task's effective `os:` tags, then provider-model access on this host and
+/// account.
+fn os_and_model_replacement(os_tags: &[String]) -> String {
+    format!(
+        "whose executor can run on one of {} and whose model is not refused on this host and account",
+        os_tags.join(", ")
+    )
 }
 
 fn body_marks_dedupe(body: &str, key: &str) -> bool {
