@@ -1,6 +1,6 @@
 use orbit_common::OrbitError;
 
-use crate::activity_job::DispatchError;
+use crate::context::dispatch_contract::DispatchError;
 
 pub(super) fn unsupported_runtime_capability(capability: &str) -> OrbitError {
     OrbitError::Execution(format!(

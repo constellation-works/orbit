@@ -1,13 +1,16 @@
 //! Execution-context primitives shared by the engine flows.
 //!
-//! Split by concern; every item is re-exported here so `crate::context::X`
-//! paths (and the crate-root re-exports in `lib.rs`) stay stable:
+//! Split by concern; existing `crate::context::X` paths (and the crate-root
+//! re-exports in `lib.rs`) stay stable. Dispatch contracts are read through
+//! their leaf module:
 //! - [`outcome`] — run outcome types, error-code constants, and
 //!   workflow-failure/interruption helpers.
+//! - [`dispatch_contract`] — executor, sandbox, outcome and error contracts for the port.
 //! - [`hosts`] — the unified [`RuntimeHost`] boundary and task-update types.
 //! - [`env`] — subprocess provenance environment variables shared by every
 //!   engine spawn path.
 
+pub(crate) mod dispatch_contract;
 mod env;
 mod hosts;
 mod outcome;

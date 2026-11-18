@@ -332,8 +332,9 @@ contracts_higher="${app_modules}|routines|auto_tasks"
 # With `$4` set to `named-path`, match the `|`-separated path prefixes `$3`
 # anywhere in code, including grouped trees, while preserving comments and
 # literals as non-dependencies. A single name matches that identifier alone.
+# With `$5` set to `include-tests`, also scan sibling test modules.
 super_chains_into() {
-  python3 - "$1" "$2" "$3" "${4:-}" <<'PY'
+  python3 - "$1" "$2" "$3" "${4:-}" "${5:-}" <<'PY'
 import pathlib
 import re
 import sys
@@ -413,7 +414,7 @@ target = app / module
 paths = [target] if target.is_file() else sorted(target.rglob("*.rs"))
 for path in paths:
     rel = path.relative_to(app)
-    if "tests" in rel.parts[:-1] or rel.name == "tests.rs":
+    if sys.argv[5] != "include-tests" and ("tests" in rel.parts[:-1] or rel.name == "tests.rs"):
         continue
     parts = ([] if crate_root and module else [app.name]) + list(rel.with_suffix("").parts)
     if parts[-1] == "mod":
@@ -1364,6 +1365,23 @@ for consumer in checks base push.rs claim/published.rs; do
     fail=1
   fi
 done
+
+# The RuntimeHost port owns its dispatch contracts below activity execution.
+# Include test-support and test fixtures; paths into orbit-types' workflow
+# modules remain legal. The contract leaf must name no engine module at all.
+engine_src="$repo_root/crates/orbit-engine/src"
+if [[ ! -d "$engine_src/context" ]]; then
+  echo "dependency scan path missing: $engine_src/context" >&2
+  exit 1
+fi
+if ! super_chains_into "$engine_src" context activity_job crate-root include-tests; then
+  echo "orbit-engine context must not name activity_job; RuntimeHost owns its dispatch contracts"
+  fail=1
+fi
+if ! module_paths_into "$engine_src/context" dispatch_contract.rs crate; then
+  echo "orbit-engine dispatch contracts must not name any crate:: module"
+  fail=1
+fi
 
 # [ORB-24781] `job::run` (a run record's lifecycle: queries, cancellation,
 # reconciliation and drain controls) sits below `job::pipeline` (submission,
