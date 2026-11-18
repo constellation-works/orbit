@@ -320,6 +320,18 @@ impl OrbitRuntime {
                 )));
             }
         }
+        // Preview the same exclusions as dispatch without reserving an owner
+        // wave. A mixed request still reaches the worker with all IDs so its
+        // audit records every omission.
+        if !task_ids.is_empty() {
+            let preview = JobAdmissionPort::preview_named_ship(self, &input)?;
+            if preview["task_ids"].as_array().is_some_and(Vec::is_empty) {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "named ship has no dispatchable tasks: {}; resolve the listed holds and retry",
+                    preview["excluded"]
+                )));
+            }
+        }
         if let Some(conflict) = self.in_flight_ship_run_for_tasks(task_ids)? {
             return Err(conflict);
         }

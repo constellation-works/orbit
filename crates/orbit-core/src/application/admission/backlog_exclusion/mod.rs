@@ -9,7 +9,7 @@ mod snapshot;
 mod types;
 
 pub(crate) use exclusions::no_drain_exclusion;
-pub(crate) use listing::{allowlist_from_input, list_backlog_tasks};
+pub(crate) use listing::{allowlist_from_input, list_backlog_tasks, preview_named_backlog_tasks};
 pub(super) use operator_override::{
     lock_conflict_gate, operator_overridden_gates, record_readiness_override,
 };

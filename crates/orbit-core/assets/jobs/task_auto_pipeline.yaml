@@ -113,6 +113,16 @@ spec:
           mode: all
         collect: gate_results
 
+    # Check omissions only after dispatch, preserving eligible siblings.
+    - id: report_named_holds
+      target: activity:validate_bundles
+      default_input:
+        bundles: "{{ steps.list_backlog.output.bundles }}"
+        max_bundle_size: "{{ input.max_bundle_size }}"
+        known_task_ids: "{{ steps.list_backlog.output.task_ids }}"
+        requested_task_ids: "{{ input.task_ids }}"
+        excluded: "{{ steps.list_backlog.output.excluded }}"
+
     - id: require_gate_success
       when: "{{ steps.validate_bundles.output.bundle_count }} != 0"
       target: activity:pipeline_success_guard

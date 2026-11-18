@@ -25,6 +25,14 @@ spec:
             type: string
       max_bundle_size:
         type: number
+      requested_task_ids:
+        type: array
+        items:
+          type: string
+      excluded:
+        type: array
+        items:
+          type: object
       known_task_ids:
         type: array
         items:
