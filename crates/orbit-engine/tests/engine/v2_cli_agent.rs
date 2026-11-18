@@ -64,6 +64,8 @@ mod no_diff;
 #[cfg(unix)]
 mod response_correction;
 #[cfg(unix)]
+mod reviewer_evidence_hold;
+#[cfg(unix)]
 mod stderr_failure;
 #[cfg(unix)]
 mod tag_instructions;

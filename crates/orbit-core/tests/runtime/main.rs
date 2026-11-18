@@ -125,6 +125,7 @@ mod review_continuation;
 mod review_evidence_fulfilment;
 mod review_evidence_paths;
 mod review_evidence_writers;
+mod review_failed_reviewer_hold;
 mod review_gate_audit;
 mod review_held_resume;
 #[cfg(target_os = "linux")]
