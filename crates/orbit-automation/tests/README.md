@@ -3,9 +3,13 @@
 `scheduling.rs` drives the public due-decision, scheduler and member evaluation
 APIs with explicit timestamps. The due table includes Berlin's spring gap and
 autumn fold (the daily cron selects the first fold occurrence), clock cadence
-grace and actual downtime. The fixed-time spring-gap case records Croner's
-backward-search resolution to the preceding real minute; wildcard schedules
-cross the gap directly to the next real slot. Both must consume their slots once.
+grace and actual downtime. The Berlin rows run in a child whose host-local zone
+(`TZ`) is the POSIX rule `CET-1CEST,M3.5.0,M10.5.0/3`, not system zoneinfo; the
+child asserts that zone before the rows run, and UTC rows evaluate in `Utc`. The
+fixed-time spring-gap case (`30 2 * * *`) resolves to the first real minute after
+the gap, `2025-03-30T01:00:00Z` (03:00 CEST), and the forward projection names the
+same slot. Wildcard schedules cross the gap directly to the next real slot. Both
+must consume their slots once.
 Interval checks cover anchored catch-up, consumed
 slots, invalid periods and an unrepresentable future boundary.
 
