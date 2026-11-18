@@ -58,6 +58,8 @@ jobs:
             Analyze (actions)
             Analyze (javascript-typescript)
             Analyze (rust)
+        # Markdown paths named by FILE_READERS in scripts/ci-test-affected.py
+        # are not docs-only; the classifier derives that exclusion.
         run: scripts/ci-change-scope.sh
 
   analyze:

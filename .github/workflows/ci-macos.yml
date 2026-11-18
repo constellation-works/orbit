@@ -72,6 +72,8 @@ jobs:
           DOCS_BEFORE_CHECKS: |
             macOS Clippy (informational)
             macOS Sandbox
+        # Markdown paths named by FILE_READERS in scripts/ci-test-affected.py
+        # are not docs-only; the classifier derives that exclusion.
         run: scripts/ci-change-scope.sh
 
   macos-clippy:

@@ -1754,6 +1754,13 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                     "-p",
                     "orbit-exec",
                     "-p",
+                    "orbit-cli",
+                    "--test",
+                    "sandbox_profile_goldens",
+                ],
+                [
+                    "test",
+                    "-p",
                     "orbit-core",
                     "-p",
                     "orbit-cli",
@@ -1790,7 +1797,7 @@ print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered ou
         result = self.run_guard("check-goldens.sh", "--update")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertEqual(len(calls), 9)
+        self.assertEqual(len(calls), 10)
         for call in calls:
             self.assertEqual(call["help"], "1")
             self.assertEqual(call["output"], "1")
@@ -1808,7 +1815,7 @@ print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered ou
         # A successful cargo with no harness summary is missing evidence,
         # not a pass. check-goldens.sh runs under `set -euo pipefail`, so
         # the first summary-less leg's refusal exits the script: only that
-        # first refusal is exercised here, not all nine legs.
+        # first refusal is exercised here, not all ten legs.
         self.write_executable(
             self.bin / "cargo",
             '#!/usr/bin/env python3\nimport json, os, sys\n'
@@ -1880,6 +1887,52 @@ print(f"test result: ok. {len(matched)} passed; 0 failed; 0 ignored; "
             calls,
             "the dead filter must run in its own invocation to be judged alone",
         )
+
+    def test_goldens_missing_sandbox_target_fails(self):
+        """A deleted sandbox golden target must fail even if the other package still has one.
+
+        Cargo exits 0 when any selected package has the named --test target, so
+        one invocation of both packages would pass after either file was removed.
+        The stub below reproduces that: a combined orbit-exec and orbit-core
+        invocation still reports a pass, and an invocation whose only non-anchor
+        package is the missing one exits the way Cargo does.
+        """
+        self.write_executable(
+            self.bin / "cargo",
+            '''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["GUARD_TEST_LOG"], "a") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\\n")
+args = sys.argv[1:]
+packages = []
+index = 0
+while index < len(args):
+    if args[index] == "-p" and index + 1 < len(args):
+        packages.append(args[index + 1])
+        index += 2
+        continue
+    index += 1
+missing = os.environ["MISSING_SANDBOX_PACKAGE"]
+owners = {"orbit-exec", "orbit-core"}
+if ("sandbox_profile_goldens" in args and missing in packages
+        and not owners <= set(packages)):
+    print(f"error: no test target named `sandbox_profile_goldens` in `{missing}`", file=sys.stderr)
+    raise SystemExit(101)
+print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s")
+''',
+        )
+        for missing in ("orbit-exec", "orbit-core"):
+            with self.subTest(missing=missing):
+                self.log.write_text("")
+                result = self.run_guard(
+                    "check-goldens.sh",
+                    env_overrides={"MISSING_SANDBOX_PACKAGE": missing},
+                )
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(
+                    "no test target named `sandbox_profile_goldens`",
+                    result.stdout + result.stderr,
+                )
 
     def use_real_ripgrep(self):
         real_rg = shutil.which("rg")
@@ -3205,6 +3258,33 @@ class ScriptFailClosedTests(unittest.TestCase):
         self.assertNotIn("ORB-999", result.stderr)
         self.assertIn("crates/example/src/lib.rs", result.stderr)
 
+    def test_public_ids_inside_multiline_strings_are_rejected(self):
+        guard = self.root / "scripts/check-public-artifact-ids.py"
+        shutil.copy2(SCRIPTS / guard.name, guard)
+        source = self.root / "crates/fixture/src/lib.rs"
+        source.parent.mkdir(parents=True)
+        rejected = {
+            "raw": 'fn schema() {\n    let _sql = r#"\n        -- note ORB-10021\n    "#;\n}\n',
+            "normal": 'fn note() {\n    let _text = "\n        ADR-004\n    ";\n}\n',
+            "raw hashes": 'fn note() {\n    let _text = r##"\n        F2026-01-001\n    "##;\n}\n',
+        }
+        for name, text in rejected.items():
+            with self.subTest(name=name):
+                source.write_text(text)
+                result = subprocess.run([sys.executable, str(guard)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("concrete artifact ID", result.stderr)
+        accepted = {
+            "comment": 'fn note() {\n    // ORB-10021\n    let _text = r#"\n        fine\n    "#;\n}\n',
+            "block": 'fn note() {\n    /*\n    ORB-10021\n    */\n    let _text = r#"fine"#;\n}\n',
+            "char": "fn note() {\n    let _quote = '\"';\n    // ORB-1\n    let _text = r#\"fine\"#;\n}\n",
+        }
+        for name, text in accepted.items():
+            with self.subTest(name=name):
+                source.write_text(text)
+                result = subprocess.run([sys.executable, str(guard)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_crate_guides_require_ripgrep(self):
         guard = self.root / "scripts/check-crate-agent-guides.sh"
         shutil.copy2(SCRIPTS / guard.name, guard)
@@ -3520,11 +3600,37 @@ class RemovedDashboardLabelTests(unittest.TestCase):
         result = self.run_check()
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("needs a reason", result.stderr)
-        self.write_allowlist([{"label": "Never Removed Label", "doc": self.DOC,
-                                "reason": "Kept for history."}])
+        self.write_allowlist([
+            {"label": self.LABEL, "doc": self.DOC,
+             "reason": "Historical note keeps the old name."},
+            {"label": "Never Removed Label", "doc": self.DOC,
+             "reason": "Kept for history."},
+        ])
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("stale allowlist entry", result.stderr)
+        self.doc.write_text("# Overview\n\nThe New Panel lists things.\n")
         result = self.run_check()
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("stale allowlist entry", result.stderr)
+        self.assertIn(self.LABEL, result.stderr)
+        self.assertNotIn("Never Removed Label", result.stderr)
+
+    def test_earlier_allowlist_entry_survives_an_unrelated_removal(self):
+        self.panel.write_text(
+            'export const title = "New Panel";\n'
+            'export const drawer = "Side Drawer Title";\n')
+        self.doc.write_text(f"# Overview\n\nThe {self.LABEL} panel lists things.\n")
+        self.write_allowlist([{"label": self.LABEL, "doc": self.DOC,
+                                "reason": "Delivery A kept the historical name."}])
+        self.git("add", ".")
+        self.git("commit", "-qm", "delivery A merged")
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+        self.panel.write_text('export const title = "New Panel";\n')
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("stale", result.stderr)
+        self.assertNotIn(self.LABEL, result.stderr)
 
     def test_removed_lowercase_visible_label_still_named_in_doc_fails(self):
         # Lowercase copy such as `text: "hide unconfirmed successes"` is a

@@ -62,6 +62,15 @@ class RelativeImportTests(unittest.TestCase):
             "crates/orbit-core/src/application/backlog_forecast",
             "crates/orbit-core/src/application/codebase",
             "crates/orbit-core/src/application/resident",
+            "crates/orbit-core/src/application/search",
+            "crates/orbit-core/src/application/sweep_filing",
+            "crates/orbit-core/src/application/notice",
+            "crates/orbit-core/src/application/evolution",
+            "crates/orbit-core/src/application/landing",
+            "crates/orbit-core/src/application/routines",
+            "crates/orbit-core/src/application/job/pipeline",
+            "crates/orbit-core/src/composition",
+            "crates/orbit-core/src/runtime",
             "crates/orbit-core/src/adapter", "crates/orbit-core/src/bootstrap",
             "crates/orbit-runtime/src", "crates/orbit-automation/src",
             "crates/orbit-store/src/contracts", "crates/orbit-store/src/driver/file",
@@ -69,8 +78,10 @@ class RelativeImportTests(unittest.TestCase):
         ):
             (self.root / directory).mkdir(parents=True, exist_ok=True)
         # The guard scans this single-file module and fails closed when it is
-        # absent [ORB-23019].
+        # absent [ORB-23019]. agent_corpus is the same shape: the upper-module
+        # list names it without the .rs suffix.
         (self.app / "tag_instructions.rs").write_text("")
+        (self.app / "agent_corpus.rs").write_text("")
         # [ORB-24097] The vcs conventions guard scans these engine files
         # directly; they must exist (empty) so ripgrep reports no match and
         # no IO error on stderr.
@@ -314,6 +325,28 @@ class RelativeImportTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("workspace dependency listing failed", result.stdout + result.stderr)
         self.assertNotIn("dependency direction guard passed", result.stdout)
+
+    def test_helper_only_scan_roots_fail_closed_when_missing(self):
+        # super_chains_into and inherent_calls_into rglob a module. A missing
+        # path must fail closed, the way the ripgrep roots already do. These
+        # two are not ripgrep roots: routines is only an inherent defining
+        # module, and orbit-core runtime is only a helper scan target.
+        cases = (
+            self.app / "routines",
+            self.root / "crates/orbit-core/src/runtime",
+        )
+        for path in cases:
+            with self.subTest(path=path.name):
+                path.rmdir()
+                try:
+                    result = subprocess.run(["bash", str(self.guard)], env=self.env,
+                                            capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn("dependency scan path missing", result.stderr)
+                    self.assertIn(path.name, result.stderr)
+                    self.assertNotIn("dependency direction guard passed", result.stdout)
+                finally:
+                    path.mkdir()
 
     def test_missing_scan_paths_fail_closed(self):
         for relative in ("task", "contracts", "automation"):

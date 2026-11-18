@@ -3,9 +3,10 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::Connection;
 
 fn ensure_routine_schema(conn: &Connection) -> Result<(), OrbitError> {
+    // Host-local routine scheduler state [ORB-10021].
     conn.execute_batch(
         r#"
-            -- Host-local routine scheduler state [ORB-10021]. Lives only in
+            -- Host-local routine scheduler state. Lives only in
             -- the host-global store database and is never synced between
             -- hosts. Routine definitions are per-user YAML under
             -- `.orbit/routines/`.

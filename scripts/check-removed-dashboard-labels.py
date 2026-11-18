@@ -6,7 +6,11 @@ merge-base fallback `scripts/ci-guardrails.sh` uses), take quoted multi-word
 labels on lines removed from `crates/orbit-web/assets/dashboard/**`, drop any
 label the same diff re-adds, and fail when the label is still present in
 current-state docs, the website or shipped skills. Legitimate keeps are
-recorded in `scripts/removed-dashboard-labels-allowlist.json`.
+recorded in `scripts/removed-dashboard-labels-allowlist.json`. An entry is
+judged only when this diff removes that same label: it is stale when the
+named document no longer contains it. An earlier delivery's entry is left
+alone, and a diff that removes no dashboard label does not judge the
+allowlist.
 """
 
 import json
@@ -235,11 +239,14 @@ def main():
                     errors.append(
                         f'removed dashboard label "{label}" (removed in {files}) '
                         f"still present in {doc}:{number}")
-        # An entry is stale when it matches no removed label on a doc line;
-        # checked only on a diff that removes labels, so unrelated diffs pay
-        # no cost and keep no opinion on the allowlist.
+        # An earlier delivery's entry stays until this diff removes that same
+        # label. It is stale only when this diff removes the label and the
+        # named document no longer contains it. A diff that removes no
+        # dashboard label returns above and does not judge the allowlist.
         hit_pairs = {(label, doc) for label, found in hits.items() for doc, _ in found}
         for label, doc in sorted(allowlist):
+            if label not in removed:
+                continue
             if (label, doc) not in hit_pairs:
                 errors.append(
                     f'stale allowlist entry: "{label}" in {doc} no longer matches '

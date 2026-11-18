@@ -94,6 +94,9 @@ def changed_paths(base):
 # another crate's assets, or a repository-root file. Cargo metadata cannot see
 # these edges, so each is declared here as (path prefix, reading crates). A
 # changed path under a prefix selects the readers and their reverse dependents.
+# scripts/ci-change-scope.sh loads this list and treats every Markdown path
+# under a prefix as non-docs. A Markdown file a Cargo test reads belongs here,
+# or a docs-only pull request skips the build and test jobs.
 FILE_READERS = (
     (Path("scripts/build-budget.py"), ("orbit-engine",)),
     (Path("scripts/ci-await-jobs.py"), ("orbit-engine",)),

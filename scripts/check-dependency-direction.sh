@@ -411,6 +411,13 @@ def use_tree(tokens, index, prefix=(), aliases=None):
 
 failed = False
 target = app / module
+if not target.exists():
+    alt = target.with_name(target.name + ".rs") if target.suffix == "" else None
+    if alt is not None and alt.is_file():
+        target = alt
+    else:
+        print(f"dependency scan path missing: {app / module}", file=sys.stderr)
+        sys.exit(1)
 paths = [target] if target.is_file() else sorted(target.rglob("*.rs"))
 for path in paths:
     rel = path.relative_to(app)
@@ -672,9 +679,15 @@ lower_path = [app.name, *[part for part in module.split("/") if part]]
 names = set()
 for top in upper:
     # A module is a directory or, like `tag_instructions`, a single file.
+    # An empty name is the defining root itself. A missing module is a scan
+    # hole, not an empty layer.
     top_root = defs_root / top
-    if not top_root.exists() and (defs_root / f"{top}.rs").is_file():
+    if not top_root.exists() and top != "" and (defs_root / f"{top}.rs").is_file():
         top_root = defs_root / f"{top}.rs"
+    if not top_root.exists():
+        missing = defs_root / top if top else defs_root
+        print(f"dependency scan path missing: {missing}", file=sys.stderr)
+        sys.exit(1)
     for path, rel in production(top_root, defs_root):
         parts = [*def_prefix, *rel.with_suffix("").parts]
         if parts[-1] == "mod":
@@ -726,7 +739,15 @@ def qualified_type(toks, end):
         return name
     return None
 failed = False
-for path, rel in production(app / module, app):
+scan_root = app / module
+if not scan_root.exists():
+    alt = scan_root.with_name(scan_root.name + ".rs") if scan_root.suffix == "" else None
+    if alt is not None and alt.is_file():
+        scan_root = alt
+    else:
+        print(f"dependency scan path missing: {app / module}", file=sys.stderr)
+        sys.exit(1)
+for path, rel in production(scan_root, app):
     if any(str(rel).startswith(e) for e in exempt):
         continue
     source = path.read_text()
