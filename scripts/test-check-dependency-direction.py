@@ -2,6 +2,7 @@
 """Regress relative use-tree escapes through the public dependency guard."""
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -73,20 +74,21 @@ class RelativeImportTests(unittest.TestCase):
              "// crate::activity_job is above the port.\n"
              'const NOTE: &str = "crate::activity_job::DispatchError";\n'),
         ], rejected=False, base=engine)
-        for source in (
-            "use crate::context::RuntimeHost;\n",
-            "use crate::{context::{RuntimeHost}};\n",
-            "fn probe() { crate::activity_job::dispatch_v2_activity(); }\n",
-        ):
-            self.check_exact("context/dispatch_contract.rs", source,
-                             rejected=True, base=engine)
-        self.check_exact("context/dispatch_contract.rs",
-                         "use std::path::PathBuf;\n"
-                         "use orbit_common::OrbitError;\n"
-                         "use orbit_types::workflow::activity_job::Provider;\n"
-                         "use serde_json::Value;\n"
-                         "use thiserror::Error;\n",
-                         rejected=False, base=engine)
+        self.check_rejected_exact_rows(engine, [
+            ("context/dispatch_contract.rs", source, 1) for source in (
+                "use crate::context::RuntimeHost;\n",
+                "use crate::{context::{RuntimeHost}};\n",
+                "fn probe() { crate::activity_job::dispatch_v2_activity(); }\n",
+            )
+        ])
+        self.check_files({
+            "context/dispatch_contract.rs":
+                "use std::path::PathBuf;\n"
+                "use orbit_common::OrbitError;\n"
+                "use orbit_types::workflow::activity_job::Provider;\n"
+                "use serde_json::Value;\n"
+                "use thiserror::Error;\n",
+        }, rejected=False, base=engine)
 
     def test_vcs_checks_dependency_direction(self):
         # The shared classifier must not reach back into landing, and its
@@ -99,20 +101,21 @@ class RelativeImportTests(unittest.TestCase):
                 "use super::super::{git::Probe, landing::{Other}};",
             )
         ], rejected=True, base=vcs)
-        for consumer in ("pr", "base", "claim"):
-            self.check_rows([
-                (f"{consumer}/probe.rs", source + "\n") for source in (
-                    "use super::super::landing::checks::Probe;",
-                    "fn probe() { super::super::landing::checks::read(); }",
-                    "use super::super::{landing::{checks::Probe}};",
-                    "use super::super::landing::{ /* note */ checks::Probe};",
-                    "use super::super::landing as l;\nuse l::checks::Probe;",
-                    "use super::super::{landing as l};\nuse l::{checks::Probe};",
-                    "use crate::executor::automation::vcs::landing as l;\nfn probe() { l::checks::read(); }",
-                    "use super::super::landing::{self as l};\nuse l::checks::Probe;",
-                    "use super::super::landing as l;\nuse l as m;\nuse m::checks::Probe;",
-                )
-            ], rejected=True, base=vcs)
+        self.check_rows([
+            (f"{consumer}/probe.rs", source + "\n")
+            for consumer in ("pr", "base", "claim")
+            for source in (
+                "use super::super::landing::checks::Probe;",
+                "fn probe() { super::super::landing::checks::read(); }",
+                "use super::super::{landing::{checks::Probe}};",
+                "use super::super::landing::{ /* note */ checks::Probe};",
+                "use super::super::landing as l;\nuse l::checks::Probe;",
+                "use super::super::{landing as l};\nuse l::{checks::Probe};",
+                "use crate::executor::automation::vcs::landing as l;\nfn probe() { l::checks::read(); }",
+                "use super::super::landing::{self as l};\nuse l::checks::Probe;",
+                "use super::super::landing as l;\nuse l as m;\nuse m::checks::Probe;",
+            )
+        ], rejected=True, base=vcs)
         self.check_rows([
             ("checks/probe.rs", "use super::super::pr_answers::Probe;\n"
              "// landing::checks is the retired path.\n"
@@ -138,9 +141,6 @@ class RelativeImportTests(unittest.TestCase):
             "fn probe() { operations::pr::read(); }",
             "pub(in crate::executor::automation::vcs::pr) fn previous() {}",
         )
-        self.check_rows(
-            [("pr_answers/probe.rs", source + "\n") for source in above],
-            rejected=True, base=vcs)
         named_pr = (
             "use super::pr::Probe;",
             "use super::super::pr::Probe;",
@@ -148,13 +148,17 @@ class RelativeImportTests(unittest.TestCase):
             "fn probe() { crate::executor::automation::vcs::pr::Probe; }",
             "use super::pr as renamed;\nfn probe() { renamed::read(); }",
         )
-        for consumer in ("checks/probe.rs", "base/probe.rs", "candidate_resume/probe.rs"):
-            self.check_rows(
-                [(consumer, source + "\n") for source in named_pr],
-                rejected=True, base=vcs)
-        for relative in ("push.rs", "claim/published.rs"):
-            for source in named_pr:
-                self.check_exact(relative, source + "\n", rejected=True, base=vcs)
+        self.check_rows(
+            [("pr_answers/probe.rs", source + "\n") for source in above]
+            + [(consumer, source + "\n")
+               for consumer in ("checks/probe.rs", "base/probe.rs", "candidate_resume/probe.rs")
+               for source in named_pr],
+            rejected=True, base=vcs)
+        self.check_rejected_exact_rows(vcs, [
+            (relative, source + "\n", 1)
+            for relative in ("push.rs", "claim/published.rs")
+            for source in named_pr
+        ])
         self.check_rows([
             ("pr_answers/probe.rs",
              "use super::operations;\n"
@@ -178,31 +182,10 @@ class RelativeImportTests(unittest.TestCase):
              "fn keep(pr: u64) { let _ = (pr, mismatches, PullRequestStatus); }\n"
              'const KEY: &str = "pr";\n'),
         ], rejected=False, base=vcs)
-        for relative, source in (
-            ("push.rs", "fn keep(pr: u64) { let _ = pr; }\n"),
-            ("claim/published.rs", 'fn keep() { let pr = "pr"; let _ = pr; }\n'),
-        ):
-            self.check_exact(relative, source, rejected=False, base=vcs)
-
-    def check_exact(self, relative, source, rejected, base):
-        path = base / relative
-        original = path.read_text()
-        path.write_text(source)
-        try:
-            result = subprocess.run(["bash", str(self.guard)], env=self.env,
-                                    capture_output=True, text=True, check=False)
-            self.assertEqual(result.stderr, "", result.stderr)
-            if rejected:
-                self.assertIn(f"{path}:", result.stdout)
-                self.assertEqual(result.returncode, 1, result.stdout)
-            else:
-                self.assertNotIn(f"{path}:", result.stdout)
-                self.assertEqual(result.returncode, 0, result.stdout)
-        finally:
-            path.write_text(original)
-
-    def prepare_config_paths(self):
-        dependency_guard_fixture.create_config_paths(self.root)
+        self.check_files({
+            "push.rs": "fn keep(pr: u64) { let _ = pr; }\n",
+            "claim/published.rs": 'fn keep() { let pr = "pr"; let _ = pr; }\n',
+        }, rejected=False, base=vcs)
 
     def test_missing_config_scan_paths_fail_closed(self):
         src = self.root / "crates/orbit-config/src"
@@ -300,19 +283,64 @@ class RelativeImportTests(unittest.TestCase):
         finally:
             path.unlink()
 
-    def check_files(self, files, rejected):
-        paths = [self.app / relative for relative in files]
+    @contextmanager
+    def fixture_files(self, base, files):
+        """Restore existing scan roots and remove newly written files after a run."""
+        originals = {}
         try:
-            for path, source in zip(paths, files.values()):
+            for relative, source in files.items():
+                path = base / relative
+                originals[path] = path.read_bytes() if path.exists() else None
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(source)
+            yield
+        finally:
+            for path, original in originals.items():
+                if original is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_bytes(original)
+
+    def check_files(self, files, rejected, base=None):
+        base = base or self.app
+        with self.fixture_files(base, files):
             result = subprocess.run(["bash", str(self.guard)], env=self.env,
                                     capture_output=True, text=True, check=False)
             self.assertEqual(result.stderr, "", result.stderr)
             self.assertEqual(result.returncode, 1 if rejected else 0, result.stdout)
-        finally:
-            for path in paths:
-                path.unlink(missing_ok=True)
+            if not rejected:
+                for relative in files:
+                    self.assertNotIn(f"{base / relative}:", result.stdout)
+
+    def check_rejected_exact_rows(self, base, rows, shared=None, rg_single_file=False):
+        """Assert a diagnostic for each exact-path snippet at its own line.
+
+        Rows give the path, snippet, and its diagnostic line (one-based).
+        Batch independent rules or snippets that reach the same branch of a
+        short-circuit chain. An explicit-file ripgrep scan omits the filename.
+        """
+        files = dict(shared or {})
+        next_line = {}
+        diagnostics = []
+        for relative, source, line in rows:
+            self.assertNotIn(relative, shared or {})
+            start = next_line.get(relative, 1)
+            self.assertTrue(source.endswith("\n"), source)
+            files[relative] = files.get(relative, "") + source
+            next_line[relative] = start + source.count("\n")
+            diagnostics.append((relative, start + line - 1, source.splitlines()[line - 1]))
+        if rg_single_file:
+            self.assertEqual(len(next_line), 1)
+        with self.fixture_files(base, files):
+            result = subprocess.run(["bash", str(self.guard)], env=self.env,
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(result.stderr, "", result.stderr)
+            self.assertEqual(result.returncode, 1, result.stdout)
+            output = set(result.stdout.splitlines())
+            for relative, line, source in diagnostics:
+                with self.subTest(path=relative, line=line, source=source):
+                    location = f"{line}" if rg_single_file else f"{base / relative}:{line}"
+                    self.assertIn(f"{location}:{source}", output, result.stdout)
 
     def check_rows(self, rows, rejected, shared=None, base=None):
         """Run the guard once over independent `(relative, source)` rows.
@@ -731,29 +759,33 @@ class RelativeImportTests(unittest.TestCase):
             "experiment/overlay.rs":
                 "impl OrbitRuntime {\n    pub(crate) fn fresh_overlay_method(&self) {}\n}\n",
         }
-        for call in (
-            "self.fresh_overlay_method()",
-            "OrbitRuntime::fresh_overlay_method(self)",
-            "Self::fresh_overlay_method(self)",
-            "<crate::OrbitRuntime>::fresh_overlay_method(self)",
-        ):
-            with self.subTest(call=call):
-                self.check_files({
-                    **method,
-                    "tag_instructions.rs":
-                        "impl OrbitRuntime {\n    fn resolve(&self) {\n"
-                        f"        {call};\n    }}\n}}\n",
-                }, rejected=True)
-        for source in (
-            "use crate::application::experiment::Probe;\n",
-            "use crate::application::{experiment::Probe};\n",
-            "use crate::application::{\n    experiment::Probe,\n};\n",
-            "use super::experiment::Probe;\n",
-            "use super::{experiment::Probe};\n",
-            "use super::super::application::experiment::Probe;\n",
-        ):
-            with self.subTest(source=source):
-                self.check_files({"tag_instructions.rs": source}, rejected=True)
+        self.check_rejected_exact_rows(self.app, [
+            ("tag_instructions.rs",
+             "impl OrbitRuntime {\n    fn resolve(&self) {\n"
+             f"        {call};\n    }}\n}}\n", 3)
+            for call in (
+                "self.fresh_overlay_method()",
+                "OrbitRuntime::fresh_overlay_method(self)",
+                "Self::fresh_overlay_method(self)",
+                "<crate::OrbitRuntime>::fresh_overlay_method(self)",
+            )
+        ], shared=method)
+        self.check_rejected_exact_rows(self.app, [
+            ("tag_instructions.rs", "use crate::application::experiment::Probe;\n", 1),
+        ], rg_single_file=True)
+        self.check_rejected_exact_rows(self.app, [
+            ("tag_instructions.rs", source, 1) for source in (
+                "use crate::application::{experiment::Probe};\n",
+                "use crate::application::{\n    experiment::Probe,\n};\n",
+            )
+        ], rg_single_file=True)
+        self.check_rejected_exact_rows(self.app, [
+            ("tag_instructions.rs", source, 1) for source in (
+                "use super::experiment::Probe;\n",
+                "use super::{experiment::Probe};\n",
+                "use super::super::application::experiment::Probe;\n",
+            )
+        ])
         self.check_files({
             "experiment/overlay.rs":
                 "use crate::application::tag_instructions::LazyRevision;\n"
@@ -961,15 +993,13 @@ class RelativeImportTests(unittest.TestCase):
             "review/handoff/console.rs":
                 "fn probe() {\n    self.stores().tasks().landing_attempts()?\n}\n",
         }, rejected=False)
-        for relative in ("task/external_merge/candidate.rs",
-                         "task/external_merge/rescued.rs",
-                         "review/handoff/console.rs"):
-            with self.subTest(relative=relative):
-                self.check_files({
-                    **method,
-                    relative: "impl OrbitRuntime {\n    fn probe(&self) {\n"
-                              "        self.landing_attempts();\n    }\n}\n",
-                }, rejected=True)
+        self.check_rejected_exact_rows(self.app, [
+            (relative, "impl OrbitRuntime {\n    fn probe(&self) {\n"
+                       "        self.landing_attempts();\n    }\n}\n", 3)
+            for relative in ("task/external_merge/candidate.rs",
+                             "task/external_merge/rescued.rs",
+                             "review/handoff/console.rs")
+        ], shared=method)
 
     def test_automation_and_auto_tasks_cannot_reach_routines(self):
         # [ORB-22623] `routines` sits above both; automation's clock-settings
@@ -1069,10 +1099,7 @@ class RelativeImportTests(unittest.TestCase):
         # Grouped relative imports escaped the guard; each super chain must
         # reach application from the fixture's actual module depth.
         targets = ("routines::clock::set_clock_cadence", "auto_tasks::AutoTaskListingRow")
-        # One batch per detector in the contracts chain, as in the forecast
-        # shim rows above. The mod.rs rows keep their own runs: check_rows
-        # cannot rename mod.rs without changing the module depth a super
-        # chain resolves against, and one directory holds only one mod.rs.
+        # Separate runs exercise direct, grouped and relative-path detectors.
         self.check_rows([
             ("contracts/clock_settings.rs", f"use crate::application::{target};\n")
             for target in targets
@@ -1088,14 +1115,15 @@ class RelativeImportTests(unittest.TestCase):
                  f"use super::{{super::{{super::{{\n    {target},\n}}}}}};\n"),
             )
         ], rejected=True)
-        for target in targets:
+        self.check_rejected_exact_rows(self.app, [
+            ("contracts/mod.rs", source, 1)
+            for target in targets
             for source in (
                 f"use super::{target};\n",
                 f"use super::{{{target}}};\n",
                 f"use super::{{\n    {target},\n}};\n",
-            ):
-                with self.subTest(source=source):
-                    self.check_files({"contracts/mod.rs": source}, rejected=True)
+            )
+        ])
         self.check_files({
             "contracts/mod.rs": "pub use self::clock_settings::ClockSettings;\n",
             "contracts/clock_settings.rs": "use super::{ScheduleDisplayState};\n",
@@ -1105,8 +1133,7 @@ class RelativeImportTests(unittest.TestCase):
         # [ORB-22674] A chain that climbs one step past application, to the crate
         # root, and then descends `application::<higher>` names the same module
         # as a chain that lands on application, so it is refused at each depth.
-        # All of these reach only the super-chain detector; the mod.rs rows
-        # keep their own runs for the depth reason above.
+        # The mod.rs rows keep their exact path for the module-depth check.
         self.check_rows([
             ("contracts/clock_settings.rs",
              "use super::super::super::application::routines::Probe;\n"),
@@ -1123,13 +1150,13 @@ class RelativeImportTests(unittest.TestCase):
             ("contracts/clock_settings/nested.rs",
              "use super::super::super::super::{\n    application::auto_tasks::Probe,\n};\n"),
         ], rejected=True)
-        for source in (
-            "use super::super::application::routines::Probe;\n",
-            "use super::super::{application::routines::Probe};\n",
-            "use super::super::{\n    application::routines::Probe,\n};\n",
-        ):
-            with self.subTest(source=source):
-                self.check_files({"contracts/mod.rs": source}, rejected=True)
+        self.check_rejected_exact_rows(self.app, [
+            ("contracts/mod.rs", source, 1) for source in (
+                "use super::super::application::routines::Probe;\n",
+                "use super::super::{application::routines::Probe};\n",
+                "use super::super::{\n    application::routines::Probe,\n};\n",
+            )
+        ])
 
     def test_moved_clock_and_display_contracts_stay_in_contracts(self):
         # [ORB-22623] A second definition would bring the back-edge's owner back.
@@ -1200,18 +1227,18 @@ class RelativeImportTests(unittest.TestCase):
                 shared={owner: "impl OrbitRuntime {\n    pub(crate) fn fresh_owner_method(&self) {}\n}\n"})
 
     def test_bare_and_other_type_calls_to_inherent_names_accepted(self):
-        for owner, caller in (
-            ("job/state.rs", "task/worker.rs"),
-            ("../adapter/state.rs", "task_quality/runtime.rs"),
-        ):
-            self.check_rows(
-                [(caller, f"fn drive(runtime: &OrbitRuntime) {{\n    {call};\n}}\n") for call in (
-                    "fresh_owner_method(runtime)",
-                    "<Other>::fresh_owner_method(runtime)",
-                    "Vec::<OrbitRuntime>::fresh_owner_method(runtime)",
-                )],
-                rejected=False,
-                shared={owner: "impl OrbitRuntime {\n    pub(crate) fn fresh_owner_method(&self) {}\n}\n"})
+        self.check_rows([
+            (caller, f"fn drive(runtime: &OrbitRuntime) {{\n    {call};\n}}\n")
+            for caller in ("task/worker.rs", "task_quality/runtime.rs")
+            for call in (
+                "fresh_owner_method(runtime)",
+                "<Other>::fresh_owner_method(runtime)",
+                "Vec::<OrbitRuntime>::fresh_owner_method(runtime)",
+            )
+        ], rejected=False, shared={
+            owner: "impl OrbitRuntime {\n    pub(crate) fn fresh_owner_method(&self) {}\n}\n"
+            for owner in ("job/state.rs", "../adapter/state.rs")
+        })
 
     def test_paths_into_bootstrap_and_composition_rejected(self):
         self.check_rows([
@@ -1345,27 +1372,11 @@ class RelativeImportTests(unittest.TestCase):
         ], rejected=False)
 
     def test_test_fixtures_accepted(self):
-        for relative in ("job/tests/worker.rs", "job/tests.rs"):
-            with self.subTest(relative=relative):
-                self.check_import(relative,
-                                  "use super::super::{distributed::Probe, pull_drain::Other};",
-                                  rejected=False)
-
-    def check_config(self, files, rejected):
-        src = self.root / "crates/orbit-config/src"
-        paths = [src / relative for relative in files]
-        try:
-            for path, source in zip(paths, files.values()):
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(source)
-            result = subprocess.run(["bash", str(self.guard)], env=self.env,
-                                    capture_output=True, text=True, check=False)
-            self.assertEqual(result.stderr, "", result.stderr)
-            self.assertEqual(result.returncode, 1 if rejected else 0, result.stdout)
-        finally:
-            for path in paths:
-                path.unlink(missing_ok=True)
-            self.prepare_config_paths()
+        self.check_files({
+            relative: "use super::super::{distributed::Probe, pull_drain::Other};\n"
+                      "fn probe() { let _: Option<Probe> = None; }\n"
+            for relative in ("job/tests/worker.rs", "job/tests.rs")
+        }, rejected=False)
 
     def test_config_registry_cannot_name_resolved(self):
         snapshot = "registry/settings/snapshot.rs"
@@ -1386,27 +1397,30 @@ class RelativeImportTests(unittest.TestCase):
             "fn probe() { crate::executor_host_os(); }",
             "fn probe() { crate::disabled_crew_message(); }",
         )], rejected=True, base=self.root / "crates/orbit-config/src")
-        self.check_config(
-            {snapshot: "use crate::crew_defaults::builtin_default_crews;\n"}, rejected=False)
+        self.check_files(
+            {snapshot: "use crate::crew_defaults::builtin_default_crews;\n"},
+            rejected=False, base=self.root / "crates/orbit-config/src")
 
     def test_config_crew_defaults_leaf_reaches_nothing_higher(self):
+        base = self.root / "crates/orbit-config/src"
         leaf = "crew_defaults.rs"
-        for source in (
-            "use crate::resolved::Probe;",
-            "use super::registry::Probe;",
-            "use crate::raw::Probe;",
-            "use toml::Value;",
-            # [ORB-22452] Inline paths to crates outside std, orbit-common
-            # and orbit-types count as the same edge as a use.
-            "fn probe() -> toml::Value { toml::Value::Boolean(true) }",
-            "fn probe() { let _ = serde_json::Value::Null; }",
-            "fn probe() { let _ = serde::de::value::Error::custom(\"\"); }",
-        ):
-            with self.subTest(source=source):
-                self.check_config({leaf: source + "\n"}, rejected=True)
-        self.check_config({leaf: (
+        # The path scan and the use-allowlist scan both run on this file.
+        self.check_rejected_exact_rows(base, [
+            (leaf, source + "\n", 1) for source in (
+                "use crate::resolved::Probe;",
+                "use super::registry::Probe;",
+                "use crate::raw::Probe;",
+                "use toml::Value;",
+                # [ORB-22452] Inline paths to crates outside std, orbit-common
+                # and orbit-types count as the same edge as a use.
+                "fn probe() -> toml::Value { toml::Value::Boolean(true) }",
+                "fn probe() { let _ = serde_json::Value::Null; }",
+                'fn probe() { let _ = serde::de::value::Error::custom(""); }',
+            )
+        ], rg_single_file=True)
+        self.check_files({leaf: (
             "use std::collections::BTreeMap;\nuse orbit_common::model_defaults::{\n    A, B,\n};\n"
-            "use orbit_types::identity::{Crew, CrewAssignment};\n")}, rejected=False)
+            "use orbit_types::identity::{Crew, CrewAssignment};\n")}, rejected=False, base=base)
 
     def test_config_domain_modules_cannot_name_the_registry(self):
         # [ORB-22707] The registry calls these modules' admitters, so they
@@ -1420,33 +1434,33 @@ class RelativeImportTests(unittest.TestCase):
             ("provider_limit/policy.rs", "use crate::{ConfigSnapshot, CrewPerformancePolicy};"),
             ("provider_limit/budget.rs", "fn probe() { let _ = &crate::CONFIG_KEY_REGISTRY; }"),
         )], rejected=True, base=src)
-        for leaf, source in (
-            ("aliases.rs", "use crate::registry::read_optional;"),
-            ("seeding.rs", "use crate::{describe_config_key, raw::Probe};"),
-        ):
-            with self.subTest(leaf=leaf):
-                self.check_config({leaf: source + "\n"}, rejected=True)
+        self.check_rejected_exact_rows(src, [
+            ("aliases.rs", "use crate::registry::read_optional;\n", 1),
+            ("seeding.rs", "use crate::{describe_config_key, raw::Probe};\n", 1),
+        ])
         self.check_rows([(relative, source + "\n") for relative, source in (
             ("crew/ladder.rs", "use crate::config_document;"),
             ("operation/policy.rs", "use super::crew::ReviewCrewPool;"),
             ("provider_limit/policy.rs", "use crate::CrewPerformancePolicy;"),
         )], rejected=False, base=src)
-        self.check_config({"aliases.rs": "use crate::config_document;\n"}, rejected=False)
+        self.check_files({"aliases.rs": "use crate::config_document;\n"},
+                         rejected=False, base=src)
 
     def test_config_document_leaf_admits_only_external_crates(self):
+        base = self.root / "crates/orbit-config/src"
         leaf = "config_document.rs"
-        for source in (
-            "use crate::registry::Probe;",
-            "use super::raw::Probe;",
-            "fn probe() { crate::config_io::read(); }",
-            "use serde_json::Value;",
-        ):
-            with self.subTest(source=source):
-                self.check_config({leaf: source + "\n"}, rejected=True)
-        self.check_config({leaf: (
+        self.check_rejected_exact_rows(base, [
+            (leaf, source + "\n", 1) for source in (
+                "use crate::registry::Probe;",
+                "use super::raw::Probe;",
+                "fn probe() { crate::config_io::read(); }",
+                "use serde_json::Value;",
+            )
+        ], rg_single_file=True)
+        self.check_files({leaf: (
             "use std::path::Path;\nuse orbit_common::OrbitError;\n"
             "use orbit_common::security::redaction::redact_home_dir;\n"
-            "use serde::de::DeserializeOwned;\n")}, rejected=False)
+            "use serde::de::DeserializeOwned;\n")}, rejected=False, base=base)
 
     def check_crate_edge(self, dependency, kind, target, rejected):
         metadata = self.root / "metadata.json"
@@ -1547,34 +1561,32 @@ class RelativeImportTests(unittest.TestCase):
             ("lease/down.rs", "use crate::api::leases::{LeaseBackend, lease_router};\n"),
             ("lease/down.rs", "use crate::shutdown::shutdown_signal;\n"),
         ], rejected=False, base=web)
-        for name, source in (
-            ("why_stuck.rs", "use crate::api::failure_root_line;\n"),
-            ("projections.rs", "use crate::api::tasks::reads;\n"),
-            ("connect.rs", "use crate::serve::open_browser;\n"),
-            ("host_tunnels.rs", "use crate::{serve::DEFAULT_DASHBOARD_PORT};\n"),
-            ("health.rs", "fn probe() { crate::api::router(); }\n"),
-            ("assets.rs", "use crate::serve::build_app;\n"),
-            ("run_failure.rs", "use crate::api::runs::detail;\n"),
-            ("shutdown.rs", "use crate::serve::run_server;\n"),
-            ("runtime_memo.rs", "use crate::api::routines::RoutineMemoKey;\n"),
-            ("runtime_memo.rs", "use crate::serve::shutdown_signal;\n"),
-        ):
-            self.check_exact(name, source, rejected=True, base=web)
-        for name, source in (
-            ("why_stuck.rs", "use crate::run_failure::failure_root_line;\n"
-             "// use crate::api::failure_root_line;\n"
-             'const NOTE: &str = "crate::serve::shutdown_signal";\n'),
-            ("connect.rs", "pub(crate) const DEFAULT_DASHBOARD_PORT: u16 = 7878;\n"),
-            ("shutdown.rs", "use orbit_core::OrbitError;\n"),
-            ("run_failure.rs", "use orbit_core::{JobRun, OrbitRuntime};\n"),
-            ("assets.rs", "use crate::state::DashboardState;\n"),
-            ("host_tunnels.rs", "use crate::connect::DEFAULT_DASHBOARD_PORT;\n"
-             "// api::forward is the HTTP side.\n"),
-            ("projections.rs", "use crate::why_stuck::attach_why_stuck;\n"),
-            ("health.rs", "fn probe() {}\n"),
-            ("runtime_memo.rs", "use orbit_core::OrbitError;\n"),
-        ):
-            self.check_exact(name, source, rejected=False, base=web)
+        self.check_rejected_exact_rows(web, [
+            ("why_stuck.rs", "use crate::api::failure_root_line;\n", 1),
+            ("projections.rs", "use crate::api::tasks::reads;\n", 1),
+            ("connect.rs", "use crate::serve::open_browser;\n", 1),
+            ("host_tunnels.rs", "use crate::{serve::DEFAULT_DASHBOARD_PORT};\n", 1),
+            ("health.rs", "fn probe() { crate::api::router(); }\n", 1),
+            ("assets.rs", "use crate::serve::build_app;\n", 1),
+            ("run_failure.rs", "use crate::api::runs::detail;\n", 1),
+            ("shutdown.rs", "use crate::serve::run_server;\n", 1),
+            ("runtime_memo.rs", "use crate::api::routines::RoutineMemoKey;\n", 1),
+            ("runtime_memo.rs", "use crate::serve::shutdown_signal;\n", 1),
+        ])
+        self.check_files({
+            "why_stuck.rs": "use crate::run_failure::failure_root_line;\n"
+                            "// use crate::api::failure_root_line;\n"
+                            'const NOTE: &str = "crate::serve::shutdown_signal";\n',
+            "connect.rs": "pub(crate) const DEFAULT_DASHBOARD_PORT: u16 = 7878;\n",
+            "shutdown.rs": "use orbit_core::OrbitError;\n",
+            "run_failure.rs": "use orbit_core::{JobRun, OrbitRuntime};\n",
+            "assets.rs": "use crate::state::DashboardState;\n",
+            "host_tunnels.rs": "use crate::connect::DEFAULT_DASHBOARD_PORT;\n"
+                               "// api::forward is the HTTP side.\n",
+            "projections.rs": "use crate::why_stuck::attach_why_stuck;\n",
+            "health.rs": "fn probe() {}\n",
+            "runtime_memo.rs": "use orbit_core::OrbitError;\n",
+        }, rejected=False, base=web)
         for required_leaf in ("runtime_memo.rs", "shutdown.rs"):
             missing = web / required_leaf
             missing.unlink()
@@ -1589,10 +1601,9 @@ class RelativeImportTests(unittest.TestCase):
                 missing.write_text("")
 
 
-# Each case builds its own fixture tree and spends nearly all of its wall time
-# in guard subprocesses (about 70 short Python and ripgrep children per guard
-# run), so independent cases run concurrently. Four workers match the hosted
-# 4-vCPU guardrails runner, where this suite was the guard pool's longest member.
+# Each case builds its own fixture tree and spends most of its time in the
+# guard's Python and ripgrep subprocesses, so independent cases run concurrently.
+# Four workers match the hosted 4-vCPU guardrails runner.
 CONCURRENT_CASES = 4
 
 
