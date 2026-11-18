@@ -2,10 +2,9 @@
 
 //! Existing `PolicyEngine` behavior exercised through the crate-root public API.
 
-use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_policy::PolicyEngine;
-use orbit_types::policy::{FsOperation, FsProfile, PolicyDef};
+use orbit_types::policy::{FsOperation, FsProfile, PolicyDef, PolicyTimestamp};
 use std::collections::HashMap;
 
 fn make_def(
@@ -29,8 +28,8 @@ fn make_def(
         deny_read: deny_read.into_iter().map(String::from).collect(),
         deny_modify: deny_modify.into_iter().map(String::from).collect(),
         fs_profiles,
-        created_at: Some(Utc::now()),
-        updated_at: Some(Utc::now()),
+        created_at: Some(PolicyTimestamp::now_utc()),
+        updated_at: Some(PolicyTimestamp::now_utc()),
     }
 }
 
@@ -54,8 +53,8 @@ fn engine(
         deny_read: deny_read.iter().map(|s| (*s).to_string()).collect(),
         deny_modify: deny_modify.iter().map(|s| (*s).to_string()).collect(),
         fs_profiles,
-        created_at: Some(Utc::now()),
-        updated_at: Some(Utc::now()),
+        created_at: Some(PolicyTimestamp::now_utc()),
+        updated_at: Some(PolicyTimestamp::now_utc()),
     };
     PolicyEngine::from_def(&def).expect("valid policy def")
 }

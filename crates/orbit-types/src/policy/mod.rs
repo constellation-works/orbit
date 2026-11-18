@@ -5,6 +5,7 @@ mod fs_rules;
 mod glob;
 mod policy_def;
 mod role;
+mod timestamp;
 pub use error::PolicyError;
 pub use fs_rules::CompiledFsRules;
 
@@ -16,3 +17,4 @@ pub use policy_def::{
     UNRESTRICTED_FS_PROFILE,
 };
 pub use role::Role;
+pub use timestamp::PolicyTimestamp;

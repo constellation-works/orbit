@@ -2228,7 +2228,6 @@ dependencies = [
 name = "orbit-policy"
 version = "0.51.1"
 dependencies = [
- "chrono",
  "orbit-common",
  "orbit-types",
  "tempfile",
@@ -2317,7 +2316,6 @@ dependencies = [
 name = "orbit-tools"
 version = "0.51.1"
 dependencies = [
- "chrono",
  "flate2",
  "jsonschema",
  "libc",
