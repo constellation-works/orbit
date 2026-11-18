@@ -91,8 +91,10 @@ orbit config set decision_channel.enabled true
 
 The setting defaults to `false`. When it is on:
 
-- blocked-task final recovery and task-pilot admission holds raise decision
-  requests;
+- blocked-task final recovery and resolvable task-pilot admission holds raise
+  decision requests (a stale assessment raises no request because decision
+  answers cannot resolve it; resolve a stale assessment by requesting a fresh
+  pilot with `orbit task repilot <id>`);
 - the [digest](#request-an-approval-digest) raises approval requests for
   proposed and review tasks.
 
