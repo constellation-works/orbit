@@ -21,6 +21,11 @@ export function fleetFacts(rows) {
   ])));
 }
 
+/// A host's health reading is still pending until hosts.js lands its fan-out:
+/// there is no entry for it yet, or its probe is in flight (`checking`). Only
+/// a settled reading may state that a host has no drain or no telemetry.
+const readingPending = reading => !reading || reading.kind === 'checking';
+
 const expandedLists = new Set();
 function section(title, content, help = null) {
   let more = null;
@@ -36,10 +41,11 @@ function section(title, content, help = null) {
   ]);
 }
 
-function resourceMeter(payload, resource, os) {
+function resourceMeter(payload, resource, os, loading) {
   const reading = describeResource(payload, resource);
   const label = resource === 'cpu' ? (!payload || reading.utilization ? 'CPU' : 'Load') : { memory: 'Mem', disk: 'Disk', io: 'I/O' }[resource];
   const unknown = reading.value === '-';
+  if (loading) reading.detail = 'Reading telemetry…';
   if (resource === 'io' && unknown && os === 'macos') reading.detail = 'I/O pressure unavailable on macOS; Linux PSI full avg60 is not reported.';
   return el('div', { class: `fleet-metric ${reading.severity}`, 'aria-label': `${label}: ${unknown ? reading.detail : reading.value + reading.suffix}` }, [
     el('span', { text: label }),
@@ -55,6 +61,7 @@ export function fleetHostCards(hosts, health, openHost) {
   for (const row of hosts) {
     const reading = health.get(row.machine_id);
     const payload = row.reachable && !row.checking ? reading?.resources : null;
+    const loading = readingPending(reading);
     const verdict = hostVerdict(payload);
     const state = row.checking ? 'Checking' : row.reachable === false ? 'Unreachable' : row.reachable ? (row.error ? 'Answered' : reading?.resourcesError ? 'Last reached' : 'Online') : 'Unprobed';
     const card = fleetButton('', `Inspect ${row.name}, diagnostics and registry actions`, () => openHost(row.machine_id), 'fleet-host-card');
@@ -65,9 +72,9 @@ export function fleetHostCards(hosts, health, openHost) {
         el('h3', {}, [row.name, row.local ? el('span', { class: 'host-local', text: ' [local]' }) : null]),
         el('span', { class: `fleet-state ${row.reachable ? 'ok' : 'unknown'}`, text: state }),
       ]),
-      el('div', { class: 'fleet-metrics' }, ['cpu', 'memory', 'disk', 'io'].map(resource => resourceMeter(payload, resource, row.host_os))),
+      el('div', { class: 'fleet-metrics' }, ['cpu', 'memory', 'disk', 'io'].map(resource => resourceMeter(payload, resource, row.host_os, loading))),
       fleetFacts([['Machine ID', row.machine_id], ['SSH', row.ssh || (row.local ? 'Local' : 'Unknown')], ['Prefix', row.task_prefix || 'Unknown'], ['Orbit', row.binary_version || 'Unknown']]),
-      el('span', { class: `fleet-card-health${verdict.status === 'held' ? ' warn' : ''}`, text: row.checking ? 'Probe in progress' : row.reachable === false ? 'Probe failed · inspect details' : !payload ? reading?.resourcesError || 'Telemetry unavailable' : `${payload.stale ? 'Stale' : 'Sampled'} ${verdict.age} · admission ${verdict.status}` }),
+      el('span', { class: `fleet-card-health${verdict.status === 'held' ? ' warn' : ''}`, text: row.checking ? 'Probe in progress' : row.reachable === false ? 'Probe failed · inspect details' : loading ? 'Reading telemetry…' : !payload ? reading?.resourcesError || 'Telemetry unavailable' : `${payload.stale ? 'Stale' : 'Sampled'} ${verdict.age} · admission ${verdict.status}` }),
     );
     grid.append(card);
   }
@@ -76,9 +83,11 @@ export function fleetHostCards(hosts, health, openHost) {
 
 export function fleetDrainSection(hosts, health, selectScope) {
   const list = el('div', { class: 'fleet-work-list' });
+  let pending = false;
   for (const host of hosts) {
     const reading = health.get(host.machine_id);
-    if (!reading || reading.kind !== 'ready') continue;
+    if (readingPending(reading)) { pending = true; continue; }
+    if (reading.kind !== 'ready') continue;
     for (const row of reading.drains || []) {
       const drains = [
         ...(row.phase && row.phase !== 'idle' ? [{ phase: row.phase, mode: 'Owner drain', stopped: row.ownerStopped, run: row.runId, work: row.work }] : []),
@@ -97,7 +106,7 @@ export function fleetDrainSection(hosts, health, selectScope) {
       }
     }
   }
-  if (!list.childElementCount) list.append(el('p', { class: 'muted', text: 'No live drains.' }));
+  if (!list.childElementCount) list.append(el('p', { class: 'muted', text: pending ? 'Checking drains…' : 'No live drains.' }));
   return section('Drains', list);
 }
 
