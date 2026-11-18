@@ -424,6 +424,114 @@ fn doctor_unknown_check_suggests_listing_valid_checks() {
 }
 
 #[test]
+fn search_index_doctor_checks_local_coverage_on_owner_and_replica() {
+    if in_child("doctor::search_index_doctor_checks_local_coverage_on_owner_and_replica") {
+        return;
+    }
+    let scratch = std::env::var_os("HOME").expect("isolated test home");
+    let owner = WorkCheckout::new_in(scratch.as_ref());
+    let replica = WorkCheckout::new_in(scratch.as_ref());
+    let orbit_dir = |fixture: &WorkCheckout| fixture.work.join(".orbit");
+    for (fixture, name) in [(&owner, "coverage-owner"), (&replica, "coverage-replica")] {
+        command(fixture)
+            .current_dir(&fixture.home)
+            .arg("--root")
+            .arg(orbit_dir(fixture))
+            .args([
+                "init",
+                "--non-interactive",
+                "--machine-name",
+                name,
+                "--task-prefix",
+                "DC",
+            ])
+            .assert()
+            .success();
+    }
+    let cli = |fixture: &WorkCheckout, args: &[&str]| {
+        let root = orbit_dir(fixture);
+        let mut cmd = vec!["--root", root.to_str().unwrap()];
+        cmd.extend(args);
+        run_ok(fixture, &cmd)
+    };
+    let json = |fixture: &WorkCheckout, args: &[&str]| -> Value {
+        serde_json::from_slice(&cli(fixture, args).stdout).unwrap()
+    };
+    let coverage = |fixture| json(fixture, &["doctor", "--check", "search-index", "--json"]);
+    let rebuild = |fixture| json(fixture, &["search", "reindex", "--json"]);
+
+    cli(&owner, &["workspace", "init", "--name", "coverage"]);
+    let registration = json(&owner, &["workspace", "show", "--json"]);
+    let owner_id = registration["workspace"]["owner_machine_id"]
+        .as_str()
+        .unwrap();
+    let task = json(
+        &owner,
+        &[
+            "task",
+            "add",
+            "--title",
+            "Coverage marker",
+            "--complexity",
+            "low",
+            "--json",
+        ],
+    );
+    let index = orbit_dir(&owner).join("state/semantic.db");
+    fs::rename(&index, index.with_extension("old")).expect("set aside the generated search index");
+    let missing = coverage(&owner);
+    assert_eq!(missing["status"], "warning", "{missing}");
+    msg_has(&missing, "0 indexed tasks / 1 stored tasks");
+    fix_has(&missing, "orbit search reindex");
+    assert_eq!(rebuild(&owner)["tasks"], 1);
+    assert_eq!(coverage(&owner)["status"], "ok");
+    let found = json(
+        &owner,
+        &["search", "Coverage marker", "--kind", "task", "--json"],
+    );
+    assert_eq!(found["results"][0]["id"], task["id"]);
+
+    cli(
+        &replica,
+        &[
+            "workspace",
+            "init",
+            "--name",
+            "coverage",
+            "--role",
+            "replica",
+            "--owner",
+            owner_id,
+        ],
+    );
+    // Give the replica an existing local bundle and its registry entry.
+    let owner_tasks = orbit_dir(&owner).join("tasks");
+    let replica_tasks = orbit_dir(&replica).join("tasks");
+    let partition = "workspaces/ws_coverage";
+    let task_id = task["id"].as_str().unwrap();
+    mkdir(&replica_tasks.join(partition));
+    fs::rename(
+        owner_tasks.join(partition).join(task_id),
+        replica_tasks.join(partition).join(task_id),
+    )
+    .unwrap();
+    fs::copy(
+        owner_tasks.join("index.sqlite"),
+        replica_tasks.join("index.sqlite"),
+    )
+    .unwrap();
+    assert_eq!(rebuild(&replica)["tasks"], 1);
+    let rebuilt = coverage(&replica);
+    assert_eq!(rebuilt["status"], "ok", "{rebuilt}");
+    msg_has(&rebuilt, "1 indexed tasks / 1 stored tasks");
+    assert!(rebuilt["remediation"].is_null(), "{rebuilt}");
+    assert_eq!(
+        json(&replica, &["task", "list", "--json"]),
+        serde_json::json!([])
+    );
+}
+
+#[test]
 fn default_doctor_checks_schema_and_deep_detects_corrupt_data() {
     if in_child("doctor::default_doctor_checks_schema_and_deep_detects_corrupt_data") {
         return;
