@@ -383,6 +383,199 @@ fn exercise_stalled_peer(name: &str, sse: bool, prefix: &'static [u8]) {
     );
 }
 
+/// The scripted dashboard QA recipe in `docs/DEVELOPMENT.md` must not abandon
+/// its server when SIGTERM lands between the spawn, the PID capture and the
+/// token capture (ORB-25593). A Bash `DEBUG` hook fires the signal
+/// deterministically just before each assignment; a Linux subreaper parent
+/// then proves the exact stub child was reaped by the harness, not merely
+/// killed and left as a zombie for the parent to collect.
+#[cfg(target_os = "linux")]
+#[test]
+fn dashboard_qa_recipe_reaps_child_when_interrupted_at_identity_boundaries() {
+    for boundary in ["spawn_pid", "pid_token", "none"] {
+        exercise_qa_recipe_boundary(boundary);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn exercise_qa_recipe_boundary(boundary: &str) {
+    use std::path::Path;
+
+    let temp = tempdir().expect("tempdir");
+    let qa_base = temp.path().join("qa");
+    let shots = qa_base.join("shots");
+    std::fs::create_dir_all(&shots).expect("create shots");
+    std::fs::write(shots.join("sentinel.txt"), "keep").expect("write sentinel");
+    let qa_repo = temp.path().join("repo");
+    std::fs::create_dir_all(&qa_repo).expect("create qa repo");
+
+    let docs = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/DEVELOPMENT.md"),
+    )
+    .expect("read DEVELOPMENT.md");
+    let section = docs
+        .find("#### Scripted dashboard QA")
+        .expect("scripted QA section");
+    let fence = docs[section..]
+        .find("```bash\n")
+        .map(|index| section + index + "```bash\n".len())
+        .expect("scripted QA bash fence");
+    let end = docs[fence..]
+        .find("\n```")
+        .map(|index| fence + index)
+        .expect("scripted QA fence end");
+    let mut recipe = docs[fence..end].to_string();
+
+    let serve_start = recipe.find("SERVE_CMD=(").expect("SERVE_CMD line");
+    let serve_end = recipe[serve_start..]
+        .find('\n')
+        .map(|index| serve_start + index)
+        .expect("SERVE_CMD line end");
+    recipe.replace_range(
+        serve_start..serve_end,
+        r#"SERVE_CMD=(/bin/sh -c 'echo $$ >"$QA_BASE/child.pid"; echo "Dashboard listening on http://127.0.0.1:9"; exec sleep 300')"#,
+    );
+    let hook = r#"
+browser_start() { :; }
+browser_shoot() { echo shot > "$SHOTS/dashboard-dark-1280.png"; }
+browser_close() { :; }
+__boundary_fired=
+__hook() {
+  case "$BASH_COMMAND" in
+    'SERVER_PID=$!') [ "$QA_BOUNDARY" = spawn_pid ] || return 0 ;;
+    'SERVER_TOKEN="$(qa_token "$SERVER_PID")"') [ "$QA_BOUNDARY" = pid_token ] || return 0 ;;
+    *) return 0 ;;
+  esac
+  [ -n "$__boundary_fired" ] && return 0
+  __boundary_fired=1
+  trap - DEBUG
+  kill -TERM $$
+}
+trap __hook DEBUG
+set -T
+"#;
+    let capture = recipe
+        .find("# Capture.")
+        .expect("capture marker in QA recipe");
+    recipe.insert_str(capture, hook);
+    let script_path = temp.path().join("script.sh");
+    std::fs::write(&script_path, recipe).expect("write QA harness");
+
+    const RUNNER: &str = r#"
+import ctypes, os, subprocess, sys, time
+script, child_pid_file = sys.argv[1], sys.argv[2]
+libc = ctypes.CDLL(None)
+if libc.prctl(36, 1, 0, 0, 0) != 0:
+    raise SystemExit("prctl(PR_SET_CHILD_SUBREAPER) failed")
+start = time.monotonic()
+proc = subprocess.Popen(["bash", script])
+timed_out = 0
+try:
+    rc = proc.wait(timeout=10)
+except subprocess.TimeoutExpired:
+    timed_out = 1
+    proc.kill()
+    rc = proc.wait(timeout=5)
+print(f"harness_timeout={timed_out}")
+print(f"harness_rc={rc}")
+print(f"elapsed_ms={int((time.monotonic() - start) * 1000)}")
+child_state = "missing"
+child_pid = ""
+deadline = time.monotonic() + 2
+while time.monotonic() < deadline:
+    try:
+        child_pid = open(child_pid_file).read().strip()
+        child = int(child_pid)
+    except (OSError, ValueError):
+        time.sleep(0.05)
+        continue
+    try:
+        wpid, _status = os.waitpid(child, os.WNOHANG)
+    except ChildProcessError:
+        child_state = "reaped"
+        break
+    if wpid == child:
+        child_state = "zombie_left_by_harness"
+        break
+    child_state = "alive"
+    time.sleep(0.05)
+else:
+    if child_pid:
+        child_state = "alive"
+if child_state == "alive":
+    try:
+        os.kill(int(child_pid), 9)
+        os.waitpid(int(child_pid), 0)
+    except OSError:
+        pass
+print(f"child_pid={child_pid}")
+print(f"child_state={child_state}")
+"#;
+    let child_pid_file = qa_base.join("child.pid");
+    let mut runner = Command::new("/usr/bin/python3")
+        .arg("-c")
+        .arg(RUNNER)
+        .arg(&script_path)
+        .arg(&child_pid_file)
+        .env("QA_BASE", &qa_base)
+        .env("QA_HOME", temp.path().join("home"))
+        .env("QA_REPO", &qa_repo)
+        .env("QA_BOUNDARY", boundary)
+        .env("QA_TERM_GRACE", "5")
+        .env("ORBIT_BIN", "/bin/true")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn subreaper runner");
+    let started = Instant::now();
+    let status = wait_with_deadline(&mut runner, Duration::from_secs(25))
+        .unwrap_or_else(|| panic!("{boundary}: subreaper runner did not finish"));
+    let output = runner.wait_with_output().expect("collect runner output");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let field = |name: &str| {
+        stdout
+            .lines()
+            .find_map(|line| line.strip_prefix(name))
+            .unwrap_or("")
+            .to_string()
+    };
+    assert!(
+        status.success(),
+        "{boundary}: runner failed: {stdout} {stderr}"
+    );
+    assert_eq!(
+        field("harness_timeout="),
+        "0",
+        "{boundary}: harness exceeded its shutdown bound: {stdout} {stderr}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "{boundary}: harness took too long: {stdout}"
+    );
+    let expected_rc = if boundary == "none" { "0" } else { "143" };
+    assert_eq!(
+        field("harness_rc="),
+        expected_rc,
+        "{boundary}: unexpected harness exit: {stdout} {stderr}"
+    );
+    assert_eq!(
+        field("child_state="),
+        "reaped",
+        "{boundary}: exact child must be reaped by the harness: {stdout} {stderr}"
+    );
+    assert!(
+        shots.join("sentinel.txt").exists() && qa_base.join("serve.log").exists(),
+        "{boundary}: teardown must leave artifacts in place: {stdout}"
+    );
+    if boundary == "none" {
+        assert!(
+            shots.join("dashboard-dark-1280.png").exists(),
+            "normal recipe run must keep its capture: {stdout}"
+        );
+    }
+}
+
 fn spawn_dashboard(home: &std::path::Path) -> BoundServer {
     let mut command = Command::new(env!("CARGO_BIN_EXE_orbit"));
     // ORB-11300: the dashboard serves whichever workspace it resolves. Without

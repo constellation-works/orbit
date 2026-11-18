@@ -108,6 +108,8 @@ FILE_READERS = (
     (Path(".github/workflows/website-check.yml"), ("orbit-engine",)),
     (Path(".github/workflows/codeql.yml"), ("orbit-engine",)),
     (Path("docs/design/auto-tasks/1_overview.md"), ("orbit-core",)),
+    # The scripted-QA recipe regression extracts and runs this recipe.
+    (Path("docs/DEVELOPMENT.md"), ("orbit-cli",)),
     (Path("crates/orbit-engine/tests/engine/pr_landing/fixtures/base-refresh-forge.sh"), ("orbit-core",)),
     (Path("crates/orbit-tools/tests/fixtures/plugins"), ("orbit-cli",)),
     (Path("crates/orbit-agent/tests/provider_invocation/fixtures"), ("orbit-engine",)),
