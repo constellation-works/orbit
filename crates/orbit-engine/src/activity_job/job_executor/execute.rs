@@ -362,8 +362,12 @@ pub fn execute_job_with_resume(
                 // [ORB-19430] A read-only completion observation whose bounded
                 // retry is spent, or that has none, holds: nothing changed on
                 // the forge, so the held run resumes completion once it answers.
+                // [ORB-25661] The same hold follows a park or current-policy
+                // requeue final recovery successfully applied for the verified
+                // unchanged candidate: its recorded disposition stands, and no
+                // failure handoff runs over it.
                 if let (
-                    FinalRecoveryVerdict::Skipped,
+                    FinalRecoveryVerdict::Skipped | FinalRecoveryVerdict::CompletionObservationHeld,
                     DispatchError::CompletionObservationUnavailable { action, message },
                 ) = (&verdict, &error)
                 {

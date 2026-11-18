@@ -132,6 +132,12 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
     if let types::FinalRecoveryBudget::Replay(decision, fault) =
         std::mem::replace(budget, types::FinalRecoveryBudget::Spent)
     {
+        // A replayed current-policy requeue of the unchanged publication
+        // holds a transient completion observation as a fresh one does.
+        let completion_requeue = matches!(
+            error,
+            DispatchError::CompletionObservationUnavailable { .. }
+        ) && matches!(decision, FinalRecoveryDecision::Requeue { .. });
         let application = FinalRecoveryApplication {
             task_id,
             failed_step_id: step.id.clone(),
@@ -145,7 +151,12 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
             completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
             infrastructure: None,
         };
-        return settlement::conclude(job, ctx, step, activity, &application, None, None);
+        let verdict = settlement::conclude(job, ctx, step, activity, &application, None, None);
+        return if completion_requeue {
+            verdict.held_for_completion_observation()
+        } else {
+            verdict
+        };
     }
     // [ORB-14668] A candidate conflict recovery found already on the pinned
     // base is settled from the host-certified evidence, re-observed here,
@@ -344,7 +355,8 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
                         == Some("done"),
                     infrastructure: None,
                 };
-                return settlement::conclude(job, ctx, step, activity, &application, None, None);
+                return settlement::conclude(job, ctx, step, activity, &application, None, None)
+                    .held_for_completion_observation();
             }
             Ok(CompletionObservationAdmission::Stopped { reason }) => {
                 // The worker is gone, so the in-worker retry cannot run. Requeue
@@ -379,7 +391,8 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
                         == Some("done"),
                     infrastructure: None,
                 };
-                return settlement::conclude(job, ctx, step, activity, &application, None, None);
+                return settlement::conclude(job, ctx, step, activity, &application, None, None)
+                    .held_for_completion_observation();
             }
             Ok(CompletionObservationAdmission::Unavailable) => {
                 "host has no authenticated completion prefix".to_string()
@@ -590,7 +603,7 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
         completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
         infrastructure: None,
     };
-    settlement::conclude(
+    let verdict = settlement::conclude(
         job,
         ctx,
         step,
@@ -598,7 +611,19 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
         &application,
         resume_index,
         downgrade.as_deref(),
-    )
+    );
+    // A recovery agent cannot be dispatched for a completion observation
+    // (the branch above intercepts it), but a requeue decided on this path
+    // for one holds the same way.
+    if matches!(
+        error,
+        DispatchError::CompletionObservationUnavailable { .. }
+    ) && matches!(decision, FinalRecoveryDecision::Requeue { .. })
+    {
+        verdict.held_for_completion_observation()
+    } else {
+        verdict
+    }
 }
 
 /// Whether `error` is a `worktree_setup` failure caused by a dependency
