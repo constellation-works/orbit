@@ -18,8 +18,6 @@
 # tagged with a re-review date — drop it once an upstream fix lands.
 yanked = "deny"
 ignore = [
-    { id = "RUSTSEC-2026-0543", reason = "All chrono versions are unmaintained. Root crates use chrono 0.4.43 for stored timestamps and scheduling, including via orbit-automation -> cel 0.15.0 and croner 3.0.1. Orbit desktop uses chrono 0.4.45 for update trust dates. Removal requires migrating these APIs and upstream dependencies. Owner: Orbit dependency/CI maintainers. Re-review 2027-05-17." },
-    { id = "RUSTSEC-2026-0555", reason = "All chrono-tz versions are unmaintained. orbit-agent -> chrono-tz 0.10.4 parses named zones in provider reset times. orbit-automation uses it in scheduling tests and via cel 0.15.0 with its chrono feature. Remove once both the zone handling and CEL dependency can migrate. Owner: Orbit dependency/CI maintainers. Re-review 2027-05-17." },
     # rsa Marvin timing sidechannel. `rsa` is a direct dependency of
     # orbit-common for release signature verification, of orbit-core for
     # decision-channel DKIM verification, and a dev-dependency of
@@ -37,6 +35,8 @@ ignore = [
     { id = "RUSTSEC-2026-0371", reason = "Desktop Linux: orbit-desktop -> notify-rust 4.18.2 / tauri-plugin-opener 2.7.2 -> zbus 5.19.0 (also via zbus_macros 5.19.0) -> zbus_names 4.3.5. Latest parents require zbus ^5 / ^5.9; maintained names moved into incompatible zbus 6. Accept standalone-crate maintenance risk until both parents migrate; no exploit reported. Owner: Orbit desktop maintainers. Re-review 2027-04-19." },
     { id = "RUSTSEC-2026-0370", reason = "Desktop Linux: orbit-desktop -> notify-rust 4.18.2 / tauri-plugin-opener 2.7.2 -> zbus 5.19.0 -> zvariant 5.15.1 (also through zbus_macros 5.19.0 / zbus_names 4.3.5). Latest parents require zbus ^5 / ^5.9; maintained wire format moved into incompatible zbus 6. Accept standalone-crate maintenance risk until both parents migrate; no exploit reported. Owner: Orbit desktop maintainers. Re-review 2027-04-19." },
     { id = "RUSTSEC-2026-0372", reason = "Desktop Linux: orbit-desktop -> notify-rust 4.18.2 / tauri-plugin-opener 2.7.2 -> zbus 5.19.0 -> zvariant 5.15.1 -> zvariant_derive 5.15.1. Latest parents require zbus ^5 / ^5.9; maintained derives moved into incompatible zbus 6. Accept standalone-crate maintenance risk until both parents migrate; no exploit reported. Owner: Orbit desktop maintainers. Re-review 2027-04-19." },
+    { id = "RUSTSEC-2026-0543", reason = "The root workspace uses chrono 0.4.43 directly across Orbit crates and transitively through cel 0.15.0 -> orbit-automation and croner 3.0.1 -> orbit-automation. All chrono versions are affected and cargo-deny reports no safe upgrade; this is an unmaintained-package notice with no demonstrated exploit. Accept maintenance risk while ORB-25504 replaces the workspace dependency. Owner: Orbit dependency maintainers. Re-review 2027-02-17." },
+    { id = "RUSTSEC-2026-0555", reason = "The root workspace uses chrono-tz 0.10.4 through cel 0.15.0 -> orbit-automation and directly in orbit-agent; cargo-deny reports no safe upgrade. Accept this unmaintained-package risk while ORB-25504 replaces the workspace dependency and its time-zone consumers. Owner: Orbit dependency maintainers. Re-review 2027-02-17." },
 ]
 
 [licenses]

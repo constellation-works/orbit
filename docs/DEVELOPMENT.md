@@ -1281,6 +1281,13 @@ The desktop maintenance exceptions were assessed on 2026-10-19. **Orbit desktop 
 
 The latest published [notify-rust 4.18.2](https://docs.rs/crate/notify-rust/4.18.2/source/Cargo.toml) and [tauri-plugin-opener 2.7.2](https://docs.rs/crate/tauri-plugin-opener/2.7.2/source/Cargo.toml) still require `zbus ^5` and `^5.9` respectively; substituting zbus 6 needs upstream API migrations. No patched standalone version is listed for these four advisories. Until the parents migrate, accept the documented maintenance risk with exact-ID exceptions. The regression executes the workflow's real audit command with real Cargo and cargo-deny against tiny independent workspaces and an offline fixture advisory database: the root-only command misses a desktop-only finding, the desktop command fails, an exact-ID exception passes, and another unknown ID still fails. It also checks that a stale desktop lockfile fails without being rewritten. Only the local fixture dependency's metadata source is adapted to registry form so no crate download or native build is needed.
 
+The workspace chrono exceptions were assessed on 2026-11-18. **Orbit dependency maintainers** own re-review by **2027-02-17** and removal once the workspace migration completes. Both advisories report unmaintained crates, and cargo-deny finds no safe upgrade. The exact dependency chains in the root graph are:
+
+| Advisory | Root workspace chain and constraint |
+| --- | --- |
+| [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543.html) | Orbit crates use `chrono 0.4.43` directly; `orbit-automation -> cel 0.15.0 -> chrono` and `orbit-automation -> croner 3.0.1 -> chrono` also retain it. All chrono versions are affected, so there is no patched release to select. |
+| [RUSTSEC-2026-0555](https://rustsec.org/advisories/RUSTSEC-2026-0555.html) | `orbit-agent -> chrono-tz 0.10.4` and `orbit-automation -> cel 0.15.0 -> chrono-tz 0.10.4`. No safe chrono-tz upgrade is available; replacement requires migrating the workspace time-zone consumers. |
+
 ## Vendored dashboard JavaScript
 
 DOMPurify and marked are vendored under [`crates/orbit-web/assets/dashboard/vendor/`](../crates/orbit-web/assets/dashboard/vendor/); [`VENDOR.md`](../crates/orbit-web/assets/dashboard/vendor/VENDOR.md) has the refresh procedure. Refresh with `./scripts/refresh-dashboard-vendor.sh` after changing the pins in `package.json`; never edit the blobs by hand. `make ci-fast` runs [`check-dashboard-vendor.py`](../scripts/check-dashboard-vendor.py), which fails on a digest mismatch or drift between the manifest, `package.json` and `package-lock.json`. Dependabot and GitHub security alerts watch these packages, and the `dependabot-alert-sweep` job files remediation tasks; `cargo-deny` does not see them.
