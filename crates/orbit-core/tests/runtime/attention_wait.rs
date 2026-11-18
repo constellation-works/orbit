@@ -211,6 +211,36 @@ fn prune_leaves_another_mints_staging_file_alone() {
     );
 }
 
+/// A stray entry whose 64th byte falls inside a multibyte character is not a
+/// grant record. Slicing its name at byte 64 panics there, and that panic would
+/// fail every mint until the entry was removed by hand.
+fn mint_ignores_a_multibyte_stray_filename() {
+    let (_root, runtime) = runtime();
+    let dir = grant_dir_of(&runtime);
+    std::fs::create_dir_all(&dir).unwrap();
+    // 63 ASCII bytes, then `é` (bytes 63 and 64), then `.jsn`: 69 bytes in all,
+    // with byte 64 inside `é`.
+    let stray = dir.join(format!("{}é.jsn", "a".repeat(63)));
+    assert_eq!(stray.file_name().unwrap().len(), 69);
+    std::fs::write(&stray, "not a grant record").unwrap();
+
+    let minted = attention(
+        &runtime,
+        json!({"wait_grant": true}),
+        session(&[McpCapability::Agent]),
+    )
+    .unwrap();
+    assert!(
+        minted["wait_grant"]["token"].as_str().is_some(),
+        "a mint over a multibyte stray filename still mints"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&stray).unwrap(),
+        "not a grant record",
+        "a non-grant entry must survive a mint's prune untouched"
+    );
+}
+
 /// Expired grant records are still pruned on mint, and the expired token is
 /// still refused with capability_denied on redeem.
 fn expired_grants_are_still_pruned_and_refused() {
@@ -321,6 +351,7 @@ crate::scenario_table!(
     shell_without_a_session_grant_is_refused,
     minted_grant_waits_for_a_delta_and_stays_inside_its_scope,
     prune_leaves_another_mints_staging_file_alone,
+    mint_ignores_a_multibyte_stray_filename,
     expired_grants_are_still_pruned_and_refused,
     concurrent_mints_all_succeed,
 );
