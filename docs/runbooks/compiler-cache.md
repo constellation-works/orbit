@@ -143,18 +143,26 @@ Residual: any edit in `[workspace.dependencies]` that leaves the filtered
 lock entries unchanged, such as a feature or `default-features` change,
 also keeps the exact key — the lock file need not be byte-identical, only
 its hashed entries. When that archive still exists, the protected push gets
-an exact hit and saves nothing, so each job rebuilds the affected units and
-their dependents, and those rebuilt units are not published. Refresh is the
-successful production of an archive for a missing key. It is not the next
-effective-key change, and it is not the next `Cargo.lock` edit. A filtered
-lock-entry, normalised member-manifest, config/toolchain, prefix or
-environment change ends the residual only when that push's eligible save
-produces the archive. A change that returns to a retained key is an exact
-hit and does not. A release bump rewrites the lock file without moving the
-effective key, so it does not either. Two of the 98 root-manifest commits
-from 2026-08-01 to 2026-11-18 were feature edits of this kind
-(`c05c3103e`, `600a0a711`); both left the exact key unchanged. The version
-switch in `b38186846` (2026-11-01) did the same.
+an exact hit and saves nothing. If the restored archive lacks the units
+needed for the new configuration, Cargo rebuilds the affected units and
+their dependents on every job, and those rebuilt units are not published.
+Repeated rebuilds are tied to the units available in the restored archive,
+not merely the cache key: an exact hit on a retained archive that already
+contains compatible units avoids those rebuilds without publishing anything.
+Refresh is the successful production of an archive for a missing key. It is
+not the next effective-key change, and it is not the next `Cargo.lock` edit.
+A filtered lock-entry, normalised member-manifest, config/toolchain, prefix
+or environment change ends repeated rebuilding only when that push's
+eligible save produces the archive. An unchanged-key push — such as a release
+bump that rewrites the lock file without moving the effective key — cannot
+replace an existing archive while that outdated exact archive remains. But
+once that archive is evicted or if an earlier save failed, an unchanged-key
+protected push misses the exact key: the pinned restore records the miss,
+and the pinned post step can then save the rebuilt dependencies under that
+key, ending the residual. Two of the 98 root-manifest commits from 2026-08-01
+to 2026-11-18 were feature edits of this kind (`c05c3103e`, `600a0a711`);
+both left the exact key unchanged. The version switch in `b38186846`
+(2026-11-01) did the same.
 
 The Check job's trusted `.orbit/tmp/dependency-producer` checkout adds that
 tree's `.cargo/config.toml` and `rust-toolchain` / `rust-toolchain.toml` to
