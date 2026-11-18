@@ -321,17 +321,39 @@ function hostErrorCause(error) {
   }
 }
 
+// A row that needs no resource read has its reading now. Such a row is not
+// waiting on the fan-out, so loadHealth publishes it before any read starts.
+function settledReading(row) {
+  if (row.checking) return { kind: "checking" };
+  if (row.reachable === false) return { kind: "unreachable" };
+  if (row.reachable == null) return { kind: "unprobed" };
+  return null;
+}
+
 async function loadHealth() {
   const token = ++healthEpoch;
   const payload = lastPayload;
   if (!payload || token !== healthEpoch) return;
   const rows = (payload.hosts || []).map(withLiveFields);
-  const entries = [];
+  const entries = new Map();
+  const reads = [];
+  for (const row of rows) {
+    const settled = settledReading(row);
+    if (settled) entries.set(row.machine_id, settled);
+    else reads.push(row);
+  }
+  // Publish settled rows now. A read held on another host must not leave an
+  // unprobed remote reading telemetry (ORB-25565). Reads keep the prior
+  // reading until their own results land, as before.
+  if (entries.size) {
+    health = new Map([...health, ...entries]);
+    render();
+  }
   let next = 0;
-  await Promise.all(Array.from({ length: Math.min(3, rows.length) }, async () => {
-    while (next < rows.length) {
-      const row = rows[next++];
-      entries.push([row.machine_id, await readHealth(row)]);
+  await Promise.all(Array.from({ length: Math.min(3, reads.length) }, async () => {
+    while (next < reads.length) {
+      const row = reads[next++];
+      entries.set(row.machine_id, await readHealth(row));
     }
   }));
   if (token !== healthEpoch) return;
@@ -340,9 +362,8 @@ async function loadHealth() {
 }
 
 async function readHealth(row) {
-  if (row.checking) return { kind: "checking" };
-  if (row.reachable === false) return { kind: "unreachable" };
-  if (row.reachable == null) return { kind: "unprobed" };
+  const settled = settledReading(row);
+  if (settled) return settled;
   const workspaces = Array.isArray(row.workspaces) ? row.workspaces : [];
   const [resources, drains] = await Promise.all([
     fetchHostResourcePayloadFor(row.name, { shareSelected: true, identity: row }).then(
