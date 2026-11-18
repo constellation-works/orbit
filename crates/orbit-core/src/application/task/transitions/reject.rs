@@ -1,4 +1,5 @@
 use super::*;
+use orbit_types::task::TaskHistoryEntry;
 
 impl OrbitRuntime {
     pub fn reject_task(
@@ -17,13 +18,25 @@ impl OrbitRuntime {
     /// through this write, so the status written here is the one validated.
     /// A live local run that still owns the task refuses the reject, as it
     /// refuses the archive and requeue answers on the same request.
+    ///
+    /// `answered` is written in the same store update as the status, so an
+    /// interruption leaves either neither or both. The returned effects close
+    /// the task's pull requests and must run after the caller releases the
+    /// task lock; a forge call is not part of the answer's atomic write.
     pub(crate) fn reject_blocked_task_for_triage_decision(
         &self,
         id: &str,
         note: String,
         comment: Option<String>,
-    ) -> Result<Task, OrbitError> {
-        self.reject_task_in_status(id, note, comment, None, None, true)
+        answered: Vec<TaskHistoryEntry>,
+    ) -> Result<DeferredApprovalEffects, OrbitError> {
+        let (task, previous_status, reason) =
+            self.reject_task_recording(id, note, comment, None, None, true, answered)?;
+        Ok(DeferredApprovalEffects::after_rejection(
+            previous_status,
+            task,
+            reason,
+        ))
     }
 
     pub(crate) fn reject_task_with_identity(
@@ -46,6 +59,27 @@ impl OrbitRuntime {
         model: Option<String>,
         allow_blocked: bool,
     ) -> Result<Task, OrbitError> {
+        let (result, previous_status, reason) =
+            self.reject_task_recording(id, note, comment, agent, model, allow_blocked, Vec::new())?;
+        self.close_task_prs_after_transition(previous_status, &result, Some(&reason));
+
+        Ok(result)
+    }
+
+    /// Write the rejection with `append_history` in the same store update and
+    /// return the rejected task, the status it left and the redacted reason.
+    /// Pull-request closure is the caller's.
+    #[allow(clippy::too_many_arguments)]
+    fn reject_task_recording(
+        &self,
+        id: &str,
+        note: String,
+        comment: Option<String>,
+        agent: Option<String>,
+        model: Option<String>,
+        allow_blocked: bool,
+        append_history: Vec<TaskHistoryEntry>,
+    ) -> Result<(Task, TaskStatus, String), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
@@ -99,15 +133,14 @@ impl OrbitRuntime {
                     status_event: Some(status_event.to_string()),
                     status_note: Some(reason.clone()),
                     append_comments: append_comments.clone(),
+                    append_history: append_history.clone(),
                     expected_status: Some(vec![task.status]),
                     ..Default::default()
                 },
             )?;
             Ok((updated, previous_status))
         })?;
-        self.close_task_prs_after_transition(previous_status, &result, Some(&reason));
-
-        Ok(result)
+        Ok((result, previous_status, reason))
     }
 
     pub fn archive_task(&self, id: &str) -> Result<(), OrbitError> {
