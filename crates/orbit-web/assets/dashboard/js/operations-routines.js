@@ -322,6 +322,13 @@ function routineTimeline(routines, now = Date.now()) {
     .flatMap(routine => {
       const breaker = trippedBreaker(routine);
       const active = routineState(routine) === "active";
+      // State-, delivery- and condition-triggered routines never record a
+      // fire in recent_fires (sweep_routine returns a report without one),
+      // so breakerTrialDispatched can never observe their trial dispatch.
+      // Without this guard a bypass trial (armedTrialAt returns now) would
+      // pin a perpetual mark at the current time. Only cron dispatches show
+      // up in recent_fires, so only they project an admitted trial.
+      if (breaker?.trial_started_at && routineEventDriven(routine)) return [];
       // An admitted trial (trial_started_at set) is upcoming until its fire
       // is dispatched: the scheduler stores the admission before it evaluates
       // the schedule, so between slots the trial waits for the next slot. The
