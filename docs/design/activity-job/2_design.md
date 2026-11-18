@@ -1235,6 +1235,10 @@ in `task_pr_pipeline`:
   exit 1. It requires a complete, untruncated JSON stream ending in that terminal,
   with no earlier provider failure or result, and no timeout, stall, sandbox write
   denial, authentication, usage limit, capacity, refusal or API/schema rejection.
+  Its `stop_reason` must be absent or `null`, or exactly `tool_use`; a `tool_use`
+  stop reason also needs an earlier assistant `tool_use` attempt in the same stream,
+  which is the evidence that the formatting retry budget was spent. Any other non-null
+  stop reason stays closed.
   The process still fails, with the redacted terminal cause ahead of unrelated
   stderr warnings. Only that diagnostic enters the correction input; prior
   StructuredOutput tool arguments never supply an answer. Missing, truncated or
