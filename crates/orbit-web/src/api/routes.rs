@@ -5,7 +5,7 @@ use axum::routing::{get, post, put};
 use super::*;
 
 /// Tell long-lived streaming handlers (`/api/log/stream`, `/api/events/stream`
-/// and lease notice streams) to close cooperatively. Called once from [`crate::serve::shutdown_signal`] so the bounded
+/// and lease notice streams) to close cooperatively. Called once from [`crate::shutdown::shutdown_signal`] so the bounded
 /// graceful-drain deadline in `crate::serve::run_server` rarely has to be relied on
 /// (ORB-11246).
 pub(crate) fn request_shutdown() {

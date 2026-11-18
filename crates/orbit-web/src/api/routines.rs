@@ -49,17 +49,8 @@ const ROUTINE_HEALTH_TTL: Duration = Duration::from_secs(5);
 /// compute.
 const ROUTINE_HEALTH_REFRESH_AFTER: Duration = Duration::from_secs(3);
 
-/// Host-wide cache key: selection does not restrict the host's routine list.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub(crate) struct RoutineMemoKey {
-    inputs: Vec<(PathBuf, Option<(SystemTime, u64)>)>,
-    /// Routine fire, cursor, pause and automation rows in the shared audit
-    /// database. Not the database's file stamp, which every unrelated audit
-    /// write moves.
-    routine_store: Option<String>,
-    include_inactive_plugins: bool,
-    operator: bool,
-}
+// Compatibility shim. Retirement: callers import `crate::runtime_memo::RoutineMemoKey`.
+pub(crate) use crate::runtime_memo::RoutineMemoKey;
 
 /// Inputs routine health reads that a live drain rewrites constantly: job runs
 /// and the task registry files. Keying on them recomputed synchronously, about
@@ -165,12 +156,12 @@ pub(super) async fn list_routine_health(
                 None => (None, None),
             };
         Ok((
-            RoutineMemoKey {
+            RoutineMemoKey::from_stamped_inputs(
                 inputs,
                 routine_store,
                 include_inactive_plugins,
-                operator: operator_session,
-            },
+                operator_session,
+            ),
             RoutineChurn {
                 job_runs,
                 task_store,

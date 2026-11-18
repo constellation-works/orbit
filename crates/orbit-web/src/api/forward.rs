@@ -29,11 +29,12 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::audit::AUDIT_NEXT_BEFORE_HEADER;
-use super::host::{host_error_code, status_for};
+use super::host::status_for;
 use super::routines::{action_capability, authorization_denied, authorized_caller};
 use crate::host_tunnels::{ForwardError, HostTarget, Lease, RemoteIdentity};
 use crate::ssh_tunnel::TunnelOrigin;
 use crate::state::DashboardState;
+use crate::state::host_error_code;
 
 /// Bound on one forwarded request: the response head, and for anything but
 /// an event stream, the whole body. A slow host holds only its own request.

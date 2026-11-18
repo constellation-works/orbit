@@ -33,8 +33,10 @@ pub use lease::{intake as lease_intake, listener as lease_listener};
 mod log_format;
 mod parse;
 mod projections;
+mod run_failure;
 mod runtime_memo;
 mod serve;
+mod shutdown;
 mod ssh_tunnel;
 mod state;
 mod why_stuck;
@@ -47,35 +49,4 @@ pub use api::leases::{
 };
 pub use connect::{ConnectArgs, connect};
 
-pub(crate) use serve::{DEFAULT_DASHBOARD_PORT, default_workspace_selection, open_browser};
 pub use serve::{ServeArgs, serve, serve_from_env};
-
-/// The dashboard stylesheet, served as one file from per-screen sources.
-/// Order is cascade order: at equal specificity a later file wins, so shared
-/// layers come first and a file that refines another comes after it.
-pub(crate) const DASHBOARD_CSS: &str = concat!(
-    include_str!("../assets/dashboard/css/base.css"),
-    include_str!("../assets/dashboard/css/shell.css"),
-    include_str!("../assets/dashboard/css/components.css"),
-    include_str!("../assets/dashboard/css/tasks.css"),
-    include_str!("../assets/dashboard/css/task-detail.css"),
-    include_str!("../assets/dashboard/css/markdown.css"),
-    include_str!("../assets/dashboard/css/runs.css"),
-    include_str!("../assets/dashboard/css/run-detail.css"),
-    include_str!("../assets/dashboard/css/dock.css"),
-    include_str!("../assets/dashboard/css/log-tail.css"),
-    include_str!("../assets/dashboard/css/audit.css"),
-    include_str!("../assets/dashboard/css/health.css"),
-    include_str!("../assets/dashboard/css/forecast.css"),
-    include_str!("../assets/dashboard/css/experiments.css"),
-    include_str!("../assets/dashboard/css/scoreboard.css"),
-    include_str!("../assets/dashboard/css/agents.css"),
-    include_str!("../assets/dashboard/css/knowledge.css"),
-    include_str!("../assets/dashboard/css/automation.css"),
-    include_str!("../assets/dashboard/css/drain.css"),
-    include_str!("../assets/dashboard/css/settings.css"),
-    include_str!("../assets/dashboard/css/fleet.css"),
-    include_str!("../assets/dashboard/css/plugins.css"),
-    include_str!("../assets/dashboard/css/leases.css"),
-    include_str!("../assets/dashboard/css/notices.css"),
-);

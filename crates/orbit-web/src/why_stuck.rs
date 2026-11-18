@@ -13,7 +13,7 @@ use orbit_core::application::task::TaskRow;
 use orbit_core::{JobRun, JobRunState, OrbitError, OrbitRuntime, Task, TaskStatus};
 use serde_json::{Map, Value, json};
 
-use crate::api::failure_root_line;
+use crate::run_failure::failure_root_line;
 
 /// Attach `why_stuck` when this task is blocked or its latest delivery run is held.
 ///

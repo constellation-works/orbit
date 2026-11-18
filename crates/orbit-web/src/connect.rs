@@ -32,7 +32,11 @@ use orbit_common::process::shell::quote_posix_arg;
 use orbit_core::OrbitError;
 
 use crate::ssh_tunnel::{self, ProbeLimit, SshTunnel, TunnelOrigin, TunnelSpec};
-use crate::{DEFAULT_DASHBOARD_PORT, open_browser};
+
+/// Conventional loopback port for the dashboard. Shared by `web serve`'s
+/// `--port` default and `web connect`'s local/remote port preference so the
+/// two surfaces agree on one number.
+pub(crate) const DEFAULT_DASHBOARD_PORT: u16 = 7878;
 
 /// How long to wait for the remote dashboard to answer `/healthz` before
 /// giving up. Generous because it covers SSH connect + remote process spawn.
@@ -655,4 +659,19 @@ fn wait_for_shutdown(tunnel: &mut SshTunnel) {
             _ = child_exit => {}
         }
     });
+}
+
+pub(crate) fn open_browser(url: &str) {
+    #[cfg(target_os = "macos")]
+    let cmd = "open";
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let cmd = "xdg-open";
+    #[cfg(windows)]
+    let cmd = "explorer";
+
+    let _ = std::process::Command::new(cmd)
+        .arg(url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }

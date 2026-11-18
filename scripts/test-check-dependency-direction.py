@@ -93,6 +93,7 @@ class RelativeImportTests(unittest.TestCase):
         context.mkdir(parents=True)
         (context / "dispatch_contract.rs").write_text("")
         self.prepare_config_paths()
+        self.prepare_web_paths()
 
     def test_engine_context_dispatch_contract_direction(self):
         # RuntimeHost owns the contracts below dispatch, including its null
@@ -239,6 +240,20 @@ class RelativeImportTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout)
         finally:
             path.write_text(original)
+
+    def prepare_web_paths(self):
+        # [ORB-25492] The orbit-web module-direction scan fails closed when a
+        # leaf is missing, so every case's fixture has the empty roots.
+        src = self.root / "crates/orbit-web/src"
+        (src / "state").mkdir(parents=True, exist_ok=True)
+        (src / "lease").mkdir(parents=True, exist_ok=True)
+        for name in (
+            "why_stuck.rs", "projections.rs", "connect.rs", "host_tunnels.rs",
+            "health.rs", "assets.rs", "run_failure.rs", "shutdown.rs",
+        ):
+            path = src / name
+            if not path.exists():
+                path.write_text("")
 
     def prepare_config_paths(self):
         src = self.root / "crates/orbit-config/src"
@@ -1549,6 +1564,62 @@ class RelativeImportTests(unittest.TestCase):
         for kind, target in (("dev", None), ("dev", "cfg(unix)")):
             with self.subTest(kind=kind, target=target):
                 self.check_crate_edge("orbit-policy", kind, target, rejected=False)
+
+    def test_orbit_web_lower_modules_do_not_name_api_or_serve(self):
+        # [ORB-25492] state, projections, the leaves and their siblings sit
+        # below api and serve. lease may still name api::leases. A comment or
+        # a string is not an edge. A missing leaf fails closed.
+        web = self.root / "crates/orbit-web/src"
+        self.check_rows([
+            ("state/up.rs", source + "\n") for source in (
+                "use crate::api::host_error_code;",
+                "use crate::{state::DashboardState, api::host_error_code};",
+                "fn probe() { crate::serve::build_state(); }",
+            )
+        ] + [
+            ("lease/up.rs", "use crate::serve::shutdown_signal;\n"),
+            ("lease/up.rs", "fn probe() { crate::serve::build_app(); }\n"),
+        ], rejected=True, base=web)
+        self.check_rows([
+            ("state/down.rs", "use crate::runtime_memo::RoutineMemoKey;\n"),
+            ("state/down.rs", "// crate::api::host_error_code stays a comment\n"),
+            ("state/down.rs", 'const NOTE: &str = "crate::serve::build_state";\n'),
+            ("lease/down.rs", "use crate::api::leases::{LeaseBackend, lease_router};\n"),
+            ("lease/down.rs", "use crate::shutdown::shutdown_signal;\n"),
+        ], rejected=False, base=web)
+        for name, source in (
+            ("why_stuck.rs", "use crate::api::failure_root_line;\n"),
+            ("projections.rs", "use crate::api::tasks::reads;\n"),
+            ("connect.rs", "use crate::serve::open_browser;\n"),
+            ("host_tunnels.rs", "use crate::{serve::DEFAULT_DASHBOARD_PORT};\n"),
+            ("health.rs", "fn probe() { crate::api::router(); }\n"),
+            ("assets.rs", "use crate::serve::build_app;\n"),
+            ("run_failure.rs", "use crate::api::runs::detail;\n"),
+            ("shutdown.rs", "use crate::serve::run_server;\n"),
+        ):
+            self.check_exact(name, source, rejected=True, base=web)
+        for name, source in (
+            ("why_stuck.rs", "use crate::run_failure::failure_root_line;\n"
+             "// use crate::api::failure_root_line;\n"
+             'const NOTE: &str = "crate::serve::shutdown_signal";\n'),
+            ("connect.rs", "pub(crate) const DEFAULT_DASHBOARD_PORT: u16 = 7878;\n"),
+            ("shutdown.rs", "use orbit_core::OrbitError;\n"),
+            ("run_failure.rs", "use orbit_core::{JobRun, OrbitRuntime};\n"),
+            ("assets.rs", "use crate::state::DashboardState;\n"),
+            ("host_tunnels.rs", "use crate::connect::DEFAULT_DASHBOARD_PORT;\n"
+             "// api::forward is the HTTP side.\n"),
+            ("projections.rs", "use crate::why_stuck::attach_why_stuck;\n"),
+            ("health.rs", "fn probe() {}\n"),
+        ):
+            self.check_exact(name, source, rejected=False, base=web)
+        missing = web / "shutdown.rs"
+        missing.unlink()
+        result = subprocess.run(["bash", str(self.guard)], env=self.env,
+                                capture_output=True, text=True, check=False)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("dependency scan path missing", result.stderr)
+        self.assertIn("shutdown.rs", result.stderr)
+        self.assertNotIn("dependency direction guard passed", result.stdout)
 
 
 # Each case builds its own fixture tree and spends nearly all of its wall time

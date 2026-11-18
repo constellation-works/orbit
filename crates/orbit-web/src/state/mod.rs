@@ -73,7 +73,7 @@ mod request;
 pub(crate) use dashboard::DashboardState;
 use dashboard::StateInner;
 use hosts::HostFileState;
-pub(crate) use hosts::PinnedHosts;
+pub(crate) use hosts::{PinnedHosts, host_error_code};
 
 pub(crate) use registry::RegistrySource;
 use registry::{CheckoutFingerprint, RegistryFingerprint, checkout_fingerprints};
