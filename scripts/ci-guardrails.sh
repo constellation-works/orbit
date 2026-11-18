@@ -169,12 +169,13 @@ export GIT_OPTIONAL_LOCKS=0
 # of its test binaries and the `orbit` binary the CLI fixtures execute. The
 # shard jobs run nextest from that archive, one count partition each, and the
 # Check job (--checks) runs everything else. Archiving runs under the folded
-# build's lint environment, so it does not recompile. After the job uploads
-# the archive, --test-partitions runs the partition guard over the archive
-# itself, so the guard proves what the shards receive while they already run.
+# build's lint environment, so it does not recompile. Once the job has packed
+# the transfer, --test-partitions runs the partition guard over the archive
+# that transfer encodes, while the job uploads it; the job waits for the guard
+# before the shards start (ci.yml).
 # NEXTEST_PARTITIONS (ci.yml) is the count-partition count: the shard jobs
 # and the additional partition jobs run every partition; the test-build
-# job runs the proof after the upload.
+# job runs the proof beside the upload.
 # A caller that sets only the older NEXTEST_SHARDS gets that many partitions.
 #
 # CI_TEST_SCOPE is the Change scope job's mode. For `affected:<crate>,...` (a

@@ -508,9 +508,12 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   compare pack/restore time and transfer bytes together on hosted candidates.
   This captures repeated linked executable sections beyond the native
   archive's 2 MiB window. It requires the runner's `zstd` CLI; the decoder
-  is capped at the same 512 MiB window the encoder may emit. The job uploads
-  each part as its own one-day artifact, then runs
-  `ci-guardrails.sh --test-partitions PATH`:
+  is capped at the same 512 MiB window the encoder may emit. The job then
+  starts `ci-guardrails.sh --test-partitions PATH` in the background and
+  uploads each part as its own one-day artifact while it runs; after the
+  uploads, `Prove the shards cover every test` waits for it (an `flock` the
+  proof holds until it exits), prints its output and exits with its status,
+  or fails if it recorded none. The proof reads only the original archive:
   it extracts the archive once, and
   [check-nextest-partitions.py](../scripts/check-nextest-partitions.py) lists
   that extraction (`--binaries-metadata` and `--cargo-metadata`) once
@@ -527,8 +530,8 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   including when a later step fails. This separates compilation critical
   paths from filter listing and archive time. Each test job needs the whole
   `Test build` job, so it starts only once that job has finished, including
-  its post-upload partition proof.
-- `Test shard k/N` jobs, one per shard, each need the `Test build` job (`needs: [pr-state, scope, test-build]`), so each starts once the whole build job has finished, including its post-upload partition proof. If the build did not succeed, the job fails in its first step, `Require a successful test build`, with `ci-await: Test build concluded <result>: <run url>`. Each job then downloads every part at once (one
+  the partition proof it waits for after the upload.
+- `Test shard k/N` jobs, one per shard, each need the `Test build` job (`needs: [pr-state, scope, test-build]`), so each starts once the whole build job has finished, including the partition proof the build waits for after the upload. If the build did not succeed, the job fails in its first step, `Require a successful test build`, with `ci-await: Test build concluded <result>: <run url>`. Each job then downloads every part at once (one
   stream per artifact; a single stream ran at 3–10 MB/s on some runners),
   in at most three download attempts of three minutes each. Each attempt
   downloads to its own directory and verifies artifact digests. A failure or
@@ -544,7 +547,7 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   The `Test extra partition`, `Test partition 2` and `6`–`12` jobs
   run the same steps on nine more test runners, selecting partitions 5, 2 and
   6–12 and uploading `nextest-junit-extra` and `nextest-junit-partition-k`.
-  They start after the whole build job has finished, including the post-upload partition proof. None of them is a `Test shard k/N` job, so
+  They start after the whole build job has finished, including the partition proof the build waits for after the upload. None of them is a `Test shard k/N` job, so
   `NEXTEST_SHARDS` and the ruleset's names stay unchanged; the Check job
   awaits them like shards. Profile `ci`
   starts the measured long tests first, using nextest's per-test priority
@@ -577,7 +580,7 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   archive-restore steps (every additional partition job's too), the build's pack
   step and the Check job's wait with stub tools, and fails unless
   those jobs together select `count:1/N` through `count:N/N` once each, the
-  build's last upload precedes the partition guard, each test job needs the whole
+  build's last upload precedes the wait for the partition guard, each test job needs the whole
   build job with `Require a successful test build` as its first step and downloads
   every uploaded part with no archive-poll wait, and the Check
   job's wait names the build, every shard, every additional partition job, `CI guardrails` and `CI QA guardrails`. After a change to this layout, re-measure the budget over
