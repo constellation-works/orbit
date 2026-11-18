@@ -385,14 +385,17 @@ fn exercise_stalled_peer(name: &str, sse: bool, prefix: &'static [u8]) {
 
 /// The scripted dashboard QA recipe in `docs/DEVELOPMENT.md` must not abandon
 /// its server when SIGTERM lands between the spawn, the PID capture and the
-/// token capture (ORB-25593). A Bash `DEBUG` hook fires the signal
-/// deterministically just before each assignment; a Linux subreaper parent
-/// then proves the exact stub child was reaped by the harness, not merely
-/// killed and left as a zombie for the parent to collect.
+/// token capture (ORB-25593), nor terminate a background job its caller
+/// started when it runs in the documented `( )` subshell and the signal lands
+/// before the spawn (ORB-25606: the subshell inherits the caller's `$!`). A
+/// Bash `DEBUG` hook fires the signal deterministically just before the spawn
+/// and each assignment; a Linux subreaper parent then proves the exact stub
+/// child was reaped by the harness, not merely killed and left as a zombie
+/// for the parent to collect.
 #[cfg(target_os = "linux")]
 #[test]
 fn dashboard_qa_recipe_reaps_child_when_interrupted_at_identity_boundaries() {
-    for boundary in ["spawn_pid", "pid_token", "none"] {
+    for boundary in ["before_spawn", "spawn_pid", "pid_token", "none"] {
         exercise_qa_recipe_boundary(boundary);
     }
 }
@@ -442,6 +445,7 @@ browser_close() { :; }
 __boundary_fired=
 __hook() {
   case "$BASH_COMMAND" in
+    'qa_serve_start 30') [ "$QA_BOUNDARY" = before_spawn ] || return 0 ;;
     'SERVER_PID=$!') [ "$QA_BOUNDARY" = spawn_pid ] || return 0 ;;
     'SERVER_TOKEN="$(qa_token "$SERVER_PID")"') [ "$QA_BOUNDARY" = pid_token ] || return 0 ;;
     *) return 0 ;;
@@ -449,7 +453,7 @@ __hook() {
   [ -n "$__boundary_fired" ] && return 0
   __boundary_fired=1
   trap - DEBUG
-  kill -TERM $$
+  kill -TERM "$BASHPID"
 }
 trap __hook DEBUG
 set -T
@@ -458,6 +462,20 @@ set -T
         .find("# Capture.")
         .expect("capture marker in QA recipe");
     recipe.insert_str(capture, hook);
+    // The documented form: the recipe runs in a `( )` subshell, after the
+    // caller started a background job whose PID the subshell inherits in `$!`.
+    let recipe = format!(
+        r#"sleep 300 &
+caller_job=$!
+(
+{recipe}
+)
+sub_rc=$?
+sleep 0.3
+if kill -0 "$caller_job" 2>/dev/null; then echo caller_job=alive; kill -KILL "$caller_job"; else echo caller_job=terminated; fi
+exit "$sub_rc"
+"#
+    );
     let script_path = temp.path().join("script.sh");
     std::fs::write(&script_path, recipe).expect("write QA harness");
 
@@ -553,19 +571,32 @@ print(f"child_state={child_state}")
         started.elapsed() < Duration::from_secs(20),
         "{boundary}: harness took too long: {stdout}"
     );
+    assert_eq!(
+        field("caller_job="),
+        "alive",
+        "{boundary}: the caller's own background job must be left untouched: {stdout} {stderr}"
+    );
     let expected_rc = if boundary == "none" { "0" } else { "143" };
     assert_eq!(
         field("harness_rc="),
         expected_rc,
         "{boundary}: unexpected harness exit: {stdout} {stderr}"
     );
+    // Before the spawn there is no server: nothing may have been started.
+    let expected_child = if boundary == "before_spawn" {
+        "missing"
+    } else {
+        "reaped"
+    };
     assert_eq!(
         field("child_state="),
-        "reaped",
+        expected_child,
         "{boundary}: exact child must be reaped by the harness: {stdout} {stderr}"
     );
+    // The log is created by the start itself, so it exists only after the spawn.
     assert!(
-        shots.join("sentinel.txt").exists() && qa_base.join("serve.log").exists(),
+        shots.join("sentinel.txt").exists()
+            && (boundary == "before_spawn" || qa_base.join("serve.log").exists()),
         "{boundary}: teardown must leave artifacts in place: {stdout}"
     );
     if boundary == "none" {
