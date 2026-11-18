@@ -73,10 +73,13 @@ pub trait RoutineDispatch {
     /// [ORB-10597] Whether the run's recorded owner process is still executing,
     /// asked independently of its persisted state. Consulted for a fire whose
     /// run reads `running` or `retrying` (a persisted in-flight state may
-    /// outlive its owner across a restart: `Stopped` settles the fire as
-    /// failed at once) and for one marked `interrupted` (which carries no
-    /// teardown, so is not evidence the work stopped: only `Stopped` releases
-    /// its slot). `Alive` and `Unknown` keep the fire in flight in both cases.
+    /// outlive its owner across a restart) and for one marked `interrupted`
+    /// (which carries no teardown, so is not evidence the work stopped).
+    /// `Stopped` releases the slot at once: the fire settles as failed
+    /// without waiting for the policy timeout. `Alive` and `Unknown` keep
+    /// the fire in flight instead: the slot stays held and the fire is
+    /// reclaimed as timed out only once the elapsed time since the fire's
+    /// creation exceeds `policy.timeout_minutes`.
     fn run_owner_liveness(&self, source_orbit_dir: &Path, run_id: &str) -> RunOwnerLiveness;
 
     /// Newest runs a state-, delivery- or condition-triggered routine's
