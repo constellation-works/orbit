@@ -792,7 +792,11 @@ unchanged, final recovery requeues that publication under current policy. A
 finished record whose owner probes alive or unverifiable keeps the refusal.
 That requeue is not a candidate-changed escalation and does not ask an
 operator to inspect the publication and admit source repair. It does not
-grant merge authority. A changed candidate, a changed policy, or a
+grant merge authority. When that requeue is successfully applied — or the
+host parks the requeue for a human instead — the run ends `held` as
+`delivery_forge_observation_unavailable`, preserving the recorded recovery
+disposition and without the failure handoff; a failed application of the
+decision keeps the ordinary failed outcome. A changed candidate, a changed policy, or a
 non-transient error keeps its existing refusal: policy drift requeues as a
 policy change, and the other refusals stay candidate-changed or ordinary
 failures. Authenticating the tail for a merge continuation still requires this

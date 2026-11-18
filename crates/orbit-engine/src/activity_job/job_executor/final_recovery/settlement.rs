@@ -110,7 +110,7 @@ pub(super) fn conclude(
     match (applied, resume_index) {
         (Ok(FinalRecoveryApplied::Resume), Some(index)) => {
             let Some(context) = application.resume_context.as_ref() else {
-                return types::FinalRecoveryVerdict::Escalated;
+                return types::FinalRecoveryVerdict::RecoveryApplicationFailed;
             };
             let mut detail = format!(
                 "rerunning from step `{}`: {}",
@@ -153,12 +153,12 @@ pub(super) fn conclude(
         (Ok(FinalRecoveryApplied::Resume), None) => {
             let detail = "the host answered resume for a decision that names no step";
             emit_final_recovery_event(ctx, step, activity, "escalated", kind, Some(detail));
-            types::FinalRecoveryVerdict::Escalated
+            types::FinalRecoveryVerdict::RecoveryApplicationFailed
         }
         (Err(error), _) => {
             let detail = format!("applying the decision failed: {error}");
             emit_final_recovery_event(ctx, step, activity, "escalated", kind, Some(&detail));
-            types::FinalRecoveryVerdict::Escalated
+            types::FinalRecoveryVerdict::RecoveryApplicationFailed
         }
     }
 }
