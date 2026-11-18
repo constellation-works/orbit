@@ -213,8 +213,9 @@ pub(super) fn readiness_snapshot_with_detail(
     // Readiness admits nothing, so its envelope selections are observed
     // without the commit boundary: they neither queue behind a drain's
     // exclusive commit sections nor hold the shared boundary against them.
-    // Ancestor and explicit-id loads (`include_tasks` below) still settle a
-    // pending commit before they read.
+    // Backlog row hydration takes short shared sections in batches. Ancestor
+    // and explicit-id loads (`include_tasks` below) also settle pending commits
+    // before reading.
     let mut snapshot = backlog_snapshot_observed(
         runtime,
         "explain_workspace_auto_readiness",

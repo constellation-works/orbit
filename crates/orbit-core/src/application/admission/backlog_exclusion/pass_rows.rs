@@ -15,6 +15,9 @@ use orbit_types::task::{Task, TaskStatus};
 use super::super::pass_error::PassError;
 use crate::OrbitRuntime;
 
+/// Let waiting writers enter between batches, even when the backlog is large.
+const OBSERVED_ROW_BATCH_SIZE: usize = 16;
+
 /// Load one lightweight row for every backlog task in `task_lookup`, record
 /// pilot handoffs when `admission` is set and `prepared` is absent, reconcile
 /// recovery context, and cache this pass's provider holds. `task_lookup` is
@@ -34,23 +37,27 @@ pub(super) fn prepare_pass_rows(
     let recorded_early = prepared.is_some();
     let mut rows = prepared.unwrap_or_default();
     let order = backlog_ids_created_desc(task_lookup);
-    for id in &order {
-        if rows.contains_key(id) {
-            continue;
-        }
-        match runtime.get_listed_task_row(id) {
-            Ok(row) => {
+    if admission {
+        for id in &order {
+            if !rows.contains_key(id) {
+                let row = runtime.get_listed_task_row(id).map_err(|error| {
+                    PassError::store(action, "record pilot operator handoffs", error)
+                })?;
                 rows.insert(id.clone(), row);
             }
-            Err(error) if admission => {
-                return Err(PassError::store(
-                    action,
-                    "record pilot operator handoffs",
-                    error,
-                ));
-            }
-            Err(error) => {
-                tracing::warn!(task_id = %id, "could not read backlog task row: {error}");
+        }
+    } else if runtime.coordination_task_reads_visible() {
+        for ids in order.chunks(OBSERVED_ROW_BATCH_SIZE) {
+            // The listed reads re-enter this shared section without taking
+            // the host and partition locks again for each task.
+            let section = runtime.in_task_read_section(|| {
+                observe_backlog_rows(runtime, ids, &mut rows);
+                Ok(())
+            });
+            if section.is_err() {
+                // Keep the individual best-effort path if entry fails. One
+                // failed section must not discard other readable task rows.
+                observe_backlog_rows(runtime, ids, &mut rows);
             }
         }
     }
@@ -79,6 +86,23 @@ pub(super) fn prepare_pass_rows(
             .map(|row| (id.as_str(), &row.task, row.history.as_slice()))
     }));
     Ok(rows)
+}
+
+fn observe_backlog_rows(
+    runtime: &OrbitRuntime,
+    ids: &[String],
+    rows: &mut BTreeMap<String, Option<TaskRow>>,
+) {
+    for id in ids {
+        match runtime.get_listed_task_row(id) {
+            Ok(row) => {
+                rows.insert(id.clone(), row);
+            }
+            Err(error) => {
+                tracing::warn!(task_id = %id, "could not read backlog task row: {error}");
+            }
+        }
+    }
 }
 
 /// Backlog ids in the store's listing order: newest `created_at`, then id.
