@@ -134,6 +134,36 @@ fn task_relations_reports_a_canonical_dangling_edge_the_index_lost() {
     );
 }
 
+/// STD-01 §R31: the relation audit observes the registry. One that is gone
+/// is reported with its setup step, never recreated by the report.
+fn task_relations_probe_reports_a_missing_registry_without_creating_it() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let tasks = temp.path().join("global").join("tasks");
+    let registry = tasks.join("index.sqlite");
+    assert!(
+        registry.is_file(),
+        "opening the runtime creates the registry"
+    );
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = fs::remove_file(tasks.join(format!("index.sqlite{suffix}")));
+    }
+    let row = task_relations_row(&runtime);
+    assert_eq!(
+        row.status,
+        WorkspaceDoctorStatus::Warning,
+        "{}",
+        row.message
+    );
+    assert!(
+        row.message.contains("cannot audit task relations"),
+        "{}",
+        row.message
+    );
+    assert!(row.remediation.is_some(), "{row:?}");
+    assert!(!registry.exists(), "the audit must not create the registry");
+}
+
 #[cfg(unix)]
 fn retired_graph_cleanup_unlinks_boundaries_without_following_them() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -275,6 +305,10 @@ fn doctor_runtime_contracts() {
         (
             "task_relations_reports_a_canonical_dangling_edge_the_index_lost",
             task_relations_reports_a_canonical_dangling_edge_the_index_lost as fn(),
+        ),
+        (
+            "task_relations_probe_reports_a_missing_registry_without_creating_it",
+            task_relations_probe_reports_a_missing_registry_without_creating_it as fn(),
         ),
         (
             "browser_kit_backlog_warns_while_ui_tasks_wait_for_this_hosts_kit",

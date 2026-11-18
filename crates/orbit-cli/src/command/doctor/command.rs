@@ -82,7 +82,7 @@ pub struct DoctorRepairFlags {
 }
 
 impl DoctorRepairFlags {
-    pub(super) fn any_requested(&self) -> bool {
+    pub(crate) fn any_requested(&self) -> bool {
         self != &Self::default()
     }
 }
