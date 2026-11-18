@@ -1063,7 +1063,7 @@ qa_serve_stop() {
       qa_wait_gone 50 || { echo "server $pid survived SIGKILL" >&2; rc=1; }
     fi
   fi
-  [ "$rc" -eq 0 ] && { wait "$pid" 2>/dev/null; }   # reaps the confirmed-dead child; returns at once
+  [ "$rc" -eq 0 ] && { wait "$pid" 2>/dev/null || :; } # reaps it; TERM/KILL wait statuses are expected
   if [ "$rc" -eq 0 ] && qa_alive; then rc=1; fi
   if [ -n "$QA_PORT" ] && qa_listening "$QA_PORT"; then echo "port $QA_PORT still listening" >&2; rc=1; fi
   [ "$rc" -eq 0 ] && SERVER_PID=
