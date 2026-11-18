@@ -179,7 +179,9 @@ macro_rules! recovery_methods {
         ) -> Result<Option<String>, OrbitError>;
 
         /// Classify a transient completion observation after authenticating the
-        /// publication and its receipts. This grants no authority to retry mutations.
+        /// publication and its receipts. A stopped run with unchanged evidence
+        /// is requeued under current policy. This grants no authority to retry
+        /// mutations or to merge.
         fn completion_observation_admission(
             &self,
             run_id: &str,

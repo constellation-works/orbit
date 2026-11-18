@@ -744,9 +744,13 @@ repair admissions/publications, source-repair, infrastructure and base-update
 reservations, including pending or unreadable records. Any such task history
 refuses this narrow continuation, even if the tree or head is unchanged. Merge,
 auto-merge and local rebase attempts record write-ahead mutation provenance;
-unknown replies keep it. Retry descendants, other rebase recovery checkpoints
+unknown replies keep it. Other rebase recovery checkpoints
 (including a refresh that does not meet those conditions), reviewer fixes and a
 `failure_activity_checkpoint` require governed recovery.
+A retry descendant this process still owns is not that case: when the candidate,
+policy and validation are unchanged, the same one in-worker observation retry
+applies. A finished retry descendant is requeued under current policy, as a
+stopped run below, rather than refused only because the record names a parent run.
 Refusals identify mutation provenance, the checkpoint step, the failure-activity
 checkpoint or the reviewer repair that prevented reuse. Native policy captures
 from before this provenance contract cannot authorize reuse.
@@ -775,14 +779,23 @@ neither a repair agent nor a merge. Permanent forge-read refusals at other
 boundaries still fail. `gh`'s
 `error connecting to api.github.com` counts as a transport failure.
 
-Changed task meaning, policy, candidate, review repairs, publication, ownership,
-lease or a dirty checkout refuses reuse, blocks the task with the refusal as
-its diagnosis and preserves the publication for explicit governed source
-repair. The agent cannot override that refusal by requesting the
-same stale prefix. A stopped or foreign execution cannot acquire an active
-worker's continuation
-through this check. No successful receipt is rewritten and no replacement PR is
-created by the continuation.
+Changed task meaning, policy, candidate, review repairs, publication,
+a live foreign owner, lease or a dirty checkout refuses reuse of the in-worker
+continuation, blocks the task with the refusal as its diagnosis and preserves
+the publication for explicit governed source repair. The agent cannot override
+that refusal by requesting the same stale prefix. A foreign execution whose
+record is still running cannot acquire that continuation. A finished run is
+not refused only because it is no longer the active owner: when the only fault
+is a transient completion observation and the published candidate, policy and
+validation are unchanged, final recovery requeues that publication under
+current policy. That requeue is not a candidate-changed escalation and does not
+ask an operator to inspect the publication and admit source repair. It does
+not grant merge authority. A changed candidate, a changed policy, or a
+non-transient error keeps its existing refusal: policy drift requeues as a
+policy change, and the other refusals stay candidate-changed or ordinary
+failures. Authenticating the tail for a merge continuation still requires this
+process to own the live run, with no retry parent. No successful receipt is
+rewritten and no replacement PR is created by the continuation.
 
 ## Requeue a failure-handoff task onto its published candidate
 

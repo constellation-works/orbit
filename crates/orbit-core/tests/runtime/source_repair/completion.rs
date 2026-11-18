@@ -820,6 +820,41 @@ pub(super) fn completion_reuse_refuses_drift() {
     }
 }
 
+/// A terminal record is requeued only when its recorded worker is conclusively
+/// gone. Persisted terminal state alone does not settle a live owner.
+pub(super) fn completion_observation_requires_a_stopped_owner() {
+    let (mut f, _) = fixture();
+    admit(&f);
+    f.source.state = JobRunState::Failed;
+    f.source.finished_at = Some(Utc::now());
+    f.source.pid = None;
+    super::published_owner::save_run(&f, &f.source);
+
+    assert!(matches!(
+        f.runtime
+            .completion_observation_admission(&f.source.run_id, &f.task, "complete_pr")
+            .unwrap(),
+        orbit_engine::CompletionObservationAdmission::Stopped { .. }
+    ));
+    drop(f);
+
+    let (mut f, _) = fixture();
+    admit(&f);
+    f.source.state = JobRunState::Failed;
+    f.source.finished_at = Some(Utc::now());
+    f.source.pid = Some(std::process::id());
+    super::published_owner::save_run(&f, &f.source);
+
+    let refusal = f
+        .runtime
+        .completion_observation_admission(&f.source.run_id, &f.task, "complete_pr")
+        .unwrap_err();
+    assert!(
+        refusal.to_string().contains("active owner"),
+        "terminal record with a live owner remains refused: {refusal}"
+    );
+}
+
 pub(super) fn changed_base_gets_fresh_native_validation() {
     let (f, checkout) = fixture();
     admit(&f);

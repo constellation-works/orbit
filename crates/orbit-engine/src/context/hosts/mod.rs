@@ -28,11 +28,12 @@ pub use config::{CrewConfig, PrConfig};
 pub use null_host::NullRuntimeHost;
 pub use plugin_broker::{PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun};
 pub use recovery::{
-    CompletionObservationAdmission, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
-    FinalRecoveryApplication, FinalRecoveryApplied, PrAutoFixAdmission, PrAutoFixRequest,
+    CompletionObservationAdmission, CompletionOwnerLiveness, FinalRecoveryAdmission,
+    FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied,
+    PrAutoFixAdmission, PrAutoFixRequest, PublishedCompletionObservation,
     RebaseRecoveryAttemptScope, STEP_RECOVERY_DECISION_SCHEMA_VERSION, StepRecoveryAdmission,
     StepRecoveryDecisionRead, StepRecoveryDecisionRequest, StepRecoveryDecisionSlot,
-    StepRecoveryVerdict,
+    StepRecoveryVerdict, admit_published_completion_observation,
 };
 pub use revalidation::{GeneratedPath, UnlockedPathValidation, ValidatedTree};
 pub use review::{

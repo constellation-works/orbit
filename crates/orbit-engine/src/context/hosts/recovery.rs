@@ -99,9 +99,70 @@ pub enum StepRecoveryDecisionRead {
     Invalid { diagnostic: String },
 }
 
+/// Who still owns the run whose completion observation failed.
+///
+/// Process ownership ignores a retry parent. A finished record is
+/// [`Stopped`](CompletionOwnerLiveness::Stopped) even when its pid is this
+/// process. [`ForeignLive`](CompletionOwnerLiveness::ForeignLive) is another
+/// process that has not finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompletionOwnerLiveness {
+    /// This process is the running owner.
+    ProcessOwned,
+    /// The run has stopped. Observation may requeue an unchanged publication.
+    Stopped,
+    /// Another live execution owns the run. Observation must not rebind it.
+    ForeignLive,
+}
+
+/// Facts already read from the published completion, before choosing retry,
+/// requeue, or refusal. Candidate and validation flags are the caller's
+/// checks; this type does not read git or receipts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishedCompletionObservation {
+    /// Whether this process still runs the record.
+    pub liveness: CompletionOwnerLiveness,
+    /// Head, branch and checkout still match the publication.
+    pub candidate_unchanged: bool,
+    /// Native validation receipts and the captured policy still match.
+    pub validation_unchanged: bool,
+    /// Present when review or completion policy differs from the capture.
+    pub policy_change: Option<String>,
+}
+
+/// Choose the observation admission from evidence the caller has already read.
+///
+/// A stopped run with an unchanged candidate, validation and policy is
+/// requeued. That is not a policy change and it does not grant a merge.
+/// A process-owned run, including a retry descendant, retries once in the
+/// worker. A changed candidate, changed validation, or a foreign live owner
+/// is refused. A policy change keeps the current-policy requeue.
+pub fn admit_published_completion_observation(
+    facts: PublishedCompletionObservation,
+) -> Result<CompletionObservationAdmission, &'static str> {
+    if !facts.candidate_unchanged {
+        return Err("completion candidate or checkout changed");
+    }
+    if !facts.validation_unchanged {
+        return Err("native validation candidate or effective policy changed");
+    }
+    if let Some(reason) = facts.policy_change {
+        return Ok(CompletionObservationAdmission::PolicyChanged { reason });
+    }
+    match facts.liveness {
+        CompletionOwnerLiveness::ProcessOwned => Ok(CompletionObservationAdmission::Retry),
+        CompletionOwnerLiveness::Stopped => Ok(CompletionObservationAdmission::Stopped {
+            reason: "the published candidate, policy and validation are unchanged".to_string(),
+        }),
+        CompletionOwnerLiveness::ForeignLive => {
+            Err("completion no longer belongs to this active owner")
+        }
+    }
+}
+
 /// Host authentication of a published completion after a transient read failure.
 /// Candidate, validation and captured review evidence must be checked before
-/// returning either admitted variant. Refused evidence remains an error.
+/// returning an admitted variant. Refused evidence remains an error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompletionObservationAdmission {
     /// Only observation is lost; retry once within the original deadline.
@@ -109,6 +170,9 @@ pub enum CompletionObservationAdmission {
     /// The publication is intact but today's review obligations differ.
     /// Requeue through current-policy candidate recovery, without reusing gates.
     PolicyChanged { reason: String },
+    /// The run has stopped and the publication is unchanged. Requeue it under
+    /// current policy. This does not resume the dead worker and does not merge.
+    Stopped { reason: String },
     /// This host cannot authenticate a published prefix.
     Unavailable,
 }
