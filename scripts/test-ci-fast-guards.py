@@ -1628,6 +1628,15 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
             path.touch()
         for relative in ("crew", "operation", "provider_limit", "layering", "registry"):
             (config / relative).mkdir(exist_ok=True)
+        # [ORB-25492] The orbit-web module-direction scan fails closed when a
+        # leaf is missing, so create the same empty roots that
+        # test-check-dependency-direction.py prepare_web_paths creates.
+        web = self.root / "crates/orbit-web/src"
+        (web / "state").mkdir(parents=True, exist_ok=True)
+        (web / "lease").mkdir(parents=True, exist_ok=True)
+        for relative in ("why_stuck.rs", "projections.rs", "connect.rs", "host_tunnels.rs",
+                         "health.rs", "assets.rs", "run_failure.rs", "shutdown.rs"):
+            (web / relative).touch()
         (self.root / "Cargo.toml").write_text(
             '[workspace]\n[workspace.dependencies]\ntempfile = "3"\n'
         )
