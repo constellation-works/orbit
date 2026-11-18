@@ -9,11 +9,18 @@
 //! settlement would derive, without committing, writing or settling
 //! anything; only a defect the reviewer can correct without rerunning a
 //! check is returned.
+//!
+//! [ORB-25667] The same judgement answers for a reviewer whose envelope
+//! declared failure: when its report is a valid incomplete verdict whose only
+//! gap is external evidence it names, the engine lets the gate's settlement
+//! decide the evidence hold instead of failing the reviewer step.
 
 use orbit_common::OrbitError;
 use orbit_engine::ReviewReportCorrectionRequest;
 use orbit_engine::review_gate::{candidate_identity_at, revision, uncommitted_paths};
-use orbit_types::workflow::{REVIEW_MANIFEST_ARTIFACT, ReviewAttemptState, ReviewManifest};
+use orbit_types::workflow::{
+    REVIEW_MANIFEST_ARTIFACT, ReviewAttemptState, ReviewManifest, ReviewVerdict,
+};
 use serde_json::json;
 
 use crate::OrbitRuntime;
@@ -31,6 +38,72 @@ pub(crate) fn review_report_correction(
     runtime: &OrbitRuntime,
     request: &ReviewReportCorrectionRequest,
 ) -> Result<Option<String>, OrbitError> {
+    let Some(judged) = judge_open_attempt(runtime, request)? else {
+        return Ok(None);
+    };
+    Ok(judged
+        .judgement
+        .correctable_defect(&judged.scope)
+        .map(|defect| defect.reason()))
+}
+
+/// [ORB-25667] The external checks the open attempt's report names, when a
+/// reviewer that declared failure still left a report settlement can hold on:
+/// a readable report for this attempt on the admitted candidate (uncommitted
+/// reviewer repairs included), of a single task, with an `incomplete`
+/// verdict, no open finding, and records that establish the candidate over
+/// the settlement scope once every named check passes. `None` for anything
+/// else — no or a mismatched report, a reject, an open finding, a gap other
+/// than the named evidence — keeps the reviewer step failed. Settlement
+/// still judges the report on its own afterwards; this only decides that it
+/// is worth judging.
+pub(crate) fn review_report_evidence_hold(
+    runtime: &OrbitRuntime,
+    request: &ReviewReportCorrectionRequest,
+) -> Result<Option<String>, OrbitError> {
+    let Some(judged) = judge_open_attempt(runtime, request)? else {
+        return Ok(None);
+    };
+    let judgement = &judged.judgement;
+    if judged.task_count != 1
+        || judgement.host_refused
+        || judgement.verdict != ReviewVerdict::Incomplete
+        || judgement.has_open_findings()
+    {
+        return Ok(None);
+    }
+    let Some(requirements) =
+        super::super::evidence::canonical_requirements(&judgement.external_evidence)
+            .filter(|requirements| !requirements.is_empty())
+    else {
+        return Ok(None);
+    };
+    if !judgement.evidence_would_complete(&requirements, &judged.scope) {
+        return Ok(None);
+    }
+    Ok(Some(
+        requirements
+            .iter()
+            .map(|required| format!("`{}`", required.command))
+            .collect::<Vec<_>>()
+            .join(", "),
+    ))
+}
+
+/// The open attempt's report, judged as settlement would read it, and the
+/// scope settlement would judge it over.
+struct OpenAttemptJudgement {
+    judgement: Judgement,
+    scope: Vec<String>,
+    task_count: usize,
+}
+
+/// `None` when there is no open, unreleased attempt with its manifest to
+/// judge, or when the candidate moved under the reviewer.
+fn judge_open_attempt(
+    runtime: &OrbitRuntime,
+    request: &ReviewReportCorrectionRequest,
+) -> Result<Option<OpenAttemptJudgement>, OrbitError> {
     let context = GateContext::load(
         runtime,
         &json!({
@@ -82,7 +155,9 @@ pub(crate) fn review_report_correction(
         None,
         &uncommitted_paths(&context.workspace_path)?,
     )?;
-    Ok(judgement
-        .correctable_defect(&scope)
-        .map(|defect| defect.reason()))
+    Ok(Some(OpenAttemptJudgement {
+        judgement,
+        scope,
+        task_count: context.task_ids.len(),
+    }))
 }

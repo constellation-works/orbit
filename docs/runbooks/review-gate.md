@@ -415,6 +415,13 @@ the kind, exact command and candidate tree. Attempt, commit, display name and
 artifact path changes do not expire a result on the same tree. Unrelated,
 different-tree, failed or incomplete evidence leaves the hold in place.
 
+A reviewer that returns a failed envelope because its host denied a required
+check is judged the same way: when its report is a valid `incomplete` for the
+admitted attempt whose only gap is the external check it names, the reviewer
+step's output carries `reviewer_declared_failure` and settlement decides the
+hold. Any other report leaves the reviewer step failed with its declared
+error code.
+
 After a checkpoint resume, the hold names the resumed run that settled the
 review, while the task keeps its original checkpoint-owner binding. Evidence
 receipt accepts that binding only through the same-job resume chain; an
