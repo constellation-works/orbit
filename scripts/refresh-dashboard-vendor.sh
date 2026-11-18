@@ -68,13 +68,22 @@ def install_staged(staged_path, destination):
 
 
 def patch_marked_list_setext_tabs(blob):
-    # Match Marked's general Setext rule in the list lazy-continuation guard.
+    # Match Marked's general Setext rule in the list lazy-continuation guard,
+    # and let a zero-padded ordered marker whose numeric start is 1 interrupt
+    # a paragraph (CommonMark allows leading zeroes in the 1-9 digit marker).
     # Require the exact upstream bundle so the patch is reviewed on upgrade.
     upstream_sha256 = "392f4df89533b50f1dadff3f6dc0952350bd39c9f17def50a0374ef47d6147ef"
     guard = rb"/^ {0,3}(?:=+|-+) *$/"
-    if hashlib.sha256(blob).hexdigest() != upstream_sha256 or blob.count(guard) != 1:
-        raise SystemExit("refresh-dashboard-vendor: recheck the Marked list Setext patch for this bundle")
-    return blob.replace(guard, rb"/^ {0,3}(?:=+|-+)[ \t]*$/")
+    interrupt = rb"|1[.)]"
+    if (
+        hashlib.sha256(blob).hexdigest() != upstream_sha256
+        or blob.count(guard) != 1
+        or blob.count(interrupt) != 4
+    ):
+        raise SystemExit("refresh-dashboard-vendor: recheck the Marked list patches for this bundle")
+    return blob.replace(guard, rb"/^ {0,3}(?:=+|-+)[ \t]*$/").replace(
+        interrupt, rb"|0{0,8}1[.)]"
+    )
 
 
 # Stage replacements on the vendor filesystem so the install renames stay
@@ -146,7 +155,7 @@ try:
                 if asset["patch"] != "marked-list-setext-tabs":
                     raise SystemExit(f"refresh-dashboard-vendor: unknown patch for {spec}")
                 if spec != "marked@18.2.0" or asset["npm_file"] != "lib/marked.umd.js":
-                    raise SystemExit("refresh-dashboard-vendor: recheck the Marked list Setext patch for this pin")
+                    raise SystemExit("refresh-dashboard-vendor: recheck the Marked list patches for this pin")
                 blob = patch_marked_list_setext_tabs(blob)
             staged_path.write_bytes(blob)
             staged.append((destination, staged_path))

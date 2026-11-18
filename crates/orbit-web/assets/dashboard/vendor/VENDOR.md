@@ -29,15 +29,20 @@ Do not edit the minified blobs by hand.
 swapped blob, a missing or drifted `package-lock.json`, or a Dependabot
 version bump that does not refresh the copies fails CI.
 
-### Marked list Setext patch
+### Marked list patches
 
 The refresh script applies `marked-list-setext-tabs` to the pinned Marked 18.2.0
 bundle before computing its digest. The list continuation guard recognizes
 the same trailing spaces and tabs as the Setext heading rule, so an
 outdented underline stays literal and an indented underline forms a heading.
-This applies to both the dashboard and the embedded MCP task panel.
-When upgrading Marked, check both forms with real tabs and remove the manifest
-patch entry and its refresh code once the upstream release handles both.
+The same patch also lets a zero-padded ordered marker whose numeric start
+is 1 (such as `01.` or `001)`) interrupt a paragraph, as CommonMark allows
+leading zeroes in its 1–9 digit marker, while a marker starting at 2 still
+stays continuation text. This applies to both the dashboard and the embedded
+MCP task panel.
+When upgrading Marked, check both forms with real tabs and check the
+zero-padded forms, and remove the manifest patch entry and its refresh code
+once the upstream release handles all of them.
 
 ## Advisories and new releases
 

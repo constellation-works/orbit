@@ -21,7 +21,7 @@
       "npm_file": "lib/marked.umd.js",
       "path": "marked.umd.js",
       "patch": "marked-list-setext-tabs",
-      "sha256": "08c83a01c00d142e01a736f3d297ea33f45dda5c00c033cbbab79d3e873c4a7a"
+      "sha256": "14929dcb7d2390f87d60352f8fd97cd1991b8f2e424adceb39cd81472a81e195"
     }
   ]
 }
