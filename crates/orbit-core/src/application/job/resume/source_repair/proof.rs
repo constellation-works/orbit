@@ -180,6 +180,19 @@ impl OrbitRuntime {
         let advanced =
             auto_fix_advanced_head(&self.get_task_history(task_id)?, source_id, number, head);
         let head = advanced.as_str();
+        // An incomplete before-landing review's failure handoff may have
+        // pushed the reviewer's commit onto that head [ORB-25671]. Follow
+        // only the push its own receipt attests; the remote, the pull request
+        // and the retained branch are still bound to that exact head below.
+        let head = publication::incomplete_review_pushed_head(
+            job,
+            state,
+            (source_id, task),
+            branch,
+            head,
+            &self.paths().repo_root,
+        )?
+        .unwrap_or(head);
         if adopted.as_ref().is_some_and(|binding| {
             binding.pull_request != number
                 || binding.base_branch != base_branch
