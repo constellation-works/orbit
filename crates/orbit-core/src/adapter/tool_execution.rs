@@ -61,7 +61,6 @@ impl OrbitRuntime {
                 _ => orbit_common::governance::task::TaskVerb::Show,
             }),
             input,
-            None,
         )
     }
 

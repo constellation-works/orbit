@@ -49,6 +49,12 @@ receiving host's resolved process actor in `model`, matching task-write
 attribution. This also applies to federated routes: no per-call model is
 needed. Updating a friction preserves its original attribution.
 
+A claimed worker's friction is attributed from its claim on the owner, not
+from the call: the claim's bound run crew model when it recorded one, else
+the claimed task's crew model, else the owner's own resolved process actor.
+The record is filed during the claimed task, and the call's own `model`
+field never supplies the attribution.
+
 **Write the `title` yourself.** It is the record's handle everywhere the corpus
 is scanned — `friction list`, the dashboard, and the search someone runs before
 filing a duplicate. A handle that doesn't name its subject is invisible to that

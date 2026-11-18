@@ -96,7 +96,7 @@ fn execute_admitted(
         reservation_owner,
     } = caller;
     if let Some(mut result) =
-        super::worker_tools::execute(runtime, session_context, action, &input, model.as_deref())?
+        super::worker_tools::execute(runtime, session_context, action, &input)?
     {
         super::artifact_redaction::finish_tool_response(
             runtime,

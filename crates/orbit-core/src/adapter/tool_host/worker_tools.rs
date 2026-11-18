@@ -157,7 +157,6 @@ pub(crate) fn execute(
     session: &ToolSessionContext,
     action: OrbitBuiltinAction,
     input: &Value,
-    model: Option<&str>,
 ) -> Result<Option<Value>, OrbitError> {
     let Some(route) = worker_route(action) else {
         return Ok(None);
@@ -193,7 +192,7 @@ pub(crate) fn execute(
             binding.validate_arguments(input)?;
             Ok(None)
         }
-        WorkerRoute::FrictionAdd => worker_friction_add(runtime, session, binding, input, model),
+        WorkerRoute::FrictionAdd => worker_friction_add(runtime, session, binding, input),
         WorkerRoute::TaskAdd => worker_task_add(runtime, session, binding, input),
         WorkerRoute::TaskWrite => worker_update(runtime, session, binding, input).map(Some),
         WorkerRoute::Refuse => Err(OrbitError::PolicyDenied(
@@ -208,12 +207,11 @@ fn worker_friction_add(
     session: &ToolSessionContext,
     binding: &WorkerInvocation,
     input: &Value,
-    model: Option<&str>,
 ) -> Result<Option<Value>, OrbitError> {
     binding.validate_arguments(input)?;
     let parsed = FrictionVerb::Add.spec().parse_input(input.clone())?;
-    let (mut params, substitutions) =
-        super::friction_tools::add_params(&parsed, model.map(str::to_owned))?;
+    let model = claimed_friction_model(runtime, binding);
+    let (mut params, substitutions) = super::friction_tools::add_params(&parsed, Some(model))?;
     params.during_task = Some(binding.task_id.clone());
     let taxonomy = crate::runtime::friction::store_for(runtime)?
         .tags()?
@@ -227,6 +225,32 @@ fn worker_friction_add(
         substitutions,
     )
     .map(Some)
+}
+
+/// Trusted attribution for a claimed worker's friction, resolved from the
+/// claim rather than the call. No model the call carries is read: neither its
+/// `model` field nor the caller's session model, which `resolve_identity`
+/// takes from that field when the runtime context names none. The claim's
+/// bound run crew model wins, then the claimed task's resolved crew, and
+/// finally the receiving (owner) process's resolved actor, the documented
+/// fallback ordinary friction creation uses.
+fn claimed_friction_model(runtime: &OrbitRuntime, binding: &WorkerInvocation) -> String {
+    let trimmed = |value: &str| {
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    };
+    if let Ok(Some(run)) = runtime.get_job_run_backend(&binding.bound_run_id)
+        && let Some(model) = run.crew_model.as_deref().and_then(trimmed)
+    {
+        return model;
+    }
+    if let Ok(task) = runtime.get_task(&binding.task_id)
+        && let Ok(Some(projection)) = runtime.resolved_crew_projection(&task)
+        && let Some(model) = trimmed(&projection.model)
+    {
+        return model;
+    }
+    runtime.actor().label.clone()
 }
 
 /// A claimed worker's follow-up filing: validated here, created by ordinary
