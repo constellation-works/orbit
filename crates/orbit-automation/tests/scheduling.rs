@@ -333,6 +333,66 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
     }
 }
 
+#[test]
+fn cron_validation_rejects_startless_weekday_steps_and_keeps_supported_steps() {
+    if isolated("cron_validation_rejects_startless_weekday_steps_and_keeps_supported_steps") {
+        return;
+    }
+
+    let invalid_cron = "0 9 1 * +/2";
+    let auto_task_error = validate_schedule(&AutoTaskSchedule::cron(invalid_cron))
+        .expect_err("auto-task validation rejects a startless weekday step");
+    assert!(
+        matches!(auto_task_error, OrbitError::InvalidInput(ref message) if message.starts_with("invalid cron expression")),
+        "auto-task validation reports an invalid-cron error: {auto_task_error}"
+    );
+
+    let root = std::env::current_dir().unwrap().join(".orbit");
+    let routines_dir = root.join("routines");
+    std::fs::create_dir_all(&routines_dir).unwrap();
+    std::fs::write(
+        routines_dir.join("startless.yaml"),
+        format!(
+            "schemaVersion: 1\nname: startless\nenabled: true\ntrigger:\n  cron: '{invalid_cron}'\ntarget: job:fixture\n"
+        ),
+    )
+    .unwrap();
+    let collection = collect_routines(
+        &[RoutineSource {
+            workspace: "fixture".into(),
+            orbit_dir: root,
+        }],
+        &|_, _| RoutineCatalogLookup {
+            resolves: true,
+            error: None,
+        },
+    );
+    assert!(collection.routines.is_empty());
+    assert_eq!(
+        collection.errors.len(),
+        1,
+        "the invalid routine is rejected"
+    );
+    assert!(
+        collection.errors[0]
+            .message
+            .contains("invalid cron expression"),
+        "routine validation reports an invalid-cron error: {:?}",
+        collection.errors
+    );
+
+    for cron in [
+        "0 9 1 * +*/2",
+        "*/15 * * * *",
+        "0-30/5 * * * *",
+        "5/20 * * * *",
+    ] {
+        parse_cron(cron).unwrap_or_else(|error| panic!("valid cron '{cron}' is rejected: {error}"));
+        validate_schedule(&AutoTaskSchedule::cron(cron))
+            .unwrap_or_else(|error| panic!("valid auto-task cron '{cron}' is rejected: {error}"));
+    }
+}
+
 /// Berlin's 2025 rule: CET (+01) with CEST (+02) from 02:00 on the last
 /// Sunday of March to 03:00 on the last Sunday of October.
 const BERLIN_POSIX_TZ: &str = "CET-1CEST,M3.5.0,M10.5.0/3";

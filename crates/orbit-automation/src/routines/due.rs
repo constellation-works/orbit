@@ -106,7 +106,14 @@ pub fn parse_cron(expression: &str) -> Result<Cron, OrbitError> {
     let startless_step = expression
         .split_whitespace()
         .flat_map(|field| field.split(','))
-        .find(|item| item.starts_with('/'));
+        .find_map(|item| {
+            // Croner's weekday AND modifier is stripped before component parsing, so a
+            // startless `+/n` otherwise reaches sloppy_ranges as `/n` and becomes `*/n`.
+            let item_without_weekday_modifier = item.strip_prefix('+').unwrap_or(item);
+            item_without_weekday_modifier
+                .starts_with('/')
+                .then_some(item_without_weekday_modifier)
+        });
     if let Some(item) = startless_step {
         return Err(invalid(&format_args!(
             "step '{item}' has no starting point; use '*{item}' for a wildcard step"
