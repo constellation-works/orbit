@@ -1613,6 +1613,9 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
             (vcs / module).mkdir(parents=True, exist_ok=True)
         (vcs / "push.rs").write_text("")
         (vcs / "claim" / "published.rs").write_text("")
+        context = self.root / "crates/orbit-engine/src/context"
+        context.mkdir(parents=True, exist_ok=True)
+        (context / "dispatch_contract.rs").touch()
         config = self.root / "crates/orbit-config/src"
         for relative in ("aliases.rs", "seeding.rs", "config_document.rs", "plugin_enablement.rs",
                          "unknown.rs", "resolved/compatibility.rs", "config_io.rs", "crew_defaults.rs"):
