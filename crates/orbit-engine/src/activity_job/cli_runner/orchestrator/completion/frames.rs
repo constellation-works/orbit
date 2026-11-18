@@ -100,10 +100,14 @@ pub(super) fn claude_structured_output_exhaustion(provider: &str, stdout: &[u8])
     }
     // A contradictory terminal is not proof of a formatting-only failure.
     // In particular Claude's errors array must not hide a second terminal
-    // cause behind the expected first formatting error.
-    if ["api_error_status", "error", "stop_reason"]
+    // cause behind the expected first formatting error. Preserve the observed
+    // `tool_use` stop reason, but reject every other non-null stop reason.
+    if ["api_error_status", "error"]
         .iter()
         .any(|key| terminal.get(*key).is_some_and(|value| !value.is_null()))
+        || terminal
+            .get("stop_reason")
+            .is_some_and(|value| !value.is_null() && value.as_str() != Some("tool_use"))
     {
         return None;
     }
