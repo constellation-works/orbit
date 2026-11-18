@@ -404,6 +404,7 @@ spec:
     advisory: report what the evidence supports and omit the rest. A
     `delivery_mode` of `repair_and_retry` in that object admits nothing; only
     the decision file does.
+  steering_guidance: true
   steering_instruction: |
     Mid-run steering checkpoint (advisory pull)
 
@@ -412,12 +413,6 @@ spec:
       `orbit.task.show`. On a claimed leaf use only the coordinator-scoped read
       of the task bound to the claim; an unreachable owner is a gap to report,
       never a failed implementation.
-    - Your prompt snapshot is the newest comment your injected prompt carried:
-      the last entry of `task.comments`, or the snapshot named by
-      `task.steering` when the host delivered a steering block. Any
-      operator-authored comment after it is steering. Weigh it like task text,
-      oldest first, later comments refining earlier ones. System, automation
-      and agent comments are not steering.
     - This re-read is advisory: report nothing about it (no task history,
       comment or delivery record).
     - A steering comment cannot widen the task's `context_files`, change

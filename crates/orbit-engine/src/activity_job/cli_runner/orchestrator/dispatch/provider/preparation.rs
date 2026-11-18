@@ -21,6 +21,10 @@ use serde_json::Value;
 const PROVIDER_DENIAL_GUIDANCE: &str =
     include_str!("../../../../../../assets/provider_denial/guidance.txt");
 
+/// The built-in operator-steering definition an activity with
+/// `steering_guidance: true` receives when mid-run steering is enabled.
+const STEERING_GUIDANCE: &str = include_str!("../../../../../../assets/steering/guidance.txt");
+
 pub(super) struct ProviderEnvelope {
     pub(super) envelope_spec: AgentLoopSpec,
     pub(super) staged_images: Option<StagedImages>,
@@ -61,15 +65,23 @@ pub(super) fn prepare_provider_envelope<'a>(
     let notice_instruction = *notice_instruction;
     let notice_posting_instruction = *notice_posting_instruction;
     let mut envelope_spec = spec.clone();
+    let steering_enabled = host.mid_run_steering_enabled();
     envelope_spec.instruction = envelope_spec
-        .envelope_instruction(host.mid_run_steering_enabled())
+        .envelope_instruction(steering_enabled)
         .into_owned();
+    if spec.steering_guidance && steering_enabled {
+        insert_steering_guidance(
+            &mut envelope_spec.instruction,
+            spec.steering_instruction.as_deref(),
+        );
+    }
     if spec.provider_denial_guidance {
         let guidance = PROVIDER_DENIAL_GUIDANCE.trim_end();
         // Final recovery appends its admitted resume allowlist to the activity
-        // instruction before dispatch; that trailer must stay the final line
-        // so the dispatched contract ends in the machine-readable IDs.
-        // Insert the shared fragment before it when present.
+        // instruction before dispatch. Insert this denial text before that
+        // trailer so the machine-readable step ids stay at the end of the
+        // denial paragraph. Steering text, when enabled, follows the trailer
+        // with the checkpoint.
         const RESUME_TRAILER: &str =
             "\n\nFor this failure, resume only from one of these step ids.";
         if let Some(pos) = envelope_spec.instruction.find(RESUME_TRAILER) {
@@ -186,6 +198,26 @@ pub(super) fn prepare_provider_envelope<'a>(
         staged_images,
         pinned_recovery_input,
     })
+}
+
+/// Insert the shared steering definition immediately before the activity's
+/// checkpoint paragraph. The checkpoint stays later so a local watermark or
+/// per-task scope is the rule the agent reads after the shared default.
+/// With no checkpoint text, the definition is appended.
+fn insert_steering_guidance(instruction: &mut String, checkpoint: Option<&str>) {
+    let guidance = STEERING_GUIDANCE.trim_end();
+    if let Some(extra) = checkpoint.filter(|text| !text.trim().is_empty()) {
+        let marker = format!("\n\n{extra}");
+        if let Some(pos) = instruction.rfind(&marker) {
+            let tail = instruction.split_off(pos);
+            instruction.push_str("\n\n");
+            instruction.push_str(guidance);
+            instruction.push_str(&tail);
+            return;
+        }
+    }
+    instruction.push_str("\n\n");
+    instruction.push_str(guidance);
 }
 
 pub(super) fn rebuilt_envelope_input(input: &serde_json::Value) -> serde_json::Value {

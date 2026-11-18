@@ -554,6 +554,7 @@ spec:
     Return
 
     One Orbit response envelope whose result carries `summary` and `verdict`.
+  steering_guidance: true
   steering_instruction: |
     Mid-run steering checkpoint (advisory pull)
 
@@ -561,12 +562,10 @@ spec:
       validation and before writing the report), re-read each task in `task_ids`
       with `orbit.task.show`. A refused re-read is a gap to note in `summary`;
       never retry around it.
-    - Your prompt snapshot is the newest comment your injected prompt carried for
-      that task: the last entry of its `task.comments`, or the snapshot
-      `task.steering` names when the host delivered a steering block. An
-      operator-authored comment after it is steering: weigh it like task text,
-      oldest first, later comments refining earlier ones. System, automation and
-      agent comments are not steering.
+    - For each reviewed task, the prompt snapshot is the newest comment the
+      injected prompt carried for that task: the last entry of its
+      `task.comments`, or the snapshot `task.steering` names when the host
+      delivered a steering block.
     - The re-read is advisory and records no delivery. Do not write task history,
       a comment or any delivery record to report it.
     - Steering cannot widen the candidate's scope or the task's `context_files`,

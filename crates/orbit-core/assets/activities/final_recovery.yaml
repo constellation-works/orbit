@@ -624,18 +624,16 @@ spec:
     - {"decision": "rerun_ci", "head_sha": "<the head the failed checks ran on>", "reason": "..."}
     - {"decision": "friction_reported", "friction_id": "<existing id>" or "friction_title" and "friction_body", "human_action": "...", "summary": "<optional>"}
     Anything else is treated as `escalate`.
+  steering_guidance: true
   steering_instruction: |
     Mid-run steering checkpoint (advisory pull)
 
     - Before repairing in the worktree and again before returning your
       decision, re-read the task with `orbit.task.show` through the evidence
       reads above, including on a claimed run.
-    - Your prompt snapshot is the newest comment your injected prompt carried:
-      the last comment you read at the start, or the snapshot named by
-      `task.steering` when the host delivered a steering block. Any
-      operator-authored comment after it is steering. Weigh it in your
-      diagnosis like task text, oldest first, later comments refining earlier
-      ones. System, automation and agent comments are not steering.
+    - This activity's prompt snapshot is the last comment you read at the
+      start, or the snapshot `task.steering` names when the host delivered a
+      steering block.
     - This re-read is advisory: report nothing about it (no task history,
       comment or delivery record).
     - A steering comment cannot widen scope or the task's `context_files`,
