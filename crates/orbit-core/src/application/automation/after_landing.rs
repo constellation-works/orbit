@@ -28,7 +28,7 @@ use crate::application::automation::AutomationAutoTaskPort;
 use crate::application::job::crew_pools::seeded_crew_ticket;
 use orbit_types::task::TaskOsRequirement;
 use orbit_types::workflow::ReviewCrewPoolMember;
-use orbit_types::workflow::automation::recovery::{CrewOsHold, OsExcludedCrew};
+use orbit_types::workflow::automation::recovery::{CrewOsHold, ModelRefusedCrew, OsExcludedCrew};
 
 /// The auto-task definition after-landing review runs through.
 pub(crate) const AFTER_LANDING_CONSUMER: &str = "delivery-code-review";
@@ -53,18 +53,35 @@ fn review_crew_pool(runtime: &OrbitRuntime, definition: &AutoTaskDefinition) -> 
 }
 
 /// The positive-weight `workflow.purpose_crews.review` members a review task
-/// minted for `definition` may carry under its `os:` tags, and the members
-/// those tags exclude. Both are empty when no pool replaces the template's crew.
+/// minted for `definition` may carry, and the members that are excluded: by
+/// the task's `os:` tags, or because this host's provider account was verified
+/// to refuse their Muse model. All are empty when no pool replaces the
+/// template's crew.
+#[derive(Default)]
+struct ReviewPool {
+    eligible: Vec<ReviewCrewPoolMember>,
+    os_excluded: Vec<OsExcludedCrew>,
+    model_refused: Vec<ModelRefusedCrew>,
+}
+
 fn eligible_review_pool(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
-) -> Result<(Vec<ReviewCrewPoolMember>, Vec<OsExcludedCrew>), OrbitError> {
+) -> Result<ReviewPool, OrbitError> {
     let pool = review_crew_pool(runtime, definition);
     if pool.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
+        return Ok(ReviewPool::default());
     }
     let members = runtime.review_pool_members(&pool, orbit_config::REVIEW_CREW_KEY)?;
-    runtime.review_pool_split_by_os(members, &minted_tags(runtime, definition)?)
+    let (by_os, os_excluded) =
+        runtime.review_pool_split_by_os(members, &minted_tags(runtime, definition)?)?;
+    let (eligible, model_refused) =
+        runtime.review_pool_without_refused_models(by_os, Utc::now())?;
+    Ok(ReviewPool {
+        eligible,
+        os_excluded,
+        model_refused,
+    })
 }
 
 /// The tags a review task minted for `definition` carries.
@@ -77,7 +94,8 @@ fn minted_tags(
 
 /// Why no review task can be minted for `definition` under the current
 /// configuration: every positive-weight `workflow.purpose_crews.review`
-/// member's executor declares a `host_os` outside the task's `os:` tags.
+/// member's executor declares a `host_os` outside the task's `os:` tags, or
+/// its Muse model was verified refused on this host and account.
 /// `None` when a positive-weight member remains, or when no pool replaces the
 /// template's crew. The evaluator holds the claimed batch on this rather than
 /// failing its mint every tick.
@@ -85,17 +103,16 @@ pub(super) fn review_crew_hold(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
 ) -> Result<Option<CrewOsHold>, OrbitError> {
-    let (eligible, excluded) = eligible_review_pool(runtime, definition)?;
-    crew_os_hold(runtime, definition, &eligible, excluded)
+    let pool = eligible_review_pool(runtime, definition)?;
+    crew_os_hold(runtime, definition, &pool)
 }
 
 fn crew_os_hold(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
-    eligible: &[ReviewCrewPoolMember],
-    excluded: Vec<OsExcludedCrew>,
+    pool: &ReviewPool,
 ) -> Result<Option<CrewOsHold>, OrbitError> {
-    if !eligible.is_empty() || excluded.is_empty() {
+    if !pool.eligible.is_empty() || (pool.os_excluded.is_empty() && pool.model_refused.is_empty()) {
         return Ok(None);
     }
     Ok(Some(CrewOsHold {
@@ -106,7 +123,8 @@ fn crew_os_hold(
             .iter()
             .map(|os| os.tag())
             .collect(),
-        excluded,
+        excluded: pool.os_excluded.clone(),
+        model_refused: pool.model_refused.clone(),
     }))
 }
 
@@ -128,10 +146,11 @@ pub(super) fn minted_review_crew(
     if pool.is_empty() {
         return Ok(None);
     }
-    let (eligible, excluded) = eligible_review_pool(runtime, definition)?;
-    if let Some(hold) = crew_os_hold(runtime, definition, &eligible, excluded)? {
+    let review_pool = eligible_review_pool(runtime, definition)?;
+    if let Some(hold) = crew_os_hold(runtime, definition, &review_pool)? {
         return Err(OrbitError::PolicyDenied(hold.summary()));
     }
+    let eligible = review_pool.eligible;
     if let ([only], [_]) = (eligible.as_slice(), pool.as_slice()) {
         return Ok(Some(only.name.clone()));
     }
@@ -482,14 +501,13 @@ pub(crate) fn after_landing_health(
     let pool = review_crew_pool(runtime, &definition);
     let mut crew_hold = None;
     if pool.len() > 1 {
-        let candidates =
-            eligible_review_pool(runtime, &definition).and_then(|(eligible, excluded)| {
-                crew_hold = crew_os_hold(runtime, &definition, &eligible, excluded)?;
-                match crew_hold {
-                    Some(_) => Ok(Vec::new()),
-                    None => runtime.review_pool_candidates(&eligible),
-                }
-            });
+        let candidates = eligible_review_pool(runtime, &definition).and_then(|pool| {
+            crew_hold = crew_os_hold(runtime, &definition, &pool)?;
+            match crew_hold {
+                Some(_) => Ok(Vec::new()),
+                None => runtime.review_pool_candidates(&pool.eligible),
+            }
+        });
         if let Err(error) = candidates {
             health.crew_error = Some(error.to_string());
             health
@@ -499,13 +517,15 @@ pub(crate) fn after_landing_health(
         health.crew_pool = pool;
     } else {
         match eligible_review_pool(runtime, &definition) {
-            Ok((eligible, excluded)) => {
-                health.crew = eligible
+            Ok(pool) => {
+                health.crew = pool
+                    .eligible
                     .first()
                     .map(|member| member.name.clone())
-                    .or_else(|| excluded.first().map(|crew| crew.crew.clone()))
+                    .or_else(|| pool.os_excluded.first().map(|crew| crew.crew.clone()))
+                    .or_else(|| pool.model_refused.first().map(|crew| crew.crew.clone()))
                     .or(definition.template.crew.clone());
-                crew_hold = crew_os_hold(runtime, &definition, &eligible, excluded)?;
+                crew_hold = crew_os_hold(runtime, &definition, &pool)?;
             }
             Err(error) => {
                 health.crew_error = Some(error.to_string());
@@ -527,8 +547,8 @@ pub(crate) fn after_landing_health(
     // The recorded stall names the same hold once evaluation has met it.
     let crew_hold_problem = crew_hold.map(|hold| {
         format!(
-            "{}; no review task is minted until the pool or the definition's `os:` tags admit \
-             a crew, and the consumer then resumes on its own",
+            "{}; no review task is minted until the pool, the definition's `os:` tags or model \
+             access admit a crew, and the consumer then resumes on its own",
             hold.summary()
         )
     });
@@ -574,8 +594,8 @@ pub(crate) fn after_landing_health(
         match &stall.crew_hold {
             Some(hold) => {
                 health.problems.push(format!(
-                    "stalled since {} ({}: {}); it resumes on its own once the pool or the \
-                     definition's `os:` tags admit a crew",
+                    "stalled since {} ({}: {}); it resumes on its own once the pool, the \
+                     definition's `os:` tags or model access admit a crew",
                     stall.since.to_rfc3339(),
                     stall.reason,
                     hold.summary()

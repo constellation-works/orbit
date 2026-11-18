@@ -11,10 +11,12 @@
 
 use std::collections::BTreeSet;
 
+use chrono::{DateTime, Utc};
+
 use orbit_automation::AutomationError;
 use orbit_common::OrbitError;
 use orbit_types::workflow::ReviewCrewPoolMember;
-use orbit_types::workflow::automation::recovery::OsExcludedCrew;
+use orbit_types::workflow::automation::recovery::{ModelRefusedCrew, OsExcludedCrew};
 use orbit_types::workflow::automation::{AutomationState, SourcePage};
 
 use super::source::Source;
@@ -49,6 +51,14 @@ pub(in crate::application) trait AutomationReviewPort {
         pool: Vec<ReviewCrewPoolMember>,
         tags: &[String],
     ) -> Result<(Vec<ReviewCrewPoolMember>, Vec<OsExcludedCrew>), OrbitError>;
+
+    /// The members of `pool` whose Muse model this host's provider account
+    /// was not verified to refuse recently, and the members that were.
+    fn review_pool_without_refused_models(
+        &self,
+        pool: Vec<ReviewCrewPoolMember>,
+        now: DateTime<Utc>,
+    ) -> Result<(Vec<ReviewCrewPoolMember>, Vec<ModelRefusedCrew>), OrbitError>;
 
     /// The members of `pool` this host can run, each with its tickets; with
     /// none left, the refusal of the first member that holds a ticket.

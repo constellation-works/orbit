@@ -147,9 +147,10 @@ pub struct AutomationStall {
 }
 
 /// Why a claimed batch's action cannot be minted under the current
-/// configuration: every crew of the pool its task would carry has an
+/// configuration: every crew of the pool its task would carry either has an
 /// executor whose declared `host_os` shares no OS with the task's `os:` tags,
-/// so no host could run the task.
+/// so no host could run the task, or names a Muse model this host's provider
+/// account was recently verified to be refused.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CrewOsHold {
@@ -161,6 +162,23 @@ pub struct CrewOsHold {
     pub os_tags: Vec<String>,
     /// Every pool member the OS requirement excluded.
     pub excluded: Vec<OsExcludedCrew>,
+    /// Every remaining pool member whose model this host's provider account
+    /// was verified to refuse. Each entry lapses at its `clears_at`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_refused: Vec<ModelRefusedCrew>,
+}
+
+/// One crew excluded because the provider refused its exact model on this
+/// host and account.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelRefusedCrew {
+    pub crew: String,
+    /// The model the provider refused.
+    pub model: String,
+    /// When the refusal lapses on its own, unless a verified success of the
+    /// model in the same context ends it sooner.
+    pub clears_at: DateTime<Utc>,
 }
 
 /// One crew an OS requirement excluded, with the limit its executor declares.
@@ -174,8 +192,9 @@ pub struct OsExcludedCrew {
 }
 
 impl CrewOsHold {
-    /// One operator-facing sentence: the pool, each excluded crew with its
-    /// executor OS, and the task's tags.
+    /// One operator-facing sentence: the pool, each OS-excluded crew with its
+    /// executor OS and the task's tags, and each crew whose model the
+    /// provider refused with when that lapses.
     #[must_use]
     pub fn summary(&self) -> String {
         let excluded = self
@@ -191,11 +210,40 @@ impl CrewOsHold {
             })
             .collect::<Vec<_>>()
             .join(", ");
+        if self.model_refused.is_empty() {
+            return format!(
+                "no crew of {} can run `{}` review tasks tagged {}: {excluded}",
+                self.pool_key,
+                self.definition,
+                self.os_tags.join(", ")
+            );
+        }
+        let refused = self
+            .model_refused
+            .iter()
+            .map(|crew| {
+                format!(
+                    "`{}` (model `{}`, refused until {})",
+                    crew.crew,
+                    crew.model,
+                    crew.clears_at.to_rfc3339()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let os = if self.excluded.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; excluded by the tags {}: {excluded}",
+                self.os_tags.join(", ")
+            )
+        };
         format!(
-            "no crew of {} can run `{}` review tasks tagged {}: {excluded}",
-            self.pool_key,
-            self.definition,
-            self.os_tags.join(", ")
+            "no crew of {} can run `{}` review tasks; Muse refused access on this host and \
+             account to {refused}{os}. A verified successful use of the model in this context, \
+             the refusal's expiry, or an eligible crew clears it",
+            self.pool_key, self.definition
         )
     }
 }

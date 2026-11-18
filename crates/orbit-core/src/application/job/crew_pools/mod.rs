@@ -50,6 +50,7 @@ pub(crate) use draw::{
 };
 #[cfg(feature = "test-support")]
 pub use draw_quantile::with_crew_draw_quantile;
+pub(crate) use model_access::{MUSE_MODEL_REFUSAL_WINDOW_HOURS, is_muse_crew};
 #[cfg(feature = "test-support")]
 pub use selection_checkpoint::with_crew_selection_checkpoint;
 pub(crate) use types::CapturedCrewPools;
