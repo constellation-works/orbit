@@ -9,7 +9,7 @@ use orbit_types::workspace::{WorkspaceCheckout, WorkspaceStatus};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
-use super::support::{Fixture, isolated, json_ok};
+use super::support::{Fixture, error_code, isolated, json_ok};
 
 fn operator_caller() -> NoticeCaller {
     let mut session = ToolSessionContext::default();
@@ -277,6 +277,46 @@ fn post_notice_refusals_carry_the_core_invalid_field_code() {
             assert!(payload["notice"].get("ended_at").is_some());
             assert_eq!(payload["notice"]["scope"], "workspace");
             assert_eq!(payload["notice"]["evidence"], json!([]));
+        },
+    );
+}
+
+/// Release-QA exception (ORB-25724, AGENTS.md "Tests and QA"): the operator's
+/// successful HTTP close of a notice this test created, and an ordinary
+/// caller's refusal of the same route. Operator authority comes only from the
+/// fixture's governed operator server; no role override or live state is used.
+#[test]
+fn operator_closes_notice_over_http_and_unprivileged_close_is_denied() {
+    isolated(
+        "notices::operator_closes_notice_over_http_and_unprivileged_close_is_denied",
+        || {
+            let fixture = Fixture::new();
+            let operator = fixture.server(true);
+            // The notice is this test's own record, created over HTTP in its isolated home.
+            let created = json_ok(operator.send(
+                "POST",
+                "/api/notices",
+                json!({"kind": "info", "title": "release QA close record"}),
+            ));
+            let id = created["notice"]["id"].as_str().unwrap().to_string();
+            let close_path = format!("/api/notices/{id}/close");
+
+            // An ordinary caller is refused, and the refusal leaves the notice open.
+            let unprivileged = fixture.server(false);
+            error_code(
+                unprivileged.send("POST", &close_path, json!({"reason": "resolved"})),
+                403,
+                "authorization_denied",
+            );
+            assert_notice_ids(&json_ok(operator.get("/api/notices")), "open", &[&id]);
+
+            let closed = json_ok(operator.send("POST", &close_path, json!({"reason": "resolved"})));
+            assert_eq!(closed["already_inactive"], false, "{closed}");
+            assert_eq!(closed["notice"]["status"], "closed", "{closed}");
+
+            let payload = json_ok(operator.get("/api/notices"));
+            assert_notice_ids(&payload, "open", &[]);
+            assert_notice_ids(&payload, "recent", &[&id]);
         },
     );
 }
