@@ -84,6 +84,10 @@ pub struct NoticeListFilter {
     pub linked_task: Option<String>,
     pub author_class: Option<AuthorClass>,
     pub host: Option<String>,
+    /// Closed or expired notices that ended before this instant are
+    /// excluded; open notices are unaffected. `None` applies no window, so
+    /// callers that need retained history keep it.
+    pub ended_since: Option<DateTime<Utc>>,
     /// `None` returns every match; an aggregating caller applies its own
     /// limit once, after merging the owners' answers.
     pub limit: Option<usize>,
@@ -100,6 +104,7 @@ impl Default for NoticeListFilter {
             linked_task: None,
             author_class: None,
             host: None,
+            ended_since: None,
             limit: Some(NOTICE_LIST_DEFAULT_LIMIT),
         }
     }

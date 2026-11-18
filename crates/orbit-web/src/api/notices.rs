@@ -229,18 +229,25 @@ pub(super) async fn list_notices(
         Ok(resolved) => resolved,
         Err(response) => return *response,
     };
+    // The recent window is computed before the blocking read; core applies
+    // it as `ended_since` and this handler re-applies it below with its own
+    // `now`, so the final selection is unchanged.
+    let recent_cutoff = Utc::now() - Duration::hours(24);
     match blocking("list notices", move || {
         let mut by_id: BTreeMap<String, Notice> = BTreeMap::new();
         for runtime in &runtimes {
-            // Read the full effective state before choosing what to show:
-            // the core listing sorts by kind and truncates at `limit`, so a
-            // bounded `All` read lets retained closed/expired rows consume
-            // the cap and silently hide an open notice of a later kind.
-            // `limit: None` returns every retained match; the open/recent
-            // selection below is the only bounding this endpoint applies.
+            // Read open plus recently ended effective states before
+            // choosing what to show: the core listing sorts by kind and
+            // truncates at `limit`, so a bounded `All` read lets retained
+            // closed/expired rows consume the cap and silently hide an open
+            // notice of a later kind. `limit: None` with `ended_since`
+            // returns every open notice and every notice that ended in
+            // the window; the open/recent selection below is the only
+            // other bounding this endpoint applies.
             let listing = runtime.list_notices(&NoticeListFilter {
                 status: NoticeStatusFilter::All,
                 limit: None,
+                ended_since: Some(recent_cutoff),
                 ..Default::default()
             })?;
             degraded.extend(listing.degraded);
