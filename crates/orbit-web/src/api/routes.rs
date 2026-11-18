@@ -10,12 +10,12 @@ use super::*;
 /// on (ORB-11246).
 ///
 /// The dashboard server's shutdown sequence in `run_server` calls this once. Its
-/// graceful-shutdown future first waits for either the process signal from
-/// [`crate::shutdown::shutdown_signal`] (SIGINT or SIGTERM) or a lifecycle
-/// boundary such as an Orbit upgrade, and records any handover target for the
-/// lifecycle case. It then calls this function, and only then notifies the
-/// grace-period timer. The standalone lease listener (`serve_lease_listener`)
-/// also awaits the signal future but does not call this function.
+/// graceful-shutdown future first waits for either the shutdown signal from
+/// [`crate::shutdown::shutdown_signal`] or a lifecycle boundary such as an
+/// Orbit upgrade, and records any handover target for the lifecycle case. It
+/// then calls this function, and only then notifies the grace-period timer.
+/// The standalone lease listener (`serve_lease_listener`) also awaits the
+/// signal future but does not call this function.
 pub(crate) fn request_shutdown() {
     log::request_shutdown();
     events::request_shutdown();

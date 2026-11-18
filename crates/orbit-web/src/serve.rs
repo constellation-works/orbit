@@ -136,8 +136,8 @@ pub(crate) fn build_state(
     state::DashboardState::from_registry(global_root, source)
 }
 
-/// Upper bound on graceful connection drain once shutdown begins (ctrl-c or
-/// SIGTERM, or a lifecycle boundary such as an Orbit upgrade) — well under
+/// Upper bound on graceful connection drain once shutdown begins (a shutdown
+/// signal or a lifecycle boundary such as an Orbit upgrade) — well under
 /// `orbit-web.service`'s `TimeoutStopUSec=90s` (see the 2026-09-05 restart
 /// incident, ORB-11246: `stop-sigterm` timed out and systemd fell back to
 /// SIGKILL). As soon as shutdown begins, `run_server` also tells long-lived
