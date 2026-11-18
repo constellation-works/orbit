@@ -306,9 +306,11 @@ function breakerTrialDispatched(routine, breaker) {
 }
 
 // When an admitted, undispatched trial fires: the next sweep tick for an
-// operator bypass, else the routine's next schedule slot.
+// operator bypass, else the routine's next schedule slot. next_due, not
+// routineNextAt: while the breaker is tripped, next_evaluation carries the
+// admission time.
 function armedTrialAt(routine, breaker, now) {
-  return breaker.trial_reason === "bypass" ? new Date(now).toISOString() : routineNextAt(routine);
+  return breaker.trial_reason === "bypass" ? new Date(now).toISOString() : routine.next_due || null;
 }
 
 // The next hour as a strip: where each routine's slots land, with paused
@@ -323,12 +325,14 @@ function routineTimeline(routines, now = Date.now()) {
       // An admitted trial (trial_started_at set) is upcoming until its fire
       // is dispatched: the scheduler stores the admission before it evaluates
       // the schedule, so between slots the trial waits for the next slot. The
-      // status projection reports the admission's updated_at as next_trial_at,
-      // which is not when it fires. Once a non-skipped fire exists after the
-      // admission, the trial is running and the scheduler admits no second one
-      // (breaker_trial_in_flight): it is no longer upcoming.
+      // status projection reports the admission's updated_at as next_trial_at
+      // and next_evaluation, which is not when it fires. Once a non-skipped
+      // fire exists after the admission, the trial is running and the
+      // scheduler admits no second one (breaker_trial_in_flight): it is no
+      // longer upcoming.
       if (breaker?.trial_started_at && breakerTrialDispatched(routine, breaker)) return [];
       const first = Date.parse(breaker?.trial_started_at ? armedTrialAt(routine, breaker, now) : breaker ? breaker.next_trial_at : routineNextAt(routine));
+      if (!Number.isFinite(first) || first < now - 60_000 || first > now + horizon || (breaker && !active)) return [];
       const kind = breaker ? "trial" : active ? "fires" : "skipped";
       const times = breaker ? [first] : routineFireTimes(routine, first, now + horizon);
       return times.map((at, index) => ({ routine, kind, at, repeat: index > 0 }));
