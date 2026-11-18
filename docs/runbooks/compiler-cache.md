@@ -82,10 +82,13 @@ each version and source). TOML formatting and comments do not count.
   rebuilds only the units whose version, source, features, profile or
   environment changed. Before ORB-25561 the whole-root digest also moved the
   prefix, so PR #9937 restored nothing and compiled for 524/518 s (runs
-  44236419113 and 44234277166). A dependency edit whose filtered entries stay
-  identical — a feature-only change, or switching a workspace crate to a
-  version already present in the lock for another crate — keeps the exact
-  key instead; see the residual below.
+  44236419113 and 44234277166). An edit in `[workspace.dependencies]` whose
+  filtered entries stay identical — a feature-only change, or a version switch
+  where the old and new versions both remain in the lock — keeps the exact
+  key instead; see the residual below. A member's own manifest is hashed, so
+  its feature edits and registry version requirements move the exact key even
+  when the lock is unchanged; only package and path-dependency versions are
+  normalised out.
 - A release version bump, lint edit or comment keeps the exact key: the root
   version lives in `[workspace.package]`, which the prefix derivation omits,
   member versions are normalised out of the member-manifest hash, and the
@@ -95,13 +98,16 @@ each version and source). TOML formatting and comments do not count.
 The action prunes `target/` to dependency artifacts before it saves. A
 prefix-match restore first deletes restored dependency units older than
 one week, so an archive last saved more than a week earlier restores less.
-Only a push whose *effective key* changes saves a new archive: the effective
-key is the prefix above plus the exact-key inputs (filtered lock entries,
-normalised member manifests, `.cargo/config.toml` and `rust-toolchain.toml`
-files, and the environment hash). A push that only edits `Cargo.lock` bytes
-outside the filtered entries gets an exact hit, and the pinned action's
-save step (`save.ts` at `d1527c8`) reports the cache up-to-date and saves
-nothing; an exact hit can never replace the existing archive. File touches
+On a protected push, a change to the *effective key* misses the exact key, so
+the save step writes a new archive. The effective key is the prefix above plus
+the exact-key inputs (filtered lock entries, normalised member manifests,
+`.cargo/config.toml` and `rust-toolchain.toml` files, and the environment
+hash). A push that only edits `Cargo.lock` bytes outside the filtered entries
+gets an exact hit when its archive exists, and the pinned action's save step
+(`save.ts` at `d1527c8`) reports the cache up-to-date and saves nothing; an
+exact hit can never replace the existing archive. An unchanged key still saves
+when no archive exists for it, for example when the run that should have
+written it saved nothing or the archive was evicted. File touches
 therefore overstate refresh frequency. Recounting 2026-09-01 to 2026-11-18
 under the current derivation: 162 commits touched `Cargo.lock`, but only
 118 of them changed the effective key (the filtered lock list, a normalised
@@ -113,17 +119,18 @@ fingerprints, not the cache key, decide whether a restored unit is reused.
 A restored unit built for other features, profile settings, compiler or
 flags is never linked.
 
-Residual: a feature or `default-features` edit in `[workspace.dependencies]`
-that leaves the filtered lock entries unchanged also keeps the exact key —
-the lock file need not be byte-identical, only its hashed entries. The
-protected push then gets an exact hit and saves nothing, so each job
-rebuilds the affected units and their dependents. That lasts until the next
-change to the effective key — a filtered lock-entry, normalised
-member-manifest, config/toolchain, prefix or environment change — not
-merely the next `Cargo.lock` edit: a release bump rewrites the lock file
-without moving any of those, so it does not end the residual. Four of the
-97 root-manifest commits from 2026-08-01 to 2026-11-18 were edits of this
-kind.
+Residual: any edit in `[workspace.dependencies]` that leaves the filtered lock
+entries unchanged, such as a feature or `default-features` change, also keeps
+the exact key — the lock file need not be byte-identical, only its hashed
+entries. The protected push then gets an exact hit and saves nothing, so each
+job rebuilds the affected units and their dependents. That lasts until the
+next change to the effective key — a filtered lock-entry, normalised
+member-manifest, config/toolchain, prefix or environment change — not merely
+the next `Cargo.lock` edit: a release bump rewrites the lock file without
+moving any of those, so it does not end the residual. Two of the 98
+root-manifest commits from 2026-08-01 to 2026-11-18 were feature edits of this
+kind (`c05c3103e`, `600a0a711`); both left the exact key unchanged. The version
+switch in `b38186846` (2026-11-01) did the same.
 
 The Check job's trusted `.orbit/tmp/dependency-producer` checkout adds that
 tree's `.cargo/config.toml` and `rust-toolchain.toml` to Check's exact key.
