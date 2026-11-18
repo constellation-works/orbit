@@ -12,6 +12,7 @@ import self_test_hang
 import shlex
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -815,6 +816,71 @@ class NextestShardWorkflowTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(record)
             path.chmod(0o755)
+
+    @unittest.skipUnless(hasattr(os, "mkfifo") and shutil.which("flock"), "requires Unix FIFOs and flock")
+    def test_proof_start_waits_for_lock_and_wait_propagates_result(self):
+        job = self.document["jobs"]["test-build"]
+        steps = {step.get("name"): step for step in job["steps"]}
+        names = list(steps)
+        start_name, wait_name = "Start the shard coverage proof", "Prove the shards cover every test"
+        for name in [f"Upload nextest archive part {n}/4" for n in range(1, 5)] + ["Upload test build timings"]:
+            self.assertLess(names.index(start_name), names.index(name))
+            self.assertLess(names.index(name), names.index(wait_name))
+
+        for outcome in ("0", "7", "interrupted"):
+            with self.subTest(outcome=outcome):
+                root = self.root / outcome
+                (root / "bin").mkdir(parents=True)
+                (root / "scripts").mkdir()
+                os.mkfifo(root / "admit")
+                os.mkfifo(root / "finish")
+                flock = root / "bin/flock"
+                flock.write_text('#!/bin/bash\nif [[ "$1" == 9 ]]; then\n'
+                                 '  touch "$RUNNER_TEMP/lock-paused"\n'
+                                 '  read -r _ < "$RUNNER_TEMP/admit"\nfi\n'
+                                 f'exec {shlex.quote(shutil.which("flock"))} "$@"\n')
+                flock.chmod(0o755)
+                proof = root / "scripts/ci-guardrails.sh"
+                proof.write_text('#!/bin/bash\ntouch "$RUNNER_TEMP/proof-running"\n'
+                                 'read -r _ < "$RUNNER_TEMP/finish"\n'
+                                 'echo "proof diagnostic"\n'
+                                 + ('kill -KILL "$PPID"\n' if outcome == "interrupted" else f'exit {outcome}\n'))
+                proof.chmod(0o755)
+                env = dict(os.environ, RUNNER_TEMP=str(root), PATH=f"{root / 'bin'}:{os.environ['PATH']}")
+
+                def await_file(path):
+                    deadline = time.monotonic() + 10
+                    while not path.exists() and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertTrue(path.exists(), f"timed out waiting for {path}")
+
+                start = subprocess.Popen(["bash", "-e", "-o", "pipefail", "-c", steps[start_name]["run"]],
+                                         cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                         start_new_session=True)
+                self.addCleanup(lambda p=start: os.killpg(p.pid, signal.SIGKILL) if p.poll() is None else None)
+                await_file(root / "lock-paused")
+                try:
+                    start.wait(timeout=0.5)
+                    released_early = True
+                except subprocess.TimeoutExpired:
+                    released_early = False
+                with (root / "admit").open("w") as pipe:
+                    pipe.write("go\n")
+                self.assertEqual(start.wait(timeout=10), 0)
+                await_file(root / "proof-running")
+                wait = subprocess.Popen(["bash", "-e", "-o", "pipefail", "-c", steps[wait_name]["run"]],
+                                        cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                try:
+                    self.assertIsNone(wait.poll(), "wait returned while proof was still running")
+                finally:
+                    with (root / "finish").open("w") as pipe:
+                        pipe.write("go\n")
+                stdout, stderr = wait.communicate(timeout=10)
+                self.assertEqual(wait.returncode, 1 if outcome == "interrupted" else int(outcome), stdout + stderr)
+                self.assertIn("proof diagnostic", stdout)
+                if outcome == "interrupted":
+                    self.assertIn("without an exit status", stderr)
+                self.assertFalse(released_early, "start released uploads before the proof acquired its lock")
 
     @staticmethod
     def resolve_download_path(expression, download_outputs):
