@@ -128,8 +128,9 @@ fn events_stream_gate() -> &'static Arc<Semaphore> {
     GATE.get_or_init(|| Arc::new(Semaphore::new(EVENTS_STREAM_MAX_CONCURRENT)))
 }
 
-/// Set once a shutdown signal is received, so every open stream closes on its
-/// next check instead of holding the graceful drain until its client leaves
+/// Set once shutdown begins (a shutdown signal or a lifecycle boundary, both
+/// acted on by `run_server`), so every open stream closes on its next check
+/// instead of holding the graceful drain until its client leaves
 /// (ORB-11246, as for `/api/log/stream`).
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 

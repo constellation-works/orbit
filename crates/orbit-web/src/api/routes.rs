@@ -5,9 +5,17 @@ use axum::routing::{get, post, put};
 use super::*;
 
 /// Tell long-lived streaming handlers (`/api/log/stream`, `/api/events/stream`
-/// and lease notice streams) to close cooperatively. Called once from [`crate::shutdown::shutdown_signal`] so the bounded
-/// graceful-drain deadline in `crate::serve::run_server` rarely has to be relied on
-/// (ORB-11246).
+/// and lease notice streams) to close cooperatively, so the bounded
+/// graceful-drain deadline in `crate::serve::run_server` rarely has to be relied
+/// on (ORB-11246).
+///
+/// The dashboard server's shutdown sequence in `run_server` calls this once. Its
+/// graceful-shutdown future first waits for either the shutdown signal from
+/// [`crate::shutdown::shutdown_signal`] or a lifecycle boundary such as an
+/// Orbit upgrade, and records any handover target for the lifecycle case. It
+/// then calls this function, and only then notifies the grace-period timer.
+/// The standalone lease listener (`serve_lease_listener`) also awaits the
+/// signal future but does not call this function.
 pub(crate) fn request_shutdown() {
     log::request_shutdown();
     events::request_shutdown();
