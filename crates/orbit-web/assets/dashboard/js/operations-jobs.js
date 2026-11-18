@@ -368,7 +368,10 @@ export function renderJobs(payload) {
     }
     body.appendChild(el("p", { class: "operation-control-note", text: `Catalogue projected from routine targets and the last ${JOB_RUN_LIMIT} runs.` }));
   }
-  $("jobs-count").textContent = `${catalog.size} job${catalog.size === 1 ? "" : "s"} · ${running.length} running · ${workspace.name}`;
+  // The running figure describes the listed jobs, matching their Active column.
+  // Delivery and other non-runnable runs in flight are counted in Jobs › Live.
+  const listedRunning = [...catalog.values()].reduce((sum, job) => sum + job.running, 0);
+  $("jobs-count").textContent = `${catalog.size} job${catalog.size === 1 ? "" : "s"} · ${listedRunning} running · ${workspace.name}`;
 }
 
 export function fetchAndRenderJobs({ routinesRead = null } = {}) {
