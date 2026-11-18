@@ -200,9 +200,13 @@ impl RegistrySource {
     }
 }
 
-/// Best-effort default when serving globally: the registered workspace whose
-/// repo root is the longest prefix of `cwd`, if the server was launched inside
-/// one. `None` means the frontend opens on the aggregate "all workspaces" view.
+/// Best-effort default for `cwd` when serving globally: the `Active` registered
+/// workspace whose repo root or path override is the longest prefix of `cwd`,
+/// if the server was launched inside one. The match is lexical
+/// (`Path::starts_with`) and does not touch the filesystem. An `Invalid`
+/// checkout is never eligible, so a `cwd` beneath a stale checkout yields
+/// `None`. `None` is no hint, not "All workspaces"; see
+/// `default_workspace_selection` for what the browser does next.
 pub(crate) fn default_workspace_for_cwd(
     registry: &WorkspaceRegistry,
     cwd: &Path,
@@ -221,24 +225,24 @@ pub(crate) fn default_workspace_for_cwd(
         .map(|(workspace, _)| workspace.id.clone())
 }
 
-/// Precedence logic for the dropdown's default-preselected workspace: an
-/// explicit `workspace_selector` (the `--workspace` flag) always wins over
-/// `cwd` when given, even if it does not resolve to any registered/active
-/// workspace — in that case the result is `None` ("All workspaces"), not a
-/// fallback to the cwd-based default. This matches [`default_workspace_for_cwd`]:
-/// don't error, don't auto-register, just prefer the aggregate view.
+/// Precedence logic for the registry's default-workspace hint. An explicit
+/// `workspace_selector` (the `--workspace` flag) always wins over `cwd` when
+/// given, even when it resolves to nothing: the result is then `None`, not a
+/// cwd-based default. An explicit but unresolved bare name never reaches the
+/// path match, so it cannot preselect the cwd's workspace. Only an absent
+/// selector (no `--workspace` flag) falls back to the cwd match
+/// ([`default_workspace_for_cwd`]).
 ///
-/// The selector is a registered name or logical `ws_*` ID first, and a local
-/// checkout path when it is path-shaped
-/// ([`registry_runtime::selector_looks_like_path`]); a path is matched the
-/// same way a cwd is (longest registered prefix over the canonicalized path,
-/// or over the lexical absolute path when canonicalization fails — see
-/// [`resolve_selector_path`]), which is what `orbit web connect` forwards for
-/// a remote workspace directory. An explicit but unresolved bare name (path
-/// comparison never runs for it) yields `None` without consulting `cwd` —
-/// that would preselect the cwd's workspace for a selector that matched
-/// nothing. Only an absent selector (`None`, i.e. no `--workspace` flag)
-/// falls back to the existing cwd-based behavior unchanged.
+/// A selector first resolves as a registered name or logical `ws_*` ID to an
+/// `Active` workspace. Otherwise a path-shaped selector
+/// ([`registry_runtime::selector_looks_like_path`]) is resolved through
+/// [`resolve_selector_path`] and matched the way a cwd is. That is what
+/// `orbit web connect` forwards for a remote workspace directory.
+///
+/// The result is only a hint, and `None` is not an "All workspaces" choice.
+/// This function checks registry status only. `RegistrySource::load` then keeps
+/// the hint only when the workspace's runtime binding succeeds, and the browser
+/// decides what opens (see `build_state`).
 pub(crate) fn default_workspace_selection(
     registry: &WorkspaceRegistry,
     workspace_selector: Option<&str>,
@@ -261,21 +265,22 @@ pub(crate) fn default_workspace_selection(
 }
 
 /// Normalize a path-shaped `--workspace <selector>` value so it can be
-/// prefix-matched against registered workspace roots (which are canonical
-/// absolute paths after the pipeline's canonicalization; see
+/// prefix-matched against eligible registered roots. Those roots are canonical
+/// absolute paths after the pipeline's canonicalization (see
 /// `orbit-runtime/src/builder.rs`).
 ///
-/// Relative paths are resolved against `cwd` before canonicalization. If
-/// canonicalization fails (path may not exist, or symlink resolution errors),
-/// return the pre-canonical absolute path so it can still be longest-prefix
-/// matched lexically (see [`default_workspace_for_cwd`], which compares with
-/// `Path::starts_with`, i.e. component-wise, not via the filesystem). A
-/// nonexistent descendant of a registered root (e.g. `/registered/missing`
-/// under the active registered root `/registered`) therefore still selects
-/// that root; only a path lexically outside every registered root misses and
-/// falls back to `None` ("All workspaces"). Lexical matching does not resolve
-/// `..` components, so a nonexistent `/registered/../other` still matches
-/// `/registered` as written.
+/// Relative paths are resolved against `cwd` before canonicalization. `cwd` is
+/// `None` when the process has no usable working directory (`build_state`
+/// passes `current_dir().ok()`). A relative selector then stays relative and
+/// cannot prefix-match an absolute root, so it yields no hint. If
+/// canonicalization fails (the path may not exist, or symlink resolution
+/// errors), the absolute lexical path is returned so it can still be matched
+/// component-wise by [`default_workspace_for_cwd`]. A nonexistent descendant of
+/// an eligible root (e.g. `/registered/missing` under `/registered`) therefore
+/// still selects that root. Only a path lexically outside every eligible root
+/// misses. A checkout whose status is `Invalid` is not eligible, so a path
+/// beneath it misses too. Lexical matching does not resolve `..` components, so
+/// a nonexistent `/registered/../other` still matches `/registered` as written.
 fn resolve_selector_path(selector: &Path, cwd: Option<&Path>) -> PathBuf {
     let absolute = if selector.is_absolute() {
         selector.to_path_buf()
