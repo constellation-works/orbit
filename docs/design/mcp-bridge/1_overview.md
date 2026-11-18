@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Overview
 owner: codex
-last_updated: 2026-11-05
-last_validated: 2026-11-09
+last_updated: 2026-11-17
+last_validated: 2026-11-17
 status: Implemented
 stage: shipped
 next: "—"
@@ -56,7 +56,7 @@ need one — typically reached through an SSH tunnel as this user. It binds
 loopback unless a wider bind is asked for explicitly. A connection is accepted
 only when the peer's user id is the server's; a different user is refused
 before any message is read, and a remote TCP peer has no local user id and is
-refused. A browser page can also send HTTP to loopback, so the listener closes
+refused [ORB-23052]. A browser page can also send HTTP to loopback, so the listener closes
 connections whose first byte is not a JSON object start before rmcp sees any
 message. It is a transport adapter only: it adds no broker, checkout preflight,
 placement routing, or client-side capability filter. The listener's server
@@ -181,5 +181,6 @@ request flow is in [`2_design.md`](./2_design.md), future work in
 - [ORB-18559] added policy-filtered recovery hints for unknown builtin tool names.
 - [ORB-20234] moved selected MCP tools into opt-in toolsets.
 - [ORB-21263] grouped MCP toolsets into selectable roles.
+- [ORB-23052] made the TCP listener admit only a peer whose uid is the server's, refusing differing, missing, ambiguous or unreadable uids before any read.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
