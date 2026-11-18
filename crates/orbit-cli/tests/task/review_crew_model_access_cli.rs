@@ -438,27 +438,27 @@ fn a_linux_tagged_model_refusal_resumes_for_a_crew_that_passes_both_filters() {
                 host and account";
     assert!(
         body.contains(both),
-        "the escalation requires a crew that passes both filters: {body}"
+        "[ORB-25599] the escalation requires a crew that passes both filters: {body}"
     );
     assert!(
         body.contains("a verified success of its model"),
-        "a verified success of the refused model is still a way out: {body}"
+        "[ORB-25599] a verified success of the refused model is still a way out: {body}"
     );
     assert!(
         !body.contains("admits a crew whose model is not refused."),
-        "resumption must not promise a crew that ignores the OS tags: {body}"
+        "[ORB-25599] resumption must not promise a crew that ignores the OS tags: {body}"
     );
     assert!(
         !body.contains("add a crew to `workflow.purpose_crews.review` whose model is not refused"),
-        "the model-only add is not enough when the task is OS-tagged: {body}"
+        "[ORB-25599] the model-only add is not enough when the task is OS-tagged: {body}"
     );
     assert!(
         !body.contains("change the definition's `os:` tags"),
-        "editing os tags cannot clear a model refusal: {body}"
+        "[ORB-25599] editing os tags cannot clear a model refusal: {body}"
     );
     assert!(
         !body.contains("add a crew whose executor can run on one of"),
-        "an OS-matching crew that keeps the refused model is not a way out: {body}"
+        "[ORB-25599] an OS-matching crew that keeps the refused model is not a way out: {body}"
     );
 
     let frozen = fixture.json(&["auto-task", "show", CONSUMER, "--json"]);
