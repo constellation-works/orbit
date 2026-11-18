@@ -25,8 +25,9 @@ const REPORT_PROBES: &[DoctorProbe] = &[
     DoctorProbe::many("build-budget", |runtime, _| build_budget_rows(runtime)),
     DoctorProbe::one("state-directory-permissions", |runtime, _| {
         state_directory_permissions_row(runtime)
-    }),
-    DoctorProbe::one("git-protection", |runtime, _| git_protection_row(runtime)),
+    })
+    .slow(),
+    DoctorProbe::one("git-protection", |runtime, _| git_protection_row(runtime)).slow(),
     DoctorProbe::one("worker-containment", |runtime, _| {
         worker_containment_row(runtime)
     }),
@@ -44,7 +45,7 @@ const REPORT_PROBES: &[DoctorProbe] = &[
     DoctorProbe::one("hosts", |runtime, _| {
         crate::hosts::doctor_hosts_row(&runtime.global_root())
     }),
-    DoctorProbe::many("browser-kit", |runtime, _| browser_kit_rows(runtime)),
+    DoctorProbe::many("browser-kit", |runtime, _| browser_kit_rows(runtime)).slow(),
     DoctorProbe::one("workspace-convergence", |runtime, _| {
         host_workspace_convergence_row(runtime)
     }),
@@ -161,12 +162,63 @@ pub fn doctor_report_probes() -> impl Iterator<Item = &'static DoctorProbe> {
     WORKSPACE_PROBES.iter().chain(REPORT_PROBES)
 }
 
-/// Run every check in [`doctor_report_probes`] in order. `deep` scans every
-/// database page with SQLite quick_check.
+/// Most probes `run_doctor_report` runs at once.
+const MAX_PARALLEL_PROBES: usize = 8;
+
+/// Run every check in [`doctor_report_probes`] and return their rows in
+/// report order. `deep` scans every database page with SQLite quick_check.
+///
+/// The probes are independent and read-only, so they run on a small pool of
+/// scoped threads, the probes marked slow first: the report takes about as
+/// long as its slowest probe rather than the sum of all of them. Each row
+/// still carries its own probe's time.
 pub fn run_doctor_report(runtime: &OrbitRuntime, deep: bool) -> Vec<WorkspaceDoctorResult> {
-    doctor_report_probes()
-        .flat_map(|probe| probe.run(runtime, deep))
-        .collect()
+    let probes = doctor_report_probes().collect::<Vec<_>>();
+    // Report positions in dispatch order; a stable sort keeps table order
+    // within the slow and the cheap probes.
+    let mut dispatch = (0..probes.len()).collect::<Vec<_>>();
+    dispatch.sort_by_key(|&index| !probes[index].is_slow());
+    let workers = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
+        .clamp(1, MAX_PARALLEL_PROBES)
+        .min(probes.len());
+    if workers <= 1 {
+        return probes
+            .iter()
+            .flat_map(|probe| probe.run(runtime, deep))
+            .collect();
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut slots: Vec<Option<Vec<WorkspaceDoctorResult>>> = vec![None; probes.len()];
+    let finished = std::thread::scope(|scope| {
+        let handles = (0..workers)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut done = Vec::new();
+                    loop {
+                        let turn = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(&index) = dispatch.get(turn) else {
+                            return done;
+                        };
+                        done.push((index, probes[index].run(runtime, deep)));
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+            .collect::<Vec<_>>()
+    });
+    for (index, rows) in finished.into_iter().flatten() {
+        slots[index] = Some(rows);
+    }
+    slots.into_iter().flatten().flatten().collect()
 }
 
 /// One row as `orbit doctor --json` and the dashboard's `/api/doctor` emit it.

@@ -409,7 +409,12 @@ and to delete it and run `git fsck`. `orbit doctor` (row `git-protection`) runs
 the same scan on the registered checkout, and `orbit run auto` and
 `orbit run auto --pull` run it once before submitting a drain on a host with an
 OS-sandboxed executor, so a refusing host is not admitted rather than failing
-each claimed task into `blocked`.
+each claimed task into `blocked`. The subdirectories directly under `objects/`
+(the loose-object fan-out holds nearly every metadata entry) are scanned on up
+to eight threads, each against the directory identities pinned so far; their
+results, identities and link counts are folded back in directory order, so a
+scan refuses the same first entry, and accepts the same split names of one
+inode, as a one-thread walk.
 
 Host Git operations can remove a transient entry such as `maintenance.lock`
 between directory enumeration and inspection. Preparation restarts the whole

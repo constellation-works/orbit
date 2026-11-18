@@ -618,10 +618,18 @@ fn permission_remediation_repairs_legacy_state_and_preserves_excluded_trees() {
     doctor(&f, &[]);
     let global = f.home.join(".orbit");
     let workspace = f.work.join(".orbit");
+    // A store wide enough that the scan splits its task directories across
+    // threads; the writable and excluded trees sit in different runs.
+    let wide = global.join("tasks/workspaces/wide");
+    for index in 0..80 {
+        mkdir(&wide.join(format!("ORB-{index:05}")));
+    }
     let legacy = [
         global.clone(),
         global.join("tasks"),
         global.join("tasks/workspaces/legacy/artifacts/files/validation/claim-legacy"),
+        wide.join("ORB-00003/artifacts"),
+        wide.join("ORB-00077/artifacts/files"),
         global.join("state/logs/legacy"),
         global.join("frictions/legacy"),
         workspace.clone(),
@@ -638,6 +646,7 @@ fn permission_remediation_repairs_legacy_state_and_preserves_excluded_trees() {
         global.join("state/worktrees/run/nested"),
         global.join("tasks/target"),
         global.join("tasks/target/nested"),
+        wide.join("ORB-00040/target"),
         workspace.join("state/worktrees"),
         workspace.join("state/worktrees/run/nested"),
         workspace.join("state/legacy/target"),
@@ -1396,6 +1405,23 @@ fn doctor_reports_git_protection_refusals_with_their_fix() {
     fs::hard_link(&object, object.with_file_name("tmp_obj_Ab12Cd")).expect("temp leftover");
     let paired = rows(&doctor(&f, &[]));
     expect_status(&paired, "git-protection", "ok");
+    // The fan-out directories are scanned concurrently: names of one inode
+    // split across two of them still add up to every name being in the store,
+    // while a fan-out object aliased outside `.git` is still refused.
+    let split = git.join("objects/62/tmp_obj_Ef34Gh");
+    mkdir(split.parent().unwrap());
+    fs::hard_link(&object, &split).expect("cross fan-out name");
+    expect_status(&rows(&doctor(&f, &[])), "git-protection", "ok");
+    let outside_object = f.temp.path().join("outside-object");
+    put(&outside_object, "loose object");
+    let escaped = git.join("objects/63/9e7b14c3a0f2d5e6b7c8d9e0f1a2b3c4d5e6f7a");
+    mkdir(escaped.parent().unwrap());
+    fs::hard_link(&outside_object, &escaped).expect("escaped object");
+    let escape = rows(&doctor(&f, &[]));
+    let refused = row(&escape, "git-protection");
+    assert_eq!(refused["status"], "warning", "{refused}");
+    msg_has(refused, &escaped.display().to_string());
+    fs::remove_file(&escaped).expect("remove escaped object");
     // A hook aliased to a file outside `.git` stays refused.
     let outside = f.temp.path().join("outside-hook");
     put(&outside, "#!/bin/sh\n");

@@ -126,6 +126,9 @@ pub struct DoctorProbe {
     /// expands into several rows. Names the probe when it cannot report.
     pub name: &'static str,
     check: ProbeCheck,
+    /// Walks a large tree or reads every task, so a parallel runner should
+    /// start it first: the report cannot finish before its slowest probe.
+    slow: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -142,6 +145,7 @@ impl DoctorProbe {
         Self {
             name,
             check: ProbeCheck::One(check),
+            slow: false,
         }
     }
 
@@ -152,7 +156,19 @@ impl DoctorProbe {
         Self {
             name,
             check: ProbeCheck::Many(check),
+            slow: false,
         }
+    }
+
+    /// Mark a probe whose cost grows with the workspace (a tree walk or a scan
+    /// of every task), so `run_doctor_report` starts it before the cheap ones.
+    pub(crate) const fn slow(self) -> Self {
+        Self { slow: true, ..self }
+    }
+
+    /// Whether `run_doctor_report` starts this probe before the cheap ones.
+    pub(crate) const fn is_slow(&self) -> bool {
+        self.slow
     }
 
     /// Run the check and time it. `deep` scans every database page; only the
@@ -180,7 +196,8 @@ pub(crate) const WORKSPACE_PROBES: &[DoctorProbe] = &[
     DoctorProbe::one("disk-space", |runtime, _| doctor_check_disk_space(runtime)),
     DoctorProbe::one("search-index", |runtime, _| {
         doctor_check_search_index(runtime)
-    }),
+    })
+    .slow(),
     DoctorProbe::one("stale-locks", |runtime, _| {
         doctor_check_stale_locks(runtime)
     }),
@@ -197,7 +214,8 @@ pub(crate) const WORKSPACE_PROBES: &[DoctorProbe] = &[
     }),
     DoctorProbe::one("task-relations", |runtime, _| {
         doctor_check_task_relations(runtime)
-    }),
+    })
+    .slow(),
     DoctorProbe::one("infra-blocked-tasks", |runtime, _| {
         doctor_check_infra_blocked_tasks(runtime)
     }),
@@ -209,7 +227,8 @@ pub(crate) const WORKSPACE_PROBES: &[DoctorProbe] = &[
     }),
     DoctorProbe::one("routine-freshness", |runtime, _| {
         doctor_check_routine_freshness(runtime)
-    }),
+    })
+    .slow(),
     DoctorProbe::one("review", |runtime, _| doctor_check_review(runtime)),
     DoctorProbe::one("forge-remote", |runtime, _| {
         doctor_check_forge_remote(runtime)
@@ -238,13 +257,16 @@ pub(crate) const WORKSPACE_PROBES: &[DoctorProbe] = &[
     }),
     DoctorProbe::one("store-retention", |runtime, _| {
         doctor_check_store_retention(runtime)
-    }),
+    })
+    .slow(),
     DoctorProbe::one("worktree-reclaim", |runtime, _| {
         doctor_check_worktree_reclaim(runtime)
-    }),
+    })
+    .slow(),
     DoctorProbe::many("task-bundles", |runtime, _| {
         doctor_check_unpublished_bundle_dirs(runtime).into()
-    }),
+    })
+    .slow(),
     DoctorProbe::many("artifacts", |runtime, _| {
         doctor_check_definition_artifacts(runtime)
     }),
