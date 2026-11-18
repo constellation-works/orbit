@@ -284,33 +284,39 @@ execute the bounded recovery route, handle stripped browser environments, and ve
 
 ### Distinguishing interrupted builds from failed scenarios
 
-An interrupted foreground build and a scenario failure differ in origin, observable symptoms,
-and reporting:
+An interrupted foreground build and a scenario failure differ in the last completed phase and
+the evidence available:
 
-- **Terminated foreground build**: An external signal (such as `SIGTERM`, signal 15, yielding
-  native exit status 143) or executor timeout terminates the process during candidate
-  compilation or harness initialization. Crucially, **no report is produced** (`report_produced`
-  is false), and no scenario assertions are evaluated. The failure reflects an environment or
-  process-group disruption during fresh candidate compilation (for example `last_observed_phase:
-  "isolated cargo build, orbit-core compilation"`). It is **not** evidence of a product defect
-  or candidate regression. Speculative bug tasks must not be filed for an uncompleted build.
-- **Failed scenario**: The candidate builds cleanly, source provenance passes, and scenarios
-  execute under harness supervision. Even when commands exit nonzero or assertions fail, the
-  harness completes and generates `qa-full-sweep-report.json`, recording structured `FAIL`,
-  `BLOCKED`, or `NOT_RUN` outcomes in `results[]` alongside scenario logs in `sweep-logs/`.
+- **Interrupted attempt**: The supervising command result or retained log records a signal or
+  timeout during candidate compilation or harness initialization (for example, the last observed
+  phase is `isolated cargo build, orbit-core compilation`). A shell often reports SIGTERM as status
+  143; a process wait result may report signal 15 instead. No scenario assertions have run if the
+  attempt stopped before scenario execution. The report may be absent if the harness itself was
+  terminated before finalization. If only the supervised build command exited by signal, the
+  harness can still emit a report with a failed build/provenance row and scenarios `NOT_RUN`.
+  Record whether a report was produced and inspect its build and result rows; neither an absent
+  report nor a build failure is, by itself, a scenario failure or evidence of a candidate defect.
+- **Failed scenario**: The candidate build and source provenance passed, and the affected scenario
+  actually ran under harness supervision. Its report row records the scenario outcome and command
+  evidence, with logs under `sweep-logs/`. A report can also be missing if the whole harness was
+  interrupted during scenario execution, so use the last completed phase and command logs to tell
+  whether the scenario ran.
 
 When an interrupted build occurs:
 1. Retain the attempt execution logs (for example `sweep-command.log` and `sweep-retry.log`) under
    `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`).
 2. Record the attempt metadata in a task artifact, such as `interrupted-attempts.json`, capturing
-   `source_revision`, `candidate_id` (if available), native exit code (e.g. 143), `report_produced: false`,
-   the last observed compilation phase, and retained scratch directories under `.orbit/tmp/`
-   (for example `.orbit/tmp/orbit-qa-full-<unique>`).
+   the exact command, `source_revision`, `candidate_id` (if available), the process result (signal
+   or exit status), `report_produced` and the report path if present, the last observed phase, and
+   retained scratch directories under `.orbit/tmp/` (for example
+   `.orbit/tmp/orbit-qa-full-<unique>`).
 3. If the signal sender or trigger cannot be definitively determined, record the cause honestly as
    unknown or unconfirmed (for example `"Unconfirmed external SIGTERM; not evidence of a product defect"`).
    Never invent an unverified cause, culprit daemon, or false bug finding.
-4. Inspect the post-exit process table (e.g. `pgrep -fa cargo`) to confirm that no detached or
-   orphan worker processes survived the termination before retrying.
+4. Inspect the post-exit process table for processes owned by this attempt, using its process group,
+   supervisor result and retained scratch roots to identify them. A command-name search such as
+   `pgrep -fa cargo` can find candidates, but a match alone does not establish ownership on a shared
+   host. Do not treat or terminate unrelated build processes as leftovers.
 
 ### Bounded permitted foreground route
 
@@ -353,9 +359,11 @@ Chromium and reports `NOT_RUN`.
 
 Two recovery approaches are permitted:
 
-1. **Explicit argument declaration in runner**: Source `ORBIT_BROWSER_KIT_ENV` inside the runner
-   script or resolve the paths in advance and pass them as explicit CLI arguments to
-   `qa-full-sweep.sh`:
+1. **Explicit argument declaration in runner**: Resolve the kit values before calling
+   `proc.spawn`, then put them in the runner script or pass them as runner arguments and forward
+   them as explicit CLI arguments to `qa-full-sweep.sh`. If the runner sources the kit file, give it
+   the file path explicitly (for example as a script argument); `proc.spawn` does not pass the
+   caller's `ORBIT_BROWSER_KIT_ENV` variable through:
    - `--playwright-module "$PLAYWRIGHT_MODULE"`
    - `--playwright-browsers-path "$PLAYWRIGHT_BROWSERS_PATH"`
    - `--browser-ld-library-path "$LD_LIBRARY_PATH"` (on Linux)
@@ -387,7 +395,10 @@ Before handoff, verify both report integrity and complete process cleanup withou
 or cleanup requirements:
 
 - **Report integrity**:
-  - Reopen `qa-full-sweep-report.json` and confirm `candidate.id` matches the source revision hash.
+  - Reopen `qa-full-sweep-report.json` and confirm `candidate.source_revision` matches the recorded
+    Git revision. `candidate.id` is a separate digest of that revision, the tracked diff, and
+    relevant untracked inputs; confirm result rows use that same candidate ID rather than comparing
+    it directly with the Git revision hash.
   - Check that all inventory scenarios are accounted for in `results[]` (78+ PASS, declared capability
     gaps recorded as NOT_RUN/BLOCKED).
   - Verify that `decision` is `INCOMPLETE` whenever required capability gaps (such as macOS on Linux or
@@ -400,8 +411,9 @@ or cleanup requirements:
   - Confirm `cleanup_verified` is true on all executed scenario rows and follow-up executions.
   - Check the report's `scratch_cleanup`: verify that `detached_workers` is empty, `unverified_commands`
     is empty, and `observation_complete` is true.
-  - Confirm no candidate binaries, Node processes, Chromium instances, or Cargo build processes
-    remain in the process table.
+  - Confirm no candidate binary, Node process, Chromium instance, or Cargo build process owned by
+    this sweep remains, using the supervisor's process records and the attempt's process group and
+    scratch roots. Unrelated processes on a shared host are not sweep leftovers.
   - Scratch roots from earlier interrupted attempts (e.g. `.orbit/tmp/orbit-qa-full-*`) remain ignored
     under `.orbit/tmp/` as audit evidence; verify they hold no live processes.
   - Never execute destructive cleanup (such as raw `rm -rf` on workspace paths or untracked directories);
