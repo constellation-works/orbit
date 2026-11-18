@@ -48,10 +48,8 @@ mod tasks;
 mod workspaces;
 
 use helpers::*;
-pub(crate) use host::host_error_code;
 pub(crate) use origin::{nosniff_json_responses, require_localhost_origin};
 pub(super) use routes::{request_shutdown, router};
-pub(crate) use runs::failure_root_line;
 
 #[cfg(test)]
 pub(crate) mod tests;

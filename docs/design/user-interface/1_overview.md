@@ -125,7 +125,7 @@ partial coverage. No recursive federation or workspace writes are performed.
 |---------|------|------|
 | Dashboard assets and HTTP API | `crates/orbit-web/assets/dashboard/`, `crates/orbit-web/src/api/` | Runtime tabs, tables, tiles, logs, and diagnostics. |
 | Dashboard layout | `crates/orbit-web/assets/dashboard/` | `index.html` and the `app.js` entry module at the root with the npm manifest; `js/` holds the feature modules, `css/` the stylesheets, `fonts/` the self-hosted fonts, and `vendor/` the pinned third-party libraries. Routes mirror the tree under `/static/`. |
-| Dashboard styles | `crates/orbit-web/assets/dashboard/css/` | One file per screen plus shared base, shell, and components layers; `DASHBOARD_CSS` in `lib.rs` joins them in cascade order and serves the result as `/static/dashboard.css`. |
+| Dashboard styles | `crates/orbit-web/assets/dashboard/css/` | One file per screen plus shared base, shell, and components layers; `DASHBOARD_CSS` in `assets.rs` joins them in cascade order and serves the result as `/static/dashboard.css`. |
 | CLI adapter | `crates/orbit-cli/src/command/web.rs` | Delegates `serve` and `connect` to `orbit-web`. |
 | Theme rules | `./specs/theme.md` | Canon Refined tokens and visual invariants. |
 | Workspace navigation across hosts (proposed) | `./specs/workspace-navigation.md` | One entry per logical workspace, owner routing, follower capacity lanes and a multi-workspace scope. Not implemented. |

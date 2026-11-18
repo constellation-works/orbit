@@ -2,7 +2,7 @@ use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::DASHBOARD_HOST_EDIT;
-use orbit_common::{HostRegistryCode, OrbitError, StorageLayer};
+use orbit_common::{HostRegistryCode, OrbitError};
 use orbit_registry::hosts::validated_host_root;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -10,6 +10,9 @@ use serde_json::{Value, json};
 use super::blocking;
 use super::routines::{action_capability, authorization_denied, authorized_caller};
 use crate::state::DashboardState;
+
+// Compatibility shim. Retirement: callers import `crate::state::host_error_code`.
+pub(crate) use crate::state::host_error_code;
 
 /// Always reports the serving host, without a workspace extractor or remote
 /// routing. Beside the resource sample it carries `provider_limits`: the host's
@@ -215,39 +218,6 @@ pub(super) async fn remove_host(
         }
     })
     .await
-}
-
-/// The CLI's error code for every error a host operation returns, so the
-/// dashboard reports `orbit host --json`'s typed refusals verbatim.
-pub(crate) fn host_error_code(error: &OrbitError) -> &str {
-    match error {
-        OrbitError::HostRegistry { code, .. } => code.as_str(),
-        OrbitError::HostConfiguration { .. } => "host_configuration",
-        OrbitError::InvalidInput(_)
-        | OrbitError::InvalidInputDiagnostic { .. }
-        | OrbitError::ClaimRefused { .. } => "invalid_input",
-        OrbitError::UnreachableDestination(_) => "unreachable_destination",
-        OrbitError::AmbiguousDestination(_) => "ambiguous_destination",
-        OrbitError::OutcomeUnknown { .. } => "outcome_unknown",
-        OrbitError::RemoteTool { code, .. } => code.as_str(),
-        OrbitError::ProcessTimeout { .. } => "process_timeout",
-        OrbitError::Execution(_)
-        | OrbitError::PrivateVcs(_)
-        | OrbitError::ForgeUnavailable(_)
-        | OrbitError::WorkflowEvidenceUnavailable(_)
-        | OrbitError::ExecutionTimeout { .. } => "execution_failed",
-        OrbitError::WorkspaceError(_) => "workspace_error",
-        OrbitError::Io(_)
-        | OrbitError::StorageAccessDenied {
-            layer: StorageLayer::Io,
-            ..
-        }
-        | OrbitError::StorageLockBusy {
-            layer: StorageLayer::Io,
-            ..
-        } => "io_error",
-        _ => "internal_error",
-    }
 }
 
 pub(super) fn status_for(code: &str) -> StatusCode {

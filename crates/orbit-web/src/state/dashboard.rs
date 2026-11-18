@@ -66,7 +66,7 @@ pub(super) struct StateInner {
     /// Per-server Cost page memo, keyed by live workspace runtime and window.
     cost: RuntimeMemo<String>,
     /// Host-wide routine projection, invalidated by its input stamps.
-    routines: RuntimeMemo<crate::api::routines::RoutineMemoKey>,
+    routines: RuntimeMemo<crate::runtime_memo::RoutineMemoKey>,
     /// Per-server single-flight TTL memo for audited plugin panel reads.
     /// Keyed by `(namespace, panel)`.
     plugin_panels: RuntimeMemo<(String, String)>,
@@ -654,7 +654,7 @@ impl DashboardState {
     }
 
     /// Host-wide routine memo shared even across different selected workspaces.
-    pub(crate) fn routines_memo(&self) -> &RuntimeMemo<crate::api::routines::RoutineMemoKey> {
+    pub(crate) fn routines_memo(&self) -> &RuntimeMemo<crate::runtime_memo::RoutineMemoKey> {
         &self.inner.routines
     }
 

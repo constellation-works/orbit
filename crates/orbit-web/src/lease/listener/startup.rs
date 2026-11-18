@@ -73,7 +73,7 @@ pub fn serve_lease_listener(
         .build()
         .map_err(|error| OrbitError::Execution(format!("lease listener runtime: {error}")))?;
     runtime.block_on(async move {
-        let shutdown = crate::serve::shutdown_signal()?;
+        let shutdown = crate::shutdown::shutdown_signal()?;
         let listener = tokio::net::TcpListener::bind(config.bind)
             .await
             .map_err(|error| {

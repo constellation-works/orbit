@@ -25,9 +25,10 @@
 
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use axum::http::{HeaderName, header};
 use orbit_core::{OrbitError, OrbitRuntime};
@@ -85,6 +86,35 @@ impl<V> Served<V> {
     /// than a body field because the friction payload is a bare JSON array.
     pub(crate) fn age_header(&self) -> [(HeaderName, String); 1] {
         [(header::AGE, self.age.as_secs().to_string())]
+    }
+}
+
+/// Host-wide cache key: selection does not restrict the host's routine list.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub(crate) struct RoutineMemoKey {
+    inputs: Vec<(PathBuf, Option<(SystemTime, u64)>)>,
+    /// Routine fire, cursor, pause and automation rows in the shared audit
+    /// database. Not the database's file stamp, which every unrelated audit
+    /// write moves.
+    routine_store: Option<String>,
+    include_inactive_plugins: bool,
+    operator: bool,
+}
+
+impl RoutineMemoKey {
+    /// Key from stamped definition inputs, the routine-store token and the request flags.
+    pub(crate) fn from_stamped_inputs(
+        inputs: Vec<(PathBuf, Option<(SystemTime, u64)>)>,
+        routine_store: Option<String>,
+        include_inactive_plugins: bool,
+        operator: bool,
+    ) -> Self {
+        Self {
+            inputs,
+            routine_store,
+            include_inactive_plugins,
+            operator,
+        }
     }
 }
 

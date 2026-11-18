@@ -1,6 +1,6 @@
 use std::future::{Future, IntoFuture};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,7 +13,6 @@ use clap::Args;
 use orbit_cmd::registry_runtime;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
-use orbit_types::workspace::{WorkspaceRegistry, WorkspaceStatus};
 use tokio::sync::Notify;
 use tower_http::compression::CompressionLayer;
 
@@ -21,10 +20,10 @@ use tower_http::compression::CompressionLayer;
 use crate::lease_intake;
 use crate::{api, assets, health, heap, state};
 
-/// Conventional loopback port for the dashboard. Shared by `web serve`'s
-/// `--port` default and `web connect`'s local/remote port preference so the
-/// two surfaces agree on one number.
-pub(crate) const DEFAULT_DASHBOARD_PORT: u16 = 7878;
+// Compatibility shims for names serve still calls. Retirement: import `connect`
+// and `shutdown` at the call sites, then drop these re-exports.
+pub(crate) use crate::connect::{DEFAULT_DASHBOARD_PORT, open_browser};
+pub(crate) use crate::shutdown::shutdown_signal;
 
 /// Arguments for `orbit web serve` (and the library entry point).
 #[derive(Args, Clone)]
@@ -116,8 +115,8 @@ pub fn serve_from_env(args: ServeArgs, root_override: Option<&Path>) -> Result<(
 /// in priority order: the registered/active workspace matching
 /// `workspace_selector` (an explicit
 /// `--workspace`), else the registered workspace containing the cwd (see
-/// [`default_workspace_for_cwd`]), else "All workspaces". See
-/// [`default_workspace_selection`] for the precedence logic.
+/// `state::registry::default_workspace_for_cwd`), else "All workspaces". See
+/// `state::registry::default_workspace_selection` for the precedence logic.
 ///
 /// The initial load is eager: a malformed registry at startup is fatal, exactly
 /// as before this became refreshable. A malformed *refresh* after a good
@@ -135,85 +134,6 @@ pub(crate) fn build_state(
         cwd,
     );
     state::DashboardState::from_registry(global_root, source)
-}
-
-/// Best-effort default when serving globally: the registered workspace whose
-/// repo root is the longest prefix of `cwd`, if the server was launched inside
-/// one. `None` means the frontend opens on the aggregate "all workspaces" view.
-pub(crate) fn default_workspace_for_cwd(
-    registry: &WorkspaceRegistry,
-    cwd: &Path,
-) -> Option<String> {
-    workspace_registry::local_workspaces(registry)
-        .filter(|(workspace, _)| workspace.status == WorkspaceStatus::Active)
-        .filter_map(|(workspace, checkout)| {
-            std::iter::once(&checkout.repo_root)
-                .chain(&checkout.path_overrides)
-                .filter(|candidate| cwd.starts_with(candidate))
-                .map(|candidate| candidate.as_os_str().len())
-                .max()
-                .map(|prefix_len| (workspace, prefix_len))
-        })
-        .max_by_key(|(_, prefix_len)| *prefix_len)
-        .map(|(workspace, _)| workspace.id.clone())
-}
-
-/// Precedence logic for the dropdown's default-preselected workspace: an
-/// explicit `workspace_selector` (the `--workspace` flag) always wins over
-/// `cwd` when given, even if it does not resolve to any registered/active
-/// workspace — in that case the result is `None` ("All workspaces"), not a
-/// fallback to the cwd-based default. This matches [`default_workspace_for_cwd`]:
-/// don't error, don't auto-register, just prefer the aggregate view.
-///
-/// The selector is a registered name or logical `ws_*` ID first, and a local
-/// checkout path when it is path-shaped
-/// ([`registry_runtime::selector_looks_like_path`]); a path is matched the
-/// same way a cwd is (longest registered prefix), which is what `orbit web
-/// connect` forwards for a remote workspace directory. An unknown bare name is
-/// never joined to cwd — that would preselect the cwd's workspace for a
-/// selector that matched nothing. `workspace_selector` not being given falls
-/// back to the existing cwd-based behavior unchanged.
-pub(crate) fn default_workspace_selection(
-    registry: &WorkspaceRegistry,
-    workspace_selector: Option<&str>,
-    cwd: Option<&Path>,
-) -> Option<String> {
-    match workspace_selector {
-        Some(selector) => workspace_registry::resolve_logical_workspace(registry, selector)
-            .ok()
-            .filter(|workspace| workspace.status == WorkspaceStatus::Active)
-            .map(|workspace| workspace.id.clone())
-            .or_else(|| {
-                if !registry_runtime::selector_looks_like_path(selector) {
-                    return None;
-                }
-                let path = resolve_selector_path(Path::new(selector), cwd);
-                default_workspace_for_cwd(registry, &path)
-            }),
-        None => cwd.and_then(|cwd| default_workspace_for_cwd(registry, cwd)),
-    }
-}
-
-/// Normalize a path-shaped `--workspace <selector>` value so it can be
-/// prefix-matched against registered workspace roots (which are canonical
-/// absolute paths after the pipeline's canonicalization; see
-/// `orbit-runtime/src/builder.rs`).
-///
-/// Relative paths are resolved against `cwd` before canonicalization. If
-/// canonicalization fails (path may not exist, or symlink resolution errors),
-/// return the pre-canonical absolute path so behavior for nonexistent paths is
-/// preserved: a raw lexical prefix comparison against a stale/nonexistent path
-/// just misses, which is the existing "All workspaces" fallback.
-fn resolve_selector_path(selector: &Path, cwd: Option<&Path>) -> PathBuf {
-    let absolute = if selector.is_absolute() {
-        selector.to_path_buf()
-    } else {
-        match cwd {
-            Some(cwd) => cwd.join(selector),
-            None => selector.to_path_buf(),
-        }
-    };
-    absolute.canonicalize().unwrap_or(absolute)
 }
 
 /// Upper bound on graceful connection drain once a shutdown signal (ctrl-c or
@@ -561,54 +481,4 @@ pub(crate) fn check_bindable_host(host: IpAddr, port: u16) -> Result<(), OrbitEr
          and use an authenticated tunnel/reverse proxy (e.g. \
          `ssh -L {port}:localhost:{port} <host>`) for remote access."
     )))
-}
-
-/// Prepare shutdown notification, installing Unix handlers before returning.
-pub(crate) fn shutdown_signal() -> Result<impl Future<Output = ()> + Send, OrbitError> {
-    #[cfg(unix)]
-    let mut interrupt =
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-            .map_err(|error| OrbitError::Execution(format!("install SIGINT handler: {error}")))?;
-    #[cfg(unix)]
-    let ctrl_c = async move {
-        interrupt.recv().await;
-    };
-
-    #[cfg(not(unix))]
-    let ctrl_c = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
-
-    #[cfg(unix)]
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .map_err(|error| OrbitError::Execution(format!("install SIGTERM handler: {error}")))?;
-    #[cfg(unix)]
-    let terminate = async move {
-        sigterm.recv().await;
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    Ok(async move {
-        tokio::select! {
-            _ = ctrl_c => {}
-            _ = terminate => {}
-        }
-    })
-}
-
-pub(crate) fn open_browser(url: &str) {
-    #[cfg(target_os = "macos")]
-    let cmd = "open";
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let cmd = "xdg-open";
-    #[cfg(windows)]
-    let cmd = "explorer";
-
-    let _ = std::process::Command::new(cmd)
-        .arg(url)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
 }

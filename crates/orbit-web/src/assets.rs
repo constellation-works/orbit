@@ -9,12 +9,42 @@ use axum::routing::get;
 use flate2::{Compression, write::GzEncoder};
 use orbit_core::OrbitError;
 
-use crate::{DASHBOARD_CSS, state};
+use crate::state;
 
 const HTML: &str = "text/html; charset=utf-8";
 const CSS: &str = "text/css; charset=utf-8";
 const JS: &str = "application/javascript; charset=utf-8";
 const WOFF2: &str = "font/woff2";
+
+/// The dashboard stylesheet, served as one file from per-screen sources.
+/// Order is cascade order: at equal specificity a later file wins, so shared
+/// layers come first and a file that refines another comes after it.
+pub(crate) const DASHBOARD_CSS: &str = concat!(
+    include_str!("../assets/dashboard/css/base.css"),
+    include_str!("../assets/dashboard/css/shell.css"),
+    include_str!("../assets/dashboard/css/components.css"),
+    include_str!("../assets/dashboard/css/tasks.css"),
+    include_str!("../assets/dashboard/css/task-detail.css"),
+    include_str!("../assets/dashboard/css/markdown.css"),
+    include_str!("../assets/dashboard/css/runs.css"),
+    include_str!("../assets/dashboard/css/run-detail.css"),
+    include_str!("../assets/dashboard/css/dock.css"),
+    include_str!("../assets/dashboard/css/log-tail.css"),
+    include_str!("../assets/dashboard/css/audit.css"),
+    include_str!("../assets/dashboard/css/health.css"),
+    include_str!("../assets/dashboard/css/forecast.css"),
+    include_str!("../assets/dashboard/css/experiments.css"),
+    include_str!("../assets/dashboard/css/scoreboard.css"),
+    include_str!("../assets/dashboard/css/agents.css"),
+    include_str!("../assets/dashboard/css/knowledge.css"),
+    include_str!("../assets/dashboard/css/automation.css"),
+    include_str!("../assets/dashboard/css/drain.css"),
+    include_str!("../assets/dashboard/css/settings.css"),
+    include_str!("../assets/dashboard/css/fleet.css"),
+    include_str!("../assets/dashboard/css/plugins.css"),
+    include_str!("../assets/dashboard/css/leases.css"),
+    include_str!("../assets/dashboard/css/notices.css"),
+);
 
 /// Every embedded dashboard file as `(route, content type, body)`.
 // L-0021: Keep embedded dashboard modules in sync with the files they import.

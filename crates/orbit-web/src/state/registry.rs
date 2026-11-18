@@ -1,5 +1,8 @@
 use super::*;
 
+use orbit_cmd::registry_runtime;
+use orbit_types::workspace::WorkspaceRegistry;
+
 /// Where a refresh reloads the servable workspace set from. Present only in the
 /// registry-backed mode built by [`crate::serve::build_state`].
 /// [`DashboardState::single`] leaves it `None`, making
@@ -164,7 +167,7 @@ impl RegistrySource {
             })
             .collect();
         self.report_unavailable(unavailable);
-        let default_workspace = crate::default_workspace_selection(
+        let default_workspace = default_workspace_selection(
             &registry,
             self.workspace_selector.as_deref(),
             self.cwd.as_deref(),
@@ -195,4 +198,83 @@ impl RegistrySource {
             failure.warn();
         }
     }
+}
+
+/// Best-effort default when serving globally: the registered workspace whose
+/// repo root is the longest prefix of `cwd`, if the server was launched inside
+/// one. `None` means the frontend opens on the aggregate "all workspaces" view.
+pub(crate) fn default_workspace_for_cwd(
+    registry: &WorkspaceRegistry,
+    cwd: &Path,
+) -> Option<String> {
+    workspace_registry::local_workspaces(registry)
+        .filter(|(workspace, _)| workspace.status == WorkspaceStatus::Active)
+        .filter_map(|(workspace, checkout)| {
+            std::iter::once(&checkout.repo_root)
+                .chain(&checkout.path_overrides)
+                .filter(|candidate| cwd.starts_with(candidate))
+                .map(|candidate| candidate.as_os_str().len())
+                .max()
+                .map(|prefix_len| (workspace, prefix_len))
+        })
+        .max_by_key(|(_, prefix_len)| *prefix_len)
+        .map(|(workspace, _)| workspace.id.clone())
+}
+
+/// Precedence logic for the dropdown's default-preselected workspace: an
+/// explicit `workspace_selector` (the `--workspace` flag) always wins over
+/// `cwd` when given, even if it does not resolve to any registered/active
+/// workspace — in that case the result is `None` ("All workspaces"), not a
+/// fallback to the cwd-based default. This matches [`default_workspace_for_cwd`]:
+/// don't error, don't auto-register, just prefer the aggregate view.
+///
+/// The selector is a registered name or logical `ws_*` ID first, and a local
+/// checkout path when it is path-shaped
+/// ([`registry_runtime::selector_looks_like_path`]); a path is matched the
+/// same way a cwd is (longest registered prefix), which is what `orbit web
+/// connect` forwards for a remote workspace directory. An unknown bare name is
+/// never joined to cwd — that would preselect the cwd's workspace for a
+/// selector that matched nothing. `workspace_selector` not being given falls
+/// back to the existing cwd-based behavior unchanged.
+pub(crate) fn default_workspace_selection(
+    registry: &WorkspaceRegistry,
+    workspace_selector: Option<&str>,
+    cwd: Option<&Path>,
+) -> Option<String> {
+    match workspace_selector {
+        Some(selector) => workspace_registry::resolve_logical_workspace(registry, selector)
+            .ok()
+            .filter(|workspace| workspace.status == WorkspaceStatus::Active)
+            .map(|workspace| workspace.id.clone())
+            .or_else(|| {
+                if !registry_runtime::selector_looks_like_path(selector) {
+                    return None;
+                }
+                let path = resolve_selector_path(Path::new(selector), cwd);
+                default_workspace_for_cwd(registry, &path)
+            }),
+        None => cwd.and_then(|cwd| default_workspace_for_cwd(registry, cwd)),
+    }
+}
+
+/// Normalize a path-shaped `--workspace <selector>` value so it can be
+/// prefix-matched against registered workspace roots (which are canonical
+/// absolute paths after the pipeline's canonicalization; see
+/// `orbit-runtime/src/builder.rs`).
+///
+/// Relative paths are resolved against `cwd` before canonicalization. If
+/// canonicalization fails (path may not exist, or symlink resolution errors),
+/// return the pre-canonical absolute path so behavior for nonexistent paths is
+/// preserved: a raw lexical prefix comparison against a stale/nonexistent path
+/// just misses, which is the existing "All workspaces" fallback.
+fn resolve_selector_path(selector: &Path, cwd: Option<&Path>) -> PathBuf {
+    let absolute = if selector.is_absolute() {
+        selector.to_path_buf()
+    } else {
+        match cwd {
+            Some(cwd) => cwd.join(selector),
+            None => selector.to_path_buf(),
+        }
+    };
+    absolute.canonicalize().unwrap_or(absolute)
 }

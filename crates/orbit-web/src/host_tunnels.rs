@@ -37,7 +37,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::watch;
 
-use crate::DEFAULT_DASHBOARD_PORT;
+use crate::connect::DEFAULT_DASHBOARD_PORT;
 use crate::ssh_tunnel::{self, SshTunnel, TunnelOrigin, TunnelSpec, Unattended};
 
 /// `ssh -o ConnectTimeout`: how long the TCP connect to a host may take.
