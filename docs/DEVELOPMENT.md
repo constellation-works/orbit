@@ -1286,8 +1286,8 @@ The workspace chrono exceptions were assessed on 2026-11-18. **Orbit dependency 
 
 | Advisory | Dependency chain and constraint |
 | --- | --- |
-| [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543.html) | Root: Orbit crates use `chrono 0.4.43` directly; `rmcp`, `rusqlite` and `schemars` also depend on it as normal dependencies; `orbit-automation -> cel 0.15.0 -> chrono` and `orbit-automation -> croner 3.0.1 -> chrono` also retain it. All chrono versions are affected, so there is no patched release to select. |
-| [RUSTSEC-2026-0555](https://rustsec.org/advisories/RUSTSEC-2026-0555.html) | `orbit-automation -> cel 0.15.0 -> chrono-tz 0.10.4` and `orbit-automation -> chrono-tz 0.10.4` in scheduling test fixtures. No safe chrono-tz upgrade is available; removal requires migrating both remaining uses. |
+| [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543.html) | Root: Orbit crates use `chrono 0.4.43` directly; `rmcp`, `rusqlite` and `schemars` also depend on it as normal dependencies; `orbit-automation -> cel 0.15.0 -> chrono` also retains it. `croner` is built without its `chrono` feature, so it adds no chrono edge. All chrono versions are affected, so there is no patched release to select. |
+| [RUSTSEC-2026-0555](https://rustsec.org/advisories/RUSTSEC-2026-0555.html) | `orbit-automation -> cel 0.15.0 -> chrono-tz 0.10.4` (the `cel` `chrono` feature behind CEL temporal values) is the only chain; the scheduling test fixtures evaluate DST in host-local time instead. No safe chrono-tz upgrade is available; removal requires migrating CEL temporal evaluation. |
 
 ## Vendored dashboard JavaScript
 

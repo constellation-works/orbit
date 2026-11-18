@@ -68,12 +68,14 @@ base64 = "0.23"
 cel = { version = "0.15", default-features = false, features = ["chrono"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 chrono = { version = "0.4", features = ["serde"] }
-chrono-tz = "0.10"
 # `string` lets a command or argument be built from an owned `String`, which
 # the plugin-derived `orbit <ns> <verb>` groups need: their names come from
 # installed manifests at startup, not from literals in this source tree.
 clap = { version = "4.5", features = ["derive", "env", "string", "wrap_help"] }
-croner = "3"
+# Default features off: the `chrono` backend feature is replaced by
+# orbit-automation's own `CronDateTime` adapter over its chrono types, so croner
+# carries no time-library edge of its own [ORB-25521].
+croner = { version = "4.0.3", default-features = false }
 flate2 = "1"
 fs2 = "0.4"
 futures-core = "0.3"

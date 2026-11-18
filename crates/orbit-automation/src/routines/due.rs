@@ -17,8 +17,11 @@
 
 use chrono::{DateTime, Duration, Local, TimeZone, Timelike, Utc};
 use croner::Cron;
+use croner::parser::CronParser;
 use orbit_common::OrbitError;
 use orbit_types::workflow::MissedRunPolicy;
+
+use super::cron_instant::CronInstant;
 
 /// How far past its scheduled slot a fire still counts as "natural" for
 /// `missed_run: skip` at the default 60-second sweep cadence. Two sweep
@@ -92,10 +95,45 @@ pub fn truncate_to_minute<Tz: TimeZone>(value: DateTime<Tz>) -> DateTime<Tz> {
 
 /// Parse and validate a routine cron expression (standard 5-field form,
 /// evaluated in host-local time by the caller's choice of `Tz`).
+///
+/// The accepted step forms are the ones stored definitions have always used:
+/// `*/n`, `a-b/n` and the single-start `a/n` (from `a` to the field's end).
+/// A step with no start at all (`/n`) stays refused.
 pub fn parse_cron(expression: &str) -> Result<Cron, OrbitError> {
-    expression.parse::<Cron>().map_err(|error| {
-        OrbitError::InvalidInput(format!("invalid cron expression '{expression}': {error}"))
-    })
+    let invalid = |reason: &dyn std::fmt::Display| {
+        OrbitError::InvalidInput(format!("invalid cron expression '{expression}': {reason}"))
+    };
+    let startless_step = expression
+        .split_whitespace()
+        .flat_map(|field| field.split(','))
+        .find(|item| item.starts_with('/'));
+    if let Some(item) = startless_step {
+        return Err(invalid(&format_args!(
+            "step '{item}' has no starting point; use '*{item}' for a wildcard step"
+        )));
+    }
+    CronParser::builder()
+        .sloppy_ranges(true)
+        .build()
+        .parse(expression)
+        .map_err(|error| invalid(&error))
+}
+
+/// The next occurrence strictly after `start`.
+fn find_next<Tz: TimeZone>(cron: &Cron, start: &DateTime<Tz>) -> Result<DateTime<Tz>, OrbitError> {
+    cron.find_next_occurrence(&CronInstant(start.clone()), false)
+        .map(|found| found.0)
+        .map_err(|error| OrbitError::InvalidInput(format!("cron evaluation failed: {error}")))
+}
+
+/// The latest occurrence at or before `start`.
+fn find_previous<Tz: TimeZone>(
+    cron: &Cron,
+    start: &DateTime<Tz>,
+) -> Result<DateTime<Tz>, OrbitError> {
+    cron.find_previous_occurrence(&CronInstant(start.clone()), true)
+        .map(|found| found.0)
+        .map_err(|error| OrbitError::InvalidInput(format!("cron evaluation failed: {error}")))
 }
 
 /// The next scheduled occurrence strictly after `now`, pinned to its minute.
@@ -108,9 +146,7 @@ pub fn next_occurrence<Tz: TimeZone>(
     cron: &Cron,
     now: &DateTime<Tz>,
 ) -> Result<DateTime<Tz>, OrbitError> {
-    let next = cron
-        .find_next_occurrence(now, false)
-        .map_err(|error| OrbitError::InvalidInput(format!("cron evaluation failed: {error}")))?;
+    let next = find_next(cron, now)?;
 
     // croner carries `now`'s sub-minute component into the occurrence it
     // returns, which would move the projection on every poll within the same
@@ -181,9 +217,7 @@ pub fn due_decision_with_grace<Tz: TimeZone>(
     natural_slot_grace: Duration,
 ) -> Result<DueDecision<Tz>, OrbitError> {
     // Latest scheduled slot at or before now.
-    let previous = cron
-        .find_previous_occurrence(now, true)
-        .map_err(|error| OrbitError::InvalidInput(format!("cron evaluation failed: {error}")))?;
+    let previous = find_previous(cron, now)?;
     // croner carries `now`'s sub-minute component into the occurrence it
     // returns, which would make the slot different on every sweep within the
     // same minute — breaking the (name, slot) idempotency key. 5-field cron
@@ -236,9 +270,7 @@ pub fn missed_slots_through<Tz: TimeZone>(
         return Ok(MissedSlotWalk { slots, more });
     }
     loop {
-        let next = cron.find_next_occurrence(&cursor, false).map_err(|error| {
-            OrbitError::InvalidInput(format!("cron evaluation failed: {error}"))
-        })?;
+        let next = find_next(cron, &cursor)?;
         let next = truncate_to_minute(next);
         if next <= cursor {
             return Err(OrbitError::InvalidInput(
