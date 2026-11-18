@@ -623,7 +623,7 @@ def others_alive():
     return any(pid != me for pid, _ in members)
 
 reaped_status = {}
-term_watch = {"after_term": "missing", "reaped_by": "", "unverified": 0}
+term_watch = {"after_term": "missing", "reaped_by": "", "unverified": 0, "descendant_term": "missing"}
 
 def note_reap(pid, status):
     if pid > 0:
@@ -720,23 +720,42 @@ def signal_confirmed(pid, starttime, pgid, sig):
 
 def signal_others(sig):
     # Every refused or unobservable delivery is counted as unverified cleanup.
+    # Returns {pid: result} for the observed members (excluding this process),
+    # so callers can require delivery to a watched PID instead of assuming a
+    # later KILL proves the earlier TERM was sent.
     pgid = os.getpgrp()
     members = group_members(pgid)
     if members is None:
         term_watch["unverified"] += 1
-        return False
+        return {}
     me = os.getpid()
+    results = {}
     for pid, starttime in members:
-        if pid != me and signal_confirmed(pid, starttime, pgid, sig) == "unverified":
+        if pid == me:
+            continue
+        result = signal_confirmed(pid, starttime, pgid, sig)
+        results[pid] = result
+        if result == "unverified":
             term_watch["unverified"] += 1
-    return True
+    return results
 
 def finish(proc, rc, descendant_pid):
     # Polite signal, bounded grace, then SIGKILL. A membership probe that
     # cannot answer counts as survival. Skip this process: it is the reaper.
     # Sample the descendant after SIGTERM and before any SIGKILL, so a child
     # that died from the first signal cannot be reported as escalated.
-    signal_others(signal.SIGTERM)
+    # Record whether TERM reached the watched descendant: a later KILL must
+    # not stand in for a missed TERM.
+    term_results = signal_others(signal.SIGTERM)
+    if not descendant_pid:
+        term_watch["descendant_term"] = "missing"
+    elif descendant_pid in term_results:
+        term_watch["descendant_term"] = term_results[descendant_pid]
+    elif descendant_liveness(descendant_pid) == "gone":
+        term_watch["descendant_term"] = "gone"
+    else:
+        term_watch["descendant_term"] = "unverified"
+        term_watch["unverified"] += 1
     if rc is None:
         try:
             rc = proc.wait(timeout=0.5)
@@ -823,6 +842,7 @@ print(f"child_state={child_state}")
 print(f"descendant_pid={descendant or ''}")
 print(f"descendant_state={descendant_state}")
 print(f"descendant_ignores_term={descendant_ignores_term}")
+print(f"descendant_term={term_watch['descendant_term']}")
 print(f"descendant_after_term={term_watch['after_term']}")
 print(f"descendant_reaped_by={term_watch['reaped_by']}")
 print(f"child_after={after(child)}")
@@ -1013,6 +1033,11 @@ sys.stdout.flush()
             field("descendant_ignores_term="),
             "1",
             "{boundary}: descendant must ignore SIGTERM before teardown: {stdout} {stderr}"
+        );
+        assert_eq!(
+            field("descendant_term="),
+            "sent",
+            "{boundary}: SIGTERM was not sent to the recorded descendant: {stdout} {stderr}"
         );
         assert_eq!(
             field("descendant_after_term="),
