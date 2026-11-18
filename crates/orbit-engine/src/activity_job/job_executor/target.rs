@@ -1,5 +1,6 @@
 use super::reviewer::ReviewerInvocation;
 use super::*;
+use crate::activity_job::DECLARED_FAILURE_EVIDENCE_KEY;
 use orbit_types::workflow::{AGENT_IMPLEMENT_ACTIVITY, IMPLEMENT_ONE_STEP_ID};
 
 /// Run-input keys the executor owns and hands every nested target of the
@@ -677,30 +678,18 @@ fn apply_implementer_blocker(
     let Some(code) = failure_code else {
         return (success, message);
     };
-    let Some(text) = message.as_deref() else {
+    let Some(evidence) = output
+        .get(DECLARED_FAILURE_EVIDENCE_KEY)
+        .and_then(Value::as_str)
+    else {
         return (success, message);
     };
-    if text.contains("declared envelope status=\"timeout\"") {
-        return (success, message);
-    }
-    let evidence = declared_failure_evidence(text);
     let Some(blocker) =
         orbit_types::workflow::agent_blocker_from_declared_failure(code.as_str(), evidence)
     else {
         return (success, message);
     };
     (false, Some(blocker.step_failure_message()))
-}
-
-/// The `error.message` a declared-failure diagnostic carries, as the
-/// blocker's evidence. The diagnostic renders as
-/// `... error.code=<code>; error.message=<message>`; a message without that
-/// fragment is itself the evidence.
-fn declared_failure_evidence(message: &str) -> &str {
-    match message.split_once("error.message=") {
-        Some((_, evidence)) => evidence.trim(),
-        None => message.trim(),
-    }
 }
 
 fn is_implementer_step(step: &JobV2Step, target: &TargetStep) -> bool {

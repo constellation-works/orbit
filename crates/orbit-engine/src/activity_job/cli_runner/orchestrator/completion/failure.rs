@@ -66,6 +66,7 @@ pub(super) struct CompletionFailure {
     pub(super) message: Option<String>,
     pub(super) failure_class: Option<ProviderFailureClass>,
     pub(super) failure_code: Option<StepFailureCode>,
+    pub(super) declared_failure_evidence: Option<String>,
     pub(super) observed_limit: Option<(ProviderLimitFailure, String)>,
 }
 
@@ -106,6 +107,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
     // [ORB-14695] The usage limit the failure reports, with the provider's
     // own words, for the host's provider-limit store.
     let mut failure_class = None;
+    let mut declared_failure_evidence = None;
     let mut observed_limit: Option<(ProviderLimitFailure, String)> = None;
     let mut limit_failure = |text: &str, prefix: &str| {
         let reported = bounded_diagnostic(text, redaction);
@@ -453,6 +455,14 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
     } else if (spec.require_completion_envelope || spec.require_response_envelope)
         && matches!(envelope_status.as_deref(), Some("failed") | Some("timeout"))
     {
+        // Reaching this branch means the envelope itself supplied the failure.
+        // Keep its evidence separate from provider errors and timeout envelopes.
+        if let Some(failure) = declared_failure.as_ref()
+            && failure.status == "failed"
+            && let Some(error) = &failure.error
+        {
+            declared_failure_evidence = Some(bounded_diagnostic(&error.message, redaction));
+        }
         Some(with_sandbox_write_attribution(
             declared_failure_diagnostic(
                 envelope_status.as_deref().unwrap_or("unknown"),
@@ -501,6 +511,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
             declared_failure_code(declared_failure.as_ref())
                 .filter(|code| *code != StepFailureCode::MuseModelAccessRefused)
         },
+        declared_failure_evidence,
         observed_limit,
     }
 }
