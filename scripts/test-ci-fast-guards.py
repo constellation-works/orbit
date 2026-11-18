@@ -3226,6 +3226,32 @@ class ScriptFailClosedTests(unittest.TestCase):
         self.assertNotIn("ORB-999", result.stderr)
         self.assertIn("crates/example/src/lib.rs", result.stderr)
 
+    def test_public_ids_after_multiline_test_module_text_are_rejected(self):
+        guard = self.root / "scripts/check-public-artifact-ids.py"
+        shutil.copy2(SCRIPTS / guard.name, guard)
+        source = self.root / "crates/fixture/src/lib.rs"
+        source.parent.mkdir(parents=True)
+        source.write_text('''#[cfg(test)]
+mod actual_tests {
+    const _LABEL: &str = "ORB-123456";
+}
+
+pub fn production() {
+    {
+        let _example = "
+#[cfg(test)]
+mod fixtures {
+";
+    }
+    println!("ORB-999999");
+}
+''')
+        result = subprocess.run([sys.executable, str(guard)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("crates/fixture/src/lib.rs:13:", result.stderr)
+        self.assertIn("ORB-999999", result.stderr)
+        self.assertNotIn("ORB-123456", result.stderr)
+
     def test_public_ids_inside_multiline_strings_are_rejected(self):
         guard = self.root / "scripts/check-public-artifact-ids.py"
         shutil.copy2(SCRIPTS / guard.name, guard)
