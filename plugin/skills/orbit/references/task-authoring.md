@@ -507,7 +507,8 @@ A body-only tool edit that keeps the name, verbs, placement and id route
 declares none of these four companions.
 
 The fifth companion is the handwritten per-role MCP surface budget
-(`mcp_role_budgets.json`), read by `role_surface_budget` in `role_surface.rs`.
+(`mcp_role_budgets.json`, in the `orbit-mcp` crate's `tests/boundary/`
+directory), read by `role_surface_budget` in `role_surface.rs`.
 Locate it at the revision being scoped with `rg --files -g 'mcp_role_budgets.json'`,
 verify the matching include in `role_surface.rs`, and declare its exact
 workspace-relative path as a `file:` selector. Its ceilings bound each role's
