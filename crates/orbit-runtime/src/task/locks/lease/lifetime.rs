@@ -5,7 +5,7 @@
 use std::time::Instant;
 
 use orbit_common::OrbitError;
-use orbit_common::fs::git::run_git;
+use orbit_common::fs::git::{GitAncestry, git_ancestry};
 use orbit_store::contracts::{LeaseRecord, LeaseReleaseParams, TaskReservationReleaseReason};
 use orbit_types::telemetry::AuditEventStatus;
 use serde_json::json;
@@ -82,13 +82,12 @@ fn lease_landing(
     }
     let branch = format!("refs/heads/{binding}");
     let base_ref = format!("refs/heads/{base}");
-    let answer = run_git(repo, &["merge-base", "--is-ancestor", &branch, &base_ref])?;
-    match answer.code {
-        Some(0) => Ok(Some(json!({"branch": binding, "base": base}))),
-        Some(1) => Ok(None),
-        _ => Err(OrbitError::Execution(format!(
+    match git_ancestry(repo, &branch, &base_ref)? {
+        GitAncestry::Ancestor => Ok(Some(json!({"branch": binding, "base": base}))),
+        GitAncestry::NotAncestor => Ok(None),
+        GitAncestry::Unanswered { stderr, .. } => Err(OrbitError::Execution(format!(
             "lease ancestry check failed: {}",
-            answer.stderr.trim()
+            stderr.trim()
         ))),
     }
 }

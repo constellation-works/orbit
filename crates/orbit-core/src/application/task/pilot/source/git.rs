@@ -7,8 +7,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::git::{
-    GIT_FETCH_CAS_ATTEMPTS, git_fetch_cas_retry_delay, run_git, run_git_within,
-    should_retry_git_ref_cas, try_with_git_fetch_lock,
+    GIT_FETCH_CAS_ATTEMPTS, GitAncestry, git_ancestry, git_fetch_cas_retry_delay, run_git,
+    run_git_within, should_retry_git_ref_cas, try_with_git_fetch_lock,
 };
 use orbit_engine::DispatchError;
 use orbit_types::plugin::is_full_commit_id;
@@ -201,12 +201,9 @@ pub(super) fn publish_remote_tracking_ref(workspace: &Path, branch: &str, revisi
         let expected = match current.as_deref() {
             Some(current) if current == revision => return Ok(()),
             Some(current) => {
-                let ancestor = run_git(
-                    workspace,
-                    &["merge-base", "--is-ancestor", current, revision],
-                )
-                .map_err(|error| FetchLockError::Git(error.to_string()))?;
-                if !ancestor.success {
+                let ancestor = git_ancestry(workspace, current, revision)
+                    .map_err(|error| FetchLockError::Git(error.to_string()))?;
+                if ancestor != GitAncestry::Ancestor {
                     return Ok(());
                 }
                 current.to_string()

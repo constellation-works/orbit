@@ -3,7 +3,9 @@
 use std::path::Path;
 use std::process::Command;
 
-use orbit_common::fs::git::{GIT_REMOTE_TIMEOUT, run_git, with_git_fetch_lock};
+use orbit_common::fs::git::{
+    GIT_REMOTE_TIMEOUT, GitAncestry, git_ancestry, run_git, with_git_fetch_lock,
+};
 use orbit_common::process::run_bounded_capped;
 
 const REMOTE_REF_REFRESH_OUTPUT_LIMIT: usize = 16 * 1024;
@@ -37,9 +39,9 @@ pub(super) fn verify_on_base(
         .map_err(|error| format!("{error}; no refresh fetch was performed"))?;
     let base = resolve(base_ref, "base ref")
         .map_err(|error| format!("{error}; no refresh fetch was performed"))?;
-    let ancestor = run_git(repo_root, &["merge-base", "--is-ancestor", &commit, &base])
+    let ancestor = git_ancestry(repo_root, &commit, &base)
         .map_err(|error| format!("{error}; no refresh fetch was performed"))?;
-    if ancestor.success {
+    if ancestor == GitAncestry::Ancestor {
         Ok(commit)
     } else {
         let unreachable =
@@ -67,17 +69,13 @@ pub(super) fn verify_on_base(
                 unreachable()
             )
         })?;
-        let retried = run_git(
-            repo_root,
-            &["merge-base", "--is-ancestor", &commit, &refreshed_base],
-        )
-        .map_err(|error| {
+        let retried = git_ancestry(repo_root, &commit, &refreshed_base).map_err(|error| {
             format!(
                 "{}; one refresh fetch was attempted for '{base_ref}' but the ancestry retry failed: {error}",
                 unreachable()
             )
         })?;
-        if retried.success {
+        if retried == GitAncestry::Ancestor {
             return Ok(commit);
         }
         let refresh_result = match fetch {
