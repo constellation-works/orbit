@@ -48,6 +48,111 @@ impl orbit_core::runtime::task_pr_forge::TaskPrForge for ObservingForge {
     }
 }
 
+struct ReconsideringForge {
+    runtime: orbit_core::OrbitRuntime,
+    task: String,
+    request: String,
+    reconsider: bool,
+    closed: std::sync::Mutex<Vec<u64>>,
+}
+
+impl orbit_core::runtime::task_pr_forge::TaskPrForge for ReconsideringForge {
+    fn authenticated_login(&self, _: &std::path::Path) -> Result<String, OrbitError> {
+        Ok("orbit-bot".into())
+    }
+
+    fn close_pull_request(
+        &self,
+        _: &std::path::Path,
+        number: u64,
+        _: &str,
+    ) -> Result<(), OrbitError> {
+        self.closed.lock().unwrap().push(number);
+        Ok(())
+    }
+
+    fn open_pull_requests(
+        &self,
+        _: &std::path::Path,
+    ) -> Result<Vec<orbit_core::runtime::task_pr_forge::ForgePullRequest>, OrbitError> {
+        assert_eq!(
+            self.runtime.get_task(&self.task).unwrap().status,
+            TaskStatus::Rejected
+        );
+        assert_eq!(
+            self.runtime
+                .get_decision_request(&self.request)
+                .unwrap()
+                .unwrap()
+                .state,
+            DecisionRequestState::Answered
+        );
+        if self.reconsider {
+            self.runtime
+                .run_tool(
+                    "orbit.task.update",
+                    json!({"id": self.task, "status": "backlog", "model": "codex"}),
+                )
+                .unwrap();
+            self.runtime
+                .apply_task_automation_update(
+                    &self.task,
+                    orbit_engine::TaskAutomationUpdate {
+                        external_refs: vec![
+                            orbit_types::task::ExternalRef::github_pr("43").unwrap(),
+                        ],
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        let number = if self.reconsider { 43 } else { 42 };
+        Ok(vec![orbit_core::runtime::task_pr_forge::ForgePullRequest {
+            number,
+            head_branch: format!("orbit/{}-aaaa1111", self.task),
+            body: format!("Task: {}", self.task),
+            author: "orbit-bot".into(),
+        }])
+    }
+}
+
+fn deferred_rejection_respects_reconsideration() {
+    for reconsider in [false, true] {
+        let fx = fixture();
+        let mut decision = data_semantics_decision();
+        decision["options"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("rewrite");
+        decision["options"][0]["action"] = json!({"kind": "reject"});
+        let (task, request) = blocked_on_decision(&fx, decision);
+        fx.record_pull_request(&task, 42);
+        let forge = std::sync::Arc::new(ReconsideringForge {
+            runtime: fx.runtime.clone(),
+            task: task.clone(),
+            request: request.clone(),
+            reconsider,
+            closed: std::sync::Mutex::new(Vec::new()),
+        });
+        fx.human()
+            .with_task_pr_forge(forge.clone())
+            .answer_decision_request_as_human(&request, "1", None, "human:operator".into(), None)
+            .unwrap();
+        assert_eq!(
+            *forge.closed.lock().unwrap(),
+            if reconsider { vec![] } else { vec![42] }
+        );
+        let history = fx.runtime.get_task_history(&task).unwrap();
+        assert_eq!(
+            history
+                .iter()
+                .filter(|entry| entry.event == orbit_types::task::DECISION_ANSWERED_EVENT)
+                .count(),
+            1
+        );
+    }
+}
+
 /// The ORB-20598 shape: the real question is a data-semantics choice, so each
 /// option rewrites an acceptance criterion and one also names an action.
 fn data_semantics_decision() -> Value {
@@ -576,6 +681,7 @@ crate::scenario_table!(
     a_terminal_recovery_option_makes_the_request_irreversible,
     a_reject_option_settles_the_blocked_task_once,
     a_reject_option_records_its_resolution_before_pull_request_closure,
+    deferred_rejection_respects_reconsideration,
     a_reject_option_is_refused_while_a_live_run_owns_the_blocked_task,
     a_requeue_option_rewrites_comments_the_choice_and_closes_the_request,
     a_rewrite_only_option_edits_the_task_and_unblocks_it,
