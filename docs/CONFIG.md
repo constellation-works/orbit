@@ -1286,7 +1286,7 @@ A crew is one provider-model assignment. An activity uses the crew named in its 
 
 ```toml
 [crews.sol]
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 provider = "codex"
 effort = "high"
 description = "Systems implementation"
@@ -1303,7 +1303,7 @@ provider = "antigravity"
 | Family | Binary | Crews (model) | Default crew |
 |---|---|---|---|
 | `claude` | `claude` | `opus` (`opus`), `sonnet` (`sonnet`), `haiku` (`haiku`), `fable` (`claude-fable-5-2`) | `opus` |
-| `codex` | `codex` | `astra` (`gpt-6.2-astra`), `sol` (`gpt-6.1-sol`), `terra` (`gpt-6.1-terra`), `luna` (`gpt-6-luna`) | `astra` |
+| `codex` | `codex` | `astra` (`gpt-6.2-astra`), `sol` (`gpt-6.2-sol`), `terra` (`gpt-6.1-terra`), `luna` (`gpt-6-luna`) | `astra` |
 | `antigravity` | `agy` | `gemini-flash` (`gemini-3.8-flash-high`), `argon` (`gemini-4-argon-high`) | `gemini-flash` |
 | `grok` | `grok` | `grok` (`grok-4.7`) | `grok` |
 | `copilot` | `copilot` | `copilot` (`claude-sonnet-5`) | `copilot` |
