@@ -50,3 +50,7 @@ filesystem support are removed. Private renderer seams and fixtures remain.
 Boundary modules are `include!`d into the single existing `config` test binary
 (`crates/orbit-config/tests/config/main.rs`); no new integration binary is
 introduced. Public helpers prove these cases without CLI/provider setup.
+
+## Later changes
+
+Checked against HEAD `b52b2606` on 2026-11-18. Two moved targets were superseded by the review-config refactor in commit 499c63001 (ORB-13992): `review_layers::operation::review_table_sets_before_pr_and_minutes_with_their_layer` is now `review_table_sets_timing_and_minutes_with_their_layer`, and `review_layers::operation::legacy_after_landing_policy_asks_for_the_auto_task_not_before_pr` is now `deprecated_after_landing_policy_turns_before_pr_off_with_a_warning`. The remaining moved targets still resolve in `crates/orbit-config/tests/config/`, and the cited RSA tamper test still exists at `crates/orbit-common/tests/common/mechanisms/security.rs` after the commit df11bae5c (ORB-16346) area-binary consolidation.
