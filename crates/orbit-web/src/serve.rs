@@ -49,10 +49,11 @@ pub struct ServeArgs {
     #[arg(long)]
     pub global: bool,
 
-    /// Preselect this workspace in the dashboard, by registered name, logical
-    /// ID (`ws_*`), or local checkout path. Defaults to the workspace
-    /// containing the current directory. Distinct from `--root`, which
-    /// chooses which registry is served.
+    /// Set the browser's workspace hint by registered name, logical ID
+    /// (`ws_*`), or local checkout path. An unmatched selector clears the
+    /// hint. Omit to derive the hint from the current directory. A valid
+    /// dashboard link or remembered choice takes precedence when the host
+    /// owns multiple workspaces.
     #[arg(long, value_name = "SELECTOR")]
     pub workspace: Option<String>,
 
@@ -123,13 +124,14 @@ pub fn serve_from_env(args: ServeArgs, root_override: Option<&Path>) -> Result<(
 /// the hint when that workspace's runtime binding fails, so the hint can be
 /// absent even when a selector matched.
 ///
-/// No hint does not mean "All workspaces". The dashboard then marks no row
-/// `is_default`, and the browser picks the board to open. Its order is: a
-/// `?workspace=` link, the choice remembered for the host (including All
-/// workspaces), an active drain on the host, the hint when it names a workspace
-/// the host owns, and otherwise the first active owned workspace in
-/// `/api/workspaces` order. With one owned workspace, the browser opens that
-/// workspace and ignores the hint. See `initWorkspaceSelector` in
+/// Without a hint, `/api/workspaces` marks no row `is_default`. With multiple
+/// owned rows, the browser tries a valid `?workspace=` link and then the choice
+/// remembered for the host, either of which can select All workspaces. Next it
+/// tries a live drain on an active owned workspace, the hint if it names an
+/// active owned workspace, and the first active owned row in registry order.
+/// If none are active, it selects the first owned row in registry order, whose
+/// board is unavailable. With exactly one owned row, the browser selects it
+/// only if active. See `initWorkspaceSelector` in
 /// `crates/orbit-web/assets/dashboard/app.js`.
 ///
 /// The initial load is eager: a malformed registry at startup is fatal, exactly
