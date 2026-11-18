@@ -51,8 +51,9 @@ jobs of these four workspaces" has to visit four boards.
 1. The browser builds the catalog from `GET /api/workspaces` on the serving host and
    `GET /api/on/<host>/workspaces` on each registered remote, with at most three requests in
    flight. This is the fan-out the fleet drain card already uses.
-2. Each `/api/workspaces` row carries `checkout_role` and `owner_machine_id`. The dashboard's
-   workspace binding already holds both; the list response must expose them.
+2. Each `/api/workspaces` row carries `checkout_role` and `owner_machine_id`, read from the
+   registry rather than the runtime binding, so a row keeps both when its checkout is missing
+   or unreadable (`status: "invalid"`). Only a row with no recorded role reports `null`.
 3. Rows are merged by logical workspace ID. A catalog entry holds the workspace ID and name,
    the owner host, and the capacity hosts.
 4. The proposed catalog picker lists each entry once, grouped under its owner's name. It is
