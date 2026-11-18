@@ -48,12 +48,20 @@ The pinned action (v2.9.3) tries the exact key first. It then restores the
 newest archive whose key starts with
 `<prefix-key>-<shared-key>-<OS>-<arch>-<environment hash>`, a prefix match.
 The environment hash covers the installed compiler versions and the
-`CARGO*`/`RUST*`/`CC*` environment. Only the exact key adds a hash of
-`Cargo.lock`'s registry and git packages, the member manifests and every
+`CARGO*`/`RUST*`/`CC*` environment. Only the exact key adds a hash of part of
+`Cargo.lock`, the member manifests and every
 `.cargo/config.toml` and `rust-toolchain.toml` below the workspace, hidden
-directories included. The action never reads the virtual workspace root, and
-its `key` input is ignored beside `shared-key`, so the root manifest enters
-through `prefix-key`.
+directories included. The lock hash is not a hash of the file: the pinned
+action (`config.ts` at `d1527c8`) keeps only the `[[package]]` entries that
+carry a `source` or `checksum` — the registry and git packages, with their
+versions, checksums and dependency edges — and hashes that filtered list.
+Workspace members are path packages with neither field, so an edit that
+changes only their entries (a release version bump is the routine case)
+leaves the lock hash unchanged. Member manifests are hashed parsed, with
+`package.version` and path-dependency versions normalised away, so a member
+version bump does not move the exact key either. The action never reads the
+virtual workspace root, and its `key` input is ignored beside `shared-key`,
+so the root manifest enters through `prefix-key`.
 
 Every producer and seeder step runs `scripts/ci-rust-dependency-cache-key.py`
 first and takes its `prefix-key` output (`v2-rust-<digest>`). The digest covers
@@ -68,29 +76,54 @@ each version and source). TOML formatting and comments do not count.
 - A profile, patch or resolver change starts a new namespace. Unless an
   archive for those settings already exists, nothing is restored and every
   dependency is rebuilt.
-- Adding, removing or upgrading a dependency changes `Cargo.lock`, so the
-  exact key misses but the prefix still matches. A pull request restores the
-  newest archive from that namespace, and Cargo rebuilds only the units whose
-  version, source, features, profile or environment changed. Before
-  ORB-25561 the whole-root digest also moved the prefix, so PR #9937 restored
-  nothing and compiled for 524/518 s (runs 44236419113 and 44234277166).
-- A release version bump, lint edit or comment keeps the exact key.
+- Adding, removing or upgrading a dependency usually changes the filtered
+  lock entries above, so the exact key misses but the prefix still matches. A
+  pull request restores the newest archive from that namespace, and Cargo
+  rebuilds only the units whose version, source, features, profile or
+  environment changed. Before ORB-25561 the whole-root digest also moved the
+  prefix, so PR #9937 restored nothing and compiled for 524/518 s (runs
+  44236419113 and 44234277166). A dependency edit whose filtered entries stay
+  identical — a feature-only change, or switching a workspace crate to a
+  version already present in the lock for another crate — keeps the exact
+  key instead; see the residual below.
+- A release version bump, lint edit or comment keeps the exact key: the root
+  version lives in `[workspace.package]`, which the prefix derivation omits,
+  member versions are normalised out of the member-manifest hash, and the
+  lock entries a release bump rewrites are the filtered-out workspace
+  members.
 
 The action prunes `target/` to dependency artifacts before it saves. A
 prefix-match restore first deletes restored dependency units older than
 one week, so an archive last saved more than a week earlier restores less.
-Pushes that change `Cargo.lock` save a new archive (161 commits changed it
-between 2026-09-01 and 2026-11-18). Cargo's unit fingerprints, not the
-cache key, decide whether a restored unit is reused. A restored unit built
-for other features, profile settings, compiler or flags is never linked.
+Only a push whose *effective key* changes saves a new archive: the effective
+key is the prefix above plus the exact-key inputs (filtered lock entries,
+normalised member manifests, `.cargo/config.toml` and `rust-toolchain.toml`
+files, and the environment hash). A push that only edits `Cargo.lock` bytes
+outside the filtered entries gets an exact hit, and the pinned action's
+save step (`save.ts` at `d1527c8`) reports the cache up-to-date and saves
+nothing; an exact hit can never replace the existing archive. File touches
+therefore overstate refresh frequency. Recounting 2026-09-01 to 2026-11-18
+under the current derivation: 162 commits touched `Cargo.lock`, but only
+118 of them changed the effective key (the filtered lock list, a normalised
+member manifest, a config/toolchain file, or the prefix); the other 44 —
+mostly release version bumps, such as `eb08b2af1` — left it unchanged.
+Neither number is a save count: not every commit was a protected push, and
+the historical environment hash is assumed unchanged. Cargo's unit
+fingerprints, not the cache key, decide whether a restored unit is reused.
+A restored unit built for other features, profile settings, compiler or
+flags is never linked.
 
 Residual: a feature or `default-features` edit in `[workspace.dependencies]`
-that leaves `Cargo.lock` unchanged also keeps the exact key. The protected
-push then gets an exact hit and saves nothing, so each job rebuilds the
-affected units and their dependents. That lasts until the next
-`Cargo.lock`, member-manifest, toolchain or environment change saves a new
-archive. Four of the 97 root-manifest commits from 2026-08-01 to 2026-11-18
-were edits of this kind.
+that leaves the filtered lock entries unchanged also keeps the exact key —
+the lock file need not be byte-identical, only its hashed entries. The
+protected push then gets an exact hit and saves nothing, so each job
+rebuilds the affected units and their dependents. That lasts until the next
+change to the effective key — a filtered lock-entry, normalised
+member-manifest, config/toolchain, prefix or environment change — not
+merely the next `Cargo.lock` edit: a release bump rewrites the lock file
+without moving any of those, so it does not end the residual. Four of the
+97 root-manifest commits from 2026-08-01 to 2026-11-18 were edits of this
+kind.
 
 The Check job's trusted `.orbit/tmp/dependency-producer` checkout adds that
 tree's `.cargo/config.toml` and `rust-toolchain.toml` to Check's exact key.
