@@ -188,6 +188,10 @@ function view(payload) {
 
 function renderDialog() {
   const row = (lastPayload?.hosts || []).map(withLiveFields).find(row => row.machine_id === selectedHost);
+  if (editing && editing.kind !== "add" && !row && !editing.pending) {
+    closeFleetDialog();
+    return;
+  }
   if (!editing && !row) { selectedHost = null; if (dialog?.open) dialog.close(); return; }
   if (!dialog) {
     dialog = el("dialog", { class: "fleet-dialog", id: "fleet-dialog", "aria-labelledby": "fleet-dialog-title" });
@@ -199,7 +203,9 @@ function renderDialog() {
   const local = lastPayload.hosts.find(host => host.local);
   const content = el("div", { class: "fleet-dialog-body" });
   const title = editing ? `${editing.kind === "add" ? "Add host" : editing.kind === "rename" ? "Rename" : "Remove"}${row ? ` · ${row.name}` : ""}` : row.name;
-  if (editing) {
+  if (editing && editing.kind !== "add" && !row) {
+    content.append(el("p", { class: "config-note", role: "status", text: "Host removed. Waiting for the change to finish." }));
+  } else if (editing) {
     content.append(el("span", { class: "muted", text: `Registry on ${local?.name || "the serving host"}` }));
     content.append(editing.kind === "add" ? addSection() : editing.kind === "rename" ? renameEditor(row) : removeEditor(row));
   } else {
