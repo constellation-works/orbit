@@ -511,9 +511,10 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   is capped at the same 512 MiB window the encoder may emit. The job then
   starts `ci-guardrails.sh --test-partitions PATH` in the background and
   uploads each part as its own one-day artifact while it runs; after the
-  uploads, `Prove the shards cover every test` waits for it (an `flock` the
-  proof holds until it exits), prints its output and exits with its status,
-  or fails if it recorded none. The proof reads only the original archive:
+  uploads, `Prove the shards cover every test` waits for it (using a lock
+  acquired before the worker starts and held until it exits), prints its
+  output and exits with its status, or fails if it recorded none. The proof
+  reads only the original archive:
   it extracts the archive once, and
   [check-nextest-partitions.py](../scripts/check-nextest-partitions.py) lists
   that extraction (`--binaries-metadata` and `--cargo-metadata`) once
