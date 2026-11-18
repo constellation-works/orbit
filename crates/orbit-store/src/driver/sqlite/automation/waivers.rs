@@ -6,7 +6,7 @@ use crate::Store;
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::automation::*;
-use rusqlite::{TransactionBehavior, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 pub(super) fn commit(
     store: &Store,
@@ -82,5 +82,24 @@ pub(super) fn list(
 
         rows.map(|row| decode(&row.map_err(sqlite_store_error)?))
             .collect()
+    })
+}
+
+/// The consumer's waiver of `batch`, by the table's batch identity key.
+pub(super) fn find(
+    store: &Store,
+    consumer: &str,
+    batch: &str,
+) -> Result<Option<BatchWaiver>, OrbitError> {
+    store.with_read_connection(|conn| {
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT waiver_json FROM automation_waivers WHERE consumer=?1 AND batch_id=?2",
+                params![consumer, batch],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sqlite_store_error)?;
+        raw.as_deref().map(decode).transpose()
     })
 }

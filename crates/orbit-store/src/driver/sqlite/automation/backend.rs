@@ -32,6 +32,14 @@ impl AutomationStoreBackend for Store {
         waivers::list(self, consumer, limit)
     }
 
+    fn automation_waiver(
+        &self,
+        consumer: &str,
+        batch: &str,
+    ) -> Result<Option<orbit_types::workflow::automation::BatchWaiver>, OrbitError> {
+        waivers::find(self, consumer, batch)
+    }
+
     fn automation_recover(
         &self,
         previous: &AutomationState,
@@ -80,6 +88,20 @@ impl AutomationStoreBackend for Store {
                 .optional()
                 .map_err(sqlite_store_error)?;
             raw.as_deref().map(decode).transpose()
+        })
+    }
+
+    fn automation_receipt_count(&self, consumer: &str) -> Result<usize, OrbitError> {
+        self.with_read_connection(|conn| {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM automation_coverage WHERE consumer=?1",
+                    [consumer],
+                    |row| row.get(0),
+                )
+                .map_err(sqlite_store_error)?;
+            usize::try_from(count)
+                .map_err(|_| OrbitError::Store("invalid accepted coverage count".into()))
         })
     }
 

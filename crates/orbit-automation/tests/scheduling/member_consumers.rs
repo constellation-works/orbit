@@ -204,3 +204,53 @@ fn checkpoint_rejects_budget_reset_ack_replacement_and_lost_failure_tombstone() 
     erased.members.as_mut().unwrap().failed.clear();
     assert!(store.automation_commit(&failed, &erased, None).is_err());
 }
+
+/// A retry waiting for admission once retired as exhausted when a temporary
+/// hold withheld every member, so the hold clearing could never admit it
+/// again without new input [ORB-25602]. The claim now waits out the hold.
+#[test]
+fn a_temporary_hold_on_an_unminted_retry_clears_without_input_churn() {
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let host = Host::new();
+    tick(store.as_ref(), &host, 0);
+    tick(store.as_ref(), &host, 2);
+    assert_eq!(
+        host.actions.borrow().len(),
+        1,
+        "the first attempt is minted"
+    );
+
+    // The run fails: a second attempt is claimed, unminted, behind its backoff.
+    *host.failed.borrow_mut() = true;
+    let retry = tick(store.as_ref(), &host, 3).state.unwrap();
+    let active = retry.members.unwrap().active.unwrap();
+    assert_eq!((active.attempt, active.action_id), (2, None));
+    *host.failed.borrow_mut() = false;
+
+    // A transient guard withholds the only member before the deadline.
+    *host.withhold.borrow_mut() = Some("execution_claim_active".into());
+    for minute in [4, 9] {
+        tick(store.as_ref(), &host, minute);
+        let members = store
+            .automation_state(CONSUMER)
+            .unwrap()
+            .unwrap()
+            .members
+            .unwrap();
+        assert!(
+            members.failed.is_empty(),
+            "minute {minute}: a hold is not a failure: {:?}",
+            members.failed
+        );
+        assert_eq!(members.active.map(|active| active.attempt), Some(2));
+    }
+
+    // The same input is admitted as the retry once the hold clears.
+    *host.withhold.borrow_mut() = None;
+    tick(store.as_ref(), &host, 10);
+    assert!(
+        host.actions.borrow().values().any(|run| run == "run-2"),
+        "{:?}",
+        host.actions.borrow()
+    );
+}

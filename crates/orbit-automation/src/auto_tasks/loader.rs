@@ -2,7 +2,8 @@
 //! fail-closed per file. An invalid definition becomes a load error and is
 //! treated as absent; it never fires with defaults (mirrors the routine
 //! loader). The file stem must equal the definition's `name` so the on-disk
-//! identity and the provenance-tag suffix stay in lockstep. Each body is
+//! identity and the provenance-tag suffix stay in lockstep, and two files
+//! sharing a stem (`name.yaml` beside `name.yml`) are both refused. Each body is
 //! loaded with its operator settings ([`super::settings`]) applied; an
 //! unreadable settings table fails every definition closed, since any of them
 //! may carry settings.
@@ -132,7 +133,8 @@ impl fmt::Display for AutoTasksDirectoryError {
     }
 }
 
-/// Load every `*.yaml` under `<orbit_dir>/auto_tasks/`, fail-closed per file.
+/// Load every `*.yaml`/`*.yml` under `<orbit_dir>/auto_tasks/`, fail-closed
+/// per file. Files sharing a stem each become a load error naming them all.
 /// A missing directory is a clean empty collection.
 pub fn collect_auto_tasks(orbit_dir: &Path) -> AutoTaskCollection {
     let mut collection = AutoTaskCollection::default();
@@ -197,6 +199,31 @@ pub fn collect_auto_tasks(orbit_dir: &Path) -> AutoTaskCollection {
     }
     paths.sort();
 
+    // The file stem is the definition identity, so `name.yaml` and `name.yml`
+    // (or any other extension spelling) would be two definitions of one
+    // auto-task sharing a scheduler cursor. Neither may load: refusing only
+    // one would let whichever file sorts first decide what fires.
+    let mut by_stem: BTreeMap<_, Vec<PathBuf>> = BTreeMap::new();
+    for path in &paths {
+        by_stem
+            .entry(path.file_stem().map(ToOwned::to_owned))
+            .or_default()
+            .push(path.clone());
+    }
+    paths.retain(|path| {
+        let Some(shared) = by_stem
+            .get(&path.file_stem().map(ToOwned::to_owned))
+            .filter(|shared| shared.len() > 1)
+        else {
+            return true;
+        };
+        collection.errors.push(AutoTaskLoadError {
+            path: Some(path.clone()),
+            message: duplicate_definition_message(shared),
+        });
+        false
+    });
+
     let settings = load_settings_table(&dir);
     for path in paths {
         let loaded = settings
@@ -212,6 +239,24 @@ pub fn collect_auto_tasks(orbit_dir: &Path) -> AutoTaskCollection {
         }
     }
     collection
+}
+
+/// Why every file defining one auto-task name is refused, naming the files.
+fn duplicate_definition_message(paths: &[PathBuf]) -> String {
+    let name = paths
+        .first()
+        .and_then(|path| path.file_stem())
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let files = paths
+        .iter()
+        .filter_map(|path| path.file_name())
+        .map(|file| file.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "auto-task '{name}' has more than one definition file ({files}); each is refused until only one remains"
+    )
 }
 
 /// Load and validate one definition file with its settings applied, as

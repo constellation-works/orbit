@@ -71,9 +71,12 @@ pub trait RoutineDispatch {
     fn run_state(&self, source_orbit_dir: &Path, run_id: &str) -> Option<JobRunState>;
 
     /// [ORB-10597] Whether the run's recorded owner process is still executing,
-    /// asked independently of its persisted state. Consulted only for runs
-    /// marked `interrupted`, which carries no teardown and so is not evidence
-    /// that the work stopped.
+    /// asked independently of its persisted state. Consulted for a fire whose
+    /// run reads `running` or `retrying` (a persisted in-flight state may
+    /// outlive its owner across a restart: `Stopped` settles the fire as
+    /// failed at once) and for one marked `interrupted` (which carries no
+    /// teardown, so is not evidence the work stopped: only `Stopped` releases
+    /// its slot). `Alive` and `Unknown` keep the fire in flight in both cases.
     fn run_owner_liveness(&self, source_orbit_dir: &Path, run_id: &str) -> RunOwnerLiveness;
 
     /// Newest runs a state-, delivery- or condition-triggered routine's
@@ -132,10 +135,16 @@ pub struct RoutineSweepReport {
     pub routine: String,
     /// Source workspace name.
     pub source: String,
-    /// Whether the definition is `committed` or `local` origin.
+    /// Where the definition was found: `workspace` (`.orbit/routines/`) or
+    /// `local` (`.orbit/routines/local/`), as [`RoutineOrigin::as_str`] reports.
+    ///
+    /// [`RoutineOrigin::as_str`]: crate::routines::loader::RoutineOrigin::as_str
     pub origin: &'static str,
     /// One of: `fired`, `retry_fired`, `would_fire`, `baselined`,
-    /// `would_baseline`, `skipped`, `error`.
+    /// `would_baseline`, `skipped`, `error`, `retired` (a retired definition
+    /// the host reports), or the trigger kind an automation-evaluated routine
+    /// reports its diagnostic under: `state`, `delivery` or `condition`, with
+    /// the evaluator's verdict in `reason`.
     pub action: &'static str,
     /// Why, for `skipped`/`error` rows.
     pub reason: Option<String>,
@@ -155,8 +164,12 @@ pub struct AutoTaskSweepReport {
     pub name: String,
     /// Source workspace name.
     pub source: String,
-    /// One of: `minted`, `would_fire`, `baselined`, `would_baseline`,
-    /// `skipped`, `error`.
+    /// The scheduler's [`AutoTaskFireReport::action`], forwarded unchanged
+    /// except that `fired` reads `minted`: one of `minted`, `would_fire`,
+    /// `baselined`, `would_baseline`, `skipped`, `error`, `delivery` or
+    /// `condition`.
+    ///
+    /// [`AutoTaskFireReport::action`]: crate::auto_tasks::scheduler::AutoTaskFireReport::action
     pub action: &'static str,
     /// Why, for `skipped` and `error` rows.
     pub reason: Option<String>,

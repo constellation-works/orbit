@@ -280,7 +280,9 @@ pub fn due_decision_with_grace<Tz: TimeZone>(
 /// Slots strictly after `lower_bound` and at or before `through` (when
 /// `include_through`) that are already outside `natural_slot_grace`, oldest
 /// first. At most `limit` slots. [`MissedSlotWalk::more`] is set when another
-/// qualifying slot remains, so a caller can avoid jumping the cursor past it.
+/// qualifying slot remains, so a caller can avoid jumping the cursor past it;
+/// with `limit` 0 the page is empty and `more` alone reports whether any
+/// qualifying slot exists.
 pub fn missed_slots_through<Tz: TimeZone>(
     cron: &Cron,
     lower_bound: &DateTime<Tz>,
@@ -293,9 +295,8 @@ pub fn missed_slots_through<Tz: TimeZone>(
     let mut cursor = lower_bound.clone();
     let mut slots = Vec::new();
     let mut more = false;
-    if limit == 0 {
-        return Ok(MissedSlotWalk { slots, more });
-    }
+    // A zero limit still looks for the first qualifying slot, so `more`
+    // tells a due slot apart from an empty interval.
     loop {
         let next = find_next(cron, &cursor)?;
         let next = truncate_to_minute(next);

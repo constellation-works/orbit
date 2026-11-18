@@ -397,7 +397,7 @@ pub(super) fn debt(
         unresolved: state.unresolved.len(),
         waived: state.waived.len(),
         excluded: state.excluded.len(),
-        receipts: store.automation_receipts(&state.consumer, 100)?.len(),
+        receipts: store.automation_receipt_count(&state.consumer)?,
     })
 }
 
@@ -429,8 +429,13 @@ pub(super) fn stalled_action(
     state: &AutomationState,
     action_failed_without_evidence: bool,
 ) -> Result<Option<StalledAction>, AutomationError> {
-    let receipts = store.automation_receipts(&state.consumer, 100)?;
-    Ok(state.active.as_ref().map(|active| StalledAction {
+    let Some(active) = state.active.as_ref() else {
+        return Ok(None);
+    };
+    let evidenced = store
+        .automation_receipt(&state.consumer, &active.batch.id)?
+        .is_some();
+    Ok(Some(StalledAction {
         batch_id: active.batch.id.clone(),
         attempt: active.attempt,
         state: active.state,
@@ -443,10 +448,7 @@ pub(super) fn stalled_action(
             .map(|delivery| delivery.key.clone())
             .collect(),
         commits: active.batch.commits.len(),
-        reissuable: settled(active, action_failed_without_evidence)
-            && !receipts
-                .iter()
-                .any(|receipt| receipt.batch_id == active.batch.id),
+        reissuable: settled(active, action_failed_without_evidence) && !evidenced,
     }))
 }
 

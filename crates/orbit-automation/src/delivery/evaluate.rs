@@ -78,8 +78,13 @@ fn evaluate_pass(
                 stall: None,
             };
 
-            if !dry_run {
-                store.automation_initialize(&state)?;
+            // Another evaluator may have pinned its own baseline since the
+            // read above. Its state is the persisted one; this pass's
+            // candidate was never written, so it must not be reported.
+            if !dry_run && !store.automation_initialize(&state)? {
+                return Err(AutomationError::Deferred(
+                    DeferredReason::ConcurrentEvaluation,
+                ));
             }
 
             return diagnostic(

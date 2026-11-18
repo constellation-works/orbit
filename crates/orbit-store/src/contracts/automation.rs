@@ -26,6 +26,16 @@ pub trait AutomationStoreBackend: Send + Sync {
         Ok(vec![])
     }
 
+    /// The recorded waiver of one batch, found by its durable identity however
+    /// many newer waivers the consumer has since recorded.
+    fn automation_waiver(
+        &self,
+        _consumer: &str,
+        _batch: &str,
+    ) -> Result<Option<BatchWaiver>, OrbitError> {
+        Err(OrbitError::Store("batch waiver lookup unavailable".into()))
+    }
+
     /// Adopt a new configuration identity and/or an authorized reissue under
     /// the same generation fence, writing the audit record in one transaction.
     /// The checkpoint may move nothing else: every cursor, obligation and
@@ -75,15 +85,24 @@ pub trait AutomationStoreBackend: Send + Sync {
         Ok(vec![])
     }
 
+    /// The accepted receipt of one batch, found by its durable identity
+    /// however many receipts the consumer retains.
     fn automation_receipt(
         &self,
-        consumer: &str,
-        batch: &str,
+        _consumer: &str,
+        _batch: &str,
     ) -> Result<Option<AcceptedCoverage>, OrbitError> {
-        Ok(self
-            .automation_receipts(consumer, 100)?
-            .into_iter()
-            .find(|r| r.batch_id == batch))
+        Err(OrbitError::Store(
+            "accepted coverage lookup unavailable".into(),
+        ))
+    }
+
+    /// How many accepted coverage receipts the consumer retains in total.
+    /// Unlike [`Self::automation_receipts`], this is not bounded by a page.
+    fn automation_receipt_count(&self, _consumer: &str) -> Result<usize, OrbitError> {
+        Err(OrbitError::Store(
+            "accepted coverage count unavailable".into(),
+        ))
     }
 
     fn automation_record_delivery_intent(&self, _delivery: &Delivery) -> Result<(), OrbitError> {
@@ -129,6 +148,8 @@ pub trait AutomationStoreBackend: Send + Sync {
         next: &AutomationState,
         receipt: Option<&AcceptedCoverage>,
     ) -> Result<bool, OrbitError>;
+    /// The newest accepted receipts, at most `limit` (implementations may cap
+    /// it further). A bounded page: never a total count or an identity lookup.
     fn automation_receipts(
         &self,
         consumer: &str,
