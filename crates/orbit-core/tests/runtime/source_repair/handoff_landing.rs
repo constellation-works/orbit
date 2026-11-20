@@ -6,8 +6,8 @@ use super::failed_publication::{escalated_completion_fixture, escalated_handoff_
 use super::*;
 use orbit_core::application::task::DecisionListProfile;
 use orbit_core::runtime::task_pr_forge::{
-    ForgePullRequest, HandoffLandingPullRequest, MergedPullRequest, PullRequestBlockers,
-    PullRequestMergeOutcome, TaskPrForge,
+    ForgePullRequest, HandoffLandingPullRequest, LeasePullRequest, MergedPullRequest,
+    PullRequestBlockers, PullRequestMergeOutcome, TaskPrForge,
 };
 use orbit_core::{ActorIdentity, OrbitError};
 use orbit_types::task::{DecisionRequest, DecisionRequestState};
@@ -87,6 +87,36 @@ impl TaskPrForge for Forge {
     }
     fn merged_pull_requests(&self, _: &Path) -> Result<Vec<MergedPullRequest>, OrbitError> {
         Ok(self.0.lock().unwrap().merged.iter().cloned().collect())
+    }
+    fn lease_pull_request(
+        &self,
+        _: &Path,
+        _: &str,
+    ) -> Result<Option<LeasePullRequest>, OrbitError> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .pull
+            .as_ref()
+            .map(|pull| LeasePullRequest {
+                number: pull.blockers.pull.number,
+                base_branch: pull.base_branch.clone(),
+                merged: false,
+            }))
+    }
+    fn pull_request_blockers(
+        &self,
+        _: &Path,
+        _: u64,
+    ) -> Result<Option<PullRequestBlockers>, OrbitError> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .pull
+            .as_ref()
+            .map(|pull| pull.blockers.clone()))
     }
     fn merge_pull_request(
         &self,
@@ -495,6 +525,86 @@ fn periodic_settlement_recovers_a_stopped_completion_during_rest_rate_limiting()
     }
 }
 
+fn the_owner_sweep_merges_a_stopped_publication_only_while_the_pull_request_is_unchanged() {
+    // ORB-25994: a stopped native run published head A. A pull request that
+    // moved to B must not be merged: settlement would reject B afterwards.
+    let (mut f, _, _) = escalated_completion_fixture();
+    f.source.state = JobRunState::Success;
+    super::published_owner::save_run(&f, &f.source);
+    f.runtime
+        .apply_task_automation_update(
+            &f.task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Review),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let forge = Forge::for_fixture(&f);
+    f.runtime = f
+        .runtime
+        .clone()
+        .with_task_pr_forge(Arc::new(forge.clone()));
+    let moved = "b".repeat(40);
+    forge
+        .0
+        .lock()
+        .unwrap()
+        .pull
+        .as_mut()
+        .unwrap()
+        .blockers
+        .head_sha = moved.clone();
+    for _ in 0..2 {
+        assert!(
+            f.runtime
+                .land_completion_authorized_tasks()
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert_eq!(
+        forge.0.lock().unwrap().merges,
+        0,
+        "the moved head is not merged"
+    );
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Review
+    );
+    let recorded = f
+        .runtime
+        .get_task_history(&f.task)
+        .unwrap()
+        .into_iter()
+        .filter(|entry| entry.event == "landing_follow_up")
+        .map(|entry| entry.note.unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(recorded.len(), 1, "recorded once: {recorded:?}");
+    assert!(
+        recorded[0].contains("publication_identity_changed") && recorded[0].contains(&moved),
+        "{}",
+        recorded[0]
+    );
+
+    forge
+        .0
+        .lock()
+        .unwrap()
+        .pull
+        .as_mut()
+        .unwrap()
+        .blockers
+        .head_sha = f.head.clone();
+    let landed = f.runtime.land_completion_authorized_tasks().unwrap();
+    assert_eq!(landed.len(), 1, "{landed:?}");
+    assert_eq!(forge.0.lock().unwrap().merges, 1);
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Done
+    );
+}
+
 crate::scenario_table!(
     handoff_landing_regressions,
     owner_lands_green_handoff_and_refusals_change_nothing,
@@ -502,4 +612,5 @@ crate::scenario_table!(
     required_review_hides_land_for_an_unreviewed_handoff,
     handoff_landing_reads_draft_and_checks_from_the_real_forge_adapter,
     periodic_settlement_recovers_a_stopped_completion_during_rest_rate_limiting,
+    the_owner_sweep_merges_a_stopped_publication_only_while_the_pull_request_is_unchanged,
 );

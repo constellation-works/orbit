@@ -2205,6 +2205,7 @@ and pull request head:
 | `completion_not_authorized` | The checks passed but the delivery never carried `--complete` | Merge the pull request, then `orbit task settle-merged <task-id>` settles it |
 | `pull_request_conflicting` | The pull request conflicts with its base | Fix PR, or rebase it |
 | `required_checks_failed` | A required check failed on the head | Fix PR, or repair it |
+| `publication_identity_changed` | The pull request no longer matches the revision the stopped run published; the entry names what differs | Check the new head, then requeue the task or merge by hand |
 | `review_not_settled` | The required pre-landing review does not cover the head | Requeue the task for review |
 | `merge_refused` | The forge refused the merge; the entry quotes why | Read the reason and merge by hand |
 
