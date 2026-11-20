@@ -560,6 +560,8 @@ fn deadline_arriving_during_job_log_read_holds_instead_of_failing_the_read() {
     );
 }
 
+const PR_READ: &str = "workflow prerequisite read repos/{owner}/{repo}/pulls/42";
+
 #[test]
 fn prerequisite_expiry_stops_next_read_and_preserves_single_shot() {
     isolated(
@@ -614,7 +616,10 @@ fn prerequisite_expiry_stops_next_read_and_preserves_single_shot() {
                     let forge = fx.forge.clone();
                     let reads = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
                     let observed = std::rc::Rc::clone(&reads);
-                    let repo_reads = std::rc::Rc::new(std::cell::Cell::new(0));
+                    // Each snapshot reads the pull request once, after the repository
+                    // identity it reuses [ORB-25864]: the Nth PR read starts the Nth
+                    // snapshot.
+                    let snapshot_reads = std::rc::Rc::new(std::cell::Cell::new(0));
                     let mut input = fx.complete_ungated_input();
                     input["auto_fix"] = json!(true);
                     input["completion"] = json!("review");
@@ -640,24 +645,17 @@ fn prerequisite_expiry_stops_next_read_and_preserves_single_shot() {
                                 "{case}: {label} receives at most the remaining completion budget, got {timeout}"
                             );
                             observed.borrow_mut().push(label.into());
-                            if label == "workflow prerequisite read repos/{owner}/{repo}" {
-                                repo_reads.set(repo_reads.get() + 1);
+                            if label == PR_READ {
+                                snapshot_reads.set(snapshot_reads.get() + 1);
                             }
                             let expired = match case {
                                 "evidence" | "observation" => {
-                                    label == "workflow prerequisite read repos/{owner}/{repo}"
-                                        && repo_reads.get() == 1
+                                    label == PR_READ && snapshot_reads.get() == 1
                                 }
                                 "source" => label == "workflow blob",
                                 // Expire after the first successful read of pre-mutation observation.
-                                "revalidation" => {
-                                    label == "workflow prerequisite read repos/{owner}/{repo}"
-                                        && repo_reads.get() == 2
-                                }
-                                "lost_reply" => {
-                                    label == "workflow prerequisite read repos/{owner}/{repo}"
-                                        && repo_reads.get() == 4
-                                }
+                                "revalidation" => label == PR_READ && snapshot_reads.get() == 2,
+                                "lost_reply" => label == PR_READ && snapshot_reads.get() == 4,
                                 _ => false,
                             };
                             if expired {
@@ -703,8 +701,8 @@ fn prerequisite_expiry_stops_next_read_and_preserves_single_shot() {
                         assert!(
                             !calls
                                 .lines()
-                                .any(|line| line == "api repos/{owner}/{repo}/pulls/42"),
-                            "expiry after repo read forbids the next PR read"
+                                .any(|line| line.starts_with("api repos/{owner}/{repo}/rules/")),
+                            "expiry after the PR read forbids the next policy read"
                         );
                     }
                     if matches!(
@@ -713,13 +711,13 @@ fn prerequisite_expiry_stops_next_read_and_preserves_single_shot() {
                     ) {
                         assert_eq!(
                             reads.borrow().last().map(String::as_str),
-                            Some("workflow prerequisite read repos/{owner}/{repo}"),
+                            Some(PR_READ),
                             "expiry forbids every subsequent read"
                         );
                         let expected = match case {
-                            "revalidation" => 1,
-                            "lost_reply" => 3,
-                            _ => 0,
+                            "revalidation" => 2,
+                            "lost_reply" => 4,
+                            _ => 1,
                         };
                         assert_eq!(
                             calls

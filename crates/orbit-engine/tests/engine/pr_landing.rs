@@ -7022,6 +7022,17 @@ if [ -f "$forge/infrastructure" ]; then
     if [ -f "$forge/infra-auth403" ] && [ "$1" = api ]; then
         echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1
     fi
+    # [ORB-25864] The account's REST quota: the next N repository reads are
+    # rate-limited, and `rate_limit` (which spends no quota) names the reset.
+    if [ "$*" = "api rate_limit" ]; then cat "$forge/infra-rate-limit"; exit; fi
+    if [ "$*" = "api repos/{owner}/{repo}" ] && [ -s "$forge/infra-rate-limited" ]; then
+        left=$(cat "$forge/infra-rate-limited")
+        if [ "$left" -gt 0 ]; then
+            echo $((left - 1)) > "$forge/infra-rate-limited"
+            echo 'gh: API rate limit exceeded for user ID 270255973. If you reach out to GitHub Support for help, please include the request ID DE78:121DB1:92BAD8:9B7940:6AFFAFC1 (HTTP 403)' >&2
+            exit 1
+        fi
+    fi
     case "$1 ${2:-}" in
         "api graphql")
             case "$*" in

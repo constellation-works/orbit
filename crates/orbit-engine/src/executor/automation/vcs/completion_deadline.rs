@@ -64,7 +64,11 @@ impl Deadline {
         if result.timed_out && (timeout < DEFAULT_TIMEOUT_MS || self.remaining().is_err()) {
             return Err(expired());
         }
-        let result = process::succeeded(result, label)?;
+        let result = if program == "gh" {
+            process::succeeded_read(result, label)?
+        } else {
+            process::succeeded(result, label)?
+        };
         self.remaining()?;
         Ok(result)
     }
