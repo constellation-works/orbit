@@ -16,13 +16,21 @@ related_features: [distributed-drain, routines, resident-orchestrator]
 
 # Scope: standing drain intent for the owner workspace
 
-Bearing: work is admitted only by a live `workspace_auto_pipeline` drain, which an operator
-submits with `orbit run auto --for <window>` (at most 24 h, `MAX_DRAIN_WINDOW_SECONDS` in
+Bearing: owner-side work reaches the task pipeline by two routes. The owner drain is the
+`workspace_auto_pipeline` run that an operator starts with `orbit run auto --for <window>` from the
+CLI or the dashboard (at most 24 h, `MAX_DRAIN_WINDOW_SECONDS` in
 `crates/orbit-core/src/application/workflow.rs`). A live drain can be lengthened
 (`orbit run extend`), it re-reads the configured crew pools while it runs (ORB-25866,
 1510e55ff0; ORB-25893, 1e1a8dbb07), it gives usage-limited crews weight 0 instead of ending,
 and it can survive a binary swap (`drain-adopt-v1`, and the clock's upgrade resume in
-[upgrades.md](../../runbooks/upgrades.md) §"switch"). The admission ladder, which covers
+[upgrades.md](../../runbooks/upgrades.md) §"switch"). Its worker dispatches `task_auto_pipeline`
+leaves for the backlog work the admission ladder admits, and `orbit.workflow` action `auto` is
+operator-only, so no resident can submit a drain. The explicit ship route is separate:
+`orbit run ship`, `orbit.workflow` action `ship` and the dashboard's ship submit a
+`task_auto_pipeline` run directly, for the task ids they name or, with none, a run whose worker
+discovers the backlog work itself. It needs no live drain, and it passes the same entry admission as the owner drain
+(`drain_entry_admission` in `crates/orbit-core/src/application/distributed/entry.rs`), which
+refuses every entry point on a replica. The admission ladder, which covers
 pilot, approval, auto-concurrency, build budget and host labels, is in
 [distributed-drain](../distributed-drain/2_design.md). This scope adds none of that. It adds the
 one thing missing: a drain that has *ended* is never started again without a person.
@@ -75,14 +83,15 @@ that one gap accounts for about 370 task-hours.
 |---|---|---|---|
 | Standing drain service / `--forever` | No | — | Every drain is a bounded, submitted run. `--for` is capped at 24 h. Without `--for`, a drain makes a single pass. No unit for this exists on the box |
 | A routine that targets `job:workspace_auto_pipeline` | Possible in principle | Window end, crash | A routine can't pass caller parameters ([routines 2_design](../routines/2_design.md) §parameters), so it gets single passes without `--complete` or `--approve-proposed`. It also doesn't see an operator stop, which is stored on one run. None of the 9 ws_orbit routines on the box targets the drain, and routines are Daniel's to create |
-| Resident orchestrator with `dispatch` | Yes, opt-in | All six causes | `resident-cycle-orbit` is disabled on the box. Each restart would be a model decision made on that model's schedule, which is a heavy and slow way to do a deterministic step. Its design already names this pain (`drain-relaunch-after-binary-update`, [resident-orchestrator 2_design](../resident-orchestrator/2_design.md)) |
+| Resident orchestrator with `dispatch` | Yes, opt-in | No restart: it can ship named tasks, but cannot submit a drain | A dispatch-granted resident can call `orbit.workflow` action `ship` with backlog task ids, which submits a `task_auto_pipeline` run and no drain, plus the `orbit.task.recover` actions `repilot` and `requeue`. It cannot call `orbit.workflow` action `auto`: that is operator-only and answers `capability_denied` even with `dispatch` (`crates/orbit-core/assets/skills/orbit/references/resident-cycle.md`). `resident-cycle-orbit` is disabled on the box, and each drain would still need an operator to submit it. Its design already names this pain (`drain-relaunch-after-binary-update`, [resident-orchestrator 2_design](../resident-orchestrator/2_design.md)) |
 | `orbit run extend` | Yes | Window expiry, if run before the end | It works only on a live drain. A closed or stopped window is refused. It can't be scheduled from a routine |
 | `drain-adopt-v1` and the clock's upgrade resume | Yes | Deploy | The deploy wrapper defeats it. `update-orbit.sh` (constellation, ORB-19698) runs `orbit run auto --stop` on every poll and "never restarts" what it stopped. The clock's upgrade resume skips drains whose admissions were stopped |
 | Live pool re-read (ORB-25866, ORB-25893) | Yes, since 11-20 | Pool-change restarts | Landed after most of the week. The worker ceiling (`max_active_leaf_runs`) can be retuned on a live drain with `orbit run concurrency <run> --set N`, with `orbit run extend <run> --for <d> --concurrency N`, or with the operator `orbit_workflow` tool's `auto` action in `mode: "resize"`. A live window can be lengthened with `run extend`, but not shortened. Review timing and the flags are still fixed when a drain starts; no live verb changes them |
 | Paused / idle surface | Partial | — | `run readiness` says "no drain is live". Attention has no item for "work waiting, no drain", and doctor has no drain check |
 
-So existing pieces cover the pool-change and usage-limit causes. The resident covers the rest only if
-Daniel turns on a model-driven loop for what is a deterministic step. The gap that remains is
+So existing pieces cover the pool-change and usage-limit causes. A dispatch-granted resident covers
+none of the rest: it can ship named tasks, but only an operator session can submit an owner drain,
+so turning the resident on does not restart one. The gap that remains is
 that **nothing re-submits a drain after it ends, and nothing records whether a stop meant "pause" or
 "restart soon"**.
 
