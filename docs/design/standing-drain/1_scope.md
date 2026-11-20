@@ -25,7 +25,7 @@ CLI or the dashboard (at most 24 h, `MAX_DRAIN_WINDOW_SECONDS` in
 and it can survive a binary swap (`drain-adopt-v1`, and the clock's upgrade resume in
 [upgrades.md](../../runbooks/upgrades.md) §"switch"). Its worker dispatches `task_auto_pipeline`
 leaves for the backlog work the admission ladder admits, and `orbit.workflow` action `auto` is
-operator-only, so no resident can submit a drain. The explicit ship route is separate:
+operator-only, so no resident can submit a drain. The explicit ship route is separate ([ORB-26010] corrected this account of the dispatch routes):
 `orbit run ship`, `orbit.workflow` action `ship` and the dashboard's ship submit a
 `task_auto_pipeline` run directly, for the task ids they name or, with none, a run whose worker
 discovers the backlog work itself. It needs no live drain, and it passes the same entry admission as the owner drain
@@ -168,7 +168,7 @@ satisfies the chief's gate: there is no dispatch path outside the ladder.
 The `false` default applies to every workspace and every host, followers and workspaces that
 never keep a drain included.
 
-The worker ceiling and the forecast mode are separate settings, and the keeper keeps them apart.
+The worker ceiling and the forecast mode are separate settings, and the keeper keeps them apart ([ORB-26009] corrected the worker-ceiling and forecast-mode claims in this section).
 The ceiling bounds how many `task_auto_pipeline` leaf runs are live at once. The forecast admission
 mode is `machine.auto_concurrency.mode` (default `off`), which `run auto --auto-concurrency` can
 override for one run. An unset `concurrency` never reads the forecast mode. The keeper has no
@@ -295,12 +295,14 @@ Each of these was resolved by the chief's ruling on [ORB-25951].
 
 ## Task References
 
-- [ORB-25965] — phase 1: intent, pause attribution, doctor row, readiness field, idle figure
-- [ORB-25991] — phase 2: the keeper (depends on ORB-25965)
-- [ORB-25992] — phase 3: deploy hold (depends on ORB-25991; parked in someday)
-- [ORB-25951] — the on-call perf review that measured the gaps
-- [ORB-25866] — live crew-pool re-read in a running drain
-- [ORB-25893] — follow-up to the live pool re-read
-- [ORB-19698] — the deploy wrapper's admission hold
+- [ORB-25965] — is building phase 1 (in progress): the drain intent, pause attribution, doctor row, readiness field and idle-with-work figure.
+- [ORB-25991] — is to build phase 2, the keeper, after ORB-25965 (backlog).
+- [ORB-25992] — is to build phase 3, the deploy hold, after ORB-25991 (someday).
+- [ORB-25951] — is the on-call review that measured the gaps and recorded the chief's ruling on phases 1–2.
+- [ORB-25866] — made a running drain re-read its configured crew pools while it runs.
+- [ORB-25893] — followed up the live pool re-read for crews removed from a running drain's pools.
+- [ORB-19698] — made update-orbit.sh hold drain admissions for the wait itself, the deploy hold this scope relies on.
+- [ORB-26009] — corrected this scope's worker-ceiling and forecast-mode claims.
+- [ORB-26010] — corrected this scope's account of the existing dispatch routes.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
