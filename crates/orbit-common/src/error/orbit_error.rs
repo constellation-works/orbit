@@ -500,8 +500,12 @@ fn not_found_message(kind: NotFoundKind, id: &str, guidance: Option<&str>) -> St
     let guidance = guidance.unwrap_or(match kind {
         NotFoundKind::Task => "; see `orbit task list` for valid task IDs",
         NotFoundKind::JobRun => {
-            default_guidance = format!("; see `orbit run history` for valid run IDs, or use `orbit task show {id} --fields delivery` for a task's delivery run");
-            &default_guidance
+            if orbit_types::task::is_valid_orb_task_id(id) {
+                default_guidance = format!("; see `orbit run history` for valid run IDs, or use `orbit task show {id} --fields delivery` for a task's delivery run");
+                &default_guidance
+            } else {
+                "; see `orbit run history` for valid run IDs"
+            }
         }
         NotFoundKind::Job => "; see `orbit job list` for valid job IDs",
         NotFoundKind::Tool => "; see `orbit tool list` or MCP `tools/list` for valid tool names",
@@ -530,14 +534,17 @@ impl OrbitError {
                 id,
                 guidance: None,
             } => {
-                let input = serde_json::json!({"id": id, "field": "delivery"});
-                not_found_message(
-                    NotFoundKind::JobRun,
-                    id,
-                    Some(&format!(
+                let default_guidance;
+                let guidance = if orbit_types::task::is_valid_orb_task_id(id) {
+                    let input = serde_json::json!({"id": id, "field": "delivery"});
+                    default_guidance = format!(
                         "; see `orbit_run {{\"action\":\"list\"}}` for valid run IDs, or use `orbit_task_show {input}` for a task's delivery run"
-                    )),
-                )
+                    );
+                    &default_guidance
+                } else {
+                    "; see `orbit_run {\"action\":\"list\"}` for valid run IDs"
+                };
+                not_found_message(NotFoundKind::JobRun, id, Some(guidance))
             }
             Self::TaskDeliveryUnavailable(task_id) => {
                 let input = serde_json::json!({"id": task_id});

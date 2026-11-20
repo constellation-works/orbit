@@ -281,6 +281,7 @@ fn missing_values_name_their_listing_commands() {
     for (args, listing) in [
         (vec!["task", "show", MISSING_TASK], "orbit task list"),
         (vec!["run", "show", "missing-run"], "orbit run history"),
+        (vec!["run", "show", "jrun-bogus"], "orbit run history"),
         (vec!["run", "logs", "missing-run"], "orbit run history"),
         (vec!["run", "job", "missing-job"], "orbit job list"),
         (vec!["tool", "show", "missing-tool"], "orbit tool list"),
@@ -301,6 +302,12 @@ fn missing_values_name_their_listing_commands() {
             assert!(
                 !message.contains("orbit.task.") && !message.contains("orbit_task_"),
                 "CLI recovery must use runnable CLI syntax: {message}"
+            );
+        }
+        if args[0] == "run" && (args[2] == "missing-run" || args[2] == "jrun-bogus") {
+            assert!(
+                !message.contains("task show"),
+                "run-not-found error for a non-task ID must not suggest task show: {message}"
             );
         }
         assert!(
