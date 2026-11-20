@@ -1,7 +1,7 @@
 use crate::RuntimeKernel;
 use crate::run_input::non_empty;
 use orbit_common::OrbitError;
-use orbit_types::identity::{Crew, resolve_crew};
+use orbit_types::identity::{Crew, find_human_crew, resolve_crew};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
@@ -137,17 +137,18 @@ impl RuntimeKernel {
     /// silently narrowing what a live drain will admit. An empty selection is
     /// `None` — the option was omitted, and behavior is unchanged.
     pub fn crew_allowlist(&self, names: &[String]) -> Result<Option<CrewAllowlist>, OrbitError> {
+        let crew_settings = self.admission_crew_settings();
         let mut allowed_names = BTreeSet::new();
         let mut identities = BTreeSet::new();
         for name in names {
             // A human crew permits nothing: its name joins the list as named,
             // with no agent identity, so its tasks report `human_crew` rather
             // than an unknown crew. Names cannot collide with agent crews.
-            if let Some(human) = self.human_crew(Some(name)) {
+            if let Some(human) = find_human_crew(Some(name), &crew_settings.human_crews) {
                 allowed_names.insert(human.name.clone());
                 continue;
             }
-            let crew = resolve_crew(name.trim(), self.context.settings().crews())?;
+            let crew = resolve_crew(name.trim(), &crew_settings.crews)?;
             identities.insert(crew_identity(&crew));
             allowed_names.insert(crew.name);
         }
@@ -161,7 +162,7 @@ impl RuntimeKernel {
     /// or by the identity it resolves to. A name that no longer resolves is
     /// not permitted.
     pub fn crew_allowlist_permits(&self, allowlist: &CrewAllowlist, name: &str) -> bool {
-        resolve_crew(name.trim(), self.context.settings().crews())
+        resolve_crew(name.trim(), &self.admission_crew_settings().crews)
             .is_ok_and(|crew| allowlist.permits(&crew))
     }
 

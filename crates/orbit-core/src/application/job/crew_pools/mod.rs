@@ -76,11 +76,11 @@ impl crate::OrbitRuntime {
             .filter(|entry| entry.weight > 0)
             .map(|entry| entry.name.clone())
             .collect::<std::collections::BTreeSet<_>>();
-        let settings = self.context.settings();
-        for (task_type, tier, entries) in settings.type_complexity_crews().iter() {
+        let crew_settings = self.admission_crew_settings();
+        for (task_type, tier, entries) in crew_settings.type_complexity_crews.iter() {
             let pool = orbit_config::canonical_crew_pool(
                 entries,
-                settings.crews(),
+                &crew_settings.crews,
                 &orbit_config::type_complexity_crews_key(task_type, tier),
             )?;
             names.extend(

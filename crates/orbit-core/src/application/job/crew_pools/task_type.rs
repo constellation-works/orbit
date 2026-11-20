@@ -43,11 +43,13 @@ impl OrbitRuntime {
         context_files: &[String],
     ) -> Option<TypePoolRoute> {
         let tier = complexity.filter(|complexity| complexity.is_assessed())?;
-        let pools = self.context.settings().type_complexity_crews();
+        let crew_settings = self.admission_crew_settings();
+        let pools = &crew_settings.type_complexity_crews;
         // Classification compiles path globs, so a workspace without type
         // pools skips it.
         pools.iter().next()?;
-        let task_type = orbit_config::classify_task_type(self.task_types(), tags, context_files);
+        let task_type =
+            orbit_config::classify_task_type(&crew_settings.task_types, tags, context_files);
         if task_type == OTHER_TYPE {
             return None;
         }
@@ -67,15 +69,15 @@ impl OrbitRuntime {
         route: &TypePoolRoute,
         task_os: Option<&TaskOsRequirement>,
     ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
-        let settings = self.context.settings();
-        let Some(raw) = settings
-            .type_complexity_crews()
+        let crew_settings = self.admission_crew_settings();
+        let Some(raw) = crew_settings
+            .type_complexity_crews
             .pool(&route.task_type, route.tier)
         else {
             return Ok(None);
         };
         let key = type_complexity_crews_key(&route.task_type, route.tier);
-        let pool = canonical_crew_pool(raw, settings.crews(), &key)?;
+        let pool = canonical_crew_pool(raw, &crew_settings.crews, &key)?;
         self.pool_member_candidates(&pool.entries, &key, task_os)
     }
 

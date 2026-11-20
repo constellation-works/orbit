@@ -31,6 +31,7 @@ impl OrbitRuntime {
         &self,
         input: &Value,
     ) -> Result<CapturedCrewPools, OrbitError> {
+        let crew_settings = self.admission_crew_settings();
         COMPLEXITIES
             .into_iter()
             .map(|complexity| {
@@ -45,19 +46,18 @@ impl OrbitRuntime {
                         format!("run_input.{key}"),
                     ),
                     None => (
-                        self.context
-                            .settings()
-                            .complexity_crews()
+                        crew_settings
+                            .complexity_crews
                             .pool(complexity)
                             .unwrap_or_default()
                             .to_vec(),
                         format!("workflow.{key}"),
                     ),
                 };
-                let pool = canonical_crew_pool(&names, self.context.settings().crews(), &source)?;
+                let pool = canonical_crew_pool(&names, &crew_settings.crews, &source)?;
                 // A run override is admitted like the configured pool: an
                 // `@auto` member needs bands for its crew.
-                let policy = self.context.settings().auto_effort();
+                let policy = &crew_settings.auto_effort;
                 if let Some(base) = pool.entries.iter().find_map(|entry| {
                     orbit_types::identity::auto_effort_base(&entry.name)
                         .filter(|base| policy.bands(base).is_none())
@@ -105,10 +105,10 @@ impl OrbitRuntime {
                 );
             }
         }
-        let settings = self.context.settings();
-        for (task_type, tier, names) in settings.type_complexity_crews().iter() {
+        let crew_settings = self.admission_crew_settings();
+        for (task_type, tier, names) in crew_settings.type_complexity_crews.iter() {
             let key = orbit_config::type_complexity_crews_key(task_type, tier);
-            if let Ok(pool) = canonical_crew_pool(names, settings.crews(), &key) {
+            if let Ok(pool) = canonical_crew_pool(names, &crew_settings.crews, &key) {
                 pools.insert(
                     CrewSource::Type {
                         task_type: task_type.to_string(),
@@ -120,11 +120,12 @@ impl OrbitRuntime {
             }
         }
         for purpose in orbit_types::workflow::CrewPurpose::ALL {
-            let names = settings.purpose_crews().pool(purpose);
+            let names = crew_settings.purpose_crews.pool(purpose);
             if names.is_empty() {
                 continue;
             }
-            if let Ok(pool) = canonical_crew_pool(names, settings.crews(), purpose.config_key()) {
+            if let Ok(pool) = canonical_crew_pool(names, &crew_settings.crews, purpose.config_key())
+            {
                 pools.insert(
                     CrewSource::Purpose(purpose.as_str().to_string()).to_string(),
                     pool.entries.into_iter().map(|entry| entry.name).collect(),
@@ -340,11 +341,9 @@ impl OrbitRuntime {
         let pool = if source == CrewSource::Other(orbit_config::REVIEW_CREW_KEY.to_string()) {
             let policy = self.operation_policy();
             let source_key = source.to_string();
-            let pool = canonical_crew_pool(
-                &policy.review_crew.value,
-                self.context.settings().crews(),
-                &source_key,
-            )?;
+            let crew_settings = self.admission_crew_settings();
+            let pool =
+                canonical_crew_pool(&policy.review_crew.value, &crew_settings.crews, &source_key)?;
             self.pool_member_candidates(&pool.entries, &source_key, None)?
         } else if matches!(source, CrewSource::Purpose(_)) {
             self.purpose_assignment_candidates(task)?
@@ -843,8 +842,8 @@ impl OrbitRuntime {
         else {
             return Ok(None);
         };
-        let registry = self.context.settings().crews();
-        let entries = canonical_crew_pool_entries(&pool.crews, registry, &pool.source)?;
+        let crew_settings = self.admission_crew_settings();
+        let entries = canonical_crew_pool_entries(&pool.crews, &crew_settings.crews, &pool.source)?;
         self.pool_member_candidates(&entries, &pool.source, task_os)
     }
 

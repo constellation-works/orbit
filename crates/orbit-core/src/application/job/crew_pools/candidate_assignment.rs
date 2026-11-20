@@ -224,7 +224,7 @@ impl OrbitRuntime {
                 source,
             }));
         }
-        if self.context.settings().default_crew().is_none() {
+        if self.admission_crew_settings().default_crew.is_none() {
             return Ok(None);
         }
         // A disabled default is not pinned onto the task: creation stays
