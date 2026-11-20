@@ -13,12 +13,17 @@ use super::candidate::{Candidate, RevokedHandoff};
 use super::model::ExternalMergeSettlement;
 use super::{refusal, rescued};
 
-/// How the task landed (`pull request #N, merged into B as C outside Orbit`),
+/// How the task landed (`pull request #N, merged into B at T as C outside Orbit`),
 /// and the landing note its settlement records.
 fn landing_note(landing: &MergedPullRequest) -> (String, String) {
     let landed = format!(
-        "pull request #{}, merged into {} as {} outside Orbit",
-        landing.pull.number, landing.base_branch, landing.merge_commit
+        "pull request #{}, merged into {} at {} as {} outside Orbit",
+        landing.pull.number,
+        landing.base_branch,
+        landing
+            .merged_at
+            .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
+        landing.merge_commit
     );
     let note = format!("settled from {landed}");
     (landed, note)
@@ -168,6 +173,9 @@ impl OrbitRuntime {
                         task.status
                     ),
                 ));
+            }
+            if task.status != TaskStatus::Backlog && task.updated_at != observed.updated_at {
+                return Err(refusal::refused(id, "the task changed after the merge was matched"));
             }
             if let Some(live) = self.live_task_delivery(&task) {
                 return Err(refusal::refused(id, &live));

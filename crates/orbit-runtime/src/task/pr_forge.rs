@@ -16,9 +16,11 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_engine::{CheckState, classify_rollup_context};
 use orbit_exec::ExecRequest;
+use orbit_types::plugin::is_full_commit_id;
 use orbit_types::workflow::MergeMessage;
 use serde_json::Value;
 
@@ -40,12 +42,16 @@ pub struct ForgePullRequest {
 pub struct MergedPullRequest {
     /// The fields an open pull request is matched by.
     pub pull: ForgePullRequest,
+    /// The forge URL, which identifies the repository as well as the number.
+    pub url: String,
     /// The branch it merged into.
     pub base_branch: String,
     /// The PR head observed after merge, including an operator's rebase.
     pub head_sha: String,
     /// The commit it merged as.
     pub merge_commit: String,
+    /// When the forge merged the pull request.
+    pub merged_at: DateTime<Utc>,
 }
 
 /// State of the PR a lease's branch or explicit `#number` binds to.
@@ -411,11 +417,11 @@ impl TaskPrForge for GhTaskPrForge {
             return Ok(None);
         }
         merged_pull_request_from_json(&entry)
+            .filter(|merged| merged.pull.number == number)
             .map(Some)
             .ok_or_else(|| {
                 OrbitError::Execution(format!(
-                    "gh pr view #{number} did not report its head branch, head commit, author, base branch \
-                     and merge commit"
+                    "gh pr view #{number} did not report matching identity and complete merge evidence"
                 ))
             })
     }
@@ -665,6 +671,9 @@ fn pull_request_from_json(entry: &Value) -> Option<ForgePullRequest> {
 /// A merged entry also needs the branch it merged into and its merge commit;
 /// without them it cannot prove where the task's work landed.
 fn merged_pull_request_from_json(entry: &Value) -> Option<MergedPullRequest> {
+    if !has_state(entry, "merged") {
+        return None;
+    }
     let non_empty = |value: Option<&Value>| {
         value
             .and_then(Value::as_str)
@@ -672,11 +681,14 @@ fn merged_pull_request_from_json(entry: &Value) -> Option<MergedPullRequest> {
             .filter(|value| !value.is_empty())
             .map(str::to_string)
     };
+    let commit = |value: Option<&Value>| non_empty(value).filter(|sha| is_full_commit_id(sha));
     Some(MergedPullRequest {
         pull: pull_request_from_json(entry)?,
+        url: non_empty(entry.get("url"))?,
         base_branch: non_empty(entry.get("baseRefName"))?,
-        head_sha: non_empty(entry.get("headRefOid"))?,
-        merge_commit: non_empty(entry.pointer("/mergeCommit/oid"))?,
+        head_sha: commit(entry.get("headRefOid"))?,
+        merge_commit: commit(entry.pointer("/mergeCommit/oid"))?,
+        merged_at: entry.get("mergedAt")?.as_str()?.parse().ok()?,
     })
 }
 

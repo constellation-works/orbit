@@ -1,6 +1,7 @@
-//! Read-only proof shared by publication recovery and desktop review.
+//! Read-only publication proof for recovery, desktop review and settlement.
 use super::observation::{authenticated_checkpoint, auto_fix_advanced_head};
 use super::*;
+use crate::application::task::NativePublicationIdentity;
 
 /// Authenticated publication identity, independent of recovery admission.
 pub(crate) struct NativePublicationProof {
@@ -15,7 +16,102 @@ pub(crate) struct NativePublicationProof {
     pub(super) certified_tip: Option<super::certified_rebase::CertifiedRebaseTip>,
 }
 
+impl From<NativePublicationProof> for NativePublicationIdentity {
+    fn from(proof: NativePublicationProof) -> Self {
+        Self {
+            branch: proof.branch,
+            head: proof.head,
+            base_branch: proof.base_branch,
+            number: proof.number,
+            url: proof.url,
+        }
+    }
+}
+
 impl OrbitRuntime {
+    /// Prove what a stopped native run published before external settlement.
+    /// An absent inline PR checkpoint leaves other settlement routes in place.
+    /// Once a checkpoint claims a publication, failure to authenticate it
+    /// must not fall back to the author and branch-name heuristic.
+    pub(crate) fn stopped_native_settlement_proof(
+        &self,
+        task: &Task,
+    ) -> Result<Option<NativePublicationProof>, OrbitError> {
+        let Some(machine) = task.job_run_machine.as_ref().filter(|machine| {
+            self.automation_machine_identity() == Some(machine.machine_id.as_str())
+        }) else {
+            return Ok(None);
+        };
+        let Some(run_id) = task.job_run_id.as_deref() else {
+            return Ok(None);
+        };
+        let Some(source) = self.get_job_run_backend(run_id)? else {
+            return Ok(None);
+        };
+        if source.job_id != orbit_types::workflow::TASK_PR_PIPELINE_JOB
+            || source
+                .executed_on
+                .as_ref()
+                .is_none_or(|origin| origin.machine_id != machine.machine_id)
+            || source.input.as_ref().is_none_or(|input| {
+                input["completion"] != "done"
+                    || input["claimed"] == true
+                    || carried_task_ids(input) != BTreeSet::from([task.id.clone()])
+            })
+            || self.stores().jobs().local_pull_for_run(run_id)?.is_some()
+        {
+            return Ok(None);
+        }
+        let Some(state) = self.read_run_state(run_id)? else {
+            return Ok(None);
+        };
+        if state.pipeline.get("pr_open").is_none_or(Value::is_null) {
+            return Ok(None);
+        }
+        // Claim liveness is checked by settlement before observing the
+        // publication and again when writing. Past claims do not change who
+        // published the current native candidate.
+        if !source.state.is_terminal()
+            || source.finished_at.is_none()
+            || run_owner_liveness(&source) != RunOwnerLiveness::Stopped
+            || state.run_id != run_id
+            || state.job_id != source.job_id
+        {
+            return Err(refuse(
+                "publication does not belong to a stopped native delivery",
+            ));
+        }
+        if let Some(digest) = state
+            .failure_activity_checkpoint
+            .as_ref()
+            .and_then(|receipt| receipt.output["task_spec_digest"].as_str())
+            && !task.spec_digest_matches(digest)
+        {
+            return Err(refuse("task specification changed after publication"));
+        }
+        let job = self.source_repair_definition(&source)?;
+        let proof = self.authenticate_publication_chain(&source, task, &state, &job, false)?;
+        let url = proof
+            .url
+            .as_deref()
+            .ok_or_else(|| refuse("publication PR URL missing"))?;
+        task_pr_association(task, &proof.number, url)?;
+        let rules = crate::runtime::RuntimeKernel::completion_hold_rules(self);
+        if !rules.is_empty()
+            && let Some(hold) = orbit_engine::candidate_commit_completion_hold(
+                rules,
+                task,
+                &self.paths().repo_root,
+                &proof.base_sha,
+                &proof.head,
+                run_id,
+            )?
+        {
+            return Err(refuse(hold.summary()));
+        }
+        Ok(Some(proof))
+    }
+
     /// Observe only the exact native execution the task names. A local row
     /// with a foreign run's id never grants publication authority.
     pub(crate) fn desktop_native_publication_proof(

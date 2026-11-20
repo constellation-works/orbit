@@ -121,9 +121,11 @@ impl TaskPrForge for LandingForge {
             number,
             MergedPullRequest {
                 pull,
+                url: format!("https://github.com/owner/repo/pull/{number}"),
                 base_branch: "main".to_string(),
                 head_sha: head_sha.to_string(),
                 merge_commit: MERGE_COMMIT.to_string(),
+                merged_at: chrono::Utc::now(),
             },
         );
         Ok(PullRequestMergeOutcome::Merged {
