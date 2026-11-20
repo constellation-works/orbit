@@ -3,8 +3,8 @@ summary: "MCP Session Context — Vision"
 type: design
 title: "MCP Session Context — Vision"
 owner: codex
-last_updated: 2026-10-31
-last_validated: 2026-10-31
+last_updated: 2026-11-20
+last_validated: 2026-11-20
 status: Accepted
 feature: mcp-session-context
 doc_role: vision
@@ -26,7 +26,7 @@ Authorization is enforced behind Core dispatch. Session capability policy comes 
 
 ### Additional transports
 
-The current TCP listener and federated SSH mux construct process and transport facts at their accepting boundaries, preserve MCP framing, isolate mutable session state, and create one trace per call [ORB-10690] [ORB-10806] [ORB-11009]. Any new transport must follow the same rules. The TCP listener admits only a peer whose user id is the server's and refuses a remote TCP client, which has no local user id. Its safe default remains loopback-only.
+The current TCP listener and federated SSH mux construct process and transport facts at their accepting boundaries, preserve MCP framing, isolate mutable session state, and create one trace per call [ORB-10690] [ORB-10806] [ORB-11009]. Any new transport must follow the same rules. The TCP listener admits only a peer whose user id is the server's and refuses a remote TCP client, which has no local user id [ORB-23052]. Its safe default remains loopback-only.
 
 ### Additional context fields
 
@@ -55,7 +55,8 @@ Add a field only when all three are true:
 
 - [ORB-11009] established the separation between v1 local addressing and the host-qualified federated selector.
 - [ORB-10690] added the TCP listener transport this design treats as a separate accepting boundary.
-- [ORB-10806] kept listener authorization and access control outside `orbit mcp listen`.
+- [ORB-10806] defined the policy-free `orbit mcp listen` entry point.
+- [ORB-23052] admitted only a peer whose user id is the server's on that listener, and refused a remote TCP client before any read.
 - [ORB-10916] and [ORB-10927] established server-owned capability grants and Core authorization.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -3,8 +3,8 @@ summary: "MCP Session Context — Overview"
 type: design
 title: "MCP Session Context — Overview"
 owner: codex
-last_updated: 2026-10-31
-last_validated: 2026-11-06
+last_updated: 2026-11-20
+last_validated: 2026-11-20
 status: Implemented
 stage: shipped
 next: "—"
@@ -45,7 +45,7 @@ The external workspace value is addressing input, not a trusted workspace identi
 
 ## Current boundary
 
-Local and SSH modes use stdio framing; the SSH proxy carries those bytes through unchanged. The separate `orbit mcp listen` TCP listener gives each accepted connection its own server session and records the peer address as best-effort `caller_ip`; it is loopback-only by default [ORB-10690] [ORB-10806]. The opt-in federated stdio mux routes to configured local and SSH destinations [ORB-11009]. Workspace selectors apply to workspace-scoped calls; federated id-routed task calls use the task ID and configured task-prefix table. Tool definitions carry global-versus-workspace-required scope; the accepting server and Core resolve capabilities and authorization. Caller machine and network labels remain audit evidence rather than authenticated principals; a destination serves the authority the session's argv asks for, because an SSH login to it is ownership of it [ORB-12564].
+Local and SSH modes use stdio framing; the SSH proxy carries those bytes through unchanged. The separate `orbit mcp listen` TCP listener gives each accepted connection its own server session and records the peer address as best-effort `caller_ip`; it is loopback-only by default and admits only a peer whose uid matches the server uid, refusing differing, missing, ambiguous or unreadable peer uids before any read [ORB-23052] [ORB-10690] [ORB-10806]. The opt-in federated stdio mux routes to configured local and SSH destinations [ORB-11009]. Workspace selectors apply to workspace-scoped calls; federated id-routed task calls use the task ID and configured task-prefix table. Tool definitions carry global-versus-workspace-required scope; the accepting server and Core resolve capabilities and authorization. Caller machine and network labels remain audit evidence rather than authenticated principals; a destination serves the authority the session's argv asks for, because an SSH login to it is ownership of it [ORB-12564].
 
 See [2_design.md](./2_design.md) for the concrete path, [3_vision.md](./3_vision.md) for evolution gates, and [4_decisions.md](./4_decisions.md) for current design choices.
 
@@ -54,6 +54,7 @@ See [2_design.md](./2_design.md) for the concrete path, [3_vision.md](./3_vision
 - [ORB-10228] — accepted the Host Registry and MCP Bridge design.
 - [ORB-10690] — added the explicit TCP MCP listener.
 - [ORB-10806] — defined the policy-free `orbit mcp listen` entry point.
+- [ORB-23052] — admitted only a peer whose uid matches the server uid on `orbit mcp listen`, refusing differing, missing, ambiguous or unreadable peer uids before any read.
 - [ORB-11009] — established the federated MCP routing contract.
 - [ORB-12564] — propagated operator authority through the federated destination's SSH policy.
 
