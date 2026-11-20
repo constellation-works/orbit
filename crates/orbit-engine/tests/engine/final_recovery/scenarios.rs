@@ -735,6 +735,69 @@ fn transient_infrastructure_is_escalated_without_an_agent() {
     }
 }
 
+/// [ORB-25864] GitHub rate-limiting the automation account's read failed
+/// `pr_complete` on seven complete candidates in one drain, and the agent
+/// escalated each into a blocked task with a decision request. The rate limit
+/// resets within the hour and judged nothing about the candidate, so final
+/// recovery requeues the unchanged publication without an agent. The same
+/// text quoted by a validation action's output still goes to the agent.
+/// `reserve_locks` stands for every delivery action, `pr_complete` among
+/// them: the host runs it, and the classifier lists it.
+fn a_github_rate_limit_is_requeued_without_an_agent() {
+    let limited = "execution failed: private automation VCS workflow prerequisite read \
+                   repos/{owner}/{repo} failed: gh: API rate limit exceeded for user ID 270255973. \
+                   If you reach out to GitHub Support for help, please include the request ID \
+                   DE78:121DB1:92BAD8:9B7940:6AFFAFC1 (HTTP 403)";
+    // The adapter's own error, and the same error inside an auto-fix stop.
+    let stopped = format!(
+        "auto_fix_stopped: pull request #42 cannot be repaired automatically ({limited}); no \
+         repair agent runs, the pull request stays open and the task stays in review"
+    );
+    for message in [limited.to_string(), stopped] {
+        let host = RecoveryHost::new([
+            ("reserve_locks", vec![Reply::Diagnostic(message.clone())]),
+            ("decide", vec![escalate()]),
+        ]);
+        let limited_run = run(&pipeline_acting("reserve_locks", false), &host, None);
+        assert!(limited_run.result.is_err(), "{message}");
+        assert_eq!(
+            host.count("decide"),
+            0,
+            "no agent judges a rate limit: {message}"
+        );
+        let applications = host.applications();
+        assert_eq!(applications.len(), 1, "{message}");
+        assert_eq!(applications[0].infrastructure, None, "{message}");
+        assert!(
+            matches!(
+                &applications[0].decision,
+                FinalRecoveryDecision::Requeue { reason } if reason.starts_with("provider-rate-limit:")
+            ),
+            "a rate limit is requeued, never escalated: {:?}",
+            applications[0].decision
+        );
+    }
+
+    let host = RecoveryHost::new([
+        (
+            "review_reconciliation_validate",
+            vec![Reply::Diagnostic(limited.into())],
+        ),
+        ("decide", vec![escalate()]),
+    ]);
+    let quoted_run = run(
+        &pipeline_acting("review_reconciliation_validate", false),
+        &host,
+        None,
+    );
+    assert!(quoted_run.result.is_err());
+    assert_eq!(
+        host.count("decide"),
+        1,
+        "validation output goes to the agent"
+    );
+}
+
 /// A `worktree_setup` failure caused by a dependency lookup `not_found` is
 /// not transient: final recovery must not dispatch an agent that could requeue
 /// it on an unchanged environment. The same text from another step still reaches the agent.
@@ -1401,7 +1464,7 @@ macro_rules! recovery_contracts {
 recovery_contracts!(recovery_contracts_1: a_resume_reruns_from_the_named_step_and_the_run_completes, resume_context_is_opaque_when_the_target_inherits_job_input, a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart, an_oversized_refusal_reaches_the_resumed_step_bounded_under_the_admitted_id, an_oversized_refused_output_reaches_the_resumed_implementer_bounded, a_settling_decision_ends_the_run_without_the_failure_handoff);
 recovery_contracts!(recovery_contracts_2: an_escalation_still_runs_the_failure_handoff, an_error_that_skips_step_recovery_still_reaches_final_recovery, step_recovery_runs_first_and_final_recovery_only_once_it_is_spent, final_recovery_runs_at_most_once_per_run, a_run_resumed_after_a_final_recovery_resume_never_runs_it_again, a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision, an_evidence_hold_after_step_recovery_holds_the_run, a_cancelled_child_after_step_recovery_cancels_the_run);
 recovery_contracts!(recovery_contracts_3: a_provider_authentication_failure_skips_final_recovery, an_empty_crew_pool_skips_final_recovery, a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade, a_resume_to_an_earlier_step_keeps_the_named_target, a_resume_to_an_admission_or_nonexistent_step_is_escalated, a_malformed_decision_is_escalated, a_decision_carries_its_fault_and_one_without_a_fault_escalates, the_recovery_packet_withholds_the_implementers_model);
-recovery_contracts!(recovery_contracts_4: a_stopped_rebase_resumes_its_rebasing_step_without_a_repair_commit, completion_observation_classifies_retry_policy_and_candidate_refusal, a_failure_before_the_worktree_exists_skips_final_recovery, failed_recovery_dispatch_is_injected_before_final_recovery, final_recovery_injects_only_its_runs_bounded_evidence_in_order, final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_evidence_overflows, final_recovery_keeps_post_recovery_output_when_a_later_step_fails, final_recovery_resume_checkpoints_the_latest_conflict_diagnostics, transient_infrastructure_is_escalated_without_an_agent, worktree_setup_dependency_not_found_skips_final_recovery);
+recovery_contracts!(recovery_contracts_4: a_stopped_rebase_resumes_its_rebasing_step_without_a_repair_commit, completion_observation_classifies_retry_policy_and_candidate_refusal, a_failure_before_the_worktree_exists_skips_final_recovery, failed_recovery_dispatch_is_injected_before_final_recovery, final_recovery_injects_only_its_runs_bounded_evidence_in_order, final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_evidence_overflows, final_recovery_keeps_post_recovery_output_when_a_later_step_fails, final_recovery_resume_checkpoints_the_latest_conflict_diagnostics, transient_infrastructure_is_escalated_without_an_agent, a_github_rate_limit_is_requeued_without_an_agent, worktree_setup_dependency_not_found_skips_final_recovery);
 recovery_contracts!(recovery_contracts_5: finished_run_tls_observation_readmits_unchanged_publication, transient_observation_held_after_recovery_parks_or_requeues);
 
 /// The executor cannot turn a policy refusal into completion authority, and

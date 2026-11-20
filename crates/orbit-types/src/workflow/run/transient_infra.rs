@@ -155,6 +155,60 @@ impl TransientInfrastructure {
     }
 }
 
+/// Whether deterministic delivery action `action` failed only because GitHub
+/// rate-limited the automation account's read [ORB-25864].
+///
+/// The account's quota is shared by every pipeline on the host and resets
+/// within the hour, so such a failure judged nothing about the candidate:
+/// final recovery requeues the unchanged publication without an agent, and
+/// the next completion waits for the reset within its own budget. Like
+/// [`TransientInfrastructure::of_action_failure`], only a delivery action's
+/// own error counts, and it has to *start* with the private VCS adapter's
+/// display (after the auto-fix stop wrapper Orbit puts on it), so a
+/// validation log quoting GitHub's rate-limit text never matches. An
+/// unauthenticated limit names an address rather than an account, so it is
+/// a missing credential and does not match either.
+#[must_use]
+pub fn is_github_rate_limit_failure(action: &str, message: &str) -> bool {
+    if !DELIVERY_ACTIONS.contains(&action) {
+        return false;
+    }
+    let message = strip_execution_failed(message.trim_start());
+    let message = strip_execution_failed(strip_auto_fix_stop(message));
+    if !message.starts_with("private automation VCS ") {
+        return false;
+    }
+    let lower = message.to_ascii_lowercase();
+    (lower.contains("api rate limit exceeded for user id ")
+        || lower.contains("api rate limit exceeded for installation id ")
+        || lower.contains("secondary rate limit"))
+        && (lower.contains("(http 403)") || lower.contains("(http 429)"))
+}
+
+fn strip_execution_failed(message: &str) -> &str {
+    message
+        .strip_prefix("execution failed: ")
+        .unwrap_or(message)
+}
+
+/// The cause inside an auto-fix stop (`auto_fix_stopped: pull request #N
+/// cannot be repaired automatically (<cause>); ...`), or `message` unchanged
+/// when it is no such stop. The wrapper is Orbit's own text.
+fn strip_auto_fix_stop(message: &str) -> &str {
+    let Some(rest) = message.strip_prefix("auto_fix_stopped: ") else {
+        return message;
+    };
+    let rest = rest
+        .strip_prefix("pull request #")
+        .map(|rest| {
+            rest.trim_start_matches(|c: char| c.is_ascii_digit())
+                .trim_start()
+        })
+        .unwrap_or(rest);
+    rest.strip_prefix("cannot be repaired automatically (")
+        .unwrap_or(message)
+}
+
 /// The typed error after the `load tag instructions for `<activity>` (run
 /// <id>): ` wrapper the runtime host puts on a tag-instructions load failure,
 /// or `message` unchanged when it has no such wrapper. The activity name and

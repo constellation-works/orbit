@@ -159,11 +159,7 @@ fn sources(
         if fields.len() != 3 || !matches!(fields[0], "100644" | "100755") || fields[1] != "blob" {
             return Err(unreadable("workflow source mode"));
         }
-        let contents = api(
-            deadline,
-            workspace,
-            &format!("repos/{{owner}}/{{repo}}/contents/{path}?ref={commit}"),
-        )?;
+        let contents = super::read_cache::contents_at_commit(deadline, workspace, path, commit)?;
         same(
             &contents["type"],
             &json!("file"),

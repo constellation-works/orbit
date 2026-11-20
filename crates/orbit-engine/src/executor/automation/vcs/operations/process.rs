@@ -221,3 +221,27 @@ pub(in crate::executor::automation::vcs) fn succeeded(
     }
     Ok(result)
 }
+
+/// [`succeeded`] for a read through `gh`: GitHub's authenticated rate limit
+/// keeps its class and message and gains the typed
+/// [`orbit_common::ProviderReadThrottle`], so the caller's policy can wait
+/// for the reset instead of failing the step [ORB-25864].
+pub(in crate::executor::automation::vcs) fn succeeded_read(
+    result: orbit_exec::ExecutionResult,
+    operation: &str,
+) -> Result<orbit_exec::ExecutionResult, OrbitError> {
+    let throttle = if result.success {
+        None
+    } else {
+        orbit_tools::github_cli::check_gh_read_result(&result, operation)
+            .err()
+            .and_then(|error| error.private_vcs_failure()?.read_throttle.clone())
+    };
+    succeeded(result, operation).map_err(|error| match (error, throttle) {
+        (OrbitError::PrivateVcs(mut failure), Some(throttle)) => {
+            failure.read_throttle = Some(throttle);
+            OrbitError::PrivateVcs(failure)
+        }
+        (error, _) => error,
+    })
+}

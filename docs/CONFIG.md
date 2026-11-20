@@ -1908,6 +1908,22 @@ validation captures bind non-review inputs separately so review-only config
 drift can be checked against the candidate's captured obligations; older
 captures still require their original full policy digest to match.
 
+GitHub's rate limit on the automation account's reads is shared by every
+pipeline on the host. When completion's workflow-prerequisite reads (the
+repository, pull request, branch policy, checks, statuses and workflow runs it
+reads before landing) are rate-limited, completion reads the reset from
+GitHub's `rate_limit` endpoint, which spends no quota, waits for it and reads
+again: at most three waits, each ending before the completion deadline, which
+is never extended. Each worktree keeps its repository identity for ten
+minutes and a workflow file's contents at a commit SHA for good, so a
+completion poll does not read them again. When the reset falls
+past the deadline, the delivery step fails with GitHub's diagnostic and final
+recovery requeues the unchanged publication without an agent, recording
+`provider-rate-limit`; the next run's completion waits for the reset within
+its own budget. The task is not blocked and no decision request opens, though
+the requeue counts toward final recovery's requeue bound. A claimed leaf's
+failure still goes to its recovery agent.
+
 A changed review obligation (timing, reviewer pool, budget, baseline commands or
 host evidence) refuses completion reuse and records `policy-changed`. The
 existing bounded requeue preserves the branch and PR for a successor delivery

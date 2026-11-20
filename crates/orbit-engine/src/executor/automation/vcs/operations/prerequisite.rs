@@ -73,11 +73,17 @@ pub(super) fn snapshot(
         return Err(unreadable("PR/head selector"));
     }
     let mut previous_unreadable = None;
+    let mut throttle_waits = 0;
     loop {
         let error = match snapshot_once(deadline, workspace, pr, head, branch, base) {
             Ok(snapshot) => return Ok(snapshot),
             Err(error) => error,
         };
+        // [ORB-25864] A rate-limited read waits for the provider's reset
+        // within the deadline and reads the whole snapshot again.
+        if super::read_reset::wait_for_reset(deadline, workspace, &error, &mut throttle_waits) {
+            continue;
+        }
         // An in-flight retry can itself run out of time. Keep the last
         // unavailable snapshot's cause when that happens as well.
         if deadline.remaining().is_err() {
@@ -89,6 +95,8 @@ pub(super) fn snapshot(
         if !matches!(&error, OrbitError::WorkflowEvidenceUnavailable(_)) {
             return Err(error);
         }
+        // Unreadable evidence may come from a stale repository identity.
+        super::read_cache::forget_repository_identity(workspace);
         let Ok(remaining) = deadline.remaining() else {
             return Err(error);
         };
@@ -112,7 +120,7 @@ pub(super) fn snapshot_once(
     branch: &str,
     base: &str,
 ) -> Result<Snapshot, OrbitError> {
-    let repo = api(deadline, workspace, "repos/{owner}/{repo}")?;
+    let repo = super::read_cache::repository_identity(deadline, workspace)?;
     let repository = text(&repo, "full_name", unreadable)?.to_string();
     let repository_id = number(&repo, "id", unreadable)?;
     let pull = api(
@@ -459,11 +467,7 @@ pub(super) fn workflow(
         unreadable,
     )?;
     let head = text(run, "head_sha", unreadable)?;
-    let contents = api(
-        deadline,
-        workspace,
-        &format!("repos/{{owner}}/{{repo}}/contents/{path}?ref={head}"),
-    )?;
+    let contents = super::read_cache::contents_at_commit(deadline, workspace, &path, head)?;
     same(
         &contents["type"],
         &json!("file"),
@@ -484,11 +488,8 @@ pub(super) fn workflow(
     if !super::input::valid_expected_remote_sha(Some(source_base)) {
         return Err(unreadable("workflow event base commit"));
     }
-    let base_contents = api(
-        deadline,
-        workspace,
-        &format!("repos/{{owner}}/{{repo}}/contents/{path}?ref={source_base}"),
-    )?;
+    let base_contents =
+        super::read_cache::contents_at_commit(deadline, workspace, &path, source_base)?;
     same(
         &base_contents["sha"],
         &json!(blob),

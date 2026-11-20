@@ -873,3 +873,4 @@ fn missing_required_prerequisite_holds_unreadable_evidence() {
 mod bounds;
 mod failed_workflow;
 mod provider_fields;
+mod rate_limit;

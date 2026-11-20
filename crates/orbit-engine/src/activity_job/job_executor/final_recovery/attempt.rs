@@ -268,6 +268,52 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
         return settlement::conclude(job, ctx, step, activity, &application, None, None);
     }
 
+    // [ORB-25864] GitHub rate-limited the automation account's read. The
+    // quota is shared by every pipeline on the host and resets within the
+    // hour; no agent can outlast it, and the candidate was not judged. The
+    // unchanged publication is requeued, not escalated: the next run's
+    // completion waits for the reset within its own fresh budget. A claimed
+    // leaf's task is its owner's, as above.
+    if let DispatchError::DeterministicActionFailed { action, message } = error
+        && orbit_types::workflow::is_github_rate_limit_failure(action, message)
+        && ctx.input.get("claimed").and_then(Value::as_bool) != Some(true)
+    {
+        let application = FinalRecoveryApplication {
+            task_id,
+            failed_step_id: step.id.clone(),
+            decision: FinalRecoveryDecision::Requeue {
+                reason: format!(
+                    "provider-rate-limit: GitHub rate-limited a read of step `{}` before the \
+                     automation account's quota reset; requeue the unchanged publication, whose \
+                     next completion waits for the reset within its own budget",
+                    step.id
+                ),
+            },
+            fault: FaultAttribution::new(
+                RecoveryFault::Infrastructure,
+                format!(
+                    "run {} step `{}` was rate-limited by GitHub: {}",
+                    ctx.run_id,
+                    step.id,
+                    bounded_recovery_text(
+                        "error",
+                        &ctx.run_id,
+                        error_message,
+                        MAX_RECOVERY_ERROR_MESSAGE_BYTES,
+                    )
+                ),
+            ),
+            resume_step_index: None,
+            preserved_steps: Vec::new(),
+            repair_commit: None,
+            resume_context: None,
+            workspace_path: worktree.workspace_path.into(),
+            completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
+            infrastructure: None,
+        };
+        return settlement::conclude(job, ctx, step, activity, &application, None, None);
+    }
+
     // Read-only completion transport failures spend the same durable final
     // recovery budget, but need neither an agent nor a replacement candidate.
     // The single retry waits out a short outage first; the cumulative
