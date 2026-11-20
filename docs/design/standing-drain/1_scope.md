@@ -172,8 +172,10 @@ The worker ceiling and the forecast mode are separate settings, and the keeper k
 The ceiling bounds how many `task_auto_pipeline` leaf runs are live at once. The forecast admission
 mode is `machine.auto_concurrency.mode` (default `off`), which `run auto --auto-concurrency` can
 override for one run. An unset `concurrency` never reads the forecast mode. The keeper has no
-forecast-mode flag, so each drain it submits captures `machine.auto_concurrency.mode` when it is
-inserted, with source `configured`, as a plain `run auto` does. A live retune (`orbit run concurrency`,
+forecast-mode flag, so each drain it submits inherits `machine.auto_concurrency.mode` with source
+`configured`, as a plain `run auto` without `--auto-concurrency` does. The drain reads the host's current
+setting at each pass, so changing `machine.auto_concurrency.mode` during its window changes that drain's
+forecast mode from the next pass. A live retune (`orbit run concurrency`,
 `orbit run extend --concurrency`, or the operator `auto` action in `mode: "resize"`) changes only that run's ceiling.
 The next keeper drain starts from the configured value, or from the job default when it is unset.
 
