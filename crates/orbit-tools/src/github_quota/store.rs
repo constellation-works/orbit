@@ -505,6 +505,35 @@ impl GithubQuotaStore {
         now: u64,
         refresh: &dyn Fn() -> RateLimitAnswer,
     ) -> Result<(), QuotaRefusal> {
+        self.admit_charging(policy, account, caller, resource, now, refresh, true)
+    }
+
+    /// [`Self::admit`] for a caller that never spawns its protected call once
+    /// the store's deadline has passed: a read admitted at or after that
+    /// deadline is not counted or debited, since no call follows it.
+    pub fn admit_unless_expired(
+        &self,
+        policy: &GithubQuotaPolicy,
+        account: &str,
+        caller: GithubCaller,
+        resource: &str,
+        now: u64,
+        refresh: &dyn Fn() -> RateLimitAnswer,
+    ) -> Result<(), QuotaRefusal> {
+        self.admit_charging(policy, account, caller, resource, now, refresh, false)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn admit_charging(
+        &self,
+        policy: &GithubQuotaPolicy,
+        account: &str,
+        caller: GithubCaller,
+        resource: &str,
+        now: u64,
+        refresh: &dyn Fn() -> RateLimitAnswer,
+        charge_expired: bool,
+    ) -> Result<(), QuotaRefusal> {
         self.refresh_if_due(policy, account, now, refresh);
         let decided = self.update(account, |record| {
             let refresh_in_flight = record.refresh_in_flight;
@@ -513,6 +542,11 @@ impl GithubQuotaStore {
             if let Some(refusal) = entry.refusal(policy, caller, resource, now) {
                 entry.refused.bump(caller);
                 return Err(refusal);
+            }
+            // The deadline is read under the record lock, so a read that ran
+            // out of budget while waiting for it or probing is not charged.
+            if !charge_expired && self.deadline.is_some_and(|at| Instant::now() >= at) {
+                return Ok(());
             }
             entry.calls.bump(caller);
             if refresh_in_flight {

@@ -142,6 +142,7 @@ pub fn admit_gh_request(caller: GithubCaller, request: &ExecRequest) -> Result<(
         caller,
         request,
         gh_request_deadline(request, Instant::now()),
+        true,
     )
 }
 
@@ -163,14 +164,18 @@ pub fn admit_gh_request_within_budget(
         return Err(exhausted());
     }
     let deadline = gh_request_deadline(request, Instant::now());
-    admit_by_deadline(caller, request, deadline)?;
+    admit_by_deadline(caller, request, deadline, false)?;
     remaining_request_budget(request, deadline).ok_or_else(exhausted)
 }
 
+/// `spawns_after_deadline` is true for a caller that runs the child even once
+/// the budget is spent; otherwise a read admitted past the deadline is not
+/// charged, because no protected call follows it.
 fn admit_by_deadline(
     caller: GithubCaller,
     request: &ExecRequest,
     deadline: Option<Instant>,
+    spawns_after_deadline: bool,
 ) -> Result<(), OrbitError> {
     let Some((store, policy)) = active_guard() else {
         return Ok(());
@@ -179,17 +184,28 @@ fn admit_by_deadline(
         return Ok(());
     };
     let account = request::request_account(request);
-    store
-        .bounded_by(deadline)
-        .admit(
+    let store = store.bounded_by(deadline);
+    let probe = || request::read_rate_limit(request, deadline);
+    let decided = if spawns_after_deadline {
+        store.admit(
             &policy,
             &account,
             caller,
             resource,
             now_epoch_seconds(),
-            &|| request::read_rate_limit(request, deadline),
+            &probe,
         )
-        .map_err(|refusal| refusal_error(&refusal, request))
+    } else {
+        store.admit_unless_expired(
+            &policy,
+            &account,
+            caller,
+            resource,
+            now_epoch_seconds(),
+            &probe,
+        )
+    };
+    decided.map_err(|refusal| refusal_error(&refusal, request))
 }
 
 /// Record what `result` of an admitted `request` says about the quota: an
@@ -297,7 +313,7 @@ pub fn run_gh_request(
     }
     let started = Instant::now();
     let deadline = gh_request_deadline(request, started);
-    admit_by_deadline(caller, request, deadline)?;
+    admit_by_deadline(caller, request, deadline, false)?;
     let Some(bounded_request) = remaining_request_budget(request, deadline) else {
         return Ok(timed_out_before_start(
             u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
