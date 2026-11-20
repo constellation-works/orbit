@@ -1,7 +1,7 @@
 ---
 title: Auto-concurrency — Vision
 owner: claude
-last_updated: 2026-10-11
+last_updated: 2026-11-19
 last_validated: 2026-10-19
 status: Draft
 feature: auto-concurrency
@@ -64,6 +64,10 @@ otherwise.
    own: a docs-only change validates without compiling. Each new class
    divides the samples further, so a class should earn its place by a
    visibly different profile in the report.
+10. **Should a delivery that is only waiting on CI hold a slot?** On an owner
+    drain it does, for about a fifth of slot time at almost no load. Proposed,
+    not built: [specs/completion-wait-credit.md](./specs/completion-wait-credit.md)
+    ([ORB-25844] wrote the proposal and the measurement).
 
 ## 2. Prior Work
 
@@ -113,6 +117,7 @@ an acceptable failure rate remains unmeasured.
 **Orbit-internal**
 
 - [Auto-concurrency — Design](./2_design.md)
+- [Completion-wait credit (proposal)](./specs/completion-wait-credit.md)
 - [Distributed Drain — Overview](../distributed-drain/1_overview.md)
 
 **External**
@@ -130,5 +135,6 @@ an acceptable failure rate remains unmeasured.
 ## Task References
 
 - [ORB-15757] — authored this proposal.
+- [ORB-25844] — proposes the completion-wait credit.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
