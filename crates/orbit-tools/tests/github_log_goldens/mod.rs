@@ -884,6 +884,92 @@ fn two_windows_of_a_completed_job_download_its_log_once() {
     assert_eq!(job.downloads(), 2, "an expired entry is not served");
 }
 
+/// A reader that found a cached log expired must not remove the fresh log a
+/// concurrent store published under the same name after it looked.
+///
+/// The interleaving is forced through the cache's own publish/remove lock (the
+/// `.lock` file beside the cache directory): the test holds it, so the reader
+/// that classified the expired entry parks on it, and the replacement is
+/// published only once the kernel reports that reader as a lock waiter. The
+/// reader's download is then made to fail, so the only log a later read can
+/// reuse is the replacement itself.
+#[test]
+#[cfg(target_os = "linux")]
+fn a_fresh_log_survives_a_reader_that_found_the_entry_it_replaced_expired() {
+    use std::os::unix::fs::MetadataExt;
+    if !isolated(
+        "public_tool_surface::github_log_goldens::a_fresh_log_survives_a_reader_that_found_the_entry_it_replaced_expired",
+    ) {
+        return;
+    }
+    let window = || json!({"line_start": 5, "line_end": 8});
+    let (job, _env) = CachedLogRead::new("first", Some("9"));
+    job.read(window()).unwrap();
+    let entries = job.cache_entries();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    let entry = entries[0].clone();
+    let fresh_bytes = std::fs::read(&entry).unwrap();
+    let day_and_a_bit = std::time::Duration::from_secs(25 * 60 * 60);
+    std::fs::File::options()
+        .write(true)
+        .open(&entry)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - day_and_a_bit)
+        .unwrap();
+
+    let mut lock_name = CachedLogRead::cache_dir().into_os_string();
+    lock_name.push(".lock");
+    let lock = std::fs::File::options()
+        .read(true)
+        .write(true)
+        .open(&lock_name)
+        .expect("the first store created the cache lock");
+    lock.lock().unwrap();
+    let lock_inode = lock.metadata().unwrap().ino();
+    let downloads_before = job.downloads();
+
+    let reader_result = std::thread::scope(|scope| {
+        let reader = scope.spawn(|| job.read(window()));
+        // The reader has classified the expired entry once it queues for the
+        // lock held here. Wait on that state, not on a delay.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let suffix = format!(":{lock_inode} ");
+        while !std::fs::read_to_string("/proc/locks")
+            .unwrap()
+            .lines()
+            .any(|line| line.contains(" -> ") && line.contains(&suffix))
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the reader never queued for the cache lock"
+            );
+            std::thread::yield_now();
+        }
+        // Publish a fresh replacement under the entry's name, then make the
+        // reader's own download fail so it cannot republish the log itself.
+        let staged = CachedLogRead::cache_dir().join(".staging-replacement");
+        std::fs::write(&staged, &fresh_bytes).unwrap();
+        std::fs::rename(&staged, &entry).unwrap();
+        std::fs::remove_file(job.root.path().join("run_log")).unwrap();
+        lock.unlock().unwrap();
+        reader.join().unwrap()
+    });
+    assert!(
+        reader_result.is_err(),
+        "the reader treated the entry as a miss and its download failed"
+    );
+    assert_eq!(job.downloads(), downloads_before + 1);
+
+    job.set_log("first");
+    let reused = job.read(window()).unwrap();
+    assert!(log_text(&reused).contains("first line 5"));
+    assert_eq!(
+        job.downloads(),
+        downloads_before + 1,
+        "the fresh replacement is reused, not removed by the reader that found the old entry expired"
+    );
+}
+
 /// The cache never widens what a caller may read: only a job or run the
 /// provider reports completed is cached, and a cached log is served only while
 /// the caller's own status request succeeds for the same resolved repository.
