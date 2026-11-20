@@ -1145,15 +1145,20 @@ jobs:
       - *bubblewrap-probe
 
       # A pattern downloads every matching artifact concurrently, one stream
-      # each, and verifies each artifact's digest. In run 44227650517, the
-      # other shards downloaded all parts in 2–12 s, while one part held
-      # partition 11's download for 647 s. Three minutes also allows for the
-      # older 155 s single-stream transfer (docs/design-patterns/test_strategy.md).
-      # Retry failures and timeouts up to twice, using a fresh directory each
-      # time so extraction cannot pick up a part from a failed attempt.
+      # each, and verifies each artifact's digest. Of 240 shard first attempts
+      # in 20 full-scope runs (2026-11-20), every one took 1.95-31.81 s (median
+      # 4.6, p90 11.2, p99 22.2) and ended within 0.2 s of the action's own
+      # "Download artifact has finished successfully" line. Two earlier stalls
+      # had the same four-part shape: run 44227650517 held one part for 647 s,
+      # and run 44317809505 sat 167 s after that line. Each attempt therefore
+      # has one minute, about twice the measured maximum, so a stalled attempt
+      # costs at most 60 s of the 180 s the three attempts can spend
+      # (docs/design-patterns/test_strategy.md). Retry failures and timeouts up
+      # to twice, using a fresh directory each time so extraction cannot pick
+      # up a part from a failed attempt.
       - name: Download nextest archive
         id: nextest-archive-download
-        timeout-minutes: 3
+        timeout-minutes: 1
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -1164,7 +1169,7 @@ jobs:
       - name: Download nextest archive attempt 2
         id: nextest-archive-download-2
         if: ${{ steps.nextest-archive-download.outcome == 'failure' }}
-        timeout-minutes: 3
+        timeout-minutes: 1
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -1175,7 +1180,7 @@ jobs:
       - name: Download nextest archive attempt 3
         id: nextest-archive-download-3
         if: ${{ steps.nextest-archive-download.outcome == 'failure' && steps.nextest-archive-download-2.outcome == 'failure' }}
-        timeout-minutes: 3
+        timeout-minutes: 1
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: nextest-archive-*
