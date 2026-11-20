@@ -249,7 +249,7 @@ fi
         |stdout: &str| dispatch_with_prelude("agy", Provider::Antigravity, stdout, &env, prelude);
     let (outcome, limits) = run(&success);
     assert!(outcome.success, "{:?}", outcome.message);
-    assert_eq!(limits.len(), 9);
+    assert_eq!(limits.len(), 13);
     for reading in &limits {
         assert_eq!(reading.provider, "antigravity");
         assert_eq!(reading.source, ProviderLimitSource::Event);
@@ -276,7 +276,7 @@ fi
     );
     let (failed, failed_limits) = run("no completion envelope");
     assert!(!failed.success);
-    assert_eq!(failed_limits.len(), 9, "failed runs also record usage");
+    assert_eq!(failed_limits.len(), 13, "failed runs also record usage");
     for body in ["not json".to_string(), "{}".to_string(), "x".repeat(65537)] {
         fs::write(&response, body).unwrap();
         let (outcome, limits) = run(&success);
@@ -339,7 +339,7 @@ fi
     };
     let (outcome, limits) = run(&success);
     assert!(outcome.success, "{:?}", outcome.message);
-    assert_eq!(limits.len(), 9);
+    assert_eq!(limits.len(), 13);
     for reading in &limits {
         assert_eq!(reading.provider, "antigravity");
         assert_eq!(reading.source, ProviderLimitSource::Event);
@@ -366,7 +366,7 @@ fi
     );
     let (failed, failed_limits) = run("no completion envelope");
     assert!(!failed.success);
-    assert_eq!(failed_limits.len(), 9, "failed runs also record usage");
+    assert_eq!(failed_limits.len(), 13, "failed runs also record usage");
     for body in ["not json".to_string(), "{}".to_string(), "x".repeat(65537)] {
         fs::write(&response, body).unwrap();
         let (outcome, limits) = run(&success);

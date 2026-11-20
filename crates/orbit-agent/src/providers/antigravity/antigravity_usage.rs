@@ -1,4 +1,5 @@
-//! Structured quota buckets from agy 1.4.6's `--print /usage --output-format json`.
+//! Structured quota buckets from agy's `--print /usage --output-format json`
+//! (shape verified with agy 1.4.6 and 1.5.13).
 
 use chrono::{DateTime, Utc};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
@@ -69,9 +70,10 @@ fn buckets(body: &[u8]) -> Option<Vec<Value>> {
     )
 }
 
-/// Model scopes of agy 1.5.13's shared "Gemini Models" group when Argon has
-/// its own bucket: Gemini 4 Neon and Hydrogen, Orchestrator (Neon) and
-/// Gemini 3.8 Flash, plus the legacy Pro slugs. Scopes match model ids by
+/// Model scopes of the shared "Gemini Models" group when Argon has its own
+/// bucket. agy 1.5.13's capture (dk-server-2, 2026-11-20) lists Gemini 4 Neon
+/// and Hydrogen, Orchestrator (Neon) and Gemini 3.8 Flash in it; `pro` keeps
+/// the slugs agy 1.4.6 grouped there. Scopes match model ids by
 /// substring, so `gemini` here would also gate Argon. [ORB-25818]
 const SHARED_GEMINI_SCOPES: &[&str] = &["flash", "pro", "neon", "hydrogen"];
 
