@@ -432,28 +432,34 @@ entry that records it depends on who held the candidate:
   `only on <machine> (pushing it failed: <diagnostic>)` (carry rejected, kept on
   that host).
 
-  A claimed PR leaf that the upgrade stopped before its normal commit step gives one
-  of three outcomes, and the entry's named head tells them apart:
+  A claimed PR leaf that the upgrade stopped before its normal commit step (the
+  pipeline commits before it prepares or synchronizes the branch) gives one of three
+  outcomes. The `claim_candidate_carry` failure-hook output on the leaf run tells them
+  apart; the owner's task history does not, because only the first writes an entry:
   - *Preservable edits* (uncommitted changes in the leaf's worktree): the failure hook
     commits them as one partial commit titled `Partial implementation candidate
-    [<task-id>]`, with an `Orbit-Partial-Candidate-Run` trailer. The commit moves no
-    branch, index or file. The entry names that commit's head and its note also reads
-    `stopped at <step>`, followed by `durable at` or `only on` as above.
+    [<task-id>]`, with an `Orbit-Partial-Candidate-Run` trailer, and reports `carry:
+    durable` (or `failed` when pushing it was rejected) with `partial: true`. The commit
+    moves no branch, index or file. The entry names that commit's head. Its note reads
+    `durable at` or `only on` as above (the placement), then `stopped at <step>`.
   - *Refused edits* (a protected or non-regular path, or unmerged changes): the hook
-    stops before writing anything, so the edits are not preserved. The entry, if one
-    exists, names the branch head the leaf had already synchronized or prepared and
-    reads `only on <machine> (pushing it failed: partial candidate refused …)`.
+    stops before writing anything, so the edits are not preserved. It reports `carry:
+    failed` with a `reason` and no branch or head. A protected or non-regular path reads
+    `partial candidate refused protected or non-regular paths: [...]`; unmerged edits
+    read `task worktree '<path>' has unresolved merge conflicts`. The reason also
+    reaches the owner in the claim's release failure.
   - *No edits*: the hook makes no commit and reports `carry: none` with the reason
-    `the leaf left no uncommitted candidate`. The entry, if one exists, names that same
-    synchronized or prepared branch head and reads `only on <machine>` without a
-    push-failure clause, because nothing was pushed. A leaf that stopped before reaching
-    either branch step records no entry.
+    `the leaf left no uncommitted candidate`, and no branch or head.
 
-  To check which case applies, look at the named head. A `Partial implementation
-  candidate` commit means edits were preserved. Any other head is a branch head the
-  leaf had already reached, not a partial commit. A claimed-local leaf
-  (`task_claimed_local_pipeline`) runs no pre-commit hook and keeps a candidate only
-  from its own commit, so an upgrade that stops it before that commit records no entry.
+  Refused and empty snapshots leave the owner no head to keep. The hook names neither
+  branch nor SHA, and no synchronized or prepared head exists yet, so the release
+  writes no `claim_candidate_kept` entry for either. Their absence is not a missing
+  record: read the carry `carry`/`reason` instead. A kept entry from a pre-commit stop
+  therefore always names a `Partial implementation candidate` head. A head that is
+  not one belongs to a leaf that stopped after its commit step, which is outside this
+  case. A claimed-local leaf (`task_claimed_local_pipeline`) runs no pre-commit hook and
+  keeps a candidate only from its own commit, so an upgrade that stops it before that
+  commit records no entry.
 
 Placement:
 
