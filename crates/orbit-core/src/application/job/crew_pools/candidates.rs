@@ -608,6 +608,7 @@ impl OrbitRuntime {
         // This re-draw weighs this host's usage pressure.
         let weighting = weighted_candidates(
             &mut crews,
+            allowlist.as_ref(),
             &self.provider_limit_policy().usage_pressure,
             || self.usage_pressure_read(chrono::Utc::now()),
         );

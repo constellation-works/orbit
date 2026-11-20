@@ -644,7 +644,8 @@ fn parked_members_stay_out_and_low_pressure_floors_without_gating() {
 /// A crew whose account has used up a window that has not reset is left out of
 /// a usage-pressure draw while another member has quota, though it is not gated
 /// (`claude:100` gates only on an exhausted flag) and would otherwise hold a
-/// floor ticket. A pool whose every member is exhausted draws as it did.
+/// floor ticket. A pool whose every member is exhausted draws as it did, and
+/// a member the run allowlist excludes never counts as the member with quota.
 fn an_exhausted_account_is_left_out_of_a_usage_pressure_draw() {
     substitute_worker();
     let fx = Fixture::new(&config("[]", "[]", ""));
@@ -680,6 +681,20 @@ fn an_exhausted_account_is_left_out_of_a_usage_pressure_draw() {
             ["sol"],
             "the exhausted member holds no ticket: {admitted}"
         );
+
+        // A crew the run allowlist excludes is no alternative: the only
+        // allowed crew keeps its floor ticket though `sol` has quota.
+        let admitted = fx.admit(json!({ "task_ids": [task.id], "allowed_crews": ["opus"] }));
+        assert_eq!(
+            admitted["crew"], "opus",
+            "an excluded crew with quota must not empty the allowlist: {admitted}"
+        );
+        // An allowed alternative with quota still wins over the exhausted one.
+        let admitted = fx.admit(json!({
+            "task_ids": [task.id],
+            "allowed_crews": ["opus", "sol"]
+        }));
+        assert_eq!(admitted["crew"], "sol", "{admitted}");
 
         fx.week("codex", 100.0, Duration::days(3));
         let admitted = fx.admit(json!({ "task_ids": [task.id] }));

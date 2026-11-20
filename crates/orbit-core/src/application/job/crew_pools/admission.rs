@@ -344,6 +344,7 @@ impl OrbitRuntime {
                 self.reresolve_auto_candidates(members, &task_auto_effort_subject(task))?;
             weighted_candidates(
                 &mut members,
+                allowlist.as_ref(),
                 &self.provider_limit_policy().usage_pressure,
                 || self.usage_pressure_read(chrono::Utc::now()),
             );
@@ -371,6 +372,7 @@ impl OrbitRuntime {
         let weighting = if explicit.is_none() {
             weighted_candidates(
                 &mut crews,
+                allowlist.as_ref(),
                 &self.provider_limit_policy().usage_pressure,
                 || self.usage_pressure_read(chrono::Utc::now()),
             )
