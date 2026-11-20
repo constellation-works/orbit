@@ -10,13 +10,28 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+import zlib
 
+import dependency_guard_batches as batches
 import dependency_guard_fixture
 
 
 SCRIPTS = Path(__file__).resolve().parent
+
+# Every guard launch goes through `run_guard`, so the summary line reports how
+# many the suite made.
+GUARD_RUNS = [0]
+GUARD_RUNS_LOCK = threading.Lock()
+
+# `None` runs each batch at once. The concurrent runner replaces it with a dict
+# of lists, and `test_deferred_batches_report_as_expected` runs the batches the
+# other cases handed over in few guard runs (see dependency_guard_batches.py).
+DEFERRED = None
+DEFERRED_LOCK = threading.Lock()
+DEFERRED_CASE = "test_deferred_batches_report_as_expected"
 
 
 class RelativeImportTests(unittest.TestCase):
@@ -195,8 +210,7 @@ class RelativeImportTests(unittest.TestCase):
                 parked = path.with_name(path.name + ".parked")
                 path.rename(parked)
                 try:
-                    result = subprocess.run(["bash", str(self.guard)], env=self.env,
-                                            capture_output=True, text=True)
+                    result = self.run_guard()
                     self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertNotIn("dependency direction guard passed", result.stdout)
                 finally:
@@ -205,8 +219,7 @@ class RelativeImportTests(unittest.TestCase):
     def test_missing_tag_instructions_scan_path_fails_closed(self):
         path = self.app / "tag_instructions.rs"
         path.unlink()
-        result = subprocess.run(["bash", str(self.guard)], env=self.env,
-                                capture_output=True, text=True)
+        result = self.run_guard()
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("dependency scan path missing", result.stderr)
         self.assertIn("tag_instructions.rs", result.stderr)
@@ -230,8 +243,7 @@ class RelativeImportTests(unittest.TestCase):
         cargo.chmod(0o755)
         count_file = self.root / "cargo-count"
         env = dict(self.env, GUARD_TEST_CARGO_COUNT=str(count_file))
-        result = subprocess.run(["bash", str(self.guard)], env=env,
-                                capture_output=True, text=True)
+        result = self.run_guard(env)
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("workspace dependency listing failed", result.stdout + result.stderr)
         self.assertNotIn("dependency direction guard passed", result.stdout)
@@ -249,8 +261,7 @@ class RelativeImportTests(unittest.TestCase):
             with self.subTest(path=path.name):
                 path.rmdir()
                 try:
-                    result = subprocess.run(["bash", str(self.guard)], env=self.env,
-                                            capture_output=True, text=True)
+                    result = self.run_guard()
                     self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertIn("dependency scan path missing", result.stderr)
                     self.assertIn(path.name, result.stderr)
@@ -264,20 +275,121 @@ class RelativeImportTests(unittest.TestCase):
                 path = self.app / relative
                 path.rmdir()
                 try:
-                    result = subprocess.run(["bash", str(self.guard)], env=self.env,
-                                            capture_output=True, text=True)
+                    result = self.run_guard()
                     self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertNotIn("dependency direction guard passed", result.stdout)
                 finally:
                     path.mkdir()
+
+    def run_guard(self, env=None):
+        """Run the public guard script once over the case's fixture tree."""
+        with GUARD_RUNS_LOCK:
+            GUARD_RUNS[0] += 1
+        return subprocess.run(["bash", str(self.guard)], env=env or self.env,
+                              capture_output=True, text=True, check=False)
+
+    def defer_batch(self, kind, *details):
+        """Hand a batch to the deferred run instead of running the guard now.
+
+        Returns False, running nothing, when the concurrent runner is not
+        collecting, so the caller checks the batch itself.
+        """
+        if DEFERRED is None:
+            return False
+        sequence = getattr(self, "batch_sequence", 0)
+        self.batch_sequence = sequence + 1
+        batch = (batches.AcceptedBatch if kind == "accepted" else batches.RejectedBatch)(
+            self.id(), sequence, *details)
+        with DEFERRED_LOCK:
+            DEFERRED[kind].append(batch)
+        return True
+
+    def deferred_tag(self):
+        """A file-name token no other case's rows share, so rows never collide."""
+        return f"{zlib.crc32(self.id().encode()):08x}_{getattr(self, 'batch_sequence', 0)}_"
+
+    def relative_path(self, base, relative):
+        return Path(os.path.normpath(base / relative)).relative_to(self.root)
+
+    def accepted_problems(self, files):
+        """Run the guard over `files` (relative to the root); name what it reports."""
+        with self.fixture_files(self.root, files):
+            result = self.run_guard()
+            problems = []
+            if result.stderr:
+                problems.append(f"stderr: {result.stderr}")
+            if result.returncode != 0:
+                problems.append(f"exit {result.returncode}: {result.stdout}")
+            problems += [f"reported {relative}" for relative in files
+                         if f"{self.root / relative}:" in result.stdout]
+            return problems
+
+    def run_rejected_group(self, group):
+        """Run the guard over one group's tree; return (reported claims, result)."""
+        with self.fixture_files(self.root, group.files()):
+            result = self.run_guard()
+        return batches.reported_rows(group, self.root, result.stdout), result
+
+    def rejected_problems(self, batch):
+        """Run one rejected batch alone, as an isolated case would; name what is wrong."""
+        group = batches.RejectedGroup()
+        group.try_add(batch)
+        reported, result = self.run_rejected_group(group)
+        problems = []
+        if result.stderr:
+            problems.append(f"stderr: {result.stderr}")
+        if result.returncode != 1:
+            problems.append(f"exit {result.returncode}, expected 1: {result.stdout}")
+        problems += [f"not reported: {claim[1].path}: {claim[1].source!r}"
+                     for claim in group.claims if claim not in reported]
+        return problems
+
+    def test_deferred_batches_report_as_expected(self):
+        """Run the batches the other cases deferred, grouped into few guard runs.
+
+        The runner calls this case after the others finish. Accepted batches run
+        together per compatible group. Rejected batches run in waves: each wave
+        removes the rows the guard reported, so a row the guard's `||` chains hid
+        behind an earlier detector's hit is reported in a later wave, without
+        the row that hid it. A row left over when a wave reports nothing new fails.
+        """
+        deferred = DEFERRED or {"accepted": [], "rejected": []}
+        for files, members in batches.pack_accepted(deferred["accepted"]):
+            problems = self.accepted_problems(files)
+            if not problems:
+                continue
+            # Attribute the failure: rerun each deferred batch alone.
+            failed_alone = False
+            for batch in members:
+                with self.subTest(deferred_from=batch.test, batch=batch.sequence):
+                    alone = self.accepted_problems(batch.files)
+                    failed_alone |= bool(alone)
+                    self.assertEqual(alone, [], alone)
+            if not failed_alone:
+                self.fail("accepted batches pass alone but not together: " + "; ".join(problems))
+        pending = list(deferred["rejected"])
+        while pending:
+            reported = []
+            for group in batches.pack_rejected(pending):
+                found, result = self.run_rejected_group(group)
+                self.assertEqual(result.stderr, "", result.stderr)
+                reported += found
+            if not reported:
+                break
+            pending = batches.unreported_batches(pending, reported)
+        for batch in pending:
+            with self.subTest(deferred_from=batch.test, batch=batch.sequence):
+                alone = self.rejected_problems(batch)
+                self.assertEqual(alone, [], alone)
+                self.fail("rejected rows reported alone but not in the shared runs: "
+                          f"{[row.source for row in batch.rows]}")
 
     def check_import(self, relative, source, rejected):
         path = self.app / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(source + "\nfn probe() { let _: Option<Probe> = None; }\n")
         try:
-            result = subprocess.run(["bash", str(self.guard)], env=self.env,
-                                    capture_output=True, text=True, check=False)
+            result = self.run_guard()
             self.assertEqual(result.stderr, "", result.stderr)
             self.assertEqual(result.returncode, 1 if rejected else 0, result.stdout)
         finally:
@@ -303,9 +415,12 @@ class RelativeImportTests(unittest.TestCase):
 
     def check_files(self, files, rejected, base=None):
         base = base or self.app
+        if not rejected and self.defer_batch("accepted", {
+                str(self.relative_path(base, relative)): source
+                for relative, source in files.items()}):
+            return
         with self.fixture_files(base, files):
-            result = subprocess.run(["bash", str(self.guard)], env=self.env,
-                                    capture_output=True, text=True, check=False)
+            result = self.run_guard()
             self.assertEqual(result.stderr, "", result.stderr)
             self.assertEqual(result.returncode, 1 if rejected else 0, result.stdout)
             if not rejected:
@@ -332,8 +447,7 @@ class RelativeImportTests(unittest.TestCase):
         if rg_single_file:
             self.assertEqual(len(next_line), 1)
         with self.fixture_files(base, files):
-            result = subprocess.run(["bash", str(self.guard)], env=self.env,
-                                    capture_output=True, text=True, check=False)
+            result = self.run_guard()
             self.assertEqual(result.stderr, "", result.stderr)
             self.assertEqual(result.returncode, 1, result.stdout)
             output = set(result.stdout.splitlines())
@@ -356,14 +470,31 @@ class RelativeImportTests(unittest.TestCase):
         directory rows are relative to, by default orbit-core's application.
         """
         base = base or self.app
+        deferred = DEFERRED is not None
+        # A deferred row's name carries its case, so rows from different cases
+        # never write the same file and can share one guard run.
+        tag = self.deferred_tag() if deferred else ""
         paths = {}
         for index, (relative, source) in enumerate(rows):
             path = Path(os.path.normpath(base / relative))
             if path.name != "mod.rs":
-                path = path.with_name(f"{path.stem}_row{index}.rs")
+                path = path.with_name(f"{path.stem}_row{tag}{index}.rs")
             self.assertNotIn(path, paths, relative)
             paths[path] = (relative, source)
         written = [Path(os.path.normpath(base / relative)) for relative in shared or {}]
+        if deferred:
+            shared_files = {str(path.relative_to(self.root)): source
+                            for path, source in zip(written, (shared or {}).values())}
+            if rejected:
+                self.defer_batch("rejected", tuple(
+                    batches.Row(str(path.relative_to(self.root)), source, path.name == "mod.rs")
+                    for path, (_, source) in paths.items()), shared_files)
+            else:
+                self.defer_batch("accepted", {
+                    **shared_files,
+                    **{str(path.relative_to(self.root)): source
+                       for path, (_, source) in paths.items()}})
+            return
         try:
             for path, source in zip(written, (shared or {}).values()):
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -371,8 +502,7 @@ class RelativeImportTests(unittest.TestCase):
             for path, (_, source) in paths.items():
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(source)
-            result = subprocess.run(["bash", str(self.guard)], env=self.env,
-                                    capture_output=True, text=True, check=False)
+            result = self.run_guard()
             self.assertEqual(result.stderr, "", result.stderr)
             for path, row in paths.items():
                 with self.subTest(row=row):
@@ -1472,8 +1602,7 @@ class RelativeImportTests(unittest.TestCase):
                           "dependencies": [{"name": dependency, "kind": kind,
                                             "target": target}]}],
         }))
-        result = subprocess.run(["bash", str(self.guard)], env=self.env,
-                                capture_output=True, text=True, check=False)
+        result = self.run_guard()
         self.assertEqual(result.stderr, "", result.stderr)
         self.assertEqual(result.returncode, 1 if rejected else 0, result.stdout)
 
@@ -1501,8 +1630,7 @@ class RelativeImportTests(unittest.TestCase):
         metadata = self.root / "metadata.json"
         metadata.write_text(json.dumps({
             "workspace_members": sorted(names), "packages": packages}))
-        result = subprocess.run(["bash", str(self.guard)], env=self.env,
-                                capture_output=True, text=True, check=False)
+        result = self.run_guard()
         self.assertEqual(result.stderr, "", result.stderr)
         self.assertEqual(result.returncode, 1 if rejected else 0, result.stdout)
         if rejected:
@@ -1591,8 +1719,7 @@ class RelativeImportTests(unittest.TestCase):
             missing = web / required_leaf
             missing.unlink()
             try:
-                result = subprocess.run(["bash", str(self.guard)], env=self.env,
-                                        capture_output=True, text=True, check=False)
+                result = self.run_guard()
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("dependency scan path missing", result.stderr)
                 self.assertIn(required_leaf, result.stderr)
@@ -1621,11 +1748,19 @@ def run_case(case):
 
 def run_cases_concurrently():
     """Run every case once, each with its own result, and report like unittest."""
+    global DEFERRED
     cases = list(unittest.defaultTestLoader.loadTestsFromTestCase(RelativeImportTests))
-    workers = max(1, min(CONCURRENT_CASES, available_cpus(), len(cases)))
+    concurrent = [case for case in cases if case._testMethodName != DEFERRED_CASE]
+    workers = max(1, min(CONCURRENT_CASES, available_cpus(), len(concurrent)))
     started = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        results = list(pool.map(run_case, cases))
+    DEFERRED = {"accepted": [], "rejected": []}
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(run_case, concurrent))
+        # Every other case has registered its accepted batches by now.
+        results += [run_case(case) for case in cases if case._testMethodName == DEFERRED_CASE]
+    finally:
+        DEFERRED = None
     elapsed = time.perf_counter() - started
     problems = [("ERROR", case, trace) for result in results for case, trace in result.errors]
     problems += [("FAIL", case, trace) for result in results for case, trace in result.failures]
@@ -1637,7 +1772,8 @@ def run_cases_concurrently():
     ran = sum(result.testsRun for result in results)
     unexpected = sum(len(result.unexpectedSuccesses) for result in results)
     print("-" * 70, file=sys.stderr)
-    print(f"Ran {ran} tests in {elapsed:.3f}s ({workers} concurrent)", file=sys.stderr)
+    print(f"Ran {ran} tests in {elapsed:.3f}s ({workers} concurrent, "
+          f"{GUARD_RUNS[0]} guard runs)", file=sys.stderr)
     # A case that ran nothing, or a lost result, is a failure, never a pass.
     if not cases or ran != len(cases) or problems or unexpected:
         print(f"FAILED (cases={len(cases)}, ran={ran}, problems={len(problems)}, "

@@ -1171,6 +1171,110 @@ p90, median and maximum, and Check's queue wait and awaited jobs' queue
 overlap separately from elapsed time. They also report each `Test build` run's
 proof and upload step spans, so the overlap is measured, not projected.
 
+### Dependency self-test shares guard runs (2026-11-20)
+
+ORB-25843 follows the ORB-25789 watch: 14 executed PR Check jobs in the latest 20
+completed PR runs (five skipped, one cancelled, none missing), nearest-rank p90
+**504 s**, median 414 s, maximum 576 s. In ten of the 14 the CI guardrails job ran
+the fixture self-tests (289–447 s) and in four it ended last, setting the Check's
+end. `test-check-dependency-direction.py` took 295–372 s hosted and equalled the
+exclusive self-test wall to within a few seconds, against about 48 s locally after
+ORB-22450. It reduces the work inside that self-test; no check, job identity,
+runner, guard or production harness behavior changes, and the guard pool's
+longest-processing-time-first order and the `CI_SELF_TESTS=changed` input
+selection are untouched.
+
+Conditions for every local figure: base `fc7d3ce4e`, one checkout, a shared
+32-logical-CPU AMD Ryzen AI MAX+ 395 Linux host (load average 8–12 at the start),
+pinned with `taskset -c 0-3`, Rust 1.98.1, Python 3.14.4, bash 5.3.9, ripgrep
+14.1.1, runs in sequence and alternating arms with no synthetic load. The lane
+was `CI_SELF_TESTS=all scripts/ci-guardrails.sh --guards` (a pull request that
+touches `scripts/` selects every self-test; build-budget admission sets the pool
+width); the self-test alone ran under `chrt --idle 0` as the hosted pool runs it.
+This host is not a hosted 4-vCPU runner.
+
+**Where the time went.** One guard run costs the same whatever a case writes: a
+trace of a run over a clean tree showed 214 `execve` calls (185 succeeded: 97 Python
+and 88 ripgrep children), about 2.2–2.4 s serial, 1.65 s of it Python. The 52 cases made
+**158 guard runs** (counted by a `bash` shim and by the suite's own counter);
+their serial wall summed to 319 s, up to 16 s per case. Two kinds of run were
+avoidable. Each case ran its accepted batches (27 `check_files` and 8 `check_rows`
+calls) alone, though a batch that must stay quiet cannot hide another's hit. And
+related cases ran the same guard detector chain once per case: the five `task`
+port cases (codebase, resident, notice, agent corpus and experiment) each ran the
+direct-path, grouped-tree, `super::` and inherent-call detectors in separate runs.
+
+**The change.** A case now hands its accepted and rejected `check_rows` and
+`check_files` batches to `scripts/dependency_guard_batches.py` instead of running
+the guard (the concurrent runner only; named cases or unittest options still run
+every batch at once). One final case, `test_deferred_batches_report_as_expected`,
+runs them in few trees:
+
+- Accepted batches share one tree per compatible group, by file path; a hit
+  anywhere fails the run by file, and a failing group reruns each batch alone to
+  name its case.
+- Rejected batches run in waves. The guard stops a detector chain at its first
+  hit, so a row behind another row's hit is not reported in that run. Each wave
+  removes the rows the guard reported and runs the rest again without the rows
+  that hid them. A row never reported when a wave reports nothing new fails, and
+  is rerun alone to name its case. Rows must be reported by their own path and,
+  for `mod.rs` rows that a group appends to one file, by their own line span, a
+  stricter check than the former path substring.
+- A group never holds two files at one path with differing contents, or a method
+  one batch defines in a shared file and another batch names, because the guard
+  derives inherent methods from every defining module.
+
+The exact-row cases, the `check_files` cases that assert a rejection, the
+fail-closed cases (they remove a path and need a tree of their own) and the
+Cargo-metadata edge cases still run alone. The guard, every row and every assertion are unchanged, and no row is
+retired, skipped or made conditional.
+
+**Candidate evidence (informational; not hosted compliance).**
+
+| Measure | Base | Candidate |
+|---|---:|---:|
+| Guard runs per self-test (deterministic; `bash` shim and suite counter) | **158** | **51** |
+| Guard child executions, at about 185 successful `execve` per run | about 29,200 | about 9,400 |
+| Self-test alone, runs 1 / 2 / 3 (s) | 120.5 / 106.3 / 86.4 | 46.7 / 34.7 / 36.3 |
+| Self-test alone, median (spread) (s) | 106.3 (34.1) | 36.3 (12.0) |
+| Lane wall, runs 1 / 2 / 3 (s) | 207.3 / 228.3 / 215.5 | 182.8 / 185.4 / 162.9 |
+| Lane wall, median (spread) (s) | 215.5 (21.0) | 182.8 (22.5) |
+| Self-test inside the lane, runs 1 / 2 / 3 (s) | 153.2 / 177.1 / 166.6 | 75.1 / 87.1 / 73.6 |
+| Self-test inside the lane, median (spread) (s) | 166.6 (23.9) | 75.1 (13.5) |
+
+The lane's longest local member is `test-qa-full-sweep.py` (168–201 s); hosted it runs in
+`CI QA guardrails`, so the hosted core lane is not bounded by it. The lane figures
+overlap by one spread, so only the self-test's own wall and the run count are
+clear evidence; the lane wall and the hosted time are not predicted from them.
+
+Guard mutations fail the same cases on both arms: a silent `super_chains_into`
+(23 cases), a silent `inherent_calls_into` (22), a dead task direct-path pattern (6),
+a dead task grouped-tree pattern (6), and two over-rejecting patterns that fail the
+accepted rows (4 and 2 cases). The sets of failing case names were identical.
+
+**`test-pr-state-workflows.py`.** Profiled the same way, it is 40 cases in one
+process: 69.9–78.6 s serial (CPU about 31 s), 362 `bash` launches, and 25.1 s and
+8.2 s in two cases whose fixture sleeps are their assertion
+(`test_slow_step_past_the_removed_cap_completes` proves no step cap remains;
+`test_bubblewrap_apt_failure_reports_elapsed_package_seconds` sleeps 2 s per
+attempt), with every other case under 6.1 s. It showed no repeated launch or setup
+to remove. Its cases patch `time`, `subprocess` and `os.kill` process-wide, so
+threads would be unsafe, and a process split would add CPU in a CPU-bound pool without
+shortening it. It is left unchanged; hosted, it ran 181–208 s beside the dependency
+self-test. Re-measure after this lane lands before choosing the next lever: the
+cold-cache runs (576 s and 504 s) and the 8–10 crate list-build and slowest
+partition remain outside this change.
+
+**Hosted compliance remains open.** After publication, once the latest 20 completed
+PR `ci.yml` runs carry this revision, the operator runs
+`python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` under the
+[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff). They
+report executed, failed, skipped, cancelled and missing Check counts, nearest-rank
+p90, median and maximum, the CI guardrails job's elapsed time and the tally of runs
+in which it was the last awaited job, which runs executed the self-tests, and the
+cache (`hit` or `miss`) and scope (`full` or `affected`) strata, with every gap
+kept as uncertainty, never zero. No local figure here claims the budget is restored.
+
 ## Why
 
 On 2026-10-03, unit tests under `crates/*/src/**` were about 295k lines and 7,675 test functions, more lines than the production code they covered. Crate-root integration tests were 37k lines. Most unit tests pinned internals, so a refactor that kept behaviour unchanged still broke dozens of them, and each break cost an agent tokens to repair a test rather than find a bug. A review of all of them kept 180 (2.3%).
