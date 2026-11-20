@@ -2156,3 +2156,109 @@ fn bare_doctor_reports_a_stale_run_without_reconciling_it() {
     let again = rows(&doctor(&f, &[]));
     msg_has(row(&again, "job-runs"), run_id);
 }
+
+fn reservation_release(
+    db: &std::path::Path,
+    reservation_id: &str,
+) -> (Option<String>, Option<String>) {
+    Connection::open(db)
+        .expect("open orbit.db")
+        .query_row(
+            "SELECT released_at, release_reason FROM task_reservations WHERE reservation_id = ?1",
+            [reservation_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("reservation row")
+}
+
+/// [ORB-25811] The read-only host surface (`orbit attention`) runs the full
+/// doctor sweep on a same-generation checkout that is not write-free. Its
+/// pull-drain rows (`pull-protocol`, `pull-gates`) must observe a stale pull
+/// drain, not finalize it: its state, finished time and task reservations stay
+/// as stored. The bare report, which is write-free, is checked as well.
+#[cfg(unix)]
+#[test]
+fn read_only_doctor_sweep_leaves_a_stale_pull_drain_and_its_reservations_as_found() {
+    if in_child(
+        "doctor::read_only_doctor_sweep_leaves_a_stale_pull_drain_and_its_reservations_as_found",
+    ) {
+        return;
+    }
+    let f = WorkCheckout::new();
+    run_ok(&f, &["workspace", "init", "--name", "doctor-pull-observe"]);
+    let runtime =
+        orbit_core::OrbitRuntime::from_roots(&f.home.join(".orbit"), &f.work.join(".orbit"))
+            .expect("runtime");
+    let workspace_id = runtime.workspace_id().expect("workspace id");
+    drop(runtime);
+    let mut gone = std::process::Command::new("true").spawn().expect("spawn");
+    let dead_pid = gone.id();
+    gone.wait().expect("wait");
+    let db = f.home.join(".orbit/orbit.db");
+    let run_id = "jrun-stale-pull-doctor";
+    let reservation_id = "reservation-jrun-stale-pull-doctor";
+    let started = (chrono::Utc::now() - chrono::Duration::minutes(10)).to_rfc3339();
+    let orbit_dir = std::fs::canonicalize(&f.work)
+        .expect("canonical checkout")
+        .join(".orbit");
+    let conn = Connection::open(&db).expect("open orbit.db");
+    conn.execute(
+        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_pull_pipeline',1,'running','{}',?3,?3,?3,?4)",
+        rusqlite::params![run_id, workspace_id, started, dead_pid],
+    )
+    .expect("seed stale pull run");
+    conn.execute(
+        "INSERT INTO task_reservations (reservation_id, workspace_orbit_dir, workspace_id, task_ids_json, files_json, actor, created_at, expires_at, owner_run_id) VALUES (?1, ?2, ?3, '[]', '[\"src/pull.rs\"]', 'fixture', ?4, '2099-01-01T00:00:00+00:00', ?5)",
+        rusqlite::params![
+            reservation_id,
+            orbit_dir.to_string_lossy(),
+            workspace_id,
+            started,
+            run_id
+        ],
+    )
+    .expect("seed pull-owned reservation");
+    drop(conn);
+    let before = job_run_state(&db, run_id);
+    assert_eq!(before.0, "running");
+    assert_eq!(reservation_release(&db, reservation_id), (None, None));
+
+    let report = rows(&doctor(&f, &[]));
+    for check in ["pull-protocol", "pull-gates"] {
+        assert_eq!(row(&report, check)["status"], "ok", "bare {check}");
+    }
+    assert_eq!(
+        job_run_state(&db, run_id),
+        before,
+        "bare report leaves the stale pull drain as it found it"
+    );
+    assert_eq!(
+        reservation_release(&db, reservation_id),
+        (None, None),
+        "bare report keeps the pull drain's reservation active"
+    );
+
+    // `orbit attention` opens the checkout read-only (same generation) and
+    // runs the same sweep; the stale run must appear in its output. It needs
+    // the operator capability, which the test sets as the other attention tests do.
+    let attention = command(&f)
+        .env("ORBIT_OPERATOR", "1")
+        .args(["attention", "--kind", "host_unhealthy", "--json"])
+        .output()
+        .expect("attention command");
+    let stdout = String::from_utf8_lossy(&attention.stdout).into_owned();
+    assert!(
+        stdout.contains(run_id),
+        "attention did not reach the doctor sweep naming the stale run: {attention:?}"
+    );
+    assert_eq!(
+        job_run_state(&db, run_id),
+        before,
+        "attention leaves the stale pull drain as it found it"
+    );
+    assert_eq!(
+        reservation_release(&db, reservation_id),
+        (None, None),
+        "attention keeps the pull drain's reservation active"
+    );
+}
