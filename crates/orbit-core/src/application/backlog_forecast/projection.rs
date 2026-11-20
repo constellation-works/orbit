@@ -46,6 +46,7 @@ fn forecast_coverage(context: &ForecastProjection, proposed: bool) -> Value {
         ("risk_prior_fallbacks", 0),
         ("risk_unestimated", 0),
         ("regression_history_missing", 0),
+        ("regression_history_bounded", 0),
         ("regression_history_thin", 0),
         ("unassessed", 0),
         ("thin_cell_fallbacks", 0),
@@ -103,6 +104,8 @@ fn forecast_coverage(context: &ForecastProjection, proposed: bool) -> Value {
             }
             if !rework.history_supported(index) {
                 bump("regression_history_missing");
+            } else if rework.history_bounded(index) {
+                bump("regression_history_bounded");
             } else if rework.pools[index].len() < model::MIN_CELL_SAMPLES {
                 bump("regression_history_thin");
             }

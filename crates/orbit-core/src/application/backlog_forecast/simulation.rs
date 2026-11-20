@@ -399,6 +399,12 @@ impl Outcome {
                 "usd": model::forecast_quantiles(&mut self.rework[2]),
                 "detection_outside_horizon": mean(self.outside_horizon),
                 "support": rework.regression_history_report(),
+                // Gaps that remain in the sampled pools of reported totals.
+                "bounded_gap": if rework_supported {
+                    rework.member_bounded_gap(&members.iter().copied().filter(|index| scenario.included[*index]).collect::<Vec<_>>())
+                } else {
+                    Value::Null
+                },
             },
             "arrival_work": {
                 "work_hours": model::forecast_quantiles(&mut self.arrival_work[0]),

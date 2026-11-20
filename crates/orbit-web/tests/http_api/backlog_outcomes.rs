@@ -465,6 +465,23 @@ fn whole_forecast_baseline_scores_without_filling_withheld_adjusted_totals() {
             }
             assert_eq!(level["settled"], 1);
             assert_eq!(calibration["by_model_version"][0]["forecast_level"], *level);
+            // The series that matures while adjusted totals are withheld is
+            // labeled, and each stored forecast names the series it carries.
+            let series = level["series"].as_array().unwrap();
+            assert_eq!(series[1]["key"], "pre_regression_baseline", "{level}");
+            assert!(
+                series[1]["scores"]
+                    .as_str()
+                    .unwrap()
+                    .contains("without simulated regression follow-up")
+            );
+            let row = &calibration["forecasts"][0];
+            assert_eq!(
+                row["scorable_series"],
+                json!(["pre_regression_baseline"]),
+                "{row}"
+            );
+            assert_eq!(row["pre_regression_baseline"], baseline, "{row}");
 
             // An adjusted-only stored row scores as before and contributes
             // no invented baseline. A young baseline stays provisional.
@@ -561,7 +578,7 @@ fn subsecond_and_immediate_returns_stay_drawable() {
                 block_that_returned(&fixture, delay);
                 let id = backlog_task(&fixture, "Waiting", &["file:wait.rs"], &[], &[]);
                 let forecast = forecast(&fixture);
-                assert_eq!(forecast["model_version"], 20);
+                assert_eq!(forecast["model_version"], 21);
                 assert_eq!(
                     forecast["inputs"]["outcomes"]["episodes"],
                     json!({"blocked": 1, "delivered": 1})
@@ -649,7 +666,7 @@ fn forecast_queued_against(
     dated_task(&fixture, status, steps);
     let id = backlog_task(&fixture, label, &["file:queued.rs"], &[], &[]);
     let forecast = forecast(&fixture);
-    assert_eq!(forecast["model_version"], 20, "{label}");
+    assert_eq!(forecast["model_version"], 21, "{label}");
     assert_eq!(forecast["inputs"]["history_deliveries"], 5, "{label}");
     assert_eq!(forecast["forecast"]["tasks"], 1, "{label}");
     assert_eq!(
@@ -983,7 +1000,7 @@ fn stored_task_forecasts_count_failed_attempts_and_score_like_measures() {
             assert_eq!(cohort["tasks"], 1, "{response}");
             let simulated = prediction(&response, &queued);
             let stored = fixture.runtime.backlog_forecasts(1).unwrap().remove(0);
-            assert_eq!(stored.model_version, 20);
+            assert_eq!(stored.model_version, 21);
             let tasks: Value = serde_json::from_str(&stored.tasks_json).unwrap();
             let task = &tasks[0]["forecast"];
             assert_eq!(tasks[0]["id"], queued.as_str());

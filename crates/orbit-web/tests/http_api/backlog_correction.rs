@@ -251,11 +251,11 @@ fn biased_history_corrects_quantiles_and_does_not_train_on_itself() {
                     .map(|id| stored_task(id, "medium", 100.0, false))
                     .collect(),
             );
-            record(&fixture, now - Duration::days(12), 20, eligible);
+            record(&fixture, now - Duration::days(12), 21, eligible);
             record(
                 &fixture,
                 now - Duration::days(9),
-                20,
+                21,
                 medium
                     .iter()
                     .map(|id| stored_task(id, "medium", 100.0, true))
@@ -266,7 +266,7 @@ fn biased_history_corrects_quantiles_and_does_not_train_on_itself() {
             let response = initial_work_forecast_baseline(json_ok(
                 server.get(&format!("{ENDPOINT}&history_tasks=5&concurrency=1")),
             ));
-            assert_eq!(response["model_version"], 20);
+            assert_eq!(response["model_version"], 21);
             assert_eq!(response["inputs"]["history_deliveries"], 5, "{response}");
             assert_eq!(
                 response["assumptions"]["residual_correction"],
@@ -345,7 +345,7 @@ fn biased_history_corrects_quantiles_and_does_not_train_on_itself() {
                 older["task_level"]["hours"]["n"].as_u64().unwrap() >= 8,
                 "version 14 must still be scored on its own measure: {older}"
             );
-            let current = version(20);
+            let current = version(21);
             assert_eq!(
                 current["task_level"]["hours"]["n"], 10,
                 "each done task counts once, and a forecast made after done is not in the population: {current}"
@@ -406,7 +406,7 @@ fn repeated_snapshots_count_one_residual_per_task() {
                 record(
                     &fixture,
                     now - Duration::days(days_ago),
-                    20,
+                    21,
                     training.clone(),
                 );
             }
@@ -504,7 +504,7 @@ fn correction_applies_p50_shift_to_the_full_script_total() {
             record(
                 &fixture,
                 now - Duration::days(12),
-                20,
+                21,
                 medium
                     .iter()
                     .map(|id| stored_task_spread(id, "medium"))
@@ -671,9 +671,9 @@ fn fit_and_calibration_read_the_first_not_started_forecast_per_task() {
                 };
             // Oldest first: the first not-started forecast, a later
             // not-started one, then one taken after work started.
-            record(&fixture, now - Duration::days(14), 20, row(1.0, false));
-            record(&fixture, now - Duration::days(13), 20, row(100.0, false));
-            record(&fixture, now - Duration::days(12), 20, row(0.01, true));
+            record(&fixture, now - Duration::days(14), 21, row(1.0, false));
+            record(&fixture, now - Duration::days(13), 21, row(100.0, false));
+            record(&fixture, now - Duration::days(12), 21, row(0.01, true));
 
             let server = fixture.server(false);
             let response = initial_work_forecast_baseline(json_ok(
@@ -725,7 +725,7 @@ fn fit_and_calibration_read_the_first_not_started_forecast_per_task() {
                 .as_array()
                 .unwrap()
                 .iter()
-                .find(|row| row["model_version"] == 20)
+                .find(|row| row["model_version"] == 21)
                 .unwrap();
             assert_eq!(
                 current["task_population"],
@@ -770,7 +770,7 @@ fn cohort_withheld_when_holdout_p90_falls_below_base() {
             record(
                 &fixture,
                 now - Duration::days(12),
-                20,
+                21,
                 medium
                     .iter()
                     .map(|id| stored_task_state(id, "medium", 2.0, 20.0, false))
@@ -856,7 +856,7 @@ fn audit_scale_task_tokens_p50_is_not_clamped_to_ten_times_base() {
             record(
                 &fixture,
                 now - Duration::days(12),
-                20,
+                21,
                 medium
                     .iter()
                     .map(|id| stored_task_audit(id, "medium"))
@@ -929,7 +929,7 @@ fn cohort_withheld_when_holdout_p50_error_worsens() {
             record(
                 &fixture,
                 now - Duration::days(12),
-                20,
+                21,
                 medium
                     .iter()
                     .map(|id| stored_task_state(id, "medium", 1.0, 100.0, false))
