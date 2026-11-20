@@ -622,8 +622,10 @@ another OS (see [Native host evidence](#native-host-evidence)).
   depends on authentication the lane may not hold, so state that precondition
   or hand the check to an operator instead of treating a capability-unavailable
   result as a pass. A criterion that names `github.*` only as the subject
-  under test or states a credential-free run (such as a fake `gh` or no live
-  API) is not flagged.
+  under test, or whose sentence states in the same clause as the call a
+  credential-free run (such as a fake `gh` or no live API), is not flagged.
+  Credential, offline or authentication wording in another clause or sentence
+  does not clear a live call.
 
 A criterion that *expects* a refusal is a correct negative test, and a tool
 name inside a quoted example is a copied observation, not a requirement.

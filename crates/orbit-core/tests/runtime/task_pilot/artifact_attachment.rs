@@ -366,8 +366,10 @@ fn github_subject_or_credential_free_criteria_produce_no_credential_warning_or_h
 
 /// [ORB-25953] A criterion that asks the implementer to invoke a `github.*`
 /// tool against live GitHub still raises the external-credential warning
-/// naming what clears it, and a credential-free sibling criterion does not
-/// suppress it.
+/// naming what clears it. [ORB-25975] Credential, offline or authentication
+/// wording in another sentence or clause of that criterion (a run's output, a
+/// sibling check that runs offline, a negated requirement) does not clear the
+/// live call.
 fn live_github_invocation_still_warns_with_clearing_guidance() {
     for (criterion, tool) in [
         (
@@ -380,6 +382,22 @@ fn live_github_invocation_still_warns_with_clearing_guidance() {
         ),
         (
             "Call `github.run.view` against live GitHub (requires GitHub authentication).",
+            "github.run.view",
+        ),
+        (
+            "Run `github.run.list` to verify the latest workflow run on main and that its log output contains no credentials.",
+            "github.run.list",
+        ),
+        (
+            "Call `github.pr.list` against live GitHub. The redaction unit test runs offline.",
+            "github.pr.list",
+        ),
+        (
+            "Call `github.run.view`; it must not run without authentication.",
+            "github.run.view",
+        ),
+        (
+            "Call `github.run.view` and it does not run without authentication.",
             "github.run.view",
         ),
     ] {
