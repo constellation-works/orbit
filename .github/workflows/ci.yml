@@ -59,11 +59,15 @@ env:
   # Full-run partition 2 spent 144 s on 501 tests, with 859.8 summed test
   # seconds and a 58.8 s longest case (run 42757620515). Four more runners
   # target that CPU-bound tail and add four downloads of the same archive.
-  # [ORB-26069] Every hosted partition is CPU-bound (busy 87-97%), so the
-  # slowest partition's wall is its summed test time over six slots. Count
-  # partitions assign round-robin by sorted name within each binary; at 13 the
-  # two 13-carrier families land one per partition and the heaviest partition's
-  # summed hosted test time on run 44710096272 falls from 693 to 551 s
+  # [ORB-26069] Hosted partitions whose cpu-util line was read were CPU-bound,
+  # busy 82-97% (Test shard 2/3 on run 44710096272 logged 82.4%), so the slowest
+  # partition's wall is its summed test time over six slots. Count partitions
+  # assign round-robin by sorted name within each binary; at 13 the two
+  # 13-carrier families land one per partition. Replaying the run's logged test
+  # durations over that assignment (47 unlogged tests scaled from a local run)
+  # estimates the heaviest partition's summed test time at 551 s; the run's
+  # 12-partition assignment logged 693 s for its heaviest. The 551 s is a replay
+  # estimate, not a measurement on the run
   # (docs/design-patterns/test_strategy.md, "Thirteenth count partition").
   NEXTEST_PARTITIONS: "13"
   # The nextest transfer travels as this many artifacts, which each shard
