@@ -57,6 +57,10 @@ pub(super) struct RaisedDecision {
     answers: Vec<DecisionAnswer>,
     recommended: Option<String>,
     human_action: Option<String>,
+    /// The `final_recovery` comment up to the `diagnosis:` line. The
+    /// request carries the options, consequences, recommendation and human
+    /// action, so the comment adds only the request's id after this.
+    comment_head: String,
 }
 
 impl OrbitRuntime {
@@ -280,20 +284,16 @@ impl OrbitRuntime {
                 }
                 Err(reason) => {
                     let reason = format!("complete_no_diff refused: {reason}");
-                    Plan::escalated(
+                    Plan::escalated_asking_action(
                         request,
                         &header,
                         &reason,
                         &format!(
-                            "evidence_commit: {}\nrationale: {}\nhuman_action: find the commit \
-                             that delivers this task on '{}', or move the task by hand",
+                            "evidence_commit: {}\nrationale: {}",
                             evidence_commit.trim(),
-                            rationale.trim(),
-                            request.base_ref
+                            rationale.trim()
                         ),
                         Some(reason.clone()),
-                    )
-                    .with_human_request(
                         &reason,
                         &format!(
                             "Find the commit that delivers this task on '{}', or move the task \
@@ -349,18 +349,12 @@ impl OrbitRuntime {
                         bound.window.num_hours(),
                         bound.max_requeues
                     );
-                    Plan::escalated(
+                    Plan::escalated_asking_action(
                         request,
                         &header,
                         &limit,
-                        &format!(
-                            "requeue_reason: {}\nhuman_action: the failure keeps recurring; \
-                             fix its cause before moving the task back to backlog",
-                            reason.trim()
-                        ),
+                        &format!("requeue_reason: {}", reason.trim()),
                         Some(limit.clone()),
-                    )
-                    .with_human_request(
                         &limit,
                         "The failure keeps recurring; fix its cause before moving the task back \
                          to backlog.",
@@ -438,31 +432,20 @@ impl OrbitRuntime {
                     OrbitError::InvalidInput(format!("final recovery decide: {error}"))
                 })?;
                 let recommended_id = recommended.to_string();
-                let listing = answers
-                    .iter()
-                    .map(|answer| {
-                        format!(
-                            "option {}: {}\n  consequence: {}",
-                            answer.id, answer.label, answer.consequence
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                Plan {
-                    raise: Some(RaisedDecision {
+                Plan::escalated_with_decision(
+                    request,
+                    &header,
+                    summary.trim(),
+                    "",
+                    None,
+                    RaisedDecision {
                         summary: summary.trim().to_string(),
                         answers,
-                        recommended: Some(recommended_id.clone()),
+                        recommended: Some(recommended_id),
                         human_action: None,
-                    }),
-                    ..Plan::escalated(
-                        request,
-                        &header,
-                        summary.trim(),
-                        &format!("{listing}\nrecommended: option {recommended_id}"),
-                        None,
-                    )
-                }
+                        comment_head: String::new(),
+                    },
+                )
             }
             FinalRecoveryDecision::Escalate {
                 diagnosis,
@@ -484,14 +467,12 @@ impl OrbitRuntime {
                         )),
                     )
                 },
-                None => Plan::escalated(
+                None => Plan::escalated_asking_action(
                     request,
                     &header,
                     diagnosis.trim(),
-                    &format!("human_action: {}", human_action.trim()),
+                    "",
                     None,
-                )
-                .with_human_request(
                     summary
                         .as_deref()
                         .unwrap_or_else(|| first_sentences(diagnosis)),
@@ -563,14 +544,15 @@ impl OrbitRuntime {
             "step": step,
             "reason": reason.code(),
         });
-        let mut plan = Plan::escalated(
+        let mut plan = Plan::escalated_asking_action(
             request,
             header,
             &diagnosis,
-            &format!("human_action: {human_action}"),
+            "",
             Some(diagnosis.clone()),
-        )
-        .with_human_request(&diagnosis, &human_action);
+            &diagnosis,
+            &human_action,
+        );
         plan.history.push(TaskHistoryEntry {
             at: Utc::now(),
             by: SYSTEM_ACTOR_LABEL.to_string(),
@@ -598,6 +580,13 @@ impl OrbitRuntime {
             message: plan.comment.clone(),
             operation_id: None,
         };
+        // An escalation that raises a decision request writes its comment
+        // with the request, which names the request's id; the store stamps
+        // that id's block episode, so it is known only after this write.
+        let raised = plan
+            .raise
+            .as_ref()
+            .filter(|_| plan.status == TaskStatus::Blocked);
         // The comment is the human-readable record; the typed decision is
         // what a replay and the blocked-task backstop read back.
         let decided = plan.outcome.applied().map(|outcome| TaskHistoryEntry {
@@ -662,7 +651,11 @@ impl OrbitRuntime {
                     run_id: request.run_id.clone(),
                 }),
                 execution_summary: plan.execution_summary.clone(),
-                append_comments: vec![comment.clone()],
+                append_comments: if raised.is_some() {
+                    Vec::new()
+                } else {
+                    vec![comment.clone()]
+                },
                 append_history: decided
                     .clone()
                     .into_iter()
@@ -675,10 +668,8 @@ impl OrbitRuntime {
                 ..Default::default()
             },
         )?;
-        if let Some(raise) = &plan.raise
-            && plan.status == TaskStatus::Blocked
-        {
-            self.raise_final_recovery_decision(&task.id, raise)?;
+        if let Some(raise) = raised {
+            self.raise_final_recovery_decision(&task.id, raise, comment)?;
         }
         Ok(())
     }
@@ -687,17 +678,30 @@ impl OrbitRuntime {
     /// the block episode this decision just recorded (or the current one,
     /// when the task was already blocked). Raised unconditionally: the
     /// request is how final recovery asks, whatever the digest channel
-    /// setting says. The caller holds the task write lock.
+    /// setting says. `comment` is the run's `final_recovery` comment, which
+    /// is written here, ending with the raised request's id. The caller
+    /// holds the task write lock.
     fn raise_final_recovery_decision(
         &self,
         task_id: &str,
         raise: &RaisedDecision,
+        mut comment: TaskComment,
     ) -> Result<(), OrbitError> {
         let history = self.get_task_history(task_id)?;
         let Some(blocked) = history
             .iter()
             .rfind(|entry| entry.to_status == Some(TaskStatus::Blocked))
         else {
+            // No block episode to bind a request to: record the comment alone.
+            comment.message = raise.comment_head.clone();
+            self.stores().task_records().update(
+                task_id,
+                StoreTaskUpdateParams {
+                    actor: SYSTEM_ACTOR_LABEL.to_string(),
+                    append_comments: vec![comment],
+                    ..Default::default()
+                },
+            )?;
             return Ok(());
         };
         let now = Utc::now().max(blocked.at);
@@ -719,10 +723,12 @@ impl OrbitRuntime {
             request = request.with_human_action(action.clone());
         }
         let entry = request.history_entry(SYSTEM_ACTOR_LABEL);
+        comment.message = format!("{}\ndecision: {}", raise.comment_head, request.id);
         self.stores().task_records().update(
             task_id,
             StoreTaskUpdateParams {
                 actor: SYSTEM_ACTOR_LABEL.to_string(),
+                append_comments: vec![comment],
                 append_history: vec![entry.clone()],
                 expected_status: Some(vec![TaskStatus::Blocked]),
                 ..Default::default()
@@ -815,28 +821,66 @@ impl Plan {
         }
     }
 
-    /// This escalation opening a decision request that asks only for an
-    /// action outside Orbit: `summary`, the exact `human_action` and one
-    /// "Done — requeue" answer.
-    pub(super) fn with_human_request(mut self, summary: &str, human_action: &str) -> Self {
-        self.raise = Some(RaisedDecision {
-            summary: summary.trim().to_string(),
-            answers: vec![DecisionAnswer {
-                risk_tier: Default::default(),
-                id: "done".to_string(),
-                label: "Done — requeue".to_string(),
-                consequence: "Confirms the action was taken; the task returns to backlog."
-                    .to_string(),
-                option: Some(DecisionOption {
-                    summary: "Done — requeue".to_string(),
-                    rewrite: None,
-                    action: Some(orbit_types::task::DecisionAction::Requeue),
-                }),
-            }],
-            recommended: Some("done".to_string()),
-            human_action: Some(human_action.trim().to_string()),
-        });
-        self
+    /// An escalation that opens `raise`, the request that carries what the
+    /// human is asked. Its comment is the header and diagnosis, any `facts`
+    /// the request does not carry, then the request's id (see [`OrbitRuntime::raise_final_recovery_decision`]).
+    pub(super) fn escalated_with_decision(
+        request: &FinalRecoveryRequest,
+        header: &str,
+        diagnosis: &str,
+        facts: &str,
+        override_reason: Option<String>,
+        mut raise: RaisedDecision,
+    ) -> Self {
+        raise.comment_head = format!("{header} outcome=escalated\ndiagnosis: {diagnosis}");
+        if !facts.is_empty() {
+            raise.comment_head.push('\n');
+            raise.comment_head.push_str(facts);
+        }
+        Self {
+            comment: raise.comment_head.clone(),
+            raise: Some(raise),
+            ..Self::escalated(request, header, diagnosis, "", override_reason)
+        }
+    }
+
+    /// An escalation that asks only for an action outside Orbit: a request
+    /// of `summary`, the exact `human_action` and one "Done — requeue"
+    /// answer.
+    pub(super) fn escalated_asking_action(
+        request: &FinalRecoveryRequest,
+        header: &str,
+        diagnosis: &str,
+        facts: &str,
+        override_reason: Option<String>,
+        summary: &str,
+        human_action: &str,
+    ) -> Self {
+        Self::escalated_with_decision(
+            request,
+            header,
+            diagnosis,
+            facts,
+            override_reason,
+            RaisedDecision {
+                summary: summary.trim().to_string(),
+                answers: vec![DecisionAnswer {
+                    risk_tier: Default::default(),
+                    id: "done".to_string(),
+                    label: "Done — requeue".to_string(),
+                    consequence: "Confirms the action was taken; the task returns to backlog."
+                        .to_string(),
+                    option: Some(DecisionOption {
+                        summary: "Done — requeue".to_string(),
+                        rewrite: None,
+                        action: Some(orbit_types::task::DecisionAction::Requeue),
+                    }),
+                }],
+                recommended: Some("done".to_string()),
+                human_action: Some(human_action.trim().to_string()),
+                comment_head: String::new(),
+            },
+        )
     }
 }
 

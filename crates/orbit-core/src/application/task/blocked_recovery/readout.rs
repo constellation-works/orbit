@@ -1,6 +1,8 @@
 //! Read-only explanation of the current block, independent of recovery eligibility.
 
-use orbit_types::task::{RecordedFinalRecovery, TaskDecision, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{
+    DecisionRequest, RecordedFinalRecovery, TaskDecision, TaskHistoryEntry, TaskStatus,
+};
 use serde_json::{Value, json};
 
 use crate::application::task::{BlockCause, TaskRow, classify_block};
@@ -73,11 +75,26 @@ pub(in crate::application::task) fn block_json(row: &TaskRow) -> Option<Value> {
     });
     let (diagnosis, next_action) = detail
         .map(|detail| {
+            // An escalation that raised a decision request ends with the
+            // request's id; the human action lives in the request.
+            let detail = detail
+                .split_once("\ndecision: ")
+                .map_or(detail, |(detail, _)| detail);
             detail
                 .split_once("\nhuman_action: ")
                 .map_or((detail, None), |(reason, action)| (reason, Some(action)))
         })
         .unwrap_or(("", None));
+    let raised_action = || {
+        row.history
+            .iter()
+            .rev()
+            .take_while(|entry| entry.to_status != Some(TaskStatus::Blocked))
+            .find_map(|entry| DecisionRequest::from_entry(entry)?.human_action)
+    };
+    let next_action = next_action
+        .map(str::to_string)
+        .or_else(|| comment.and_then(|_| raised_action()));
     let note = entry
         .and_then(|entry| entry.note.as_deref())
         .unwrap_or_default();
@@ -107,6 +124,9 @@ pub(in crate::application::task) fn block_json(row: &TaskRow) -> Option<Value> {
         "reason": (!reason.is_empty() && reason != "-").then_some(reason),
         "run_id": run_id,
         "comment_index": comment.map(|(index, _)| index),
-        "next_action": next_action.map(str::trim).filter(|action| !action.is_empty()),
+        "next_action": next_action
+            .as_deref()
+            .map(str::trim)
+            .filter(|action| !action.is_empty()),
     }))
 }

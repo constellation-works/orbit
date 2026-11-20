@@ -381,18 +381,15 @@ impl OrbitRuntime {
             let summary = summary
                 .map(str::to_string)
                 .unwrap_or_else(|| diagnosis.clone());
-            Ok(Plan::escalated(
+            Ok(Plan::escalated_asking_action(
                 request,
                 header,
                 &diagnosis,
-                &format!(
-                    "friction: {}\nhuman_action: {}",
-                    record.id,
-                    human_action.trim()
-                ),
+                "",
                 None,
-            )
-            .with_human_request(&summary, human_action))
+                &summary,
+                human_action,
+            ))
         };
         attempt()
             .unwrap_or_else(|refusal| refused_step(request, header, "friction_reported", refusal))
@@ -413,14 +410,15 @@ fn refused_step(request: &FinalRecoveryRequest, header: &str, step: &str, refusa
         "The automatic `{step}` did not apply. Read the reason, then requeue the task or move it \
          by hand."
     );
-    Plan::escalated(
+    Plan::escalated_asking_action(
         request,
         header,
         &refusal,
-        &format!("human_action: {human_action}"),
+        "",
         Some(refusal.clone()),
+        &refusal,
+        &human_action,
     )
-    .with_human_request(&refusal, &human_action)
 }
 
 fn request_bound() -> FinalRecoveryRequeueBound {

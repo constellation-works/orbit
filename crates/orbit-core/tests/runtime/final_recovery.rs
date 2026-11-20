@@ -377,7 +377,13 @@ impl Fixture {
             .collect()
     }
 
+    /// The task's comments and the human actions of its decision requests,
+    /// where an escalation's ask lives.
     fn comments_text(&self, task: &str) -> String {
+        let requests = self
+            .runtime
+            .list_decision_requests(None, Some(task), false)
+            .unwrap();
         self.runtime
             .run_tool("orbit.task.show", json!({ "id": task }))
             .unwrap()["comments"]
@@ -385,6 +391,11 @@ impl Fixture {
             .unwrap()
             .iter()
             .filter_map(|comment| comment["message"].as_str())
+            .chain(
+                requests
+                    .iter()
+                    .filter_map(|request| request.human_action.as_deref()),
+            )
             .collect::<Vec<_>>()
             .join("\n")
     }

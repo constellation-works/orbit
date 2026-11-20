@@ -951,11 +951,10 @@ fn task_show_explains_latest_block() {
     assert_eq!(escalated["next_step"]["run_id"], "jrun-latest-escalation");
     assert_eq!(escalated["block"]["at"], escalated["final_recovery"]["at"]);
     let index = escalated["block"]["comment_index"].as_u64().unwrap() as usize;
+    let message = escalated["comments"][index]["message"].as_str().unwrap();
     assert!(
-        escalated["comments"][index]["message"]
-            .as_str()
-            .unwrap()
-            .contains("human_action:")
+        message.contains("\ndecision: dr-") && !message.contains("human_action:"),
+        "the comment names the decision request, which carries the action: {message}"
     );
     assert_eq!(
         escalated,
