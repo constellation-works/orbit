@@ -177,13 +177,24 @@ A probe that emits several rows copies that one duration onto each row. For exam
 its duration. Row durations therefore repeat the same measurement and are not additive:
 summing them overcounts, including in serial mode. Durations include unsuccessful and
 skipped probes. When the host reports more than one available CPU, the CLI runs read-only
-probes on up to eight worker threads, dispatching the slow probes first. With one available
-CPU, or when the CPU-count query fails, it runs probes serially in report order, still
-invoking each probe once. Describe wall time per distinct probe invocation in both modes:
-in serial mode, elapsed time tracks the sum of those invocation durations plus command
-overhead. In parallel mode the invocations overlap, so elapsed time is at least the longest
-single probe duration and, apart from command overhead, at most the sum of the invocation
-durations.
+probes on up to eight threads, dispatching the slow probes first. The calling thread is one
+of those threads and starts up to seven scan workers beside it. With one available CPU, or
+when the CPU-count query fails, it runs probes serially in report order, still invoking each
+probe once. Describe wall time per distinct probe invocation in both modes: in serial mode,
+elapsed time tracks the sum of those invocation durations plus command overhead. In parallel
+mode the invocations overlap, so elapsed time is at least the longest single probe duration
+and, apart from command overhead, at most the sum of the invocation durations.
+
+On a thread-limited host the operating system can refuse some or all of those scan workers.
+The command does not fail or fall back to report-order dispatch: the calling thread and any
+workers that did start share the same slow-first queue, so every probe still runs exactly
+once. With fewer successful spawns, fewer invocations overlap and elapsed time moves toward
+the sum of the invocation durations. When every spawn is refused, the calling thread runs
+the whole queue alone, one probe after another in slow-first order, so elapsed time tracks
+that sum plus command overhead, as in serial mode. In every case the rows are emitted in
+report order, not in the order the probes ran, so output order alone does not show which
+dispatch mode or how many threads a run used.
+
 Lock files flagged by `stale-locks`
 include holder diagnostics. Run `orbit doctor --fix-stale-locks` to clear a dead holder's
 record after acquiring the advisory lock and rechecking the holder. The repair preserves
