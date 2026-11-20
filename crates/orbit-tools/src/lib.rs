@@ -62,6 +62,7 @@ pub(crate) const TIMEOUT_SLOW_MS: u64 = 30_000;
 /// fetches a branch and may transfer significant data over the network.
 pub(crate) const TIMEOUT_LONG_MS: u64 = 60_000;
 
+pub use builtin::github::{GITHUB_RUN_LOG_CACHE_DIR, remove_legacy_github_run_log_cache};
 pub use builtin::orbit::pipeline::invoke::has_pipeline_child_admission;
 pub use context::{
     ActivityBinding, DeterministicStepPrograms, PROC_SPAWN_MAX_TIMEOUT_MINUTES, ProcSpawnBudget,

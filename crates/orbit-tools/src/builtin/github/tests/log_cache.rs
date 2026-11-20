@@ -3,7 +3,11 @@ use std::time::{Duration, SystemTime};
 
 use tempfile::TempDir;
 
-use super::super::log_cache::{LogCache, LogCacheKey};
+use super::super::log_cache::{LogCache, LogCacheKey, RedactedLog};
+
+fn redacted(source: &[u8]) -> RedactedLog {
+    RedactedLog::from_source(source).unwrap()
+}
 
 fn key(name: &str) -> LogCacheKey {
     LogCacheKey::job("acme/orbit", "1", name, "failed")
@@ -20,7 +24,7 @@ fn age(cache_dir: &std::path::Path, by: Duration) {
 fn an_entry_past_the_age_bound_is_removed_and_missed() {
     let dir = TempDir::new().unwrap();
     let cache = LogCache::new(dir.path().join("c"), 1 << 20, Duration::from_secs(60));
-    cache.put(&key("1"), b"log one");
+    cache.put(&key("1"), &redacted(b"log one"));
     assert_eq!(cache.get(&key("1")).as_deref(), Some(&b"log one"[..]));
 
     age(&dir.path().join("c"), Duration::from_secs(120));
@@ -33,11 +37,11 @@ fn a_store_removes_expired_entries_and_stray_staging_files() {
     let dir = TempDir::new().unwrap();
     let cache_dir = dir.path().join("c");
     let cache = LogCache::new(cache_dir.clone(), 1 << 20, Duration::from_secs(60));
-    cache.put(&key("old"), b"old");
+    cache.put(&key("old"), &redacted(b"old"));
     fs::write(cache_dir.join(".staging-crashed"), b"partial").unwrap();
     age(&cache_dir, Duration::from_secs(120));
 
-    cache.put(&key("new"), b"new");
+    cache.put(&key("new"), &redacted(b"new"));
     let names: Vec<_> = fs::read_dir(&cache_dir)
         .unwrap()
         .flatten()
@@ -52,9 +56,9 @@ fn the_size_bound_removes_the_oldest_entries_first() {
     let dir = TempDir::new().unwrap();
     let cache_dir = dir.path().join("c");
     let cache = LogCache::new(cache_dir.clone(), 25, Duration::from_secs(3600));
-    cache.put(&key("a"), &[b'a'; 10]);
+    cache.put(&key("a"), &redacted(&[b'a'; 10]));
     age(&cache_dir, Duration::from_secs(30));
-    cache.put(&key("b"), &[b'b'; 10]);
+    cache.put(&key("b"), &redacted(&[b'b'; 10]));
     age(&cache_dir, Duration::from_secs(20));
     // Refresh `a` and `b` ages relative to each other: a is older than b.
     File::options()
@@ -63,13 +67,13 @@ fn the_size_bound_removes_the_oldest_entries_first() {
         .unwrap()
         .set_modified(SystemTime::now() - Duration::from_secs(40))
         .unwrap();
-    cache.put(&key("c"), &[b'c'; 10]);
+    cache.put(&key("c"), &redacted(&[b'c'; 10]));
 
     assert_eq!(cache.get(&key("a")), None, "the oldest entry is evicted");
     assert!(cache.get(&key("b")).is_some());
     assert!(cache.get(&key("c")).is_some());
 
-    cache.put(&key("huge"), &[b'x'; 26]);
+    cache.put(&key("huge"), &redacted(&[b'x'; 26]));
     assert_eq!(
         cache.get(&key("huge")),
         None,
@@ -100,7 +104,7 @@ fn entries_are_owner_only_and_a_staging_file_is_never_an_entry() {
     let dir = TempDir::new().unwrap();
     let cache_dir = dir.path().join("c");
     let cache = LogCache::new(cache_dir.clone(), 1 << 20, Duration::from_secs(3600));
-    cache.put(&key("1"), b"secret-bearing log");
+    cache.put(&key("1"), &redacted(b"secret-bearing log"));
 
     let mode = |path: &std::path::Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode(&cache_dir), 0o700);
@@ -121,7 +125,7 @@ fn a_fresh_publication_survives_the_removal_of_the_entry_it_replaced() {
     let dir = TempDir::new().unwrap();
     let cache_dir = dir.path().join("c");
     let cache = LogCache::new(cache_dir.clone(), 1 << 20, Duration::from_secs(60));
-    cache.put(&key("1"), b"old log");
+    cache.put(&key("1"), &redacted(b"old log"));
     age(&cache_dir, Duration::from_secs(120));
     let path = fs::read_dir(&cache_dir)
         .unwrap()
@@ -131,7 +135,7 @@ fn a_fresh_publication_survives_the_removal_of_the_entry_it_replaced() {
         .path();
     let stale = fs::symlink_metadata(&path).unwrap();
 
-    cache.put(&key("1"), b"fresh log");
+    cache.put(&key("1"), &redacted(b"fresh log"));
     assert!(!cache.remove_if_unchanged(&path, &stale));
     assert!(cache.get(&key("1")).is_some());
 

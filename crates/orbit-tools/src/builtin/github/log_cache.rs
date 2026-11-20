@@ -1,10 +1,15 @@
 //! A host-side copy of completed GitHub Actions logs, so paging one log in
 //! windows downloads it once instead of once per window.
 //!
-//! The cache holds the *source* bytes `gh run view --log*` printed, never a
-//! rendered excerpt: every read replays them through the same collector, so the
-//! excerpt, the selection and the redaction an agent receives are exactly what
-//! an uncached read would have produced.
+//! The cache holds a *masked* copy of the bytes `gh run view --log*` printed,
+//! never the source itself and never a rendered excerpt: before any byte
+//! reaches the disk, staging files included, every span the response redactor
+//! would rewrite is overwritten with `*` bytes of the same length
+//! ([`RedactedLog`] is the only thing [`LogCache::put`] accepts). Lengths and
+//! line breaks are kept, so byte and line coordinates, step sections and
+//! failure regions are those of the source. Every read of a cacheable log, the
+//! read that fills the cache included, replays the masked copy through the
+//! same collector, so a cold and a warm read return the same result.
 //!
 //! Only complete logs are stored. The caller learns completion from GitHub's
 //! status for the job or run before it stores anything (see `logs.rs`), and a
@@ -23,18 +28,22 @@
 //! file, so it is never an entry), and a removal re-checks, under that lock,
 //! that the name still holds the file it classified.
 //!
-//! Entries live under `<Orbit data root>/cache/github-run-logs/`, in a `0700`
-//! directory, as `0600` files written through a staging file and an atomic
-//! rename. The logs are stored as GitHub served them, before redaction, so
-//! the directory is as sensitive as the logs themselves; nothing outside the
-//! owning user can read it. Any failure to read or write the cache is a miss,
-//! never a read error.
+//! Entries live under `<Orbit data root>/state/github-run-logs/`
+//! ([`GITHUB_RUN_LOG_CACHE_DIR`]), in a `0700` directory, as `0600` files
+//! written through a staging file and an atomic rename. The directory is
+//! broker-only state: every agent sandbox masks it, so a confined worker reads
+//! a log only through the bounded, redacted tool response. Earlier releases
+//! kept unredacted entries in `cache/github-run-logs/`; that directory is never
+//! read and is removed whenever the cache is opened or an agent sandbox is
+//! prepared ([`remove_legacy_github_run_log_cache`]). Any failure to read or
+//! write the cache is a miss, never a read error.
 
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use orbit_common::security::redaction::redact_all;
 use sha2::{Digest, Sha256};
 
 /// Total bytes the cache directory may hold. A log is at most 8 MiB (the
@@ -45,8 +54,14 @@ pub(crate) const DEFAULT_MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 /// log within minutes; a day covers a long investigation and bounds disk use.
 pub(crate) const DEFAULT_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// Name of the directory under the Orbit data root.
-const CACHE_DIRECTORY: [&str; 2] = ["cache", "github-run-logs"];
+/// The run-log cache directory, relative to the Orbit data root. Broker-only:
+/// every agent sandbox masks it, so a confined worker cannot read cached logs
+/// except through the tool's response.
+pub const GITHUB_RUN_LOG_CACHE_DIR: &str = "state/github-run-logs";
+
+/// Where earlier releases kept unredacted entries, relative to the Orbit data
+/// root. Never read; removed by [`remove_legacy_github_run_log_cache`].
+const LEGACY_RAW_CACHE_DIR: &str = "cache/github-run-logs";
 
 const ENTRY_EXTENSION: &str = "log";
 
@@ -84,6 +99,79 @@ impl LogCacheKey {
     }
 }
 
+/// A completed log with every span the response redactor rewrites masked: the
+/// only form the cache persists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RedactedLog(Vec<u8>);
+
+impl RedactedLog {
+    /// Mask the source bytes `gh` printed, byte for byte. In each line the
+    /// redactor changes, the span between the first and last changed byte
+    /// becomes `*` (a line that is not UTF-8 is masked whole), so what is left
+    /// is text the redacted response shows anyway.
+    ///
+    /// `None` when masking line by line would leave something the redactor
+    /// finds only across lines: such a log is not cached.
+    pub(crate) fn from_source(source: &[u8]) -> Option<Self> {
+        let text = String::from_utf8_lossy(source);
+        let redacted = redact_all(&text);
+        if redacted == text {
+            return Some(Self(source.to_vec()));
+        }
+        let mut masked = Vec::with_capacity(source.len());
+        let mut redacted_lines = String::with_capacity(redacted.len());
+        for line in source.split_inclusive(|byte| *byte == b'\n') {
+            let line_text = String::from_utf8_lossy(line);
+            let line_redacted = redact_all(&line_text);
+            if line_redacted == line_text {
+                masked.extend_from_slice(line);
+            } else {
+                masked.extend(mask_changed_span(line, &line_redacted));
+            }
+            redacted_lines.push_str(&line_redacted);
+        }
+        (redacted_lines == redacted).then_some(Self(masked))
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// `line` with the bytes between its common prefix and suffix with
+/// `redacted` overwritten by `*`, cut at character boundaries. A line that is
+/// not UTF-8 is masked whole, its line break kept.
+fn mask_changed_span(line: &[u8], redacted: &str) -> Vec<u8> {
+    let Ok(text) = std::str::from_utf8(line) else {
+        return line
+            .iter()
+            .map(|byte| if *byte == b'\n' { b'\n' } else { b'*' })
+            .collect();
+    };
+    let (source, redacted) = (text.as_bytes(), redacted.as_bytes());
+    let mut start = source
+        .iter()
+        .zip(redacted)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let suffix = source[start..]
+        .iter()
+        .rev()
+        .zip(redacted[start..].iter().rev())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let mut end = source.len() - suffix;
+    while !text.is_char_boundary(start) {
+        start -= 1;
+    }
+    while !text.is_char_boundary(end) {
+        end += 1;
+    }
+    let mut masked = line.to_vec();
+    masked[start..end].fill(b'*');
+    masked
+}
+
 /// A bounded directory of completed logs.
 #[derive(Debug, Clone)]
 pub(crate) struct LogCache {
@@ -109,14 +197,18 @@ impl LogCache {
             Ok(root) if !root.trim().is_empty() => PathBuf::from(root),
             _ => orbit_common::fs::path::global_orbit_dir().ok()?,
         };
-        let directory = CACHE_DIRECTORY
-            .iter()
-            .fold(root, |path, part| path.join(part));
-        Some(Self::new(
-            directory,
+        Some(Self::in_root(&root))
+    }
+
+    /// The default cache under `root`, after removing the unredacted cache an
+    /// earlier release left there.
+    pub(crate) fn in_root(root: &Path) -> Self {
+        remove_legacy_github_run_log_cache(root);
+        Self::new(
+            root.join(GITHUB_RUN_LOG_CACHE_DIR),
             DEFAULT_MAX_TOTAL_BYTES,
             DEFAULT_MAX_AGE,
-        ))
+        )
     }
 
     fn entry_path(&self, key: &LogCacheKey) -> PathBuf {
@@ -182,10 +274,11 @@ impl LogCache {
         Some(bytes)
     }
 
-    /// Store `bytes` under `key`, then remove entries past either bound.
+    /// Store `log` under `key`, then remove entries past either bound.
     /// A log larger than the whole cache is not stored. Failures are logged
     /// and otherwise ignored: the caller already holds the log it read.
-    pub(crate) fn put(&self, key: &LogCacheKey, bytes: &[u8]) {
+    pub(crate) fn put(&self, key: &LogCacheKey, log: &RedactedLog) {
+        let bytes = log.as_bytes();
         if bytes.is_empty() || bytes.len() as u64 > self.max_total_bytes {
             return;
         }
@@ -258,6 +351,37 @@ impl LogCache {
                 total = total.saturating_sub(metadata.len());
             }
         }
+    }
+}
+
+/// Remove the unredacted run-log cache an earlier release kept under `root`
+/// (`cache/github-run-logs/`: its entries, staging files and the lock beside
+/// it). Only regular files directly in a plain directory are removed, never
+/// through a link at that name, then the directory if it is left empty.
+/// Best effort: a failure is logged and the next open retries.
+pub fn remove_legacy_github_run_log_cache(root: &Path) {
+    let directory = root.join(LEGACY_RAW_CACHE_DIR);
+    let mut lock = directory.as_os_str().to_owned();
+    lock.push(".lock");
+    let is_plain_directory =
+        fs::symlink_metadata(&directory).is_ok_and(|metadata| metadata.is_dir());
+    let entries = is_plain_directory
+        .then(|| fs::read_dir(&directory).ok())
+        .flatten()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path());
+    for path in entries.chain(std::iter::once(PathBuf::from(lock))) {
+        if !fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file()) {
+            continue;
+        }
+        if let Err(error) = fs::remove_file(&path) {
+            tracing::debug!(%error, "legacy github run log cache file not removed");
+        }
+    }
+    if is_plain_directory {
+        let _ = fs::remove_dir(&directory);
     }
 }
 
