@@ -174,6 +174,24 @@ with a linked task or evidence, after checking the brief for an open notice
 on the same subject (re-posting corroborates it) — and close your own
 task's notice with `orbit.notice.close` when it stops being true.
 
+### Upgrade admission refusal
+
+An `orbit` command run inside a managed activity can be refused at once with
+`upgrade admission refused: [upgrade_pending] a generation switch is pending: …`
+while an Orbit upgrade holds admission. This is not a task blocker and not a
+transient error to work around. Do not retry the command, wait for the upgrade
+to finish, or reach the same result another way. Stop the step and leave the
+worktree as it is: keep every uncommitted change, and do not commit, revert or
+clean up. Return `result.blocker` with kind `upgrade_pending` and the refusal
+text as `evidence`, saying in that evidence what is done and what is not run.
+Use this kind only for this refusal; a failing check or a missing prerequisite
+is a different outcome. A reviewer whose step is refused the same way follows
+this too.
+
+The step then ends on `upgrade_pending`, and the task is not blocked. The
+pipeline requeues the task, keeps the candidate, and resumes it once the
+upgrade settles.
+
 ### Agent-filled PR sections
 
 When the workspace configures `pr.agent_sections` or `pr.required_sections`,
