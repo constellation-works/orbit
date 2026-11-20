@@ -16,10 +16,12 @@
 //! only ever precedes a repeated read; a reserved mutation is never part of
 //! what is read again.
 //! `gh` names no reset in its rendered diagnostic, so the reset is read from
-//! GitHub's `rate_limit` endpoint, which spends no quota. Anything this
+//! GitHub's `rate_limit` endpoint, which spends no quota, through the host's
+//! shared quota record when the guard is on. Anything this
 //! policy refuses keeps the read's original failure.
 
 use orbit_common::{OrbitError, ProviderReadThrottle};
+use orbit_tools::github_quota::SharedReset;
 use serde_json::Value;
 use std::cell::Cell;
 use std::path::Path;
@@ -134,15 +136,27 @@ pub(super) fn wait_for_reset(
 }
 
 /// The latest reset of an exhausted rate-limit resource the throttle could
-/// have hit (the one it named, `core` and `graphql`), from GitHub's
-/// `rate_limit` endpoint, which does not count against the quota. `None`
-/// when the read fails or no such resource is exhausted, which leaves the
-/// unknown-reset backoff.
+/// have hit (the one it named, `core` and `graphql`). With the host guard on
+/// it comes from the shared quota record, so it never reads GitHub's
+/// `rate_limit` endpoint again inside the refresh interval an admission probe
+/// already used [ORB-25938]; with the guard off it reads the endpoint, which
+/// does not count against the quota. `None` when the read fails or no such
+/// resource is exhausted, which leaves the unknown-reset backoff.
 fn exhausted_reset(
     deadline: Deadline,
     workspace: &Path,
     throttle: &ProviderReadThrottle,
 ) -> Option<u64> {
+    let resources = ["core", "graphql"]
+        .into_iter()
+        .chain(throttle.resource.as_deref())
+        .collect::<Vec<_>>();
+    match super::process::shared_exhausted_reset(workspace, deadline.remaining().ok()?, &resources)
+        .ok()?
+    {
+        SharedReset::Guarded(reset) => return reset,
+        SharedReset::Unguarded => {}
+    }
     let response = deadline
         .execute(
             "gh",
@@ -152,9 +166,8 @@ fn exhausted_reset(
         )
         .ok()?;
     let limits: Value = serde_json::from_str(&response.stdout).ok()?;
-    ["core", "graphql"]
+    resources
         .into_iter()
-        .chain(throttle.resource.as_deref())
         .filter_map(|resource| limits["resources"].get(resource))
         .filter(|limit| limit["remaining"].as_u64() == Some(0))
         .filter_map(|limit| limit["reset"].as_u64())

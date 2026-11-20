@@ -6,6 +6,8 @@
 //! [ORB-25918] So does a throttled fallback behind an empty prerequisite log.
 //! [ORB-25917] A snapshot that spent its waits ends the pass instead of
 //! being read again with a fresh count.
+//! [ORB-25938] With the host guard on, completion's reset lookup shares the
+//! admission probe's refresh interval.
 use super::*;
 use std::{cell::Cell, cell::RefCell, rc::Rc};
 
@@ -422,6 +424,103 @@ fn a_persistently_throttled_observation_snapshot_stops_after_its_three_waits() {
                     calls(&fx, "run rerun"),
                     1,
                     "observing the reserved rerun sends no additional mutation"
+                );
+            });
+        },
+    );
+}
+
+/// [ORB-25938] A due admission probe finds quota left; the protected read is
+/// then throttled with no reset or retry header. Completion's reset lookup
+/// answers from the shared record instead of calling `api rate_limit` again
+/// inside the interval, and still waits for the reset the record holds.
+#[test]
+fn a_headerless_throttle_after_a_due_probe_reads_the_reset_from_the_shared_record() {
+    use orbit_tools::github_quota::{self, GithubQuotaPolicy, GithubQuotaStore};
+
+    isolated(
+        "infrastructure::rate_limit::a_headerless_throttle_after_a_due_probe_reads_the_reset_from_the_shared_record",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let fx = fixture_with_workflow(row);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                action(
+                    &host,
+                    "pr_open",
+                    &fx.open_input(&fx.candidate, &fx.base_sha),
+                )
+                .unwrap();
+                setup(&fx, "positive");
+                // The guard's record uses real epoch seconds, so the probe's
+                // answer and the logical clock are anchored to the real now.
+                let real_ms = u64::try_from(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis(),
+                )
+                .unwrap();
+                let reset = real_ms / 1_000 + 300;
+                fs::write(fx.forge.join("infra-rate-limited"), "9").unwrap();
+                fs::write(
+                    fx.forge.join("infra-rate-limit"),
+                    json!({"resources":{
+                        "core":{"limit":5000,"remaining":4000,"reset":reset},
+                        "graphql":{"limit":5000,"remaining":4000,"reset":reset}
+                    }})
+                    .to_string(),
+                )
+                .unwrap();
+                fs::write(fx.forge.join("calls"), "").unwrap();
+                let records = tempfile::TempDir::new().unwrap();
+                let store = GithubQuotaStore::new(records.path().to_path_buf());
+                let clock = Rc::new(Cell::new(real_ms));
+                let waits = Rc::new(RefCell::new(Vec::new()));
+                let (now, recorded) = (Rc::clone(&clock), Rc::clone(&waits));
+                let input = complete_review_input(&fx);
+                let result = orbit_engine::test_support::with_prerequisite_clock(
+                    move || {
+                        let current = now.get();
+                        now.set(current + 1);
+                        current
+                    },
+                    |_, _| {},
+                    || {
+                        github_quota::with_scoped_guard(store, GithubQuotaPolicy::default(), || {
+                            orbit_engine::test_support::with_vcs_retry_wait(
+                                move |duration| {
+                                    recorded
+                                        .borrow_mut()
+                                        .push(u64::try_from(duration.as_millis()).unwrap());
+                                },
+                                || action(&host, "pr_complete", &input),
+                            )
+                        })
+                    },
+                );
+                let error = result.expect_err("the quota stays held for the real clock");
+                assert!(
+                    error.to_string().contains("refused locally"),
+                    "completion keeps the typed local refusal: {error}"
+                );
+                assert!(
+                    waits
+                        .borrow()
+                        .iter()
+                        .any(|wait| (290_000..=300_000).contains(wait)),
+                    "completion waited toward the recorded reset: {:?}",
+                    waits.borrow()
+                );
+                assert_eq!(
+                    calls(&fx, "api rate_limit"),
+                    1,
+                    "the lookup shares the admission probe's interval: {}",
+                    fs::read_to_string(fx.forge.join("calls")).unwrap()
+                );
+                assert_eq!(
+                    calls(&fx, "api repos/{owner}/{repo}"),
+                    1,
+                    "only the first read reached the provider; the hold refuses the rest"
                 );
             });
         },

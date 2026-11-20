@@ -256,6 +256,26 @@ pub(in crate::executor::automation::vcs) fn run_vcs_process_within(
     Ok(result)
 }
 
+/// The latest exhausted reset of `resources` through the host's shared quota
+/// record, which reads GitHub's rate-limit endpoint only when no process has
+/// within the refresh interval. [`orbit_tools::github_quota::SharedReset::Unguarded`]
+/// while the guard is off.
+pub(in crate::executor::automation::vcs) fn shared_exhausted_reset(
+    workspace: &Path,
+    timeout_ms: u64,
+    resources: &[&str],
+) -> Result<orbit_tools::github_quota::SharedReset, OrbitError> {
+    let request = build_vcs_request(
+        "gh",
+        vec!["api".into(), "rate_limit".into()],
+        Some(workspace),
+        timeout_ms,
+    )?;
+    Ok(orbit_tools::github_quota::shared_exhausted_reset(
+        &request, resources,
+    ))
+}
+
 pub(in crate::executor::automation::vcs) fn succeeded(
     result: orbit_exec::ExecutionResult,
     operation: &str,

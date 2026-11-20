@@ -239,6 +239,34 @@ pub fn inherited_account_key() -> String {
     ))
 }
 
+/// The reset a completion-style caller waits for, from the shared record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SharedReset {
+    /// The guard is off: the caller reads the endpoint itself.
+    Unguarded,
+    /// The record's latest exhausted reset among the asked resources, if any.
+    Guarded(Option<u64>),
+}
+
+/// The latest exhausted reset of `resources` for the account `request` uses,
+/// read through the host-shared record. The rate-limit endpoint is read only
+/// when no process on the host has within the refresh interval, so a lookup
+/// right after an admission probe does not call it again. `request` supplies
+/// the program, environment, directory and timeout budget of that read.
+pub fn shared_exhausted_reset(request: &ExecRequest, resources: &[&str]) -> SharedReset {
+    let Some((store, policy)) = active_guard() else {
+        return SharedReset::Unguarded;
+    };
+    let account = request::request_account(request);
+    SharedReset::Guarded(store.exhausted_reset(
+        &policy,
+        &account,
+        resources,
+        now_epoch_seconds(),
+        &|| request::read_rate_limit(request),
+    ))
+}
+
 /// The record for the account a default `gh` call in this process uses,
 /// refreshed first when due; `None` while the guard is off.
 pub fn host_quota_status() -> Option<GithubQuotaStatus> {
