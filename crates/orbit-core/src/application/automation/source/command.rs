@@ -151,25 +151,68 @@ impl<'a> Source<'a> {
             return Err(AutomationError::Deferred(DeferredReason::SourceDeadline));
         }
 
-        if self.elapsed() > SOURCE_DEADLINE {
-            return Err(AutomationError::Deferred(DeferredReason::SourceDeadline));
-        }
+        let remaining_source_before = SOURCE_DEADLINE
+            .checked_sub(self.elapsed())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or(AutomationError::Deferred(DeferredReason::SourceDeadline))?;
+
+        #[cfg(feature = "test-support")]
+        let frozen_clock = self.started.is_frozen();
+        #[cfg(not(feature = "test-support"))]
+        let frozen_clock = false;
 
         // A provider read spends the host's GitHub quota as background work:
-        // a read the guard refuses defers this pass and runs nothing.
-        let quota_request = gh_quota_request(program, args, env, self.root);
-        if let Some(request) = &quota_request {
-            orbit_tools::github_quota::admit_gh_request(
+        // a read the guard refuses defers this pass and runs nothing. Bound any
+        // rate-limit probe to what remains of this command and source budget,
+        // and re-check both before spawning the provider command.
+        let mut quota_request = gh_quota_request(program, args, env, self.root);
+        let effective_budget = if let Some(request) = quota_request.as_mut() {
+            if !frozen_clock {
+                let probe_budget = budget.min(remaining_source_before);
+                let probe_ms = u64::try_from(probe_budget.as_millis())
+                    .unwrap_or(u64::MAX)
+                    .max(1);
+                request.timeout_ms = Some(probe_ms);
+            }
+            let command_started = super::budget_now();
+            let wall_started = std::time::Instant::now();
+            let admitted = orbit_tools::github_quota::admit_gh_request(
                 orbit_tools::github_quota::GithubCaller::Background,
                 request,
-            )
-            .map_err(|error| {
+            );
+            let wall_elapsed = wall_started.elapsed();
+            let command_elapsed = super::budget_now()
+                .saturating_duration_since(command_started)
+                .max(wall_elapsed);
+            if self.elapsed() >= SOURCE_DEADLINE
+                || (!frozen_clock && wall_elapsed >= remaining_source_before)
+            {
+                return Err(AutomationError::Deferred(DeferredReason::SourceDeadline));
+            }
+            admitted.map_err(|error| {
                 AutomationError::Deferred(DeferredReason::EvidenceUnavailable(format!(
                     "{}: {error}",
                     command_line(program, args)
                 )))
             })?;
-        }
+            let remaining_command_budget = budget.saturating_sub(command_elapsed);
+            if !frozen_clock && remaining_command_budget.is_zero() {
+                return Err(AutomationError::Deferred(DeferredReason::SourceBudget));
+            }
+            if frozen_clock {
+                budget
+            } else {
+                let remaining_source_after = SOURCE_DEADLINE
+                    .saturating_sub(self.elapsed())
+                    .min(remaining_source_before.saturating_sub(wall_elapsed));
+                if remaining_source_after.is_zero() {
+                    return Err(AutomationError::Deferred(DeferredReason::SourceDeadline));
+                }
+                remaining_command_budget.min(remaining_source_after)
+            }
+        } else {
+            budget
+        };
 
         let stdin = match input {
             None => Stdio::null(),
@@ -235,7 +278,7 @@ impl<'a> Source<'a> {
                 stdin: Stdin::Null,
                 stdout: Stream::Redirected,
                 stderr: Stream::Redirected,
-                timeout: self.supervision_timeout(budget),
+                timeout: self.supervision_timeout(effective_budget),
                 // The source clock, so a frozen or injected test clock does
                 // not start spending the wall-clock budget.
                 clock: Some(&super::budget_now),

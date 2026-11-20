@@ -172,15 +172,56 @@ pub fn observe_gh_failure(request: &ExecRequest, stderr: &str) {
     );
 }
 
-/// [`admit_gh_request`], run `request` without a sandbox, then
-/// [`observe_gh_result`].
+/// Remaining timeout budget after `elapsed`, or `None` when `request`'s
+/// finite budget is already exhausted.
+fn remaining_request_budget(
+    request: &ExecRequest,
+    elapsed: std::time::Duration,
+) -> Option<ExecRequest> {
+    let Some(budget_ms) = request.timeout_ms else {
+        return Some(request.clone());
+    };
+    let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+    let remaining_ms = budget_ms.saturating_sub(elapsed_ms);
+    if remaining_ms == 0 {
+        return None;
+    }
+    let mut bounded = request.clone();
+    bounded.timeout_ms = Some(remaining_ms);
+    Some(bounded)
+}
+
+fn timed_out_before_start(duration_ms: u64) -> ExecutionResult {
+    ExecutionResult {
+        success: false,
+        timed_out: true,
+        stdout: String::new(),
+        stderr: "process timed out before starting".to_string(),
+        exit_code: None,
+        duration_ms,
+        output: None,
+    }
+}
+
+/// [`admit_gh_request`], run `request` without a sandbox with the remaining
+/// timeout budget, then [`observe_gh_result`].
 pub fn run_gh_request(
     caller: GithubCaller,
     request: &ExecRequest,
 ) -> Result<ExecutionResult, OrbitError> {
+    if request.timeout_ms == Some(0) {
+        return Ok(timed_out_before_start(0));
+    }
+    let started = std::time::Instant::now();
     admit_gh_request(caller, request)?;
-    let result = run_process(request, &NoSandbox)?;
-    observe_gh_result(request, &result);
+    let elapsed = started.elapsed();
+    let Some(bounded_request) = remaining_request_budget(request, elapsed) else {
+        return Ok(timed_out_before_start(
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+        ));
+    };
+    let result = run_process(&bounded_request, &NoSandbox)?;
+    observe_gh_result(&bounded_request, &result);
     Ok(result)
 }
 
@@ -202,7 +243,9 @@ pub fn inherited_account_key() -> String {
 /// refreshed first when due; `None` while the guard is off.
 pub fn host_quota_status() -> Option<GithubQuotaStatus> {
     let (store, policy) = active_guard()?;
-    let probe = crate::builtin::github::gh_exec_request(Vec::new(), None, 0);
+    let mut probe = crate::builtin::github::gh_exec_request(Vec::new(), None, 0);
+    // Status inspection has no caller deadline; use the full refresh timeout.
+    probe.timeout_ms = None;
     let account = request::request_account(&probe);
     let now = now_epoch_seconds();
     store.refresh_if_due(&policy, &account, now, &|| request::read_rate_limit(&probe));

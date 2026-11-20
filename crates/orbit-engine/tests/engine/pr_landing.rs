@@ -7024,7 +7024,10 @@ if [ -f "$forge/infrastructure" ]; then
     fi
     # [ORB-25864] The account's REST quota: the next N repository reads are
     # rate-limited, and `rate_limit` (which spends no quota) names the reset.
-    if [ "$*" = "api rate_limit" ]; then cat "$forge/infra-rate-limit"; exit; fi
+    if [ "$*" = "api rate_limit" ]; then
+        if [ -f "$forge/infra-rate-limit-hang" ]; then sleep 30; fi
+        cat "$forge/infra-rate-limit"; exit
+    fi
     if [ "$*" = "api repos/{owner}/{repo}" ] && [ -s "$forge/infra-rate-limited" ]; then
         left=$(cat "$forge/infra-rate-limited")
         if [ "$left" -gt 0 ]; then

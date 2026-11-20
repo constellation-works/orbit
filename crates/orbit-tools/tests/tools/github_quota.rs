@@ -71,6 +71,7 @@ impl FakeGh {
              if [ \"$*\" = 'api rate_limit' ]; then\n\
                case $(cat \"$dir/rate_limit\") in\n\
                  refuse) echo 'HTTP 401: Bad credentials (https://api.github.com/rate_limit)' >&2; exit 1 ;;\n\
+                 hang) sleep 30; exit 0 ;;\n\
                  *) cat \"$dir/rate_limit\"; exit 0 ;;\n\
                esac\n\
              fi\n\
@@ -511,4 +512,46 @@ fn in_flight_refresh_preserves_overlapping_delivery_debits_for_reserve() {
         assert_eq!(refusal.limit, Some(5000));
         assert_eq!(refusal.reserve, 1000);
     }
+}
+
+/// Regression [ORB-25934]: a slow `api rate_limit` probe must be bounded by the
+/// caller's `request.timeout_ms` instead of hard-coding 15 s, and an expired
+/// budget must return timed-out without spawning the original `gh` request.
+#[test]
+fn slow_rate_limit_probe_bounds_to_request_timeout_and_skips_expired_request() {
+    let records = TempDir::new().unwrap();
+    let policy = GithubQuotaPolicy::default();
+    let gh = FakeGh::new("hang", "ok");
+
+    let mut request = gh.request(&["run", "view", "123"]);
+    request.timeout_ms = Some(60);
+    let started = std::time::Instant::now();
+    let result = github_quota::with_scoped_guard(store(records.path()), policy, || {
+        github_quota::run_gh_request(GithubCaller::Delivery, &request)
+    })
+    .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "probe must respect the 60 ms request timeout instead of waiting 15 s, took {:?}",
+        started.elapsed()
+    );
+    assert!(result.timed_out);
+    assert!(!result.success);
+    assert_eq!(
+        gh.calls(),
+        vec!["api rate_limit".to_string()],
+        "an expired budget after admission must not spawn the original request"
+    );
+
+    // Zero budget must not spawn even the probe.
+    let gh_zero = FakeGh::new("hang", "ok");
+    let mut zero_request = gh_zero.request(&["run", "view", "456"]);
+    zero_request.timeout_ms = Some(0);
+    let zero_result = github_quota::with_scoped_guard(store(records.path()), policy, || {
+        github_quota::run_gh_request(GithubCaller::Delivery, &zero_request)
+    })
+    .unwrap();
+    assert!(zero_result.timed_out);
+    assert!(!zero_result.success);
+    assert!(gh_zero.calls().is_empty());
 }

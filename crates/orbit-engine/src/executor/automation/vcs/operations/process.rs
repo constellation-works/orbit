@@ -180,6 +180,31 @@ pub(in crate::executor::automation::vcs) fn execute(
     )
 }
 
+fn build_vcs_request(
+    program: &str,
+    args: Vec<String>,
+    current_dir: Option<&Path>,
+    timeout_ms: u64,
+) -> Result<ExecRequest, OrbitError> {
+    if program == "git" {
+        let root = current_dir.ok_or_else(|| {
+            OrbitError::InvalidInput("Git operation requires a working directory".to_string())
+        })?;
+        let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+        Ok(super::super::git::git_request(root, &args, timeout_ms))
+    } else {
+        Ok(ExecRequest {
+            program: program.to_string(),
+            args,
+            current_dir: current_dir.map(|path| path.to_string_lossy().into_owned()),
+            timeout_ms: Some(timeout_ms),
+            stdin_mode: StdinMode::Null,
+            environment_mode: EnvironmentMode::ClearAndSet(super::super::git::gh_environment()),
+            debug: false,
+        })
+    }
+}
+
 /// Run one VCS process and return its outcome, failed or not.
 ///
 /// A `gh` call is delivery's spend of the host's GitHub quota: it is admitted
@@ -192,23 +217,7 @@ pub(in crate::executor::automation::vcs) fn run_vcs_process(
     current_dir: Option<&Path>,
     timeout_ms: u64,
 ) -> Result<orbit_exec::ExecutionResult, OrbitError> {
-    let request = if program == "git" {
-        let root = current_dir.ok_or_else(|| {
-            OrbitError::InvalidInput("Git operation requires a working directory".to_string())
-        })?;
-        let args = args.iter().map(String::as_str).collect::<Vec<_>>();
-        super::super::git::git_request(root, &args, timeout_ms)
-    } else {
-        ExecRequest {
-            program: program.to_string(),
-            args,
-            current_dir: current_dir.map(|path| path.to_string_lossy().into_owned()),
-            timeout_ms: Some(timeout_ms),
-            stdin_mode: StdinMode::Null,
-            environment_mode: EnvironmentMode::ClearAndSet(super::super::git::gh_environment()),
-            debug: false,
-        }
-    };
+    let request = build_vcs_request(program, args, current_dir, timeout_ms)?;
     if program == "git" {
         return run_process(&request, &NoSandbox);
     }
@@ -216,6 +225,35 @@ pub(in crate::executor::automation::vcs) fn run_vcs_process(
         orbit_tools::github_quota::GithubCaller::Delivery,
         &request,
     )
+}
+
+/// [`run_vcs_process`] for a deadline-bounded caller: admission sees
+/// `timeout_ms`, and `remaining_after_admission` validates and bounds the
+/// remaining budget (both elapsed wall clock and any caller clock) before the
+/// original `gh` process may spawn.
+pub(in crate::executor::automation::vcs) fn run_vcs_process_within(
+    program: &str,
+    args: Vec<String>,
+    current_dir: Option<&Path>,
+    timeout_ms: u64,
+    remaining_after_admission: impl FnOnce(u64) -> Result<u64, OrbitError>,
+) -> Result<orbit_exec::ExecutionResult, OrbitError> {
+    let mut request = build_vcs_request(program, args, current_dir, timeout_ms)?;
+    if program == "git" {
+        return run_process(&request, &NoSandbox);
+    }
+    let admit_started = std::time::Instant::now();
+    let admission = orbit_tools::github_quota::admit_gh_request(
+        orbit_tools::github_quota::GithubCaller::Delivery,
+        &request,
+    );
+    let admit_elapsed_ms = u64::try_from(admit_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let remaining_ms = remaining_after_admission(admit_elapsed_ms)?;
+    admission?;
+    request.timeout_ms = Some(remaining_ms);
+    let result = run_process(&request, &NoSandbox)?;
+    orbit_tools::github_quota::observe_gh_result(&request, &result);
+    Ok(result)
 }
 
 pub(in crate::executor::automation::vcs) fn succeeded(

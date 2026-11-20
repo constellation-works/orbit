@@ -105,18 +105,34 @@ pub(crate) fn request_account(request: &ExecRequest) -> String {
     format!("{host}-{fingerprint}")
 }
 
+/// Build the `gh api rate_limit` probe request for `request`, bounded by
+/// `request.timeout_ms` (and at most [`REFRESH_TIMEOUT_MS`]). Returns `None`
+/// when `request`'s finite timeout budget is already zero.
+pub(crate) fn rate_limit_probe_request(request: &ExecRequest) -> Option<ExecRequest> {
+    let timeout_ms = match request.timeout_ms {
+        Some(0) => return None,
+        Some(limit) => limit.min(REFRESH_TIMEOUT_MS),
+        None => REFRESH_TIMEOUT_MS,
+    };
+    Some(ExecRequest {
+        program: request.program.clone(),
+        args: vec!["api".to_string(), "rate_limit".to_string()],
+        current_dir: request.current_dir.clone(),
+        timeout_ms: Some(timeout_ms),
+        stdin_mode: StdinMode::Null,
+        environment_mode: request.environment_mode.clone(),
+        debug: false,
+    })
+}
+
 /// Read GitHub's rate-limit endpoint with `request`'s program, environment
 /// and directory, so it answers for the same account. The endpoint does not
 /// count against the quota.
 pub(crate) fn read_rate_limit(request: &ExecRequest) -> RateLimitAnswer {
-    let probe = ExecRequest {
-        program: request.program.clone(),
-        args: vec!["api".to_string(), "rate_limit".to_string()],
-        current_dir: request.current_dir.clone(),
-        timeout_ms: Some(REFRESH_TIMEOUT_MS),
-        stdin_mode: StdinMode::Null,
-        environment_mode: request.environment_mode.clone(),
-        debug: false,
+    let Some(probe) = rate_limit_probe_request(request) else {
+        return RateLimitAnswer::Unknown(
+            "rate-limit read skipped: timeout budget exhausted".to_string(),
+        );
     };
     match run_process(&probe, &NoSandbox) {
         Ok(result) if result.success => parse_rate_limit(&result.stdout),
