@@ -49,15 +49,16 @@ pub(super) fn run_gh_process(
 
 /// Guard for `orbit_tools::github_cli::read_run_log_guarded`: put one `gh`
 /// subprocess request under the cleared VCS environment, admitted as
-/// `caller`'s read of the host's GitHub quota.
+/// `caller`'s read of the host's GitHub quota. The returned request carries
+/// only the timeout budget left after admission; an exhausted budget is the
+/// typed timeout and the read never starts.
 pub(super) fn clear_gh_environment(
     request: &ExecRequest,
     caller: github_quota::GithubCaller,
 ) -> Result<ExecRequest, OrbitError> {
     let mut request = request.clone();
     request.environment_mode = EnvironmentMode::ClearAndSet(gh_environment());
-    github_quota::admit_gh_request(caller, &request)?;
-    Ok(request)
+    github_quota::admit_gh_request_within_budget(caller, &request)
 }
 
 pub(super) fn run_gh(
