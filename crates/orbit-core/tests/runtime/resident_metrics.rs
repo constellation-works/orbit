@@ -25,6 +25,7 @@ use serde_json::{Value, json};
 const CONFIG: &str = "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n\n[crews.dk]\nkind = \"human\"\ndescription = \"Daniel's own work\"\n";
 
 fn runtime_at(root: &Path) -> OrbitRuntime {
+    crate::scenarios::require_isolated_mutable_fixture("resident_metrics::runtime_at");
     let global = root.join("home/.orbit");
     let orbit = root.join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
@@ -1095,7 +1096,6 @@ fn interventions_and_escalations_outside_active_span_are_excluded() {
 /// [ORB-26011] A human stop or takeover written through `control_resident`
 /// is one manual intervention on its mandate. A human wake is not one, and
 /// neither is a stop the clock writes as `system`.
-#[test]
 fn human_stop_and_takeover_count_once_while_wake_and_system_stop_do_not() {
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let runtime = human_runtime_at(root.path());
@@ -1350,4 +1350,5 @@ crate::scenario_table!(
     ended_mandate_bounds_active_days_by_its_end,
     interventions_and_escalations_outside_active_span_are_excluded,
     escalation_buckets_sum_to_count_and_per_human_day_uses_window_days,
+    human_stop_and_takeover_count_once_while_wake_and_system_stop_do_not,
 );
