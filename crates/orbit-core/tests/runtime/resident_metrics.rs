@@ -7,12 +7,12 @@
 use std::path::Path;
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
 use orbit_core::application::resident::{
     ResidentChannelCaller, ResidentControlAction, ResidentControlParams,
 };
 use orbit_core::application::task::{AgentDecisionRaise, TaskAddParams, TaskUpdateParams};
+use orbit_core::{ActorIdentity, OrbitRuntime};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{
     DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest, DecisionRiskTier, TaskArtifact,
@@ -31,6 +31,12 @@ fn runtime_at(root: &Path) -> OrbitRuntime {
     std::fs::create_dir_all(&orbit).unwrap();
     std::fs::write(orbit.join("config.toml"), CONFIG).unwrap();
     OrbitRuntime::from_roots(&global, &orbit).unwrap()
+}
+
+/// Runtime whose writes are attributed to a human, so a control write made
+/// through `control_resident` carries the human writer label.
+fn human_runtime_at(root: &Path) -> OrbitRuntime {
+    runtime_at(root).with_actor(ActorIdentity::human("human:daniel"))
 }
 
 fn operator() -> ToolSessionContext {
@@ -970,7 +976,7 @@ fn ended_mandate_bounds_active_days_by_its_end() {
 
 fn interventions_and_escalations_outside_active_span_are_excluded() {
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
-    let runtime = runtime_at(root.path());
+    let runtime = human_runtime_at(root.path());
     let now = Utc::now();
     let (mandate_id, watched) = mandate_with_human_watched(&runtime, "span leaf");
 
@@ -1059,10 +1065,17 @@ fn interventions_and_escalations_outside_active_span_are_excluded() {
         .iter()
         .find(|m| m["task_id"] == mandate_id)
         .unwrap();
-    assert_eq!(backdated["interventions"]["count"], 1, "{backdated}");
+    // The in-span comment, then the human stop that ends the span at its
+    // boundary [ORB-26011].
+    assert_eq!(backdated["interventions"]["count"], 2, "{backdated}");
     assert_eq!(
         backdated["interventions"]["items"][0]["at"],
         json!(inside),
+        "{backdated}"
+    );
+    assert_eq!(
+        backdated["interventions"]["items"][1]["at"],
+        json!(ended),
         "{backdated}"
     );
     assert_eq!(backdated["escalations"]["count"], 1, "{backdated}");
@@ -1072,8 +1085,84 @@ fn interventions_and_escalations_outside_active_span_are_excluded() {
         "{backdated}"
     );
 
+    // The in-span human comment and the human stop: two interventions. The
+    // stop itself was once dropped because it is a `resident_` event
+    // [ORB-26011].
     let live = mandates.iter().find(|m| m["task_id"] == live_id).unwrap();
-    assert_eq!(live["interventions"]["count"], 1, "{live}");
+    assert_eq!(live["interventions"]["count"], 2, "{live}");
+}
+
+/// [ORB-26011] A human stop or takeover written through `control_resident`
+/// is one manual intervention on its mandate. A human wake is not one, and
+/// neither is a stop the clock writes as `system`.
+#[test]
+fn human_stop_and_takeover_count_once_while_wake_and_system_stop_do_not() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = human_runtime_at(root.path());
+    let (stopped, _) = mandate_with_human_watched(&runtime, "stop leaf");
+    let (taken_over, _) = mandate_with_human_watched(&runtime, "takeover leaf");
+    let (clock_ended, _) = mandate_with_human_watched(&runtime, "clock leaf");
+
+    resident_control_write(&runtime, &stopped, ResidentControlAction::Wake);
+    resident_control_write(&runtime, &stopped, ResidentControlAction::Stop);
+    resident_control_write(&runtime, &taken_over, ResidentControlAction::Takeover);
+    seed_clock_stop(&runtime, &clock_ended, Utc::now());
+
+    let report = metrics(&runtime, json!({"since": "7d"}));
+    let mandates = report["mandates"].as_array().unwrap();
+    let interventions = |task_id: &str| {
+        let mandate = mandates.iter().find(|m| m["task_id"] == task_id).unwrap();
+        mandate["interventions"].clone()
+    };
+
+    let stop = interventions(&stopped);
+    assert_eq!(stop["count"], 1, "{stop}");
+    assert_eq!(stop["items"][0]["kind"], "stop", "{stop}");
+    let takeover = interventions(&taken_over);
+    assert_eq!(takeover["count"], 1, "{takeover}");
+    assert_eq!(takeover["items"][0]["kind"], "takeover", "{takeover}");
+    let clock = interventions(&clock_ended);
+    assert_eq!(clock["count"], 0, "{clock}");
+}
+
+fn resident_control_write(runtime: &OrbitRuntime, task_id: &str, action: ResidentControlAction) {
+    runtime
+        .control_resident(
+            &ResidentChannelCaller::default(),
+            ResidentControlParams {
+                task_id: task_id.into(),
+                action,
+                reason: "manual check".into(),
+                status_request: false,
+                by_session: None,
+            },
+        )
+        .unwrap();
+}
+
+/// The entry the clock writes when a mandate deadline passes, inside the
+/// mandate's active span.
+fn seed_clock_stop(runtime: &OrbitRuntime, mandate_id: &str, at: DateTime<Utc>) {
+    let control = json!({
+        "action": "stop",
+        "state": "ended",
+        "reason": "deadline: the mandate deadline has passed",
+        "by": "system",
+    });
+    append_history(
+        runtime,
+        mandate_id,
+        vec![TaskHistoryEntry {
+            at,
+            by: "system".into(),
+            event: "resident_control".into(),
+            note: Some(control.to_string()),
+            from_status: None,
+            to_status: None,
+            operation_id: None,
+            decision: None,
+        }],
+    );
 }
 
 fn escalation_buckets_sum_to_count_and_per_human_day_uses_window_days() {
