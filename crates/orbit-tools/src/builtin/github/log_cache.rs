@@ -46,6 +46,8 @@ use std::time::{Duration, SystemTime};
 use orbit_common::security::redaction::redact_all;
 use sha2::{Digest, Sha256};
 
+use crate::github_run_log_cache::{GITHUB_RUN_LOG_CACHE_DIR, remove_legacy_github_run_log_cache};
+
 /// Total bytes the cache directory may hold. A log is at most 8 MiB (the
 /// source read limit), so this keeps about thirty-two of the largest.
 pub(crate) const DEFAULT_MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
@@ -53,15 +55,6 @@ pub(crate) const DEFAULT_MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 /// How long a cached log may be served after it was written. Agents page one
 /// log within minutes; a day covers a long investigation and bounds disk use.
 pub(crate) const DEFAULT_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
-
-/// The run-log cache directory, relative to the Orbit data root. Broker-only:
-/// every agent sandbox masks it, so a confined worker cannot read cached logs
-/// except through the tool's response.
-pub const GITHUB_RUN_LOG_CACHE_DIR: &str = "state/github-run-logs";
-
-/// Where earlier releases kept unredacted entries, relative to the Orbit data
-/// root. Never read; removed by [`remove_legacy_github_run_log_cache`].
-const LEGACY_RAW_CACHE_DIR: &str = "cache/github-run-logs";
 
 const ENTRY_EXTENSION: &str = "log";
 
@@ -363,37 +356,6 @@ impl LogCache {
                 total = total.saturating_sub(metadata.len());
             }
         }
-    }
-}
-
-/// Remove the unredacted run-log cache an earlier release kept under `root`
-/// (`cache/github-run-logs/`: its entries, staging files and the lock beside
-/// it). Only regular files directly in a plain directory are removed, never
-/// through a link at that name, then the directory if it is left empty.
-/// Best effort: a failure is logged and the next open retries.
-pub fn remove_legacy_github_run_log_cache(root: &Path) {
-    let directory = root.join(LEGACY_RAW_CACHE_DIR);
-    let mut lock = directory.as_os_str().to_owned();
-    lock.push(".lock");
-    let is_plain_directory =
-        fs::symlink_metadata(&directory).is_ok_and(|metadata| metadata.is_dir());
-    let entries = is_plain_directory
-        .then(|| fs::read_dir(&directory).ok())
-        .flatten()
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|entry| entry.path());
-    for path in entries.chain(std::iter::once(PathBuf::from(lock))) {
-        if !fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file()) {
-            continue;
-        }
-        if let Err(error) = fs::remove_file(&path) {
-            tracing::debug!(%error, "legacy github run log cache file not removed");
-        }
-    }
-    if is_plain_directory {
-        let _ = fs::remove_dir(&directory);
     }
 }
 

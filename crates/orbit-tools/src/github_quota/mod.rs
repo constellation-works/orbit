@@ -150,7 +150,7 @@ pub fn observe_gh_failure(request: &ExecRequest, stderr: &str) {
     let Some(resource) = request::request_resource(request) else {
         return;
     };
-    let Some(throttle) = crate::builtin::github::throttle::read_throttle(stderr) else {
+    let Some(throttle) = crate::gh_request::read_throttle(stderr) else {
         return;
     };
     // A secondary limit names no account; it throttles one request pattern,
@@ -232,11 +232,7 @@ pub fn request_account_key(request: &ExecRequest) -> String {
 
 /// The record key a `gh` call inheriting this process's environment uses.
 pub fn inherited_account_key() -> String {
-    request::request_account(&crate::builtin::github::gh_exec_request(
-        Vec::new(),
-        None,
-        0,
-    ))
+    request::request_account(&crate::gh_request::gh_exec_request(Vec::new(), None, 0))
 }
 
 /// The reset a completion-style caller waits for, from the shared record.
@@ -271,7 +267,7 @@ pub fn shared_exhausted_reset(request: &ExecRequest, resources: &[&str]) -> Shar
 /// refreshed first when due; `None` while the guard is off.
 pub fn host_quota_status() -> Option<GithubQuotaStatus> {
     let (store, policy) = active_guard()?;
-    let mut probe = crate::builtin::github::gh_exec_request(Vec::new(), None, 0);
+    let mut probe = crate::gh_request::gh_exec_request(Vec::new(), None, 0);
     // Status inspection has no caller deadline; use the full refresh timeout.
     probe.timeout_ms = None;
     let account = request::request_account(&probe);

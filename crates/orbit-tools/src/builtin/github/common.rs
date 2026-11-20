@@ -1,20 +1,6 @@
 use super::*;
 
-pub fn gh_exec_request(
-    args: Vec<String>,
-    current_dir: Option<String>,
-    timeout_ms: u64,
-) -> ExecRequest {
-    ExecRequest {
-        program: "gh".to_string(),
-        args,
-        current_dir,
-        timeout_ms: Some(timeout_ms),
-        stdin_mode: StdinMode::Null,
-        environment_mode: EnvironmentMode::Inherit,
-        debug: false,
-    }
-}
+pub use crate::gh_request::gh_exec_request;
 
 /// The checkout a repository-scoped `gh` call made through a registered tool
 /// runs in: the caller's selected workspace, else its cwd.
