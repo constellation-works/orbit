@@ -1293,6 +1293,11 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         self.assertEqual(self.pull_request("npm/README.md"), "full")
         self.assertEqual(self.pull_request("docs/dev/qa/path-leases-listener-sudo.md"), "full")
         self.assertEqual(self.pull_request("docs/dev/qa/path-leases-listener-sudo.md", "README.md"), "full")
+        # ci-guardrails.sh selects its self-tests for the vendored standards and the
+        # root agent guides, so a docs-only run would never execute them.
+        for path in ("docs/standards/STD-01-cli-surface/STD-01.md", "AGENTS.md", "CLAUDE.md"):
+            self.assertEqual(self.pull_request(path), "full", path)
+            self.assertEqual(self.pull_request(path, "README.md"), "full", path)
         self.assertEqual(self.pull_request("RELEASING.md", "crates/orbit-cli/src/main.rs"),
                          "affected:orbit-auth,orbit-cli,orbit-exec,orbit-policy,orbit-store")
         # A listing that disagrees with the reported count is not trusted.
@@ -1360,6 +1365,8 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         self.assertEqual(self.push("npm/README.md"), "full")
         self.assertEqual(self.push("docs/dev/qa/path-leases-listener-sudo.md"), "full")
         self.assertEqual(self.push("README.md", "docs/dev/qa/path-leases-listener-sudo.md"), "full")
+        for path in ("docs/standards/STD-01-cli-surface/STD-01.md", "AGENTS.md", "CLAUDE.md"):
+            self.assertEqual(self.push(path), "full", path)
         self.assertEqual(self.classify("push", {}, SHA=self.SHA, BEFORE=self.BEFORE), "full")
 
     def test_cargo_read_markdown_is_not_docs_only(self):

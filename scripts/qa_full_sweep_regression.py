@@ -489,13 +489,17 @@ def self_test():
                 evidence = repo / ".orbit/tmp/hosted.json"
                 evidence.write_text(json.dumps(hosted))
                 extra = [*extra, "--platform-evidence", str(evidence)]
+            # The report path is fixed across cases: a crashed run must not leave
+            # the previous case's report to satisfy this case's assertions.
+            report_path = repo / ".orbit/tmp/report.json"
+            report_path.unlink(missing_ok=True)
             child = subprocess.run([sys.executable, str(driver), str(harness), str(repo),
                                     "--run-commands", *extra], cwd=repo,
                                    env={**os.environ, "PATH": f"{cargo.parent}:{os.environ['PATH']}"},
                                    capture_output=True, text=True, timeout=60)
-            report_path = repo / ".orbit/tmp/report.json"
-            if not report_path.is_file():
-                raise AssertionError(f"sweep did not produce a report: {child.stdout}\n{child.stderr}")
+            if child.returncode not in (0, 1) or not report_path.is_file():
+                raise AssertionError(
+                    f"sweep did not produce a report (exit {child.returncode}): {child.stdout}\n{child.stderr}")
             return json.loads(report_path.read_text())
 
         def row(report, name):
@@ -639,7 +643,10 @@ def self_test():
         assert row(report, "macos-platform")["native_certificate_sha256"] == hashlib.sha256(hosted_bytes).hexdigest(), report
         for mode in ["hosted-skip", "hosted-listing"]:
             report = sweep([native], mode)
-            assert report["decision"] == "INCOMPLETE", report
+            # Rejected evidence earns no credit: the certificate stays unclaimed
+            # and the import row fails (a valid one would be a digest-bound claim).
+            assert report["decision"] == "INCOMPLETE" and not native_claimed(report), (mode, report)
+            assert row(report, "platform-evidence-import")["outcome"] == "FAIL", (mode, report)
         # Capture a real subprocess through the workflow recorder CLI. The
         # fixture Cargo/Git executables provide deterministic host adapters.
         (repo / "mode.json").write_text(json.dumps("complete"))
@@ -1396,13 +1403,18 @@ def retired_cases_orphan_proof_self_test(harness, scratch):
                 "required_capability_gaps": {},
             }
             (repo / "scripts/qa-full-sweep-inventory.json").write_text(json.dumps(inventory))
+            report_path = repo / ".orbit/tmp/report.json"
+            report_path.unlink(missing_ok=True)
             child = subprocess.run(
                 [sys.executable, str(driver), str(harness), str(repo), "--run-commands"],
                 cwd=repo,
                 env={**os.environ, "PATH": f"{cargo.parent}:{os.environ['PATH']}"},
                 capture_output=True, text=True, timeout=60,
             )
-            report = json.loads((repo / ".orbit/tmp/report.json").read_text())
+            if child.returncode not in (0, 1) or not report_path.is_file():
+                raise AssertionError(
+                    f"sweep did not produce a report (exit {child.returncode}): {child.stdout}\n{child.stderr}")
+            report = json.loads(report_path.read_text())
             guard = next(r for r in report["results"] if r["scenario"] == "inventory-guard")
             return child, report, guard
 

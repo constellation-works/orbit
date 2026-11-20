@@ -31,12 +31,16 @@ allowed=(
 # (`use std::io::IsTerminal;`). A bare `is_terminal()` is not matched on
 # purpose — `JobRunState::is_terminal` is an unrelated domain predicate — so a
 # glob import (`use std::io::*;`) followed by `.is_terminal()` is not caught.
+# `TERM` is matched only as an `env::var("TERM")` read, since a table column may
+# carry that header; `isatty` covers `libc::isatty` (orbit-cli depends on libc).
 patterns=(
   '\bIsTerminal\b'
   '\bTIOCGWINSZ\b'
   '\bNO_COLOR\b'
   '\bCLICOLOR'
   '"COLUMNS"'
+  'env::var(_os)?\(\s*"TERM"'
+  '\bisatty\b'
 )
 
 # Fail closed: ripgrep exits 2 on a missing search root, which `|| true`

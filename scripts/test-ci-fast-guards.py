@@ -1090,6 +1090,24 @@ qa.main()
                     self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                     self.assertIn("crates/example/tests/fixture.rs:3:", result.stderr)
 
+    def test_child_runner_multiline_string_does_not_hide_reexec(self):
+        """A string literal spanning lines is one string, so its `}` line cannot close the function."""
+        shutil.copy2(SCRIPTS / "check-test-child-runners.py", self.scripts)
+        (self.scripts / "test-child-runner-allowlist.json").write_text("[]")
+        fixture = self.root / "crates/example/tests/fixture.rs"
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text(
+            "fn reexec() {\n"
+            "    let note = \"{\n"
+            "}\n"
+            "\";\n"
+            "    std::process::Command::new(std::env::current_exe().unwrap()).output().unwrap();\n"
+            "}\n"
+        )
+        result = self.run_guard("check-test-child-runners.py")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("crates/example/tests/fixture.rs:5:", result.stderr)
+
     def test_static_allows_run_child_test_and_rejects_stale_exception(self):
         """The same re-exec passes through run_child_test; a leftover exception fails."""
         self.prepare_ci()
@@ -1998,6 +2016,17 @@ print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered ou
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("terminal state queried outside the output sink",
                       result.stdout + result.stderr)
+        for source in ('fn f() { let _ = std::env::var("TERM"); }\n',
+                       'fn f() { let _ = unsafe { libc::isatty(1) }; }\n'):
+            with self.subTest(source=source):
+                (cli_src / "bad.rs").write_text(source)
+                result = self.run_guard("check-terminal-state-guard.sh")
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("terminal state queried outside the output sink",
+                              result.stdout + result.stderr)
+        (cli_src / "bad.rs").write_text('fn f() { let _ = Column::new("TERM"); }\n')
+        result = self.run_guard("check-terminal-state-guard.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 class DocLinkGuardrailTests(unittest.TestCase):
@@ -3473,6 +3502,32 @@ class DoctestFenceGuardTests(unittest.TestCase):
         for name, source in cases.items():
             with self.subTest(name=name):
                 self.assert_clean(source)
+
+    def test_unterminated_fence_does_not_hide_a_later_items_runnable_fence(self):
+        # Each item has its own docs: item A's unclosed text fence cannot
+        # swallow item B's runnable fence.
+        source = (
+            "/// ```text\n"
+            "/// unclosed\n"
+            "pub fn first() {}\n"
+            "\n"
+            "/// ```rust\n"
+            "/// assert_eq!(1, 2);\n"
+            "/// ```\n"
+            "pub fn second() {}\n"
+        )
+        self.assert_fence_at(source, 5)
+        block = "/// ```text\npub fn first() {}\n/**\n```rust\nassert_eq!(1, 2);\n```\n*/\npub fn second() {}\n"
+        self.assert_fence_at(block, 4)
+
+    def test_fence_spans_attributes_and_plain_comments_within_one_item(self):
+        self.assert_clean(
+            "/// ```rust,ignore\n"
+            "#[cfg(\n    test\n)]\n"
+            "// a plain comment\n"
+            "/// assert_eq!(1, 2);\n"
+            "/// ```\n"
+        )
 
     def test_ignored_and_non_rust_fences_pass(self):
         cases = {

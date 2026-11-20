@@ -66,10 +66,11 @@ if [[ "$is_check" == true && "$disable_fetch" == true && "$has_disable_fetch" ==
 fi
 
 temp_cfg=""
+temp_cfg_dir=""
 temp_link_dir=""
 cleanup() {
-  if [[ -n "$temp_cfg" && -f "$temp_cfg" ]]; then
-    rm -f "$temp_cfg"
+  if [[ -n "$temp_cfg_dir" && -d "$temp_cfg_dir" ]]; then
+    rm -rf "$temp_cfg_dir"
   fi
   if [[ -n "$temp_link_dir" && -d "$temp_link_dir" ]]; then
     rm -rf "$temp_link_dir"
@@ -94,7 +95,10 @@ if [[ -n "$db_path" && "$has_config" == false ]]; then
     fi
   fi
 
-  temp_cfg="$(mktemp "${TMPDIR:-/tmp}/orbit-deny-XXXXXX.toml")"
+  # BSD mktemp (macOS) replaces only trailing Xs, so a `XXXXXX.toml` template
+  # would be a fixed name; make a unique directory and name the file inside it.
+  temp_cfg_dir="$(mktemp -d "${TMPDIR:-/tmp}/orbit-deny-XXXXXX")"
+  temp_cfg="$temp_cfg_dir/deny.toml"
   ORBIT_CARGO_DENY_DB_PATH_FOR_AWK="$target_db_dir" awk '
     function toml_escape(value, escaped, i, character, code) {
       escaped = "";

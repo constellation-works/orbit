@@ -1446,6 +1446,40 @@ class RelativeImportTests(unittest.TestCase):
                 ("job/worker.rs", f"super::{{super::{{{module}::Probe}}}}"),
             )], rejected=True)
 
+    def test_crate_grouped_application_imports_rejected(self):
+        # A `crate::{…, application::<upper>::…}` tree and a nested
+        # `crate::application::{ a::{…}, <upper>::… }` tree name the upper
+        # module as surely as a direct path; each chain once admitted both.
+        self.check_rows([
+            ("task/probe.rs", "use crate::{OrbitRuntime, application::job::JobStuff};\n"),
+            ("task/probe_nested.rs",
+             "use crate::application::{\n    contracts::{DrainClaimedLeaf},\n    job::Other,\n};\n"),
+        ], rejected=True)
+        self.check_rows([
+            ("review/probe.rs", "use crate::{OrbitRuntime, application::codebase::Probe};\n"),
+        ], rejected=True)
+        self.check_rows([
+            ("task/probe.rs", "use crate::{OrbitRuntime, application::contracts::Probe};\n"),
+            ("task/probe_comment.rs", "// use crate::{application::job::Probe};\n"),
+        ], rejected=False)
+
+    def test_crate_grouped_adapter_and_store_imports_rejected(self):
+        self.check_rows([
+            ("probe.rs", "use crate::{OrbitRuntime, adapter::Probe};\n"),
+        ], rejected=True)
+        self.check_rows([
+            ("probe.rs", "use crate::{\n    OrbitRuntime,\n    adapter::{Probe},\n};\n"),
+        ], rejected=True)
+        store = self.root / "crates/orbit-store/src"
+        for relative, source in (
+            ("contracts/probe.rs", "use crate::{Other, repository::Probe};\n"),
+            ("driver/file/probe.rs", "use crate::{Other, driver::sqlite::Probe};\n"),
+            ("driver/sqlite/probe.rs", "use crate::{Other, workflow::{Probe}};\n"),
+            ("fs/probe.rs", "use crate::{Other, driver::{file::Probe}};\n"),
+        ):
+            with self.subTest(relative=relative):
+                self.check_rows([(relative, source)], rejected=True, base=store)
+
     def test_existing_direct_imports_rejected(self):
         # One batch per detector, as in the forecast shim rows above.
         self.check_rows([

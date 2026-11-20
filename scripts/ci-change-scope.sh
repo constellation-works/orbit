@@ -12,9 +12,11 @@
 #             docs/design/auto-tasks/1_overview.md and the configuration
 #             reference page, so those prefixes are not a docs-only run.
 #             scripts/test-* self-tests execute or digest RELEASING.md,
-#             npm/README.md and docs/dev/qa/path-leases-listener-sudo.md,
-#             which are not FILE_READERS entries, so each is not a docs-only
-#             run either. A push also requires a successful
+#             npm/README.md and docs/dev/qa/path-leases-listener-sudo.md, and
+#             ci-guardrails.sh selects its self-tests for docs/standards/*,
+#             AGENTS.md and CLAUDE.md (the vendored-standards guard); none of
+#             these are FILE_READERS entries, so each is not a docs-only run
+#             either. A push also requires a successful
 #             completed full check on BEFORE; a previous push may have been
 #             replaced while pending. That check is `Check / Clippy / Test`
 #             unless DOCS_BEFORE_CHECKS lists one GitHub check name per line.
@@ -78,8 +80,11 @@ docs_only() {
       # Executed by test-release-promotion.py; copied and digested by the
       # test-qa-full-sweep.py self-test (check_npm_package.py RUNTIME_FILES).
       # test-path-leases-listener-sudo.py executes the listener-sudo recipe.
+      # ci-guardrails.sh also runs its self-tests for docs/standards/*,
+      # AGENTS.md and CLAUDE.md (test_ci_gates_reject_modified_vendored_standards).
       # These are not FILE_READERS entries.
-      RELEASING.md | npm/README.md | docs/dev/qa/path-leases-listener-sudo.md) return 1 ;;
+      RELEASING.md | npm/README.md | docs/dev/qa/path-leases-listener-sudo.md | \
+        docs/standards/* | AGENTS.md | CLAUDE.md) return 1 ;;
       *.md)
         # Exact file or any Markdown under a directory prefix. Derived from
         # FILE_READERS so a new Cargo-read page cannot stay docs-only.

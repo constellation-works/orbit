@@ -168,8 +168,6 @@ def plain_string(source, i):
             chars.append(source[j + 1])
             j += 2
             continue
-        if char == "\n":
-            return "".join(chars), j
         chars.append(char)
         j += 1
     return "".join(chars), j
@@ -181,7 +179,7 @@ def char_literal(source, i):
     j = i + 1
     if j < len(source) and source[j] == "\\":
         j += 2
-        if j <= len(source) and source.startswith("u{", i + 1):
+        if j <= len(source) and source.startswith("u{", i + 2):
             end = source.find("}", i + 3)
             j = len(source) if end < 0 else end + 1
     elif j < len(source):
