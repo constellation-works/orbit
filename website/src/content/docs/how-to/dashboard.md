@@ -123,6 +123,7 @@ Confirm the selected workspace before you act.
 | **[Tasks](#tasks)** | Tasks, with the ones waiting on you first. The right dock holds **Drain**, a live **Log**, **[Notices](#notices)**, and **[Residents](#residents)**. |
 | **Drain** | Only in windows 1315px wide or narrower, where it opens the dock's Drain tab in place of the task list. |
 | **[Jobs](#runs-and-errors)** | **Live** (runs pending or running now), **History** (every run, with run detail), and **Catalogue** (jobs you can run by hand). |
+| **Leases** | Active and queued path leases by path: who holds each one, who waits, and recent landings that changed a leased path. Read-only. The rail hides it for a workspace where path leases are off. |
 | **Health** | What is broken now: **Incidents** (grouped failures, with **Events** and **Errors** tabs) and **Doctor**. |
 | **[Analytics](#analytics)** | How delivery is trending: **Metrics**, **Reliability**, **Codebase**, **Resources**, **Forecast**, **Cost**, **[Agents](#agents)**, and **Experiments**. |
 | **[Automation](#automation)** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Scripts**. |
@@ -256,9 +257,11 @@ the target, check **allow missing context** before you save.
 ### Distributed tasks
 
 On the owner of a [distributed drain](/how-to/distributed-drain/), a task
-with an execution claim shows a **distributed execution** panel. **approve**
-on a `review` task with a handed-off claim sends **Approve handoff** for the
-candidate shown. **Revoke authority** and **Recover claim** require a reason;
+with an execution claim has a **Delivery** tab in its detail, with the claim's
+attempt and its **Owner actions** (**Recovery** when there is nothing to
+approve). **approve** on a `review` task with a handed-off claim sends
+**Approve handoff** for the candidate shown. **Revoke authority** and
+**Recover claim** require a reason;
 **Recover claim** moves the task to the status you pick. A replica refuses
 all three actions.
 
