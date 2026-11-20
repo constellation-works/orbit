@@ -1316,8 +1316,8 @@ tags = ["ops"]
 
 **Supported keys and restrictions.** A human crew takes only `description`
 and `tags` besides `kind`. Setting an agent key (`provider`, `model`,
-`effort`, `env`, `vision`, `enabled`, `backend`, or a retired role table)
-fails load naming the crew. Its name must not match an agent crew,
+`effort`, `env`, `vision`, `enabled`, or `backend`) fails load naming the
+crew. Its name must not match an agent crew,
 built-in ones included. Human crews are kept apart from the agent crews, so
 a `[crews]` table holding only human crews still gets the built-in agent
 crews. Names normalize to lowercase letters, digits, `_` and `-`.
