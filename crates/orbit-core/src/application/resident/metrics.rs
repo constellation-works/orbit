@@ -62,6 +62,26 @@ fn is_human_writer(by: &str) -> bool {
     by == "human" || by == "operator" || by.starts_with("human:") || by.starts_with("human-")
 }
 
+/// Custom process actor labels carry no human prefix. Count one only when the
+/// control record explicitly captured a human actor, while preserving the
+/// legacy label check and excluding system and agent writers.
+fn is_explicit_human_control_writer(entry: &TaskHistoryEntry) -> bool {
+    if entry.event != RESIDENT_CONTROL_EVENT {
+        return false;
+    }
+    let Some(note) = entry.note.as_deref() else {
+        return false;
+    };
+    let Ok(control) = serde_json::from_str::<ResidentControlEntry>(note) else {
+        return false;
+    };
+    let writer = entry.by.trim();
+    control.human_actor
+        && control.by == entry.by
+        && writer != "unknown"
+        && !orbit_types::identity::is_automation_actor(writer)
+}
+
 /// The action of a `resident_control` entry that counts as a manual
 /// intervention (design §9): a `stop` or a `takeover`. Wake, pause, resume
 /// and release do not count.
@@ -576,7 +596,7 @@ impl OrbitRuntime {
                 None => self.get_task_history(watched_id)?,
             };
             for entry in history_read {
-                if !is_human_writer(&entry.by) {
+                if !is_human_writer(&entry.by) && !is_explicit_human_control_writer(&entry) {
                     continue;
                 }
                 // A human stop or takeover is an intervention. The other

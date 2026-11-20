@@ -103,6 +103,10 @@ pub(crate) struct ResidentControlEntry {
     pub(crate) state: ResidentControlState,
     pub(crate) reason: String,
     pub(crate) by: String,
+    /// The process actor was explicitly typed as human when this entry was
+    /// written. Older history and system-authored controls default to false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) human_actor: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) status_request: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -310,6 +314,8 @@ impl OrbitRuntime {
                     state: to,
                     reason: reason.clone(),
                     by: writer.clone(),
+                    human_actor: self.actor().kind == crate::runtime::context::ActorKind::Human
+                        && !orbit_types::identity::is_automation_actor(&writer),
                     status_request: params.status_request,
                     by_session: params
                         .by_session
@@ -457,6 +463,7 @@ impl OrbitRuntime {
                         deadline.to_rfc3339()
                     ),
                     by: "system".into(),
+                    human_actor: false,
                     status_request: false,
                     by_session: None,
                 };
@@ -491,6 +498,7 @@ impl OrbitRuntime {
                     state: ResidentControlState::Ended,
                     reason: "the mandate deadline has passed".into(),
                     by: "system".into(),
+                    human_actor: false,
                     status_request: false,
                     by_session: None,
                 },
