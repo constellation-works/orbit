@@ -725,9 +725,16 @@ landing does not edit or rebase the candidate to bypass a check.
 
 The `landing_waiting_for_base` note makes that wait visible. At the landing
 deadline, an unresolved base wait stops in review with the reason `the base
-never recovered before the landing deadline`. Base-suspect observations also
-have `max_base_ci_cycles` (default 3) per unchanged head/check/signature;
-exhaustion stops in review naming the check, signature and missing evidence.
+never recovered before the landing deadline`. A hold at the landing deadline
+never reclassifies. Base-suspect observations also have `max_base_ci_cycles`
+(default 3) per unchanged head/check/signature. At exhaustion, a same-check pass
+on a base-branch push run at a commit containing the candidate's base, with no
+same-check failure there or on the landing tip, proves the base green: the
+failure is reclassified `candidate` (`ci_base_suspect_reclassified`) and takes
+the candidate requeue route, returning the task to the backlog. Without that
+proof (no pass, a red tip or an unreadable base), exhaustion holds the candidate
+in review as `delivery_base_checks_pending`, naming the check, signature and
+missing evidence.
 CI retry evidence that stays unreadable (plan authentication or log reads) for
 the same cycle count escalates too: a same-check base pass sends a flaky
 failure to candidate repair (or requeue once its repair is spent). Candidate failures keep their

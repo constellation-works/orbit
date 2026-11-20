@@ -1873,13 +1873,15 @@ one. From then on:
     3600 seconds), whichever comes first.
     A cycle is one landing poll that rechecks the same failed job against the
     accepted base ancestry.
-    When those cycles end, the landing reads the base once more: if the same
-    check passed on a base-branch push run at a commit containing the
+    When those cycles end (the cycle limit, not the deadline), the landing
+    reads the base once more: if the same check passed on a base-branch push run at a commit containing the
     candidate's base, with no same-check failure there or on the landing tip,
     the base is proven green. The failure is then reclassified **candidate**,
     recorded as `ci_base_suspect_reclassified` with the base run id, base SHA
     and check, and the task returns to the backlog for its repair run instead
     of holding. A missing pass, a red tip or an unreadable base keeps the hold.
+    A hold at the `max_wait_seconds` deadline never reclassifies, even when a
+    same-check base pass exists; only the cycle-limit read above can.
     Its hold evidence names the check, signature and missing rerun or base
     result for operator review. A log that cites no repository file, or cites
     a file the candidate changed, is classified as before.

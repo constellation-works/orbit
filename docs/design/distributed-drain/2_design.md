@@ -1245,7 +1245,11 @@ results, `handoff_land` holds the candidate in review as
 `delivery_base_checks_pending` after
 `max_base_ci_cycles` observation cycles (default 3) or `max_wait_seconds` (default 3600 seconds),
 whichever comes first. Each observation cycle rechecks the failed job against the accepted base
-ancestry. Reruns share the eligible-set planner with owner-local `auto_fix=true` completion. Before the
+ancestry. At the cycle limit the landing reads the base once more: a same-check pass on a base-branch
+push run at a commit containing the candidate's base, with no same-check failure there or on the
+landing tip, reclassifies the failure as `candidate` (`ci_base_suspect_reclassified`) and requeues it
+instead of holding. A hold at the `max_wait_seconds` deadline never reclassifies. Reruns share the
+eligible-set planner with owner-local `auto_fix=true` completion. Before the
 workflow-wide `--failed` action, it authenticates the **complete** latest-attempt job and step
 listing, not only required failed checks. Every failed job must be an independently eligible
 transient/flaky root or a dependency-only waiter whose versioned evidence reaches those roots.

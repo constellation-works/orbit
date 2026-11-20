@@ -2699,7 +2699,11 @@ Each `[[review.host_evidence]]` rule has `kind` (`codeql` or `host_sandbox_test`
   retry evidence stop in review naming the read failure. If untouched-path evidence remains
   incomplete, landing holds the candidate in review as `delivery_base_checks_pending` after
   `max_base_ci_cycles` observation cycles (default 3) or `max_wait_seconds` (default 3600 seconds),
-  whichever comes first (see the [distributed drain runbook](runbooks/distributed-drain.md)). Branch
+  whichever comes first. At the cycle limit, a same-check pass on a base-branch push run at a commit
+  containing the candidate's base, with no same-check failure there or on the landing tip, reclassifies
+  the base-suspect failure as candidate (`ci_base_suspect_reclassified`) and requeues it instead of
+  holding; a hold at the `max_wait_seconds` deadline never reclassifies (see the
+  [distributed drain runbook](runbooks/distributed-drain.md)). Branch
   protection's own reading of a skipped or neutral required check is unchanged. Without
   `hosted_check` — a custom query, or a workspace with no hosted CodeQL — the requirement holds the
   review like any other owed check. Declare it only for a check that really runs the rule's command:

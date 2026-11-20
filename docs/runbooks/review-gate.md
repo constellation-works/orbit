@@ -328,7 +328,11 @@ The owner enforces what it is owed in two places:
   `handoff_land` holds in review (`delivery_base_checks_pending`) after
   `max_base_ci_cycles` observation cycles (default 3) or `max_wait_seconds`
   (default 3600 seconds), whichever comes
-  first, and names the missing evidence. Branch protection may still treat a skipped or
+  first, and names the missing evidence. At the cycle limit, a same-check pass on a base-branch
+  push run at a commit containing the candidate's base, with no same-check failure there or on the
+  landing tip, reclassifies a base-suspect failure as `candidate` (`ci_base_suspect_reclassified`)
+  and requeues it instead of holding; a hold at the `max_wait_seconds` deadline never reclassifies.
+  Branch protection may still treat a skipped or
   neutral rerun of the failed required check as satisfied; this gate does not. The candidate
   stays in review. A local candidate owed a hosted check stops too.
 
