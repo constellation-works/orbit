@@ -1345,6 +1345,49 @@ fn clipped_probe_with_contended_finalization_lock_releases_claim_and_preserves_r
     assert_contended_clipped_recovery(records.path(), policy, ACCOUNT, now, reset);
 }
 
+/// Regression [ORB-26115]: a malformed candidate at the active generation's
+/// clipped-release path is diagnostic evidence, not proof of ownership. A
+/// healthy account still admits and counts its read while the marker bytes are
+/// preserved for diagnosis.
+#[test]
+fn malformed_clipped_release_is_preserved_while_healthy_admission_proceeds() {
+    let records = TempDir::new().unwrap();
+    let policy = GithubQuotaPolicy::default();
+    let now = now();
+    let reset = now + 1800;
+    store(records.path()).refresh_if_due(&policy, ACCOUNT, now - 120, &|| known(3500, reset));
+    run_contended_clipped_probe(records.path(), policy, ACCOUNT, now);
+
+    let marker = records.path().join(format!(".{ACCOUNT}.clipped.2.json"));
+    let malformed_bytes = b"{\"generation\":";
+    std::fs::write(&marker, malformed_bytes).unwrap();
+
+    store(records.path())
+        .admit(
+            &policy,
+            ACCOUNT,
+            GithubCaller::Agent,
+            RESOURCE_CORE,
+            now,
+            &|| unreachable!("active clipped refresh must not probe again"),
+        )
+        .expect("healthy account should admit the read despite malformed marker");
+
+    assert_eq!(
+        std::fs::read(&marker).unwrap(),
+        malformed_bytes,
+        "malformed release marker bytes must remain available for diagnosis"
+    );
+    let status = store(records.path()).status(&policy, ACCOUNT, now);
+    let core = status
+        .resources
+        .iter()
+        .find(|resource| resource.resource == RESOURCE_CORE)
+        .unwrap();
+    assert_eq!(core.remaining, Some(3499));
+    assert_eq!(core.calls.agent, 1);
+}
+
 /// Regression [ORB-26114]: a writable/searchable quota directory that denies
 /// listing (`0o300`) must still reconcile a staged clipped release by name,
 /// refresh once at the same logical instant, admit an agent once the new
