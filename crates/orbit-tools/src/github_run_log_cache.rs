@@ -18,10 +18,17 @@ pub const GITHUB_RUN_LOG_CACHE_DIR: &str = "state/github-run-logs";
 const LEGACY_RAW_CACHE_DIR: &str = "cache/github-run-logs";
 
 /// Remove the unredacted run-log cache an earlier release kept under `root`
-/// (`cache/github-run-logs/`: its entries, staging files and the lock beside
-/// it). Only regular files directly in a plain directory are removed, never
-/// through a link at that name, then the directory if it is left empty.
-/// Best effort: a failure is logged and the next open retries.
+/// (`cache/github-run-logs/`). It removes regular files directly in a plain
+/// cache directory, then tries to remove that directory if it is empty. It
+/// also removes the sibling `.lock` file when it is regular. Links and
+/// nonfiles are skipped.
+///
+/// Best effort: a failed `remove_file` emits a debug diagnostic only when
+/// metadata first identified that path as a regular file. Failures to inspect
+/// or read the directory, iterate its entries, or remove the directory are
+/// silent. There is no retry within one call; cleanup runs again the next time
+/// the cache is opened with `LogCache::in_root` or an agent sandbox is prepared
+/// with `prepare_agent_mask`.
 pub fn remove_legacy_github_run_log_cache(root: &Path) {
     let directory = root.join(LEGACY_RAW_CACHE_DIR);
     let mut lock = directory.as_os_str().to_owned();
