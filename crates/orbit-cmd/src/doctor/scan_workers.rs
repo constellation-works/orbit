@@ -23,9 +23,13 @@ pub(super) fn spawn_scan_worker<'scope, 'env, T: Send + 'scope>(
         .spawn_scoped(scope, work)
 }
 
-/// Pool size to use while [`DoctorWorkerSpawnRefusal`] is held: the pool
-/// always takes its threaded path, so the refusal is reached on any host.
-/// `None` outside the seam, where the host's parallelism sizes the pool.
+/// Pool size to use while the test-support `DoctorWorkerSpawnRefusal` guard is
+/// held: `work_items` capped at `max`. The pool takes its threaded path, and
+/// so attempts a spawn through [`spawn_scan_worker`], only with two or more
+/// work items. With zero or one item it runs on the calling thread, attempts
+/// no spawn, and the guard refuses nothing. The seam ignores the host's
+/// parallelism. `None` outside the seam, where the host's parallelism sizes
+/// the pool.
 pub(super) fn forced_pool_size(max: usize, work_items: usize) -> Option<usize> {
     #[cfg(feature = "test-support")]
     if seam::installed() {
@@ -35,8 +39,11 @@ pub(super) fn forced_pool_size(max: usize, work_items: usize) -> Option<usize> {
     None
 }
 
-/// Per-thread seam that makes every doctor scan worker spawn fail the way an
-/// exhausted thread limit does, without placing load on the host.
+/// Per-thread seam that makes every doctor scan worker spawn attempt fail the
+/// way an exhausted thread limit does, without placing load on the host. A scan
+/// attempts a spawn only with two or more work items: subdirectories of one
+/// directory, or doctor probes. With zero or one item it runs on the calling
+/// thread, and `refused` stays at zero.
 #[cfg(feature = "test-support")]
 pub struct DoctorWorkerSpawnRefusal;
 
