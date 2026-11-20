@@ -65,10 +65,15 @@
 //! running. `orbit task settle-merged <id>` reads the task's own PRs one by
 //! one, so a merge older than that listing settles too.
 //!
+//! The same tick also finishes a delivery nobody is left to merge: an
+//! authorised (`completion: done`) run that held or ended with its PR open, once
+//! the checks pass ([`auto_land`], ORB-25966).
+//!
 //! `orbit.workflow.land` merges the delivery PR of a task in `review` and then
 //! settles it here ([`land`]), so a landing and an observed merge complete a
 //! task the same way.
 
+mod auto_land;
 mod candidate;
 mod entry;
 mod handoff;
@@ -79,6 +84,9 @@ mod refusal;
 mod rescued;
 
 use crate::runtime::task_pr_forge::MergedPullRequest;
+pub use auto_land::{
+    AutoLanding, FOLLOW_UP_OWNER_OPERATOR, LANDING_FOLLOW_UP_EVENT, LandingFollowUp,
+};
 use candidate::{RevokedHandoff, names_delivery};
 pub use model::ExternalMergeSettlement;
 pub use model::ExternalMergeSettlementProfile;

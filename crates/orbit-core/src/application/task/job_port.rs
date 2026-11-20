@@ -38,6 +38,21 @@ use crate::application::contracts::{
 /// The crew pools an admitting pipeline captured, as task code names them.
 pub(in crate::application::task) type CrewPools = <crate::OrbitRuntime as TaskJobPort>::CrewPools;
 
+/// What a task's newest delivery run says about merging its pull request.
+pub(in crate::application) enum DeliveryCompletion {
+    /// A delivery run is still live; it finishes the task itself.
+    Live,
+    /// No delivery run authorised completion, or the newest one ended where
+    /// only an operator continues it.
+    NotAuthorized,
+    /// The newest run carried `completion: done` and ended `success`, or held
+    /// on a delivery hold a fresh forge read can clear.
+    Authorized {
+        /// That run.
+        run_id: String,
+    },
+}
+
 /// The authenticated identity of the pull request a task's own native run
 /// published, as review and settlement compare it with the forge.
 pub(in crate::application) struct NativePublicationIdentity {
@@ -304,6 +319,10 @@ pub(in crate::application) trait TaskJobPort {
         &self,
         task: &Task,
     ) -> Result<NativePublicationIdentity, OrbitError>;
+
+    /// Whether `task_id`'s newest delivery run authorised completion and ended
+    /// where a fresh forge read may finish it.
+    fn delivery_completion(&self, task_id: &str) -> Result<DeliveryCompletion, OrbitError>;
 
     /// The stopped completion run's authenticated publication, if it has an
     /// inline PR checkpoint. A checkpoint that cannot be verified is an error.
