@@ -17,17 +17,24 @@
 .shell > .main-col { grid-area: main; }
 
 /* Navigation rail collapse (rail-toggle.js): an icon button at the top of
-   the rail, right-aligned on its own row above the first nav entry.
+   the rail, right-aligned on the same row as the Host label. The toggle stays
+   first in the DOM (and focus order); a negative bottom margin of its own
+   height lets the Host row, which is that tall, share its row, and the
+   stacking order keeps the button clickable above the label.
    Contents slide before the grid column changes once; reduced motion skips
    the slide. The column leaves a 45px strip containing only the toggle. */
 .rail-toggle {
+  position: relative;
+  z-index: 1;
   align-self: flex-end;
   flex: 0 0 auto;
-  margin-bottom: 6px;
+  margin-bottom: -28px;
 }
 .rail-toggle > svg { transform: scaleX(-1); }
 .rail .rail-toggle:focus-visible { outline-offset: -2px; }
 @media (min-width: 761px) {
+  /* The Host label's row is as tall as the toggle it shares the row with. */
+  .rail-host .rail-scope-label { display: flex; align-items: center; min-height: 28px; }
   .rail > :not(.rail-toggle) { transition: transform 180ms ease, opacity 180ms ease; }
   .shell:is(.rail-leaving, .rail-entering) .rail > :not(.rail-toggle) {
     transform: translateX(-32px);
@@ -251,7 +258,6 @@
    windows keep the spacing above. */
 @media (min-width: 761px) and (max-height: 800px) {
   .shell > .rail { padding: 8px 12px 6px; }
-  .shell > .rail .rail-toggle { margin-bottom: 4px; }
   .shell > .rail .tabs { gap: 6px; margin-top: 6px; margin-bottom: 4px; }
   .shell > .rail .rail-group-label { padding-bottom: 2px; }
   .shell > .rail .rail-foot { gap: 4px; padding-top: 4px; padding-bottom: 4px; }
