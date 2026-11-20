@@ -558,6 +558,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0093".to_string(),
                 "routine_breakers".to_string()
             ),
+            (
+                "migration.v0094".to_string(),
+                "job_run_crew_model_backfill".to_string()
+            ),
         ]
     );
 }

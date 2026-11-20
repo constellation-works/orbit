@@ -849,12 +849,20 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_routine_breakers,
     },
+    // Data backfill only: `crew_model` takes the legacy `implementer_model`
+    // where it is unset. An older binary still reads either column.
+    Migration {
+        version: 94,
+        name: "job_run_crew_model_backfill",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_job_run_crew_model_backfill,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 93;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 94;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

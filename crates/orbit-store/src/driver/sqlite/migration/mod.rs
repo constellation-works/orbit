@@ -80,10 +80,10 @@ use invocation::{
 use job_run_tasks::apply_job_run_task_recency;
 use job_runs::{
     apply_execution_provenance, apply_flat_crew_model, apply_job_run_archive_stage,
-    apply_job_run_build, apply_job_run_host_id_indexes, apply_job_run_id_allocations,
-    apply_job_run_states, apply_job_run_step_activity_window_index, apply_job_run_step_lock_wait,
-    apply_job_runs_created_index, apply_job_runs_job_created_and_retry_indexes,
-    apply_job_runs_recency_index,
+    apply_job_run_build, apply_job_run_crew_model_backfill, apply_job_run_host_id_indexes,
+    apply_job_run_id_allocations, apply_job_run_states, apply_job_run_step_activity_window_index,
+    apply_job_run_step_lock_wait, apply_job_runs_created_index,
+    apply_job_runs_job_created_and_retry_indexes, apply_job_runs_recency_index,
 };
 use landed_diff_stats::{apply_landed_diff_reviewable_lines, apply_landed_diff_stats};
 use learning::{apply_learning_index_workspace_scope, apply_remove_native_learning_subsystem};

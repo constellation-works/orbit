@@ -633,11 +633,7 @@ pub struct JobRun {
     pub knowledge_metrics: Option<KnowledgeRunMetrics>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_crew: Option<String>,
-    #[serde(
-        default,
-        alias = "implementer_model",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew_model: Option<String>,
     /// Step execution results; populated in-memory from step files and never serialized.
     #[serde(skip)]
