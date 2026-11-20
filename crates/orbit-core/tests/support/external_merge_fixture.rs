@@ -88,6 +88,8 @@ pub(crate) struct ForgeState {
     pub(crate) answers: VecDeque<MergeabilityAnswer>,
     pub(crate) repeat: Option<MergeabilityAnswer>,
     pub(crate) reads: u32,
+    /// The head reports no required check run at all.
+    pub(crate) no_required_checks: bool,
     pub(crate) merges: Vec<(u64, String)>,
     pub(crate) landed: Option<MergedPullRequest>,
 }
@@ -133,6 +135,10 @@ impl FakeForge {
         state.land_base = base.into();
         state.answers = VecDeque::from(answers.to_vec());
         state.repeat = Some(repeat);
+    }
+    /// Whether the scripted head reports no required check run.
+    pub(crate) fn report_no_required_checks(&self, absent: bool) {
+        self.0.lock().unwrap().no_required_checks = absent;
     }
     pub(crate) fn reads(&self) -> u32 {
         self.0.lock().unwrap().reads
@@ -209,7 +215,13 @@ impl TaskPrForge for FakeForge {
                 Err(OrbitError::PullRequestMergeabilityUnknown { number })
             }
             MergeabilityAnswer::Conflicting => Ok(Some(Self::blockers(pull, true))),
-            MergeabilityAnswer::Mergeable => Ok(Some(Self::blockers(pull, false))),
+            MergeabilityAnswer::Mergeable => {
+                let mut blockers = Self::blockers(pull, false);
+                if state.no_required_checks {
+                    blockers.passed_required_checks.clear();
+                }
+                Ok(Some(blockers))
+            }
         }
     }
     fn merge_pull_request(

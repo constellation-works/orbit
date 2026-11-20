@@ -132,13 +132,16 @@ impl OrbitRuntime {
         {
             return Ok(None);
         }
-        let run_id = match self.delivery_completion(&id)? {
+        let (run_id, needs_passed_check) = match self.delivery_completion(&id)? {
             DeliveryCompletion::Live => return Ok(None),
             DeliveryCompletion::NotAuthorized => {
                 self.record_unauthorized_follow_up(&task, &history)?;
                 return Ok(None);
             }
-            DeliveryCompletion::Authorized { run_id } => run_id,
+            DeliveryCompletion::Authorized {
+                run_id,
+                needs_passed_check,
+            } => (run_id, needs_passed_check),
         };
         if current_completion_hold(task.status, &history).is_some() {
             return Ok(None);
@@ -201,6 +204,12 @@ impl OrbitRuntime {
             return Ok(None);
         }
         if !blockers.pending_required_checks.is_empty() {
+            return Ok(None);
+        }
+        // A run held because the head reported no required check run has no
+        // check evidence until one passes; a forge read with none is not
+        // permission to merge. The next pass reads again.
+        if needs_passed_check && blockers.passed_required_checks.is_empty() {
             return Ok(None);
         }
         if !self.handoff_landing_review_ready(&task, Some(&head), None)? {

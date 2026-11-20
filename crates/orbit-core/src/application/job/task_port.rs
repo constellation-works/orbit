@@ -8,7 +8,7 @@ use orbit_types::task::{
     CrewSource, DecisionRequest, ExecutorOsLimit, Task, TaskComplexity, TaskHistoryEntry,
 };
 use orbit_types::workflow::{
-    self, CrewPurpose, HostValidationGates, JobRun, JobRunTrigger, PipelineState,
+    self, CrewPurpose, DeliveryRefusal, HostValidationGates, JobRun, JobRunTrigger, PipelineState,
     RunDeliveryObservation, ShipMode, SourceRepairBinding,
 };
 use serde_json::{Value, json};
@@ -37,22 +37,29 @@ impl TaskJobPort for OrbitRuntime {
             .and_then(|input| input.get("completion"))
             .and_then(Value::as_str)
             == Some("done");
+        let mut needs_passed_check = false;
         let eligible = match run.state {
             workflow::JobRunState::Pending
             | workflow::JobRunState::Running
             | workflow::JobRunState::Retrying => return Ok(DeliveryCompletion::Live),
             workflow::JobRunState::Success => true,
-            workflow::JobRunState::Held => self
-                .stores()
-                .jobs()
-                .get_job_run(&run.run_id)?
-                .as_ref()
-                .and_then(super::pr_repair::held_refusal)
-                .is_some_and(super::pr_repair::handed_back_hold),
+            workflow::JobRunState::Held => {
+                let refusal = self
+                    .stores()
+                    .jobs()
+                    .get_job_run(&run.run_id)?
+                    .as_ref()
+                    .and_then(super::pr_repair::held_refusal);
+                needs_passed_check = refusal == Some(DeliveryRefusal::CheckRunsAbsent);
+                refusal.is_some_and(super::pr_repair::handed_back_hold)
+            }
             _ => false,
         };
         Ok(if authorized && eligible {
-            DeliveryCompletion::Authorized { run_id: run.run_id }
+            DeliveryCompletion::Authorized {
+                run_id: run.run_id,
+                needs_passed_check,
+            }
         } else {
             DeliveryCompletion::NotAuthorized
         })

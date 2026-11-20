@@ -17,6 +17,7 @@ use super::*;
 crate::scenario_table!(
     auto_landing,
     a_held_authorised_run_whose_checks_went_green_is_merged_by_the_owner_tick,
+    a_held_absent_runs_delivery_is_not_merged_until_a_required_check_passes,
     a_succeeded_authorised_run_with_a_passed_observation_is_merged,
     a_delivery_without_completion_authority_records_who_merges_it,
     an_authorised_conflicting_pull_request_records_its_follow_up_once
@@ -126,6 +127,36 @@ fn a_held_authorised_run_whose_checks_went_green_is_merged_by_the_owner_tick() {
         follow_ups(&fx, &task).is_empty(),
         "a merged task owes nothing"
     );
+}
+
+fn a_held_absent_runs_delivery_is_not_merged_until_a_required_check_passes() {
+    // ORB-25993: a mergeable head with no required check run has no check
+    // evidence; the sweep must not ask the forge to merge it.
+    let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Mergeable);
+    delivery_run(
+        &fx,
+        &task,
+        "done",
+        JobRunState::Held,
+        Some("delivery_check_runs_absent"),
+    );
+    forge.report_no_required_checks(true);
+    for _ in 0..2 {
+        tick(&fx, false, false);
+    }
+    assert!(
+        forge.merges().is_empty(),
+        "no required check has passed, so the sweep makes no merge call"
+    );
+    fx.assert_status(&task, TaskStatus::Review, "waits for check evidence");
+    forge.report_no_required_checks(false);
+    tick(&fx, false, false);
+    assert_eq!(
+        forge.merges(),
+        vec![(LAND_PR, LAND_HEAD.to_string())],
+        "the same delivery merges once a required check passes"
+    );
+    fx.assert_done(&task, "the owner settles the merged task");
 }
 
 fn a_succeeded_authorised_run_with_a_passed_observation_is_merged() {
