@@ -39,15 +39,17 @@ impl RuntimeKernel {
         self.canonical_crew_name(crew).map(|_| ())
     }
 
-    /// The human crew `crew` names, if it names one.
-    pub fn human_crew(&self, crew: Option<&str>) -> Option<&HumanCrew> {
-        find_human_crew(crew, self.context.settings().human_crews())
+    /// The human crew `crew` names, if it names one, read from the current
+    /// admission registry so a long-lived runtime follows a crew whose kind
+    /// changed after it opened.
+    pub fn human_crew(&self, crew: Option<&str>) -> Option<HumanCrew> {
+        find_human_crew(crew, &self.admission_crew_settings().human_crews).cloned()
     }
 
     /// Whether `crew` names a human crew (`[crews.<name>] kind = "human"`):
     /// operator work that no drain, follower or task pilot picks up.
     pub fn is_human_crew(&self, crew: Option<&str>) -> bool {
-        find_human_crew(crew, &self.admission_crew_settings().human_crews).is_some()
+        self.human_crew(crew).is_some()
     }
 
     /// Canonicalize the crew a task is assigned. A task, unlike a dispatch,

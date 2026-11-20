@@ -80,7 +80,7 @@ pub(crate) fn stamp_human_crew_from_runtime(
     object: &mut Map<String, Value>,
 ) {
     let human = runtime.human_crew(object.get("crew").and_then(Value::as_str));
-    stamp_human_crew(object, human);
+    stamp_human_crew(object, human.as_ref());
 }
 
 /// The riskiness model cached for `runtime`. The first read for a runtime
