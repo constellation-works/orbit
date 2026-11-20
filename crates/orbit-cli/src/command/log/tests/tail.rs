@@ -12,6 +12,11 @@ use crate::command::log::tail::{
     FollowTestControl, TailArgs, build_filters, run_tail_with_test_control,
 };
 
+// Upper bound for every thread handshake and output wait. These only elapse on
+// failure, so it is generous: an instrumented (coverage) build on a loaded
+// runner can take seconds just to schedule the follower thread.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+
 fn write_fixture(path: &Path, lines: &[String]) {
     let mut content = String::new();
     for line in lines {
@@ -50,7 +55,7 @@ fn append_during_initial_history_read_is_emitted_once_at_handoff() {
     let mut follower =
         spawn_follower_with_args(args, Duration::ZERO, Some((reached_tx, resume_rx)));
     reached_rx
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(HANDSHAKE_TIMEOUT)
         .expect("initial reader paused after first line");
 
     let during = json!({"target": "orbit.test", "fields": {"message": "during"}}).to_string();
@@ -91,7 +96,7 @@ fn rotation_during_initial_read_keeps_the_old_reader_and_restarts_the_new_file()
     let mut follower =
         spawn_follower_with_args(args, Duration::ZERO, Some((reached_tx, resume_rx)));
     reached_rx
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(HANDSHAKE_TIMEOUT)
         .expect("initial reader paused");
 
     std::fs::rename(&path, dir.path().join("archive.jsonl")).unwrap();
@@ -144,7 +149,7 @@ struct FollowWorker {
 impl FollowWorker {
     fn wait_until_ready(&self) {
         self.ready_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(HANDSHAKE_TIMEOUT)
             .expect("follower established its initial offset");
     }
 
@@ -153,7 +158,7 @@ impl FollowWorker {
     }
 
     fn collect_through(&self, needle: &str) -> String {
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
         let mut output = String::new();
         while Instant::now() < deadline {
             if let Ok(chunk) = self.recv_timeout(Duration::from_millis(50)) {
