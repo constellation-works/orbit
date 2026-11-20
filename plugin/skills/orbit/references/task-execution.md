@@ -193,8 +193,14 @@ is a different outcome. A reviewer whose step is refused the same way follows
 this too.
 
 The step then ends on `upgrade_pending`, and the task is not blocked. The
-pipeline requeues the task, keeps the candidate, and resumes it once the
-upgrade settles.
+pipeline requeues the task and keeps the candidate: it commits what you left and
+pushes that commit to a durable ref on `origin`, and the next run resumes it once
+the upgrade settles. A run on another host resumes it only when that push
+succeeded. If `origin` refuses the push, the candidate stays on the host that
+held it: a run there still resumes it, and a run on any other host starts the
+task afresh. The task's `candidate_held` history entry records which case
+applied; a refused push reads `host-local` there and in the `## Orbit upgrade`
+comment. Do not push or repair the candidate ref yourself.
 
 ### Agent-filled PR sections
 

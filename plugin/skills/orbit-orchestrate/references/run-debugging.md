@@ -243,15 +243,34 @@ What happens to the step and the task:
 - The step is not retried. Neither step recovery nor final recovery runs, and the
   candidate is kept.
 - A claimed leaf releases its claim as transient, with the candidate on the
-  release. The task returns to the owner's backlog, and its next claim resumes the
-  candidate. The leaf's crew sits out the rest of that drain's window.
-- An owner `task_pr_pipeline` run commits what the agent left, carries it to its
-  durable ref and opens no pull request. Run finalization returns the task to the
-  backlog with the history event `upgrade_pending_requeued`, and the next run
-  resumes the candidate once the upgrade settles.
+  release. A claimed PR leaf first pushes that candidate to a durable ref. The
+  task returns to the owner's backlog, and its next claim resumes the candidate
+  under the placement rule below. The leaf's crew sits out the rest of that
+  drain's window.
+- An owner `task_pr_pipeline` run commits what the agent left and pushes it to
+  its durable ref, `refs/orbit/candidates/<task-id>/<run-id>`, on `origin`. It
+  opens no pull request. Run finalization returns the task to the backlog with
+  the history event `upgrade_pending_requeued`.
+- That push can be refused. The hold still succeeds and the candidate stays on
+  the holding host. Recognise a host-local candidate in the task's
+  `candidate_held` history entry: its `decision` has no `durable_ref`,
+  `carry_failure` holds the push diagnostic, and the note reads
+  `host-local: …`. The `## Orbit upgrade` comment says the same in words, and
+  names the holding machine when the host has an identity. A pushed candidate
+  instead reads `durable at …` and carries `durable_ref`.
+- Placement decides where the next run can resume it:
+  - Durable: a run or claim on any host resumes the candidate from `origin`,
+    once the upgrade settles.
+  - Host-local: only a run on the holding host resumes it, and only while that
+    host's repository still has the commit. A claim on any other host is offered
+    no candidate (`not_durable`) and implements the task afresh. Pushing the
+    commit to `origin` by hand does not change this, because placement reads the
+    durable ref recorded in the history entry.
 - The task is never set to `blocked`, so an operator does not move it back, as
   they must after a `task_blocked_by_agent` stop. Check that the upgrade has
-  settled and that the next run or claim picks the candidate up.
+  settled and that the next run or claim picks the candidate up. For a
+  host-local candidate, expect a resume only on the holding host; anywhere else
+  the next run starts afresh.
 
 Three outcomes can look alike. The state and the code tell them apart:
 
