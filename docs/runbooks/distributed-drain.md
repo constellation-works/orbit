@@ -2684,7 +2684,7 @@ Where to read it:
   today included, when `backlog` or `proposed` work existed but no auto drain
   held an admission window. It also gives the same time summed per waiting
   task (task-hours), the hours drains admitted, and one figure per UTC day. This
-  daily series is the idle-with-work figure the perf-review auto-task reads
+  daily series is the idle-with-work figure a perf review can read
   (`orbit doctor --json`, row `standing-drain`).
 
 The idle figure is rebuilt on each read from task status histories and drain
