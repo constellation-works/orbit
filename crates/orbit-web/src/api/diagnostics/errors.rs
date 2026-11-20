@@ -5,7 +5,7 @@ use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_common::security::redaction::redact_all;
 use orbit_common::storage::blob_store::BlobStore;
-use orbit_core::runtime::audit::run::RunAuditStep;
+use orbit_core::runtime::audit::run::{AuditStepOutcome, RunAuditStep};
 use orbit_core::{JobRunState, OrbitRuntime, V2AuditEventFilter};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -199,7 +199,11 @@ fn step_attempt_for_error<'a>(steps: &'a [RunAuditStep], row: &Value) -> Option<
                 .filter(|step| step.finished_at.is_some_and(|finish| finish <= timestamp))
                 .max_by_key(|step| step.finished_at)
         })?;
-    (!matches!(step.outcome.as_deref(), Some("success" | "held"))).then_some(step)
+    (!matches!(
+        step.outcome,
+        Some(AuditStepOutcome::Success | AuditStepOutcome::Held)
+    ))
+    .then_some(step)
 }
 
 /// Process ERROR rows from the active log and every rotated segment that

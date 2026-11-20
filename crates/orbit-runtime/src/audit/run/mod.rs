@@ -5,10 +5,12 @@
 pub(crate) mod detail;
 pub mod events;
 pub mod logs;
+mod outcome;
 mod projection;
 mod scripts;
 mod trail;
 
+pub use outcome::AuditStepOutcome;
 pub use scripts::RunScriptExecution;
 
 pub use trail::{

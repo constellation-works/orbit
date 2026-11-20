@@ -2,6 +2,7 @@
 
 use chrono::Utc;
 use orbit_core::TaskStatus;
+use orbit_core::runtime::audit::run::AuditStepOutcome;
 use orbit_engine::{
     DispatchError, ReviewReleaseRequest, ReviewerInvocationRequest, RuntimeHost,
     TaskAutomationUpdate, execute_deterministic_action,
@@ -699,7 +700,7 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
             2,
             "hold must stop before publication and failure handoff"
         );
-        assert_eq!(steps[1].state.as_deref(), Some("held"));
+        assert!(matches!(steps[1].outcome, Some(AuditStepOutcome::Held)));
         assert_eq!(
             fixture
                 .runtime

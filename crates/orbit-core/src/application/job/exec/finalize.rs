@@ -2,6 +2,7 @@ use super::entry::V2JobRunResult;
 use crate::OrbitRuntime;
 use crate::application::job::log_best_effort;
 use crate::application::job::resume::ResumePlan;
+use crate::runtime::audit::run::AuditStepOutcome;
 use orbit_common::OrbitError;
 use orbit_engine::JobOutcome;
 use orbit_store::contracts::{JobRunStepParams, TaskReservationReleaseReason};
@@ -492,7 +493,7 @@ impl OrbitRuntime {
                     .num_milliseconds()
                     .max(0) as u64,
             );
-            let state = job_run_state_from_audit_outcome(step.state.as_deref());
+            let state = AuditStepOutcome::job_run_state(step.outcome.as_ref());
             self.stores().jobs().complete_job_run_step(
                 &run.run_id,
                 &JobRunStepParams {
@@ -557,28 +558,6 @@ pub(crate) fn audit_terminal_outcome(
             ("held", Some(err.to_string()))
         }
         Err(err) => ("error", Some(err.to_string())),
-    }
-}
-
-fn job_run_state_from_audit_outcome(outcome: Option<&str>) -> JobRunState {
-    match outcome {
-        Some("success" | "succeeded" | "finished") => JobRunState::Success,
-        Some("failed" | "error" | "denied") => JobRunState::Failed,
-        Some("timeout") => JobRunState::Timeout,
-        Some("skipped") => JobRunState::Skipped,
-        Some("cancelled") => JobRunState::Cancelled,
-        Some("interrupted") => JobRunState::Interrupted,
-        Some("held") => JobRunState::Held,
-        Some("retrying") => JobRunState::Retrying,
-        Some("pending") => JobRunState::Pending,
-        Some("running") => JobRunState::Running,
-        other => {
-            tracing::warn!(
-                outcome = other.unwrap_or("<missing>"),
-                "unrecognized audit step outcome persisted as failed",
-            );
-            JobRunState::Failed
-        }
     }
 }
 

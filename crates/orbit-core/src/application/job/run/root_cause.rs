@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::job::JobPullSettlementPort;
-use crate::runtime::audit::run::RunAuditStep;
+use crate::runtime::audit::run::{AuditStepOutcome, RunAuditStep};
 use crate::runtime::upgrade_handover::UPGRADE_QUIESCE_ERROR_CODE;
 
 use super::projection::{job_run_task_ids, run_error_step};
@@ -147,15 +147,15 @@ impl OrbitRuntime {
                 .into_iter()
                 .rev()
                 .find(|step| {
-                    step.state.as_deref() != Some("skipped")
+                    !matches!(step.outcome, Some(AuditStepOutcome::Skipped))
                         && (step
                             .error_message
                             .as_deref()
                             .is_some_and(|message| !message.is_empty())
-                            || matches!(
-                                step.state.as_deref(),
-                                Some("error" | "failed" | "timeout" | "interrupted")
-                            ))
+                            || step
+                                .outcome
+                                .as_ref()
+                                .is_some_and(|outcome| outcome.is_failure_like(false)))
                 })
                 .map(|step| step.step_id)
         };
@@ -577,7 +577,7 @@ impl OrbitRuntime {
 /// failed, even when the stored step only wraps that failure.
 fn all_leaves_summary(audit: &[RunAuditStep], run: &JobRun) -> (Option<String>, Option<String>) {
     let audit_error = audit.iter().rev().find(|step| {
-        step.state.as_deref() != Some("skipped")
+        !matches!(step.outcome, Some(AuditStepOutcome::Skipped))
             && step
                 .error_message
                 .as_deref()
@@ -591,10 +591,9 @@ fn all_leaves_summary(audit: &[RunAuditStep], run: &JobRun) -> (Option<String>, 
                 .is_some_and(|message| !message.is_empty())
     });
     let audit_failed = audit.iter().rev().find(|step| {
-        matches!(
-            step.state.as_deref(),
-            Some("error" | "failed" | "timeout" | "interrupted")
-        )
+        step.outcome
+            .as_ref()
+            .is_some_and(|outcome| outcome.is_failure_like(false))
     });
     let stored_failed = run.steps.iter().rev().find(|step| {
         matches!(
@@ -627,10 +626,10 @@ fn deepest_observed_audit_summary(
         .find(|step| nonblank(step.error_message.as_deref()))
         .or_else(|| {
             steps.iter().rev().find(|step| {
-                matches!(
-                    step.state.as_deref(),
-                    Some("error" | "failed" | "timeout" | "interrupted" | "cancelled")
-                ) && nonblank(Some(step.step_id.as_str()))
+                step.outcome
+                    .as_ref()
+                    .is_some_and(|outcome| outcome.is_failure_like(true))
+                    && nonblank(Some(step.step_id.as_str()))
             })
         })?;
     let summary = (

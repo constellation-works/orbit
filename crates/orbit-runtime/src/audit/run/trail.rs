@@ -10,6 +10,7 @@ use serde_json::Value;
 use crate::RuntimeKernel;
 use orbit_store::V2AuditEventFilter;
 
+use super::outcome::AuditStepOutcome;
 use super::projection::{
     audit_step_attempts_from_events, audit_steps_from_events, cli_invocation_record,
     latest_timestamp_from_envelope_rows, provider_processes_from_events,
@@ -48,11 +49,21 @@ pub struct RunAuditStep {
     pub step_id: String,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
-    pub state: Option<String>,
-    pub outcome: Option<String>,
+    /// Recorded ending. Absent until the step finishes, is skipped or is denied.
+    pub outcome: Option<AuditStepOutcome>,
     pub error_message: Option<String>,
     /// Structured detail recorded independently of the readable error.
     pub error_diagnostic: Option<Value>,
+}
+
+impl RunAuditStep {
+    /// Display state derived from [`Self::outcome`].
+    ///
+    /// Denied is `failed`; every other recorded outcome uses its own spelling.
+    /// Absent until the step records an outcome.
+    pub fn state(&self) -> Option<&str> {
+        self.outcome.as_ref().map(AuditStepOutcome::display_state)
+    }
 }
 
 /// A bounded, operator-facing recovery attempt reconstructed from the v2 audit
