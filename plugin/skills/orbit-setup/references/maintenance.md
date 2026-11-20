@@ -428,6 +428,10 @@ Choose by intent:
   publication branch. Verify with `orbit workspace publication show --json`.
   See [Publication](publication.md) and [Multi-host](multi-host.md) before
   moving state between hosts.
+- If the checkout directory moved on disk and the repository did not change,
+  use `orbit workspace rebind --path <DIR>` to re-point this host at it. This
+  is not `remove` or `teardown`, and it does not change the source remote. See
+  [Rebind a moved checkout](#rebind-a-moved-checkout).
 
 Before `remove` or `teardown`, manually confirm there are no live drains, runs,
 or claims, and identify any unpublished tasks. The commands do not enforce
@@ -444,6 +448,69 @@ longer registered on this host. After a rebind, use
 `orbit workspace list --json`, `orbit workspace show --json` and
 `orbit workspace source-remote show --json` to verify the registration and
 new source identity.
+
+### Rebind a moved checkout
+
+Use `orbit workspace rebind --path <DIR>` after the operator has moved a
+registered Git checkout directory to a new path. It re-points this host's
+registration at the directory that was already moved. It works on owner and
+replica checkouts and keeps their role and owner.
+
+It does not move files, change the source remote, or change another host. Run
+it on each host whose checkout moved. If the repository's origin also changed,
+use the source-remote bullet under "Choose by intent" for that change; it is a
+separate operation. `remove` and `teardown` are not moves: `remove` stops
+tracking the checkout and keeps its data, and `teardown` deletes the checkout's
+Orbit data.
+
+Preconditions, all before the directory is moved:
+
+- Stop the workspace's runs, settle pulled claims, and release workspace claims
+  and path reservations.
+- Remove the retained Orbit-managed worktrees first.
+  [Worktree garbage collection](#worktree-garbage-collection) describes how
+  worktrees are reclaimed.
+- Move the entire repository, including `.git` and the checkout-local `.orbit`
+  directory. External Orbit data roots are refused.
+- Keep the host store outside the moved directory. The store, `orbit.db` under
+  `~/.orbit` (or under the selected `--root`), must already exist. On a newly
+  initialized checkout, run `orbit tool run orbit.task.list --input '{}'` from
+  the registered checkout before moving it. Without the store, both apply and
+  `--dry-run` refuse with `workspace_rebind_host_store_required` and write
+  nothing.
+- The new path must be the checkout's primary Git root, with the registered Git
+  origin and the existing `.orbit` task-store identity. A target claimed by
+  another workspace is refused.
+
+If the directory has already moved and the store is missing, move it back to
+its registered path, run the runtime command there, then move it again and
+rebind.
+
+Preview first. `--dry-run` validates and reports the binding without writing
+anything. Review its output, then repeat the command without `--dry-run`:
+
+```bash
+orbit --workspace <registered-name-or-id> workspace rebind --path /new/checkout --dry-run --json
+orbit --workspace <registered-name-or-id> workspace rebind --path /new/checkout --json
+```
+
+If the command is interrupted, runtime commands refuse to open the workspace
+until the same rebind finishes its recovery. Repeat the same command with the
+same `--path`, and finish that recovery before starting another rebind.
+
+Verify from the new directory:
+
+```bash
+cd /new/checkout
+orbit workspace list --json
+orbit workspace show --json
+orbit tool run orbit.task.list --input '{}'
+```
+
+`workspace list --json` should still list the workspace on this host, and
+`workspace show --json` should resolve it from the new directory. The runtime
+command confirms that the store opens against the moved checkout. A successful
+rebind also appears in `orbit audit list --json`.
 
 ## Persistent MCP clients during upgrades
 
