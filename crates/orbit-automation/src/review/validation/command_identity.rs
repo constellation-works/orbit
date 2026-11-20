@@ -1,5 +1,6 @@
 //! Effective check identity and host-command normalization.
 
+use orbit_types::identity;
 use orbit_types::workflow::ReviewValidation;
 
 /// One check: both records carry the same record id, or they share an
@@ -151,26 +152,6 @@ fn first_shell_word(command: &str) -> (&str, &str) {
 /// `NAME` is `[A-Za-z_][A-Za-z0-9_]*`. The value may be quoted. A word whose
 /// name is quoted, or that has no `=`, is a command word.
 fn is_env_assignment(word: &str) -> bool {
-    let mut chars = word.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !is_posix_name_start(first) {
-        return false;
-    }
-    for ch in chars {
-        if is_posix_name_continue(ch) {
-            continue;
-        }
-        return ch == '=';
-    }
-    false
-}
-
-fn is_posix_name_start(ch: char) -> bool {
-    ch.is_ascii_alphabetic() || ch == '_'
-}
-
-fn is_posix_name_continue(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || ch == '_'
+    word.split_once('=')
+        .is_some_and(|(name, _)| identity::is_env_var_name(name))
 }
