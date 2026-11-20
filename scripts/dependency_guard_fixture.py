@@ -97,6 +97,10 @@ WEB_FILES = (
     "runtime_memo.rs",
 )
 
+# The orbit-tools module-direction scan [ORB-26098]: `builtin` is the mandatory
+# root (the guard fails closed without it); crate-root modules are enumerated.
+TOOLS_DIRECTORIES = ("builtin",)
+
 
 def _touch(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,8 +134,16 @@ def create_web_paths(root: Path) -> None:
         _touch(src / relative)
 
 
+def create_tools_paths(root: Path) -> None:
+    """Create the orbit-tools scan roots."""
+    src = root / "crates/orbit-tools/src"
+    for relative in TOOLS_DIRECTORIES:
+        (src / relative).mkdir(parents=True, exist_ok=True)
+
+
 def create_scan_layout(root: Path) -> None:
     """Create every mandatory scan root of the guard under `root`."""
     create_core_paths(root)
     create_config_paths(root)
     create_web_paths(root)
+    create_tools_paths(root)

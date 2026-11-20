@@ -1,5 +1,5 @@
 use super::*;
-use crate::builtin::github::GITHUB_RUN_LOG_CACHE_DIR;
+use crate::github_run_log_cache::GITHUB_RUN_LOG_CACHE_DIR;
 
 /// Host ceiling on `spec.backend.timeout_ms`.
 pub const PLUGIN_TIMEOUT_CEILING_MS: u64 = 300_000;

@@ -116,6 +116,10 @@ allowed_internal_deps() {
 
 allowed_dev_only_deps() {
   case "$1" in
+    orbit-tools)
+      # Tools' own integration tests enable its `test-support` feature.
+      echo "orbit-tools"
+      ;;
     orbit-mcp)
       # Only integration tests enable its test-support transport hooks.
       echo "orbit-mcp"
@@ -1447,6 +1451,32 @@ if ! module_paths_into "$web_src" lease serve; then
   echo "orbit-web lease must not name serve"
   fail=1
 fi
+
+# [ORB-26098] orbit-tools: `builtin` sits above every other crate-root module.
+# Only `lib.rs` (its re-exports), `registry.rs` (through `register_builtins`)
+# and `github_cli.rs` (the documented re-exports of builtin GitHub builders)
+# name it; any other crate-root module's production code, `super::` chains
+# and grouped trees included, must not. Shared pieces live in crate-root
+# leaves (`gh_request`, `github_run_log_cache`, `task_guarded_selectors`).
+# Modules are enumerated, so a new one is covered without being listed. A
+# missing scan root fails closed. Tests are skipped inside module_paths_into.
+tools_src="$repo_root/crates/orbit-tools/src"
+if [[ ! -d "$tools_src/builtin" ]]; then
+  echo "dependency scan path missing: $tools_src/builtin" >&2
+  exit 1
+fi
+for entry in "$tools_src"/*; do
+  module="$(basename "$entry")"
+  case "$module" in
+    builtin | lib.rs | registry.rs | github_cli.rs | tests) continue ;;
+  esac
+  if [[ -d "$entry" || "$module" == *.rs ]]; then
+    if ! module_paths_into "$tools_src" "$module" builtin; then
+      echo "orbit-tools ${module} must not name builtin; move the shared piece into a crate-root leaf"
+      fail=1
+    fi
+  fi
+done
 
 if [[ "$fail" -ne 0 ]]; then
   exit 1

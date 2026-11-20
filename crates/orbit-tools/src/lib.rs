@@ -46,8 +46,11 @@ pub mod tool_suggestions;
 mod artifact_materialize;
 mod context;
 mod fs_audit;
+mod gh_request;
+mod github_run_log_cache;
 mod host;
 mod program_policy;
+mod task_guarded_selectors;
 mod tool;
 
 /// Default network operation timeout (15 s). Used for most GitHub API calls
@@ -62,13 +65,13 @@ pub(crate) const TIMEOUT_SLOW_MS: u64 = 30_000;
 /// fetches a branch and may transfer significant data over the network.
 pub(crate) const TIMEOUT_LONG_MS: u64 = 60_000;
 
-pub use builtin::github::{GITHUB_RUN_LOG_CACHE_DIR, remove_legacy_github_run_log_cache};
 pub use builtin::orbit::pipeline::invoke::has_pipeline_child_admission;
 pub use context::{
     ActivityBinding, DeterministicStepPrograms, PROC_SPAWN_MAX_TIMEOUT_MINUTES, ProcSpawnBudget,
     ReservationOwnerContext, ToolCaller, ToolContext, WitnessedProgramGrant,
 };
 pub use fs_audit::{FsAuditLogger, FsCallEvent, FsCallEventKind};
+pub use github_run_log_cache::{GITHUB_RUN_LOG_CACHE_DIR, remove_legacy_github_run_log_cache};
 pub use host::{
     DrainOwnerTransport, OrbitBuiltinAction, OrbitTaskScope, OrbitToolHost, OwnerCoordinator,
     prepare_remote_task_artifact_put,
