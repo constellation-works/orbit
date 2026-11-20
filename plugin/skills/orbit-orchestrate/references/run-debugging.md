@@ -202,6 +202,60 @@ not rewrite that original failure, and a failed `authorization`, `decision`,
 preparation, `dispatch`, or `activity` attempt explains why recovery did not
 complete.
 
+### Upgrade-refused agent steps
+
+An Orbit upgrade can refuse an agent's own `orbit` commands while a step runs. A
+command inside an Orbit-managed activity never starts or waits on a generation
+switch, so while an upgrade holds admission the command fails at once with
+`[upgrade_pending]`, and the agent is expected to report a blocker. A blocker
+whose kind names that refusal is classified as an upgrade refusal: its words
+include `upgrade` with `admission`, `pending` or `quiesce`, or `generation` with
+`switch` (for example `upgrade_pending`, `upgrade_admission_refused` or
+`orbit.generation_switch_pending`). This applies to any agent step, reviewers
+included, and step recovery can declare the same blocker. A malformed blocker (no
+well-formed kind, or empty evidence) is an ordinary result, not a stop.
+
+Recognise the outcome in `orbit run show <run_id> --json`:
+
+- On an owner run, `run.state` is `failed`. It is not `held`, which is the
+  `task_blocked_by_agent` stop, and not `interrupted`, which is the
+  `upgrade_quiesce` pause.
+- The failing `steps` entry has `error_code` `upgrade_pending`, and its
+  `error_message` carries `[upgrade_pending] kind=<kind>` followed by the agent's
+  evidence.
+- The run is not reported as `upgrade_paused`, so `--failures` and the reliability
+  counts treat it as a failure.
+
+What happens to the step and the task:
+
+- The step is not retried. Neither step recovery nor final recovery runs, and the
+  candidate is kept.
+- A claimed leaf releases its claim as transient, with the candidate on the
+  release. The task returns to the owner's backlog, and its next claim resumes the
+  candidate. The leaf's crew sits out the rest of that drain's window.
+- An owner `task_pr_pipeline` run commits what the agent left, carries it to its
+  durable ref and opens no pull request. Run finalization returns the task to the
+  backlog with the history event `upgrade_pending_requeued`, and the next run
+  resumes the candidate once the upgrade settles.
+- The task is never set to `blocked`, so an operator does not move it back, as
+  they must after a `task_blocked_by_agent` stop. Check that the upgrade has
+  settled and that the next run or claim picks the candidate up.
+
+Three outcomes can look alike. The state and the code tell them apart:
+
+- `task_blocked_by_agent` ([above](#inspect-recovery-evidence-before-falling-back-to-audit-files)):
+  the run is `held`, and the task is blocked until an operator moves it back.
+- `upgrade_quiesce` ([Check Parent And Child Runs](#check-parent-and-child-runs)):
+  a worker yields at a step boundary, its checkpoint is kept, and the run is
+  `interrupted`. The clock resumes it once the generation settles.
+- `upgrade_pending` (this section): the step stops mid-run, the run is `failed`,
+  and the task returns to the backlog without an operator action.
+
+To avoid stopping a step at all, let long agent steps finish before the installed
+`orbit` is replaced, or install while no drain is live. A running step keeps going
+after the binary is replaced, and while the upgrade holds admission its `orbit`
+commands are refused.
+
 ### Tell a working agent from an abandoned wrapper
 
 For a run that is still `running`, the operator-only `orbit_run` action `show`
