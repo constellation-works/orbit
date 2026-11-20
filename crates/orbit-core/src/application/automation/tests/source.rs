@@ -1201,3 +1201,97 @@ fn held_graphql_quota_defers_a_provider_read_without_running_gh() {
     assert_eq!(graphql.calls.background, 0, "no provider read may run");
     assert_eq!(graphql.refused.background, 1);
 }
+
+/// ORB-25934: a slow `api rate_limit` quota probe is bounded by the source's
+/// remaining budget and prevents spawning the original provider command when
+/// `SOURCE_DEADLINE` expires during admission.
+#[cfg(unix)]
+#[test]
+fn slow_quota_probe_consuming_source_deadline_prevents_spawning_gh() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &slow_quota_probe_consuming_source_deadline_prevents_spawning_gh,
+    )) {
+        return;
+    }
+    use orbit_tools::github_quota::{self, GithubQuotaPolicy, GithubQuotaStore};
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().expect("tempdir");
+    let bin = root.path().join("bin");
+    std::fs::create_dir_all(&bin).expect("bin dir");
+    let gh = bin.join("gh");
+    let calls = root.path().join("calls");
+    std::fs::write(
+        &gh,
+        format!(
+            "#!/bin/sh\n\
+             [ \"$1\" = --warm-up ] && exit 0\n\
+             printf '%s\\n' \"$*\" >> '{}'\n\
+             if [ \"$*\" = 'api rate_limit' ]; then sleep 30; exit 0; fi\n\
+             echo '{{}}'\n",
+            calls.display()
+        ),
+    )
+    .expect("write fake gh");
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+    let mut attempts = 0;
+    while std::process::Command::new(&gh)
+        .arg("--warm-up")
+        .status()
+        .is_err()
+    {
+        attempts += 1;
+        assert!(attempts < 200, "fake gh never became executable");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let path = std::env::join_paths(
+        std::iter::once(bin).chain(
+            std::env::var_os("PATH")
+                .into_iter()
+                .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>()),
+        ),
+    )
+    .expect("join PATH");
+    let _env = orbit_common::test_env::scoped([
+        ("PATH", path.to_str()),
+        (super::super::source::SOURCE_ELAPSED_ENV, None),
+    ]);
+
+    let records = tempfile::tempdir().expect("tempdir");
+    let store = GithubQuotaStore::new(records.path().to_path_buf());
+    let policy = GithubQuotaPolicy::default();
+
+    let spent = std::rc::Rc::new(std::cell::Cell::new(Duration::ZERO));
+    let clock_spent = std::rc::Rc::clone(&spent);
+    let origin = Instant::now();
+    let started = Instant::now();
+    let error = super::super::source::test_support::with_delivery_source_clock(
+        move || origin + clock_spent.get(),
+        || {
+            let source = Source::new(root.path());
+            spent.set(super::super::source::SOURCE_DEADLINE - Duration::from_millis(80));
+            github_quota::with_scoped_guard(store, policy, || source.ci_cover_pull_request("#1"))
+        },
+    )
+    .expect_err("slow probe exhausting source deadline must defer");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "slow quota probe must be bounded by the remaining 80 ms source deadline, took {:?}",
+        started.elapsed()
+    );
+    assert!(
+        matches!(
+            error,
+            AutomationError::Deferred(DeferredReason::SourceDeadline)
+        ),
+        "expected SourceDeadline, got {error:?}"
+    );
+    let recorded = std::fs::read_to_string(&calls).unwrap_or_default();
+    assert_eq!(
+        recorded.lines().collect::<Vec<_>>(),
+        vec!["api rate_limit"],
+        "expired quota probe must prevent spawning gh pr view"
+    );
+}

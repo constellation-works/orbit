@@ -899,3 +899,127 @@ fn infrastructure_deadline_refusal_keeps_type_and_unreadable_forge_holds() {
         }
     }
 }
+
+/// ORB-25934: a slow `api rate_limit` quota probe is bounded by the caller's
+/// remaining deadline instead of 15 s, prevents spawning the original request
+/// once the budget expires, and preserves `CompletionBudgetExpired` on both
+/// `Deadline::execute` and the `ci_job_log` guard.
+#[test]
+fn slow_quota_probe_exhausting_budget_prevents_spawn_and_preserves_deadline() {
+    use orbit_tools::github_quota::{self, GithubQuotaPolicy, GithubQuotaStore};
+
+    isolated(
+        "infrastructure::bounds::slow_quota_probe_exhausting_budget_prevents_spawn_and_preserves_deadline",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let fx = fixture_with_workflow(row);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                action(
+                    &host,
+                    "pr_open",
+                    &fx.open_input(&fx.candidate, &fx.base_sha),
+                )
+                .unwrap();
+                setup(&fx, "positive");
+                fs::write(fx.forge.join("infra-rate-limit-hang"), "").unwrap();
+
+                // 1) Completion `Deadline::execute` (via `pr_complete` -> `pr.status`).
+                fs::write(fx.forge.join("calls"), "").unwrap();
+                let records_deadline = tempfile::TempDir::new().unwrap();
+                let store_deadline = GithubQuotaStore::new(records_deadline.path().to_path_buf());
+                let policy = GithubQuotaPolicy::default();
+                let clock_calls = std::rc::Rc::new(std::cell::Cell::new(0_u32));
+                let mut input = fx.complete_ungated_input();
+                input["auto_fix"] = json!(true);
+                input["completion"] = json!("review");
+                input["max_wait_seconds"] = json!(1);
+                let started = std::time::Instant::now();
+                let result = orbit_engine::test_support::with_prerequisite_clock(
+                    move || {
+                        let call = clock_calls.get();
+                        clock_calls.set(call + 1);
+                        if call == 0 { 1_000 } else { 1_920 }
+                    },
+                    |_, _| {},
+                    || {
+                        github_quota::with_scoped_guard(store_deadline, policy, || {
+                            orbit_engine::test_support::with_vcs_retry_wait(
+                                |_| {},
+                                || action(&host, "pr_complete", &input),
+                            )
+                        })
+                    },
+                );
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(2),
+                    "slow quota probe must be bounded by the 80 ms remaining deadline, took {:?}",
+                    started.elapsed()
+                );
+                let error = result.expect_err("slow quota probe exhausting budget must expire");
+                assert!(
+                    matches!(
+                        &error,
+                        orbit_common::OrbitError::DeliveryRefused {
+                            refusal:
+                                orbit_types::workflow::DeliveryRefusal::CompletionBudgetExpired,
+                            ..
+                        }
+                    ),
+                    "expected CompletionBudgetExpired, got {error:?}"
+                );
+                let calls = fs::read_to_string(fx.forge.join("calls")).unwrap();
+                assert_eq!(
+                    calls.lines().collect::<Vec<_>>(),
+                    vec!["api rate_limit"],
+                    "expired quota probe must prevent spawning the original pr view"
+                );
+
+                // 2) `ci_job_log` guard (`jobs.rs`).
+                fs::write(fx.forge.join("calls"), "").unwrap();
+                let records_log = tempfile::TempDir::new().unwrap();
+                let store_log = GithubQuotaStore::new(records_log.path().to_path_buf());
+                let started = std::time::Instant::now();
+                let log_result = orbit_engine::test_support::with_prerequisite_clock(
+                    || 1_000,
+                    |_, _| {},
+                    || {
+                        github_quota::with_scoped_guard(store_log, policy, || {
+                            orbit_engine::run_private_vcs_operation(
+                                "ci.job_log",
+                                &json!({
+                                    "workspace_path": fx.repo,
+                                    "run_id": "700",
+                                    "job_id": "1100",
+                                    "deadline_ms": 1_080_u64,
+                                }),
+                            )
+                        })
+                    },
+                );
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(2),
+                    "log guard probe must be bounded by the 80 ms deadline, took {:?}",
+                    started.elapsed()
+                );
+                let log_error = log_result.expect_err("slow quota probe in ci_job_log must expire");
+                assert!(
+                    matches!(
+                        &log_error,
+                        orbit_common::OrbitError::DeliveryRefused {
+                            refusal:
+                                orbit_types::workflow::DeliveryRefusal::CompletionBudgetExpired,
+                            ..
+                        }
+                    ),
+                    "expected CompletionBudgetExpired from ci_job_log, got {log_error:?}"
+                );
+                let calls = fs::read_to_string(fx.forge.join("calls")).unwrap();
+                assert_eq!(
+                    calls.lines().collect::<Vec<_>>(),
+                    vec!["api rate_limit"],
+                    "expired quota probe must prevent spawning gh run view --log"
+                );
+            });
+        },
+    );
+}
