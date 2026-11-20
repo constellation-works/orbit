@@ -148,10 +148,12 @@ export function fleetProviderSection(hosts, health) {
       const state = group.gated ? 'Held' : unknown ? 'Unknown' : readings.some(r => r.severity === 'critical') ? 'At limit' : readings.some(r => r.severity === 'elevated') ? 'Near limit' : 'Available';
       const windows = el('div', { class: 'fleet-account-windows' });
       for (const reading of readings) {
+        const flags = [reading.stale ? 'stale' : null, reading.partial ? 'partial' : null].filter(Boolean);
+        const reset = reading.resetsAt ? `Resets ${formatDateTime(reading.resetsAt)}` : 'Reset unknown';
         windows.append(el('div', { class: 'fleet-quota' }, [
-          el('span', {}, [reading.label, el('span', { class: 'mono', text: `${reading.value}${reading.stale ? ' · stale' : ''}${reading.partial ? ' · partial' : ''}` })]),
+          el('span', {}, [reading.label, el('span', { class: 'mono', text: reading.value })]),
           el('span', { class: `fleet-track ${reading.severity}${reading.used == null ? ' unknown' : ''}` }, [el('span', { style: { width: `${reading.fill}%` } })]),
-          el('span', { class: 'muted', text: reading.resetsAt ? `Resets ${formatDateTime(reading.resetsAt)}` : 'Reset unknown' }),
+          el('span', { class: 'muted', text: [reset, ...flags].join(' · ') }),
         ]));
       }
       if (!readings.length) windows.append(el('span', { class: 'muted', text: 'No usage windows reported' }));
