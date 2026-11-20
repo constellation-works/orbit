@@ -17,20 +17,16 @@ pub const JSON_RPC_INVALID_PARAMS_CODE: i64 = -32602;
 /// never searched inside a formatted message.
 const UNKNOWN_INTERNAL_DRAIN_OPERATION_RPC_MESSAGE: &str = "unknown internal drain operation";
 
-/// The phrase a store refusal carries when an observation-only open found a
-/// supported registry that still owes a writable migration or setup step, as
-/// opposed to a registry this binary cannot read at all. The store builds its
-/// messages from this constant so [`OrbitError::owes_writable_store_open`]
-/// cannot drift from them.
-pub const STORE_WRITABLE_OPEN_OWED_PHRASE: &str = "the database is read-only";
-
 impl OrbitError {
     /// Whether this is a store refusal from an observation-only open whose
     /// remedy is one ordinary writable open (for example `orbit task list`).
     /// An unsupported or corrupt store is a store error too, but a writable
     /// open cannot repair it.
+    ///
+    /// Answered from the variant alone, so a formatted path or diagnostic
+    /// quoting read-only text never triggers writable-open remediation.
     pub fn owes_writable_store_open(&self) -> bool {
-        matches!(self, OrbitError::Store(message) if message.contains(STORE_WRITABLE_OPEN_OWED_PHRASE))
+        matches!(self, Self::StoreWritableOpenOwed(_))
     }
 
     /// Stable machine-readable code shared by Orbit error surfaces.
@@ -124,7 +120,7 @@ impl OrbitError {
             | OrbitError::ExecutionTimeout { .. } => "execution_failed",
             OrbitError::ProcessTimeout { .. } => "process_timeout",
             OrbitError::TaskBundleCorrupt { .. } => "task_bundle_corrupt",
-            OrbitError::Store(_) => "store_error",
+            OrbitError::Store(_) | OrbitError::StoreWritableOpenOwed(_) => "store_error",
             // [ORB-15088] Retryable, unlike `internal_error`: a pull follower
             // retries an owner read that lost only to a lock-wait deadline and
             // never mistakes it for a failure of its candidate.
@@ -687,7 +683,7 @@ impl OrbitError {
     pub fn storage_layer(&self) -> Option<StorageLayer> {
         match self {
             Self::Io(_) => Some(StorageLayer::Io),
-            Self::Store(_) => Some(StorageLayer::Store),
+            Self::Store(_) | Self::StoreWritableOpenOwed(_) => Some(StorageLayer::Store),
             Self::Migration(_) => Some(StorageLayer::Migration),
             Self::StorageAccessDenied { layer, .. } | Self::StorageLockBusy { layer, .. } => {
                 Some(*layer)

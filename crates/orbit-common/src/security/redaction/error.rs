@@ -297,6 +297,7 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             OrbitError::FileLockTimeout(redact_file_lock_timeout(*timeout, redact))
         }
         OrbitError::Store(m) => OrbitError::Store(redact(&m)),
+        OrbitError::StoreWritableOpenOwed(m) => OrbitError::StoreWritableOpenOwed(redact(&m)),
         OrbitError::SqliteContention(contention) => {
             OrbitError::SqliteContention(redact_sqlite_contention(*contention, redact))
         }
