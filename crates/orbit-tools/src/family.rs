@@ -347,11 +347,17 @@ pub(crate) fn resolve_family_input(
         .iter()
         .find(|member| member.action.action == selected)
     else {
-        let recovery_hint = if name == "orbit.task.artifact" && matches!(selected, "list" | "read")
-        {
-            "; to list task artifacts, use `orbit.task.show` with `fields: [\"artifacts\"]`"
-        } else {
-            ""
+        // Reads of a family's records are not family actions; name the search
+        // that serves them, so a refused read is retried through it.
+        let recovery_hint = match (name, selected) {
+            ("orbit.task.artifact", "list" | "read") => {
+                "; to list task artifacts, use `orbit.task.show` with `fields: [\"artifacts\"]`"
+            }
+            ("orbit.friction", "show" | "list" | "comment") => {
+                "; to read or list friction records, use `orbit.search` with kind `friction`: \
+                 set `query` to the friction ID to read one record, or omit `query` to list"
+            }
+            _ => "",
         };
         return Err(OrbitError::InvalidInput(format!(
             "unknown `{name}` action `{selected}`; expected one of {}{recovery_hint}",

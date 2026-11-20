@@ -113,6 +113,58 @@ fn artifact_list_and_read_actions_recommend_task_show() {
     }
 }
 
+/// Refused friction reads (`show`, `list`, `comment`) keep the family action
+/// list at `add, update` and name the `orbit.search` read route. Agents retried
+/// these actions when the refusal named no read route (ORB-25849).
+#[test]
+fn friction_read_actions_recommend_orbit_search() {
+    let root = tempfile::tempdir().expect("fixture");
+    let home = root.path().join("home");
+    let work = root.path().join("work");
+    std::fs::create_dir_all(&home).expect("fixture home");
+    git_repo::init(&work);
+    orbit_command(&work, &home)
+        .args(["workspace", "init", "--name", "friction-action-hints"])
+        .assert()
+        .success();
+
+    for action in ["show", "list", "comment"] {
+        let input = serde_json::json!({"action": action}).to_string();
+        let output = orbit_command(&work, &home)
+            .args([
+                "tool",
+                "run",
+                "orbit.friction",
+                "--input",
+                &input,
+                "--format",
+                "json",
+            ])
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        assert!(output.stdout.is_empty(), "{output:?}");
+        let error: Value = serde_json::from_slice(&output.stderr).expect("JSON tool error");
+        assert_eq!(error["code"], "invalid_input", "{error}");
+        let message = error["error"].as_str().expect("error string");
+        assert!(
+            message.contains(&format!(
+                "unknown `orbit.friction` action `{action}`; expected one of add, update;"
+            )),
+            "the refused friction action must stay refused with only add and update listed: {message}"
+        );
+        assert!(
+            message.contains("`orbit.search` with kind `friction`"),
+            "the refusal must name the search that reads friction records: {message}"
+        );
+        assert!(
+            message.contains("friction ID") && message.contains("omit `query` to list"),
+            "the refusal must say how to read one record and how to list: {message}"
+        );
+    }
+}
+
 /// Malformed `--input` and an unreadable `--input-file` fail before workspace
 /// bootstrap, including from a directory that is not an Orbit workspace.
 #[test]

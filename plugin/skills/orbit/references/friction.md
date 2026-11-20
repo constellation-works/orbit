@@ -29,9 +29,11 @@ re-diagnosing the same problem.
 
 Records live in Orbit's store, keyed by `(workspace_id, friction_id)` — IDs are
 workspace-local and monthly (`F<YYYY>-<MM>-<NNN>`), so the same ID in two
-workspaces is two unrelated records. Reach them only through `orbit.friction` and the friction CLI;
-any `.orbit/frictions/` markdown tree is legacy evidence, and editing a file
-there cannot change what a read returns. Creation is durable; `update` can replace the body and triage metadata. New records start `open` and may become `triaged` or `resolved`.
+workspaces is two unrelated records. Agents write them through
+`orbit.friction` (actions `add` and `update`) and read them through
+`orbit.search` (kind `friction`); the `orbit friction` CLI serves people. Any
+`.orbit/frictions/` markdown tree is legacy evidence, and editing a file there
+cannot change what a read returns. Creation is durable; `update` can replace the body and triage metadata. New records start `open` and may become `triaged` or `resolved`.
 
 ```bash
 orbit tool run orbit.friction --input '{"action":"add",
@@ -252,6 +254,12 @@ orbit friction show <ID>
 orbit friction stats                          # friction rates over time
 orbit search "<terms>" --kind friction        # lexical friction search
 ```
+
+The `orbit friction` commands above are for people at a terminal. They are not
+`orbit.friction` actions, and that tool refuses `show`, `list` and `comment`. An
+MCP session or `orbit tool run` caller reads and lists only through
+`orbit.search`: `{"kind":"friction","query":"<ID>"}` reads one record, and the
+same input without `query` lists them.
 
 Frictions use lexical matching. Search by the words someone would actually have used.
 → [search.md](search.md)
