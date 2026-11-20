@@ -3011,7 +3011,7 @@ refresh_interval_seconds = 60
 |---|---|---|
 | `machine.github_quota.agent_reserve_percent` | `20` | Share of each resource's limit agent reads may not spend: an agent's `github.*` tool call is refused once the remaining count is at or below it. `0` disables the refusal; valid range `0..=100`. |
 | `machine.github_quota.background_reserve_percent` | `10` | The same for background reads: the CI and security-alert sweeps, auto-task sources and `github.*` calls a deterministic job step makes. `0` disables the refusal; valid range `0..=100`. |
-| `machine.github_quota.refresh_interval_seconds` | `60` | **Advanced.** Shortest interval between two reads of GitHub's rate-limit endpoint on the host, however many processes read; valid range `10..=3600`. The endpoint does not count against the quota. |
+| `machine.github_quota.refresh_interval_seconds` | `60` | **Advanced.** Shortest interval between two reads of GitHub's rate-limit endpoint on the host, however many processes read, delivery completion's reset lookup included; valid range `10..=3600`. The endpoint does not count against the quota. |
 
 - **Caller classes.** Delivery (the private VCS operations behind PR open, completion, landing and merge, and the task PR forge) keeps no reserve and runs the quota to zero. Background reads stop at their reserve, agent reads at theirs. Any other `github.*` call, including attention's CI read, is an agent read.
 - **Hold after a rate-limit answer.** After GitHub's authenticated primary rate-limit answer for a resource, or a rate-limit read showing it empty, every read of that resource on the host, delivery included, is refused locally until GitHub's reset (its `Retry-After` when no reset is known, else one refresh interval). The other resource is unaffected.

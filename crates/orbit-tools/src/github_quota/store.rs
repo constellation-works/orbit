@@ -461,6 +461,30 @@ impl GithubQuotaStore {
         });
     }
 
+    /// The latest reset among `resources` that the record shows exhausted
+    /// (a current observation with nothing remaining, which a primary
+    /// rate-limit answer also leaves), after [`Self::refresh_if_due`] through
+    /// `refresh`. A caller that needs a reset therefore shares the interval
+    /// with admission instead of reading the endpoint itself. `None` when the
+    /// record shows none exhausted or the quota is unknown.
+    pub fn exhausted_reset(
+        &self,
+        policy: &GithubQuotaPolicy,
+        account: &str,
+        resources: &[&str],
+        now: u64,
+        refresh: &dyn Fn() -> RateLimitAnswer,
+    ) -> Option<u64> {
+        self.refresh_if_due(policy, account, now, refresh);
+        let record = Self::load(&self.record_path(account));
+        resources
+            .iter()
+            .filter_map(|name| record.resources.get(*name)?.current(now))
+            .filter(|(_, remaining, _)| *remaining == 0)
+            .map(|(_, _, reset)| reset)
+            .max()
+    }
+
     /// Record an authenticated primary rate-limit answer for `resource`:
     /// every read of it on the host is held until the reset GitHub named,
     /// else its `Retry-After`, else the recorded reset, else one refresh
