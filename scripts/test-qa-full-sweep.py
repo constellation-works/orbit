@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import errno
 import hashlib
+import io
 import json
 import os
 import platform
@@ -19,12 +21,14 @@ import socket
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
 import urllib.request
 from contextlib import ExitStack
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 validate_npm_evidence = runpy.run_path(
@@ -1111,8 +1115,8 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
     started = datetime.now(timezone.utc).isoformat()
     evidence = {"command": argv, "started_at": started, "exit_code": None,
                 "stdout": "", "stderr": "", "outcome": "FAIL", "output_truncated": False,
-                "cleanup_verified": False, "detached_workers": None, "open_descendants": None,
-                "subreaper": False, "observation_complete": None}
+                "timed_out": False, "cleanup_verified": False, "detached_workers": None,
+                "open_descendants": None, "subreaper": False, "observation_complete": None}
     if os.name != "posix":
         evidence["stderr"] = "QA process-group supervision requires a POSIX host"
         return evidence
@@ -1260,6 +1264,7 @@ def run(argv, *, cwd, env, timeout=180, input_text=None):
             consume_result(True)
         else:
             evidence["stderr"] = f"timeout after {timeout}s"
+            evidence["timed_out"] = True
             # Do not wait/reap before signalling: the live or zombie supervisor
             # reserves its own process-group identity throughout cleanup.
             terminate_group()
@@ -1863,6 +1868,8 @@ def execution_notices(evidence):
     output = evidence.get("stdout", "") + "\n" + evidence.get("stderr", "")
     notices = re.findall(r"^(?:SKIP:|DEFERRED:|skipping\b)[^\n]*",
                          output, re.MULTILINE | re.IGNORECASE)
+    # A projected install record keeps its notices from the raw output it no longer carries.
+    notices.extend(evidence.get("capability_notices") or [])
     if isinstance(evidence.get("preparation"), dict):
         notices.extend(execution_notices(evidence["preparation"]))
     return sorted(set(notices))
@@ -2239,8 +2246,76 @@ def browser_environment(base: dict, playwright_browsers_path: Path | None,
     return env
 
 
-def website_build_evidence(repo: Path, temp: Path, env: dict, command):
-    """Install and build a scratch copy, leaving candidate dependencies untouched."""
+# Install diagnostics keep only the newest lines of npm output and debug log.
+# Registry URLs, addresses and credential-bearing lines are redacted before they
+# reach the report, since a private registry can appear in any of them.
+_INSTALL_TAIL_LINES = 12
+_INSTALL_LINE_CHARS = 240
+_INSTALL_LOG_READ_BYTES = 65_536
+_INSTALL_CREDENTIAL = re.compile(
+    r"(?i)authorization|cookie|_auth|token[=:\s]|password|passwd|secret|bearer|api[-_]?key")
+_INSTALL_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"<>]+")
+_INSTALL_ADDRESS = re.compile(r"\[[0-9A-Fa-f:.]+\]|\b(?:\d{1,3}\.){3}\d{1,3}\b")
+
+
+def redacted_install_line(line: str) -> str:
+    """Return one npm output line with URLs (and their userinfo and query) and addresses removed.
+
+    A line that still names a credential after that is replaced whole, so the
+    package name in an ordinary progress line survives the redaction.
+    """
+    line = _INSTALL_ADDRESS.sub("<address>", _INSTALL_URL.sub("<url>", line))
+    if _INSTALL_CREDENTIAL.search(line):
+        return "<redacted: credential-bearing line>"
+    return line[:_INSTALL_LINE_CHARS]
+
+
+def install_last_progress(cache: Path, finished: float):
+    """Describe the newest npm debug log: when it last advanced and its redacted tail."""
+    try:
+        newest = max(cache.glob("_logs/*.log"), key=lambda path: path.stat().st_mtime, default=None)
+        if newest is None:
+            return {"available": False, "reason": "npm wrote no debug log"}
+        status = newest.stat()
+        with newest.open("rb") as handle:
+            handle.seek(max(0, status.st_size - _INSTALL_LOG_READ_BYTES))
+            lines = handle.read().decode(errors="replace").splitlines()
+    except OSError as error:
+        return {"available": False, "reason": f"npm debug log unreadable: {error.strerror}"}
+    if status.st_size > _INSTALL_LOG_READ_BYTES:
+        lines = lines[1:]  # the first line may begin inside an earlier record
+    return {"available": True, "log_bytes": status.st_size,
+            "last_write_at": datetime.fromtimestamp(status.st_mtime, timezone.utc).isoformat(),
+            "idle_seconds_at_finish": round(max(0.0, finished - status.st_mtime), 3),
+            "lines": [redacted_install_line(line) for line in lines if line.strip()][-_INSTALL_TAIL_LINES:]}
+
+
+def install_record(install: dict, cache: Path, duration_seconds: float, timeout_seconds: int):
+    """Project one `npm ci` run into bounded, redacted report fields.
+
+    The raw output stays on the in-memory record for classification; the report
+    gets the attribution (duration, timeout, outcome), the capability notices read
+    from that output, and redacted tails of its stdout, stderr and debug log.
+    """
+    def tail(text: str):
+        return [redacted_install_line(line) for line in text.splitlines() if line.strip()][-_INSTALL_TAIL_LINES:]
+
+    return {"command": install["command"], "started_at": install["started_at"],
+            "duration_seconds": round(duration_seconds, 3), "timeout_seconds": timeout_seconds,
+            "timed_out": install["timed_out"], "exit_code": install["exit_code"],
+            "outcome": install["outcome"], "cleanup_verified": install["cleanup_verified"],
+            "output_truncated": install["output_truncated"],
+            "capability_notices": execution_notices(install),
+            "stdout_tail": tail(install["stdout"]), "stderr_tail": tail(install["stderr"]),
+            "last_progress": install_last_progress(cache, time.time())}
+
+
+def website_build_evidence(repo: Path, temp: Path, env: dict, command, install_timeout=1800):
+    """Install and build a scratch copy, leaving candidate dependencies untouched.
+
+    `install_timeout` is the hard limit on `npm ci`; its record attributes that
+    step's duration, outcome and timeout separately from the build.
+    """
     root = temp / "website-validation"
     root.mkdir()
     shutil.copytree(repo / "website", root / "website",
@@ -2249,8 +2324,10 @@ def website_build_evidence(repo: Path, temp: Path, env: dict, command):
     shutil.copyfile(repo / "CHANGELOG.md", root / "CHANGELOG.md")
     website_env = {**env, "npm_config_cache": str(root / "npm-cache"),
                    "ASTRO_TELEMETRY_DISABLED": "1"}
-    preparation = observe_local_command(run(["npm", "--prefix", "website", "ci"],
-                                            cwd=root, env=website_env, timeout=1800))
+    started = time.monotonic()
+    install = observe_local_command(run(["npm", "--prefix", "website", "ci"],
+                                        cwd=root, env=website_env, timeout=install_timeout))
+    preparation = install_record(install, root / "npm-cache", time.monotonic() - started, install_timeout)
     if preparation["outcome"] == "PASS":
         evidence = observe_local_command(run(command, cwd=root, env=website_env, timeout=1800))
     else:
@@ -4206,6 +4283,138 @@ def retired_case_self_test():
            "unknown keys")
 
 
+def npm_tarball_bytes(name: str) -> bytes:
+    body = json.dumps({"name": name, "version": "1.0.0"}).encode()
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        member = tarfile.TarInfo("package/package.json")
+        member.size = len(body)
+        archive.addfile(member, io.BytesIO(body))
+    return buffer.getvalue()
+
+
+def write_website_install_fixture(repo: Path, name: str, registry: str, tarball: bytes, token: str = ""):
+    """Write a candidate website whose lockfile pins one dependency on the given registry."""
+    website = repo / "website"
+    website.mkdir(parents=True)
+    dependencies = {name: "1.0.0"}
+    (website / "package.json").write_text(json.dumps({
+        "name": "qa-website-install", "version": "1.0.0", "dependencies": dependencies,
+        "scripts": {"build": "node build.cjs"}}))
+    integrity = "sha512-" + base64.b64encode(hashlib.sha512(tarball).digest()).decode()
+    resolved = f"{registry}{name}/-/{name}-1.0.0.tgz" + (f"?token={token}" if token else "")
+    (website / "package-lock.json").write_text(json.dumps({
+        "name": "qa-website-install", "version": "1.0.0", "lockfileVersion": 3,
+        "packages": {"": {"name": "qa-website-install", "version": "1.0.0", "dependencies": dependencies},
+                     f"node_modules/{name}": {"version": "1.0.0", "resolved": resolved, "integrity": integrity}}}))
+    (website / "build.cjs").write_text(
+        "const fs = require('node:fs'); fs.mkdirSync('dist'); fs.writeFileSync('dist/built', 'built');\n")
+    (repo / "CHANGELOG.md").write_text("fixture changelog\n")
+
+
+def website_install_evidence_self_test():
+    """Attribute one stalled and one successful `npm ci` on a loopback registry.
+
+    The stalled registry accepts the tarball request and never answers, the
+    symptom of the production stall. Both installs use the production function
+    with an isolated home and cache; only the registry env is added. Returns the
+    report rows so a demonstration can keep them.
+    """
+    release = threading.Event()
+    ok_tarball = npm_tarball_bytes("ok-dep")
+
+    class RegistryHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.startswith("/stalled-dep/"):
+                release.wait(60)
+                return
+            if not self.path.startswith("/ok-dep/-/ok-dep-1.0.0.tgz"):
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(ok_tarball)))
+            self.end_headers()
+            self.wfile.write(ok_tarball)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), RegistryHandler)
+    serving = threading.Thread(target=server.serve_forever, daemon=True)
+    serving.start()
+    registry = f"http://127.0.0.1:{server.server_address[1]}/"
+    secret = "planted-registry-token"
+    command = ["npm", "--prefix", "website", "run", "build"]
+    try:
+        with tempfile.TemporaryDirectory(prefix="orbit-qa-website-install-") as tmp:
+            base = Path(tmp)
+
+            def scenario_env(name):
+                temp = base / name
+                temp.mkdir()
+                # Only the loopback registry and quiet flags are added; no global npm config is read.
+                env = {**isolated_environment(temp, {"PATH": os.environ.get("PATH", "")}),
+                       "npm_config_registry": registry, "npm_config_audit": "false",
+                       "npm_config_fund": "false", "npm_config_update_notifier": "false"}
+                return temp, env
+
+            stall_temp, stall_env = scenario_env("stall")
+            stall_repo = base / "stall-candidate"
+            write_website_install_fixture(stall_repo, "stalled-dep", registry, b"", token=secret)
+            stalled = website_build_evidence(stall_repo, stall_temp, stall_env, command, install_timeout=6)
+            prep = stalled["preparation"]
+            if stalled["outcome"] != "FAIL" or prep["outcome"] != "FAIL" or prep["timed_out"] is not True:
+                raise AssertionError(f"stalled install was not attributed as a timeout: {prep!r}")
+            if prep["timeout_seconds"] != 6 or prep["duration_seconds"] < 6:
+                raise AssertionError(f"stalled install duration does not reflect its hard timeout: {prep!r}")
+            if not any("timeout after 6s" in line for line in prep["stderr_tail"]):
+                raise AssertionError(f"stalled install omitted its timeout reason: {prep['stderr_tail']!r}")
+            progress = prep["last_progress"]
+            if not progress.get("available") or not any("stalled-dep" in line for line in progress["lines"]):
+                raise AssertionError(f"stalled install shows no last progress: {progress!r}")
+            if (stall_temp / "website-validation/website/dist").exists():
+                raise AssertionError("stalled install still ran the build")
+
+            ok_temp, ok_env = scenario_env("success")
+            ok_repo = base / "success-candidate"
+            write_website_install_fixture(ok_repo, "ok-dep", registry, ok_tarball)
+            done = website_build_evidence(ok_repo, ok_temp, ok_env, command)
+            ok_prep = done["preparation"]
+            if done["outcome"] != "PASS" or ok_prep["outcome"] != "PASS" or ok_prep["timed_out"] is not False:
+                raise AssertionError(f"successful install did not pass: {ok_prep!r}")
+            if ok_prep["exit_code"] != 0 or ok_prep["duration_seconds"] <= 0:
+                raise AssertionError(f"successful install lacks its own exit and duration: {ok_prep!r}")
+            if not ok_prep["last_progress"].get("available"):
+                raise AssertionError(f"successful install shows no last progress: {ok_prep['last_progress']!r}")
+            if (ok_temp / "website-validation/website/dist/built").read_text() != "built":
+                raise AssertionError("successful install did not reach the build")
+
+            for label, row in (("stalled", stalled), ("successful", done)):
+                text = json.dumps(row, sort_keys=True)
+                for leaked in (secret, registry, "127.0.0.1", "http://"):
+                    if leaked in text:
+                        raise AssertionError(f"{label} install leaked {leaked!r} into release evidence")
+
+        samples = {
+            "npm http fetch GET 200 https://user:pw-leak@registry.example.invalid/pkg 9ms": ["pw-leak", "registry.example"],
+            "connect ETIMEDOUT 10.1.2.3:443": ["10.1.2.3"],
+            "tarball from [2001:db8::7]:443": ["2001:db8"],
+            "authorization: Bearer header-leak": ["header-leak"],
+        }
+        for raw, forbidden in samples.items():
+            redacted = redacted_install_line(raw)
+            for needle in forbidden:
+                if needle in redacted:
+                    raise AssertionError(f"install redaction kept {needle!r}: {redacted!r}")
+        return {"stalled": stalled, "success": done}
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+        serving.join(timeout=5)
+
+
 def self_test():
     runpy.run_path(str(Path(__file__).with_name("qa_full_sweep_regression.py")))["self_test"]()
     process_self_test()
@@ -4509,6 +4718,7 @@ def self_test():
             raise AssertionError(f"failed website install earned a build pass: {failed!r}")
         if (failed_temp / "website-validation/website/dist").exists():
             raise AssertionError("website build ran after dependency preparation failed")
+    website_install_evidence_self_test()
 
     with tempfile.TemporaryDirectory(prefix="orbit-qa-platform-self-test-") as tmp:
         repo = Path(tmp)
