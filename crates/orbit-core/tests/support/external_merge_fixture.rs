@@ -85,6 +85,7 @@ pub(crate) struct ForgeState {
     pub(crate) closure_comments: BTreeMap<u64, String>,
     pub(crate) land_pull: Option<ForgePullRequest>,
     pub(crate) land_base: String,
+    pub(crate) base_answers: VecDeque<String>,
     pub(crate) answers: VecDeque<MergeabilityAnswer>,
     pub(crate) repeat: Option<MergeabilityAnswer>,
     pub(crate) reads: u32,
@@ -133,8 +134,16 @@ impl FakeForge {
             author: BOT.into(),
         });
         state.land_base = base.into();
+        state.base_answers.clear();
         state.answers = VecDeque::from(answers.to_vec());
         state.repeat = Some(repeat);
+    }
+    /// Script the base branches returned by successive `lease_pull_request`
+    /// reads, falling back to `fallback` once exhausted.
+    pub(crate) fn script_base_answers(&self, bases: &[&str], fallback: &str) {
+        let mut state = self.0.lock().unwrap();
+        state.base_answers = bases.iter().map(|base| (*base).to_string()).collect();
+        state.land_base = fallback.to_string();
     }
     /// Whether the scripted head reports no required check run.
     pub(crate) fn report_no_required_checks(&self, absent: bool) {
@@ -182,10 +191,14 @@ impl TaskPrForge for FakeForge {
         _: &Path,
         binding: &str,
     ) -> Result<Option<LeasePullRequest>, OrbitError> {
-        let state = self.0.lock().unwrap();
+        let mut state = self.0.lock().unwrap();
+        let base_branch = state
+            .base_answers
+            .pop_front()
+            .unwrap_or_else(|| state.land_base.clone());
         Ok(Some(LeasePullRequest {
             number: binding.trim_start_matches('#').parse().unwrap(),
-            base_branch: state.land_base.clone(),
+            base_branch,
             merged: state.landed.is_some(),
         }))
     }

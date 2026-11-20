@@ -21,7 +21,8 @@ crate::scenario_table!(
     a_succeeded_authorised_run_with_a_passed_observation_is_merged,
     a_delivery_without_completion_authority_records_who_merges_it,
     an_authorised_conflicting_pull_request_records_its_follow_up_once,
-    two_open_delivery_pull_requests_record_one_ambiguity_follow_up
+    two_open_delivery_pull_requests_record_one_ambiguity_follow_up,
+    a_retargeted_pull_request_is_not_merged_and_lands_once_restored
 );
 
 /// A finished delivery run of `task` that carried `completion`.
@@ -260,4 +261,63 @@ fn two_open_delivery_pull_requests_record_one_ambiguity_follow_up() {
         "names both pull requests: {}",
         recorded[0].detail
     );
+}
+
+fn a_retargeted_pull_request_is_not_merged_and_lands_once_restored() {
+    // ORB-26002: retargeting the PR after candidate selection preserves the
+    // head SHA; neither the second read in auto_land_one nor the final merge
+    // read in merge_delivery_pull_request may issue a merge against another branch.
+    for bases in [
+        // Retargeted between Read #1 (candidate selection) and Read #2 (auto_land_one).
+        vec!["other-branch"],
+        // Retargeted between Read #2 (auto_land_one) and Read #3 (merge_delivery_pull_request).
+        vec!["stable", "other-branch"],
+    ] {
+        let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Mergeable);
+        let stable = fx.base.clone();
+        let scripted: Vec<&str> = std::iter::once(stable.as_str())
+            .chain(
+                bases
+                    .iter()
+                    .map(|b| if *b == "stable" { stable.as_str() } else { *b }),
+            )
+            .collect();
+        forge.script_base_answers(&scripted, "other-branch");
+        delivery_run(
+            &fx,
+            &task,
+            "done",
+            JobRunState::Held,
+            Some("delivery_check_runs_absent"),
+        );
+
+        tick(&fx, false, false);
+        assert!(
+            forge.merges().is_empty(),
+            "retargeted PR must never receive a merge request ({bases:?})"
+        );
+        fx.assert_status(&task, TaskStatus::Review, "retargeted PR stays in review");
+        let recorded = follow_ups(&fx, &task);
+        assert_eq!(
+            recorded.len(),
+            1,
+            "recorded follow-up ({bases:?}): {recorded:?}"
+        );
+        assert_eq!(recorded[0].code, "merge_refused");
+        assert!(
+            recorded[0].detail.contains("other-branch"),
+            "detail names the changed target: {}",
+            recorded[0].detail
+        );
+
+        // Retargeting back to the stable eligible branch lets the next sweep land it.
+        forge.script_base_answers(&[], &stable);
+        tick(&fx, false, false);
+        assert_eq!(
+            forge.merges(),
+            vec![(LAND_PR, LAND_HEAD.to_string())],
+            "restored target lands on the next sweep ({bases:?})"
+        );
+        fx.assert_done(&task, "restored target settles to done");
+    }
 }

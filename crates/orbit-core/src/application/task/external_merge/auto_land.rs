@@ -165,8 +165,11 @@ impl OrbitRuntime {
         {
             return Ok(None);
         }
-        let number = match self.open_delivery_pull_request(&candidate)? {
-            OpenDelivery::One(number) => number,
+        let (number, expected_base) = match self.open_delivery_pull_request(&candidate)? {
+            OpenDelivery::One {
+                number,
+                target_branch,
+            } => (number, target_branch),
             OpenDelivery::None => return Ok(None),
             OpenDelivery::Several(numbers) => {
                 // Choosing between them is the operator's: merge nothing and
@@ -228,6 +231,17 @@ impl OrbitRuntime {
                 ),
             )?;
             return Ok(None);
+        }
+        if let Err(error) =
+            super::land::ensure_delivery_target_branch(&id, number, base.as_deref(), &expected_base)
+        {
+            match error {
+                OrbitError::PolicyDenied(reason) => {
+                    self.record_follow_up(&task, &history, follow_up("merge_refused", reason))?;
+                    return Ok(None);
+                }
+                other => return Err(other),
+            }
         }
         if blockers.conflicting {
             self.record_follow_up(
@@ -307,7 +321,7 @@ impl OrbitRuntime {
             )?;
             return Ok(None);
         }
-        match self.merge_delivery_pull_request(&id, number, Some(&head)) {
+        match self.merge_delivery_pull_request(&id, number, Some(&head), &expected_base) {
             Ok(merge_commit) => {
                 // The work has landed; a settlement that fails here is read
                 // again from the merge by the next settlement pass.
