@@ -317,8 +317,8 @@ The owner enforces what it is owed in two places:
   between retries). The budget survives watcher/completion restarts and
   unknown replies; the same provider attempt is never resent. Candidate
   siblings prevent this recovery. Exhaustion appends
-  `ci_infrastructure_retry_exhausted`, naming the transient classification
-  and attempt count in `orbit task show` history, and keeps the task in review.
+  `ci_infrastructure_retry_exhausted`; `orbit task show` history shows it as
+  `classification=transient` and `attempts=<n>`, and the task stays in review.
   The existing completion deadline still bounds the wait. Rate-limited log
   reads follow the recorded read-deferral path without spending an attempt.
   Owner-local review deliveries use the same planner from their existing

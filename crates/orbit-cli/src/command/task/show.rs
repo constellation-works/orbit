@@ -646,29 +646,32 @@ fn history_line(entry: &TaskHistoryEntry) -> String {
 }
 
 // Only human-oriented fields are eligible: arbitrary scalar fields can contain
-// ledger keys, identifiers or hashes. The original note remains in JSON output.
+// ledger keys, identifiers or hashes. `classification` and `attempts` are the
+// retry-exhaustion fields the docs name, shown with their labels. The original
+// note remains in JSON output.
 fn history_note_summary(note: &str) -> String {
     let Ok(Value::Object(object)) = serde_json::from_str::<Value>(note) else {
         return note.to_owned();
     };
-    let parts: Vec<String> = ["summary", "tool", "phase", "ref", "outcome", "status"]
+    let words = |key: &str| {
+        object
+            .get(key)
+            .and_then(Value::as_str)
+            .map(history_text_words)
+            .filter(|value| !value.is_empty())
+    };
+    let mut parts: Vec<String> = ["summary", "tool", "phase", "ref", "outcome", "status"]
         .iter()
-        .filter_map(|key| object.get(*key).and_then(Value::as_str))
-        .map(|value| {
-            value
-                .split_whitespace()
-                .filter(|word| {
-                    let lower = word.to_ascii_lowercase();
-                    !lower.contains("sha256")
-                        && !word
-                            .split(|c: char| !c.is_ascii_hexdigit())
-                            .any(|part| part.len() >= 32)
-                })
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
-        .filter(|value| !value.is_empty())
+        .copied()
+        .filter_map(words)
         .collect();
+    parts.extend(words("classification").map(|value| format!("classification={value}")));
+    parts.extend(
+        object
+            .get("attempts")
+            .and_then(Value::as_u64)
+            .map(|attempts| format!("attempts={attempts}")),
+    );
     let summary = if parts.is_empty() {
         "structured note".to_owned()
     } else {
@@ -681,6 +684,21 @@ fn history_note_summary(note: &str) -> String {
     } else {
         prefix
     }
+}
+
+/// Keeps the words of a note field that are not digests or long hex identifiers.
+fn history_text_words(value: &str) -> String {
+    value
+        .split_whitespace()
+        .filter(|word| {
+            let lower = word.to_ascii_lowercase();
+            !lower.contains("sha256")
+                && !word
+                    .split(|c: char| !c.is_ascii_hexdigit())
+                    .any(|part| part.len() >= 32)
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The words after `Next:` on a task show. Local and routed text both use this.
