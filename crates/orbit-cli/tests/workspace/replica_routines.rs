@@ -44,6 +44,72 @@ fn held_owner_is_settled_before_fixture_teardown_on_assertion_failure() {
     exercise_routine_settlement(true);
 }
 
+/// A routine a replica lists as owner-only is refused by `routine breaker` with
+/// the owner named, the same `owner_authority` answer `routine enable` gives,
+/// not as an unknown routine.
+#[test]
+fn routine_breaker_refuses_an_owner_only_routine_naming_the_owner() {
+    if !isolated("routine_breaker_refuses_an_owner_only_routine_naming_the_owner") {
+        return;
+    }
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let replica_repo = temp.path().join("replica");
+    fs::create_dir_all(&home).expect("create home");
+    crate::git_repo::SeededRepo::new(&replica_repo)
+        .readme("# replica breaker\n")
+        .build();
+    run_success(
+        &replica_repo,
+        &home,
+        &[
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "replica-breaker-host",
+            "--task-prefix",
+            "RB",
+        ],
+    );
+    run_success(
+        &replica_repo,
+        &home,
+        &[
+            "workspace",
+            "init",
+            "--name",
+            REPLICA,
+            "--role",
+            "replica",
+            "--owner",
+            REMOTE_OWNER,
+        ],
+    );
+    let owner_only = format!("ci-failure-sweep-{REPLICA}");
+    let listed = run_json(&replica_repo, &home, &["routine", "list", "--json"]);
+    assert!(
+        listed["owner_only"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["name"] == owner_only.as_str())),
+        "fixture routine is owner-only: {listed}"
+    );
+    for action in ["reset", "bypass"] {
+        let output = command(&replica_repo, &home)
+            .args(["routine", "breaker", action, &owner_only])
+            .output()
+            .expect("run routine breaker");
+        assert!(
+            !output.status.success(),
+            "owner-only {action} must be refused"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(REMOTE_OWNER) && !stderr.contains("no routine named"),
+            "{action} names the owner instead of an unknown routine: {stderr}"
+        );
+    }
+}
+
 /// [ORB-16354] A replicated workspace's store-gc routine loads, fires, and
 /// prunes the local host store. The remote owner has no route, the run never
 /// names that owner, and the owner checkout's own workspace-scoped rows stay.

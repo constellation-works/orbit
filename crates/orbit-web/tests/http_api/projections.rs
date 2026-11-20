@@ -1094,6 +1094,26 @@ projections_test!(
         assert_contains(&refused, "error", "hm_fixture_remote");
         check!(refused["owner_machine"].is_string(); "owner refusal names the owner machine: {refused}");
         check_eq!(fs::read(&ci_sweep_path).unwrap() => ci_sweep_before; "owner toggle wrote");
+        // The breaker controls select through the same refusals as the toggle.
+        let breaker_from = |name: &str, source: &str| {
+            server.send(
+                "POST",
+                "/api/routines/breaker?workspace=ws_http_fixture",
+                json!({"name":name,"source":source,"action":"reset","machine_name":"http-fixture"}),
+            )
+        };
+        error_code(breaker_from("missing", "fixture"), 404, "routine_not_found");
+        error_code(
+            breaker_from("replica-gc", "elsewhere"),
+            409,
+            "workspace_mismatch",
+        );
+        let refused = error_code(
+            breaker_from("replica-ci-sweep", "fixture"),
+            409,
+            "owner_authority",
+        );
+        assert_contains(&refused, "error", "hm_fixture_remote");
         let enabled = json_ok(toggle("replica-gc", gc_job));
         assert_fields!(enabled, "changed": json!(true));
         check!(fs::read_to_string(&gc_path).unwrap().contains("enabled: true"); "GC routine enabled on disk");

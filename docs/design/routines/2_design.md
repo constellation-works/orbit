@@ -1044,6 +1044,9 @@ logs every transition to `routine_breaker_events` (`tripped`, `trial`,
   Other trigger kinds are evaluated at once. The dashboard routine details offer the
   same two actions through the governed `routine.breaker` operation. Both are
   recorded as breaker events; the dashboard action is also audited.
+  Both select the routine through the selection every routine edit uses, so a
+  routine a replica lists as owner-only is refused naming its owner, and the
+  dashboard refuses a routine of another source workspace (`workspace_mismatch`).
 - **Status.** `orbit routine list`, `orbit routine show` and the dashboard show a
   tripped routine as `tripped` with its error class and next trial time instead
   of a failure streak; `orbit routine show` lists the breaker events.

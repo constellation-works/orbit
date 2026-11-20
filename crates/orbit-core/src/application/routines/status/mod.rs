@@ -41,8 +41,9 @@ pub use display::{
 pub use fires::recent_fires;
 pub use report::{RoutineStatusReport, routine_statuses_with_providers};
 pub use toggle::{
-    bypass_routine_breaker, pause_routine, reset_routine_breaker, resume_routine,
-    routine_breaker_events, select_listed_routine, set_routine_enabled, toggle_listed_routine,
+    RoutineBreakerAction, RoutineBreakerOutcome, control_listed_routine_breaker, pause_routine,
+    resume_routine, routine_breaker_events, select_listed_routine, set_routine_enabled,
+    toggle_listed_routine,
 };
 pub(crate) use toggle::{
     next_scheduled_occurrence, rewrite_enabled_line, select_listed_routine_for_target,
