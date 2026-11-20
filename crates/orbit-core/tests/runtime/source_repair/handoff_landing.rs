@@ -2,7 +2,7 @@
 //! a hand merge and a forced completion (the published handoff incident).
 
 use super::decision_answer::raise_block_triage;
-use super::failed_publication::escalated_handoff_fixture;
+use super::failed_publication::{escalated_completion_fixture, escalated_handoff_fixture};
 use super::*;
 use orbit_core::application::task::DecisionListProfile;
 use orbit_core::runtime::task_pr_forge::{
@@ -57,9 +57,11 @@ impl Forge {
         let pull = state.pull.take().unwrap();
         state.merged = Some(MergedPullRequest {
             pull: pull.blockers.pull,
+            url: "https://github.com/owner/repository/pull/17".into(),
             base_branch: pull.base_branch,
             head_sha: pull.blockers.head_sha,
             merge_commit: MERGE.into(),
+            merged_at: Utc::now(),
         });
         state.merges += 1;
     }
@@ -399,10 +401,105 @@ fn handoff_landing_reads_draft_and_checks_from_the_real_forge_adapter() {
     );
 }
 
+fn periodic_settlement_recovers_a_stopped_completion_during_rest_rate_limiting() {
+    let (f, _, _) = escalated_completion_fixture();
+    let recent = f._root.path().join("recent-merges.json");
+    std::fs::write(
+        f._root.path().join("bin/gh"),
+        format!(
+            "#!/bin/sh\ncase \"$1 $2 $3 $4\" in\n\
+             'pr list --state merged') cat '{}' ;;\n\
+             'pr list --state open') printf '[]' ;;\n\
+             'pr view 17 --json') cat '{}' ;;\n\
+             'api user --jq .login') printf 'gh: API rate limit exceeded (HTTP 403)\\n' >&2; exit 1 ;;\n\
+             *) exit 99 ;;\nesac\n",
+            recent.display(),
+            f.answer.display(),
+        ),
+    )
+    .unwrap();
+    let mut pr: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    pr["state"] = json!("CLOSED");
+    pr["author"] = json!({"login":"orbit-bot"});
+    pr["body"] = json!(format!("Delivers {}.", f.task));
+    std::fs::write(&f.answer, pr.to_string()).unwrap();
+    std::fs::write(&recent, "[]").unwrap();
+    assert!(
+        f.runtime
+            .settle_externally_merged_tasks()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(f.runtime.settle_externally_merged_task(&f.task).is_err());
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Blocked
+    );
+
+    pr["mergeCommit"] = json!({"oid": MERGE});
+    let merged_at = "2026-11-20T02:41:33Z";
+    pr["mergedAt"] = json!(merged_at);
+    // Even with a merge SHA, a closed answer is not a merged one.
+    std::fs::write(&recent, json!([&pr]).to_string()).unwrap();
+    assert!(
+        f.runtime
+            .settle_externally_merged_tasks()
+            .unwrap()
+            .is_empty()
+    );
+    pr["state"] = json!("MERGED");
+    for (field, wrong) in [
+        ("baseRefName", json!("release")),
+        ("headRefOid", json!(MERGE)),
+        (
+            "url",
+            json!("https://github.com/elsewhere/repository/pull/17"),
+        ),
+        ("mergedAt", Value::Null),
+    ] {
+        let mut stale = pr.clone();
+        stale[field] = wrong;
+        std::fs::write(&recent, json!([stale]).to_string()).unwrap();
+        assert!(
+            f.runtime
+                .settle_externally_merged_tasks()
+                .unwrap()
+                .is_empty(),
+            "{field}"
+        );
+        assert_eq!(
+            f.runtime.get_task(&f.task).unwrap().status,
+            TaskStatus::Blocked
+        );
+    }
+    std::fs::write(&recent, json!([pr]).to_string()).unwrap();
+    let settled = f.runtime.settle_externally_merged_tasks().unwrap();
+    assert_eq!(settled.len(), 1, "{settled:?}");
+    assert_eq!(settled[0].task_id, f.task);
+    assert_eq!(settled[0].pr_number, 17);
+    assert_eq!(settled[0].merge_commit, MERGE);
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Done
+    );
+    let history = f.runtime.get_task_history(&f.task).unwrap();
+    let entry = history
+        .iter()
+        .find(|entry| entry.event == "external_merge_settled")
+        .expect("settlement in task history");
+    assert_eq!(entry.from_status, Some(TaskStatus::Blocked));
+    assert_eq!(entry.to_status, Some(TaskStatus::Done));
+    let note = entry.note.as_deref().unwrap();
+    for detail in ["#17", MERGE, merged_at] {
+        assert!(note.contains(detail), "{note}");
+    }
+}
+
 crate::scenario_table!(
     handoff_landing_regressions,
     owner_lands_green_handoff_and_refusals_change_nothing,
     requeued_failure_handoff_settles_after_external_merge,
     required_review_hides_land_for_an_unreviewed_handoff,
     handoff_landing_reads_draft_and_checks_from_the_real_forge_adapter,
+    periodic_settlement_recovers_a_stopped_completion_during_rest_rate_limiting,
 );

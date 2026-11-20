@@ -101,9 +101,11 @@ fn failed_claims_kept_unaccepted_pr_settles_after_receipt_compaction() {
             // The follower's PR is authoritative even though it has another author.
             author: "follower-bot".into(),
         },
+        url: "https://github.com/owner/repo/pull/42".into(),
         base_branch: probe["ship"]["landing_branch"].as_str().unwrap().into(),
         head_sha: head.into(),
         merge_commit: head.into(),
+        merged_at: chrono::Utc::now(),
     });
     let settlement = owner
         .settle_externally_merged_task(task)

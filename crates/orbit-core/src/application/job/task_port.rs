@@ -305,14 +305,14 @@ impl TaskJobPort for OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<NativePublicationIdentity, OrbitError> {
-        let proof = self.desktop_native_publication_proof(task)?;
-        Ok(NativePublicationIdentity {
-            branch: proof.branch,
-            head: proof.head,
-            base_branch: proof.base_branch,
-            number: proof.number,
-            url: proof.url,
-        })
+        self.desktop_native_publication_proof(task).map(Into::into)
+    }
+
+    fn stopped_publication_identity(
+        &self,
+        task: &Task,
+    ) -> Result<Option<NativePublicationIdentity>, OrbitError> {
+        Ok(self.stopped_native_settlement_proof(task)?.map(Into::into))
     }
 
     fn purpose_pool_members(

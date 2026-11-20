@@ -27,7 +27,10 @@
 //! handoff that awaits approval or is authorized, which approval or the
 //! owner's landing job completes.
 //!
-//! A delivery PR is matched as the closure matches it: its head branch is
+//! A stopped native completion run's authenticated publication pins the PR
+//! number and URL, head branch and commit, and target branch. It can settle
+//! without a separate forge login lookup. Otherwise a recorded delivery PR
+//! is matched as the closure matches it: its head branch is
 //! `orbit/<TASK-ID>-…`, its body names the task, and it was authored by a
 //! delivery identity (`pr.delivery_authors`, else the login this machine's
 //! forge credentials act as), or it is the delivery PR of a follower handoff
@@ -37,8 +40,8 @@
 //! the base branch the task's delivery run was submitted against, else the
 //! workspace base branch.
 //!
-//! The write is Orbit's own: `done` with a landing note naming the PR and its
-//! merge commit, recorded in history as [`super::lifecycle::EXTERNAL_MERGE_SETTLED_EVENT`]. It
+//! The write is Orbit's own: `done` with a landing note naming the PR, its
+//! merge time and commit, recorded in history as [`super::lifecycle::EXTERNAL_MERGE_SETTLED_EVENT`]. It
 //! starts no execution, so no footprint guard applies to it. A task with an
 //! execution claim of its own is still refused by the store, except through
 //! the claim journal: a revoked handoff's settlement is one owner store write

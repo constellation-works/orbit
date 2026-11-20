@@ -111,4 +111,6 @@ pub use executor::automation::vcs::{
 };
 pub use orbit_agent::provider_supports_continuity;
 
-pub use executor::automation::vcs::completion_hold::candidate_completion_hold;
+pub use executor::automation::vcs::completion_hold::{
+    candidate_commit_completion_hold, candidate_completion_hold,
+};

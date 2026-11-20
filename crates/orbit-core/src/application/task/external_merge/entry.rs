@@ -1,3 +1,5 @@
+use std::cell::OnceCell;
+
 use orbit_common::OrbitError;
 use orbit_types::task::TaskStatus;
 
@@ -34,41 +36,22 @@ impl OrbitRuntime {
 
         let repo_root = self.context.paths().repo_root.clone();
         let forge = self.task_pr_forge();
-        let merged = forge
-            .merged_pull_requests(&repo_root)?
-            .into_iter()
-            .filter(|merged| {
-                candidates.iter().any(|candidate| {
-                    candidate::names_delivery(
-                        &self
-                            .context
-                            .settings()
-                            .pr_settings()
-                            .conventions
-                            .branch_name,
-                        merged,
-                        &candidate.task.id,
-                    )
-                })
-            })
-            .collect::<Vec<_>>();
-        // The delivery identity costs a forge call; only a merge that names a
-        // candidate needs it.
-        if merged.is_empty() {
-            return Ok(Vec::new());
-        }
-        let authors = self.settlement_authors(&repo_root);
+        let merged = forge.merged_pull_requests(&repo_root)?;
+        let authors = OnceCell::new();
         let mut settled = Vec::new();
         for candidate in candidates {
-            let Some(landing) = self.delivery_merge(&candidate, &merged, &authors) else {
-                continue;
-            };
-            match self.write_settlement(&candidate, &landing) {
-                Ok(settlement) => settled.push(settlement),
+            match self
+                .delivery_merge(&candidate, &merged, &authors)
+                .and_then(|landing| {
+                    landing
+                        .map(|landing| self.write_settlement(&candidate, &landing))
+                        .transpose()
+                }) {
+                Ok(Some(settlement)) => settled.push(settlement),
+                Ok(None) => {}
                 Err(error) => tracing::warn!(
                     target: "orbit.core.external_merge",
                     task_id = %candidate.task.id,
-                    pr = landing.pull.number,
                     error = %error,
                     "could not settle a task from its merged delivery pull request"
                 ),
@@ -107,29 +90,7 @@ impl OrbitRuntime {
         for number in candidate.pr_numbers() {
             fetched.extend(forge.merged_pull_request(&repo_root, number)?);
         }
-        let merged = fetched
-            .iter()
-            .filter(|merged| {
-                candidate::names_delivery(
-                    &self
-                        .context
-                        .settings()
-                        .pr_settings()
-                        .conventions
-                        .branch_name,
-                    merged,
-                    id,
-                )
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        // A revoked handoff's PR proves itself by the handoff, not its author.
-        let authors = if merged.is_empty() || candidate.revoked.is_some() {
-            Vec::new()
-        } else {
-            self.settlement_authors(&repo_root)
-        };
-        let Some(landing) = self.delivery_merge(&candidate, &merged, &authors) else {
+        let Some(landing) = self.delivery_merge(&candidate, &fetched, &OnceCell::new())? else {
             let reason = match &candidate.revoked {
                 Some(revoked) => candidate::revoked_handoff_unmerged(
                     &self

@@ -109,9 +109,11 @@ impl FakeForge {
                 body,
                 author: author.into(),
             },
+            url: format!("https://github.com/owner/repo/pull/{number}"),
             base_branch: base.into(),
             head_sha: "0dbd8e2000000000000000000000000000000000".into(),
             merge_commit: MERGE_COMMIT.into(),
+            merged_at: Utc::now(),
         }
     }
     pub(crate) fn script_land(
@@ -222,9 +224,11 @@ impl TaskPrForge for FakeForge {
         let pull = state.land_pull.clone().unwrap();
         state.landed = Some(MergedPullRequest {
             pull,
+            url: format!("https://github.com/owner/repo/pull/{number}"),
             base_branch: state.land_base.clone(),
             head_sha: head_sha.into(),
             merge_commit: MERGE_COMMIT.into(),
+            merged_at: Utc::now(),
         });
         Ok(PullRequestMergeOutcome::Merged {
             merge_commit: MERGE_COMMIT.into(),
