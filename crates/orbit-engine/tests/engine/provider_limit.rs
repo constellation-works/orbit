@@ -569,3 +569,48 @@ fn provider_limit_contracts_1() {
     );
     assert_eq!(std::env::var_os("TZ"), parent_timezone);
 }
+
+#[test]
+fn muse_subscription_quota_is_a_limit_for_leaf_and_pilot() {
+    crate::git_fixture::isolated_with_timezone(
+        module_path!(),
+        "muse_subscription_quota_is_a_limit_for_leaf_and_pilot",
+        Some("UTC"),
+        || {
+            for (activity, reset, exit_code) in [
+                ("implement_one", Some("2026-11-20T08:00:00Z"), 1),
+                ("task_pilot", None, 0),
+            ] {
+                let suffix = reset.map_or(String::new(), |at| format!("; resets at {at}"));
+                let reason = format!(
+                    "API error 429: rate_limit_error: Subscription quota exhausted{suffix}"
+                );
+                let stdout = json!({"payload_type":"run.terminal.failed", "payload":{"kind":"run_terminal", "terminal":"failed", "text":reason}}).to_string();
+                let fake = FakeProvider::new("muse", &stdout, "", exit_code, "");
+                let audit = tempfile::tempdir().unwrap();
+                let host = CapacityHost::new(&fake.path, audit.path());
+                let outcome = dispatch_v2_activity(V2DispatchInput {
+                    activity_name: activity,
+                    spec: &ActivityV2Spec::AgentLoop(agent_spec(Provider::Muse)),
+                    fs_profile: None,
+                    input: json!({"prompt":"implement"}),
+                    audit: outcome_writer(activity),
+                    run_id: activity,
+                    host: Some(&host),
+                })
+                .unwrap();
+                assert!(!outcome.success);
+                let limit = typed_limit(outcome.message.as_deref(), "muse");
+                assert_eq!(limit.resets_at, reset.map(|at| at.parse().unwrap()));
+                let limits = host.limits.lock().unwrap();
+                let [observation] = limits.as_slice() else {
+                    panic!("expected one observation: {limits:?}");
+                };
+                assert_eq!(observation.provider, "muse");
+                assert_eq!(observation.source, ProviderLimitSource::Error);
+                assert!(observation.exhausted && observation.gating);
+                assert_eq!(observation.resets_at, limit.resets_at);
+            }
+        },
+    );
+}
