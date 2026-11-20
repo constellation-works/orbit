@@ -458,6 +458,24 @@ pub(super) fn normalize_pass_list(pass: Vec<String>) -> Result<Vec<String>, Orbi
     Ok(normalized.into_iter().collect())
 }
 
+/// `execution.env.login_auth`: lowercase, sorted, deduplicated provider names,
+/// each one a provider whose CLI keeps a login.
+pub(super) fn normalize_login_auth(raw: Vec<String>) -> Result<Vec<String>, OrbitError> {
+    let mut providers = BTreeSet::new();
+    for entry in raw {
+        let provider = entry.trim().to_ascii_lowercase();
+        if !orbit_common::security::child_env::LOGIN_AUTH_PROVIDERS.contains(&provider.as_str()) {
+            return Err(OrbitError::InvalidInput(format!(
+                "execution.env.login_auth contains unsupported provider '{}'; expected one of: {}",
+                entry.trim(),
+                orbit_common::security::child_env::LOGIN_AUTH_PROVIDERS.join(", ")
+            )));
+        }
+        providers.insert(provider);
+    }
+    Ok(providers.into_iter().collect())
+}
+
 pub(crate) fn resolve_percent(raw: Option<u8>, default: u8, key: &str) -> Result<u8, OrbitError> {
     resolve_bounded_range(raw, default, key)
 }

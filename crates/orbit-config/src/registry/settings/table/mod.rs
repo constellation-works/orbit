@@ -18,8 +18,8 @@ use super::super::{
 use super::resolve;
 use super::resolve::{
     DEFAULT_RETENTION_DAYS, DEFAULT_WORKER_MEMORY_HIGH, DEFAULT_WORKER_MEMORY_MAX,
-    default_pass_list, normalize_logins, normalize_pass_list, resolve_at, resolve_bounded_range,
-    resolve_branch_template, resolve_build_output_env, resolve_choice,
+    default_pass_list, normalize_login_auth, normalize_logins, normalize_pass_list, resolve_at,
+    resolve_bounded_range, resolve_branch_template, resolve_build_output_env, resolve_choice,
     resolve_commit_subject_template, resolve_distributed_completion, resolve_generated_paths,
     resolve_light_delivery_paths, resolve_machine_id, resolve_machine_labels, resolve_machine_name,
     resolve_material_fields, resolve_mcp_role, resolve_mcp_toolsets, resolve_memory_limit,

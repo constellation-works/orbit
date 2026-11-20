@@ -26,6 +26,14 @@ macro_rules! assemble_config_settings {
         allowed: format("environment variable names"),
         resolve: |raw: Option<Vec<String>>| raw.map(normalize_pass_list).unwrap_or_else(|| Ok(default_pass_list())),
     },
+    execution_env_login_auth: Vec<String> => Vec<String> {
+        key: "execution.env.login_auth", value_type: "array<string>",
+        description: "Providers whose agents authenticate through the CLI's own login, so their credential variables in execution.env.pass are not reported when unset.",
+        section: ConfigSection::Execution, order: 31,
+        tier: ConfigKeyTier::Advanced,
+        allowed: each_of(&["claude", "codex"]),
+        resolve: |raw: Option<Vec<String>>| normalize_login_auth(raw.unwrap_or_default()),
+    },
     machine_id: Option<String> => String {
         key: "machine.id", value_type: "string",
         description: "Stable generated identity of this machine, written once by orbit init.",

@@ -239,6 +239,7 @@ file, retain the [workspace preset procedure](first-run.md#workspace-presets).
 | `workflow.distributed_completion` | Standing owner authority for accepted distributed-drain handoffs: `review` (default, each handoff waits for operator approval) or `done` (acceptance authorizes owner landing). Owner configuration only; landing rechecks it. See [Distributed-drain completion policy](#distributed-drain-completion-policy). |
 | `tasks.id_start` | Floor for this machine's task-id allocator; forward-only. → [multi-host.md](multi-host.md) |
 | `execution.env.pass` | Environment variable names allow-listed into agent subprocesses. |
+| `execution.env.login_auth` | Providers (`claude`, `codex`) authenticated by the CLI's own login; their unset credential names in `pass` are not reported. |
 | `execution.codex.sandbox` | `read-only`, `workspace-write`, or `danger-full-access`. |
 | `execution.codex.approval_policy` | `untrusted`, `on-request`, or `never`. |
 | `machine.auto_concurrency.mode` | Forecast admission: `off` (default) builds no forecast, `shadow` records what forecasting would admit while retaining ordinary admission, `enforce` uses forecast fit to decide admissions within the worker ceiling. |
