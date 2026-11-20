@@ -7,8 +7,8 @@ use chrono::{DateTime, Utc};
 use orbit_common::process::identity::{ProcessLiveness, probe_process_stopped};
 use orbit_common::security::redaction::redact_all;
 use orbit_common::storage::blob_store::BlobStore;
-use serde_json::Value;
 
+use super::body::{RunTrailBody, RunTrailEnvelope, RunTrailRow};
 use super::outcome::AuditStepOutcome;
 use super::trail::{
     MAX_RECOVERY_ATTEMPTS, RunAuditEvent, RunAuditStep, RunCliInvocationRecord, RunProviderProcess,
@@ -21,17 +21,11 @@ pub(super) fn latest_timestamp_from_envelope_rows(
     rows: impl IntoIterator<Item = orbit_store::V2AuditEventRow>,
 ) -> Option<DateTime<Utc>> {
     rows.into_iter()
-        .filter_map(|row| serde_json::from_str::<Value>(&row.payload_json).ok())
+        .filter_map(|row| RunTrailRow::parse(&row.payload_json))
         // Match the full audit projection's envelope validity boundary without
         // reconstructing parent links or activity steps just to read `ts`.
-        .filter(|value| value.get("event_id").and_then(Value::as_str).is_some())
-        .filter_map(|value| {
-            value
-                .get("ts")
-                .and_then(Value::as_str)
-                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-                .map(|value| value.with_timezone(&Utc))
-        })
+        .filter(|row| row.envelope.event_id.is_some())
+        .filter_map(|row| row.envelope.ts)
         .max()
 }
 
@@ -42,20 +36,19 @@ pub(super) fn audit_steps_from_events(events: &[RunAuditEvent]) -> Vec<RunAuditS
     let mut index_by_id = HashMap::<String, usize>::new();
 
     for event in events {
-        match event.body_kind.as_deref() {
-            Some("step_started") => {
-                let Some(step_id) = event.raw.get("step_id").and_then(Value::as_str) else {
-                    continue;
-                };
+        match &event.body {
+            RunTrailBody::StepStarted {
+                step_id: Some(step_id),
+            } => {
                 if index_by_id.contains_key(step_id) {
                     continue;
                 }
                 let index = steps.len();
-                index_by_id.insert(step_id.to_string(), index);
+                index_by_id.insert(step_id.clone(), index);
                 steps.push(RunAuditStep {
                     lock_wait_ms: None,
                     step_index: index as u32,
-                    step_id: step_id.to_string(),
+                    step_id: step_id.clone(),
                     started_at: event.timestamp,
                     finished_at: None,
                     outcome: None,
@@ -63,55 +56,48 @@ pub(super) fn audit_steps_from_events(events: &[RunAuditEvent]) -> Vec<RunAuditS
                     error_diagnostic: None,
                 });
             }
-            Some("step_finished") | Some("step_skipped") | Some("step_denied") => {
-                let Some(step_id) = event.raw.get("step_id").and_then(Value::as_str) else {
+            RunTrailBody::StepFinished {
+                step_id: Some(step_id),
+                outcome,
+                error_message,
+                error_diagnostic,
+                lock_wait_ms,
+            } => {
+                let Some(step) = started_step(&mut steps, &index_by_id, step_id) else {
                     continue;
                 };
-                let Some(index) = index_by_id.get(step_id).copied() else {
-                    continue;
-                };
-                let step = &mut steps[index];
                 step.finished_at = event.timestamp;
-                match event.body_kind.as_deref() {
-                    Some("step_finished") => {
-                        step.error_diagnostic = event
-                            .raw
-                            .get("error_diagnostic")
-                            .filter(|value| !value.is_null())
-                            .cloned();
-                        step.lock_wait_ms = event.raw.get("lock_wait_ms").and_then(Value::as_u64);
-                        step.outcome = Some(
-                            event
-                                .raw
-                                .get("outcome")
-                                .and_then(Value::as_str)
-                                .map(AuditStepOutcome::from_recorded)
-                                .unwrap_or(AuditStepOutcome::Finished),
-                        );
-                        step.error_message = event
-                            .raw
-                            .get("error_message")
-                            .and_then(Value::as_str)
-                            .map(str::to_string);
-                    }
-                    Some("step_skipped") => {
-                        step.outcome = Some(AuditStepOutcome::Skipped);
-                        step.error_message = event
-                            .raw
-                            .get("reason")
-                            .and_then(Value::as_str)
-                            .map(str::to_string);
-                    }
-                    Some("step_denied") => {
-                        step.outcome = Some(AuditStepOutcome::Denied);
-                        step.error_message = event
-                            .raw
-                            .get("reason")
-                            .and_then(Value::as_str)
-                            .map(str::to_string);
-                    }
-                    _ => {}
-                }
+                step.error_diagnostic = error_diagnostic.clone();
+                step.lock_wait_ms = *lock_wait_ms;
+                step.outcome = Some(
+                    outcome
+                        .as_deref()
+                        .map(AuditStepOutcome::from_recorded)
+                        .unwrap_or(AuditStepOutcome::Finished),
+                );
+                step.error_message = error_message.clone();
+            }
+            RunTrailBody::StepSkipped {
+                step_id: Some(step_id),
+                reason,
+            } => {
+                let Some(step) = started_step(&mut steps, &index_by_id, step_id) else {
+                    continue;
+                };
+                step.finished_at = event.timestamp;
+                step.outcome = Some(AuditStepOutcome::Skipped);
+                step.error_message = reason.clone();
+            }
+            RunTrailBody::StepDenied {
+                step_id: Some(step_id),
+                reason,
+            } => {
+                let Some(step) = started_step(&mut steps, &index_by_id, step_id) else {
+                    continue;
+                };
+                step.finished_at = event.timestamp;
+                step.outcome = Some(AuditStepOutcome::Denied);
+                step.error_message = reason.clone();
             }
             _ => {}
         }
@@ -120,46 +106,48 @@ pub(super) fn audit_steps_from_events(events: &[RunAuditEvent]) -> Vec<RunAuditS
     steps
 }
 
+/// The step a finish, skip or denial closes, when that step has started.
+fn started_step<'a>(
+    steps: &'a mut [RunAuditStep],
+    index_by_id: &HashMap<String, usize>,
+    step_id: &str,
+) -> Option<&'a mut RunAuditStep> {
+    let index = index_by_id.get(step_id).copied()?;
+    steps.get_mut(index)
+}
+
 /// Preserve each finished attempt instead of overwriting earlier completions
 /// when a step is resumed. Step indices still follow first-started order.
 pub(super) fn audit_step_attempts_from_events(events: &[RunAuditEvent]) -> Vec<RunAuditStep> {
     let mut starts = HashMap::new();
     let mut attempts = Vec::new();
     for event in events {
-        let Some(step_id) = event.raw.get("step_id").and_then(Value::as_str) else {
-            continue;
-        };
-        match event.body_kind.as_deref() {
-            Some("step_started") => {
+        match &event.body {
+            RunTrailBody::StepStarted {
+                step_id: Some(step_id),
+            } => {
                 let index = starts.len() as u32;
-                let start = starts.entry(step_id).or_insert((index, None));
+                let start = starts.entry(step_id.as_str()).or_insert((index, None));
                 start.1 = event.timestamp;
             }
-            Some("step_finished") => {
+            RunTrailBody::StepFinished {
+                step_id: Some(step_id),
+                outcome,
+                error_message,
+                error_diagnostic,
+                lock_wait_ms,
+            } => {
                 let index = starts.len() as u32;
-                let start = starts.entry(step_id).or_insert((index, None));
-                let outcome = event
-                    .raw
-                    .get("outcome")
-                    .and_then(Value::as_str)
-                    .map(AuditStepOutcome::from_recorded);
+                let start = starts.entry(step_id.as_str()).or_insert((index, None));
                 attempts.push(RunAuditStep {
-                    error_diagnostic: event
-                        .raw
-                        .get("error_diagnostic")
-                        .filter(|value| !value.is_null())
-                        .cloned(),
-                    lock_wait_ms: event.raw.get("lock_wait_ms").and_then(Value::as_u64),
+                    error_diagnostic: error_diagnostic.clone(),
+                    lock_wait_ms: *lock_wait_ms,
                     step_index: start.0,
-                    step_id: step_id.to_string(),
+                    step_id: step_id.clone(),
                     started_at: start.1,
                     finished_at: event.timestamp,
-                    outcome,
-                    error_message: event
-                        .raw
-                        .get("error_message")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
+                    outcome: outcome.as_deref().map(AuditStepOutcome::from_recorded),
+                    error_message: error_message.clone(),
                 });
                 start.1 = event.timestamp;
             }
@@ -197,16 +185,13 @@ where
     let mut invocation_parent_by_process_event = HashMap::<String, String>::new();
 
     for event in events {
-        match event.body_kind.as_deref() {
-            Some("cli_invocation_process") => {
-                let Some(pid) = event
-                    .raw
-                    .get("pid")
-                    .and_then(Value::as_u64)
-                    .and_then(|pid| u32::try_from(pid).ok())
-                else {
-                    continue;
-                };
+        match &event.body {
+            RunTrailBody::CliInvocationProcess {
+                run_id: event_run_id,
+                provider,
+                pid: Some(pid),
+                pid_start_time,
+            } => {
                 let step_index = event
                     .step_id
                     .as_ref()
@@ -216,27 +201,14 @@ where
                         .insert(event.event_id.clone(), parent_event_id.clone());
                 }
                 records.push(RunProviderProcess {
-                    run_id: event
-                        .raw
-                        .get("run_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or(run_id)
-                        .to_string(),
-                    event_id: event.event_id,
+                    run_id: event_run_id.as_deref().unwrap_or(run_id).to_string(),
+                    event_id: event.event_id.clone(),
                     ts: event.timestamp,
                     step_index,
-                    step_id: event.step_id,
-                    provider: event
-                        .raw
-                        .get("provider")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
-                    pid,
-                    pid_start_time: event
-                        .raw
-                        .get("pid_start_time")
-                        .and_then(Value::as_str)
-                        .map(str::to_string),
+                    step_id: event.step_id.clone(),
+                    provider: provider.clone(),
+                    pid: *pid,
+                    pid_start_time: pid_start_time.clone(),
                     finished: false,
                     exit_code: None,
                     timed_out: false,
@@ -251,15 +223,14 @@ where
                     stopped_descendants: Vec::new(),
                 });
             }
-            Some("cli_invocation_stopped_descendant") => {
-                let Some(pid) = event
-                    .raw
-                    .get("pid")
-                    .and_then(Value::as_u64)
-                    .and_then(|pid| u32::try_from(pid).ok())
-                else {
-                    continue;
-                };
+            RunTrailBody::CliInvocationStoppedDescendant {
+                pid: Some(pid),
+                pid_start_time,
+                command,
+                stopped_ms,
+                ended,
+                error,
+            } => {
                 let Some(record) = matching_provider_process_for_completion(
                     &mut records,
                     &invocation_parent_by_process_event,
@@ -267,30 +238,22 @@ where
                 ) else {
                     continue;
                 };
-                let text = |key: &str| {
-                    event
-                        .raw
-                        .get(key)
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                };
                 record.stopped_descendants.push(RunStoppedDescendant {
                     ts: event.timestamp,
-                    pid,
-                    pid_start_time: text("pid_start_time"),
-                    command: text("command"),
-                    stopped_ms: event.raw.get("stopped_ms").and_then(Value::as_u64),
-                    ended: event
-                        .raw
-                        .get("ended")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                    error: text("error"),
+                    pid: *pid,
+                    pid_start_time: pid_start_time.clone(),
+                    command: command.clone(),
+                    stopped_ms: *stopped_ms,
+                    ended: *ended,
+                    error: error.clone(),
                     // Probed below, for open children only.
                     still_stopped: false,
                 });
             }
-            Some("cli_invocation_activity") => {
+            RunTrailBody::CliInvocationActivity {
+                latest_message,
+                latest_message_truncated,
+            } => {
                 // Correlated exactly as a completion is: the open child the
                 // same invocation spawned.
                 let Some(record) = matching_provider_process_for_completion(
@@ -302,16 +265,12 @@ where
                 };
                 record.last_activity_at = event.timestamp.or(record.last_activity_at);
                 // A sample whose tail held no message keeps the previous one.
-                if let Some(message) = event.raw.get("latest_message").and_then(Value::as_str) {
-                    record.latest_message = Some(message.to_string());
-                    record.latest_message_truncated = event
-                        .raw
-                        .get("latest_message_truncated")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false);
+                if let Some(message) = latest_message {
+                    record.latest_message = Some(message.clone());
+                    record.latest_message_truncated = *latest_message_truncated;
                 }
             }
-            Some("cli_invocation_build_budget") => {
+            RunTrailBody::CliInvocationBuildBudget(waits) => {
                 let Some(record) = matching_provider_process_for_completion(
                     &mut records,
                     &invocation_parent_by_process_event,
@@ -319,9 +278,15 @@ where
                 ) else {
                     continue;
                 };
-                record.build_budget_waits = serde_json::from_value(event.raw.clone()).ok();
+                record.build_budget_waits = waits.clone();
             }
-            Some("cli_invocation_finished") => {
+            RunTrailBody::CliInvocationFinished {
+                exit_code,
+                timed_out,
+                duration_ms,
+                stdout_blob_ref,
+                ..
+            } => {
                 let Some(record) = matching_provider_process_for_completion(
                     &mut records,
                     &invocation_parent_by_process_event,
@@ -330,18 +295,10 @@ where
                     continue;
                 };
                 record.finished = true;
-                record.exit_code = event.raw.get("exit_code").and_then(Value::as_i64);
-                record.timed_out = event
-                    .raw
-                    .get("timed_out")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                record.duration_ms = event.raw.get("duration_ms").and_then(Value::as_u64);
-                record.stdout_blob_ref = event
-                    .raw
-                    .get("stdout_blob_ref")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
+                record.exit_code = *exit_code;
+                record.timed_out = *timed_out;
+                record.duration_ms = *duration_ms;
+                record.stdout_blob_ref = stdout_blob_ref.clone();
             }
             _ => {}
         }
@@ -445,28 +402,21 @@ fn matching_provider_process_for_completion<'a>(
 /// step that encloses it.
 pub(super) fn run_audit_event(
     event_id: String,
-    raw: Value,
-    events_by_id: &HashMap<String, Value>,
+    row: RunTrailRow,
+    events_by_id: &HashMap<String, RunTrailRow>,
 ) -> RunAuditEvent {
+    let step_id = enclosing_step_id(&row.envelope, events_by_id);
+    let RunTrailRow {
+        raw,
+        envelope,
+        body,
+    } = row;
     RunAuditEvent {
-        parent_event_id: raw
-            .get("parent_event_id")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        event_type: raw
-            .get("event_type")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        body_kind: raw
-            .get("body_kind")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        timestamp: raw
-            .get("ts")
-            .and_then(Value::as_str)
-            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-            .map(|value| value.with_timezone(&Utc)),
-        step_id: enclosing_step_id(&raw, events_by_id),
+        parent_event_id: envelope.parent_event_id,
+        event_type: envelope.event_type,
+        body,
+        timestamp: envelope.ts,
+        step_id,
         raw,
         event_id,
     }
@@ -474,22 +424,26 @@ pub(super) fn run_audit_event(
 
 /// The operator record of one `cli_invocation_finished` event, reading its
 /// stdout/stderr blobs whole or, given `blob_preview_max_bytes`, as a preview.
+/// `None` for any other kind of event.
 pub(super) fn cli_invocation_record(
     run_id: &str,
     event: RunAuditEvent,
     blob_store: &BlobStore,
     blob_preview_max_bytes: Option<usize>,
     step_index_by_id: &HashMap<String, u32>,
-) -> RunCliInvocationRecord {
-    let blob_ref = |key: &str| {
-        event
-            .raw
-            .get(key)
-            .and_then(Value::as_str)
-            .map(str::to_string)
+) -> Option<RunCliInvocationRecord> {
+    let RunTrailBody::CliInvocationFinished {
+        run_id: event_run_id,
+        provider,
+        exit_code,
+        timed_out,
+        duration_ms,
+        stdout_blob_ref,
+        stderr_blob_ref,
+    } = event.body
+    else {
+        return None;
     };
-    let stdout_blob_ref = blob_ref("stdout_blob_ref");
-    let stderr_blob_ref = blob_ref("stderr_blob_ref");
     let (stdout, stdout_blob_truncated) = read_invocation_blob(
         blob_store,
         stdout_blob_ref.as_deref(),
@@ -504,26 +458,13 @@ pub(super) fn cli_invocation_record(
         .step_id
         .as_ref()
         .and_then(|step_id| step_index_by_id.get(step_id).copied());
-    RunCliInvocationRecord {
-        run_id: event
-            .raw
-            .get("run_id")
-            .and_then(Value::as_str)
-            .unwrap_or(run_id)
-            .to_string(),
+    Some(RunCliInvocationRecord {
+        run_id: event_run_id.unwrap_or_else(|| run_id.to_string()),
         step_index,
-        provider: event
-            .raw
-            .get("provider")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        exit_code: event.raw.get("exit_code").and_then(Value::as_i64),
-        timed_out: event
-            .raw
-            .get("timed_out")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        duration_ms: event.raw.get("duration_ms").and_then(Value::as_u64),
+        provider,
+        exit_code,
+        timed_out,
+        duration_ms,
         event_id: event.event_id,
         ts: event.timestamp,
         step_id: event.step_id,
@@ -533,34 +474,28 @@ pub(super) fn cli_invocation_record(
         stderr,
         stdout_blob_truncated,
         stderr_blob_truncated,
-    }
+    })
 }
 
-fn enclosing_step_id(event: &Value, events: &HashMap<String, Value>) -> Option<String> {
-    if let Some(step_id) = event.get("step_id").and_then(Value::as_str) {
-        return Some(step_id.to_string());
+fn enclosing_step_id(
+    envelope: &RunTrailEnvelope,
+    events: &HashMap<String, RunTrailRow>,
+) -> Option<String> {
+    if let Some(step_id) = &envelope.step_id {
+        return Some(step_id.clone());
     }
 
-    let mut parent_id = event
-        .get("parent_event_id")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let mut parent_id = envelope.parent_event_id.clone();
     let mut seen = HashSet::new();
     while let Some(id) = parent_id {
         if !seen.insert(id.clone()) {
             return None;
         }
         let parent = events.get(&id)?;
-        if parent.get("body_kind").and_then(Value::as_str) == Some("step_started") {
-            return parent
-                .get("step_id")
-                .and_then(Value::as_str)
-                .map(str::to_string);
+        if let RunTrailBody::StepStarted { step_id } = &parent.body {
+            return step_id.clone();
         }
-        parent_id = parent
-            .get("parent_event_id")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        parent_id = parent.envelope.parent_event_id.clone();
     }
     None
 }
@@ -590,127 +525,108 @@ pub(super) fn recovery_attempts_from_partitioned_rows(
 }
 
 fn recovery_event_from_row(row: &orbit_store::V2AuditEventRow) -> Option<RunAuditEvent> {
-    let raw: Value = serde_json::from_str(&row.payload_json).ok()?;
-    let event_id = raw.get("event_id").and_then(Value::as_str)?.to_string();
-    Some(RunAuditEvent {
-        parent_event_id: raw
-            .get("parent_event_id")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        event_type: raw
-            .get("event_type")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        body_kind: raw
-            .get("body_kind")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        timestamp: raw
-            .get("ts")
-            .and_then(Value::as_str)
-            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-            .map(|value| value.with_timezone(&Utc))
-            .or(Some(row.ts)),
-        step_id: raw
-            .get("step_id")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+    let RunTrailRow {
         raw,
-        event_id,
+        envelope,
+        body,
+    } = RunTrailRow::parse(&row.payload_json)?;
+    Some(RunAuditEvent {
+        event_id: envelope.event_id?,
+        parent_event_id: envelope.parent_event_id,
+        event_type: envelope.event_type,
+        body,
+        timestamp: envelope.ts.or(Some(row.ts)),
+        step_id: envelope.step_id,
+        raw,
     })
 }
 
 fn recovery_attempt_from_event(run_id: &str, event: RunAuditEvent) -> Option<RunRecoveryAttempt> {
-    let failed_step_id = event.raw.get("step_id")?.as_str()?.to_string();
-    if event.body_kind.as_deref() == Some("final_recovery_attempted") {
-        let outcome = event.raw.get("outcome")?.as_str()?.to_string();
-        let detail = event
-            .raw
-            .get("detail")
-            .and_then(Value::as_str)
-            .map(bounded_recovery_diagnostic);
-        return Some(RunRecoveryAttempt {
-            run_id: run_id.to_string(),
-            event_id: event.event_id,
-            attempted_at: event.timestamp,
-            failed_step_id,
-            recovery_activity: event
-                .raw
-                .get("final_recovery_activity")?
-                .as_str()?
-                .to_string(),
-            retry_admitted: outcome == "resume",
+    match event.body {
+        RunTrailBody::FinalRecoveryAttempted {
+            step_id,
+            final_recovery_activity,
             outcome,
-            failure_phase: None,
-            diagnostic: detail.as_ref().map(|(text, _)| text.clone()),
-            diagnostic_truncated: detail.as_ref().is_some_and(|(_, truncated)| *truncated),
-            decision: event
-                .raw
-                .get("decision")
-                .and_then(Value::as_str)
-                .map(|verdict| RunRecoveryDecision {
+            decision,
+            detail,
+        } => {
+            let failed_step_id = step_id?;
+            let outcome = outcome?;
+            let recovery_activity = final_recovery_activity?;
+            let detail = detail.as_deref().map(bounded_recovery_diagnostic);
+            Some(RunRecoveryAttempt {
+                run_id: run_id.to_string(),
+                event_id: event.event_id,
+                attempted_at: event.timestamp,
+                failed_step_id,
+                recovery_activity,
+                retry_admitted: outcome == "resume",
+                outcome,
+                failure_phase: None,
+                diagnostic: detail.as_ref().map(|(text, _)| text.clone()),
+                diagnostic_truncated: detail.as_ref().is_some_and(|(_, truncated)| *truncated),
+                decision: decision.map(|verdict| RunRecoveryDecision {
                     status: "verified".to_string(),
-                    verdict: Some(verdict.to_string()),
+                    verdict: Some(verdict),
                     detail: detail.map(|(text, _)| text),
                 }),
-        });
-    }
-    let recovery_activity = event.raw.get("recovery_activity")?.as_str()?.to_string();
-    let recovery_succeeded = event.raw.get("recovery_succeeded")?.as_bool()?;
-    let (diagnostic, diagnostic_truncated) = event
-        .raw
-        .get("error_message")
-        .and_then(Value::as_str)
-        .map(bounded_recovery_diagnostic)
-        .map_or((None, false), |(diagnostic, truncated)| {
-            (Some(diagnostic), truncated)
-        });
-    let decision = event.raw.get("decision").and_then(|decision| {
-        Some((
-            RunRecoveryDecision {
-                status: decision.get("status")?.as_str()?.to_string(),
-                verdict: decision
-                    .get("verdict")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                detail: decision
-                    .get("detail")
-                    .and_then(Value::as_str)
-                    .map(|detail| bounded_recovery_diagnostic(detail).0),
-            },
-            decision.get("retry_admitted")?.as_bool()?,
-        ))
-    });
-    // A historical or slotless completion kept the single re-attempt.
-    let retry_admitted =
-        recovery_succeeded && decision.as_ref().is_none_or(|(_, admitted)| *admitted);
+            })
+        }
+        RunTrailBody::StepRecoveryAttempted {
+            run_id: event_run_id,
+            step_id,
+            recovery_activity,
+            recovery_succeeded,
+            failure_phase,
+            error_message,
+            decision,
+        } => {
+            let failed_step_id = step_id?;
+            let recovery_activity = recovery_activity?;
+            let recovery_succeeded = recovery_succeeded?;
+            let (diagnostic, diagnostic_truncated) = error_message
+                .as_deref()
+                .map(bounded_recovery_diagnostic)
+                .map_or((None, false), |(diagnostic, truncated)| {
+                    (Some(diagnostic), truncated)
+                });
+            let decision = decision.map(|decision| {
+                (
+                    RunRecoveryDecision {
+                        status: decision.status,
+                        verdict: decision.verdict,
+                        detail: decision
+                            .detail
+                            .as_deref()
+                            .map(|detail| bounded_recovery_diagnostic(detail).0),
+                    },
+                    decision.retry_admitted,
+                )
+            });
+            // A historical or slotless completion kept the single re-attempt.
+            let retry_admitted =
+                recovery_succeeded && decision.as_ref().is_none_or(|(_, admitted)| *admitted);
 
-    Some(RunRecoveryAttempt {
-        run_id: event
-            .raw
-            .get("run_id")
-            .and_then(Value::as_str)
-            .unwrap_or(run_id)
-            .to_string(),
-        event_id: event.event_id,
-        attempted_at: event.timestamp,
-        failed_step_id,
-        recovery_activity,
-        outcome: if recovery_succeeded {
-            "succeeded".to_string()
-        } else {
-            "failed".to_string()
-        },
-        failure_phase: event
-            .raw
-            .get("failure_phase")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        diagnostic,
-        diagnostic_truncated,
-        decision: decision.map(|(decision, _)| decision),
-        retry_admitted,
-    })
+            Some(RunRecoveryAttempt {
+                run_id: event_run_id.unwrap_or_else(|| run_id.to_string()),
+                event_id: event.event_id,
+                attempted_at: event.timestamp,
+                failed_step_id,
+                recovery_activity,
+                outcome: if recovery_succeeded {
+                    "succeeded".to_string()
+                } else {
+                    "failed".to_string()
+                },
+                failure_phase,
+                diagnostic,
+                diagnostic_truncated,
+                decision: decision.map(|(decision, _)| decision),
+                retry_admitted,
+            })
+        }
+        _ => None,
+    }
 }
 
 fn bounded_recovery_diagnostic(raw: &str) -> (String, bool) {

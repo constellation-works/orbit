@@ -340,7 +340,12 @@ fn a_cancelled_leaf_cancels_the_gate_and_auto_parents_that_wait_on_it() {
             .unwrap();
         let finished = events
             .iter()
-            .find(|event| event.body_kind.as_deref() == Some("run_finished"))
+            .find(|event| {
+                matches!(
+                    event.body,
+                    orbit_core::runtime::audit::run::RunTrailBody::RunFinished { .. }
+                )
+            })
             .expect("the cancelled parent must have a terminal audit event");
         assert_eq!(finished.raw["outcome"], "cancelled", "{:?}", finished.raw);
         assert!(

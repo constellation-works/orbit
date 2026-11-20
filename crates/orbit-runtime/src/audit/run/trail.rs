@@ -10,6 +10,7 @@ use serde_json::Value;
 use crate::RuntimeKernel;
 use orbit_store::V2AuditEventFilter;
 
+use super::body::{RunTrailBody, RunTrailRow};
 use super::outcome::AuditStepOutcome;
 use super::projection::{
     audit_step_attempts_from_events, audit_steps_from_events, cli_invocation_record,
@@ -23,7 +24,8 @@ pub struct RunAuditEvent {
     pub event_id: String,
     pub parent_event_id: Option<String>,
     pub event_type: Option<String>,
-    pub body_kind: Option<String>,
+    /// The payload's body, parsed once when the row was read.
+    pub body: RunTrailBody,
     pub timestamp: Option<DateTime<Utc>>,
     pub step_id: Option<String>,
 }
@@ -469,13 +471,15 @@ impl RuntimeKernel {
         let events = self.collect_run_audit_events(run_id)?;
         let steps = audit_steps_from_events(&events);
         let script_executions = super::scripts::script_executions_from_events(run_id, &events);
+        // The newest run finish decides, even when it carries no diagnostic.
         let error_diagnostic = events
             .iter()
             .rev()
-            .find(|event| event.body_kind.as_deref() == Some("run_finished"))
-            .and_then(|event| event.raw.get("error_diagnostic"))
-            .filter(|value| !value.is_null())
-            .cloned();
+            .find_map(|event| match &event.body {
+                RunTrailBody::RunFinished { error_diagnostic } => Some(error_diagnostic.clone()),
+                _ => None,
+            })
+            .flatten();
         let provider_processes =
             provider_processes_from_events(run_id, events, &step_index_by_id(&steps), probe);
         Ok(RunAuditView {
@@ -540,27 +544,7 @@ impl RuntimeKernel {
             }
             offset += page_len;
         }
-        let mut events_by_id = HashMap::new();
-        let mut ordered_ids = Vec::new();
-        for row in rows.into_iter().rev() {
-            let value: Value = match serde_json::from_str(&row.payload_json) {
-                Ok(value) => value,
-                Err(_) => continue,
-            };
-            let Some(event_id) = value.get("event_id").and_then(Value::as_str) else {
-                continue;
-            };
-            ordered_ids.push(event_id.to_string());
-            events_by_id.insert(event_id.to_string(), value);
-        }
-
-        Ok(ordered_ids
-            .into_iter()
-            .filter_map(|event_id| {
-                let raw = events_by_id.get(&event_id).cloned()?;
-                Some(run_audit_event(event_id, raw, &events_by_id))
-            })
-            .collect())
+        Ok(run_audit_events_from_rows(rows.into_iter().rev()))
     }
 
     /// The newest valid timestamp carried by the newest v2 envelope rows for
@@ -632,27 +616,7 @@ impl RuntimeKernel {
             offset += page_len;
         }
 
-        let mut events_by_id = HashMap::new();
-        let mut ordered_ids = Vec::new();
-        for row in rows {
-            let value: Value = match serde_json::from_str(&row.payload_json) {
-                Ok(value) => value,
-                Err(_) => continue,
-            };
-            let Some(event_id) = value.get("event_id").and_then(Value::as_str) else {
-                continue;
-            };
-            ordered_ids.push(event_id.to_string());
-            events_by_id.insert(event_id.to_string(), value);
-        }
-
-        Ok(ordered_ids
-            .into_iter()
-            .filter_map(|event_id| {
-                let raw = events_by_id.get(&event_id).cloned()?;
-                Some(run_audit_event(event_id, raw, &events_by_id))
-            })
-            .collect())
+        Ok(run_audit_events_from_rows(rows))
     }
 
     /// Recover the most recent bounded recovery-attempt evidence for a run.
@@ -799,13 +763,13 @@ impl RuntimeKernel {
         let mut records = Vec::new();
 
         for event in events {
-            if event.body_kind.as_deref() != Some("cli_invocation_finished")
+            if !matches!(event.body, RunTrailBody::CliInvocationFinished { .. })
                 || seen_event_ids.contains(&event.event_id)
                 || step_id.is_some_and(|step_id| event.step_id.as_deref() != Some(step_id))
             {
                 continue;
             }
-            records.push(cli_invocation_record(
+            records.extend(cli_invocation_record(
                 run_id,
                 event,
                 &blob_store,
@@ -823,4 +787,32 @@ impl RuntimeKernel {
     pub(super) fn v2_audit_blob_root(&self) -> PathBuf {
         self.data_root().join("state").join("audit").join("blobs")
     }
+}
+
+/// Parse trail rows given in trail order into events. Rows that are not JSON
+/// or carry no string `event_id` are dropped; a repeated `event_id` keeps its
+/// last payload at every position it appears.
+fn run_audit_events_from_rows(
+    rows: impl IntoIterator<Item = orbit_store::V2AuditEventRow>,
+) -> Vec<RunAuditEvent> {
+    let mut events_by_id = HashMap::new();
+    let mut ordered_ids = Vec::new();
+    for row in rows {
+        let Some(parsed) = RunTrailRow::parse(&row.payload_json) else {
+            continue;
+        };
+        let Some(event_id) = parsed.envelope.event_id.clone() else {
+            continue;
+        };
+        ordered_ids.push(event_id.clone());
+        events_by_id.insert(event_id, parsed);
+    }
+
+    ordered_ids
+        .into_iter()
+        .filter_map(|event_id| {
+            let row = events_by_id.get(&event_id).cloned()?;
+            Some(run_audit_event(event_id, row, &events_by_id))
+        })
+        .collect()
 }

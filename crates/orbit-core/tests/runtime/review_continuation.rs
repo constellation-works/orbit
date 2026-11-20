@@ -686,7 +686,7 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
             .unwrap();
         assert!(
             !events.iter().any(|event| matches!(
-                event.body_kind.as_deref(),
+                event.raw["body_kind"].as_str(),
                 Some("step_retry" | "step_recovery_attempted" | "final_recovery_attempted")
             )),
             "ORB-14313: evidence holds must bypass retry and both recovery stages"
