@@ -145,6 +145,28 @@ pub fn admit_gh_request(caller: GithubCaller, request: &ExecRequest) -> Result<(
     )
 }
 
+/// [`admit_gh_request`] for a caller that spawns the child itself: returns
+/// `request` with only the timeout budget left after admission (lock waits and
+/// the rate-limit probe included), so the child cannot outlive the original
+/// budget. A finite budget exhausted before the child could start is the typed
+/// [`OrbitError::ProcessTimeout`], and the caller must not spawn. A request
+/// without a finite budget comes back unchanged.
+pub fn admit_gh_request_within_budget(
+    caller: GithubCaller,
+    request: &ExecRequest,
+) -> Result<ExecRequest, OrbitError> {
+    let exhausted = || OrbitError::ProcessTimeout {
+        timeout_ms: request.timeout_ms.unwrap_or_default(),
+        detail: "the request's timeout budget ran out before the process could start".to_string(),
+    };
+    if request.timeout_ms == Some(0) {
+        return Err(exhausted());
+    }
+    let deadline = gh_request_deadline(request, Instant::now());
+    admit_by_deadline(caller, request, deadline)?;
+    remaining_request_budget(request, deadline).ok_or_else(exhausted)
+}
+
 fn admit_by_deadline(
     caller: GithubCaller,
     request: &ExecRequest,

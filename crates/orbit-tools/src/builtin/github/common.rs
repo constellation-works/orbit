@@ -33,15 +33,14 @@ pub(crate) fn quota_caller(ctx: &ToolContext) -> crate::github_quota::GithubCall
 }
 
 /// The `read_run_log_guarded` guard that admits each `gh` subprocess of a
-/// `github.*` tool call against the host's quota.
+/// `github.*` tool call against the host's quota. It returns the request with
+/// only the timeout budget left after admission, or the typed timeout when
+/// admission spent it all.
 pub(crate) fn quota_admission(
     ctx: &ToolContext,
 ) -> impl Fn(&ExecRequest) -> Result<ExecRequest, OrbitError> {
     let caller = quota_caller(ctx);
-    move |request| {
-        crate::github_quota::admit_gh_request(caller, request)?;
-        Ok(request.clone())
-    }
+    move |request| crate::github_quota::admit_gh_request_within_budget(caller, request)
 }
 
 pub(super) fn gh_schema(name: &str, description: &str, parameters: Vec<ToolParam>) -> ToolSchema {

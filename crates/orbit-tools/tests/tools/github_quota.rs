@@ -557,6 +557,75 @@ fn slow_rate_limit_probe_bounds_to_request_timeout_and_skips_expired_request() {
     assert!(gh_zero.calls().is_empty());
 }
 
+/// Regression [ORB-26103]: a caller that spawns the child itself through
+/// `admit_gh_request_within_budget` gets only the budget left after admission,
+/// and no request to spawn once admission spent all of it. A record lock held
+/// 300 ms of a 5 s budget leaves under 4.8 s; an unresponsive probe under a
+/// 60 ms budget leaves nothing, and the unguarded zero budget never starts.
+#[test]
+fn admission_returns_only_the_budget_left_and_never_a_request_past_it() {
+    let policy = GithubQuotaPolicy::default();
+
+    let records = TempDir::new().unwrap();
+    let gh = FakeGh::new("{}", "ok");
+    let mut request = gh.request(&["run", "view", "123"]);
+    request.timeout_ms = Some(5_000);
+    let account = github_quota::request_account_key(&request);
+    let record_path = records.path().join(format!("{account}.json"));
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let holder = std::thread::spawn(move || {
+        let _lock = orbit_common::fs::io::hold_exclusive_file_lock_options(
+            &record_path,
+            "contending quota holder",
+            orbit_common::fs::io::FileLockOptions::default(),
+        )
+        .unwrap();
+        held_tx.send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+    });
+    held_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the holder never took the account lock");
+    let admitted = github_quota::with_scoped_guard(store(records.path()), policy, || {
+        github_quota::admit_gh_request_within_budget(GithubCaller::Delivery, &request)
+    })
+    .expect("a contended lock that frees inside the budget admits the request");
+    holder.join().unwrap();
+    let left = admitted.timeout_ms.expect("a finite budget stays finite");
+    assert!(
+        (1..=4_800).contains(&left),
+        "the 300 ms of lock contention must come off the 5 s budget, left {left} ms"
+    );
+
+    let records = TempDir::new().unwrap();
+    let gh = FakeGh::new("hang", "ok");
+    let mut slow = gh.request(&["run", "view", "123"]);
+    slow.timeout_ms = Some(60);
+    let error = github_quota::with_scoped_guard(store(records.path()), policy, || {
+        github_quota::admit_gh_request_within_budget(GithubCaller::Delivery, &slow)
+    })
+    .expect_err("a budget spent by the probe leaves no request to start");
+    assert!(
+        matches!(
+            error,
+            orbit_common::OrbitError::ProcessTimeout { timeout_ms: 60, .. }
+        ),
+        "{error:?}"
+    );
+    assert_eq!(gh.calls(), vec!["api rate_limit".to_string()]);
+
+    let mut zero = gh.request(&["run", "view", "456"]);
+    zero.timeout_ms = Some(0);
+    let _ = std::fs::remove_file(gh.dir.path().join("calls"));
+    let error = github_quota::admit_gh_request_within_budget(GithubCaller::Delivery, &zero)
+        .expect_err("a zero budget never starts");
+    assert!(
+        matches!(error, orbit_common::OrbitError::ProcessTimeout { .. }),
+        "{error:?}"
+    );
+    assert!(gh.calls().is_empty());
+}
+
 /// Regression [ORB-26096]: the quota record's lock waits belong to the
 /// request's deadline. A second process holding the account lock must not keep
 /// a 40 ms request in a fresh 30-second acquisition: the request returns its
