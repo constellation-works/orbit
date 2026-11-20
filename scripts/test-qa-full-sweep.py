@@ -1732,18 +1732,47 @@ def untracked_entry_identity(entry: Path):
     return f"other-{stat.S_IFMT(status.st_mode):o}", ""
 
 
+def porcelain_z_entries(output: bytes):
+    """Parse `git status --porcelain=v1 -z` into (code, path, origin) tuples.
+
+    With -z, git never C-quotes a path, so spaces and non-ASCII bytes come
+    through unchanged. A rename or copy record is followed by its origin path
+    as its own NUL-terminated field; that field is consumed here and never
+    read as a record of its own.
+    """
+    fields = output.split(b"\0")
+    entries = []
+    index = 0
+    while index < len(fields):
+        field = fields[index]
+        index += 1
+        if not field:
+            continue
+        code = os.fsdecode(field[:2])
+        path = os.fsdecode(field[3:])
+        origin = None
+        if "R" in code or "C" in code:
+            origin = os.fsdecode(fields[index])
+            index += 1
+        entries.append((code, path, origin))
+    return entries
+
+
 def candidate_source(repo: Path, excluded_paths=()):
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
     diff = subprocess.check_output(["git", "diff", "--binary", "HEAD"], cwd=repo)
-    status = subprocess.check_output(["git", "status", "--porcelain=v1"], cwd=repo, text=True)
+    status_output = subprocess.check_output(["git", "status", "--porcelain=v1", "-z"], cwd=repo)
     excluded = tuple(str(path) for path in excluded_paths)
 
     def is_excluded(path):
         return any(path == excluded_path or path.startswith(f"{excluded_path}/")
                    for excluded_path in excluded)
 
-    status_lines = [line for line in status.splitlines()
-                    if not is_excluded(line[3:].split(" -> ")[-1] if len(line) > 3 else line)]
+    entries = [(code, path, origin) for code, path, origin in porcelain_z_entries(status_output)
+               if not is_excluded(path)]
+    status_lines = [f"{code} {origin} -> {path}" if origin else f"{code} {path}"
+                    for code, path, origin in entries]
+    changed_paths = [path for _, path, _ in entries]
     untracked_output = subprocess.check_output(
         ["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=repo)
     untracked = []
@@ -1761,7 +1790,7 @@ def candidate_source(repo: Path, excluded_paths=()):
                            "untracked": untracked}, sort_keys=True).encode()
     return {"head": head, "diff_sha256": hashlib.sha256(diff).hexdigest(),
             "untracked": untracked, "candidate_id": hashlib.sha256(material).hexdigest(),
-            "status": status_lines}
+            "status": status_lines, "changed_paths": changed_paths}
 
 
 def execute_retired_case_commands(scenario, *, repo, env, candidate_id, excluded_paths):
@@ -4195,10 +4224,11 @@ def self_test():
     if cli_help_children("Usage: orbit task show <ID>\nArguments:\n  id  Task ID\n"):
         raise AssertionError("leaf CLI arguments were mistaken for commands")
     command = ["cargo", "test", "--lib", "renamed_filter"]
-    # Each fixture carries a valid target announcement and a complete outer
-    # suite, so it reaches the guard it names instead of failing on the
-    # missing-announcement precondition: removing the zero-passing,
-    # FAILED-summary or malformed-summary guard lets its fixture pass.
+    # The three non-empty fixtures each carry a valid target announcement and
+    # an outer `running` frame, so each reaches the guard it names: removing
+    # the zero-passing, FAILED-summary or malformed-summary guard lets its
+    # fixture pass. The empty-output fixture has no outer report at all, so
+    # it is rejected by the generic missing-report precondition instead.
     cargo_stderr = "     Running unittests src/lib.rs (target/debug/deps/fixture)\n"
     for output in ("",
                    "running 0 tests\n"
@@ -4398,6 +4428,25 @@ def self_test():
             raise AssertionError("candidate exclusion dropped an unrelated candidate input")
         if any("retained-evidence" in line for line in excluded_source["status"]):
             raise AssertionError("retained browser evidence leaked into candidate status")
+
+        # git status C-quotes names with spaces or non-ASCII bytes and reports
+        # a rename as "old -> new". The changed paths must carry the real
+        # names, or main() hashes nothing for them and the report omits them.
+        with tempfile.TemporaryDirectory() as path_temp:
+            path_repo = Path(path_temp)
+            git_identity = ["-c", "user.name=qa-full-sweep", "-c", "user.email=qa@example.invalid",
+                            "-c", "commit.gpgsign=false"]
+            (path_repo / "old.md").write_text("moved\n", encoding="utf-8")
+            for git_args in (["init", "-q"], ["add", "old.md"],
+                             [*git_identity, "commit", "-q", "-m", "fixture"],
+                             ["mv", "old.md", "renamed.md"]):
+                subprocess.run(["git", "-C", str(path_repo), *git_args],
+                               check=True, capture_output=True, text=True)
+            (path_repo / "with space.md").write_text("spaced\n", encoding="utf-8")
+            (path_repo / "café.md").write_text("accented\n", encoding="utf-8")
+            changed = set(candidate_source(path_repo)["changed_paths"])
+            if changed != {"renamed.md", "with space.md", "café.md"}:
+                raise AssertionError(f"candidate changed paths drop quoted or renamed files: {sorted(changed)}")
 
         # Exercise the shell boundary too: python3 is a capture fixture, so no
         # full sweep or candidate build is launched by this regression check.
@@ -4943,10 +4992,9 @@ def main():
                             "outcome":"NOT_RUN", "assertions":[], "candidate_id":candidate_id})
     full_pass, decision_failures = scenario_decision(inventory, results, candidate_id)
     full_pass = full_pass and not errors
-    changed_paths = [line[3:] for line in candidate["status"] if " -> " not in line[3:]]
     changed_hashes = {
         path: hashlib.sha256((repo / path).read_bytes()).hexdigest()
-        for path in changed_paths if (repo / path).is_file()
+        for path in candidate["changed_paths"] if (repo / path).is_file()
     }
     report = {
         "schema_version": 2, "generated_at": datetime.now(timezone.utc).isoformat(),
