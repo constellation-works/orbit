@@ -173,7 +173,8 @@ fn admit_by_deadline(
 /// Record what `result` of an admitted `request` says about the quota: an
 /// authenticated primary rate-limit answer holds every read of its resource
 /// on the host until the reset. Waits for the shared record no longer than
-/// `request`'s own timeout budget.
+/// `request`'s own timeout budget, or up to the 30-second file-lock default
+/// when `request` has none.
 pub fn observe_gh_result(request: &ExecRequest, result: &ExecutionResult) {
     observe_gh_result_by_deadline(
         request,
@@ -184,7 +185,8 @@ pub fn observe_gh_result(request: &ExecRequest, result: &ExecutionResult) {
 
 /// [`observe_gh_result`] bounded by `deadline` (from [`gh_request_deadline`])
 /// instead of a fresh `request` budget, for a caller that spent part of the
-/// budget before the child's answer arrived. `None` waits without a bound.
+/// budget before the child's answer arrived. `None` leaves each record-lock
+/// wait at the shared file-lock default of 30 seconds.
 pub fn observe_gh_result_by_deadline(
     request: &ExecRequest,
     result: &ExecutionResult,
