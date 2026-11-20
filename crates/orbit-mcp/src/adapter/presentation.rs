@@ -64,7 +64,7 @@ pub(super) fn tools(_federated: bool) -> Vec<Tool> {
             },
             "workspace": { "type": "string", "minLength": 1, "description": WORKSPACE_SELECTOR_DESCRIPTION },
             "id": { "type": "string", "minLength": 1, "description": "Public task key or run ID." },
-            "kind": {"type":"string", "enum":["task","run"], "default":"task"}
+            "kind": {"type":"string", "enum":["task","run"], "default":"task", "description": "Whether `id` is a task or a run."}
         },
         "required": ["action"],
         "dependentRequired": { "id": ["workspace"], "kind": ["workspace", "id"] }

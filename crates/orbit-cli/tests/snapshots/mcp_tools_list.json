@@ -716,15 +716,15 @@
           "items": {
             "type": "string"
           },
-          "description": "No pagination with a projection on a claimed read."
+          "description": "Fields to return, keyed (even one)."
         },
         "field": {
           "type": "string",
-          "description": "No pagination with a projection on a claimed read."
+          "description": "Alias for `fields` taking one field."
         },
         "run_id": {
           "type": "string",
-          "description": "No pagination with a delivery selector on a claimed read."
+          "description": "Delivery run to report."
         },
         "workspace": {
           "type": "string",
@@ -736,19 +736,19 @@
         },
         "limit": {
           "type": "integer",
-          "description": "No projection with pagination on a claimed read."
+          "description": "Detail page size for a paginated claimed read."
         },
         "comments_offset": {
           "type": "integer",
-          "description": "No projection with pagination on a claimed read."
+          "description": "Comment offset for a paginated claimed read."
         },
         "history_offset": {
           "type": "integer",
-          "description": "No projection with pagination on a claimed read."
+          "description": "History offset for a paginated claimed read."
         },
         "artifacts_offset": {
           "type": "integer",
-          "description": "No projection with pagination on a claimed read."
+          "description": "Artifact metadata offset for a paginated claimed read."
         }
       },
       "required": [
