@@ -17,7 +17,22 @@ pub const JSON_RPC_INVALID_PARAMS_CODE: i64 = -32602;
 /// never searched inside a formatted message.
 const UNKNOWN_INTERNAL_DRAIN_OPERATION_RPC_MESSAGE: &str = "unknown internal drain operation";
 
+/// The phrase a store refusal carries when an observation-only open found a
+/// supported registry that still owes a writable migration or setup step, as
+/// opposed to a registry this binary cannot read at all. The store builds its
+/// messages from this constant so [`OrbitError::owes_writable_store_open`]
+/// cannot drift from them.
+pub const STORE_WRITABLE_OPEN_OWED_PHRASE: &str = "the database is read-only";
+
 impl OrbitError {
+    /// Whether this is a store refusal from an observation-only open whose
+    /// remedy is one ordinary writable open (for example `orbit task list`).
+    /// An unsupported or corrupt store is a store error too, but a writable
+    /// open cannot repair it.
+    pub fn owes_writable_store_open(&self) -> bool {
+        matches!(self, OrbitError::Store(message) if message.contains(STORE_WRITABLE_OPEN_OWED_PHRASE))
+    }
+
     /// Stable machine-readable code shared by Orbit error surfaces.
     pub fn wire_code(&self) -> &str {
         match self {

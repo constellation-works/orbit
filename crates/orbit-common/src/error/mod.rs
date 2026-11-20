@@ -5,7 +5,8 @@ mod orbit_error;
 mod reader;
 
 pub use classification::{
-    JSON_RPC_INVALID_PARAMS_CODE, LOCK_BUSY_ERROR_CODE, is_lock_busy_message,
+    JSON_RPC_INVALID_PARAMS_CODE, LOCK_BUSY_ERROR_CODE, STORE_WRITABLE_OPEN_OWED_PHRASE,
+    is_lock_busy_message,
 };
 pub use kinds::{
     ArtifactOrigin, ArtifactOriginMode, CandidateAbsorbed, ClaimRefusalKind, ConflictedFile,

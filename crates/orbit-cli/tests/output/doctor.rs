@@ -208,7 +208,8 @@ fn doctor_admission_receipts_reports_storage_and_compacts() {
 }
 /// STD-01 §R31: launching bare `doctor` observes the registry before it
 /// audits. A registry that is gone stays gone and one that needs migration
-/// stays at its recorded schema, while the report names the setup step.
+/// stays at its recorded schema, while the report names the setup step. A
+/// registry this binary cannot read keeps the store's upgrade guidance.
 #[test]
 fn bare_doctor_startup_neither_creates_nor_migrates_the_task_registry() {
     if in_child("doctor::bare_doctor_startup_neither_creates_nor_migrates_the_task_registry") {
@@ -291,6 +292,29 @@ fn bare_doctor_startup_neither_creates_nor_migrates_the_task_registry() {
     assert!(
         !registry.exists(),
         "bare doctor must not create the registry"
+    );
+
+    // A registry newer than this binary reads: a writable open cannot migrate
+    // it, so the report must keep the upgrade guidance and not name the
+    // migration step.
+    Connection::open(&registry)
+        .expect("create registry")
+        .execute_batch("PRAGMA user_version = 9")
+        .expect("stamp unsupported registry version");
+    let out = command(&f)
+        .args(["doctor", "--json"])
+        .output()
+        .expect("doctor");
+    let report =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{report}");
+    assert!(
+        report.contains("Upgrade the selected Orbit executable"),
+        "the report keeps the store's upgrade guidance: {report}"
+    );
+    assert!(
+        !report.contains("orbit task list"),
+        "an unsupported registry cannot be migrated by a writable open: {report}"
     );
 }
 /// ORB-16351: `clock-unit: ok` requires an enabled, active systemd timer.
