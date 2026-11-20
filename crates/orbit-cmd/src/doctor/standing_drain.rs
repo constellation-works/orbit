@@ -19,6 +19,7 @@ pub(super) fn standing_drain_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResul
             ),
         );
     }
+    let mut intent_unreadable = false;
     let intent = match runtime.workspace_drain_intent() {
         Ok(None) => "off".to_string(),
         Ok(Some(record)) => {
@@ -37,11 +38,20 @@ pub(super) fn standing_drain_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResul
                 }
             }
         }
-        Err(error) => format!("unreadable ({error})"),
+        Err(error) => {
+            intent_unreadable = true;
+            format!("unreadable ({error})")
+        }
     };
     match runtime.drain_idle_with_work(IDLE_WITH_WORK_DAYS) {
+        // An intent this binary cannot read is never a healthy row, even when
+        // the idle measure reads (ORB-26041).
         Ok(idle) => row(
-            WorkspaceDoctorStatus::Ok,
+            if intent_unreadable {
+                WorkspaceDoctorStatus::Warning
+            } else {
+                WorkspaceDoctorStatus::Ok
+            },
             format!("Drain intent: {intent}. {}", idle_sentence(&idle)),
         ),
         Err(error) => row(
