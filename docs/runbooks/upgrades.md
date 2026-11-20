@@ -382,10 +382,13 @@ neither step recovery nor final recovery runs. The run settles like a step-bound
 interrupt:
 
 - **Claimed leaf:** the claim is released as `failure=transient` with the candidate
-  on the release. A claimed PR leaf pushes that candidate to a durable ref first. The
-  task returns to the owner's backlog, and its next claim resumes the candidate under
-  the placement rule below. As with any transient release, the leaf's crew sits out
-  the rest of that drain's window.
+  on the release. A claimed PR leaf that already published its head reuses it: an
+  unchanged published head needs no extra ref and the release names it as
+  published. A tip past that head, or an unpublished tip, is pushed to a durable
+  ref first (`refs/orbit/candidates/<task-id>/<run-id>`). The task returns to the
+  owner's backlog, and its next claim resumes the candidate under the placement
+  rule below. As with any transient release, the leaf's crew sits out the rest of
+  that drain's window.
 - **Owner `task_pr_pipeline` run:** the failure handoff commits what the agent left and
   pushes it to its durable ref, `refs/orbit/candidates/<task-id>/<run-id>`, on `origin`.
   It opens no PR. Run finalization returns the task to the backlog
@@ -393,16 +396,30 @@ interrupt:
   settles.
 
 **Which host resumes a refused candidate.** The push can be refused. The hold still
-succeeds, and the candidate then exists only on the host that held it:
+succeeds, and the candidate then exists only on the host that held it. The history
+entry that records it depends on who held the candidate:
 
-- A durable candidate resumes on any host once the upgrade settles. The task's
-  `candidate_held` history entry carries its `durable_ref`.
-- A host-local candidate resumes only on the holding host, and only while that host's
-  repository still has the commit. A run or claim on any other host starts the task
-  afresh. The entry's note reads `host-local: <diagnostic>`, and its `machine_id` names
-  the holding machine when the host has an identity. Pushing the commit to `origin` by
-  hand does not make it resumable elsewhere, because placement reads the recorded
-  `durable_ref`.
+- **Owner run:** the task's `candidate_held` entry, plus the `## Orbit upgrade`
+  comment. Only an owner `task_pr_pipeline` run writes them.
+- **Claimed leaf:** the owner's task history carries a `claim_candidate_kept` entry,
+  written when the claim's release settles, and no `candidate_held` entry or
+  `## Orbit upgrade` comment. Its note tells the cases apart:
+  `durable at <ref>` (pushed); neither `durable at` nor `only on` (the leaf's own
+  published head, reused without a new ref; it names the pull request); or
+  `only on <machine> (pushing it failed: <diagnostic>)` (carry rejected, kept on
+  that host). A leaf that ended before committing keeps nothing and records no entry.
+
+Placement:
+
+- A durable candidate resumes on any host once the upgrade settles. An owner hold's
+  `candidate_held` entry carries its `durable_ref`; a claimed leaf's note names it
+  after `durable at`.
+- A host-local candidate resumes only on the holding host, and only while that
+  host's repository still has the commit. A run or claim on any other host starts
+  the task afresh. An owner hold's note reads `host-local: <diagnostic>`, and its
+  `machine_id` names the holding machine when the host has an identity. A claimed
+  leaf's note reads `only on <machine>`. Pushing the commit to `origin` by hand does
+  not make it resumable elsewhere, because placement reads the recorded durable ref.
 
 The task is never `blocked`. To avoid stopping a step at all, let long steps finish
 before installing, or install while no drain is live.

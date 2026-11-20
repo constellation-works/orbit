@@ -252,8 +252,9 @@ What happens to the step and the task:
 - The step is not retried. Neither step recovery nor final recovery runs, and the
   candidate is kept.
 - A claimed leaf releases its claim as transient, with the candidate on the
-  release. A claimed PR leaf first pushes that candidate to a durable ref. The
-  task returns to the owner's backlog, and its next claim resumes the candidate
+  release. A claimed PR leaf that already published its head reuses it, and an
+  unchanged published head needs no extra ref; a tip past it, or an unpublished
+  tip, is first pushed to a durable ref. The task returns to the owner's backlog, and its next claim resumes the candidate
   under the placement rule below. The leaf's crew sits out the rest of that
   drain's window.
 - An owner `task_pr_pipeline` run commits what the agent left and pushes it to
@@ -261,12 +262,20 @@ What happens to the step and the task:
   opens no pull request. Run finalization returns the task to the backlog with
   the history event `upgrade_pending_requeued`.
 - That push can be refused. The hold still succeeds and the candidate stays on
-  the holding host. Recognise a host-local candidate in the task's
-  `candidate_held` history entry: its `decision` has no `durable_ref`,
-  `carry_failure` holds the push diagnostic, and the note reads
-  `host-local: …`. The `## Orbit upgrade` comment says the same in words, and
-  names the holding machine when the host has an identity. A pushed candidate
-  instead reads `durable at …` and carries `durable_ref`.
+  the holding host. The evidence depends on who held it:
+  - Owner run: the task's `candidate_held` history entry. A host-local candidate
+    has no `durable_ref` in its `decision`, `carry_failure` holds the push
+    diagnostic, and the note reads `host-local: …`. The `## Orbit upgrade`
+    comment says the same in words, and names the holding machine when the host
+    has an identity. A pushed candidate instead reads `durable at …` and carries
+    `durable_ref`.
+  - Claimed leaf: the owner's `claim_candidate_kept` history entry, written when
+    the release settles. It has no `candidate_held` entry and no `## Orbit
+    upgrade` comment, so their absence does not mean the candidate is missing.
+    Its note reads `durable at <ref>` when pushed; names the pull request with
+    neither `durable at` nor `only on` when the leaf's published head was reused;
+    and reads `only on <machine> (pushing it failed: <diagnostic>)` when the
+    carry was rejected. A leaf that ended before committing records no entry.
 - Placement decides where the next run can resume it:
   - Durable: a run or claim on any host resumes the candidate from `origin`,
     once the upgrade settles.
