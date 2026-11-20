@@ -35,11 +35,15 @@ pub(in crate::doctor) fn doctor_check_pull_protocol(
 ) -> WorkspaceDoctorResult {
     const CHECK: &str = "pull-protocol";
     let inspect = || -> Result<Option<String>, OrbitError> {
-        let runs = runtime.list_job_runs(orbit_core::application::job::JobRunListParams {
-            job_id: Some(orbit_core::application::contracts::PULL_DRAIN_JOB.to_string()),
-            limit: Some(1),
-            ..Default::default()
-        })?;
+        // [ORB-25811] Observed, not reconciled: a reconciling list finalizes a
+        // stale pull drain and releases its reservations on any runtime that is
+        // not write-free, including a same-generation read-only one.
+        let runs =
+            runtime.list_job_runs_observed(orbit_core::application::job::JobRunListParams {
+                job_id: Some(orbit_core::application::contracts::PULL_DRAIN_JOB.to_string()),
+                limit: Some(1),
+                ..Default::default()
+            })?;
         let Some(run) = runs.first() else {
             return Ok(None);
         };
@@ -82,11 +86,13 @@ pub(in crate::doctor) fn doctor_check_pull_protocol(
 pub(in crate::doctor) fn doctor_check_pull_gates(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     const CHECK: &str = "pull-gates";
     let inspect = || -> Result<Option<Option<String>>, OrbitError> {
-        let runs = runtime.list_job_runs(orbit_core::application::job::JobRunListParams {
-            job_id: Some(orbit_core::application::contracts::PULL_DRAIN_JOB.to_string()),
-            limit: Some(1),
-            ..Default::default()
-        })?;
+        // [ORB-25811] Observed, not reconciled; see `doctor_check_pull_protocol`.
+        let runs =
+            runtime.list_job_runs_observed(orbit_core::application::job::JobRunListParams {
+                job_id: Some(orbit_core::application::contracts::PULL_DRAIN_JOB.to_string()),
+                limit: Some(1),
+                ..Default::default()
+            })?;
         let Some(run) = runs.first() else {
             return Ok(None);
         };
