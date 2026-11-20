@@ -156,10 +156,10 @@ impl ConfigSeed {
 
     /// The seeded complexity pools `[low, medium, hard, xhard]`, derived from
     /// the detected families. Codex and claude pick a base row; grok is
-    /// appended to medium; `agy` appends `gemini-flash` to low and `argon` to
-    /// hard; `muse` appends `muse-spark`, `muse-wonder` and `muse-wonder-full`
-    /// to low, medium and hard. Copilot has no pool rule, and an empty pool
-    /// routes to `default_crew`.
+    /// appended to medium; `agy` appends `gemini-flash` to low, `hydrogen` to
+    /// medium and `argon` and `neon` to hard; `muse` appends `muse-spark`,
+    /// `muse-wonder` and `muse-wonder-full` to low, medium and hard. Copilot
+    /// has no pool rule, and an empty pool routes to `default_crew`.
     pub fn complexity_pools(&self) -> [Vec<&'static str>; 4] {
         let (codex, claude) = (self.has_family("codex"), self.has_family("claude"));
         let mut pools: [Vec<&'static str>; 4] = BASE_POOLS
@@ -172,7 +172,8 @@ impl ConfigSeed {
         }
         if self.has_family("antigravity") {
             pools[0].push("gemini-flash");
-            pools[2].push("argon");
+            pools[1].push("hydrogen");
+            pools[2].extend(["argon", "neon"]);
         }
         if self.has_family("muse") {
             pools[0].push("muse-spark");

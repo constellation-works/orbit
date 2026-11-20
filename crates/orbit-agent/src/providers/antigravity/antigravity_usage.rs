@@ -1,4 +1,5 @@
-//! Structured quota buckets from agy 1.4.6's `--print /usage --output-format json`.
+//! Structured quota buckets from agy's `--print /usage --output-format json`
+//! (shape verified with agy 1.4.6 and 1.5.13).
 
 use chrono::{DateTime, Utc};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
@@ -14,8 +15,8 @@ pub(crate) fn antigravity_usage_windows(
     let Some(buckets) = buckets(body) else {
         return Vec::new();
     };
-    // Pro accounts expose a separate Argon bucket. Never apply the Flash/Pro
-    // quota to Argon there. Ultra includes Argon in the shared Gemini bucket.
+    // Pro accounts expose a separate Argon bucket. Never apply the shared
+    // Gemini quota to Argon there. Ultra includes Argon in the shared bucket.
     let separate_argon = buckets
         .iter()
         .any(|bucket| bucket.get("id").and_then(Value::as_str) == Some("gemini-argon-wtu-weekly"));
@@ -69,6 +70,13 @@ fn buckets(body: &[u8]) -> Option<Vec<Value>> {
     )
 }
 
+/// Model scopes of the shared "Gemini Models" group when Argon has its own
+/// bucket. agy 1.5.13's capture (dk-server-2, 2026-11-20) lists Gemini 4 Neon
+/// and Hydrogen, Orchestrator (Neon) and Gemini 3.8 Flash in it; `pro` keeps
+/// the slugs agy 1.4.6 grouped there. Scopes match model ids by
+/// substring, so `gemini` here would also gate Argon. [ORB-25818]
+const SHARED_GEMINI_SCOPES: &[&str] = &["flash", "pro", "neon", "hydrogen"];
+
 type Reading<'a> = (&'a str, &'static [&'static str], u32, f64, DateTime<Utc>);
 
 fn reading(bucket: &Value, separate_argon: bool) -> Option<Reading<'_>> {
@@ -83,7 +91,7 @@ fn reading(bucket: &Value, separate_argon: bool) -> Option<Reading<'_>> {
     let (scopes, minutes): (&[&str], u32) = match (id, window) {
         ("gemini-weekly", "weekly") => (
             if separate_argon {
-                &["flash", "pro"]
+                SHARED_GEMINI_SCOPES
             } else {
                 &["gemini"]
             },
@@ -91,7 +99,7 @@ fn reading(bucket: &Value, separate_argon: bool) -> Option<Reading<'_>> {
         ),
         ("gemini-5h", "5h") => (
             if separate_argon {
-                &["flash", "pro"]
+                SHARED_GEMINI_SCOPES
             } else {
                 &["gemini"]
             },
