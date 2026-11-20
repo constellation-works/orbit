@@ -292,7 +292,9 @@ impl OrbitRuntime {
     /// (the drain intent set `on` by a person) closes it. Only drains created
     /// after the latest hand start count. Upgrade interruptions are deploys
     /// and do not count. While closed, `failed` is the number of failures in
-    /// the last hour.
+    /// the last hour. While the intent is not `on` (paused or never started)
+    /// the last hand start is not visible, so only the last hour is read and
+    /// failures from before a pause cannot reopen a breaker a start closed.
     pub(crate) fn standing_drain_keeper_breaker(
         &self,
         settings: &StandingDrainSettings,
@@ -307,6 +309,10 @@ impl OrbitRuntime {
             trigger_routine: Some(STANDING_DRAIN_KEEPER.to_string()),
             states: vec![JobRunState::Failed, JobRunState::Interrupted],
             created_since: hand_start,
+            // Without an `on` intent the last hand start is not recorded (a
+            // pause overwrites it), so history cannot be attributed to the
+            // breaker a start closed: read only the last hour.
+            recency_since: hand_start.is_none().then_some(now - BREAKER_WINDOW),
             order_by: JobRunOrder::Recency,
             limit: Some(BREAKER_SCAN_LIMIT),
             include_steps: true,

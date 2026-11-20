@@ -48,9 +48,17 @@ impl Fixture {
     }
 
     fn intent_on(&self, updated_at: DateTime<Utc>) {
+        self.intent(DrainIntentState::On, updated_at);
+    }
+
+    fn intent_paused(&self, updated_at: DateTime<Utc>) {
+        self.intent(DrainIntentState::Paused, updated_at);
+    }
+
+    fn intent(&self, intent: DrainIntentState, updated_at: DateTime<Utc>) {
         self.jobs
             .record_drain_intent(&DrainIntentRecord {
-                intent: DrainIntentState::On,
+                intent,
                 actor: "tester".into(),
                 source: "cli".into(),
                 reason: None,
@@ -149,6 +157,26 @@ fn a_hand_start_closes_the_latched_breaker() {
     );
 }
 
+fn a_pause_after_a_hand_start_does_not_reopen_the_closed_breaker() {
+    let fixture = Fixture::new();
+    let now = Utc::now();
+    fixture.intent_on(now - Duration::hours(8));
+    for minutes_ago in [200, 189, 178] {
+        fixture.failed_keeper_drain(now - Duration::minutes(minutes_ago));
+    }
+    assert_eq!(fixture.breaker_items().len(), 1);
+    // A hand start closes the breaker, then a hand pause overwrites the
+    // intent record: the failures before the start must stay closed.
+    fixture.intent_on(Utc::now() + Duration::seconds(1));
+    fixture.intent_paused(Utc::now() + Duration::seconds(2));
+    let view = fixture.runtime.standing_drain_keeper_view().unwrap();
+    let breaker = view.breaker.unwrap();
+    assert!(
+        !breaker.open(),
+        "a paused intent must not count failures a hand start closed: {breaker:?}"
+    );
+}
+
 fn failures_spread_over_more_than_an_hour_do_not_trip_the_breaker() {
     let fixture = Fixture::new();
     let now = Utc::now();
@@ -163,5 +191,6 @@ crate::scenario_table!(
     standing_drain_keeper,
     three_failures_in_an_hour_stay_open_after_the_hour_passes,
     a_hand_start_closes_the_latched_breaker,
+    a_pause_after_a_hand_start_does_not_reopen_the_closed_breaker,
     failures_spread_over_more_than_an_hour_do_not_trip_the_breaker,
 );
