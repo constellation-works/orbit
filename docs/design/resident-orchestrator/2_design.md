@@ -623,19 +623,35 @@ they are derivable, from an interactive orchestration task's history. The first 
 crash recovery are mostly not: a chat loop that died left no record, which is part of the point.
 Measures that cannot be derived report `not_derivable`, never zero.
 
-**As implemented ([ORB-21247]).** `orbit resident metrics [--mandate <task>] [--since <window>]
+**As implemented ([ORB-21247], updated in [ORB-25960]).** `orbit resident metrics [--mandate <task>] [--since <window>]
 [--baseline <task>]` (tool `orbit.resident.metrics`, read-only; `--since` takes a span such as
 `7d`, `24h` or `2w`, or an RFC 3339 instant, default `30d`) reports per mandate and, without
-`--mandate`, across mandates with workspace totals. A resident-raised escalation is a decision
-request named by a checkpoint `requests[]` or a `resident.request` record, or an agent-raised
-request on a task related to the assignment. A reversal is counted once per checkpoint decision
-or completed action: a `resident.answer` with `reverses` naming the decision id or action key, or
-a human status write on the action's subject to `proposed` or `rejected` (or a revert), within
-7 days of the checkpoint. Recovery cost counts `outcome: incomplete` checkpoints, measures to
-the next non-`incomplete` checkpoint from the dead cycle's recorded start, sums recovery-cycle
-time to its checkpoint as slot minutes, and counts a completed dead-cycle action run again as
-`ok` (rather than the ledger's `already_done`) as a repeat. A baseline task with no checkpoints
-reports reversals and recovery as `not_derivable`.
+`--mandate`, across mandates with workspace totals. Only `resident`-tagged tasks that carry a
+`resident/mandate.json` artifact are counted as mandates; tasks carrying the tag without the
+mandate artifact are excluded. Each mandate's active span is bounded by its activation (when
+`resident/mandate.json` was attached, or its earliest resident lifecycle event if the artifact was
+later edited) and its end (`resident_control` stop, passed mandate `deadline`, or closed/`review`
+assignment status), intersected with the report window `[start, now]`; unfiltered reports omit
+mandates whose active span does not overlap the window. Interventions, escalations (`raised_at`),
+reversals and recovery checkpoints count only inside that active span.
+
+**Rate divisors and escalation states.** `per_mandate_day` divides by **mandate active days**: for
+each mandate, its bounded active span within the window rounded up to whole days with a 1-day floor
+(`ceil().max(1.0)`), and in `totals`, the sum of active mandate-days across all included mandates
+(with a 1-day floor). `per_human_day` divides by **human calendar days**: the length of the report
+window (`window.days`, from `--since` to `now`, rounded up to whole days with a 1-day floor) for
+both individual mandates and `totals`, because one human operator fields escalations across the
+whole calendar window. A resident-raised escalation is a decision request named by a checkpoint
+`requests[]` or a `resident.request` record, or an agent-raised request on a task related to the
+assignment. Every counted escalation lands in exactly one state bucket among `answered`, `open`,
+`expired_unanswered` and `superseded` (`answered + open + expired_unanswered + superseded == count`).
+A reversal is counted once per checkpoint decision or completed action: a `resident.answer` with
+`reverses` naming the decision id or action key, or a human status write on the action's subject to
+`proposed` or `rejected` (or a revert), within 7 days of the checkpoint. Recovery cost counts
+`outcome: incomplete` checkpoints, measures to the next non-`incomplete` checkpoint from the dead
+cycle's recorded start, sums recovery-cycle time to its checkpoint as slot minutes, and counts a
+completed dead-cycle action run again as `ok` (rather than the ledger's `already_done`) as a
+repeat. A baseline task with no checkpoints reports reversals and recovery as `not_derivable`.
 
 **References outside the assignment's workspace ([ORB-21642]).** Run the report in the
 workspace that owns the mandate or baseline task. Its references (watched and related tasks,

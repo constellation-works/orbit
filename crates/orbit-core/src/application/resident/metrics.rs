@@ -36,10 +36,18 @@ use chrono::{DateTime, Duration, Utc};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::RegisteredTaskResolution;
 use orbit_types::task::{DecisionRequestState, Task, TaskHistoryEntry, TaskStatus};
-use orbit_types::workflow::{RESIDENT_TAG, ResidentComment};
+use orbit_types::workflow::{
+    RESIDENT_AUTHORITY_CHANGED_EVENT, RESIDENT_CYCLE_GRANTED_EVENT, RESIDENT_MANDATE_ARTIFACT,
+    RESIDENT_TAG, ResidentComment, ResidentLiveCycle, ResidentMandate,
+};
 use serde_json::{Value, json};
 
+use super::control::{
+    RESIDENT_CONTROL_EVENT, ResidentControlAction, ResidentControlEntry, ResidentControlState,
+};
+use super::cycle::CYCLE_CHANGED;
 use super::due::{checkpoints, started_cycles};
+use super::resident_mandate_ended;
 use crate::OrbitRuntime;
 use crate::application::statistics;
 
@@ -104,10 +112,121 @@ fn median_seconds(values: &[f64]) -> Option<f64> {
     statistics::median(&mut values.to_vec())
 }
 
-fn active_days(task_created: DateTime<Utc>, start: DateTime<Utc>, end: DateTime<Utc>) -> f64 {
-    let from = task_created.max(start);
-    let seconds = (end - from).num_seconds().max(0) as f64;
+fn active_days(span_start: DateTime<Utc>, span_end: DateTime<Utc>) -> f64 {
+    let seconds = (span_end - span_start).num_seconds().max(0) as f64;
     (seconds / 86_400.0).ceil().max(1.0)
+}
+
+fn assignment_closed_at(task: &Task, history: &[TaskHistoryEntry]) -> Option<DateTime<Utc>> {
+    let is_closed =
+        |status: TaskStatus| resident_mandate_ended(status) || status == TaskStatus::Review;
+    if !is_closed(task.status) {
+        return None;
+    }
+    let mut closed_at = None;
+    for entry in history.iter().rev() {
+        if let Some(to_status) = entry.to_status {
+            if is_closed(to_status) {
+                closed_at = Some(entry.at);
+            } else {
+                break;
+            }
+        }
+    }
+    Some(closed_at.unwrap_or(task.updated_at))
+}
+
+fn mandate_activated_at(
+    task: &Task,
+    history: &[TaskHistoryEntry],
+    comments: &[orbit_types::task::TaskComment],
+    manifest_created_at: Option<DateTime<Utc>>,
+) -> DateTime<Utc> {
+    let first_cycle_at = history
+        .iter()
+        .filter(|entry| {
+            entry.event == RESIDENT_CYCLE_GRANTED_EVENT
+                || (entry.event == CYCLE_CHANGED
+                    && entry
+                        .note
+                        .as_deref()
+                        .and_then(|note| {
+                            serde_json::from_str::<Option<ResidentLiveCycle>>(note).ok()
+                        })
+                        .flatten()
+                        .is_some())
+        })
+        .map(|entry| entry.at)
+        .min();
+    let first_checkpoint_at = comments
+        .iter()
+        .filter(|comment| {
+            matches!(
+                ResidentComment::parse(&comment.message),
+                Ok(ResidentComment::Checkpoint(record)) if record.mandate == task.id.as_str()
+            )
+        })
+        .map(|comment| comment.at)
+        .min();
+    let first_authority_at = history
+        .iter()
+        .filter(|entry| entry.event == RESIDENT_AUTHORITY_CHANGED_EVENT)
+        .map(|entry| entry.at)
+        .min();
+    let first_control_at = history
+        .iter()
+        .filter(|entry| entry.event == RESIDENT_CONTROL_EVENT)
+        .map(|entry| entry.at)
+        .min();
+    let first_system_activation_at = history
+        .iter()
+        .filter(|entry| {
+            entry.by == "system"
+                && entry.to_status == Some(TaskStatus::InProgress)
+                && entry.event != "started"
+                && entry.decision.is_none()
+        })
+        .map(|entry| entry.at)
+        .min();
+    [
+        manifest_created_at,
+        first_cycle_at,
+        first_checkpoint_at,
+        first_authority_at,
+        first_control_at,
+        first_system_activation_at,
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+    .unwrap_or(task.created_at)
+}
+
+fn mandate_ended_at(
+    task: &Task,
+    history: &[TaskHistoryEntry],
+    mandate: Option<&ResidentMandate>,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    let stop_at = history
+        .iter()
+        .filter(|entry| entry.event == RESIDENT_CONTROL_EVENT)
+        .filter_map(|entry| {
+            let parsed =
+                serde_json::from_str::<ResidentControlEntry>(entry.note.as_deref()?).ok()?;
+            (parsed.state == ResidentControlState::Ended
+                || parsed.action == ResidentControlAction::Stop)
+                .then_some(entry.at)
+        })
+        .min();
+    let deadline_at = mandate
+        .and_then(|record| record.deadline)
+        .filter(|deadline| *deadline <= now);
+    let closed_at = assignment_closed_at(task, history);
+    [stop_at, deadline_at, closed_at]
+        .into_iter()
+        .flatten()
+        .min()
 }
 
 /// How one referenced task resolved for the metrics read.
@@ -156,19 +275,33 @@ impl OrbitRuntime {
     ) -> Result<Value, OrbitError> {
         let now = Utc::now();
         let start = parse_window_start(since, now)?;
+        let window_days = ((now - start).num_seconds().max(0) as f64 / 86_400.0)
+            .ceil()
+            .max(1.0);
         let window = json!({
             "since": since,
             "start": start,
             "end": now,
-            "days": ((now - start).num_seconds().max(0) as f64 / 86_400.0).ceil().max(1.0),
+            "days": window_days,
         });
 
+        let explicit_mandate = mandate.map(str::trim).filter(|value| !value.is_empty());
         let mut mandate_ids: Vec<String> = Vec::new();
-        if let Some(task_id) = mandate.map(str::trim).filter(|value| !value.is_empty()) {
-            mandate_ids.push(self.get_task(task_id)?.id.to_string());
+        if let Some(task_id) = explicit_mandate {
+            let task = self.get_task(task_id)?;
+            if self
+                .get_task_artifact(&task.id, RESIDENT_MANDATE_ARTIFACT)?
+                .is_some()
+            {
+                mandate_ids.push(task.id.to_string());
+            }
         } else if baseline.is_none() {
             for task in self.list_task_metadata()? {
-                if task.tags.iter().any(|tag| tag == RESIDENT_TAG) {
+                if task.tags.iter().any(|tag| tag == RESIDENT_TAG)
+                    && self
+                        .get_task_artifact(&task.id, RESIDENT_MANDATE_ARTIFACT)?
+                        .is_some()
+                {
                     mandate_ids.push(task.id.to_string());
                 }
             }
@@ -196,9 +329,29 @@ impl OrbitRuntime {
         let mut mandate_days = 0.0f64;
         for task_id in &mandate_ids {
             let task = self.get_task(task_id)?;
-            let days = active_days(task.created_at, start, now);
+            let history = self.get_task_history(task_id)?;
+            let comments = self.get_task_comments(task_id)?;
+            let manifest_created_at = self
+                .get_task_artifact_manifest(task_id)?
+                .into_iter()
+                .find(|file| file.path == RESIDENT_MANDATE_ARTIFACT)
+                .map(|file| file.created_at);
+            let parsed_mandate = self
+                .get_task_artifact(task_id, RESIDENT_MANDATE_ARTIFACT)?
+                .and_then(|artifact| ResidentMandate::parse(&artifact.content).ok());
+            let activated_at =
+                mandate_activated_at(&task, &history, &comments, manifest_created_at);
+            let ended_at = mandate_ended_at(&task, &history, parsed_mandate.as_ref(), now);
+            if explicit_mandate.is_none()
+                && (ended_at.is_some_and(|end| end < start) || activated_at > now)
+            {
+                continue;
+            }
+            let span_start = activated_at.max(start);
+            let span_end = ended_at.map_or(now, |end| end.min(now));
+            let days = active_days(span_start, span_end);
             mandate_days += days;
-            let inputs = self.measure_task(task_id, start, now)?;
+            let inputs = self.measure_task(task_id, span_start, span_end, now)?;
             totals.reversed += inputs.reversed;
             totals.reversal_total += inputs.reversal_total;
             totals.crashed += inputs.crashed;
@@ -208,7 +361,7 @@ impl OrbitRuntime {
             totals.recovery_interventions += inputs.recovery_interventions;
             totals.has_checkpoints |= inputs.has_checkpoints;
             totals.intervention_times.extend(&inputs.intervention_times);
-            mandates.push(mandate_json(task_id, days, &inputs, false));
+            mandates.push(mandate_json(task_id, days, window_days, &inputs, false));
             totals.interventions.extend(inputs.interventions);
             totals.escalations.extend(inputs.escalations);
             totals.foreign_references.extend(inputs.foreign_references);
@@ -222,16 +375,16 @@ impl OrbitRuntime {
             "mandates": mandates,
         });
         if mandate.is_some() || baseline.is_none() {
-            let window_days = ((now - start).num_seconds().max(0) as f64 / 86_400.0)
-                .ceil()
-                .max(1.0);
             value["totals"] = totals_json(window_days, mandate_days, &totals);
         }
         if let Some(baseline_id) = baseline.map(str::trim).filter(|value| !value.is_empty()) {
             let task = self.get_task(baseline_id)?;
-            let days = active_days(task.created_at, start, now);
-            let inputs = self.measure_task(&task.id.to_string(), start, now)?;
-            value["baseline"] = mandate_json(&task.id.to_string(), days, &inputs, true);
+            let history = self.get_task_history(&task.id)?;
+            let active_end = assignment_closed_at(&task, &history).map_or(now, |end| end.min(now));
+            let days = active_days(task.created_at.max(start), active_end);
+            let inputs = self.measure_task(&task.id.to_string(), start, now, now)?;
+            value["baseline"] =
+                mandate_json(&task.id.to_string(), days, window_days, &inputs, true);
         }
         Ok(value)
     }
@@ -274,11 +427,13 @@ impl OrbitRuntime {
         })
     }
 
-    /// The four measures for one assignment task (resident or interactive).
+    /// The four measures for one assignment task (resident or interactive),
+    /// bounded to `[span_start, span_end]` inside the report window ending at `now`.
     fn measure_task(
         &self,
         task_id: &str,
-        start: DateTime<Utc>,
+        span_start: DateTime<Utc>,
+        span_end: DateTime<Utc>,
         now: DateTime<Utc>,
     ) -> Result<MeasureInputs, OrbitError> {
         let task = self.get_task(task_id)?;
@@ -344,7 +499,7 @@ impl OrbitRuntime {
              kind: &str,
              interventions: &mut Vec<Value>,
              times: &mut Vec<DateTime<Utc>>| {
-                if at < start || at > now {
+                if at < span_start || at > span_end {
                     return;
                 }
                 interventions.push(json!({
@@ -504,7 +659,8 @@ impl OrbitRuntime {
         }
         // A resident request record is authoritative even when its task read
         // resolves through the assignment itself.
-        escalations.retain(|request| request.raised_at >= start && request.raised_at <= now);
+        escalations
+            .retain(|request| request.raised_at >= span_start && request.raised_at <= span_end);
         escalations.sort_by_key(|request| request.raised_at);
 
         // --- Reversal rate --------------------------------------------
@@ -543,7 +699,7 @@ impl OrbitRuntime {
             let Some(at) = checkpoint_at(index) else {
                 continue;
             };
-            if at < start {
+            if at < span_start || at > span_end {
                 continue;
             }
             let window_end = at + Duration::days(REVERSAL_WINDOW_DAYS);
@@ -601,7 +757,7 @@ impl OrbitRuntime {
         let mut recovery_seconds: Vec<f64> = Vec::new();
         let mut recovery_interventions = 0usize;
         for (at, checkpoint) in &timed_checkpoints {
-            if checkpoint.outcome != "incomplete" || *at < start {
+            if checkpoint.outcome != "incomplete" || *at < span_start || *at > span_end {
                 continue;
             }
             crashed += 1;
@@ -614,7 +770,7 @@ impl OrbitRuntime {
             if let Some(good_at) = next_good {
                 recovery_seconds.push((good_at - dead_start).num_seconds().max(0) as f64);
             }
-            let until = next_good.unwrap_or(now);
+            let until = next_good.unwrap_or(span_end);
             recovery_interventions += intervention_times
                 .iter()
                 .filter(|time| **time > dead_start && **time <= until)
@@ -629,7 +785,7 @@ impl OrbitRuntime {
                     repeated_actions += 1;
                 }
             }
-            if *at < start {
+            if *at < span_start || *at > span_end {
                 continue;
             }
             if let Some(dead) = &checkpoint.recovery_of {
@@ -685,11 +841,23 @@ impl OrbitRuntime {
     }
 }
 
-fn escalation_json(escalations: &[orbit_types::task::DecisionRequest], active_days: f64) -> Value {
-    let answered: Vec<_> = escalations
-        .iter()
-        .filter(|request| request.state == DecisionRequestState::Answered)
-        .collect();
+fn escalation_json(
+    escalations: &[orbit_types::task::DecisionRequest],
+    active_days: f64,
+    human_days: f64,
+) -> Value {
+    let mut answered = Vec::new();
+    let mut open = 0usize;
+    let mut expired_unanswered = 0usize;
+    let mut superseded = 0usize;
+    for request in escalations {
+        match request.state {
+            DecisionRequestState::Answered => answered.push(request),
+            DecisionRequestState::Open => open += 1,
+            DecisionRequestState::Expired => expired_unanswered += 1,
+            DecisionRequestState::Superseded => superseded += 1,
+        }
+    }
     let latencies: Vec<f64> = answered
         .iter()
         .filter_map(|request| {
@@ -715,10 +883,11 @@ fn escalation_json(escalations: &[orbit_types::task::DecisionRequest], active_da
         "count": escalations.len(),
         "total": escalations.len(),
         "per_mandate_day": escalations.len() as f64 / active_days,
-        "per_human_day": escalations.len() as f64 / active_days,
+        "per_human_day": escalations.len() as f64 / human_days,
         "answered": answered.len(),
-        "open": escalations.iter().filter(|r| r.state == DecisionRequestState::Open).count(),
-        "expired_unanswered": escalations.iter().filter(|r| r.state == DecisionRequestState::Expired).count(),
+        "open": open,
+        "expired_unanswered": expired_unanswered,
+        "superseded": superseded,
         "median_answer_latency_seconds": median_seconds(&latencies),
         "answer_latency_seconds": latencies,
         "recommended_share": if with_recommendation > 0 {
@@ -775,7 +944,13 @@ fn recovery_json(inputs: &MeasureInputs) -> Value {
     })
 }
 
-fn mandate_json(task_id: &str, active_days: f64, inputs: &MeasureInputs, baseline: bool) -> Value {
+fn mandate_json(
+    task_id: &str,
+    active_days: f64,
+    human_days: f64,
+    inputs: &MeasureInputs,
+    baseline: bool,
+) -> Value {
     let interventions = json!({
         "count": inputs.interventions.len(),
         "total": inputs.interventions.len(),
@@ -784,7 +959,7 @@ fn mandate_json(task_id: &str, active_days: f64, inputs: &MeasureInputs, baselin
         "active_days": active_days,
         "items": inputs.interventions,
     });
-    let escalations = escalation_json(&inputs.escalations, active_days);
+    let escalations = escalation_json(&inputs.escalations, active_days, human_days);
     let references = json!({
         "foreign": inputs.foreign_references,
         "unreachable": inputs.unreachable_references,
@@ -827,13 +1002,10 @@ fn mandate_json(task_id: &str, active_days: f64, inputs: &MeasureInputs, baselin
 fn totals_json(window_days: f64, mandate_days: f64, totals: &MeasureInputs) -> Value {
     // Workspace totals divide per-mandate-day rates by summed mandate active
     // days (mandate-days), not by the calendar window. Per-human-day rates
-    // stay over the calendar window.
+    // divide by the calendar window days (`human_days`).
     let window_days = window_days.max(1.0);
     let mandate_days = mandate_days.max(1.0);
-    let mut aggregate = mandate_json("totals", mandate_days, totals, false);
-    let per_human_day = totals.escalations.len() as f64 / window_days;
-    aggregate["escalations"]["per_human_day"] = json!(per_human_day);
-    aggregate["escalation_load"]["per_human_day"] = json!(per_human_day);
+    let mut aggregate = mandate_json("totals", mandate_days, window_days, totals, false);
     aggregate["task_id"] = Value::Null;
     aggregate
 }
