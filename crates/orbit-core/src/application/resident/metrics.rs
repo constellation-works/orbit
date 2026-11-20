@@ -62,6 +62,18 @@ fn is_human_writer(by: &str) -> bool {
     by == "human" || by == "operator" || by.starts_with("human:") || by.starts_with("human-")
 }
 
+/// The action of a `resident_control` entry that counts as a manual
+/// intervention (design §9): a `stop` or a `takeover`. Wake, pause, resume
+/// and release do not count.
+fn counted_control_action(entry: &TaskHistoryEntry) -> Option<ResidentControlAction> {
+    let note: ResidentControlEntry = serde_json::from_str(entry.note.as_deref()?).ok()?;
+    matches!(
+        note.action,
+        ResidentControlAction::Stop | ResidentControlAction::Takeover
+    )
+    .then_some(note.action)
+}
+
 pub(super) fn parse_window_start(
     since: Option<&str>,
     now: DateTime<Utc>,
@@ -565,6 +577,21 @@ impl OrbitRuntime {
             };
             for entry in history_read {
                 if !is_human_writer(&entry.by) {
+                    continue;
+                }
+                // A human stop or takeover is an intervention. The other
+                // control actions (wake, pause, resume, release) are not.
+                if entry.event == RESIDENT_CONTROL_EVENT {
+                    if let Some(action) = counted_control_action(&entry) {
+                        record_intervention(
+                            watched_id,
+                            entry.at,
+                            &entry.by,
+                            action.as_str(),
+                            &mut interventions,
+                            &mut intervention_times,
+                        );
+                    }
                     continue;
                 }
                 // Answers to escalations and authority grants are not
