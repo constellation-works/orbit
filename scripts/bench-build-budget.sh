@@ -139,7 +139,10 @@ if [[ "${1:-}" == "__arm" ]]; then
     else
       (
         cd "$tree"
-        ORBIT_BUILD_BUDGET_DIR="$WORKDIR/locks" ORBIT_BUILD_SLOTS="$SLOTS" \
+        # A caller already under a budget (HELD=1) or with it disabled (BUDGET=0)
+        # would make the wrapper skip admission, so this arm would run unbudgeted.
+        env -u ORBIT_BUILD_BUDGET_HELD -u ORBIT_BUILD_BUDGET \
+          ORBIT_BUILD_BUDGET_DIR="$WORKDIR/locks" ORBIT_BUILD_SLOTS="$SLOTS" \
           ORBIT_CARGO_JOBS="$JOBS" CARGO_TARGET_DIR="$target" CARGO_INCREMENTAL=0 \
           "$WRAPPER" -- cargo check -p "$PACKAGE" --offline
       ) &

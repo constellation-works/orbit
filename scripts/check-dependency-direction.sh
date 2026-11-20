@@ -299,18 +299,6 @@ while IFS=$'\t' read -r crate manifest dependency kind; do
   fi
 done < "$dependency_listing"
 
-# orbit-core is one crate, but its internal boundaries are directional too.
-# The runtime kernel lives in orbit-runtime, which cannot reach Core's use
-# cases or adapters (the dependency policy above); composition is the only
-# owner allowed to join resolved config, bootstrap, runtime construction, and
-# adapter registration.
-if dependency_matches -n 'crate::adapter' \
-  "$repo_root/crates/orbit-core/src/application" \
-  -g '*.rs' -g '!**/tests/**'; then
-  echo "forbidden orbit-core application-to-adapter import"
-  fail=1
-fi
-
 # Within the application layer [ORB-17924]: constants and DTOs that several
 # modules share live in `application::contracts`, which imports none of the
 # application modules; `task` reaches the state scheduler only through its
@@ -328,8 +316,11 @@ contracts_higher="${app_modules}|routines|auto_tasks"
 # nonzero when one is found. With `$4` set to `crate-root`, `$1` is any layer under
 # the crate source and the modules are crate-root modules: a `super::` chain counts
 # when it climbs out to the crate root, and a `crate::` path or use-tree counts too
-# [ORB-22005]. With `$4` set to `application-root`, also expand absolute
-# `crate::application::` paths and nested use-trees into the application modules.
+# [ORB-22005]. Without it, `$1` is the application layer: a `super::` chain counts
+# when it climbs to `application`, and an absolute `crate::application::<module>`
+# path or use-tree counts too, however it is grouped (`use crate::{X,
+# application::<module>::Y}` or a nested `use crate::application::{a::{B},
+# <module>::C}`).
 # With `$4` set to `named-path`, match the `|`-separated path prefixes `$3`
 # anywhere in code, including grouped trees, while preserving comments and
 # literals as non-dependencies. A single name matches that identifier alone.
@@ -345,7 +336,7 @@ module = sys.argv[2]
 upper = set(sys.argv[3].split("|"))
 crate_root = sys.argv[4] == "crate-root"
 climb_target = [] if crate_root else [app.name]
-path_starts = ("super", "crate") if sys.argv[4] in ("crate-root", "application-root") else ("super",)
+path_starts = ("super", "crate")
 token = re.compile(
     r"(?P<line>//[^\n]*)|(?P<block>/\*)"
     r'|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")'
@@ -500,6 +491,17 @@ for path in paths:
 sys.exit(1 if failed else 0)
 PY
 }
+
+# orbit-core is one crate, but its internal boundaries are directional too.
+# The runtime kernel lives in orbit-runtime, which cannot reach Core's use
+# cases or adapters (the dependency policy above); composition is the only
+# owner allowed to join resolved config, bootstrap, runtime construction, and
+# adapter registration.
+# Grouped `use crate::{adapter::…}` trees count as an import too.
+if ! super_chains_into "$repo_root/crates/orbit-core/src/application" "" 'crate::adapter' named-path; then
+  echo "forbidden orbit-core application-to-adapter import"
+  fail=1
+fi
 
 # Resolve relative use trees at each file's module depth: grouped and multiline
 # imports into higher modules count, while imports within contracts stay legal.
@@ -1103,7 +1105,7 @@ done
 # Selective-review retirement removed review's risk-model freeze and its
 # codebase dependency. Keep that direction closed: review has no codebase
 # exception, including calls indexed from codebase's inherent runtime methods.
-if ! super_chains_into "$app_src" review codebase application-root ||
+if ! super_chains_into "$app_src" review codebase ||
   ! inherent_calls_into "$app_src" review codebase '' ''; then
   echo "orbit-core review must not name codebase or call its inherent methods"
   fail=1
@@ -1156,26 +1158,24 @@ fi
 # is directional: contracts and shared fs mechanics are leaves; each driver is
 # isolated; only repositories, workflows, and composition may join drivers.
 store_src="$repo_root/crates/orbit-store/src"
-if dependency_matches -n 'crate::(driver|repository|workflow)|\brusqlite\b' \
-  "$store_src/contracts" -g '*.rs' -g '!**/tests/**'; then
+if ! super_chains_into "$store_src" contracts 'crate::driver|crate::repository|crate::workflow' named-path ||
+  dependency_matches -n '\brusqlite\b' \
+    "$store_src/contracts" -g '*.rs' -g '!**/tests/**'; then
   echo "orbit-store contracts must not import persistence implementations"
   fail=1
 fi
 
-if dependency_matches -n 'crate::(driver::sqlite|repository|workflow)|use crate::(Store|StoreTx)' \
-  "$store_src/driver/file" -g '*.rs' -g '!**/tests/**'; then
+if ! super_chains_into "$store_src" driver/file 'crate::driver::sqlite|crate::repository|crate::workflow|crate::Store|crate::StoreTx' named-path; then
   echo "orbit-store file driver must not import SQLite, repositories, or workflows"
   fail=1
 fi
 
-if dependency_matches -n 'crate::(driver::file|repository|workflow)' \
-  "$store_src/driver/sqlite" -g '*.rs' -g '!**/tests/**'; then
+if ! super_chains_into "$store_src" driver/sqlite 'crate::driver::file|crate::repository|crate::workflow' named-path; then
   echo "orbit-store SQLite driver must not import file drivers, repositories, or workflows"
   fail=1
 fi
 
-if dependency_matches -n 'crate::(driver|repository|workflow)' \
-  "$store_src/fs" -g '*.rs' -g '!**/tests/**'; then
+if ! super_chains_into "$store_src" fs 'crate::driver|crate::repository|crate::workflow' named-path; then
   echo "orbit-store filesystem primitives must not import drivers or orchestration"
   fail=1
 fi

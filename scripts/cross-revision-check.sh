@@ -86,6 +86,13 @@ die() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --baseline | --candidate | --repo | --baseline-marker | --candidate-marker | \
+      --expect-baseline | --expect-candidate | --workdir | --tail)
+      # `shift 2` fails under `set -e` with no message when the value is missing.
+      [[ $# -ge 2 ]] || die "$1 requires a value"
+      ;;
+  esac
+  case "$1" in
     --baseline) BASELINE_REV="${2:-}"; shift 2 ;;
     --candidate) CANDIDATE_REV="${2:-}"; shift 2 ;;
     --repo) REPO="${2:-}"; shift 2 ;;

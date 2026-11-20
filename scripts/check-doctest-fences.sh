@@ -325,11 +325,31 @@ def physical_lines(text):
     return lines
 
 
+def gap_has_code(lines, first, last):
+    """Whether physical lines `first..last` (1-based, inclusive) hold an item.
+
+    Blank lines, plain `//` comments and attributes (which may span lines) sit
+    between the doc lines of one item; any other line ends that item's docs.
+    """
+    attribute_depth = 0
+    for lineno in range(first, last + 1):
+        stripped = lines[lineno - 1].strip()
+        if attribute_depth == 0:
+            if not stripped or stripped.startswith("//"):
+                continue
+            if not stripped.startswith("#"):
+                return True
+        attribute_depth += stripped.count("[") - stripped.count("]")
+        attribute_depth = max(attribute_depth, 0)
+    return False
+
+
 def doc_lines(text):
     """Doc-comment lines in source order, line docs and block docs together.
 
-    Fence state is one stream per file, as it was when only line comments
-    were visible: a fence opened in one comment closes in a later one.
+    A fence opened in one doc comment closes in a later one only while no item
+    sits between them, since each item has its own docs. Yields `(None, None)`
+    where an item ends the docs so far and the caller drops its open fence.
     Lines that belong to a block doc are not also read as `///` lines.
     """
     lines = physical_lines(text)
@@ -340,16 +360,20 @@ def doc_lines(text):
         occupied.update(range(block["start_line"], block["end_line"] + 1))
     events = []
     for block in blocks:
-        events.append((block["start"], block["contents"]))
+        events.append((block["start"], block["contents"], block["start_line"], block["end_line"]))
     for lineno, line in enumerate(lines, start=1):
         if lineno in occupied:
             continue
         content = line_doc_content(line)
         if content is None:
             continue
-        events.append((offsets[lineno - 1], [(lineno, content)]))
+        events.append((offsets[lineno - 1], [(lineno, content)], lineno, lineno))
     events.sort(key=lambda event: event[0])
-    for _, contents in events:
+    previous_end = None
+    for _, contents, first_line, last_line in events:
+        if previous_end is not None and gap_has_code(lines, previous_end + 1, first_line - 1):
+            yield None, None
+        previous_end = last_line
         for lineno, content in contents:
             yield lineno, content
 
@@ -391,6 +415,9 @@ for path in sorted((root / "crates").glob("*/src/**/*.rs")):
         unreadable.append(f"{path.relative_to(root)}: cannot read source: {error}")
         continue
     for lineno, content in doc_lines(text):
+        if lineno is None:
+            fence = None
+            continue
         fence = consider_fence(path, lineno, content, fence)
 
 if unreadable:
