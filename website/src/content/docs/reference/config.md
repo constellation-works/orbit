@@ -68,7 +68,7 @@ the built-in defaults listed under [Settable keys](#settable-keys).
 
   Other providers add to these pools. Grok appends `grok` to `medium`.
   Antigravity (`agy`) appends `gemini-flash` to `low`, `hydrogen` to
-  `medium`, and `argon` and `neon` to `hard`.
+  `medium`, `argon` and `neon` to `hard`, and `carbon` to `xhard`.
   Muse appends `muse-spark` to `low`, `muse-wonder` to `medium` and
   `muse-wonder-full` to `hard`. Copilot adds nothing.
 - **Purpose pools.** Init keeps only the members whose crew it seeds enabled

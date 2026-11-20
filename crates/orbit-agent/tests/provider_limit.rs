@@ -306,7 +306,7 @@ fn antigravity_quota_command_reports_scoped_windows_without_reading_answer_text(
     let readings = provider_usage_windows(Provider::Antigravity, ANTIGRAVITY_USAGE, None, now);
     assert_eq!(
         readings.len(),
-        13,
+        15,
         "five buckets split by their covered model families"
     );
     for reading in &readings {
@@ -327,7 +327,8 @@ fn antigravity_quota_command_reports_scoped_windows_without_reading_answer_text(
                 Some("2026-10-24T08:49:02Z".parse().unwrap())
             );
             assert!(
-                ["flash", "pro", "neon", "hydrogen"].contains(&reading.model.as_deref().unwrap())
+                ["flash", "pro", "neon", "carbon", "hydrogen"]
+                    .contains(&reading.model.as_deref().unwrap())
             );
         } else {
             assert_eq!(reading.used_percent, Some(0.0));

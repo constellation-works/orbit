@@ -1259,7 +1259,7 @@ holds, pull-drain auth exclusions and probes are its own, and
 (`opus-credits:200usd/30d`).
 
 `orbit init` writes every built-in crew (Claude: `opus`, `sonnet`, `haiku`, and `fable` pinned to `claude-fable-5-2`;
-Codex: `astra`, `sol`, `terra`, `luna`; Antigravity: `gemini-flash`, `argon`, `neon`, `hydrogen`;
+Codex: `astra`, `sol`, `terra`, `luna`; Antigravity: `gemini-flash`, `argon`, `neon`, `hydrogen`, `carbon`;
 Grok: `grok`; Copilot: `copilot`; Muse: `muse-spark`, `muse-wonder`, `muse-wonder-full`;
 no built-in Gemini CLI crew; the `cursor`, `pi`, and `opencode` lanes were [retired](providers.md#provider-identity-and-resolution)), with `enabled = true` on the crews whose
 agent CLI it detects and `enabled = false` on the rest, and points
@@ -1270,7 +1270,7 @@ table, nor a system-crew key. The four
 `workflow.*_complexity_crews` pools are seeded from the detected families
 (Claude only: `haiku` / `sonnet` / `opus` / `fable`; Codex only: `luna` / `terra` /
 `sol` / `astra`; both: `haiku, luna` / `terra, sonnet` / `sol, opus` / `fable, astra`;
-grok joins `medium`; a detected `agy` appends `gemini-flash` to `low`, `hydrogen` to `medium`, and `argon` and `neon` to `hard`;
+grok joins `medium`; a detected `agy` appends `gemini-flash` to `low`, `hydrogen` to `medium`, `argon` and `neon` to `hard`, and `carbon` to `xhard`;
 a detected `muse` appends `muse-spark`, `muse-wonder`, and `muse-wonder-full` to `low`, `medium`, and `hard`;
 Copilot and other families leave them `[]`). A user-authored
 legacy `qa` crew remains loadable, but init never creates it. Init also writes the
