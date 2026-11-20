@@ -381,8 +381,12 @@ spec:
       Add `"blocker": {"kind": "<token>", "evidence": "<why>"}`, on this
       decision only. `kind` is an ASCII letter followed by ASCII letters,
       digits, `_`, `.`, `:` or `-`, at most 64 bytes. Orbit admits no attempt
-      and blocks the task with that kind. Prefer `not_recovered` when you only
-      lack evidence.
+      and, for an ordinary kind, blocks the task with that kind. A kind that
+      names an Orbit upgrade refusal (for example `upgrade_pending`) is the
+      host's state, not the task's: it does not block the task. An owner run or
+      an in-budget claimed release returns the task to the backlog, and only an
+      exhausted claim-release budget holds it. Prefer `not_recovered` when you
+      only lack evidence.
 
     Admission reads only this file. Orbit reads it after this invocation
     completes and ignores your result, comments and summary. A `retry` bound to
