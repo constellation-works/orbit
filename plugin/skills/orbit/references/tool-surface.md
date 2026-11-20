@@ -485,8 +485,12 @@ a multi-task apply, one task's failure does not fail the other tasks'
 applied results: the pipeline guard passes a partially applied apply as
 held, and only the failed task is held. Standalone scheduled discovery also
 holds failed stale repilots for proposed and backlog tasks. A later description
-or acceptance-criteria edit, or an explicit repilot request, can retry; provider
-outages and missing inspection crews do not create this task-dependent hold.
+or acceptance-criteria edit, a person's or agent session's `context_files` edit,
+or an explicit repilot request, can retry; provider outages and missing
+inspection crews do not create this task-dependent hold. A person's or agent
+session's `context_files` edit on a proposed or backlog task whose latest
+assessment holds a warning or an admission hold also queues a fresh automatic
+pilot, so an operator repilot is not needed for that hold.
 
 ### Pilot-warning triage
 
