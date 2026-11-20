@@ -141,7 +141,7 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (9)
+### Building (10)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -154,8 +154,9 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
 | [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Re-file the slice 10 pilot (ORB-21251 archived 2026-11-03, not done) once a bounded mandate with an operator authority grant and a manager session is ready | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
+| [Standing Drain](./design/standing-drain/1_scope.md) | Phase 1 (intent and surfaces) is ORB-25965; the keeper, ORB-25991, follows it | claude |
 
-### Designing (7)
+### Designing (6)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -163,7 +164,6 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Context Index](./design/context-index/1_overview.md) | Decide from the [ORB-24866] measurement whether to file 2_design.md §13 tasks 1–5 in ws_orbit-graph | claude |
 | [Eval Harness](./design/eval-harness/1_overview.md) | Daniel accepted every recommendation in 2_design.md §14; file build-order tasks 1 to 5 once he names the Q7 spend cap and confirms the Q2 box | claude |
 | [Owner Failover](./design/owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions | claude |
-| [Standing Drain](./design/standing-drain/1_scope.md) | Captain/chief review of this scope; ORB-25965 stays someday until promoted | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
 
