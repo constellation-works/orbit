@@ -490,7 +490,7 @@ fn landing_request_refuses_empty_and_dot_only_repository_segments() {
 }
 
 #[cfg(unix)]
-fn isolated() -> bool {
+fn isolated(test: &str) -> bool {
     const MARKER: &str = "ORBIT_TEST_GITHUB_LOG_GOLDEN_CHILD";
     if std::env::var_os(MARKER).is_some() {
         return true;
@@ -515,7 +515,16 @@ case "$*" in
     if [ -f "$fixture_dir/job_$job" ]; then /bin/cat "$fixture_dir/job_$job"; exit 0; fi
     printf 'gh: Not Found (HTTP 404) token=ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' >&2
     exit 1 ;;
+  *actions/jobs/*)
+    [ -f "$fixture_dir/denied" ] && { echo 'HTTP 404: Not Found' >&2; exit 1; }
+    [ -f "$fixture_dir/job_metadata" ] && { /bin/cat "$fixture_dir/job_metadata"; exit 0; }
+    exit 1 ;;
+  *actions/runs/*)
+    [ -f "$fixture_dir/denied" ] && { echo 'HTTP 404: Not Found' >&2; exit 1; }
+    [ -f "$fixture_dir/run_metadata" ] && { /bin/cat "$fixture_dir/run_metadata"; exit 0; }
+    exit 1 ;;
   *--log*)
+    [ -f "$fixture_dir/denied" ] && { echo 'HTTP 404: Not Found' >&2; exit 1; }
     if [ -f "$fixture_dir/run_error" ]; then /bin/cat "$fixture_dir/run_error" >&2; exit 1; fi
     /bin/cat "$fixture_dir/run_log"; exit 0 ;;
   *--json*) /bin/cat "$fixture_dir/view.json"; exit 0 ;;
@@ -538,24 +547,16 @@ exit 1
     )))
     .unwrap();
     command
-        .args([
-            "--exact",
-            "public_tool_surface::github_log_goldens::fallback_fixture_goldens",
-            "--nocapture",
-            "--test-threads=1",
-        ])
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
         .env(MARKER, "1")
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
+        .env("ORBIT_ROOT", home.path().join("orbit-root"))
         .env("PATH", path)
         .current_dir(home.path());
-    let output = orbit_common::test_env::run_child_test(
-        &mut command,
-        "public_tool_surface::github_log_goldens::fallback_fixture_goldens",
-        home.path(),
-    );
+    let output = orbit_common::test_env::run_child_test(&mut command, test, home.path());
     orbit_common::test_env::assert_child_test_passed(
-        "public_tool_surface::github_log_goldens::fallback_fixture_goldens",
+        test,
         output.status,
         output.stdout,
         output.stderr,
@@ -566,7 +567,7 @@ exit 1
 #[test]
 #[cfg(unix)]
 fn fallback_fixture_goldens() {
-    if !isolated() {
+    if !isolated("public_tool_surface::github_log_goldens::fallback_fixture_goldens") {
         return;
     }
     golden("fallback", &read("fallback.json"), |case| {
@@ -668,4 +669,199 @@ fn fallback_fixture_goldens() {
             Err(error) => json!({"error": error.to_string(), "calls": calls, "cwds": cwds}),
         }
     });
+}
+
+/// What the registered log tool did over one scripted job, as the fake `gh`
+/// saw it. Every read goes through `ToolRegistry`, so the cache is enabled and
+/// located by the shipped wiring, not by the test.
+#[cfg(unix)]
+struct CachedJobRead {
+    root: TempDir,
+    registry: ToolRegistry,
+}
+
+#[cfg(unix)]
+impl CachedJobRead {
+    /// A completed job whose log is numbered lines tagged `tag`, in a fresh
+    /// fixture directory and an empty cache.
+    fn new(tag: &str) -> (Self, orbit_common::test_env::ScopedEnv) {
+        let _ = std::fs::remove_dir_all(Self::cache_dir());
+        let root = TempDir::new().unwrap();
+        let env = orbit_common::test_env::scoped([(
+            "GH_GOLDEN_CASE",
+            Some(root.path().to_str().unwrap()),
+        )]);
+        let mut registry = ToolRegistry::new();
+        registry.register_builtins();
+        let read = Self { root, registry };
+        read.set_log(tag);
+        read.set_job("completed", "acme/orbit");
+        (read, env)
+    }
+
+    fn cache_dir() -> PathBuf {
+        PathBuf::from(std::env::var_os("ORBIT_ROOT").unwrap())
+            .join(orbit_tools::GITHUB_RUN_LOG_CACHE_DIR)
+    }
+
+    fn set_log(&self, tag: &str) {
+        let log: String = (1..=40)
+            .map(|line| format!("build\tTest\t2026-11-20T02:00:00.0000000Z {tag} line {line}\n"))
+            .collect();
+        std::fs::write(self.root.path().join("job_9"), &log).unwrap();
+        std::fs::write(self.root.path().join("run_log"), log).unwrap();
+    }
+
+    fn set_job(&self, status: &str, repository: &str) {
+        let url = format!("https://api.github.com/repos/{repository}/actions/jobs/9");
+        let body = json!({"id": 9, "run_id": 123, "status": status, "url": url});
+        std::fs::write(self.root.path().join("job_metadata"), body.to_string()).unwrap();
+    }
+
+    fn deny(&self) {
+        std::fs::write(self.root.path().join("denied"), "").unwrap();
+    }
+
+    fn read(&self, window: Value) -> Result<Value, orbit_common::OrbitError> {
+        let mut input = json!({"run": "123", "job": "9", "scope": "all"});
+        for (key, value) in window.as_object().unwrap() {
+            input[key] = value.clone();
+        }
+        self.registry
+            .execute("github.run.logs", &ToolContext::default(), input)
+    }
+
+    fn calls(&self) -> Vec<String> {
+        std::fs::read_to_string(self.root.path().join("calls"))
+            .unwrap_or_default()
+            .lines()
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    /// Whole-log downloads, as opposed to status requests.
+    fn downloads(&self) -> usize {
+        self.calls()
+            .iter()
+            .filter(|call| call.starts_with("run view") && call.contains("--log"))
+            .count()
+    }
+
+    fn cache_entries(&self) -> Vec<PathBuf> {
+        std::fs::read_dir(Self::cache_dir())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .collect()
+    }
+}
+
+#[cfg(unix)]
+fn log_text(output: &Value) -> &str {
+    output["log"].as_str().unwrap()
+}
+
+/// A second window of a completed job's log is served from the cache: one
+/// download for both, and only the status request that proves current access.
+#[test]
+#[cfg(unix)]
+fn two_windows_of_a_completed_job_download_its_log_once() {
+    if !isolated(
+        "public_tool_surface::github_log_goldens::two_windows_of_a_completed_job_download_its_log_once",
+    ) {
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let (job, _env) = CachedJobRead::new("first");
+    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+
+    let early = job.read(json!({"byte_start": 0, "byte_end": 60})).unwrap();
+    let calls_after_first = job.calls();
+    let later = job.read(json!({"line_start": 5, "line_end": 8})).unwrap();
+    let repeat = job.read(json!({"byte_start": 0, "byte_end": 60})).unwrap();
+
+    assert_eq!(
+        job.downloads(),
+        1,
+        "three reads of one completed job download it once: {:?}",
+        job.calls()
+    );
+    assert_eq!(
+        job.calls()[calls_after_first.len()..],
+        [
+            "api --method GET repos/{owner}/{repo}/actions/jobs/9",
+            "api --method GET repos/{owner}/{repo}/actions/jobs/9",
+        ],
+        "a warm read makes only the status request that proves current access"
+    );
+    assert!(log_text(&early).contains("first line 1"));
+    assert!(log_text(&later).contains("first line 5"));
+    assert_eq!(early, repeat, "a warm read renders what the cold one did");
+
+    let entries = job.cache_entries();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(mode(&CachedJobRead::cache_dir()), 0o700);
+    assert_eq!(mode(&entries[0]), 0o600);
+
+    // An entry past the age bound is a miss: the log is downloaded again.
+    let day_and_a_bit = std::time::Duration::from_secs(25 * 60 * 60);
+    std::fs::File::options()
+        .write(true)
+        .open(&entries[0])
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - day_and_a_bit)
+        .unwrap();
+    job.read(json!({"line_start": 5, "line_end": 8})).unwrap();
+    assert_eq!(job.downloads(), 2, "an expired entry is not served");
+}
+
+/// The cache never widens what a caller may read: only a job the provider
+/// reports completed is cached, and a cached log is served only while the
+/// caller's own status request succeeds for the same resolved repository.
+#[test]
+#[cfg(unix)]
+fn a_cached_job_log_is_served_only_to_a_caller_that_may_read_it_now() {
+    if !isolated(
+        "public_tool_surface::github_log_goldens::a_cached_job_log_is_served_only_to_a_caller_that_may_read_it_now",
+    ) {
+        return;
+    }
+    let window = || json!({"line_start": 5, "line_end": 8});
+
+    let (running, env) = CachedJobRead::new("first");
+    running.set_job("in_progress", "acme/orbit");
+    running.read(window()).unwrap();
+    running.read(window()).unwrap();
+    assert_eq!(running.downloads(), 2, "a running job is always re-read");
+    assert!(running.cache_entries().is_empty(), "and never cached");
+    drop(env);
+
+    let (refused, env) = CachedJobRead::new("first");
+    refused.read(window()).unwrap();
+    assert_eq!(refused.cache_entries().len(), 1);
+    refused.deny();
+    let error = refused.read(window()).unwrap_err().to_string();
+    assert!(!error.contains("first line"), "{error}");
+    assert_eq!(
+        refused.downloads(),
+        2,
+        "a refused read still asks the provider rather than serving the cache"
+    );
+    drop(env);
+
+    let (moved, _env2) = CachedJobRead::new("first");
+    // The unqualified `{owner}/{repo}` request resolves to another repository
+    // once the checkout it runs in changes; the same ids are another job.
+    let first = moved.read(window()).unwrap();
+    assert!(log_text(&first).contains("first line 5"));
+    moved.set_job("completed", "other/repo");
+    moved.set_log("other");
+    let second = moved.read(window()).unwrap();
+    assert!(
+        log_text(&second).contains("other line 5"),
+        "another repository's read never returns the first one's log"
+    );
+    assert_eq!(moved.downloads(), 2);
+    assert_eq!(moved.cache_entries().len(), 2);
 }

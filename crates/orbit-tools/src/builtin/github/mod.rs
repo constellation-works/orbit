@@ -26,6 +26,3 @@ pub mod run;
 pub mod task_prs;
 
 pub(crate) mod landing;
-
-#[cfg(test)]
-mod tests;
