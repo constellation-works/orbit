@@ -76,6 +76,7 @@
   font: inherit; text-decoration: underline; cursor: pointer;
 }
 .fc-link:hover { color: var(--accent-hover); }
+.fc-bounded-gap { color: var(--warn-fg); }
 .fc-subset strong { color: var(--fg); font-weight: 500; }
 
 /* Tasks: one line per task; the evidence is behind each row's icon. Wide
