@@ -22,9 +22,12 @@ orphaned run is reported by `job-runs` and left as it was found. It opens the wo
 write-free: it never creates or migrates the store database or the task registry, and it
 upgrades no workspace layout, before it audits. A workspace whose stores were never created
 (`orbit init` and `orbit workspace init` do not create them), or whose stores exist but fail the
-open with a store error such as a ledger older than the binary, reports a `runtime` error row
-naming the setup step (run any ordinary command such as `orbit task list` once, then rerun
-`orbit doctor`); doctor leaves the stores as it found them. A workspace whose job definitions are not
+open because a supported store still owes a writable migration, such as a ledger older than the
+binary, reports a `runtime` error row naming the setup step (run any ordinary command such as
+`orbit task list` once, then rerun `orbit doctor`); doctor leaves the stores as it found them. A
+store this binary cannot read, such as a registry schema newer than it supports, is not
+migratable that way: doctor fails with the store's own error, which says to upgrade the selected
+Orbit executable. A workspace whose job definitions are not
 installed yet reports `pull-protocol` and `pull-gates` as `skipped` and names `orbit init`.
 Only the `--fix-*` repairs, `--remove-graph`, and `doctor admission-receipts --compact` open the
 writable runtime.

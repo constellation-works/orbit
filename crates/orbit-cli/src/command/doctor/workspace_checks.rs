@@ -19,9 +19,11 @@ impl DoctorCommand {
     /// runtime write-free, so a workspace whose stores were never created or
     /// whose stores need a migration fails that open; the report then names
     /// the setup step instead of the bare storage error (STD-01 §R31). Stores
-    /// that exist but fail the open with a store error are the migration
-    /// case. Any other bootstrap failure with both stores present still
-    /// fails closed. A misplaced
+    /// that exist but whose open refusal says a writable open is still owed
+    /// are the migration case. A store this binary cannot read (an
+    /// unsupported schema, which a writable open cannot migrate) and any other
+    /// bootstrap failure with both stores present still fail closed with the
+    /// store's own upgrade or recovery guidance. A misplaced
     /// global `[plugin_enablement]` table, read straight from the host config
     /// because that table is what makes the layered config refuse to load, is
     /// reported alongside.
@@ -44,7 +46,7 @@ impl DoctorCommand {
         let misplaced = orbit_cmd::misplaced_plugin_enablement_row(&global_root);
         let missing_store = !global_root.join("orbit.db").exists()
             || !global_root.join("tasks").join("index.sqlite").exists();
-        let needs_migration = !missing_store && matches!(bootstrap, OrbitError::Store(_));
+        let needs_migration = !missing_store && bootstrap.owes_writable_store_open();
         if misplaced.is_none() && !missing_store && !needs_migration {
             return None;
         }
