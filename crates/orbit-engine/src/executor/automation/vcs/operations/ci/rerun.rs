@@ -424,7 +424,7 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_failed(
         let refreshed: orbit_types::workflow::PrInfrastructureEvidence =
             serde_json::from_value(refreshed["evidence"].clone())
                 .map_err(|_| super::super::prerequisite::unreadable("refreshed prerequisite"))?;
-        if refreshed != expected {
+        if !expected.same_verified_evidence(&refreshed) {
             return Err(super::super::prerequisite::unreadable(
                 "evidence changed before mutation",
             ));

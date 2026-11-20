@@ -7062,6 +7062,9 @@ if [ -f "$forge/infrastructure" ]; then
         "run view")
             # A planted marker hangs the job-log read until the supervisor kills it.
             if [ -f "$forge/infra-log-hang" ]; then sleep 30; fi
+            # A planted marker makes the diagnosis vanish once the reservation
+            # is durable, as an empty or throttled view would.
+            if [ -f "$forge/infra-log-vanishes" ] && [ -f "$forge/infra-reserved" ]; then exit; fi
             cat "$forge/infra-log"; exit ;;
         "run rerun")
             [ -f "$forge/infra-reserved" ] || { echo 'rerun without durable reservation' >&2; exit 2; }
