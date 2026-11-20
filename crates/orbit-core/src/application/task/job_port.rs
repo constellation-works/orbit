@@ -50,6 +50,10 @@ pub(in crate::application) enum DeliveryCompletion {
     Authorized {
         /// That run.
         run_id: String,
+        /// The run held on `delivery_check_runs_absent`: the head had no
+        /// required check run to watch, so a merge needs a required check
+        /// that has since passed on it.
+        needs_passed_check: bool,
     },
 }
 
