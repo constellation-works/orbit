@@ -1294,9 +1294,15 @@ token = re.compile(
     r'|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")'
     r'|(?P<literal>(?:b|c)?"(?:\\[\s\S]|[^"\\])*"'
     r"|b?'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F_]+\}|[^\n])|[^'\\\n])')"
-    r"|::|[a-zA-Z_][a-zA-Z_0-9]*|\S"
+    r"|::|r\#[a-zA-Z_][a-zA-Z_0-9]*|[a-zA-Z_][a-zA-Z_0-9]*|\S"
 )
 block_delimiter = re.compile(r"/\*|\*/")
+
+
+def segment_name(token_text):
+    # [ORB-26107] `r#builtin` names the module `builtin`. Keywords keep their
+    # raw spelling, so `r#use` is never read as a `use` item.
+    return token_text.removeprefix("r#")
 
 
 def code_tokens(source):
@@ -1325,7 +1331,7 @@ def code_tokens(source):
 def use_tree(tokens, index, prefix=()):
     paths = []
     while index + 1 < len(tokens) and tokens[index + 1][0] == "::":
-        prefix += (tokens[index][0],)
+        prefix += (segment_name(tokens[index][0]),)
         index += 2
     if index < len(tokens) and tokens[index][0] == "{":
         index += 1
@@ -1339,7 +1345,7 @@ def use_tree(tokens, index, prefix=()):
         if index < len(tokens) and tokens[index][0] == "}":
             index += 1
     elif index < len(tokens):
-        paths.append(prefix + (tokens[index][0],))
+        paths.append(prefix + (segment_name(tokens[index][0]),))
         index += 1
         if index < len(tokens) and tokens[index][0] == "as":
             index += 2
@@ -1372,7 +1378,7 @@ for path in paths:
         if any(segment in forbidden for segments in imported for segment in segments):
             report(start)
     for index, (name, start) in enumerate(tokens):
-        if name not in forbidden:
+        if segment_name(name) not in forbidden:
             continue
         previous = tokens[index - 1][0] if index else ""
         following = tokens[index + 1][0] if index + 1 < len(tokens) else ""
