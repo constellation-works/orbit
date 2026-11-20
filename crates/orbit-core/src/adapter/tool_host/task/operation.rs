@@ -134,7 +134,22 @@ pub(in crate::adapter::tool_host) fn dispatch(
                 .get("discard_candidate")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            let response = runtime.requeue_blocked_task(&id, &reason, discard)?;
+            let response = if resident_cycle_admitted {
+                // The trusted identity of the cycle's run, never the host's
+                // process actor, which may resolve to a person.
+                let family = orbit_types::identity::require_canonical_agent_family(
+                    caller.agent.as_deref(),
+                    caller.model.as_deref(),
+                )?
+                .ok_or_else(|| {
+                    OrbitError::CapabilityDenied(
+                        "a resident requeue needs the cycle run's agent identity".into(),
+                    )
+                })?;
+                runtime.requeue_blocked_task_as_resident(&id, &reason, discard, &family)?
+            } else {
+                runtime.requeue_blocked_task(&id, &reason, discard)?
+            };
             Ok((response, Some(id)))
         }
         TaskVerb::BlockTriage => block_triage(runtime, caller, &input),
