@@ -43,7 +43,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::validation_tools::{
-    names_tool, positive_validation_sentences, sentence_requires_tool_invocation,
+    names_tool, positive_criterion_sentences, sentence_requires_tool_invocation,
 };
 use crate::application::task::{
     OperatorValidationRequirement, TaskJobPort, operator_validation_requirements,
@@ -228,17 +228,25 @@ impl ImplementationLane {
                 }
             }
         }
-        for (_, sentence) in positive_validation_sentences(task) {
-            if requires_owner_sign_off(&sentence) {
-                findings.push(OWNER_SIGN_OFF_FINDING.into());
-                if findings.is_full() {
-                    return findings.ordered;
+        for (_, criterion, sentences) in positive_criterion_sentences(task) {
+            for sentence in sentences {
+                if requires_owner_sign_off(&sentence) {
+                    findings.push(OWNER_SIGN_OFF_FINDING.into());
+                    if findings.is_full() {
+                        return findings.ordered;
+                    }
                 }
-            }
-            for tool in self.tools_named_in(&sentence) {
-                self.report(tool, &sentence, granted.as_deref(), &mut findings);
-                if findings.is_full() {
-                    return findings.ordered;
+                for tool in self.tools_named_in(&sentence) {
+                    self.report(
+                        tool,
+                        &sentence,
+                        &criterion,
+                        granted.as_deref(),
+                        &mut findings,
+                    );
+                    if findings.is_full() {
+                        return findings.ordered;
+                    }
                 }
             }
         }
@@ -271,6 +279,7 @@ impl ImplementationLane {
         &self,
         tool: &str,
         sentence: &str,
+        criterion: &str,
         granted: Option<&[String]>,
         findings: &mut Findings,
     ) {
@@ -303,15 +312,161 @@ impl ImplementationLane {
             findings.push(finding);
         }
 
-        if let Some((_, credential)) = EXTERNAL_CREDENTIALS
-            .iter()
-            .find(|(family, _)| tool.starts_with(family))
+        // Only a criterion that asks the implementer to invoke the tool
+        // against the live credentialed service needs external credentials.
+        // A subject-only mention or a criterion stating a credential-free run
+        // (fake executable, fixture, no live API) stays clear [ORB-25953].
+        if sentence_requires_tool_invocation(sentence, tool)
+            && let Some((_, credential)) = EXTERNAL_CREDENTIALS
+                .iter()
+                .find(|(family, _)| tool.starts_with(family))
+            && !states_credential_free_run(criterion, credential)
         {
             findings.push(format!(
                 "acceptance criterion requires `{tool}`, whose result depends on {credential} in the executing lane; `required_tools` cannot supply credentials, so state that precondition or hand the check to an operator"
             ));
         }
     }
+}
+
+/// Whether `criterion` states that the run needs no `credential` — for
+/// example, no authentication/credentials needed, no live API call, or an
+/// isolated fake/stub/mock executable or fixture.
+fn states_credential_free_run(criterion: &str, credential: &str) -> bool {
+    let padded = format!(" {} ", normalize_prose(criterion));
+    let credential = normalize_prose(credential);
+
+    let no_credential_phrases = [
+        format!(" no {credential} "),
+        format!(" without {credential} "),
+        format!(" not need {credential} "),
+        format!(" not require {credential} "),
+        format!(" {credential} is not needed "),
+        format!(" {credential} is not required "),
+    ];
+    if no_credential_phrases
+        .iter()
+        .any(|phrase| padded.contains(phrase))
+    {
+        return true;
+    }
+
+    const CREDENTIAL_FREE_PHRASES: &[&str] = &[
+        " no github auth ",
+        " without github auth ",
+        " not need github auth ",
+        " not require github auth ",
+        " no authentication ",
+        " without authentication ",
+        " not need authentication ",
+        " not require authentication ",
+        " authentication is not needed ",
+        " authentication is not required ",
+        " no auth ",
+        " without auth ",
+        " no credentials ",
+        " without credentials ",
+        " not need credentials ",
+        " not require credentials ",
+        " credentials are not needed ",
+        " credentials are not required ",
+        " credential free ",
+        " auth free ",
+        " no live api ",
+        " no live github ",
+        " no live call ",
+        " no live calls ",
+        " no live network ",
+        " no live service ",
+        " without live api ",
+        " without a live api ",
+        " without live github ",
+        " without calling live ",
+        " without hitting live ",
+        " without network ",
+        " not call live ",
+        " not hit live ",
+        " not touch live ",
+        " not make live ",
+        " not make a live ",
+        " never calls live ",
+        " never hits live ",
+        " never makes live ",
+        " offline mode ",
+        " offline test ",
+        " offline fixture ",
+        " offline harness ",
+        " runs offline ",
+        " run offline ",
+        " canned response ",
+        " canned fixture ",
+        " recorded response ",
+        " recorded fixture ",
+        " golden fixture ",
+    ];
+    if CREDENTIAL_FREE_PHRASES
+        .iter()
+        .any(|phrase| padded.contains(phrase))
+    {
+        return true;
+    }
+
+    const FAKE_EXECUTABLE_PHRASES: &[&str] = &[
+        " fake gh ",
+        " fake executable ",
+        " fake binary ",
+        " fake cli ",
+        " fake tool ",
+        " fake script ",
+        " fake command ",
+        " stub gh ",
+        " stubbed gh ",
+        " stub executable ",
+        " stub binary ",
+        " stub cli ",
+        " mock gh ",
+        " mocked gh ",
+        " mock executable ",
+        " mock binary ",
+        " mock cli ",
+        " mock server ",
+        " mock github ",
+        " mocked api ",
+        " gh fixture ",
+        " fixture gh ",
+        " fixture binary ",
+        " fixture executable ",
+        " fixture script ",
+        " fixture response ",
+        " fixture data ",
+    ];
+    FAKE_EXECUTABLE_PHRASES.iter().any(|phrase| {
+        padded.match_indices(phrase).any(|(idx, _)| {
+            let prefix = &padded[..idx];
+            !prefix.ends_with(" not") && !prefix.ends_with(" not a")
+        })
+    })
+}
+
+/// Normalize prose to lowercase ASCII alphanumeric words separated by single
+/// spaces, expanding `n't` contractions so negated requirements match cleanly.
+fn normalize_prose(text: &str) -> String {
+    let lowered = text.to_ascii_lowercase().replace("n't", " not");
+    let mut normalized = String::with_capacity(lowered.len());
+    let mut prev_space = true;
+    for ch in lowered.chars() {
+        if ch.is_ascii_alphanumeric() {
+            normalized.push(ch);
+            prev_space = false;
+        } else if !prev_space {
+            normalized.push(' ');
+            prev_space = true;
+        }
+    }
+    if normalized.ends_with(' ') {
+        normalized.pop();
+    }
+    normalized
 }
 
 /// Whether `sentence` requires an owner or operator sign-off. A sign-off term

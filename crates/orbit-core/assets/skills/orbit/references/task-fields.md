@@ -618,9 +618,12 @@ another OS (see [Native host evidence](#native-host-evidence)).
   criterion means running the tool) becomes an operator validation hold and
   keeps this finding; a mention the pilot leaves unclassified, or classifies
   malformed, holds as `invoke`.
-- **External credentials.** `github.*` reads depend on authentication the lane
-  may not hold, so state that precondition instead of treating a
-  capability-unavailable result as a pass.
+- **External credentials.** Calling a `github.*` tool against live GitHub
+  depends on authentication the lane may not hold, so state that precondition
+  or hand the check to an operator instead of treating a capability-unavailable
+  result as a pass. A criterion that names `github.*` only as the subject
+  under test or states a credential-free run (such as a fake `gh` or no live
+  API) is not flagged.
 
 A criterion that *expects* a refusal is a correct negative test, and a tool
 name inside a quoted example is a copied observation, not a requirement.
