@@ -5,7 +5,7 @@ tags: [operations, health, doctor, dashboard, routines]
 paths: ["crates/orbit-cmd/src/doctor/mod.rs", "crates/orbit-core/src/application/job/run/reconcile.rs"]
 related_features: [orbit-core, activity-job, routines]
 related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986, ORB-11791, ORB-12109, ORB-12223, ORB-12244, ORB-12968]
-last_validated: 2026-11-18
+last_validated: 2026-11-19
 ---
 
 # Check Orbit Health
@@ -149,15 +149,26 @@ $ orbit doctor --format table
 
 The command exits nonzero only when at least one check is `ERROR`; warnings and skips exit
 zero. `--json` emits an array of objects with `check`, `status`, `message`, `remediation`, and `duration_ms`
-fields; statuses are lowercase and `remediation` is `null` for healthy/skipped rows. The
-array starts with the `resource-throttle` info row, whose `duration_ms` is `0`. Repair rows
-requested on the same invocation follow it, in the order the command runs them, and appear
-only when repair flags are passed. Then come the workspace probe rows, followed by the report
-probe rows, which begin with host-level checks such as `build-budget`. The JSON array keeps
-this order, which differs from the table's. Human-readable rows are sorted by severity
-(`ERROR`, then `warning`, `ok`, `info` and `skipped`, the labels the table prints), retaining
-report order within each severity. Human output prints the same guidance as an `Action:`
-line and includes elapsed seconds on rows that take more than one second.
+fields; statuses are lowercase and `remediation` is `null` for healthy/skipped rows. In the
+full report, the array starts with the `resource-throttle` info row, whose `duration_ms` is `0`.
+Repair rows requested on the same invocation follow it, in the order the command runs them, and
+appear only when repair flags are passed. Then come the workspace probe rows, followed by the
+report probe rows, which begin with host-level checks such as `build-budget`. The full report's
+JSON array keeps this order, which differs from the table's. Human-readable rows are sorted by
+severity (`ERROR`, then `warning`, `ok`, `info` and `skipped`, the labels the table prints),
+retaining report order within each severity. Human output prints the same guidance as an
+`Action:` line and includes elapsed seconds on rows that take more than one second.
+
+A plain `orbit doctor`, with or without `--json`, has one degraded exception to that full
+report. If a misplaced global `[plugin_enablement]` table in the host config stops the runtime
+from opening, the command reads that table from the config file instead of failing with the
+bootstrap error. It then reports exactly two error rows, in this order: `plugin-enablement`,
+with the table's location and remediation, and `runtime`, whose message says no other check ran
+and carries the bootstrap error. In `--json`, the output is a two-element array with no
+`resource-throttle` row, no repair rows and no probe rows, and the command exits 1. On this
+path, `--check` can name only `plugin-enablement` or `runtime`. Repair flags and focused
+subcommands never take this path; they fail with the bootstrap error. Consumers should match
+rows by `check` name rather than by position.
 
 Each probe runs once per invocation, and its `duration_ms` is that invocation's wall time.
 A probe that emits several rows copies that one duration onto each row. For example, a
