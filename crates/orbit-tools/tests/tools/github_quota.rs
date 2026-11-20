@@ -557,6 +557,63 @@ fn slow_rate_limit_probe_bounds_to_request_timeout_and_skips_expired_request() {
     assert!(gh_zero.calls().is_empty());
 }
 
+/// Regression [ORB-26104]: a read whose budget a slow probe spent before the
+/// child could start is not charged. A known record keeps its remaining count
+/// and protected-call counts, while a request that does run still counts once.
+#[test]
+fn request_timed_out_before_spawn_is_not_charged_to_a_known_record() {
+    let records = TempDir::new().unwrap();
+    let policy = GithubQuotaPolicy::default();
+    let gh = FakeGh::new("hang", "ok");
+    let mut request = gh.request(&["run", "view", "123"]);
+    request.timeout_ms = Some(60);
+    let account = github_quota::request_account_key(&request);
+    let seeded_at = now() - 10_000;
+    store(records.path()).refresh_if_due(&policy, &account, seeded_at, &|| {
+        known(4000, seeded_at + 20_000)
+    });
+    let core = |status: github_quota::GithubQuotaStatus| status.resources[0].clone();
+    let before = core(store(records.path()).status(&policy, &account, now()));
+    assert_eq!(before.remaining, Some(4000));
+
+    let result = github_quota::with_scoped_guard(store(records.path()), policy, || {
+        github_quota::run_gh_request(GithubCaller::Delivery, &request)
+    })
+    .unwrap();
+    assert!(result.timed_out, "{result:?}");
+    assert_eq!(gh.calls(), vec!["api rate_limit".to_string()]);
+    let after = core(store(records.path()).status(&policy, &account, now()));
+    assert_eq!(
+        after.remaining,
+        Some(4000),
+        "a request that never ran is free"
+    );
+    assert_eq!(
+        (
+            after.calls.delivery,
+            after.calls.background,
+            after.calls.agent
+        ),
+        (0, 0, 0)
+    );
+
+    // A request with budget to run counts once.
+    let ran = FakeGh::new("{}", "ok");
+    let mut runnable = ran.request(&["run", "view", "123"]);
+    runnable.timeout_ms = Some(5_000);
+    let runnable_account = github_quota::request_account_key(&runnable);
+    store(records.path()).refresh_if_due(&policy, &runnable_account, now(), &|| {
+        known(4000, now() + 1800)
+    });
+    github_quota::with_scoped_guard(store(records.path()), policy, || {
+        github_quota::run_gh_request(GithubCaller::Delivery, &runnable)
+    })
+    .unwrap();
+    let counted = core(store(records.path()).status(&policy, &runnable_account, now()));
+    assert_eq!(counted.calls.delivery, 1);
+    assert_eq!(counted.remaining, Some(3999));
+}
+
 /// Regression [ORB-26103]: a caller that spawns the child itself through
 /// `admit_gh_request_within_budget` gets only the budget left after admission,
 /// and no request to spawn once admission spent all of it. A record lock held
