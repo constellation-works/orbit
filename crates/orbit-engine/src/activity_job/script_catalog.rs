@@ -19,8 +19,8 @@ use thiserror::Error;
 
 use orbit_types::resource::{ResourceKind, ResourceMetadata};
 use orbit_types::workflow::activity_job::{
-    SCRIPT_GRANT_DIGEST_DOMAIN, ScriptSpec, ScriptValidationError, script_interpreter_from_shebang,
-    script_sha256_hex, validate_script_spec,
+    ScriptSpec, ScriptValidationError, script_interpreter_from_shebang, script_sha256_hex,
+    validate_script_spec,
 };
 
 /// One loaded script manifest plus what grant and dispatch decisions are
@@ -530,7 +530,3 @@ impl V2ScriptCatalog {
         self.scripts_dir.join(format!("{name}.yaml"))
     }
 }
-
-// Keep the digest domain reachable beside the catalog so a reader tracing
-// the grant binding finds it from the loader as well as from the types.
-pub const SCRIPT_DIGEST_DOMAIN: &str = SCRIPT_GRANT_DIGEST_DOMAIN;
