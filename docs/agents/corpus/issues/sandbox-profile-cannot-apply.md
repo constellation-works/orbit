@@ -43,9 +43,9 @@ Durable source evidence: task histories/comments retrieved with `orbit.task.show
 
 | Date (UTC) | Task | Run | Matched signature and source | Outcome |
 | --- | --- | --- | --- | --- |
-| 2026-10-28T02:04:28.397828986Z | ORB-19265 | jrun-20261028-0149-c1 | nested sandbox profile cannot be applied / native sandbox evidence cannot be obtained; source ORB-19265 history:blocked_triage@2026-10-28T02:04:28.397828986Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
-| 2026-10-30T04:37:07.805136364Z | ORB-20040 | not recorded in triage comment | nested sandbox profile cannot be applied / native sandbox evidence cannot be obtained; source ORB-20040 history:blocked_triage@2026-10-30T04:37:07.805136364Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
-| 2026-10-31T01:19:57.007423130Z | ORB-20250 | jrun-20261031-0023-c1 | nested sandbox profile cannot be applied / native sandbox evidence cannot be obtained; source ORB-20250 history:blocked_triage@2026-10-31T01:19:57.007423130Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-28T02:04:28.397828986Z | ORB-19265 | jrun-20261028-0149-c1 | nested sandbox profile cannot be applied / native sandbox evidence cannot be obtained; source ORB-19265 history:blocked_task_triaged@2026-10-28T02:04:28.397828986Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-30T04:37:07.805136364Z | ORB-20040 | not recorded in triage comment | nested sandbox profile cannot be applied / native sandbox evidence cannot be obtained; source ORB-20040 history:blocked_task_triaged@2026-10-30T04:37:07.805136364Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-31T01:19:57.007423130Z | ORB-20250 | jrun-20261031-0023-c1 | nested sandbox profile cannot be applied / native sandbox evidence cannot be obtained; source ORB-20250 history:blocked_task_triaged@2026-10-31T01:19:57.007423130Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
 
 ### ORB-22592 owner scan, 2026-11-07
 

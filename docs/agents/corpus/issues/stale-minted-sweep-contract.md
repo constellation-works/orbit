@@ -21,7 +21,7 @@ Do not requeue; it fails again. Fix the effective definition first. Daniel force
 
 ## Fix task
 
-ORB-20132 (on-call, in review, not landed).
+ORB-20132 (on-call, done since 2026-11-02 after human review approval).
 
 ## Occurrences
 
@@ -40,9 +40,9 @@ Durable source evidence: task histories/comments retrieved with `orbit.task.show
 
 | Date (UTC) | Task | Run | Matched signature and source | Outcome |
 | --- | --- | --- | --- | --- |
-| 2026-10-27T19:44:00.194077208Z | ORB-19150 | jrun-20261027-1930-c17 | sweep contract counts/partition cannot be satisfied in one leaf (incomplete_scenario_counts / incomplete_code_health_sweep); source ORB-19150 history:blocked_triage@2026-10-27T19:44:00.194077208Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
-| 2026-10-28T21:37:09.777768618Z | ORB-19588 | jrun-20261028-2111-c16 | sweep contract counts/partition cannot be satisfied in one leaf (incomplete_scenario_counts / incomplete_code_health_sweep); source ORB-19588 history:blocked_triage@2026-10-28T21:37:09.777768618Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
-| 2026-10-30T09:02:05.953604399Z | ORB-20125 | not recorded in triage comment | sweep contract counts/partition cannot be satisfied in one leaf (incomplete_scenario_counts / incomplete_code_health_sweep); source ORB-20125 history:blocked_triage@2026-10-30T09:02:05.953604399Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-27T19:44:00.194077208Z | ORB-19150 | jrun-20261027-1930-c17 | sweep contract counts/partition cannot be satisfied in one leaf (incomplete_scenario_counts / incomplete_code_health_sweep); source ORB-19150 history:blocked_task_triaged@2026-10-27T19:44:00.194077208Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-28T21:37:09.777768618Z | ORB-19588 | jrun-20261028-2111-c16 | sweep contract counts/partition cannot be satisfied in one leaf (incomplete_scenario_counts / incomplete_code_health_sweep); source ORB-19588 history:blocked_task_triaged@2026-10-28T21:37:09.777768618Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
+| 2026-10-30T09:02:05.953604399Z | ORB-20125 | not recorded in triage comment | sweep contract counts/partition cannot be satisfied in one leaf (incomplete_scenario_counts / incomplete_code_health_sweep); source ORB-20125 history:blocked_task_triaged@2026-10-30T09:02:05.953604399Z | blocked_triage disposition=human_only recorded in ORB-22246 resume pass |
 
 ### ORB-22592 owner scan, 2026-11-07
 
