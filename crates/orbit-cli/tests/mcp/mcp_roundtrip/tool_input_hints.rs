@@ -18,7 +18,7 @@ fn mcp_missing_records_name_a_recovery_tool_or_field() {
             "orbit_task_show",
             json!({"id": task_id, "field": "delivery", "run_id": "missing-run"}),
             "not_found",
-            "delivery",
+            "`orbit_run {\"action\":\"list\"}`",
         ),
         (
             "orbit_decision",
