@@ -42,7 +42,7 @@ pub struct DrainIntentRecord {
     /// Who set it: the acting identity of the process that started or
     /// stopped the drain.
     pub actor: String,
-    /// The surface it came from (`cli`, `dashboard`, `desktop`, ...).
+    /// The surface it came from (`cli`, `dashboard`, `mcp`).
     pub source: String,
     pub reason: Option<String>,
     pub updated_at: DateTime<Utc>,
