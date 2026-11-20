@@ -605,7 +605,7 @@ fn follower_run_failed_degrades_when_the_owner_task_status_cannot_be_read() {
     );
 }
 
-fn seed_bound_claim(
+pub(crate) fn seed_bound_claim(
     runtime: &OrbitRuntime,
     task_id: &str,
     run_id: &str,
@@ -717,7 +717,12 @@ fn run_failed_settled_claims_are_not_held_and_a_live_claim_is() {
     );
 }
 
-fn seed_local_pull(runtime: &OrbitRuntime, run_id: &str, phase: LocalPullPhase, request_id: &str) {
+pub(crate) fn seed_local_pull(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    phase: LocalPullPhase,
+    request_id: &str,
+) {
     let admission = LocalPullAdmission {
         destination: PullDestination {
             owner_machine_id: "owner-m".into(),
