@@ -15,8 +15,10 @@ pub(crate) fn antigravity_usage_windows(
     let Some(buckets) = buckets(body) else {
         return Vec::new();
     };
-    // Pro accounts expose a separate Argon bucket. Never apply the shared
-    // Gemini quota to Argon there. Ultra includes Argon in the shared bucket.
+    // A reading may carry its own Argon bucket. Then the shared Gemini quota
+    // does not cover Argon, so never apply it there. Without one, the shared
+    // bucket covers every Gemini model. The layout can change between
+    // readings of one account and says nothing about its plan.
     let separate_argon = buckets
         .iter()
         .any(|bucket| bucket.get("id").and_then(Value::as_str) == Some("gemini-argon-wtu-weekly"));
@@ -70,10 +72,10 @@ fn buckets(body: &[u8]) -> Option<Vec<Value>> {
     )
 }
 
-/// Model scopes of the shared "Gemini Models" group when Argon has its own
-/// bucket. agy 1.5.13's `/usage` group description lists Gemini 4 Neon, Carbon,
-/// Hydrogen, Orchestrator (Neon) and Gemini 3.8 Flash in it, and Argon only
-/// when no separate Argon bucket exists; `pro` keeps the slugs agy 1.4.6
+/// Model scopes of the shared "Gemini Models" group when the reading gives
+/// Argon its own bucket. agy 1.5.13's `/usage` group description lists Gemini 4
+/// Neon, Carbon, Hydrogen, Orchestrator (Neon) and Gemini 3.8 Flash in it, and
+/// Argon only when no separate Argon bucket exists; `pro` keeps the slugs agy 1.4.6
 /// grouped there. Scopes match model ids by substring, so `gemini` here would
 /// also gate Argon. [ORB-25818] [ORB-25944]
 const SHARED_GEMINI_SCOPES: &[&str] = &["flash", "pro", "neon", "carbon", "hydrogen"];

@@ -265,6 +265,17 @@ pub trait ProviderLimitStoreBackend: Send + Sync {
         &self,
         observation: &ProviderLimitObservation,
     ) -> Result<bool, OrbitError>;
+    /// [ORB-25967] Record a provider's complete usage reading, taken at one
+    /// instant for one provider account: store each observation as
+    /// `record_provider_limit` does, and in the same transaction retire the
+    /// account's `event` observations of that provider that an older reading
+    /// stored and this one no longer reports, so a window the provider stopped
+    /// reporting neither shows nor gates. `error` observations keep their own
+    /// expiry. An empty reading changes nothing.
+    fn record_provider_usage_reading(
+        &self,
+        observations: &[ProviderLimitObservation],
+    ) -> Result<(), OrbitError>;
     /// The latest observation per provider, model scope and window, newest
     /// first.
     fn provider_limits(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError>;

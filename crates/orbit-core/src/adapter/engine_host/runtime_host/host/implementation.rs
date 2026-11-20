@@ -653,6 +653,13 @@ impl RuntimeHost for OrbitRuntime {
         invocation::record_provider_limit(self, observation)
     }
 
+    fn record_provider_usage_reading(
+        &self,
+        observations: &[ProviderLimitObservation],
+    ) -> Result<(), OrbitError> {
+        invocation::record_provider_usage_reading(self, observations)
+    }
+
     fn activity_implementer_identity(
         &self,
         input: &Value,

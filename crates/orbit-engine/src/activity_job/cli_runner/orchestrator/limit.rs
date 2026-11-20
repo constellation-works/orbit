@@ -193,13 +193,27 @@ pub(super) fn record_usage_windows(
     } else {
         stdout
     };
-    for mut observation in
-        provider_usage_windows(provider, source, context.codex_home.as_deref(), Utc::now())
-    {
+    let mut observations =
+        provider_usage_windows(provider, source, context.codex_home.as_deref(), Utc::now());
+    for observation in &mut observations {
         observation.run_id = (!run_id.is_empty()).then(|| run_id.to_string());
         observation.crew = crew.map(str::to_string);
         observation.account = account.map(str::to_string);
-        record(host, &observation);
+    }
+    // [ORB-25967] agy's `/usage` reports every window of the account, so a
+    // window or scope it no longer reports is gone, not merely unchanged.
+    if provider == Provider::Antigravity {
+        if let Err(error) = host.record_provider_usage_reading(&observations) {
+            tracing::warn!(
+                provider = provider.as_str(),
+                run_id,
+                "could not record the provider usage reading on this host: {error}"
+            );
+        }
+        return;
+    }
+    for observation in &observations {
+        record(host, observation);
     }
 }
 
