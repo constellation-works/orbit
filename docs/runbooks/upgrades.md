@@ -444,10 +444,16 @@ entry that records it depends on who held the candidate:
     `durable at` or `only on` as above (the placement), then `stopped at <step>`.
   - *Refused edits* (a protected or non-regular path, or unmerged changes): the hook
     stops before writing anything, so the edits are not preserved. It reports `carry:
-    failed` with a `reason` and no branch or head. A protected or non-regular path reads
-    `partial candidate refused protected or non-regular paths: [...]`; unmerged edits
-    read `task worktree '<path>' has unresolved merge conflicts`. The reason also
-    reaches the owner in the claim's release failure.
+    failed` with a `reason` and no branch or head. Three refusals apply, and the
+    `reason` names which one stopped it. Unmerged edits give `task worktree '<path>' has
+    unresolved merge conflicts` and that check runs before the path checks. An untracked
+    protected path (`??` in `git status`) is refused first, whatever its file type, while
+    the candidate paths are listed: the reason contains `task delivery refused protected
+    untracked paths: [...]`. Staging that path removes it from that listing, so the next
+    refusal applies instead. Other protected or non-regular paths (staged or modified, or
+    irregular) give `partial candidate refused protected or non-regular paths: [...]`.
+    All three refusals report no branch or head and write no `claim_candidate_kept`
+    entry. The reason also reaches the owner in the claim's release failure.
   - *No edits*: the hook makes no commit and reports `carry: none` with the reason
     `the leaf left no uncommitted candidate`, and no branch or head.
 
