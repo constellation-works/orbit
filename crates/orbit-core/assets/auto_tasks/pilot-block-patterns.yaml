@@ -56,7 +56,7 @@ template:
     ## 1. Windows
 
     - **Cursor.** Find the newest completed prior pass with `orbit.task.list`
-      `{"status":["done"],"tag":["pilot-block-patterns"],"limit":1}` and
+      `{"status":["done"],"type":"chore","tag":["auto-task:pilot-block-patterns"],"limit":1,"model":"<agent-family>"}` and
       read its `pilot-block-cursor.json` and `pilot-block-report.json` with
       `orbit.task.artifact` action `get` only after `artifacts` from `orbit.task.show` lists those
       paths. Record the new scan start, the moment this scan starts, before reading any

@@ -4366,6 +4366,31 @@
         "## 3. Group by cause and route to the source",
         "## 4. Dedupe and file",
         "## 5. Check earlier fixes",
+        "## 6. Corpus proposal, report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "3612b4950b769818598b2cebcd57b02cadde1ec20aac67abd02aeefffda5a427",
+      "revision": "804385f4a48253eeb0269670e6bd4d01d857a8ea",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 6 * * *"
+        },
+        "tags": [
+          "pilot-block-patterns"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Collect",
+        "## 3. Group by cause and route to the source",
+        "## 4. Dedupe and file",
+        "## 5. Check earlier fixes",
         "## 6. Report and cursor",
         "## Rules and command surfaces"
       ],
