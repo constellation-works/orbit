@@ -246,8 +246,15 @@ fn a_completed_run_downloads_once_per_attempt_and_asks_its_status_each_read() {
     assert_eq!(gh.downloads(), 1);
     assert_eq!(
         status_reads(&gh),
-        2,
-        "each read asks for status and attempt"
+        3,
+        "cold miss verifies attempt before and after download; warm hit checks status once"
+    );
+    assert!(
+        gh.calls()
+            .iter()
+            .any(|call| call.contains("run view 123") && call.contains("--attempt 1")),
+        "download binds to the observed attempt: {:?}",
+        gh.calls()
     );
     assert!(second["text"].as_str().unwrap().contains("first line 5"));
 
