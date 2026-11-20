@@ -12,7 +12,7 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::DeliveryRefusal;
 use serde_json::{Value, json};
 
-use crate::DispatchError;
+use crate::context::dispatch_contract::DispatchError;
 use crate::context::{RebaseRecoveryAttemptScope, RuntimeHost};
 
 use super::super::super::input::{input_string_field, required_input_string};

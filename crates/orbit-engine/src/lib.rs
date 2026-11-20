@@ -55,6 +55,7 @@ pub mod test_support {
 mod condition;
 mod context;
 mod executor;
+mod sandbox_spawn;
 mod template;
 
 #[cfg(test)]

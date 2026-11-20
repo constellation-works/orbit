@@ -1410,6 +1410,53 @@ if ! module_paths_into "$engine_src/context" dispatch_contract.rs crate; then
   fail=1
 fi
 
+# [ORB-26097] orbit-engine: `sandbox_spawn` sits below both
+# `executor/automation` and `activity_job`, and `executor/automation` sits below
+# `activity_job`. `sandbox_spawn.rs` may name `crate::context` (for
+# `ResolvedSandbox`) and no other crate-root module or crate-root re-export.
+# `executor/automation` must not name `activity_job` or any crate-root re-export
+# of an `activity_job` item. Children of `activity_job` must read
+# `DECLARED_FAILURE_EVIDENCE_KEY` from `context::dispatch_contract`, not the
+# `activity_job` root.
+if [[ ! -d "$engine_src/executor/automation" ]]; then
+  echo "dependency scan path missing: $engine_src/executor/automation" >&2
+  exit 1
+fi
+if [[ ! -f "$engine_src/sandbox_spawn.rs" ]]; then
+  echo "dependency scan path missing: $engine_src/sandbox_spawn.rs" >&2
+  exit 1
+fi
+for child in cli_runner job_executor; do
+  if [[ ! -d "$engine_src/activity_job/$child" ]]; then
+    echo "dependency scan path missing: $engine_src/activity_job/$child" >&2
+    exit 1
+  fi
+done
+engine_activity_job_names='activity_job|DispatchError|DispatchInvocationTrace|DispatchOutcome|JobOutcome|LinuxRuntimeWriteAuthority|ResolvedCliExecutor|ResolvedSandbox|ResolvedShellExecutor|SandboxMask|V2AuditWriter|V2DispatchInput|V2SqliteSink|dispatch_error_to_orbit|dispatch_v2_activity|execute_job_with_resume|load_activity_asset|resolve_crew_settings|resolve_job_catalog_refs_for_execution|resolve_job_catalog_refs_with_scripts_for_execution|validate_job|validate_job_deterministic_actions'
+if ! super_chains_into "$engine_src" executor/automation "$engine_activity_job_names" crate-root; then
+  echo "orbit-engine executor/automation must not name activity_job or its crate-root re-exports"
+  fail=1
+fi
+engine_spawn_forbidden="$engine_activity_job_names|test_support|ci_log_signature|ci_run_event|execute_deterministic_action|normalize_review_decision|observe_accepted_published_handoff|observe_candidate|observe_no_diff_candidate|observe_published_candidate|verify_handoff_pull_request_head|BaseSyncMode|landing_wait_gate_cleared|review_gate|run_private_vcs_operation|BaselineHoldStatus|CheckState|ClaimedKnownRed|KnownRedUnconfirmed|PullRequestStatus|WORKTREE_IDENTITY_INPUT_KEYS|WorktreeGcOptions|WorktreeGcRecovery|WorktreeGcResult|WorktreeReclaimReport|baseline_hold_status|classify_rollup_context|collect_worktrees|compose_squash_merge_message|fetch_remote_base|judge_light_delivery|judge_light_delivery_with_key|recorded_baseline_hold_status|review_skip_decision|run_deferral_probe|run_review_skip_guard|run_worktree_has_reclaim_output|run_worktree_paths|validate_claim_new_paths|verify_claimed_known_red|verify_claimed_known_red_base|provider_supports_continuity|candidate_commit_completion_hold|candidate_completion_hold"
+for entry in "$engine_src"/*; do
+  module="$(basename "$entry")"
+  module="${module%.rs}"
+  case "$module" in
+    context | lib | sandbox_spawn | tests) continue ;;
+  esac
+  if [[ -d "$entry" || "$entry" == *.rs ]]; then
+    engine_spawn_forbidden="${engine_spawn_forbidden}|${module}"
+  fi
+done
+if ! super_chains_into "$engine_src" sandbox_spawn.rs "$engine_spawn_forbidden" crate-root; then
+  echo "orbit-engine sandbox_spawn must not name any crate:: module except context"
+  fail=1
+fi
+if ! super_chains_into "$engine_src/activity_job" "" DECLARED_FAILURE_EVIDENCE_KEY; then
+  echo "orbit-engine activity_job children must read DECLARED_FAILURE_EVIDENCE_KEY from context::dispatch_contract, not the activity_job root"
+  fail=1
+fi
+
 # [ORB-24781] `job::run` (a run record's lifecycle: queries, cancellation,
 # reconciliation and drain controls) sits below `job::pipeline` (submission,
 # admission and worker execution). Run owns its audit trail (`audit_record`),

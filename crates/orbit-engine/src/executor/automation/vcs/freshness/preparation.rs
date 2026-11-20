@@ -372,7 +372,9 @@ fn persist<H: RuntimeHost + ?Sized>(
     mut payload: Value,
 ) -> Result<Value, OrbitError> {
     let run = required_input_string(&payload, "run_id")?.to_string();
-    let dispatch = |error: crate::DispatchError| OrbitError::Execution(error.to_string());
+    let dispatch = |error: crate::context::dispatch_contract::DispatchError| {
+        OrbitError::Execution(error.to_string())
+    };
     let attempt = host
         .begin_rebase_recovery_attempt(
             &run,

@@ -18,8 +18,8 @@ use super::frames::{
     structured_provider_quota_error, structured_provider_refusal,
 };
 use super::{failure, frames};
-use crate::activity_job::DECLARED_FAILURE_EVIDENCE_KEY;
 use crate::activity_job::dispatcher::{DispatchError, DispatchInvocationTrace, DispatchOutcome};
+use crate::context::dispatch_contract::DECLARED_FAILURE_EVIDENCE_KEY;
 use orbit_agent::{
     ParsedStdout, antigravity_background_task_diagnostic, antigravity_terminal_error_diagnostic,
     assign_recorded_tool_calls, is_missing_envelope_violation, is_success_carrying_error_violation,
