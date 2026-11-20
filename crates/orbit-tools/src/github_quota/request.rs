@@ -107,7 +107,9 @@ pub(crate) fn request_account(request: &ExecRequest) -> String {
 
 /// Build the `gh api rate_limit` probe request for `request`, bounded by
 /// `request.timeout_ms` (and at most [`REFRESH_TIMEOUT_MS`]). Returns `None`
-/// when `request`'s finite timeout budget is already zero.
+/// when `request`'s finite timeout budget is already zero. A probe that the
+/// caller's budget cuts short is answered as `Clipped`, which leaves the shared
+/// record as it was.
 pub(crate) fn rate_limit_probe_request(request: &ExecRequest) -> Option<ExecRequest> {
     let timeout_ms = match request.timeout_ms {
         Some(0) => return None,
@@ -130,12 +132,19 @@ pub(crate) fn rate_limit_probe_request(request: &ExecRequest) -> Option<ExecRequ
 /// count against the quota.
 pub(crate) fn read_rate_limit(request: &ExecRequest) -> RateLimitAnswer {
     let Some(probe) = rate_limit_probe_request(request) else {
-        return RateLimitAnswer::Unknown(
+        return RateLimitAnswer::Clipped(
             "rate-limit read skipped: timeout budget exhausted".to_string(),
         );
     };
+    let clipped = probe
+        .timeout_ms
+        .is_some_and(|limit| limit < REFRESH_TIMEOUT_MS);
     match run_process(&probe, &NoSandbox) {
         Ok(result) if result.success => parse_rate_limit(&result.stdout),
+        // The caller's deadline, not the endpoint, ended the read.
+        Ok(result) if result.timed_out && clipped => RateLimitAnswer::Clipped(
+            "rate-limit read cut short by the caller's timeout budget".to_string(),
+        ),
         Ok(result) => RateLimitAnswer::Unknown(format!(
             "rate-limit read failed: {}",
             orbit_common::security::redaction::redact_all(result.stderr.trim())

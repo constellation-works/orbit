@@ -118,6 +118,11 @@ pub enum RateLimitAnswer {
     /// caller, or answered something unreadable. Reads stay allowed and the
     /// quota is reported unknown, never as zero remaining.
     Unknown(String),
+    /// The read was cut short by one caller's own deadline (a probe given less
+    /// than the standard refresh timeout that ran out, or no time at all). It
+    /// says nothing about the account, so it neither claims the interval nor
+    /// replaces the record: the next caller reads the endpoint itself.
+    Clipped(String),
 }
 
 /// Calls per caller class.
@@ -425,6 +430,7 @@ impl GithubQuotaStore {
         refresh: &dyn Fn() -> RateLimitAnswer,
     ) {
         let interval = policy.refresh_seconds();
+        let mut previous_claim = None;
         let claim = self
             .update(account, |record| {
                 // `now` was sampled before the lock, so a caller that waited
@@ -439,6 +445,7 @@ impl GithubQuotaStore {
                     }
                 });
                 if due {
+                    previous_claim = record.refresh_claimed_at;
                     record.refresh_claimed_at = Some(now);
                     record.refresh_generation = record.refresh_generation.wrapping_add(1);
                     record.refresh_in_flight = true;
@@ -457,7 +464,7 @@ impl GithubQuotaStore {
         };
         let answer = refresh();
         let _ = self.update(account, |record| {
-            apply_answer(record, answer, now, claim_generation)
+            apply_answer(record, answer, now, claim_generation, previous_claim)
         });
     }
 
@@ -561,18 +568,28 @@ fn apply_answer(
     answer: RateLimitAnswer,
     now: u64,
     claim_generation: u64,
+    previous_claim: Option<u64>,
 ) {
     if !record.refresh_in_flight || record.refresh_generation != claim_generation {
         return;
     }
     record.refresh_in_flight = false;
+    if matches!(answer, RateLimitAnswer::Clipped(_)) {
+        // Give the interval back and keep what the record knew. Debits taken
+        // during the read were already applied to the known remaining count.
+        record.refresh_claimed_at = previous_claim;
+        for entry in record.resources.values_mut() {
+            entry.in_flight_debits = 0;
+        }
+        return;
+    }
     record.refreshed_at = Some(now);
     let observed = match answer {
         RateLimitAnswer::Known(observed) => {
             record.refresh_error = None;
             observed
         }
-        RateLimitAnswer::Unknown(reason) => {
+        RateLimitAnswer::Unknown(reason) | RateLimitAnswer::Clipped(reason) => {
             record.refresh_error = Some(reason.chars().take(MAX_ERROR_CHARS).collect());
             BTreeMap::new()
         }
