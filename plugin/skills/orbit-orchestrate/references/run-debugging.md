@@ -239,8 +239,14 @@ Recognise the outcome in `orbit run show <run_id> --json`:
   of a terminal run, `state` takes the run's terminal state and `outcome` reads
   `interrupted`; a finished step with no recorded outcome reads `finished`. `outcome`
   is null only for an unfinished step of a run that is not terminal, whose `state`
-  then reads `running`. `started_at`, `finished_at`, `lock_wait_ms` and
-  `error_diagnostic` are null when the audit recorded no value.
+  then reads `running`. `started_at`, `finished_at` and `lock_wait_ms` are null when
+  the audit recorded no value. `error_diagnostic` is the audit's structured value when
+  it recorded one. When it did not, and `error_message` carries a legacy
+  worktree-integrity message (the text `worktree integrity violation`, a backticked
+  failure code, then a JSON object), `error_diagnostic` is that parsed object,
+  redacted. Otherwise it is null. A legacy message also replaces `error_message` with
+  a readable message for its code and reason, even when the structured value is
+  present.
 - Fields that may be null: `run.error_code` is `upgrade_pending` only when the run
   record kept that code, and is otherwise null. `root_cause` is null because the
   owner run failed on its own.
