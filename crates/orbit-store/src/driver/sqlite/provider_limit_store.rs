@@ -57,14 +57,33 @@ impl ProviderLimitStoreBackend for Store {
                 ""
             }
         );
+        let newer_exists = format!(
+            "SELECT EXISTS (SELECT 1 FROM {table} \
+             WHERE provider = ?1 AND source = ?2 AND observed_at > ?4{account_filter})"
+        );
         let event = ProviderLimitSource::Event.as_str();
         let cutoff = stamp(first.observed_at);
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             let conn = tx.connection();
+            let account_text = account.unwrap_or_default();
+            // A newer reading already stands for this account. It reported
+            // every window the provider still has and retired the rest, and a
+            // retired key keeps no timestamp to reject this older insert, so
+            // writing any of this reading would restore a window the newer
+            // layout dropped.
+            let superseded: bool = conn
+                .query_row(
+                    &newer_exists,
+                    rusqlite::params![first.provider, event, account_text, cutoff],
+                    |row| row.get(0),
+                )
+                .map_err(sqlite_store_error)?;
+            if superseded {
+                return Ok(());
+            }
             for observation in observations {
                 upsert_observation(conn, observation)?;
             }
-            let account_text = account.unwrap_or_default();
             let mut statement = conn.prepare(&select).map_err(sqlite_store_error)?;
             // `?3` is unused without an account; the placeholder keeps the
             // numbered parameters contiguous.
