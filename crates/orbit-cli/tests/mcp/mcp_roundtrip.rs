@@ -2869,6 +2869,23 @@ fn task_and_delivery_refusals_use_the_calling_surface_syntax() {
     assert!(!message_contains(&missing_run, "orbit run "));
     assert!(!message_contains(&missing_run, "orbit.task."));
     client.call_tool_ok("orbit_run", json!({"action": "list"}));
+
+    // [ORB-25809] A run-shaped nonexistent ID gives the list remedy without
+    // suggesting task show with that run ID, on CLI and MCP alike.
+    let output = workspace.run(&["run", "show", "jrun-bogus"]);
+    let message = stderr(&output);
+    assert_eq!(output.status.code(), Some(1), "{message}");
+    assert!(message.contains("orbit run history"), "{message}");
+    assert!(!message.contains("task show"), "{message}");
+
+    let missing_run_id = client.assert_tool_error(
+        "orbit_run",
+        json!({"action": "show", "id": "jrun-bogus"}),
+        "not_found",
+    );
+    assert_message_parts(&missing_run_id, &["orbit_run {\"action\":\"list\"}"]);
+    assert!(!message_contains(&missing_run_id, "orbit_task_show"));
+    assert!(!message_contains(&missing_run_id, "task show"));
     let missing =
         client.assert_tool_error("orbit_task_show", json!({"id": "TST-99999"}), "not_found");
     assert_message_parts(&missing, &["orbit_task_list"]);
