@@ -6,8 +6,8 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Offset, Utc};
 use orbit_agent::{
-    antigravity_terminal_error_diagnostic, provider_usage_limit, provider_usage_limit_details,
-    provider_usage_windows,
+    antigravity_terminal_error_diagnostic, muse_terminal_failure_diagnostic, provider_usage_limit,
+    provider_usage_limit_details, provider_usage_windows,
 };
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::ProviderLimitFailure;
@@ -46,6 +46,8 @@ pub(super) fn structured_provider_limit(provider: Provider, stdout: &[u8]) -> Op
             .last(),
         Provider::Antigravity => antigravity_terminal_error_diagnostic(provider, stdout)
             .filter(|text| provider_usage_limit(text)),
+        Provider::Muse => muse_terminal_failure_diagnostic(provider, stdout)
+            .filter(|text| provider_usage_limit(text)),
         Provider::Codex
         | Provider::Gemini
         | Provider::Grok
@@ -54,8 +56,7 @@ pub(super) fn structured_provider_limit(provider: Provider, stdout: &[u8]) -> Op
         | Provider::OpenaiCompat
         | Provider::Cursor
         | Provider::Pi
-        | Provider::Opencode
-        | Provider::Muse => None,
+        | Provider::Opencode => None,
     }
 }
 

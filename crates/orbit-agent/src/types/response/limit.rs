@@ -12,6 +12,7 @@
 //!   limit · resets 3pm (America/Los_Angeles)`.
 //! - Antigravity: `Individual quota reached. … Resets in 1h37m37s.`
 //! - Gemini CLI: `TerminalQuotaError: You exceeded your current quota`.
+//! - Muse: `Subscription quota exhausted … resets at <RFC3339>`.
 //! - grok 1.0.46: HTTP `Too Many Requests (` and `Payment Required (`; Grok
 //!   Build: `API error (status 402 Payment Required): Grok Build usage balance
 //!   exhausted`.
@@ -39,6 +40,7 @@ const PROVIDER_LIMIT_PHRASES: &[&str] = &[
     "payment required (",
     "payment required)",
     "usage balance exhausted",
+    "subscription quota exhausted",
 ];
 
 /// Claude Code's openings, which say a limit only alongside the word.
@@ -82,10 +84,34 @@ pub fn provider_usage_limit_details(
         model: limit_model(&folded),
         window: None,
         resets_at: relative_reset(&folded, now)
+            .or_else(|| rfc3339_reset(text))
             .or_else(|| try_again_at(&folded, now, local))
             .or_else(|| resets_at_zone(&folded, now))
             .or_else(|| epoch_suffix(&folded)),
     }
+}
+
+/// Muse's `resets at <RFC3339>` timestamp, with optional trailing punctuation.
+fn rfc3339_reset(text: &str) -> Option<DateTime<Utc>> {
+    const LEAD: &str = "resets at ";
+    // ASCII case folding preserves byte positions for the timestamp only when
+    // the prefix is ASCII, so locate it in the original text instead.
+    let start = text
+        .char_indices()
+        .find(|(index, _)| {
+            text[*index..]
+                .get(..LEAD.len())
+                .is_some_and(|s| s.eq_ignore_ascii_case(LEAD))
+        })?
+        .0
+        + LEAD.len();
+    let stamp = text[start..]
+        .split_whitespace()
+        .next()?
+        .trim_end_matches(['.', ',', ';', ')']);
+    DateTime::parse_from_rfc3339(stamp)
+        .ok()
+        .map(|at| at.with_timezone(&Utc))
 }
 
 /// Codex's `usage limit for <model>`, lowercased like crew models compare.
