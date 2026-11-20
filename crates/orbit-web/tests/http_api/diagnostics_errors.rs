@@ -1,6 +1,7 @@
 use std::fs;
 
 use chrono::{DateTime, Duration, Utc};
+use orbit_core::runtime::audit::run::AuditStepOutcome;
 use orbit_core::{JobRunState, V2AuditEventInsertParams};
 use serde_json::{Value, json};
 
@@ -253,7 +254,10 @@ fn resumed_step_errors_keep_each_attempts_reason_and_mark_run_recovery() {
                 }
                 let final_steps = fixture.runtime.collect_run_audit_steps(run).unwrap();
                 assert_eq!(final_steps.len(), 1);
-                assert_eq!(final_steps[0].outcome.as_deref(), Some("success"));
+                assert!(matches!(
+                    final_steps[0].outcome,
+                    Some(AuditStepOutcome::Success)
+                ));
                 assert_eq!(final_steps[0].error_message, None);
             }
             write_process_rows(

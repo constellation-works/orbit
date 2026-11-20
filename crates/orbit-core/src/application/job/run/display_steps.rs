@@ -104,14 +104,16 @@ impl RunDisplayStep {
             .error_message
             .as_deref()
             .and_then(orbit_types::workflow::activity_job::legacy_worktree_failure);
-        let interrupted = step.state.is_none() && run_state.is_terminal();
-        let state = match step.state {
-            Some(state) => state,
+        let interrupted = step.state().is_none() && run_state.is_terminal();
+        let state = match step.state() {
+            Some(state) => state.to_string(),
             None if interrupted => run_state.to_string(),
             None => "running".to_string(),
         };
         let outcome = step
             .outcome
+            .as_ref()
+            .map(|outcome| outcome.as_str().to_string())
             .or_else(|| interrupted.then(|| "interrupted".to_string()));
         Self {
             step_index: step.step_index,

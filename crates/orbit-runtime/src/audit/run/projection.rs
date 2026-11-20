@@ -9,6 +9,7 @@ use orbit_common::security::redaction::redact_all;
 use orbit_common::storage::blob_store::BlobStore;
 use serde_json::Value;
 
+use super::outcome::AuditStepOutcome;
 use super::trail::{
     MAX_RECOVERY_ATTEMPTS, RunAuditEvent, RunAuditStep, RunCliInvocationRecord, RunProviderProcess,
     RunRecoveryAttempt, RunRecoveryAttempts, RunRecoveryDecision, RunStoppedDescendant,
@@ -57,7 +58,6 @@ pub(super) fn audit_steps_from_events(events: &[RunAuditEvent]) -> Vec<RunAuditS
                     step_id: step_id.to_string(),
                     started_at: event.timestamp,
                     finished_at: None,
-                    state: None,
                     outcome: None,
                     error_message: None,
                     error_diagnostic: None,
@@ -80,14 +80,14 @@ pub(super) fn audit_steps_from_events(events: &[RunAuditEvent]) -> Vec<RunAuditS
                             .filter(|value| !value.is_null())
                             .cloned();
                         step.lock_wait_ms = event.raw.get("lock_wait_ms").and_then(Value::as_u64);
-                        let outcome = event
-                            .raw
-                            .get("outcome")
-                            .and_then(Value::as_str)
-                            .unwrap_or("finished")
-                            .to_string();
-                        step.state = Some(outcome.clone());
-                        step.outcome = Some(outcome);
+                        step.outcome = Some(
+                            event
+                                .raw
+                                .get("outcome")
+                                .and_then(Value::as_str)
+                                .map(AuditStepOutcome::from_recorded)
+                                .unwrap_or(AuditStepOutcome::Finished),
+                        );
                         step.error_message = event
                             .raw
                             .get("error_message")
@@ -95,8 +95,7 @@ pub(super) fn audit_steps_from_events(events: &[RunAuditEvent]) -> Vec<RunAuditS
                             .map(str::to_string);
                     }
                     Some("step_skipped") => {
-                        step.state = Some("skipped".to_string());
-                        step.outcome = Some("skipped".to_string());
+                        step.outcome = Some(AuditStepOutcome::Skipped);
                         step.error_message = event
                             .raw
                             .get("reason")
@@ -104,8 +103,7 @@ pub(super) fn audit_steps_from_events(events: &[RunAuditEvent]) -> Vec<RunAuditS
                             .map(str::to_string);
                     }
                     Some("step_denied") => {
-                        step.state = Some("failed".to_string());
-                        step.outcome = Some("denied".to_string());
+                        step.outcome = Some(AuditStepOutcome::Denied);
                         step.error_message = event
                             .raw
                             .get("reason")
@@ -140,7 +138,11 @@ pub(super) fn audit_step_attempts_from_events(events: &[RunAuditEvent]) -> Vec<R
             Some("step_finished") => {
                 let index = starts.len() as u32;
                 let start = starts.entry(step_id).or_insert((index, None));
-                let outcome = event.raw.get("outcome").and_then(Value::as_str);
+                let outcome = event
+                    .raw
+                    .get("outcome")
+                    .and_then(Value::as_str)
+                    .map(AuditStepOutcome::from_recorded);
                 attempts.push(RunAuditStep {
                     error_diagnostic: event
                         .raw
@@ -152,8 +154,7 @@ pub(super) fn audit_step_attempts_from_events(events: &[RunAuditEvent]) -> Vec<R
                     step_id: step_id.to_string(),
                     started_at: start.1,
                     finished_at: event.timestamp,
-                    state: outcome.map(str::to_string),
-                    outcome: outcome.map(str::to_string),
+                    outcome,
                     error_message: event
                         .raw
                         .get("error_message")

@@ -1,6 +1,6 @@
 //! Worktree failures in the public run projection retain their raw details.
 use orbit_core::application::job::{job_run_to_json, run_display_steps};
-use orbit_core::runtime::audit::run::RunAuditStep;
+use orbit_core::runtime::audit::run::{AuditStepOutcome, RunAuditStep};
 use orbit_types::workflow::{JobRun, JobRunState, JobRunStep};
 use serde_json::{Value, json};
 
@@ -43,8 +43,7 @@ fn historical_and_audited_worktree_failures_keep_reachable_diagnostics() {
             step_id: "implement".into(),
             started_at: None,
             finished_at: None,
-            state: Some("error".into()),
-            outcome: Some("error".into()),
+            outcome: Some(AuditStepOutcome::Error),
             error_message: Some(readable.into()),
             error_diagnostic: Some(diagnostic.clone()),
         }]
