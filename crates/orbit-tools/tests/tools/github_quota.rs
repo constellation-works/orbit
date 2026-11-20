@@ -557,6 +557,61 @@ fn slow_rate_limit_probe_bounds_to_request_timeout_and_skips_expired_request() {
     assert!(gh_zero.calls().is_empty());
 }
 
+/// Regression [ORB-26096]: the quota record's lock waits belong to the
+/// request's deadline. A second process holding the account lock must not keep
+/// a 40 ms request in a fresh 30-second acquisition: the request returns its
+/// timeout while the holder still owns the lock, and neither the rate-limit
+/// probe nor the protected call reaches `gh`.
+#[test]
+fn contended_record_lock_is_bounded_by_the_request_deadline() {
+    let records = TempDir::new().unwrap();
+    let policy = GithubQuotaPolicy::default();
+    let gh = FakeGh::new("{}", "ok");
+    let mut request = gh.request(&["run", "view", "123"]);
+    request.timeout_ms = Some(40);
+    let account = github_quota::request_account_key(&request);
+    let record_path = records.path().join(format!("{account}.json"));
+
+    // The holder reports the lock taken, then keeps it until released.
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        let _lock = orbit_common::fs::io::hold_exclusive_file_lock_options(
+            &record_path,
+            "contending quota holder",
+            orbit_common::fs::io::FileLockOptions::default(),
+        )
+        .unwrap();
+        held_tx.send(()).unwrap();
+        // Bounded so a failed assertion cannot strand the holder.
+        let _ = release_rx.recv_timeout(Duration::from_secs(60));
+    });
+    held_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the holder never took the account lock");
+
+    let started = std::time::Instant::now();
+    let result = github_quota::with_scoped_guard(store(records.path()), policy, || {
+        github_quota::run_gh_request(GithubCaller::Delivery, &request)
+    });
+    let elapsed = started.elapsed();
+    release_tx.send(()).unwrap();
+    holder.join().unwrap();
+
+    let result = result.unwrap();
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "lock waits must stop at the 40 ms request deadline, took {elapsed:?}"
+    );
+    assert!(result.timed_out, "{result:?}");
+    assert!(!result.success);
+    assert!(
+        gh.calls().is_empty(),
+        "neither the probe nor the protected call may run: {:?}",
+        gh.calls()
+    );
+}
+
 /// Regression [ORB-25964]: a probe cut short by one caller's remaining deadline
 /// says nothing about the account, so it must neither claim the refresh
 /// interval nor replace a known record with an unknown one. A second caller
