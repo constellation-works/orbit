@@ -618,11 +618,11 @@ fn an_operator_approved_auto_rule_answers_and_can_be_reversed() {
     );
     let tool_set = fx.runtime.run_tool(
         "orbit.decision.rule_auto",
-        json!({"rule": "pricing/sign-off", "auto": "on"}),
+        json!({"rule": "pricing/sign-off", "auto": true}),
     );
     assert!(
-        tool_set.is_err(),
-        "rule-auto is not an agent tool: {tool_set:?}"
+        matches!(&tool_set, Err(OrbitError::PolicyDenied(message)) if message.contains("operator")),
+        "rule-auto is refused to agents as an operator-only verb: {tool_set:?}"
     );
     let still = parse_decision_rules(&String::from_utf8(fx.rule_bytes()).unwrap());
     assert!(
@@ -745,8 +745,8 @@ fn an_operator_approved_auto_rule_answers_and_can_be_reversed() {
         .runtime
         .run_tool("orbit.decision.reverse", json!({"id": request_id}));
     assert!(
-        tool_reverse.is_err(),
-        "reverse is not an agent tool: {tool_reverse:?}"
+        matches!(&tool_reverse, Err(OrbitError::PolicyDenied(message)) if message.contains("operator")),
+        "reverse is refused to agents as an operator-only verb: {tool_reverse:?}"
     );
     assert_eq!(
         fx.runtime.get_task(&decision).unwrap().status,

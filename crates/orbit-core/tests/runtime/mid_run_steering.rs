@@ -525,8 +525,8 @@ fn forged_agent_output_neither_advances_nor_fakes_delivery() {
 }
 
 fn steering_instruction_is_byte_inert_when_disabled_and_appended_when_enabled() {
-    // The host flag's default and per-key layering are
-    // `config_settings::mid_run_steering_defaults_off_layers_per_key_and_refuses_invalid_values`.
+    // The host flag's per-key layering is
+    // `config_settings::mid_run_steering_layers_per_key_and_refuses_invalid_values`.
     // This row keeps the byte-inert guarantee: disabled rendering matches the
     // base instruction, and enabled rendering appends the declared paragraph.
     for name in [

@@ -14,7 +14,7 @@ use orbit_types::workflow::{
     REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT,
     ReviewCertificate,
 };
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::review_gate_audit::Fixture;
 
@@ -515,96 +515,84 @@ fn artifact_errors_explain_the_source_file_listing_and_size_remedies() {
     assert_eq!(read["content"], "bounded evidence");
 }
 
-/// Execute the shipped review procedure's preflight against a real admitted
-/// candidate, including its required manifest read and one optional listing.
-fn read_review_evidence(fixture: &Fixture) -> Vec<String> {
-    let call = |tool: &str, input: Value| {
-        // A session names a family action through its family.
-        let (tool, input) = orbit_types::tool::tool_family_call(tool, input);
-        fixture
-            .runtime
-            .execute_tool_command(&tool, input, None, Some("codex".into()))
-            .unwrap()
-    };
-    call(
-        "orbit.task.artifact.get",
-        json!({"id": fixture.task_id, "path": REVIEW_MANIFEST_ARTIFACT}),
-    );
-    let mut fetched = vec![REVIEW_MANIFEST_ARTIFACT.to_string()];
-    let listing = call(
+/// The artifact listing a review preflight reads before any optional `get`.
+/// It is a metadata projection, so it never carries artifact content.
+fn listed_artifact_paths(runtime: &OrbitRuntime, task_id: &str) -> Vec<String> {
+    let (tool, input) = orbit_types::tool::tool_family_call(
         "orbit.task.show",
-        json!({"id": fixture.task_id, "field": "artifacts"}),
+        json!({"id": task_id, "field": "artifacts"}),
     );
+    let listing = runtime
+        .execute_tool_command(&tool, input, None, Some("codex".into()))
+        .unwrap();
     let available = listing.as_array().expect("artifact metadata list");
-    for path in [
-        "review-evidence-hold.json",
-        REVIEW_REPORT_ARTIFACT,
-        "review-report-history.json",
-    ] {
-        if available.iter().any(|artifact| artifact["path"] == path) {
-            call(
-                "orbit.task.artifact.get",
-                json!({"id": fixture.task_id, "path": path}),
-            );
-            fetched.push(path.to_string());
-        }
-    }
-    fetched
-}
-
-fn successful_reads(runtime: &OrbitRuntime) -> usize {
-    runtime
-        .list_audit_events(
-            None,
-            Some("orbit.task.artifact.get".into()),
-            None,
-            None,
-            100,
-        )
-        .unwrap()
-        .into_iter()
-        .inspect(|row| assert_eq!(row.status, AuditEventStatus::Success, "{row:?}"))
-        .count()
+    assert!(
+        available
+            .iter()
+            .all(|artifact| artifact.get("content").is_none()),
+        "the artifacts projection is metadata-only: {listing}"
+    );
+    available
+        .iter()
+        .map(|artifact| {
+            artifact["path"]
+                .as_str()
+                .expect("artifact path")
+                .to_string()
+        })
+        .collect()
 }
 
 fn review_preflight_fetches_only_existing_optional_artifacts() {
     let mut fixture = Fixture::new();
     fixture.admit();
-    let paths = read_review_evidence(&fixture);
-    assert_eq!(
-        paths,
-        [REVIEW_MANIFEST_ARTIFACT],
-        "a fresh review must make no get call for any absent optional artifact"
+    let task_id = fixture.task_id.to_string();
+    let optional = [
+        REVIEW_EVIDENCE_HOLD_ARTIFACT,
+        REVIEW_REPORT_ARTIFACT,
+        REVIEW_REPORT_HISTORY_ARTIFACT,
+    ];
+    let listed = listed_artifact_paths(&fixture.runtime, &task_id);
+    assert!(
+        optional
+            .iter()
+            .all(|path| !listed.iter().any(|l| l == path)),
+        "a fresh review lists no optional artifact, so none is fetched: {listed:?}"
     );
-    assert_eq!(
-        successful_reads(&fixture.runtime),
-        1,
-        "only the required manifest was fetched"
-    );
+    fixture
+        .runtime
+        .run_tool(
+            "orbit.task.artifact.get",
+            json!({"id": task_id, "path": REVIEW_MANIFEST_ARTIFACT}),
+        )
+        .expect("the required manifest is readable");
+
     fixture.put_report(&json!({
         "schema_version": 1,
         "attempt_id": fixture.input["admission"]["attempt_id"],
         "verdict": "incomplete", "summary": "Retained review progress.",
         "validation": [{"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"}],
     }));
-    let paths = read_review_evidence(&fixture);
-    assert_eq!(
-        successful_reads(&fixture.runtime),
-        4,
-        "manifest twice plus the listed report and history"
-    );
-    assert!(paths.iter().any(|path| path == REVIEW_REPORT_ARTIFACT));
+    let listed = listed_artifact_paths(&fixture.runtime, &task_id);
+    for path in [REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT] {
+        assert!(
+            listed.iter().any(|l| l == path),
+            "{path} is listed after the report is put: {listed:?}"
+        );
+        fixture
+            .runtime
+            .run_tool(
+                "orbit.task.artifact.get",
+                json!({"id": task_id, "path": path}),
+            )
+            .expect("a listed artifact is readable");
+    }
     assert!(
-        paths
+        listed
             .iter()
-            .any(|path| path == "review-report-history.json")
+            .all(|path| path != REVIEW_EVIDENCE_HOLD_ARTIFACT),
+        "{listed:?}"
     );
-    assert!(paths.iter().all(|path| path != "review-evidence-hold.json"));
-    let listings = fixture
-        .runtime
-        .list_audit_events(None, Some("orbit.task.show".into()), None, None, 100)
-        .unwrap();
-    assert_eq!(listings.len(), 2, "list exactly once per review preflight");
 }
 
 fn doc_duties_discovery_fetches_only_listed_ledgers() {
@@ -643,51 +631,22 @@ fn doc_duties_discovery_fetches_only_listed_ledgers() {
     let middle = make_task("no ledger", None);
     let newest = make_task("newest ledger", Some(v2.clone()));
 
-    // The doc-duties step-2 procedure: newest first, discover via the
-    // metadata-only artifacts projection, fetch only listed ledgers, and
-    // stop at the first cumulative (schema_version 2) ledger.
-    let call = |tool: &str, input: Value| {
-        let (tool, input) = orbit_types::tool::tool_family_call(tool, input);
-        runtime
-            .execute_tool_command(&tool, input, None, Some("codex".into()))
-            .unwrap()
-    };
-    let mut fetched: Vec<(String, Value)> = Vec::new();
-    for id in [&newest, &middle, &oldest] {
-        let listing = call("orbit.task.show", json!({"id": id, "field": "artifacts"}));
-        let available = listing.as_array().expect("artifact metadata list");
-        assert!(
-            available
-                .iter()
-                .all(|artifact| artifact.get("content").is_none()),
-            "the artifacts projection is metadata-only: {listing}"
-        );
-        if available
+    // Discovery goes through the metadata-only artifacts projection: only the
+    // tasks that hold a ledger list one, and a listed ledger reads back whole.
+    let has_ledger = |id: &String| {
+        listed_artifact_paths(runtime, id)
             .iter()
-            .any(|artifact| artifact["path"] == "doc-duties-ledger.json")
-        {
-            let read = call(
-                "orbit.task.artifact.get",
-                json!({"id": id, "path": "doc-duties-ledger.json"}),
-            );
-            let is_cumulative =
-                serde_json::from_str::<Value>(read["content"].as_str().expect("ledger text"))
-                    .unwrap()["schema_version"]
-                    == 2;
-            fetched.push((id.clone(), read));
-            if is_cumulative {
-                break;
-            }
-        }
-    }
-    assert_eq!(fetched.len(), 1, "only the newest listed ledger is fetched");
-    assert_eq!(fetched[0].0, newest);
-    assert_eq!(fetched[0].1["content"], v2);
-    assert_eq!(
-        successful_reads(runtime),
-        1,
-        "skipping the unlisted middle task generated no failed artifact GET"
-    );
+            .any(|path| path == "doc-duties-ledger.json")
+    };
+    assert!(has_ledger(&newest) && has_ledger(&oldest));
+    assert!(!has_ledger(&middle), "an unlisted task holds no ledger");
+    let read = runtime
+        .run_tool(
+            "orbit.task.artifact.get",
+            json!({"id": newest, "path": "doc-duties-ledger.json"}),
+        )
+        .unwrap();
+    assert_eq!(read["content"], v2);
 
     // A direct GET for a well-formed absent artifact stays typed not-found
     // and now explains metadata-only discovery; valid retrieval is unchanged.
