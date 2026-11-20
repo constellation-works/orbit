@@ -51,7 +51,7 @@ fn known(core_remaining: u64, reset: u64) -> RateLimitAnswer {
 }
 
 /// A fake `gh` that logs every call and answers the rate-limit endpoint from
-/// `rate_limit` and every other call from `answer` (`ok` or `throttle`).
+/// `rate_limit` and every other call from `answer` (`ok`, `empty` or `throttle`).
 struct FakeGh {
     dir: TempDir,
 }
@@ -75,6 +75,7 @@ impl FakeGh {
                  *) cat \"$dir/rate_limit\"; exit 0 ;;\n\
                esac\n\
              fi\n\
+             if [ \"$(cat \"$dir/answer\")\" = empty ]; then exit 0; fi\n\
              if [ \"$(cat \"$dir/answer\")\" = throttle ]; then\n\
                echo 'gh: API rate limit exceeded for user ID 42. (HTTP 403)' >&2\n\
                exit 1\n\
@@ -608,4 +609,87 @@ fn deadline_clipped_probe_leaves_known_quota_and_reserve_refusal_in_place() {
         vec!["api rate_limit".to_string(), "api rate_limit".to_string()],
         "a clipped probe must leave the interval due for the next caller"
     );
+}
+
+/// A run-scoped log admitted with one call left above the agent reserve comes
+/// back empty and spends that call, so the fallback's metadata read is refused
+/// locally. Both the unscoped and the scoped read must report that refusal as
+/// the typed throttle (never an empty success or a missing-selection error),
+/// the refused fallback must never reach `gh`, and an unavailable fallback with
+/// quota to spare stays the ordinary untyped answer.
+#[test]
+fn refused_log_fallback_is_a_typed_throttle_for_unscoped_and_scoped_reads() {
+    let policy = GithubQuotaPolicy::default();
+    let reset = now() + 1800;
+    let gh = FakeGh::new("{}", "empty");
+    let probe = gh.request(&["run", "view", "123"]);
+    let account = github_quota::request_account_key(&probe);
+
+    let read = |remaining: u64, input: serde_json::Value| {
+        let records = TempDir::new().unwrap();
+        store(records.path()).refresh_if_due(&policy, &account, now(), &|| known(remaining, reset));
+        let mut requests = orbit_tools::github_cli::RunLogRequests::from_input(&input).unwrap();
+        for request in [&mut requests.run_log, &mut requests.run_view] {
+            request.program = probe.program.clone();
+            request.environment_mode = probe.environment_mode.clone();
+        }
+        let _ = std::fs::remove_file(gh.dir.path().join("calls"));
+        let result = github_quota::with_scoped_guard(store(records.path()), policy, || {
+            orbit_tools::github_cli::read_run_log_guarded(
+                &requests,
+                orbit_tools::github_cli::LogReadBounds::new(4096),
+                None,
+                &|request| {
+                    github_quota::admit_gh_request(GithubCaller::Agent, request)?;
+                    Ok(request.clone())
+                },
+            )
+        });
+        (result, gh.calls())
+    };
+
+    // 1,001 of 5,000 left: one call above the 1,000 reserve.
+    let (unscoped, calls) = read(1001, json!({"run": "123", "repo": "acme/orbit"}));
+    let throttle = unscoped
+        .expect("an unscoped read still returns its read")
+        .throttle_refusal()
+        .expect("the refused fallback is a typed throttle");
+    assert_eq!(
+        refused_throttle(&throttle).resource.as_deref(),
+        Some(RESOURCE_CORE)
+    );
+    assert_eq!(refused_throttle(&throttle).reset_epoch_seconds, Some(reset));
+    assert_eq!(
+        calls.len(),
+        1,
+        "the refused fallback must not run: {calls:?}"
+    );
+
+    let (scoped, calls) = read(
+        1001,
+        json!({"run": "123", "repo": "acme/orbit", "step": "Build"}),
+    );
+    let error = scoped
+        .err()
+        .expect("a scoped read has no selection to return");
+    assert_eq!(
+        refused_throttle(&error).resource.as_deref(),
+        Some(RESOURCE_CORE)
+    );
+    assert!(error.to_string().contains("do not retry before"), "{error}");
+    assert_eq!(
+        calls.len(),
+        1,
+        "the refused fallback must not run: {calls:?}"
+    );
+
+    // With quota to spare the fallback runs and its ordinary failure is kept.
+    let (scoped, calls) = read(
+        4000,
+        json!({"run": "123", "repo": "acme/orbit", "step": "Build"}),
+    );
+    let error = scoped.err().expect("the selection is unavailable");
+    assert!(error.private_vcs_failure().is_none(), "{error}");
+    assert!(error.to_string().contains("log step not found"), "{error}");
+    assert_eq!(calls.len(), 2, "{calls:?}");
 }
