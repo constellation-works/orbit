@@ -123,6 +123,45 @@ fn finding_invalid_without_a_review_finding_or_evidence_writes_nothing() {
     }
 }
 
+fn rejection_comment_quotes_the_first_sentence_with_its_citation() {
+    for (detail, summary) in [
+        // An abbreviation's period does not end the sentence.
+        (
+            "See e.g. src/main.rs:42 for the guard. Extra detail.",
+            "See e.g. src/main.rs:42 for the guard.",
+        ),
+        // A sentence ends at an exclamation mark.
+        (
+            "Already fixed! See the old implementation.",
+            "Already fixed!",
+        ),
+    ] {
+        let workspace = Workspace::new();
+        let task = workspace.finding(&["code-review"]);
+        let prepared = workspace.prepare(&[&task.id]);
+        let applied = workspace.judge(&prepared, json!({ "evidence": detail }));
+        assert_eq!(
+            applied["task_outcomes"][0]["outcome"], "applied",
+            "{applied}"
+        );
+
+        let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
+        let verdict_comment = comments.last().expect("a verdict comment");
+        assert!(
+            verdict_comment.message.ends_with(&format!(": {summary}")),
+            "{detail:?}: {}",
+            verdict_comment.message
+        );
+
+        let verdict = workspace
+            .runtime
+            .finding_verification(&task.id)
+            .unwrap()
+            .expect("a recorded verdict");
+        assert_eq!(verdict.rejection.unwrap().detail, detail);
+    }
+}
+
 fn null_finding_invalid_applies_as_before() {
     let workspace = Workspace::new();
     let task = workspace.finding(&["code-review"]);
@@ -283,6 +322,7 @@ crate::scenario_table!(
     finding_invalid_scenarios,
     invalid_review_finding_is_rejected_with_the_pilot_evidence,
     finding_invalid_without_a_review_finding_or_evidence_writes_nothing,
+    rejection_comment_quotes_the_first_sentence_with_its_citation,
     null_finding_invalid_applies_as_before,
     implementer_rejection_binds_the_material_its_prompt_carried,
     implementer_rejection_never_reaches_a_task_outside_its_run,
