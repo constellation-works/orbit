@@ -1542,7 +1542,8 @@ fn clipped_probe_recovers_without_directory_listing_and_ignores_unrelated_entrie
     std::fs::write(&stale_marker, r#"{"generation":3,"previous_claim":null}"#).unwrap();
 
     // Delivery admission during gen 4 records an in-flight debit and must not
-    // be clobbered by the stale generation-3 marker.
+    // be clobbered by the stale generation-3 marker, and the update unlinks
+    // that superseded marker without listing the directory.
     store(records.path())
         .admit(
             &policy,
@@ -1553,8 +1554,16 @@ fn clipped_probe_recovers_without_directory_listing_and_ignores_unrelated_entrie
             &|| unreachable!("newer generation refresh is already in flight"),
         )
         .unwrap();
+    assert!(
+        !stale_marker.exists(),
+        "next quota record update must remove superseded clipped marker without listing"
+    );
     finish.wait();
     refresher.join().unwrap();
+
+    // A stale generation-3 marker staged after generation 4 already completed
+    // must also be removed on the next quota record update.
+    std::fs::write(&stale_marker, r#"{"generation":3,"previous_claim":null}"#).unwrap();
 
     let refreshes = AtomicUsize::new(0);
     store(records.path()).refresh_if_due(&policy, ACCOUNT, t1, &|| {
@@ -1562,6 +1571,10 @@ fn clipped_probe_recovers_without_directory_listing_and_ignores_unrelated_entrie
         known(999, reset + 1800)
     });
     assert_eq!(refreshes.load(Ordering::SeqCst), 0);
+    assert!(
+        !stale_marker.exists(),
+        "next quota record update after completion must remove stale clipped marker without listing"
+    );
 
     let status = store(records.path()).status(&policy, ACCOUNT, t1);
     let core = status
@@ -1683,6 +1696,13 @@ fn stale_clipped_release_does_not_clobber_newer_refresh_generation() {
             core.remaining,
             Some(expected_remaining),
             "completed_before={complete_newer_before_release}"
+        );
+        assert!(
+            !records
+                .path()
+                .join(format!(".{ACCOUNT}.clipped.2.json"))
+                .exists(),
+            "stale clipped release marker must not remain on disk (completed_before={complete_newer_before_release})"
         );
     }
 }
