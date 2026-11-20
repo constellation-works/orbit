@@ -201,5 +201,5 @@ pub use settings::{
     AUTO_CONCURRENCY_HEAD_STUCK_PASSES, AUTO_CONCURRENCY_HORIZON_CAP_MINUTES,
     AUTO_CONCURRENCY_PROFILE_WINDOW, AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigSnapshot,
     ExperimentSettings, MachineSettings, MidRunSteeringSettings, ResourceThrottleSettings,
-    WorkerContainmentSettings,
+    StandingDrainSettings, WorkerContainmentSettings,
 };

@@ -28,6 +28,45 @@ pub struct MidRunSteeringSettings {
     pub max_rounds: u8,
 }
 
+/// Admitted `workflow.standing_drain.*`: whether the owner's clock may
+/// resubmit a bounded drain, and the flags and bounds every keeper drain
+/// carries. The default is off with the documented bounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StandingDrainSettings {
+    /// `workflow.standing_drain.enabled` (default `false`).
+    pub enabled: bool,
+    /// `workflow.standing_drain.window` in seconds (default 24 h).
+    pub window_seconds: u64,
+    /// `workflow.standing_drain.concurrency`; `None` uses the job default.
+    pub concurrency: Option<u32>,
+    /// `workflow.standing_drain.complete` (default `false`).
+    pub complete: bool,
+    /// `workflow.standing_drain.approve_proposed` (default `false`).
+    pub approve_proposed: bool,
+    /// `workflow.standing_drain.auto_fix` (default `false`).
+    pub auto_fix: bool,
+    /// `workflow.standing_drain.min_resubmit_interval` in seconds (default 10 min).
+    pub min_resubmit_interval_seconds: u64,
+    /// `workflow.standing_drain.max_failed_resubmits` (default 3).
+    pub max_failed_resubmits: u32,
+}
+
+impl Default for StandingDrainSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            window_seconds: super::resolve::DEFAULT_STANDING_DRAIN_WINDOW_SECONDS,
+            concurrency: None,
+            complete: false,
+            approve_proposed: false,
+            auto_fix: false,
+            min_resubmit_interval_seconds:
+                super::resolve::DEFAULT_STANDING_DRAIN_MIN_RESUBMIT_SECONDS,
+            max_failed_resubmits: 3,
+        }
+    }
+}
+
 /// Admitted `experiments.*`: the workspace's experiment policy. Experiment
 /// definitions are store records, not configuration.
 #[derive(Debug, Clone, PartialEq)]
@@ -389,6 +428,20 @@ impl ConfigSnapshot {
         MidRunSteeringSettings {
             enabled: self.workflow_mid_run_steering_enabled,
             max_rounds: self.workflow_mid_run_steering_max_rounds,
+        }
+    }
+
+    /// The admitted `workflow.standing_drain.*` settings.
+    pub fn standing_drain(&self) -> StandingDrainSettings {
+        StandingDrainSettings {
+            enabled: self.workflow_standing_drain_enabled,
+            window_seconds: self.workflow_standing_drain_window,
+            concurrency: self.workflow_standing_drain_concurrency,
+            complete: self.workflow_standing_drain_complete,
+            approve_proposed: self.workflow_standing_drain_approve_proposed,
+            auto_fix: self.workflow_standing_drain_auto_fix,
+            min_resubmit_interval_seconds: self.workflow_standing_drain_min_resubmit_interval,
+            max_failed_resubmits: self.workflow_standing_drain_max_failed_resubmits,
         }
     }
 

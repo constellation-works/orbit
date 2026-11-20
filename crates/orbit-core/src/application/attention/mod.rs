@@ -2,6 +2,7 @@
 //! destination side of federation. Filters, the cursor and the public page
 //! live with the operation in `orbit_common::governance::attention`, so the
 //! federated aggregator applies the same rules once over every host.
+mod drain_keeper_sources;
 mod host;
 mod notice_sources;
 mod provider_sources;

@@ -746,3 +746,41 @@ pub(super) fn resolve_tag_requires_labels(
     orbit_types::task::TagLabelRequirements::try_from(raw.unwrap_or_default())
         .map_err(|error| OrbitError::InvalidInput(error.to_string()))
 }
+
+/// Default `workflow.standing_drain.window`: the 24-hour drain window cap.
+pub(super) const DEFAULT_STANDING_DRAIN_WINDOW_SECONDS: u64 = 86_400;
+/// Default `workflow.standing_drain.min_resubmit_interval`: ten minutes.
+pub(super) const DEFAULT_STANDING_DRAIN_MIN_RESUBMIT_SECONDS: u64 = 600;
+
+/// A `workflow.standing_drain.*` duration (`30m`, `24h`): `default_seconds`
+/// when unset, else the parsed value within `min..=max` seconds.
+pub(super) fn resolve_standing_drain_duration(
+    raw: Option<String>,
+    default_seconds: u64,
+    (min, max): (u64, u64),
+    key: &str,
+) -> Result<u64, OrbitError> {
+    let Some(raw) = raw else {
+        return Ok(default_seconds);
+    };
+    let seconds = orbit_common::protocol::tool_input::parse_duration_seconds(&raw)
+        .map_err(|error| OrbitError::InvalidInput(format!("{key}: {error}")))?;
+    if (min..=max).contains(&seconds) {
+        Ok(seconds)
+    } else {
+        Err(OrbitError::InvalidInput(format!(
+            "{key} has invalid value {raw:?}; expected a duration from {min} to {max} seconds"
+        )))
+    }
+}
+
+/// `workflow.standing_drain.concurrency`: unset leaves the drain job's own
+/// default ceiling; a set value is the bounded worker ceiling.
+pub(super) fn resolve_standing_drain_concurrency(
+    raw: Option<u32>,
+) -> Result<Option<u32>, OrbitError> {
+    raw.map(|value| {
+        resolve_bounded_range(Some(value), value, "workflow.standing_drain.concurrency")
+    })
+    .transpose()
+}

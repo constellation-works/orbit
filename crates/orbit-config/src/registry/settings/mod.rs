@@ -11,5 +11,5 @@ pub use machine::{
     ResourceThrottleSettings, WorkerContainmentSettings,
 };
 pub(crate) use resolve::resolve_bounded_range;
-pub use snapshot::{ExperimentSettings, MidRunSteeringSettings};
+pub use snapshot::{ExperimentSettings, MidRunSteeringSettings, StandingDrainSettings};
 pub use table::{CONFIG_KEY_REGISTRY, ConfigSnapshot};

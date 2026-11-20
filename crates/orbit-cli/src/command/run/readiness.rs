@@ -111,6 +111,9 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
     if let Some(line) = drain_intent_line(&payload["drain_intent"]) {
         lines.push(line);
     }
+    if let Some(line) = drain_keeper_line(&payload["drain_keeper"]) {
+        lines.push(line);
+    }
     if let Some(run_id) = capacity["pull_drain_run_id"].as_str() {
         let stopped = if capacity["pull_drain_admissions_stopped"].as_bool() == Some(true) {
             " (admissions stopped)"
@@ -349,6 +352,44 @@ fn drain_intent_line(intent: &Value) -> Option<String> {
             intent["error"].as_str().unwrap_or("unknown error")
         )),
     }
+}
+
+/// [ORB-25991] The standing-drain keeper, only while it is enabled: off
+/// prints nothing new.
+fn drain_keeper_line(keeper: &Value) -> Option<String> {
+    if keeper["enabled"].as_bool() != Some(true) {
+        return None;
+    }
+    let flags = &keeper["flags"];
+    let concurrency = flags["concurrency"]
+        .as_u64()
+        .map_or_else(|| "default".to_string(), |value| value.to_string());
+    let mut line = format!(
+        "Standing-drain keeper: enabled (window {}s, concurrency {concurrency}, complete {}, \
+         approve_proposed {}, auto_fix {})",
+        flags["window_seconds"].as_u64().unwrap_or_default(),
+        flags["complete"].as_bool().unwrap_or_default(),
+        flags["approve_proposed"].as_bool().unwrap_or_default(),
+        flags["auto_fix"].as_bool().unwrap_or_default(),
+    );
+    let breaker = &keeper["breaker"];
+    if breaker["open"].as_bool() == Some(true) {
+        line.push_str(&format!(
+            "; crash breaker open ({} failed keeper drains in the last hour) until a person starts a drain",
+            breaker["failed_in_last_hour"].as_u64().unwrap_or_default()
+        ));
+    }
+    if let Some(decision) = keeper["last_decision"]["decision"].as_str() {
+        line.push_str(&format!(
+            "; last decision {decision} {} at {}",
+            keeper["last_decision"]["detail"].as_str().unwrap_or("-"),
+            keeper["last_decision"]["at"]
+                .as_str()
+                .unwrap_or("unknown time"),
+        ));
+    }
+    line.push('.');
+    Some(line)
 }
 
 /// Live repairs and the latest drain pass's skipped repair candidates.

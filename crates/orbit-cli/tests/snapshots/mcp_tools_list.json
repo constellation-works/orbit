@@ -41,7 +41,9 @@
               "host_unhealthy",
               "notice_open",
               "resident_stalled",
-              "routine_tripped"
+              "routine_tripped",
+              "drain_paused",
+              "drain_breaker_open"
             ]
           },
           "description": "Include kinds (repeatable)."
@@ -64,7 +66,9 @@
               "host_unhealthy",
               "notice_open",
               "resident_stalled",
-              "routine_tripped"
+              "routine_tripped",
+              "drain_paused",
+              "drain_breaker_open"
             ]
           },
           "description": "Exclude kinds (repeatable)."

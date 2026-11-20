@@ -866,6 +866,7 @@ impl PipelineWorkerSupervisor {
                 status,
                 arguments,
                 error_message,
+                workspace_id: None,
             },
         )
     }

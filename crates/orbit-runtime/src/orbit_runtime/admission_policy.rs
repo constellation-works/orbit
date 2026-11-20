@@ -8,8 +8,8 @@ use std::time::SystemTime;
 
 use orbit_config::{
     AutoConcurrencySettings, AutoEffortPolicy, ComplexityCrewPools, MidRunSteeringSettings,
-    ProviderLimitPolicy, PurposeCrewPools, ResolvedConfig, TaskTypeDefinition,
-    TypeComplexityCrewPools,
+    ProviderLimitPolicy, PurposeCrewPools, ResolvedConfig, StandingDrainSettings,
+    TaskTypeDefinition, TypeComplexityCrewPools,
 };
 use orbit_types::identity::{Crew, HumanCrew};
 
@@ -40,6 +40,8 @@ pub(super) struct AdmissionPolicy {
     experiments_enabled: bool,
     /// `crew_memory.enabled`.
     crew_memory_enabled: bool,
+    /// `workflow.standing_drain.*`.
+    standing_drain: StandingDrainSettings,
     crew_settings: Arc<AdmissionCrewSettings>,
 }
 
@@ -49,6 +51,7 @@ impl AdmissionPolicy {
         let mid_run_steering = config.snapshot.mid_run_steering();
         let experiments_enabled = config.snapshot.experiments().enabled;
         let crew_memory_enabled = config.snapshot.crew_memory_enabled();
+        let standing_drain = config.snapshot.standing_drain();
         let auto_effort = config.snapshot.auto_effort();
         let purpose_crews = config.snapshot.purpose_crews();
         let type_complexity_crews = config.snapshot.type_complexity_crews();
@@ -59,6 +62,7 @@ impl AdmissionPolicy {
             mid_run_steering,
             experiments_enabled,
             crew_memory_enabled,
+            standing_drain,
             auto_concurrency: config.auto_concurrency,
             crew_settings: Arc::new(AdmissionCrewSettings {
                 complexity_crews: config.complexity_crews,
@@ -114,6 +118,9 @@ impl RuntimeKernel {
                 // Fail closed: until a config load succeeds, crew memory
                 // writes stay refused, the feature's default.
                 crew_memory_enabled: false,
+                // Fail closed the same way: the keeper stays off until a
+                // config load says otherwise.
+                standing_drain: StandingDrainSettings::default(),
                 crew_settings: Arc::new(AdmissionCrewSettings {
                     complexity_crews: settings.complexity_crews().clone(),
                     crews: settings.crews().clone(),
@@ -180,6 +187,13 @@ impl RuntimeKernel {
     /// every write at once, including in a long-lived runtime.
     pub fn current_crew_memory_enabled(&self) -> bool {
         self.refresh_workflow_policy().crew_memory_enabled
+    }
+
+    /// `workflow.standing_drain.*` from the current config, like
+    /// [`Self::current_crew_memory_enabled`]: an operator's disable stops the
+    /// keeper at its next tick. Off until a config load succeeds.
+    pub fn current_standing_drain(&self) -> StandingDrainSettings {
+        self.refresh_workflow_policy().standing_drain
     }
 
     /// Pin both policies for this pass so all decisions use one config version.

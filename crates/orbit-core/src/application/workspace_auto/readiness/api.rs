@@ -27,6 +27,12 @@ fn attach_readiness_runtime_fields(runtime: &OrbitRuntime, payload: &mut Value) 
         Ok(record) => crate::application::job::drain_intent_json(record.as_ref()),
         Err(error) => json!({ "intent": "unknown", "error": error.to_string() }),
     };
+    // [ORB-25991] The standing-drain keeper: whether it is enabled, its
+    // flags and breaker while it is, and its last recorded decision.
+    payload["drain_keeper"] = match runtime.standing_drain_keeper_view() {
+        Ok(view) => view.to_json(),
+        Err(error) => json!({ "error": error.to_string() }),
+    };
 }
 
 /// Explain the same snapshot that auto-drain uses without performing its

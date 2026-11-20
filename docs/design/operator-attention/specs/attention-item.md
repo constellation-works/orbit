@@ -50,6 +50,8 @@ review records alone; "runtime" kinds need run, claim, provider or host state.
 | `notice_open` | record | the notice store's effective-open read (`list_notices` with status open), derived only on the home owner | an effective-open fleet notice is homed in the workspace; expired or closed notices are not items | `opened_at` |
 | `resident_stalled` | task | the resident mandate view and its checkpoint comments (`application/resident/due.rs`, `resident_stall`), derived only on the home owner | an `active` resident mandate (not paused, taken over, handed off or ended) wrote no checkpoint for twice its heartbeat, or its last three checkpoints are all `incomplete`, or its workspace's cycle routine is disabled — no cycle can fire at all then, however recently it checkpointed ([manager-channel](../../resident-orchestrator/specs/manager-channel.md#what-residents-report-through)) | the last checkpoint (task creation when it never checkpointed), or the first of the three incomplete ones |
 | `routine_tripped` | runtime | the host's routine circuit breakers (`routine_breakers` in `~/.orbit/orbit.db`, written by the routine sweep), reported by each checkout for the routines its workspace defines | the routine's breaker is open: its last three fires failed with the same error class, and the sweep stops firing it until a trial fire succeeds or an operator resets it ([routines design](../../routines/2_design.md#41-circuit-breaker)) | `tripped_at` |
+| `drain_paused` | runtime | the workspace's drain intent (`drain_intents`) and its `backlog`/`proposed` tasks, derived only on the owner and only while `workflow.standing_drain.enabled` is set ([standing-drain scope](../../standing-drain/1_scope.md)) | the intent has been `paused` by hand for over 12 hours while work waits | the pause's `updated_at` |
+| `drain_breaker_open` | runtime | the standing-drain keeper's drains (`workspace_auto_pipeline` runs whose trigger routine is `standing-drain-keeper`), derived only on the owner and only while the keeper is enabled | `max_failed_resubmits` keeper drains ended `failed` or `interrupted` (upgrade interruptions excluded) within the last hour since the last hand start | the newest such failure |
 
 Notes that bind implementations:
 
@@ -181,6 +183,8 @@ The task-level implementation returns at most 32 warning findings in `detail.fin
 | `notice_open` | `orbit.notice.show`; `also`: `orbit.notice.close` (needs `reason`) |
 | `resident_stalled` | `orbit.resident.control` with `action: wake` and `status_request: true` (needs `reason`) when the resident cycle routine is enabled; `orbit.routine.control` with `action: toggle`, `expected_enabled: false`, `enabled: true` and the observed routine `name` and `target` (no `needs`) when it is disabled — routine enablement requires trusted operator authority and an explicit workspace; `also`: `orbit.resident.show` |
 | `routine_tripped` | `orbit routine breaker reset <name>` once the cause is fixed; `also`: `orbit routine show <name>` and `orbit routine breaker bypass <name>` (one fire on the next sweep) |
+| `drain_paused` | `orbit run auto --for 24h` (a hand start lifts the pause); `also`: `orbit run readiness` |
+| `drain_breaker_open` | `orbit run auto --for 24h` once the cause is found (a hand start closes the breaker); `also`: `orbit run readiness` |
 
 For `claim_stale`, `input` carries only `claim_id` and `workspace`; the observed phase is
 `detail.phase`. The operator supplies `expected_phase` after inspecting it, a fresh/replayed
@@ -225,6 +229,8 @@ and are not waiting on a single task.
 | `host_unhealthy` | high | critical | critical when the host is the owner of an in-scope workspace, or its failure is the reason another item is degraded |
 | `resident_stalled` | medium | high | none; fingerprint state is the stall reason, `last_checkpoint_at`, and the routine state (`cycle_routine_disabled`, `cycle_routine_name`) |
 | `routine_tripped` | high | high | none; fingerprint state is `tripped_at` and `trips`, so a re-opened breaker after a failed trial is a new episode |
+| `drain_paused` | medium | medium | none; fingerprint state is the pause's `since` |
+| `drain_breaker_open` | high | high | none; fingerprint state is the newest failure's `since` |
 | `notice_open` | `warn` and `incident` high, `maintenance` medium, `info` low (residents' status lines excluded) | critical | one step higher when the linked task is terminal but not `done`, or when the notice expires within 2 hours. This kind's severity is the notice rule in [notice-delivery](../../fleet-notices/specs/notice-delivery.md#attention-kind), not the age-bump ladder; its fingerprint state is `revision`, effective `status` and severity, with `refs` carrying `notice_id` and the linked `task_id`, `reason` the notice title, and `since` its `opened_at` |
 
 The thresholds, the 48-hour run window, the 120-minute stuck bound, the 60-second CI cache, the

@@ -5,7 +5,7 @@ last_updated: 2026-11-20
 last_validated: 2026-11-20
 status: Draft
 stage: building
-next: "Phase 1 (intent and surfaces) is built; next is the keeper, ORB-25991"
+next: "Phases 1 (intent and surfaces) and 2 (the opt-in keeper) are built; enabling the keeper is Daniel's; next is the deploy hold, ORB-25992"
 feature: standing-drain
 doc_role: scope
 type: design
@@ -260,9 +260,20 @@ and a mean of 6.36 M tokens including cache reads. Excluding cache reads it was 
    as waiting, so it is a ceiling on admissible work. Nothing reads the intent, nothing is
    submitted and no config key was added. Operation:
    [distributed-drain runbook](../../runbooks/distributed-drain.md#drain-intent-standing-drain-phase-1).
-2. **Keeper ([ORB-25991]).** Clock-tick re-submission behind `workflow.standing_drain.enabled`,
-   with the bounds, authority rules and audit events above. It depends on phase 1, gets an
-   independent review, and is in that night's security review if it lands before it.
+2. **Keeper ([ORB-25991]), built, off by default.** The clock tick, after upgrade resume and
+   only on the owner, submits one drain through `submit_workspace_auto_run` (the `orbit run
+   auto` path) when `workflow.standing_drain.enabled` is set, the intent is `on`, no drain is
+   pending, running or held, a `backlog` or `proposed` task waits, `min_resubmit_interval`
+   has passed since the newest drain ended and the crash breaker is closed. The submission's
+   trigger is the routine `standing-drain-keeper`, so it records no intent. Upgrade
+   interruptions do not count toward the breaker, and a hand start closes it. Each
+   submission is audited as `drain.keeper.submit` with the effective flags; a skip is audited
+   as `drain.keeper.skip { reason }` when its reason differs from the previous decision, so an
+   unchanged reason is not rewritten every tick. Readiness (`drain_keeper`), the doctor row
+   and the attention kinds `drain_paused` and `drain_breaker_open` report it only while it is
+   enabled. Operation: [distributed-drain runbook](../../runbooks/distributed-drain.md#standing-drain-keeper-phase-2).
+   It still gets an independent review, and is in that night's security review if it lands
+   before it.
 3. **Deploy hold ([ORB-25992]).** Add the CLI verb and its use in `update-orbit.sh` and the Mac
    RB-15 sequence, and update RB-15 step 9. This is filed but not built this shift: no change
    to deploy tooling while the shift still owes binary updates.
@@ -305,8 +316,8 @@ Each of these was resolved by the chief's ruling on [ORB-25951].
 
 ## Task References
 
-- [ORB-25965] — is building phase 1 (in progress): the drain intent, pause attribution, doctor row, readiness field and idle-with-work figure.
-- [ORB-25991] — is to build phase 2, the keeper, after ORB-25965 (backlog).
+- [ORB-25965] — built phase 1: the drain intent, pause attribution, doctor row, readiness field and idle-with-work figure.
+- [ORB-25991] — built phase 2, the keeper, off by default.
 - [ORB-25992] — is to build phase 3, the deploy hold, after ORB-25991 (someday).
 - [ORB-25951] — is the on-call review that measured the gaps and recorded the chief's ruling on phases 1–2.
 - [ORB-25866] — made a running drain re-read its configured crew pools while it runs.
