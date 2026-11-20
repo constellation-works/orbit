@@ -220,9 +220,21 @@ Recognise the outcome in `orbit run show <run_id> --json`:
 - On an owner run, `run.state` is `failed`. It is not `held`, which is the
   `task_blocked_by_agent` stop, and not `interrupted`, which is the
   `upgrade_quiesce` pause.
-- The failing `steps` entry has `error_code` `upgrade_pending`, and its
-  `error_message` carries `[upgrade_pending] kind=<kind>` followed by the agent's
-  evidence.
+- Match the refusal on its failure text, not on an error code. The text starts
+  `[upgrade_pending] kind=<kind>` on its first line, and the agent's evidence
+  follows on the lines after it. `run.error_message` carries that text, and so does
+  the `error_message` of the failing `steps` entry.
+- `steps_source` says where the top-level `steps` came from. A run whose record
+  holds only the job-level failure, the usual v2 case, reads `audit`: those entries
+  are rebuilt from the audit trail, so their `error_code` is always null. Find the
+  marker in `error_message` instead. A `record` source keeps each entry's stored
+  `error_code`, which may also be null.
+- Fields that may be null: `run.error_code` is `upgrade_pending` only when the run
+  record kept that code, and is otherwise null. On an audit-sourced step,
+  `error_code`, `exit_code` and `agent_response_json` are always null, and
+  `started_at`, `finished_at`, `duration_ms`, `lock_wait_ms`, `outcome` and
+  `error_diagnostic` are null when the audit recorded no value. `root_cause` is null
+  because the owner run failed on its own.
 - The run is not reported as `upgrade_paused`, so `--failures` and the reliability
   counts treat it as a failure.
 
