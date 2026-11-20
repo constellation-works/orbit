@@ -276,17 +276,47 @@ fn short_verified_sha(sha: &str) -> &str {
     sha.get(..12).unwrap_or(sha)
 }
 
+/// Abbreviations whose period does not end a sentence, lowercase.
+const ABBREVIATIONS: [&str; 4] = ["e.g.", "i.e.", "cf.", "vs."];
+
 /// The first sentence of a rejection's `detail`, read from its first line and
 /// capped at [`SUMMARY_DETAIL_CHARS`] characters.
 fn detail_first_sentence(detail: &str) -> String {
     let line = detail.trim().lines().next().unwrap_or_default();
-    let end = line.find(". ").map_or(line.len(), |index| index + 1);
-    let sentence = &line[..end];
+    let sentence = &line[..sentence_end(line)];
     if sentence.chars().count() <= SUMMARY_DETAIL_CHARS {
         return sentence.to_string();
     }
     let capped: String = sentence.chars().take(SUMMARY_DETAIL_CHARS).collect();
     capped + "…"
+}
+
+/// The byte offset just past the first sentence-ending mark of `line`: a `.`,
+/// `!` or `?` followed by whitespace or the end of the line. A period that
+/// closes one of [`ABBREVIATIONS`] does not end the sentence.
+fn sentence_end(line: &str) -> usize {
+    for (index, mark) in line.char_indices() {
+        if !matches!(mark, '.' | '!' | '?') {
+            continue;
+        }
+        let end = index + mark.len_utf8();
+        let breaks = line[end..].chars().next().is_none_or(char::is_whitespace);
+        if breaks && !(mark == '.' && closes_abbreviation(&line[..end])) {
+            return end;
+        }
+    }
+    line.len()
+}
+
+/// Whether `text`, which ends in a period, ends in one of [`ABBREVIATIONS`]
+/// as a whole word.
+fn closes_abbreviation(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    ABBREVIATIONS.iter().any(|abbreviation| {
+        lower
+            .strip_suffix(abbreviation)
+            .is_some_and(|before| !before.ends_with(char::is_alphanumeric))
+    })
 }
 
 /// The summary of a verdict that gives no rejection detail: its evidence count.
