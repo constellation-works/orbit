@@ -17,7 +17,7 @@ use serde_json::Value;
 use crate::OrbitRuntime;
 use crate::application::task::TaskJobPort;
 use crate::application::task::pr_closure::unsettled_claim_reason;
-use crate::runtime::task_pr_forge::MergedPullRequest;
+use crate::runtime::task_pr_forge::{ForgePullRequest, MergedPullRequest};
 
 use super::model::SETTLEABLE_STATUSES;
 
@@ -538,6 +538,50 @@ impl OrbitRuntime {
             })
             .max_by_key(|merged| merged.pull.number)
             .cloned())
+    }
+
+    /// What differs between a stopped native run's authenticated publication
+    /// and the open pull request the owner is about to merge, or `None` when
+    /// they are the same revision or the task has no such publication. The
+    /// checks are the ones [`Self::delivery_merge`] applies after the merge,
+    /// so a pull request this refuses is one settlement would reject.
+    pub(super) fn stopped_publication_mismatch(
+        &self,
+        candidate: &Candidate,
+        pull: &ForgePullRequest,
+        base_branch: Option<&str>,
+        head_sha: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        if candidate.revoked.is_some() || candidate.requeued_handoff.is_some() {
+            return Ok(None);
+        }
+        let Some(proof) = self.stopped_publication_identity(&candidate.task)? else {
+            return Ok(None);
+        };
+        let mut differs = Vec::new();
+        if proof.number != pull.number.to_string() {
+            differs.push(format!(
+                "number #{} (published #{})",
+                pull.number, proof.number
+            ));
+        }
+        if proof.branch != pull.head_branch {
+            differs.push(format!(
+                "branch {} (published {})",
+                pull.head_branch, proof.branch
+            ));
+        }
+        if proof.head != head_sha {
+            differs.push(format!("head {head_sha} (published {})", proof.head));
+        }
+        if base_branch != Some(proof.base_branch.as_str()) {
+            differs.push(format!(
+                "base {} (published {})",
+                base_branch.unwrap_or("unknown"),
+                proof.base_branch
+            ));
+        }
+        Ok((!differs.is_empty()).then(|| differs.join(", ")))
     }
 
     /// The branch the task's own delivery targets: the base its linked run

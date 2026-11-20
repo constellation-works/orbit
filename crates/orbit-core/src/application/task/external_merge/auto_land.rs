@@ -16,7 +16,9 @@
 //! - no `completion.hold` rule holds it, and the pre-landing review covers the
 //!   pull request's head;
 //! - its one open delivery pull request is mergeable with every required
-//!   check passed.
+//!   check passed, and, when a stopped native run published it, still is the
+//!   revision that run published: settlement rejects any other, so a moved
+//!   branch records `publication_identity_changed` and merges nothing.
 //!
 //! Checks still running, or mergeability GitHub has not computed yet, wait for
 //! the next pass. The pass runs on every owner sweep tick, so a pull request
@@ -61,7 +63,7 @@ pub const FOLLOW_UP_OWNER_OPERATOR: &str = "operator";
 pub struct LandingFollowUp {
     /// Stable reason code: `completion_not_authorized`,
     /// `pull_request_conflicting`, `required_checks_failed`,
-    /// `review_not_settled` or `merge_refused`.
+    /// `publication_identity_changed`, `review_not_settled` or `merge_refused`.
     pub code: String,
     /// Who acts next: `operator`.
     pub owner: String,
@@ -178,6 +180,28 @@ impl OrbitRuntime {
             head_sha: Some(head.clone()),
             detail,
         };
+        let base = forge
+            .lease_pull_request(&repo_root, &format!("#{number}"))?
+            .map(|bound| bound.base_branch);
+        // A stopped native run's publication is the revision settlement will
+        // accept after the merge; a pull request that moved off it would merge
+        // the wrong revision and leave the task in review.
+        if let Some(difference) =
+            self.stopped_publication_mismatch(&candidate, &blockers.pull, base.as_deref(), &head)?
+        {
+            self.record_follow_up(
+                &task,
+                &history,
+                follow_up(
+                    "publication_identity_changed",
+                    format!(
+                        "pull request #{number} no longer matches the publication its run \
+                         recorded: {difference}"
+                    ),
+                ),
+            )?;
+            return Ok(None);
+        }
         if blockers.conflicting {
             self.record_follow_up(
                 &task,
@@ -224,9 +248,6 @@ impl OrbitRuntime {
             )?;
             return Ok(None);
         }
-        let base = forge
-            .lease_pull_request(&repo_root, &format!("#{number}"))?
-            .map(|bound| bound.base_branch);
         if let Some(base) = base.as_deref()
             && let Some(hold) = orbit_engine::candidate_completion_hold(
                 crate::runtime::RuntimeKernel::completion_hold_rules(self),
