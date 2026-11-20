@@ -173,7 +173,6 @@ fn ci_retry_journal_read_passes_a_queued_admission() {
 
     // The journal read passes it. The deadline makes a regression fail
     // instead of waiting out the holder.
-    let started = Instant::now();
     let (observed, lock_wait_ms) = orbit_common::fs::lock_wait::measure(|| {
         orbit_core::test_support::with_task_commit_lock_timeout(Duration::from_secs(2), || {
             RuntimeHost::observe_task_artifact(&fixture.runtime, &fixture.task_id, JOURNAL)
@@ -184,7 +183,7 @@ fn ci_retry_journal_read_passes_a_queued_admission() {
         .expect("the stored journal is returned");
     assert_eq!(observed.content, JOURNAL_CONTENT.as_bytes());
     assert!(
-        lock_wait_ms < 2_000 && started.elapsed() < Duration::from_secs(2),
+        lock_wait_ms < 2_000,
         "journal read waited {lock_wait_ms} ms behind a queued admission"
     );
     let missing = RuntimeHost::observe_task_artifact(

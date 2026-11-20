@@ -967,6 +967,18 @@ fn two_admitter_processes_cannot_fill_one_gap_twice() {
             // lock wait may be arbitrarily short if it is delayed after
             // signalling, so no elapsed-time assumption is made.
             wait_for(&rendezvous.join("requesting"));
+            // The second admitter is now at its request boundary. While this
+            // process still holds the lock it must not have been served: its
+            // result appears only after this closure returns. The window is
+            // a bounded negative observation, never a wait for a result.
+            let window = Instant::now() + StdDuration::from_millis(250);
+            while Instant::now() < window {
+                assert!(
+                    !rendezvous.join("result.json").exists(),
+                    "the second admitter was served while the first held the admission lock"
+                );
+                std::thread::sleep(StdDuration::from_millis(10));
+            }
             Ok(admit_if_it_fits(forecast, &fixture.workspace, "ORB-first"))
         })
         .unwrap();
@@ -981,14 +993,6 @@ fn two_admitter_processes_cannot_fill_one_gap_twice() {
     let second: Value =
         serde_json::from_slice(&std::fs::read(rendezvous.join("result.json")).unwrap()).unwrap();
     assert!(first, "the empty host fits the first delivery");
-    // Contention was established by coordination, not elapsed time: the
-    // first admitter observed `requesting` while still holding the lock
-    // (it could not commit before that file appeared), and the second
-    // signalled it only after observing `holding`.
-    assert!(
-        rendezvous.join("requesting").exists(),
-        "the second admitter signalled its request while the first held the lock"
-    );
     assert_eq!(second["seen"], json!(["ORB-first"]), "{second}");
     assert_eq!(second["admitted"], json!(false), "{second}");
 }

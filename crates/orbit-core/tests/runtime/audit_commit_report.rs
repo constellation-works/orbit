@@ -11,11 +11,14 @@
 //! SQLite's message text, so that case holds a real writer lock.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use orbit_core::OrbitRuntime;
 use serde_json::{Value, json};
 use tempfile::TempDir;
+use tracing_subscriber::layer::{Context, Layer};
+use tracing_subscriber::prelude::*;
 
 const FAILED_AUDIT_TITLE: &str = "audit insert fails after the task commits";
 const NORMAL_TITLE: &str = "audit insert commits with the task";
@@ -77,51 +80,87 @@ fn committed_task_add_stays_success_when_its_audit_insert_fails() {
     assert_eq!(tasks_titled(&runtime, FAILED_AUDIT_TITLE), vec![id]);
 }
 
-/// A committed call whose audit insert outlasts one busy timeout behind
-/// another connection's writer lock retries the insert once, so the row
-/// still lands. The lock is held for one busy timeout plus a margin: the
-/// first insert gives up while it is held, and the retry outlasts it.
+/// A committed mutating call whose audit insert outlasts one busy timeout
+/// behind another connection's writer lock retries the insert once, so the
+/// row still lands. The lock is released only after the dispatcher reports
+/// that its first insert lost to it, so no host speed lets the first insert
+/// outwait the holder: without the retry the call returns an `audit_warning`
+/// and no row.
 fn audit_insert_held_out_by_a_sqlite_writer_lock_is_retried() {
     orbit_common::storage::sqlite::with_sqlite_busy_timeout(500, || {
         let (_root, runtime, repo_root, database) = test_runtime();
-        let busy_timeout = Duration::from_millis(500);
         let (held, held_rx) = std::sync::mpsc::channel();
+        let (release, release_rx) = std::sync::mpsc::channel::<()>();
         let holder = std::thread::spawn(move || {
             let connection = rusqlite::Connection::open(&database).expect("open audit database");
             connection
                 .execute_batch("BEGIN IMMEDIATE;")
                 .expect("hold the audit writer lock");
             held.send(()).expect("report the held lock");
-            std::thread::sleep(busy_timeout + Duration::from_millis(200));
+            // Released by the first insert's loss, or when the call returns.
+            let _ = release_rx.recv();
             connection
                 .execute_batch("ROLLBACK;")
                 .expect("release the audit writer lock");
         });
         held_rx.recv().expect("the holder takes the lock");
 
-        let listed = runtime
-            .execute_tool_command(
-                "orbit.task.list",
-                json!({"workspace": repo_root.to_string_lossy(), "model": "grok"}),
+        let first_attempt_lost = Arc::new(AtomicBool::new(false));
+        let subscriber = tracing_subscriber::registry().with(FirstInsertLostTheLock {
+            observed: first_attempt_lost.clone(),
+            release: Mutex::new(release.clone()),
+        });
+        let added = tracing::subscriber::with_default(subscriber, || {
+            runtime.execute_tool_command(
+                "orbit.task.add",
+                add_input(&repo_root, FAILED_AUDIT_TITLE),
                 None,
                 Some("grok".into()),
             )
-            .expect("a read-only call succeeds behind the audit lock");
+        });
+        // A call that never reported the loss must not leave the holder blocked.
+        let _ = release.send(());
         holder.join().expect("the holder releases the lock");
+        let added = added.expect("a committed call succeeds behind the audit lock");
 
         assert!(
-            listed.get("audit_warning").is_none(),
-            "the retried insert persisted: {listed}"
+            first_attempt_lost.load(Ordering::SeqCst),
+            "the first audit insert never reported losing the lock: {added}"
         );
-        let rows = runtime
-            .list_audit_events(None, Some("orbit.task.list".to_string()), None, None, 20)
-            .expect("list audit rows");
-        assert_eq!(
-            rows.len(),
-            1,
-            "the insert that lost to the lock is retried into exactly one row: {rows:?}"
+        assert!(
+            added.get("audit_warning").is_none(),
+            "the retried insert persisted: {added}"
         );
+        assert_eq!(audit_rows(&runtime).len(), 1, "exactly one audit row");
     });
+}
+
+/// Releases the held writer lock when the dispatcher reports that its first
+/// audit insert lost to it and is retrying.
+struct FirstInsertLostTheLock {
+    observed: Arc<AtomicBool>,
+    release: Mutex<std::sync::mpsc::Sender<()>>,
+}
+
+impl<S: tracing::Subscriber> Layer<S> for FirstInsertLostTheLock {
+    fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+        struct Message(String);
+        impl tracing::field::Visit for Message {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = format!("{value:?}");
+                }
+            }
+        }
+        let mut message = Message(String::new());
+        event.record(&mut message);
+        if *event.metadata().level() == tracing::Level::WARN
+            && message.0.contains("lost the audit-store lock")
+        {
+            self.observed.store(true, Ordering::SeqCst);
+            let _ = self.release.lock().expect("release sender").send(());
+        }
+    }
 }
 
 /// The caller from the incident: a reported failure is retried once, and a
