@@ -38,10 +38,16 @@
 .fleet-work-row > *, .fleet-primary { min-width: 0; overflow-wrap: anywhere; }
 .fleet-primary { display: grid; gap: 3px; }
 .fleet-work-detail { grid-column: 1 / -1; color: var(--fg-dim); }
-.fleet-account { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(0, 2fr) auto; align-items: center; gap: 18px; padding: 14px; font: 400 12px/1.5 var(--font-sans); }
-.fleet-account-windows { display: flex; flex-wrap: wrap; gap: 12px; min-width: 0; }
-.fleet-quota { display: grid; gap: 6px; flex: 1 1 130px; min-width: 0; }
-.fleet-quota > span:first-child { display: flex; flex-wrap: wrap; gap: 5px; justify-content: space-between; }
+/* The name sizes to its text. Meters take the rest as equal tracks, so a short
+   last row stays the same width. Subgrid rows put every bar in a row on one
+   line however the window name wraps, and the percentage stays beside it. */
+.fleet-account { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 18px; padding: 14px; font: 400 12px/1.5 var(--font-sans); min-width: 0; }
+.fleet-account-windows { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(140px, 100%), 1fr)); column-gap: 12px; row-gap: 6px; min-width: 0; }
+.fleet-quota { display: grid; grid-template-rows: subgrid; grid-row: span 3; min-width: 0; }
+.fleet-quota > span:first-child { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; column-gap: 5px; min-width: 0; }
+.fleet-quota > span:first-child > .mono { white-space: nowrap; }
+.fleet-quota > .muted { min-width: 0; overflow-wrap: break-word; padding-bottom: 6px; }
+.fleet-account-windows > .muted { grid-column: 1 / -1; }
 .fleet-work-list > p { margin: 0; padding: 14px; }
 .fleet-dialog { padding: 0; width: 520px; max-width: calc(100vw - 28px); max-height: 90dvh; box-sizing: border-box; background: var(--bg-elev); color: var(--fg); border: 1px solid var(--border); border-radius: var(--radius-panel); overflow-y: auto; }
 .fleet-dialog::backdrop { background: var(--bg-overlay, #0009); }
