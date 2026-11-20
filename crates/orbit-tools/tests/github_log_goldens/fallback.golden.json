@@ -548,11 +548,13 @@
       "checkout_evidence_source_truncated": false
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed",
       "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -592,11 +594,13 @@
       "checkout_evidence_source_truncated": false
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/runs/34060485218",
       "run view 34060485218 --repo acme/orbit --log-failed",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -1024,11 +1028,13 @@
       "checkout_evidence_source_truncated": false
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed",
       "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -1168,9 +1174,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -1204,28 +1212,34 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
   "scoped_step_absent_from_the_log_fails_without_log_bytes": {
     "error": "invalid input: log step not found: \"No such step\" in run 34060485218 job 101560010340; no log bytes returned",
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
   "scoped_read_for_an_absent_job_fails_without_log_bytes": {
     "error": "invalid input: log step not found: \"Download nextest archive\" in run 34060485218 job 424242; job 424242 is not a job of run 34060485218; no log bytes returned",
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/jobs/424242",
       "run view 34060485218 --job 424242 --log",
       "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace"
     ]
@@ -1260,9 +1274,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -1296,9 +1312,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -1352,9 +1370,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -1396,11 +1416,13 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --log-failed",
       "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -1409,11 +1431,13 @@
   "scoped_step_by_workflow_name_in_a_raw_job_log_returns_an_unsupported_mapping_error": {
     "error": "invalid input: log step selection unsupported: \"Download nextest archive\" in run 34060485218 job 101560010340: raw job logs name steps only by their `Run <command>` display group, not by workflow step name, so this step's identity and runtime boundaries cannot be reliably established in the raw log; job log fallback read 1 of 1 candidate job(s): job 101560010340 (`test`): raw log step mapping unsupported for the requested step; no log bytes returned",
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --log-failed",
       "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -1454,9 +1478,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -1490,9 +1516,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -1526,9 +1554,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -1562,9 +1592,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -1598,9 +1630,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -1634,9 +1668,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -1670,9 +1706,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -1706,9 +1744,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -1742,9 +1782,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -1778,9 +1820,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -1814,9 +1858,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -1850,9 +1896,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -1886,9 +1934,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -1922,9 +1972,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -1958,9 +2010,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -1994,9 +2048,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2030,9 +2086,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2066,9 +2124,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2102,9 +2162,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2138,9 +2200,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2174,9 +2238,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2210,9 +2276,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2246,9 +2314,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2282,9 +2352,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2318,9 +2390,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2354,9 +2428,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2390,9 +2466,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2426,9 +2504,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2462,9 +2542,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2498,9 +2580,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2534,9 +2618,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2570,9 +2656,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2606,9 +2694,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2642,9 +2732,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2678,9 +2770,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2714,9 +2808,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2750,9 +2846,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2786,9 +2884,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2822,9 +2922,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2858,9 +2960,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2894,9 +2998,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2930,9 +3036,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -2966,9 +3074,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3002,9 +3112,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3038,9 +3150,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3074,9 +3188,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3110,9 +3226,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3146,9 +3264,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3182,9 +3302,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3218,9 +3340,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3254,9 +3378,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3290,9 +3416,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3326,9 +3454,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3362,9 +3492,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3398,9 +3530,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3434,9 +3568,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3470,9 +3606,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3506,9 +3644,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3542,9 +3682,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3578,9 +3720,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3614,9 +3758,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3650,9 +3796,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3686,9 +3834,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3722,9 +3872,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3758,9 +3910,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3794,9 +3948,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3830,9 +3986,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3866,9 +4024,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3902,9 +4062,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3938,9 +4100,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -3974,9 +4138,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -4010,9 +4176,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -4046,9 +4214,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/{owner}/{repo}/actions/runs/34060485218",
       "run view 34060485218 --log-failed"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -4082,9 +4252,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -4109,9 +4281,11 @@
       "checkout_evidence_source_truncated": false
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -4145,9 +4319,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -4181,9 +4357,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -4208,9 +4386,11 @@
       "checkout_evidence_source_truncated": false
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -4244,9 +4424,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -4280,9 +4462,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -4307,9 +4491,11 @@
       "checkout_evidence_source_truncated": false
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -4343,9 +4529,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -4379,9 +4567,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -4415,9 +4605,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -4451,9 +4643,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -4487,9 +4681,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -4523,9 +4719,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -4567,11 +4765,13 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -4606,11 +4806,13 @@
       "checkout_evidence_source_truncated": false
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -4654,11 +4856,13 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -4702,11 +4906,13 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -4741,11 +4947,13 @@
       "checkout_evidence_source_truncated": false
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -4789,11 +4997,13 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -4837,11 +5047,13 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -4876,11 +5088,13 @@
       "checkout_evidence_source_truncated": false
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -4924,11 +5138,13 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -4972,11 +5188,13 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -5020,11 +5238,13 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -5068,11 +5288,13 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -5116,11 +5338,13 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -5164,11 +5388,13 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -5204,9 +5430,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -5240,9 +5468,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -5276,9 +5506,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -5312,9 +5544,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -5348,9 +5582,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -5384,9 +5620,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -5420,9 +5658,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   },
@@ -5464,11 +5704,13 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -5512,11 +5754,13 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -5560,11 +5804,13 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -5608,11 +5854,13 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -5656,11 +5904,13 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -5704,11 +5954,13 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log",
       "run view 34060485218 --repo acme/orbit --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
       "api --method GET repos/acme/orbit/actions/jobs/101560010340/logs"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace",
       "selected_workspace",
       "selected_workspace"
@@ -5744,9 +5996,11 @@
       }
     },
     "calls": [
+      "api --method GET repos/acme/orbit/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --repo acme/orbit --log"
     ],
     "cwds": [
+      "selected_workspace",
       "selected_workspace"
     ]
   }
