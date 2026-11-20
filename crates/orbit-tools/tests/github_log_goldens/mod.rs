@@ -671,20 +671,21 @@ fn fallback_fixture_goldens() {
     });
 }
 
-/// What the registered log tool did over one scripted job, as the fake `gh`
-/// saw it. Every read goes through `ToolRegistry`, so the cache is enabled and
-/// located by the shipped wiring, not by the test.
+/// What the registered log tool did over one scripted job or whole run, as the
+/// fake `gh` saw it. Every read goes through `ToolRegistry`, so the cache is
+/// enabled and located by the shipped wiring, not by the test.
 #[cfg(unix)]
-struct CachedJobRead {
+struct CachedLogRead {
     root: TempDir,
     registry: ToolRegistry,
+    job: Option<&'static str>,
 }
 
 #[cfg(unix)]
-impl CachedJobRead {
-    /// A completed job whose log is numbered lines tagged `tag`, in a fresh
-    /// fixture directory and an empty cache.
-    fn new(tag: &str) -> (Self, orbit_common::test_env::ScopedEnv) {
+impl CachedLogRead {
+    /// A completed job or run whose log is numbered lines tagged `tag`, in a
+    /// fresh fixture directory and an empty cache.
+    fn new(tag: &str, job: Option<&'static str>) -> (Self, orbit_common::test_env::ScopedEnv) {
         let _ = std::fs::remove_dir_all(Self::cache_dir());
         let root = TempDir::new().unwrap();
         let env = orbit_common::test_env::scoped([(
@@ -693,9 +694,13 @@ impl CachedJobRead {
         )]);
         let mut registry = ToolRegistry::new();
         registry.register_builtins();
-        let read = Self { root, registry };
+        let read = Self {
+            root,
+            registry,
+            job,
+        };
         read.set_log(tag);
-        read.set_job("completed", "acme/orbit");
+        read.set_status("completed", "acme/orbit", 1);
         (read, env)
     }
 
@@ -712,10 +717,19 @@ impl CachedJobRead {
         std::fs::write(self.root.path().join("run_log"), log).unwrap();
     }
 
-    fn set_job(&self, status: &str, repository: &str) {
-        let url = format!("https://api.github.com/repos/{repository}/actions/jobs/9");
-        let body = json!({"id": 9, "run_id": 123, "status": status, "url": url});
-        std::fs::write(self.root.path().join("job_metadata"), body.to_string()).unwrap();
+    fn set_status(&self, status: &str, repository: &str, run_attempt: u64) {
+        let job_url = format!("https://api.github.com/repos/{repository}/actions/jobs/9");
+        let job_body = json!({"id": 9, "run_id": 123, "status": status, "url": job_url});
+        std::fs::write(self.root.path().join("job_metadata"), job_body.to_string()).unwrap();
+
+        let run_url = format!("https://api.github.com/repos/{repository}/actions/runs/123");
+        let run_body = json!({
+            "id": 123,
+            "status": status,
+            "run_attempt": run_attempt,
+            "url": run_url,
+        });
+        std::fs::write(self.root.path().join("run_metadata"), run_body.to_string()).unwrap();
     }
 
     fn deny(&self) {
@@ -723,7 +737,10 @@ impl CachedJobRead {
     }
 
     fn read(&self, window: Value) -> Result<Value, orbit_common::OrbitError> {
-        let mut input = json!({"run": "123", "job": "9", "scope": "all"});
+        let mut input = json!({"run": "123", "scope": "all"});
+        if let Some(job) = self.job {
+            input["job"] = json!(job);
+        }
         for (key, value) in window.as_object().unwrap() {
             input[key] = value.clone();
         }
@@ -773,7 +790,7 @@ fn two_windows_of_a_completed_job_download_its_log_once() {
         return;
     }
     use std::os::unix::fs::PermissionsExt;
-    let (job, _env) = CachedJobRead::new("first");
+    let (job, _env) = CachedLogRead::new("first", Some("9"));
     let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
 
     let early = job.read(json!({"byte_start": 0, "byte_end": 60})).unwrap();
@@ -801,7 +818,7 @@ fn two_windows_of_a_completed_job_download_its_log_once() {
 
     let entries = job.cache_entries();
     assert_eq!(entries.len(), 1, "{entries:?}");
-    assert_eq!(mode(&CachedJobRead::cache_dir()), 0o700);
+    assert_eq!(mode(&CachedLogRead::cache_dir()), 0o700);
     assert_eq!(mode(&entries[0]), 0o600);
 
     // An entry past the age bound is a miss: the log is downloaded again.
@@ -816,9 +833,9 @@ fn two_windows_of_a_completed_job_download_its_log_once() {
     assert_eq!(job.downloads(), 2, "an expired entry is not served");
 }
 
-/// The cache never widens what a caller may read: only a job the provider
-/// reports completed is cached, and a cached log is served only while the
-/// caller's own status request succeeds for the same resolved repository.
+/// The cache never widens what a caller may read: only a job or run the
+/// provider reports completed is cached, and a cached log is served only while
+/// the caller's own status request succeeds for the same resolved repository.
 #[test]
 #[cfg(unix)]
 fn a_cached_job_log_is_served_only_to_a_caller_that_may_read_it_now() {
@@ -829,39 +846,55 @@ fn a_cached_job_log_is_served_only_to_a_caller_that_may_read_it_now() {
     }
     let window = || json!({"line_start": 5, "line_end": 8});
 
-    let (running, env) = CachedJobRead::new("first");
-    running.set_job("in_progress", "acme/orbit");
-    running.read(window()).unwrap();
-    running.read(window()).unwrap();
-    assert_eq!(running.downloads(), 2, "a running job is always re-read");
-    assert!(running.cache_entries().is_empty(), "and never cached");
-    drop(env);
+    for job in [Some("9"), None] {
+        let (running, env) = CachedLogRead::new("first", job);
+        running.set_status("in_progress", "acme/orbit", 1);
+        running.read(window()).unwrap();
+        running.read(window()).unwrap();
+        assert_eq!(
+            running.downloads(),
+            2,
+            "job={job:?}: a running job or run is always re-read"
+        );
+        assert!(
+            running.cache_entries().is_empty(),
+            "job={job:?}: and never cached"
+        );
+        drop(env);
 
-    let (refused, env) = CachedJobRead::new("first");
-    refused.read(window()).unwrap();
-    assert_eq!(refused.cache_entries().len(), 1);
-    refused.deny();
-    let error = refused.read(window()).unwrap_err().to_string();
-    assert!(!error.contains("first line"), "{error}");
-    assert_eq!(
-        refused.downloads(),
-        2,
-        "a refused read still asks the provider rather than serving the cache"
-    );
-    drop(env);
+        let (refused, env) = CachedLogRead::new("first", job);
+        let cold = refused.read(window()).unwrap();
+        let warm = refused.read(window()).unwrap();
+        assert_eq!(cold, warm, "job={job:?}: warm read matches cold fill");
+        assert_eq!(refused.downloads(), 1, "job={job:?}: warm read hits cache");
+        assert_eq!(refused.cache_entries().len(), 1, "job={job:?}");
+        refused.deny();
+        let error = refused.read(window()).unwrap_err().to_string();
+        assert!(!error.contains("first line"), "job={job:?}: {error}");
+        assert_eq!(
+            refused.downloads(),
+            2,
+            "job={job:?}: a refused read still asks the provider rather than serving the cache"
+        );
+        drop(env);
 
-    let (moved, _env2) = CachedJobRead::new("first");
-    // The unqualified `{owner}/{repo}` request resolves to another repository
-    // once the checkout it runs in changes; the same ids are another job.
-    let first = moved.read(window()).unwrap();
-    assert!(log_text(&first).contains("first line 5"));
-    moved.set_job("completed", "other/repo");
-    moved.set_log("other");
-    let second = moved.read(window()).unwrap();
-    assert!(
-        log_text(&second).contains("other line 5"),
-        "another repository's read never returns the first one's log"
-    );
-    assert_eq!(moved.downloads(), 2);
-    assert_eq!(moved.cache_entries().len(), 2);
+        let (moved, _env2) = CachedLogRead::new("first", job);
+        // The unqualified `{owner}/{repo}` request resolves to another
+        // repository once the checkout it runs in changes; the same ids (and
+        // run attempt) belong to another repository.
+        let first = moved.read(window()).unwrap();
+        assert!(log_text(&first).contains("first line 5"), "job={job:?}");
+        let warm = moved.read(window()).unwrap();
+        assert_eq!(warm, first, "job={job:?}: warm read hits cache");
+        assert_eq!(moved.downloads(), 1, "job={job:?}");
+        moved.set_status("completed", "other/repo", 1);
+        moved.set_log("other");
+        let second = moved.read(window()).unwrap();
+        assert!(
+            log_text(&second).contains("other line 5"),
+            "job={job:?}: another repository's read never returns the first one's log"
+        );
+        assert_eq!(moved.downloads(), 2, "job={job:?}");
+        assert_eq!(moved.cache_entries().len(), 2, "job={job:?}");
+    }
 }
