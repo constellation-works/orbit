@@ -282,6 +282,10 @@ orbit tool run orbit.task.list --input '{"workspace":"<workspace-id>"}'
 orbit doctor
 ```
 
+Run the `orbit.task.list` call before `orbit doctor`: registering a checkout does not create the
+host's task and workspace databases, and a write-free `orbit doctor` on a host without them
+prints only a `runtime` error row that asks for `orbit task list`.
+
 `orbit doctor` is the real check — it inspects config, database, disk, indexes,
 locks, and runs. Report its output. Distinguish failures affecting the requested workflow from optional capabilities
 not configured. Resolve relevant failures or report the specific blocker; a

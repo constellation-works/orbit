@@ -88,8 +88,16 @@ The steps the skill runs:
 orbit init
 cd <repo>
 orbit workspace init --mcp
+orbit task list
 orbit doctor
 ```
+
+`orbit init` and `orbit workspace init` do not create the task and workspace
+databases; the first command that opens them does, and `orbit task list` is
+the simplest. `orbit doctor` only observes, so on a machine where those
+databases do not exist yet it reports a single `runtime` error row that names
+this step instead of the full report. Run `orbit task list` once, then
+`orbit doctor`.
 
 ### Initialize the machine
 

@@ -245,12 +245,11 @@ fn bare_doctor_startup_neither_creates_nor_migrates_the_task_registry() {
         .args(["doctor", "--json"])
         .output()
         .expect("doctor");
-    let report =
-        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
-    assert!(
-        report.contains("requires a writable migration"),
-        "the report names the setup the registry needs: {report}"
-    );
+    let parsed = rows(&out);
+    let runtime = row(&parsed, "runtime");
+    assert_eq!(runtime["status"], "error", "{runtime}");
+    msg_has(runtime, "requires a writable migration");
+    fix_has(runtime, "orbit task list");
     assert_eq!(
         ledger(&registry),
         lagging,
