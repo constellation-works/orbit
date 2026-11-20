@@ -2295,8 +2295,8 @@ three are safe; none strands a claim, and none fails a task that never ran.
   (`release_held` in `pull_settlements`): it reaches the owner only once the
   leaf is seen to stop, so a second executor never starts the task beside a
   first that is still running. Stop that leaf by hand on its host.
-- The MCP stop control takes the same option: `orbit.workflow` action `auto` with
-  `mode: "stop"` and `force: true` stops admissions, then force-cancels each
+- The MCP stop control takes the same option: `orbit.workflow.auto` with
+  `action: "stop"` and `force: true` stops admissions, then force-cancels each
   live drain as above (a local drain's task runs included). It fails, naming
   the leaves, when any leaf could not be confirmed stopped.
 - A drain that is still queued, or whose worker is gone, is cancelled at once;
@@ -2653,11 +2653,15 @@ Each workspace records one drain intent in its store, beside its drain runs
 
 - `off`: the default. No drain has been started or stopped by hand since the
   intent existed.
-- `paused`: the last hand action was a stop. `orbit run auto --stop` (with or
-  without `--force`), the dashboard's Stop and the desktop control's Stop record
-  it, with who stopped it (the acting identity), from which surface, the reason
-  if one was given, and when. A stop records the pause even when no drain was
-  live.
+- `paused`: the last hand action was a stop. `orbit run auto --stop`, the
+  dashboard's Stop, the desktop control's Stop and the `orbit.workflow` auto
+  stop record it, with who stopped it (the acting identity), from which surface,
+  the reason if one was given, and when. A stop records the pause even when no
+  drain was live. Only the `orbit.workflow` auto stop (and the desktop control,
+  which uses the same handler) accepts `force`, which also cancels live drains
+  in flight; the force setting does not change whether the pause is recorded.
+  `orbit run auto` has no `--force` flag, the dashboard's Stop takes none, and
+  `orbit run cancel --force` does not record a pause.
 - `on`: the last hand action was a start. `orbit run auto` from the CLI, the
   dashboard or MCP records it, and so does `orbit run auto --pull` on a replica.
   A routine-submitted run records nothing.

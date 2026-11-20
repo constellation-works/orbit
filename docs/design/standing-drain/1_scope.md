@@ -248,8 +248,9 @@ and a mean of 6.36 M tokens including cache reads. Excluding cache reads it was 
 ## Phasing
 
 1. **Surface only ([ORB-25965]), built.** The intent is a `drain_intents` store row (schema
-   v95). A hand stop (CLI, dashboard or desktop, forced or not) records `paused` with the acting
-   identity, surface, reason and time. A hand start from the CLI, dashboard or MCP, local or
+   v95). A hand stop (`orbit run auto --stop`, the dashboard's Stop, or the `orbit.workflow` auto
+   stop that the desktop control also uses, with or without `force`) records `paused` with the
+   acting identity, surface, reason and time. A hand start from the CLI, dashboard or MCP, local or
    `--pull`, records `on`; routine submissions record nothing. `orbit run readiness`
    (`drain_intent`) and the dashboard's Auto-drain card show it. The owner host's `orbit doctor`
    `standing-drain` row reports the idle-with-work hours, task-hours and a per-UTC-day series
