@@ -81,7 +81,10 @@ fn rejected_or_archived_ci_sweep_task_settles_superseded_without_pilot_writes() 
         let task = filed_task(&workspace, title);
         let prepared = workspace.prepare(&[&task.id]);
         if status == TaskStatus::Archived {
-            workspace.runtime.archive_task(&task.id).unwrap();
+            workspace
+                .runtime
+                .archive_task_as_operator(&task.id, false)
+                .unwrap();
         } else {
             workspace
                 .runtime

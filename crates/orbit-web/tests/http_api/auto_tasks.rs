@@ -64,7 +64,10 @@ fn instance(fixture: &Fixture, tags: Vec<String>, status: TaskStatus) -> Task {
         })
         .unwrap();
     if status == TaskStatus::Archived {
-        fixture.runtime.archive_task(&task.id).unwrap();
+        fixture
+            .runtime
+            .archive_task_as_operator(&task.id, false)
+            .unwrap();
         fixture.runtime.get_task(&task.id).unwrap()
     } else {
         task

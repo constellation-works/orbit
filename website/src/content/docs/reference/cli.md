@@ -57,7 +57,7 @@ with `--host <host>` when it is on another host. An unknown prefix fails with
 | `orbit task add --title <title> --complexity <low\|medium\|hard\|xhard>` | Create a task. Common options: `--description`, `--acceptance-criteria`, `--context`, `--crew`. |
 | `orbit task update <id>` | Update fields or append a `--comment`. `--approve` takes the next approval step; `--status` follows the [transition rules](/concepts/tasks/#transition-rules) unless you add `--force`. |
 | `orbit task repilot <id>` | Request one new pilot assessment. `--full` runs a full assessment instead of a re-check. |
-| `orbit task archive <id>` | Archive a task in any status. Restore it with `orbit task update <id> --status <status> --force`. |
+| `orbit task archive <id> [--force]` | Archive a task in any status. If a live local run owns it, archiving requires `--force`. Restore it with `orbit task update <id> --status <status> --force`. |
 | `orbit task list` | List tasks, 50 by default. Filter with `--status`, `--tag`, `--type`, `--path`, `--ready` or `--scheduled`. |
 | `orbit task eligible` | List `backlog` and `proposed` tasks whose files overlap no `in-progress` or `review` task. `--explain` shows what holds the rest. |
 | `orbit task show <id>` | Show one task. `--fields <a,b>` prints only those fields. |

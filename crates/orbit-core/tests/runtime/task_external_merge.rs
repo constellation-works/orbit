@@ -189,7 +189,7 @@ fn external_merge_settlement_refuses_every_ineligible_status() {
             &[105],
         );
         if status == TaskStatus::Archived {
-            fx.runtime.archive_task(&task).unwrap();
+            fx.runtime.archive_task_as_operator(&task, false).unwrap();
         }
         fx.merge(105, &task, BOT, &fx.base.clone());
         let error = fx.settle_err(&task, "ineligible status refuses");

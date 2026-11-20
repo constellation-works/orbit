@@ -143,7 +143,7 @@ impl OrbitRuntime {
         Ok((result, previous_status, reason))
     }
 
-    pub fn archive_task(&self, id: &str) -> Result<(), OrbitError> {
+    pub(crate) fn archive_task(&self, id: &str) -> Result<(), OrbitError> {
         self.update_task(
             id,
             TaskUpdateParams {
@@ -154,12 +154,9 @@ impl OrbitRuntime {
         .map(|_| ())
     }
 
-    /// Archive as the dashboard's archive button does: refused while a
-    /// local run owns the task unless `force`, in which case the move is
-    /// applied under the forced authority and recorded as `forced`. The
-    /// plain [`Self::archive_task`] stays the internal path its in-process
-    /// callers own.
-    pub fn archive_task_for_dashboard(&self, id: &str, force: bool) -> Result<(), OrbitError> {
+    /// Archive a task in any status. A live local run must release the task
+    /// first unless the operator requests `force`, which records a forced archive.
+    pub fn archive_task_as_operator(&self, id: &str, force: bool) -> Result<(), OrbitError> {
         if force {
             return self
                 .force_update_task_with_identity(

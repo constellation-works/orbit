@@ -149,7 +149,7 @@ pub(in crate::api) async fn archive_task_action(
     let runtime_clone = runtime.clone();
     let force = body.force;
     match blocking("task archival", move || {
-        runtime_clone.archive_task_for_dashboard(&archived_id, force)
+        runtime_clone.archive_task_as_operator(&archived_id, force)
     })
     .await
     {

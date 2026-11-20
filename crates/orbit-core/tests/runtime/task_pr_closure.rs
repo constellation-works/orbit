@@ -360,7 +360,9 @@ fn archiving_closes_the_tasks_orbit_prs_naming_the_state() {
     fx.seed_forge(&task_id, &other);
     fx.record_prs(&task_id, &[13]);
 
-    fx.runtime.archive_task(&task_id).expect("archive the task");
+    fx.runtime
+        .archive_task_as_operator(&task_id, false)
+        .expect("archive the task");
 
     assert_eq!(fx.forge.closed_numbers(), vec![11, 13]);
     assert!(fx.forge.comment_for(11).contains("archived"));
@@ -384,7 +386,9 @@ fn archiving_a_done_task_keeps_the_pr_its_approval_left_open() {
         .expect("approve the review");
     assert_eq!(fx.forge.closed_numbers(), vec![13]);
 
-    fx.runtime.archive_task(&task_id).expect("archive the task");
+    fx.runtime
+        .archive_task_as_operator(&task_id, false)
+        .expect("archive the task");
 
     assert_eq!(
         fx.runtime.get_task(&task_id).unwrap().status,
@@ -457,7 +461,7 @@ fn forge_errors_are_warnings_and_never_fail_the_transition() {
 
     fx.forge.state().fail_list = true;
     fx.runtime
-        .archive_task(&listed)
+        .archive_task_as_operator(&listed, false)
         .expect("a failed PR lookup does not fail the archive");
     assert_eq!(
         fx.runtime.get_task(&listed).unwrap().status,
@@ -494,7 +498,9 @@ fn configured_delivery_authors_replace_the_forge_login() {
     fx.record_prs(&task_id, &[13]);
     fx.forge.state().fail_login = true;
 
-    fx.runtime.archive_task(&task_id).expect("archive the task");
+    fx.runtime
+        .archive_task_as_operator(&task_id, false)
+        .expect("archive the task");
 
     assert_eq!(fx.forge.closed_numbers(), vec![11, 13]);
     assert_eq!(fx.forge.state().login_lookups, 0);

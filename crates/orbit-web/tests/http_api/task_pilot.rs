@@ -29,7 +29,10 @@ fn run_pilot_refuses_without_submitting_or_changing_the_task() {
             let held = add("held by a pilot", TaskStatus::Proposed);
             let admitted = add("admitted to delivery", TaskStatus::Backlog);
             let retired = add("retired", TaskStatus::Proposed);
-            fixture.runtime.archive_task(&retired.id).unwrap();
+            fixture
+                .runtime
+                .archive_task_as_operator(&retired.id, false)
+                .unwrap();
             let mut pilot = fixture.seed_run(
                 "jrun-pilot-live",
                 "task_pilot_pipeline",
