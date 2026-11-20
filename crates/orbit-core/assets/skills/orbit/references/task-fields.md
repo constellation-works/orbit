@@ -51,7 +51,9 @@ For the read → full-union update → verify command sequence, see
 
 `orbit.task.show` resolves `id` globally through the host task registry by
 default. Cwd, MCP initialize metadata and linked-worktree runtime identities
-are not filters. Optional `workspace` is an explicit fail-closed filter.
+are not filters. Optional `workspace` is an explicit fail-closed filter
+argument, not a projection field; `workspace` and `workspace_path` do not
+belong in `fields`.
 
 For `orbit.task.show`, `orbit.task.add` and `orbit.task.update`, MCP accepts
 `fields` as an array of field names, or `field` as a single-field alias.

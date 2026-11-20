@@ -88,6 +88,102 @@ fn task_tool_unknown_selectors_give_specific_recovery_hints() {
         )
     );
 
+    let selector_hints = [
+        (
+            "fleet_notices",
+            "Read open notices from injected prompt data `task.fleet_notices` or `orbit.notice.list`; `fleet_notices` is not an `orbit.task.show` field.",
+        ),
+        (
+            "steering",
+            "Read the injected steering snapshot as `task.steering`; `steering` is not an `orbit.task.show` field.",
+        ),
+        (
+            "workspace",
+            "Pass the workspace filter in the `workspace` argument to `orbit.task.show`; neither name is a projection field.",
+        ),
+        (
+            "workspace_path",
+            "Pass the workspace filter in the `workspace` argument to `orbit.task.show`; neither name is a projection field.",
+        ),
+        (
+            "pilot",
+            "Read the `pilot` object from a task-pilot receipt comment and its assessment from that comment's artifact path; `pilot` is not an `orbit.task.show` field.",
+        ),
+        (
+            "review",
+            "`review` is not a task projection field; read review material from the task context, description, comments or artifacts.",
+        ),
+        (
+            "task",
+            "The injected task is task context, not a projection field; call `orbit.task.show` with `id` and omit `fields` for the full task readout.",
+        ),
+        (
+            "finding_fingerprint",
+            "Read `finding_fingerprint` from the injected task context for an invalid-review-finding task; it is not a projection field.",
+        ),
+        (
+            "blocked_reason",
+            "`blocked_reason` is not a task projection field; omit it or select a supported projection field.",
+        ),
+        (
+            "related_to",
+            "`related_to` is a relation type; select `relations` to read task relations.",
+        ),
+    ];
+    for (selector, recovery) in selector_hints {
+        let shown = invalid_input_message(runtime.run_tool(
+            "orbit.task.show",
+            json!({"id": id, "fields": [selector], "model": "codex"}),
+        ));
+        assert_eq!(
+            shown,
+            format!(
+                "unknown field selector `{selector}`. Valid values: {TASK_SHOW_PROJECTION_FIELDS_CSV}. {recovery}"
+            ),
+            "the `{selector}` refusal must direct callers to its source"
+        );
+        assert!(
+            !TASK_SHOW_PROJECTION_FIELDS_CSV
+                .split(", ")
+                .any(|field| field == selector),
+            "`{selector}` remains outside the projection vocabulary"
+        );
+    }
+
+    let list_selector_hints = [
+        (
+            "completed_at",
+            "There is no completion timestamp in the projection; use `status` for the lifecycle state or `updated_at` for the latest change. `created_at` is the task creation time.",
+        ),
+        (
+            "created",
+            "Use `created_at` for the creation time, `updated_at` for the latest change, or `status` for the current lifecycle state.",
+        ),
+        (
+            "pr_url",
+            "`pr_url` is not a projection field; use `pr_status` for the task's pull-request status.",
+        ),
+    ];
+    for (selector, recovery) in list_selector_hints {
+        let listed = invalid_input_message(runtime.run_tool(
+            "orbit.task.list",
+            json!({"fields": [selector], "model": "codex"}),
+        ));
+        assert_eq!(
+            listed,
+            format!(
+                "unknown field selector `{selector}`. Valid values: {TASK_SHOW_PROJECTION_FIELDS_CSV}. {recovery}"
+            ),
+            "the `{selector}` list refusal must direct callers to its source"
+        );
+        assert!(
+            !TASK_SHOW_PROJECTION_FIELDS_CSV
+                .split(", ")
+                .any(|field| field == selector),
+            "`{selector}` remains outside the projection vocabulary"
+        );
+    }
+
     let tasks_before = runtime
         .run_tool(
             "orbit.task.list",

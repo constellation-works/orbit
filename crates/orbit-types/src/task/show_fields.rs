@@ -158,6 +158,42 @@ pub fn unknown_task_show_field_message(name: &str) -> String {
         "warnings" => format!(
             "{message}. `warnings` is optional write-response metadata, not a task field, and is absent when empty. To receive it, omit `fields` on the original valid `orbit.task.add` or `orbit.task.update` request: an unprojected object response carries any warnings. Do not replay a write that succeeded or whose outcome is unknown; check with `orbit.task.show` first."
         ),
+        "fleet_notices" => format!(
+            "{message}. Read open notices from injected prompt data `task.fleet_notices` or `orbit.notice.list`; `fleet_notices` is not an `orbit.task.show` field."
+        ),
+        "steering" => format!(
+            "{message}. Read the injected steering snapshot as `task.steering`; `steering` is not an `orbit.task.show` field."
+        ),
+        "workspace" | "workspace_path" => format!(
+            "{message}. Pass the workspace filter in the `workspace` argument to `orbit.task.show`; neither name is a projection field."
+        ),
+        "pilot" => format!(
+            "{message}. Read the `pilot` object from a task-pilot receipt comment and its assessment from that comment's artifact path; `pilot` is not an `orbit.task.show` field."
+        ),
+        "review" => format!(
+            "{message}. `review` is not a task projection field; read review material from the task context, description, comments or artifacts."
+        ),
+        "task" => format!(
+            "{message}. The injected task is task context, not a projection field; call `orbit.task.show` with `id` and omit `fields` for the full task readout."
+        ),
+        "finding_fingerprint" => format!(
+            "{message}. Read `finding_fingerprint` from the injected task context for an invalid-review-finding task; it is not a projection field."
+        ),
+        "blocked_reason" => format!(
+            "{message}. `blocked_reason` is not a task projection field; omit it or select a supported projection field."
+        ),
+        "related_to" => format!(
+            "{message}. `related_to` is a relation type; select `relations` to read task relations."
+        ),
+        "completed_at" => format!(
+            "{message}. There is no completion timestamp in the projection; use `status` for the lifecycle state or `updated_at` for the latest change. `created_at` is the task creation time."
+        ),
+        "created" => format!(
+            "{message}. Use `created_at` for the creation time, `updated_at` for the latest change, or `status` for the current lifecycle state."
+        ),
+        "pr_url" => format!(
+            "{message}. `pr_url` is not a projection field; use `pr_status` for the task's pull-request status."
+        ),
         _ => message,
     }
 }
