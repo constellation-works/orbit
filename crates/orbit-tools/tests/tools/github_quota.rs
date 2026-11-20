@@ -555,3 +555,57 @@ fn slow_rate_limit_probe_bounds_to_request_timeout_and_skips_expired_request() {
     assert!(!zero_result.success);
     assert!(gh_zero.calls().is_empty());
 }
+
+/// Regression [ORB-25964]: a probe cut short by one caller's remaining deadline
+/// says nothing about the account, so it must neither claim the refresh
+/// interval nor replace a known record with an unknown one. A second caller
+/// still meets the agent reserve and the interval stays open for a real read.
+#[test]
+fn deadline_clipped_probe_leaves_known_quota_and_reserve_refusal_in_place() {
+    let records = TempDir::new().unwrap();
+    let policy = GithubQuotaPolicy::default();
+    let gh = FakeGh::new("hang", "ok");
+    let request = gh.request(&["run", "view", "123"]);
+    let account = github_quota::request_account_key(&request);
+    let now = now();
+    let reset = now + 1800;
+    // 1,000 of 5,000 left is exactly the 20% agent reserve, observed long
+    // enough ago that the next admission finds the refresh due.
+    store(records.path()).refresh_if_due(&policy, &account, now - 120, &|| known(1000, reset));
+
+    let mut short = request.clone();
+    short.timeout_ms = Some(60);
+    let result = github_quota::with_scoped_guard(store(records.path()), policy, || {
+        github_quota::run_gh_request(GithubCaller::Delivery, &short)
+    })
+    .unwrap();
+    assert!(result.timed_out);
+    assert_eq!(gh.calls(), vec!["api rate_limit".to_string()]);
+
+    let status = store(records.path()).status(&policy, &account, now);
+    let core = &status.resources[0];
+    assert_eq!(
+        core.state, "known",
+        "a clipped probe must keep the record: {status:?}"
+    );
+    assert_eq!(status.refresh_error, None, "{status:?}");
+    assert!(core.agent_reads_refused, "{core:?}");
+
+    // The interval was not claimed: the second caller reads the endpoint
+    // itself (clipped again here) and still meets the reserve.
+    let mut agent = request.clone();
+    agent.timeout_ms = Some(200);
+    let error = github_quota::with_scoped_guard(store(records.path()), policy, || {
+        github_quota::admit_gh_request(GithubCaller::Agent, &agent)
+    })
+    .expect_err("the agent reserve still applies after a clipped probe");
+    assert_eq!(
+        refused_throttle(&error).resource.as_deref(),
+        Some(RESOURCE_CORE)
+    );
+    assert_eq!(
+        gh.calls(),
+        vec!["api rate_limit".to_string(), "api rate_limit".to_string()],
+        "a clipped probe must leave the interval due for the next caller"
+    );
+}
