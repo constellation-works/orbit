@@ -23,85 +23,78 @@ impl ProviderLimitStoreBackend for Store {
         &self,
         observation: &ProviderLimitObservation,
     ) -> Result<bool, OrbitError> {
-        // [ORB-17288] A crew account's readings are kept in their own table,
-        // so the default login's rows, and an older binary's writes of them,
-        // keep their key.
-        let account = observation
-            .account
-            .as_deref()
-            .map(str::trim)
-            .filter(|account| !account.is_empty());
-        // Keep SQL structure literal and observation data in bound parameters.
-        // The account is a crew name, never the credential that crew uses.
-        let sql = if account.is_some() {
-            r#"
-            INSERT INTO provider_account_limit_observations (
-                account, provider, model_scope, window_label, exhausted, source,
-                resets_at, observed_at, run_id, crew, detail,
-                used_percent, window_minutes, gating
-            ) VALUES (?14, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
-            ON CONFLICT (provider, account, model_scope, window_label) DO UPDATE SET
-                exhausted = excluded.exhausted,
-                source = excluded.source,
-                resets_at = excluded.resets_at,
-                observed_at = excluded.observed_at,
-                run_id = excluded.run_id,
-                crew = excluded.crew,
-                detail = excluded.detail,
-                used_percent = excluded.used_percent,
-                window_minutes = excluded.window_minutes,
-                gating = excluded.gating
-            WHERE excluded.observed_at >= provider_account_limit_observations.observed_at
-            "#
-        } else {
-            r#"
-            INSERT INTO provider_limit_observations (
-                provider, model_scope, window_label, exhausted, source,
-                resets_at, observed_at, run_id, crew, detail,
-                used_percent, window_minutes, gating
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
-            ON CONFLICT (provider, model_scope, window_label) DO UPDATE SET
-                exhausted = excluded.exhausted,
-                source = excluded.source,
-                resets_at = excluded.resets_at,
-                observed_at = excluded.observed_at,
-                run_id = excluded.run_id,
-                crew = excluded.crew,
-                detail = excluded.detail,
-                used_percent = excluded.used_percent,
-                window_minutes = excluded.window_minutes,
-                gating = excluded.gating
-            WHERE excluded.observed_at >= provider_limit_observations.observed_at
-            "#
-        };
-        let model = observation.model.as_deref().unwrap_or_default();
-        let window = observation.window.as_deref().unwrap_or_default();
-        let source = observation.source.as_str();
-        let resets_at = observation.resets_at.map(stamp);
-        let observed_at = stamp(observation.observed_at);
-        let mut bound: Vec<&dyn rusqlite::ToSql> = vec![
-            &observation.provider,
-            &model,
-            &window,
-            &observation.exhausted,
-            &source,
-            &resets_at,
-            &observed_at,
-            &observation.run_id,
-            &observation.crew,
-            &observation.detail,
-            &observation.used_percent,
-            &observation.window_minutes,
-            &observation.gating,
-        ];
-        if let Some(account) = &account {
-            bound.push(account);
-        }
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-            tx.connection()
-                .execute(sql, bound.as_slice())
-                .map(|changed| changed > 0)
-                .map_err(sqlite_store_error)
+            upsert_observation(tx.connection(), observation)
+        })
+    }
+
+    fn record_provider_usage_reading(
+        &self,
+        observations: &[ProviderLimitObservation],
+    ) -> Result<(), OrbitError> {
+        let Some(first) = observations.first() else {
+            return Ok(());
+        };
+        let account = account_of(first);
+        // Retire only what an older reading wrote: a newer reading that
+        // landed first (a concurrent drain) is the authority, not this one.
+        let (table, account_filter) = if account.is_some() {
+            ("provider_account_limit_observations", " AND account = ?3")
+        } else {
+            ("provider_limit_observations", "")
+        };
+        let select = format!(
+            "SELECT model_scope, window_label FROM {table} \
+             WHERE provider = ?1 AND source = ?2 AND observed_at < ?4{account_filter}"
+        );
+        let delete = format!(
+            "DELETE FROM {table} \
+             WHERE provider = ?1 AND model_scope = ?2 AND window_label = ?3 \
+             AND source = ?4 AND observed_at < ?5{}",
+            if account.is_some() {
+                " AND account = ?6"
+            } else {
+                ""
+            }
+        );
+        let event = ProviderLimitSource::Event.as_str();
+        let cutoff = stamp(first.observed_at);
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let conn = tx.connection();
+            for observation in observations {
+                upsert_observation(conn, observation)?;
+            }
+            let account_text = account.unwrap_or_default();
+            let mut statement = conn.prepare(&select).map_err(sqlite_store_error)?;
+            // `?3` is unused without an account; the placeholder keeps the
+            // numbered parameters contiguous.
+            let params: [&dyn rusqlite::ToSql; 4] =
+                [&first.provider, &event, &account_text, &cutoff];
+            let stale = statement
+                .query_map(params, |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
+                .map_err(sqlite_store_error)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_store_error)?;
+            drop(statement);
+            for (model, window) in stale {
+                let reported = observations.iter().any(|observation| {
+                    observation.model.as_deref().unwrap_or_default() == model
+                        && observation.window.as_deref().unwrap_or_default() == window
+                });
+                if reported {
+                    continue;
+                }
+                let mut bound: Vec<&dyn rusqlite::ToSql> =
+                    vec![&first.provider, &model, &window, &event, &cutoff];
+                if account.is_some() {
+                    bound.push(&account_text);
+                }
+                conn.execute(&delete, bound.as_slice())
+                    .map_err(sqlite_store_error)?;
+            }
+            Ok(())
         })
     }
 
@@ -218,4 +211,94 @@ impl ProviderLimitStoreBackend for Store {
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(sqlite_store_error)
     }
+}
+
+/// The crew account an observation belongs to, or `None` for the provider's
+/// default login. [ORB-17288]
+fn account_of(observation: &ProviderLimitObservation) -> Option<&str> {
+    observation
+        .account
+        .as_deref()
+        .map(str::trim)
+        .filter(|account| !account.is_empty())
+}
+
+/// Store `observation` as the latest of its key unless a newer one stands.
+fn upsert_observation(
+    conn: &rusqlite::Connection,
+    observation: &ProviderLimitObservation,
+) -> Result<bool, OrbitError> {
+    // [ORB-17288] A crew account's readings are kept in their own table,
+    // so the default login's rows, and an older binary's writes of them,
+    // keep their key.
+    let account = account_of(observation);
+    // Keep SQL structure literal and observation data in bound parameters.
+    // The account is a crew name, never the credential that crew uses.
+    let sql = if account.is_some() {
+        r#"
+        INSERT INTO provider_account_limit_observations (
+            account, provider, model_scope, window_label, exhausted, source,
+            resets_at, observed_at, run_id, crew, detail,
+            used_percent, window_minutes, gating
+        ) VALUES (?14, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+        ON CONFLICT (provider, account, model_scope, window_label) DO UPDATE SET
+            exhausted = excluded.exhausted,
+            source = excluded.source,
+            resets_at = excluded.resets_at,
+            observed_at = excluded.observed_at,
+            run_id = excluded.run_id,
+            crew = excluded.crew,
+            detail = excluded.detail,
+            used_percent = excluded.used_percent,
+            window_minutes = excluded.window_minutes,
+            gating = excluded.gating
+        WHERE excluded.observed_at >= provider_account_limit_observations.observed_at
+        "#
+    } else {
+        r#"
+        INSERT INTO provider_limit_observations (
+            provider, model_scope, window_label, exhausted, source,
+            resets_at, observed_at, run_id, crew, detail,
+            used_percent, window_minutes, gating
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+        ON CONFLICT (provider, model_scope, window_label) DO UPDATE SET
+            exhausted = excluded.exhausted,
+            source = excluded.source,
+            resets_at = excluded.resets_at,
+            observed_at = excluded.observed_at,
+            run_id = excluded.run_id,
+            crew = excluded.crew,
+            detail = excluded.detail,
+            used_percent = excluded.used_percent,
+            window_minutes = excluded.window_minutes,
+            gating = excluded.gating
+        WHERE excluded.observed_at >= provider_limit_observations.observed_at
+        "#
+    };
+    let model = observation.model.as_deref().unwrap_or_default();
+    let window = observation.window.as_deref().unwrap_or_default();
+    let source = observation.source.as_str();
+    let resets_at = observation.resets_at.map(stamp);
+    let observed_at = stamp(observation.observed_at);
+    let mut bound: Vec<&dyn rusqlite::ToSql> = vec![
+        &observation.provider,
+        &model,
+        &window,
+        &observation.exhausted,
+        &source,
+        &resets_at,
+        &observed_at,
+        &observation.run_id,
+        &observation.crew,
+        &observation.detail,
+        &observation.used_percent,
+        &observation.window_minutes,
+        &observation.gating,
+    ];
+    if let Some(account) = &account {
+        bound.push(account);
+    }
+    conn.execute(sql, bound.as_slice())
+        .map(|changed| changed > 0)
+        .map_err(sqlite_store_error)
 }

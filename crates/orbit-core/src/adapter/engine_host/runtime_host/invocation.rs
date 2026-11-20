@@ -77,6 +77,13 @@ pub(super) fn record_provider_limit(
     crate::runtime::RuntimeKernel::record_provider_limit(runtime, observation).map(|_| ())
 }
 
+pub(super) fn record_provider_usage_reading(
+    runtime: &OrbitRuntime,
+    observations: &[orbit_types::telemetry::ProviderLimitObservation],
+) -> Result<(), orbit_common::OrbitError> {
+    crate::runtime::RuntimeKernel::record_provider_usage_reading(runtime, observations)
+}
+
 pub(super) fn activity_implementer_identity(
     runtime: &OrbitRuntime,
     input: &Value,

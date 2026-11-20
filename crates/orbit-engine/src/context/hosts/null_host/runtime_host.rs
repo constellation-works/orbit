@@ -576,6 +576,12 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<(), OrbitError> {
         NullRuntimeHost::record_provider_limit(self, observation)
     }
+    fn record_provider_usage_reading(
+        &self,
+        observations: &[ProviderLimitObservation],
+    ) -> Result<(), OrbitError> {
+        NullRuntimeHost::record_provider_usage_reading(self, observations)
+    }
     fn activity_implementer_identity(
         &self,
         input: &Value,

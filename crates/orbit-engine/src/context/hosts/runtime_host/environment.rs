@@ -208,6 +208,15 @@ macro_rules! environment_methods {
             &self,
             observation: &ProviderLimitObservation,
         ) -> Result<(), OrbitError>;
+        /// [ORB-25967] Record a provider's complete usage reading, taken at one
+        /// instant for one provider account. Each observation is stored as
+        /// `record_provider_limit` stores it, and the account's `event`
+        /// observations of that provider an older reading stored and this one
+        /// no longer reports are retired.
+        fn record_provider_usage_reading(
+            &self,
+            observations: &[ProviderLimitObservation],
+        ) -> Result<(), OrbitError>;
         fn activity_implementer_identity(
             &self,
             input: &Value,

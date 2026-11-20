@@ -710,6 +710,15 @@ pub trait NullRuntimeHost: Send + Sync {
     ) -> Result<(), OrbitError> {
         Err(unsupported_runtime_capability("record_provider_limit"))
     }
+    /// A double that records limits keeps each reading; it retires nothing.
+    fn record_provider_usage_reading(
+        &self,
+        observations: &[ProviderLimitObservation],
+    ) -> Result<(), OrbitError> {
+        observations
+            .iter()
+            .try_for_each(|observation| self.record_provider_limit(observation))
+    }
     fn activity_implementer_identity(
         &self,
         _input: &Value,
