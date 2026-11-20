@@ -6,7 +6,7 @@
 //! evidence and the proposed task's generated identity.
 
 use orbit_engine::DispatchError;
-use orbit_types::task::{CI_FAILURE_KEY_TAG_PREFIX, Task, TaskStatus};
+use orbit_types::task::{CI_FAILURE_KEY_TAG_PREFIX, TaskStatus};
 use serde_json::{Value, json};
 
 use crate::application::contracts::CI_FAILURE_TAG;
@@ -16,22 +16,24 @@ use crate::application::task::pilot::{
     promotion_findings, recommendation_has_evidence,
 };
 use crate::application::task::{
-    CiSweepAdmission, CiSweepAdmissionDecision, CiSweepFilingEvidence, PILOT_VERIFIED_NO_DIFF,
+    CiSweepAdmission, CiSweepAdmissionDecision, CiSweepAdmissionRequest, PILOT_VERIFIED_NO_DIFF,
     PromotionDecision, VerifiedNoDiff,
 };
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn assess_ci_sweep_admission(
-    action: &str,
-    task_id: &str,
-    task: &Task,
-    assessment: &Value,
-    selectors: &[String],
-    filing: &CiSweepFilingEvidence,
-    promotion_authorized: bool,
-    dependencies: &[String],
-    is_done: &dyn Fn(&str) -> bool,
+    request: CiSweepAdmissionRequest<'_>,
 ) -> Result<CiSweepAdmission, DispatchError> {
+    let CiSweepAdmissionRequest {
+        action,
+        task_id,
+        task,
+        assessment,
+        selectors,
+        filing,
+        promotion_authorized,
+        dependencies,
+        is_done,
+    } = request;
     let filed_task_id = filing.required_task_id(action)?;
     if filed_task_id != task_id {
         return Err(DispatchError::action_failed(

@@ -182,8 +182,8 @@ pub use screened::{ScreenedTaskWrite, TaskUpdateAuthority, TaskWriteScreen};
 pub(crate) use selector_match::task_selectors_contain_path;
 pub(in crate::application) use sweep_filing_port::TaskSweepFilingPort;
 pub(crate) use sweep_filing_port::{
-    AdmissionClosure, CiSweepAdmission, CiSweepAdmissionDecision, CiSweepFilingEvidence,
-    CiSweepFilingSource, PromotionDecision,
+    AdmissionClosure, CiSweepAdmission, CiSweepAdmissionDecision, CiSweepAdmissionRequest,
+    CiSweepFilingEvidence, CiSweepFilingSource, PromotionDecision,
 };
 pub use transient_infra::TransientInfraBlockedTask;
 pub(crate) use validation_tools::positive_validation_tools;

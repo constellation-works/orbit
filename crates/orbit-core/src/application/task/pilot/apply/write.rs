@@ -10,7 +10,7 @@ use super::admission::{
 };
 use super::task::{Settled, refused};
 use super::{Applied, ApplyContext, invalid_finding};
-use crate::application::task::{CiSweepAdmission, TaskSweepFilingPort};
+use crate::application::task::{CiSweepAdmission, CiSweepAdmissionRequest, TaskSweepFilingPort};
 use orbit_types::task::{Task, TaskStatus};
 use serde_json::Value;
 
@@ -63,17 +63,17 @@ fn admit(
             }
             context
                 .runtime
-                .ci_sweep_admission(
-                    context.action,
+                .ci_sweep_admission(CiSweepAdmissionRequest {
+                    action: context.action,
                     task_id,
-                    &admission_task,
-                    &assessed.assessment,
-                    &assessed.after,
+                    task: &admission_task,
+                    assessment: &assessed.assessment,
+                    selectors: &assessed.after,
                     filing,
-                    *authorized,
-                    &dependencies,
-                    &is_done,
-                )
+                    promotion_authorized: *authorized,
+                    dependencies: &dependencies,
+                    is_done: &is_done,
+                })
                 .map(|outcome| match outcome {
                     CiSweepAdmission::Decision(decision) => {
                         CheckedAdmission::Apply(Some(Admission::CiSweep(decision)))
