@@ -428,12 +428,24 @@ impl GithubQuotaStore {
                 return None;
             }
         };
-        let Ok(release) = serde_json::from_str::<ClippedClaimRelease>(&text) else {
-            return Some(path);
+        let release = match serde_json::from_str::<ClippedClaimRelease>(&text) {
+            Ok(release) => release,
+            Err(error) => {
+                tracing::warn!(target: "orbit_tools::github_quota", %error,
+                    path = %path.display(),
+                    "staged clipped quota release marker malformed; preserving it");
+                return None;
+            }
         };
-        if release.generation == record.refresh_generation {
-            release_clipped_claim(record, release.previous_claim);
+        if release.generation != record.refresh_generation {
+            tracing::warn!(target: "orbit_tools::github_quota",
+                marker_generation = release.generation,
+                active_generation = record.refresh_generation,
+                path = %path.display(),
+                "staged clipped quota release marker ownership is ambiguous; preserving it");
+            return None;
         }
+        release_clipped_claim(record, release.previous_claim);
         Some(path)
     }
 
