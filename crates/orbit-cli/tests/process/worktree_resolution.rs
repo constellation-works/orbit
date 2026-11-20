@@ -1114,6 +1114,8 @@ fn doctor_graph_cleanup_uses_split_roots_and_keeps_json_stdout_clean() {
         mkdir(marker.parent().expect("graph parent"));
         write(marker, b"retired");
     }
+    // Doctor audits stores a writable command created; it never creates them.
+    fixture.json(&linked_worktree, &["task", "list", "--json"]);
     for (case, args, exists) in [
         ("ordinary", vec!["doctor", "--json"], true),
         ("cleaned", vec!["doctor", "--remove-graph", "--json"], false),

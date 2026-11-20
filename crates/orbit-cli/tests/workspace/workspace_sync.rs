@@ -314,6 +314,11 @@ fn retired_delivery_qa_is_absent_after_init_and_a_modified_copy_is_kept() {
     )
     .expect("record the seeded digest");
 
+    // Doctor audits stores a writable command created; it never creates them.
+    orbit(&repo, home.path())
+        .args(["task", "list"])
+        .output()
+        .expect("create stores");
     let doctor = orbit(&repo, home.path())
         .args(["doctor", "--json"])
         .output()

@@ -97,6 +97,8 @@ fn json_stdout(output: &Output) -> Value {
 }
 
 fn doctor_row(fixture: &WorkCheckout) -> Value {
+    // Doctor audits stores a writable command created; it never creates them.
+    orbit(fixture).args(["task", "list"]).output().unwrap();
     let output = orbit(fixture).args(["doctor", "--json"]).output().unwrap();
     let rows = json_stdout(&output);
     rows.as_array()

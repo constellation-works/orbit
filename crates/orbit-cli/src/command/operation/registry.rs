@@ -595,9 +595,9 @@ impl Commands {
                 use super::super::doctor::DoctorSubcommand;
                 // Inspection avoids reconciliation on open: the bare report
                 // changes no durable state (STD-01 §R31), so it opens the
-                // observation runtime. Receipt compaction and the repair
-                // flags need the full runtime and its writable generation
-                // gate.
+                // write-free runtime and creates or migrates no store before
+                // it audits. Receipt compaction and the repair flags need the
+                // full runtime and its writable generation gate.
                 let (subcommand, target_type, target_id, runtime_need) = match &command.command {
                     None => (
                         None,
@@ -606,7 +606,7 @@ impl Commands {
                         if command.repairs.any_requested() {
                             RuntimeNeed::Required
                         } else {
-                            RuntimeNeed::ReadOnly
+                            RuntimeNeed::Inspection
                         },
                     ),
                     Some(DoctorSubcommand::AdmissionReceipts(args)) => (

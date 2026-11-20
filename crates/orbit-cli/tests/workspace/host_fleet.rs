@@ -224,6 +224,8 @@ impl Fleet {
     }
 
     pub(crate) fn doctor_hosts_row(&self) -> Value {
+        // Doctor audits stores a writable command created; it never creates them.
+        self.orbit(&self.local_repo, &["task", "list"]);
         let output = self.orbit(&self.local_repo, &["doctor", "--json"]);
         let rows: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
             panic!(
