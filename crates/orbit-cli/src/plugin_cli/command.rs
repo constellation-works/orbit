@@ -79,14 +79,14 @@ pub(crate) fn augment(command: Command, groups: &[PluginCliGroup]) -> Command {
     command
 }
 
+/// Longest summary a listing shows for a plugin group or verb. It stays below
+/// the longest built-in root row (68 characters), so a plugin row never
+/// outgrows the built-in rows.
+const SUMMARY_MAX_CHARS: usize = 60;
+
 fn group_command(group: &PluginCliGroup) -> Command {
-    let about = if group.description.trim().is_empty() {
-        format!("Tools from the '{}' plugin", group.namespace)
-    } else {
-        group.description.trim().to_string()
-    };
     let mut command = Command::new(group.namespace.clone())
-        .about(about)
+        .about(group_summary(group))
         .long_about(format!(
             "{}\n\nProvided by the '{}' plugin v{}. Every verb here is the same audited \
              operation as `orbit tool run {}.<verb>`.",
@@ -110,7 +110,7 @@ fn group_command(group: &PluginCliGroup) -> Command {
 fn verb_command(verb: &PluginCliVerb) -> Command {
     let mut command = Command::new(verb.verb.clone());
     if !verb.description.trim().is_empty() {
-        command = command.about(verb.description.trim().to_string());
+        command = command.about(description_summary(verb.description.trim()));
     }
     command = command.long_about(format!(
         "{}\n\nRuns `{}`{}. `--input` and `--input-file` are always accepted and override \
@@ -235,13 +235,38 @@ fn build_invocation(verb: &PluginCliVerb, matches: &ArgMatches) -> PluginGroupIn
 pub(crate) fn help_rows(groups: &[PluginCliGroup]) -> Vec<(String, String)> {
     groups
         .iter()
-        .map(|group| {
-            let about = if group.description.trim().is_empty() {
-                format!("Tools from the '{}' plugin", group.namespace)
-            } else {
-                group.description.trim().to_string()
-            };
-            (group.namespace.clone(), about)
-        })
+        .map(|group| (group.namespace.clone(), group_summary(group)))
         .collect()
+}
+
+/// The one-line summary a group shows in the root `Plugins:` rows and as its
+/// `-h` about line.
+fn group_summary(group: &PluginCliGroup) -> String {
+    let description = group.description.trim();
+    if description.is_empty() {
+        format!("Tools from the '{}' plugin", group.namespace)
+    } else {
+        description_summary(description)
+    }
+}
+
+/// A manifest description reduced to its first sentence, flattened onto one
+/// line and cut at a word boundary to [`SUMMARY_MAX_CHARS`] with an ellipsis.
+/// The full text stays in `--help` (`long_about`) and in `orbit plugin show`.
+fn description_summary(description: &str) -> String {
+    let flat = description.split_whitespace().collect::<Vec<_>>().join(" ");
+    let end = [". ", "! ", "? "]
+        .into_iter()
+        .filter_map(|boundary| flat.find(boundary).map(|index| index + 1))
+        .min()
+        .unwrap_or(flat.len());
+    let sentence = &flat[..end];
+    if sentence.chars().count() <= SUMMARY_MAX_CHARS {
+        return sentence.to_string();
+    }
+    let head: String = sentence.chars().take(SUMMARY_MAX_CHARS - 1).collect();
+    let kept = head
+        .rfind(' ')
+        .map_or(head.as_str(), |space| &head[..space]);
+    format!("{kept}…")
 }
