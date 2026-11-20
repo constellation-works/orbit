@@ -614,6 +614,31 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
             lambda branch: branch["else"]["required"].append("view"),
             "`orbit_task_show` property `inputSchema[else].view` newly required")
 
+    def test_moving_root_required_into_existing_else_decides_patch(self):
+        self._write_conditional_schema()
+        tools = self.repo.mcp()
+        # `id` was required of every request at the root; now only the else
+        # branch requires it, so every former request still validates.
+        tools[0]["inputSchema"]["required"] = [
+            name for name in tools[0]["inputSchema"]["required"] if name != "id"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Move id requirement into else [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
+    def test_new_requirement_in_else_stays_minor_when_root_did_not_require_it(self):
+        self._write_conditional_schema()
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["allOf"][0]["else"]["required"].append("view")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Require view in else [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(self.signals(report), {
+            ("ORB-54", "mcp-schema",
+             "`orbit_task_show` property `inputSchema[else].view` newly required")})
+        self.assertEqual(report["bump"], "minor")
+
     def test_conditional_property_names_enum_drop_decides_minor(self):
         self._assert_conditional_change_is_breaking(
             lambda branch: branch["then"]["propertyNames"]["enum"].remove("view"),

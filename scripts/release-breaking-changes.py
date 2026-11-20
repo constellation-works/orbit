@@ -870,6 +870,22 @@ def detect_mcp_changes(git, parent, commit, changed):
                 grouped.setdefault(location(raw), set()).update(req)
             return grouped
 
+        def required_by_enclosing_location(loc, prop):
+            """Whether `prop` was already required wherever `loc` applies.
+
+            A then/else/anyOf/oneOf branch constrains the same instance as
+            its enclosing schema, so a property the enclosing schema already
+            required of every instance is not a new demand when the
+            requirement moves into the branch.
+            """
+            for outer, names in before_required.items():
+                if prop not in names or not loc.startswith(outer) or loc == outer:
+                    continue
+                suffix = loc[len(outer):]
+                if re.fullmatch(r"(?:\[(?:then|else)\]|\{(?:anyOf|oneOf)\d+\})+", suffix):
+                    return True
+            return False
+
         before_locations = {location(p) for p in before.get("schema_nodes", set())}
         before_required = required_by_location(before)
         translated_after = dict(after)
@@ -884,6 +900,8 @@ def detect_mcp_changes(git, parent, commit, changed):
             if loc not in before_locations or loc not in after_locations:
                 continue
             for prop in sorted(required - before_required.get(loc, set())):
+                if required_by_enclosing_location(loc, prop):
+                    continue
                 report(f"`{name}` property `{loc}.{prop}` newly required")
         # Dropping a requirement normally only admits more input. In a oneOf
         # branch it can create a second match and reject a formerly valid one.
