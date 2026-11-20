@@ -57,6 +57,7 @@ impl crate::OrbitRuntime {
     ) -> Result<CrewPoolDraw, OrbitError> {
         let weighting = weighted_candidates(
             &mut candidates,
+            None,
             &self.provider_limit_policy().usage_pressure,
             || self.usage_pressure_read(chrono::Utc::now()),
         );
@@ -224,10 +225,13 @@ impl DrawWeighting {
 /// narrowing; membership is unchanged. Task admission applies its allowlist
 /// afterward; other draws keep their existing membership filters first. A
 /// weight of 0 stays 0 and a positive weight keeps at least one ticket.
-/// `None` leaves the draw as it was: pressure does not apply or there is no
+/// An exhausted member leaves the draw only while another member that
+/// `allowlist` permits still has quota, so a crew this run may not draw never
+/// stands in as the alternative that empties the pool. `None` leaves the draw as it was: pressure does not apply or there is no
 /// choice to weigh.
 pub(crate) fn weighted_candidates(
     candidates: &mut [CrewCandidate],
+    allowlist: Option<&CrewAllowlist>,
     pressure_policy: &UsagePressurePolicy,
     pressure_read: impl FnOnce() -> UsagePressureRead,
 ) -> Option<DrawWeighting> {
@@ -235,8 +239,9 @@ pub(crate) fn weighted_candidates(
         return None;
     }
     let pressure = pressure_read();
-    // An exhausted account is left out of the draw while another member
-    // has quota, rather than kept at the floor ticket.
+    // An exhausted account is left out of the draw while another drawable
+    // member (positive weight, permitted by the allowlist) has quota, rather
+    // than kept at the floor ticket.
     let exhausted = candidates
         .iter()
         .map(|candidate| candidate.weight > 0 && pressure.crew_exhausted(&candidate.crew))
@@ -245,7 +250,11 @@ pub(crate) fn weighted_candidates(
         && candidates
             .iter()
             .zip(&exhausted)
-            .any(|(candidate, exhausted)| candidate.weight > 0 && !exhausted);
+            .any(|(candidate, exhausted)| {
+                candidate.weight > 0
+                    && !exhausted
+                    && allowlist.is_none_or(|list| list.permits(&candidate.crew))
+            });
     let mut members = BTreeMap::new();
     for (candidate, exhausted) in candidates.iter_mut().zip(exhausted) {
         let crew_pressure = pressure.crew(&candidate.crew);
