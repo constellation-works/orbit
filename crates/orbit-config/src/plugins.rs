@@ -24,7 +24,7 @@ use orbit_common::OrbitError;
 use serde_json::Value as JsonValue;
 
 /// Dotted prefix of the plugin configuration table.
-pub const PLUGIN_CONFIG_PREFIX: &str = "plugins";
+const PLUGIN_CONFIG_PREFIX: &str = "plugins";
 
 /// One installed plugin's configuration contract.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -207,7 +207,7 @@ pub fn plugin_config_schema(namespace: &str) -> Option<PluginConfigSchema> {
 }
 
 /// Every registered namespace, sorted.
-pub fn registered_plugin_namespaces() -> Vec<String> {
+fn registered_plugin_namespaces() -> Vec<String> {
     registry()
         .read()
         .map(|registry| registry.keys().cloned().collect())
@@ -216,7 +216,7 @@ pub fn registered_plugin_namespaces() -> Vec<String> {
 
 /// One live field on a plugin section, as `orbit config get`/`set` names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PluginFieldKey<'a> {
+pub(crate) struct PluginFieldKey<'a> {
     /// Namespace between `plugins.` and the key.
     pub namespace: &'a str,
     /// A key in the plugin's configuration table.
@@ -229,7 +229,7 @@ pub struct PluginFieldKey<'a> {
 /// table). An ill-formed path is an error rather than a fallthrough to the
 /// fixed-key registry, so `plugins.graph` is not reported as an unknown
 /// setting when what it needs is a field.
-pub fn parse_plugin_field_key(key: &str) -> Result<Option<PluginFieldKey<'_>>, OrbitError> {
+pub(crate) fn parse_plugin_field_key(key: &str) -> Result<Option<PluginFieldKey<'_>>, OrbitError> {
     let mut parts = key.split('.');
     if parts.next() != Some(PLUGIN_CONFIG_PREFIX) {
         return Ok(None);
@@ -267,7 +267,7 @@ pub fn parse_plugin_field_key(key: &str) -> Result<Option<PluginFieldKey<'_>>, O
 /// unconditionally closed schema is refused with named properties/defaults as
 /// suggestions; other constraints are checked against the effective section
 /// when writing, rather than inferred from a partial list of names.
-pub fn admit_plugin_field_key(parsed: PluginFieldKey<'_>) -> Result<(), OrbitError> {
+pub(crate) fn admit_plugin_field_key(parsed: PluginFieldKey<'_>) -> Result<(), OrbitError> {
     let namespaces = registered_plugin_namespaces();
     if namespaces.is_empty() {
         return Ok(());

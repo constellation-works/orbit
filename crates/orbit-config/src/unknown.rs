@@ -47,9 +47,9 @@ pub fn unknown_config_keys_present(document: &toml::Value) -> Vec<UnknownConfigK
             "routines",
             "plugins",
             "plugin_enablement",
-            crate::TAG_INSTRUCTIONS_KEY,
-            crate::AGENT_CORPUS_KEY,
-            crate::REVIEW_SKIP_TAGS_KEY,
+            crate::tag_instructions::TAG_INSTRUCTIONS_KEY,
+            crate::tag_instructions::AGENT_CORPUS_KEY,
+            orbit_types::task::REVIEW_SKIP_TAGS_KEY,
             // Read by the operation layer; the settings registry has no row for it.
             REVIEW_HOST_EVIDENCE_KEY,
         ])

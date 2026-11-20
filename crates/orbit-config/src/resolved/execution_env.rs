@@ -257,7 +257,7 @@ impl ExecutionEnvPolicy {
     }
 
     /// [`Self::unset_pass_names`] over an explicit parent environment.
-    pub fn unset_pass_names_in(&self, parent: &[(String, String)]) -> Vec<String> {
+    pub(crate) fn unset_pass_names_in(&self, parent: &[(String, String)]) -> Vec<String> {
         if self.inherit {
             return Vec::new();
         }

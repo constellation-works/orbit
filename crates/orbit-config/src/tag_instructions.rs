@@ -18,10 +18,10 @@ use orbit_types::workflow::{
 };
 
 /// The dotted config path of the tag table.
-pub const TAG_INSTRUCTIONS_KEY: &str = "workflow.tag_instructions";
+pub(crate) const TAG_INSTRUCTIONS_KEY: &str = "workflow.tag_instructions";
 
 /// The dotted config path of the activity-to-corpus-index table.
-pub const AGENT_CORPUS_KEY: &str = "workflow.agent_corpus";
+pub(crate) const AGENT_CORPUS_KEY: &str = "workflow.agent_corpus";
 
 /// What one tag maps for one role.
 #[derive(Debug, Clone, PartialEq, Eq)]
