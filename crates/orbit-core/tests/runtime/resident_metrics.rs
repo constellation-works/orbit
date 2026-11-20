@@ -1125,6 +1125,54 @@ fn human_stop_and_takeover_count_once_while_wake_and_system_stop_do_not() {
     assert_eq!(clock["count"], 0, "{clock}");
 }
 
+/// [ORB-26038] A custom human process actor label is counted from its
+/// explicitly typed control record, while agent and system controls remain
+/// excluded from the public metrics report.
+fn custom_human_actor_control_counts_but_agent_and_system_controls_do_not() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let (custom_human, _) = mandate_with_human_watched(&runtime, "custom human actor leaf");
+    let (agent, _) = mandate_with_human_watched(&runtime, "agent actor leaf");
+    let (system, _) = mandate_with_human_watched(&runtime, "system actor leaf");
+
+    let custom_human_runtime = runtime.clone().with_actor(ActorIdentity::human("alice"));
+    call(
+        &custom_human_runtime,
+        "orbit.resident.control",
+        json!({"task_id": custom_human, "action": "stop", "reason": "operator stop"}),
+    )
+    .unwrap();
+
+    let agent_runtime = runtime.clone().with_actor(ActorIdentity::agent("codex"));
+    call(
+        &agent_runtime,
+        "orbit.resident.control",
+        json!({"task_id": agent, "action": "takeover", "reason": "agent takeover"}),
+    )
+    .unwrap();
+    seed_clock_stop(&runtime, &system, Utc::now());
+
+    let report = metrics(&runtime, json!({"since": "7d"}));
+    let interventions = |task_id: &str| {
+        report["mandates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|mandate| mandate["task_id"] == task_id)
+            .unwrap()["interventions"]
+            .clone()
+    };
+
+    let custom_human_interventions = interventions(&custom_human);
+    assert_eq!(custom_human_interventions["count"], 1, "{report}");
+    assert_eq!(
+        custom_human_interventions["items"][0]["kind"], "stop",
+        "{report}"
+    );
+    assert_eq!(interventions(&agent)["count"], 0, "{report}");
+    assert_eq!(interventions(&system)["count"], 0, "{report}");
+}
+
 fn resident_control_write(runtime: &OrbitRuntime, task_id: &str, action: ResidentControlAction) {
     runtime
         .control_resident(
@@ -1351,4 +1399,5 @@ crate::scenario_table!(
     interventions_and_escalations_outside_active_span_are_excluded,
     escalation_buckets_sum_to_count_and_per_human_day_uses_window_days,
     human_stop_and_takeover_count_once_while_wake_and_system_stop_do_not,
+    custom_human_actor_control_counts_but_agent_and_system_controls_do_not,
 );
