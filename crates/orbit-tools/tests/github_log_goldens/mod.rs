@@ -755,6 +755,53 @@ impl CachedJobRead {
             .map(|entry| entry.path())
             .collect()
     }
+
+    /// A run whose run-scoped read prints nothing (the primary blind spot).
+    /// Its one job, 9, is a completed failure whose log API serves the log, so
+    /// the run-scoped read recovers the excerpt from that job.
+    fn fallback(tag: &str) -> (Self, orbit_common::test_env::ScopedEnv) {
+        let (read, env) = Self::new(tag);
+        std::fs::write(read.root.path().join("run_log"), "").unwrap();
+        let view = json!({
+            "databaseId": 123,
+            "url": "https://github.com/acme/orbit/actions/runs/123",
+            "jobs": [{
+                "databaseId": 9,
+                "name": "build",
+                "status": "completed",
+                "conclusion": "failure",
+            }],
+        });
+        std::fs::write(read.root.path().join("view.json"), view.to_string()).unwrap();
+        let run = json!({
+            "id": 123,
+            "status": "completed",
+            "run_attempt": 1,
+            "url": "https://api.github.com/repos/acme/orbit/actions/runs/123",
+        });
+        std::fs::write(read.root.path().join("run_metadata"), run.to_string()).unwrap();
+        (read, env)
+    }
+
+    /// A run-scoped read with the default scope, which is the request that
+    /// reaches the fallback.
+    fn run_read(&self, window: Value) -> Result<Value, orbit_common::OrbitError> {
+        let mut input = json!({"run": "123"});
+        for (key, value) in window.as_object().unwrap() {
+            input[key] = value.clone();
+        }
+        self.registry
+            .execute("github.run.logs", &ToolContext::default(), input)
+    }
+
+    /// Whole-log downloads of the fallback job's own log API, as opposed to
+    /// the run-scoped primary reads and status requests.
+    fn fallback_downloads(&self) -> usize {
+        self.calls()
+            .iter()
+            .filter(|call| call.contains("actions/jobs/9/logs"))
+            .count()
+    }
 }
 
 #[cfg(unix)]
@@ -864,4 +911,97 @@ fn a_cached_job_log_is_served_only_to_a_caller_that_may_read_it_now() {
     );
     assert_eq!(moved.downloads(), 2);
     assert_eq!(moved.cache_entries().len(), 2);
+}
+
+/// Two windows of a run's fallback log download the failed job's log once. Each
+/// window still reports the job log API and the job that supplied the bytes,
+/// and each cached window's log text matches an uncached read of that window.
+#[test]
+#[cfg(unix)]
+fn two_windows_of_a_completed_fallback_job_download_its_log_once() {
+    if !isolated(
+        "public_tool_surface::github_log_goldens::two_windows_of_a_completed_fallback_job_download_its_log_once",
+    ) {
+        return;
+    }
+    let (fallback, _env) = CachedJobRead::fallback("fallback");
+    let windows = [
+        json!({"line_start": 5, "line_end": 8}),
+        json!({"byte_start": 0, "byte_end": 60}),
+    ];
+
+    let early = fallback.run_read(windows[0].clone()).unwrap();
+    let later = fallback.run_read(windows[1].clone()).unwrap();
+
+    assert_eq!(
+        fallback.fallback_downloads(),
+        1,
+        "the failed job's log is downloaded once: {:?}",
+        fallback.calls()
+    );
+    for read in [&early, &later] {
+        assert_eq!(read["source"], "job_api_log");
+        assert_eq!(read["source_jobs"][0]["job_id"], 9);
+    }
+    assert!(log_text(&early).contains("fallback line 5"));
+    assert!(log_text(&later).contains("fallback line 1"));
+    assert_eq!(fallback.cache_entries().len(), 1);
+
+    for (read, window) in [(&early, &windows[0]), (&later, &windows[1])] {
+        let mut input = window.clone();
+        input["run"] = json!("123");
+        let requests = gh::RunLogRequests::from_input(&input).unwrap();
+        let uncached = gh::read_run_log(&requests, gh::LogReadBounds::new(262_144), None).unwrap();
+        assert_eq!(log_text(read), uncached.log.text, "{window}");
+    }
+}
+
+/// Only a completed fallback job's log is cached. A running job, a refused read
+/// and a failed job-log read each leave the cache empty, and the first read
+/// that succeeds stores exactly one entry.
+#[test]
+#[cfg(unix)]
+fn a_fallback_job_log_that_is_not_complete_or_not_readable_is_never_cached() {
+    if !isolated(
+        "public_tool_surface::github_log_goldens::a_fallback_job_log_that_is_not_complete_or_not_readable_is_never_cached",
+    ) {
+        return;
+    }
+    let window = || json!({"line_start": 2, "line_end": 4});
+
+    // The job log API still reports the job as running.
+    let (running, env) = CachedJobRead::fallback("partial");
+    running.set_job("in_progress", "acme/orbit");
+    running.run_read(window()).unwrap();
+    running.run_read(window()).unwrap();
+    assert_eq!(
+        running.fallback_downloads(),
+        2,
+        "a running job's log is re-read"
+    );
+    assert!(running.cache_entries().is_empty(), "and never cached");
+    drop(env);
+
+    // The caller's access is refused, so the read fails and stores nothing.
+    let (refused, env) = CachedJobRead::fallback("denied");
+    refused.deny();
+    refused.run_read(window()).unwrap_err();
+    assert!(
+        refused.cache_entries().is_empty(),
+        "a refused read stores nothing"
+    );
+    drop(env);
+
+    // The job log API fails, then answers. The failed read leaves nothing that
+    // the later read could mistake for the log.
+    let (failed, _env) = CachedJobRead::fallback("later");
+    let job_log = failed.root.path().join("job_9");
+    let log = std::fs::read(&job_log).unwrap();
+    std::fs::remove_file(&job_log).unwrap();
+    failed.run_read(window()).unwrap_err();
+    assert!(failed.cache_entries().is_empty());
+    std::fs::write(&job_log, log).unwrap();
+    let read = failed.run_read(window()).unwrap();
+    assert!(log_text(&read).contains("later line 2"));
+    assert_eq!(failed.cache_entries().len(), 1);
 }
