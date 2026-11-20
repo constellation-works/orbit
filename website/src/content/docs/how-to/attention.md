@@ -18,8 +18,9 @@ run the command or open the workspace in the [dashboard](/how-to/dashboard/).
 
 The kinds are `pilot_warning`, `pilot_hold`, `blocked`, `decision_open`,
 `review_waiting`, `run_failed`, `run_stuck`, `claim_stale`, `ci_red`,
-`friction_untriaged`, `notice_open`, `resident_stalled` and `host_unhealthy`.
-An open decision may be folded into its hold, block or review.
+`friction_untriaged`, `notice_open`, `resident_stalled`, `routine_tripped`
+(a routine whose circuit breaker is open after repeated failures) and
+`host_unhealthy`. An open decision may be folded into its hold, block or review.
 
 :::caution
 An empty list does not prove that nothing waits. Check `degraded` in the JSON
