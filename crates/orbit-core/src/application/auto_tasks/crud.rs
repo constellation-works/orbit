@@ -384,6 +384,11 @@ impl OrbitRuntime {
             entry.apply(&mut definition);
             definition.validate()?;
         }
+        // The same load-time checks discovery runs, so a definition the
+        // scheduler and `auto_task_list` refuse is refused here too.
+        validate_schedule(&definition.schedule)?;
+        orbit_automation::auto_tasks::loader::check_auto_task_conditions(&definition)
+            .map_err(OrbitError::InvalidInput)?;
         Ok(definition)
     }
 

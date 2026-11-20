@@ -350,7 +350,15 @@ fn http_listing_json(
 ) -> Value {
     let listed = &row.listed;
     let definition = &listed.definition;
-    let cursor = row.cursor.as_ref();
+    // Delivery and condition schedules never write the time cursor; a
+    // leftover one from an earlier time schedule must not leak into their
+    // projection, as in `last_fire_json`.
+    let cursor = row.cursor.as_ref().filter(|_| {
+        !matches!(
+            definition.schedule,
+            AutoTaskSchedule::Deliveries { .. } | AutoTaskSchedule::Condition { .. }
+        )
+    });
     let open_duplicate = minted.as_ref().is_ok_and(|tasks| {
         open_auto_task_instances_from_tasks(tasks.iter().copied())
             .next()

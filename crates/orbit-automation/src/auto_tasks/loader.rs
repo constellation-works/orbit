@@ -272,6 +272,13 @@ fn load_definition_with_settings(
 ) -> Result<LoadedAutoTask, String> {
     let raw = std::fs::read_to_string(path).map_err(|error| format!("read failed: {error}"))?;
     let mut definition = parse_auto_task_yaml(&raw).map_err(|error| error.to_string())?;
+    // A definition written before tool families reads with family actions,
+    // as `auto_task_show` does [ORB-23552].
+    if let Some(required_tools) =
+        orbit_types::tool::family_action_tool_names(&definition.template.required_tools)
+    {
+        definition.template.required_tools = required_tools;
+    }
     if let Some(entry) = settings.get(&definition.name) {
         entry.apply(&mut definition);
         definition
