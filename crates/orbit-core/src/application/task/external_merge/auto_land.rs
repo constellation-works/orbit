@@ -29,7 +29,7 @@
 //! [`LANDING_FOLLOW_UP_EVENT`] entry naming a typed `code`, the `owner` of the
 //! next step and the pull request head, once per code and head. A review task
 //! whose last observed checks passed but whose delivery never carried
-//! completion authority records `completion_not_authorized` with the operator
+//! completion authority (a run that had it and stopped is not that case) records `completion_not_authorized` with the operator
 //! as owner: merging it is the operator's choice, never Orbit's.
 
 use orbit_common::OrbitError;
@@ -147,6 +147,9 @@ impl OrbitRuntime {
                 self.record_unauthorized_follow_up(&task, &history)?;
                 return Ok(None);
             }
+            // The run had completion authority and stopped; its own hold or
+            // failure carries the disposition, not a missing-authority note.
+            DeliveryCompletion::Stopped => return Ok(None),
             DeliveryCompletion::Authorized {
                 run_id,
                 needs_passed_check,

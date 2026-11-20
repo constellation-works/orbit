@@ -42,9 +42,14 @@ pub(in crate::application::task) type CrewPools = <crate::OrbitRuntime as TaskJo
 pub(in crate::application) enum DeliveryCompletion {
     /// A delivery run is still live; it finishes the task itself.
     Live,
-    /// No delivery run authorised completion, or the newest one ended where
-    /// only an operator continues it.
+    /// No delivery run authorised completion: there is none, or the newest
+    /// one did not carry `completion: done`.
     NotAuthorized,
+    /// The newest run carried `completion: done` but failed or ended on a hold
+    /// a forge read cannot clear. It had the authority; the stop's own
+    /// disposition decides what happens next, so nothing here lands it or
+    /// calls it unauthorised.
+    Stopped,
     /// The newest run carried `completion: done` and ended `success`, or held
     /// on a delivery hold a fresh forge read can clear.
     Authorized {

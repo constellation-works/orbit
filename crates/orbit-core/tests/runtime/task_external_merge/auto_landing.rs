@@ -20,6 +20,7 @@ crate::scenario_table!(
     a_held_absent_runs_delivery_is_not_merged_until_a_required_check_passes,
     a_succeeded_authorised_run_with_a_passed_observation_is_merged,
     a_delivery_without_completion_authority_records_who_merges_it,
+    a_stopped_authorised_run_is_not_reported_as_unauthorised,
     an_authorised_conflicting_pull_request_records_its_follow_up_once,
     two_open_delivery_pull_requests_record_one_ambiguity_follow_up,
     a_retargeted_pull_request_is_not_merged_and_lands_once_restored
@@ -200,6 +201,31 @@ fn a_delivery_without_completion_authority_records_who_merges_it() {
         ),
         ("completion_not_authorized", "operator", LAND_PR)
     );
+}
+
+fn a_stopped_authorised_run_is_not_reported_as_unauthorised() {
+    // ORB-25995: a `completion: done` run that failed after a passed
+    // observation had authority; it must not be told to merge by hand.
+    for (state, code) in [
+        (JobRunState::Failed, None),
+        (JobRunState::Held, Some("review_budget_exhausted")),
+    ] {
+        let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Mergeable);
+        delivery_run(&fx, &task, "done", state, code);
+        observe_passed(&fx, &task);
+        assert!(
+            fx.runtime
+                .land_completion_authorized_tasks()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(forge.merges().is_empty(), "a stopped run is not landed");
+        assert!(
+            follow_ups(&fx, &task).is_empty(),
+            "{state:?}: no missing-authority follow-up: {:?}",
+            follow_ups(&fx, &task)
+        );
+    }
 }
 
 fn an_authorised_conflicting_pull_request_records_its_follow_up_once() {

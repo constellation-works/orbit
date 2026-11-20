@@ -2202,7 +2202,7 @@ and pull request head:
 
 | `code` | Meaning | Next step (`owner: operator`) |
 |---|---|---|
-| `completion_not_authorized` | The checks passed but the delivery never carried `--complete` | Merge the pull request, then `orbit task settle-merged <task-id>` settles it |
+| `completion_not_authorized` | The checks passed but the delivery never carried `--complete` (a `--complete` run that failed or held is not this case; its own hold or failure is the disposition) | Merge the pull request, then `orbit task settle-merged <task-id>` settles it |
 | `pull_request_conflicting` | The pull request conflicts with its base | Fix PR, or rebase it |
 | `required_checks_failed` | A required check failed on the head | Fix PR, or repair it |
 | `publication_identity_changed` | The pull request no longer matches the revision the stopped run published; the entry names what differs | Check the new head, then discard the candidate with `orbit task update <task-id> --status backlog --discard-candidate`: this closes the moved pull request, and the next run implements fresh and publishes a new one |
