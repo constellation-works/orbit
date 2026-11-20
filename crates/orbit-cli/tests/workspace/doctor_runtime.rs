@@ -318,6 +318,44 @@ fn browser_kit_backlog_warns_while_ui_tasks_wait_for_this_hosts_kit() {
     );
 }
 
+fn standing_drain_probe_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    let mut rows = doctor_report_probes()
+        .find(|probe| probe.name == "standing-drain")
+        .expect("standing-drain probe")
+        .run(runtime, false);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    rows.remove(0)
+}
+
+/// ORB-26041: a `drain_intents` row this binary cannot read (an intent token
+/// a newer binary wrote) made `standing-drain` report `ok`. An unreadable
+/// intent is a warning, never a healthy row.
+fn standing_drain_warns_when_the_drain_intent_row_is_unreadable() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let workspace_id = runtime.workspace_id().expect("workspace id");
+    // No Orbit surface can record an unknown token, so the row is written
+    // directly, the way a newer binary would have written it.
+    let store = rusqlite::Connection::open(runtime.global_root().join("orbit.db"))
+        .expect("open host store");
+    store
+        .execute(
+            "INSERT INTO drain_intents (workspace_id, intent, actor, source, reason, updated_at) \
+             VALUES (?1, 'hibernate', 'operator', 'cli', NULL, '2026-11-19T00:00:00Z')",
+            rusqlite::params![workspace_id],
+        )
+        .expect("write an intent token this binary does not know");
+    drop(store);
+
+    let row = standing_drain_probe_row(&runtime);
+    assert_eq!(
+        row.status,
+        WorkspaceDoctorStatus::Warning,
+        "{}",
+        row.message
+    );
+}
+
 #[test]
 fn doctor_runtime_contracts() {
     if crate::isolated_test::run_in_child("doctor_runtime::doctor_runtime_contracts") {
@@ -339,6 +377,10 @@ fn doctor_runtime_contracts() {
         (
             "browser_kit_backlog_warns_while_ui_tasks_wait_for_this_hosts_kit",
             browser_kit_backlog_warns_while_ui_tasks_wait_for_this_hosts_kit as fn(),
+        ),
+        (
+            "standing_drain_warns_when_the_drain_intent_row_is_unreadable",
+            standing_drain_warns_when_the_drain_intent_row_is_unreadable as fn(),
         ),
         #[cfg(unix)]
         (
