@@ -196,7 +196,8 @@ case "$1 ${2:-}" in
                     echo "$seen" > "$forge/integration-reads"
                     if [ "$seen" -ge "$(cat "$forge/unreadable-integration")" ] && { [ ! -f "$forge/integration-hit" ] || [ -f "$forge/integration-repeat" ]; }; then
                         touch "$forge/integration-hit"
-                        echo '[{"type":"required_status_checks","ruleset_id":55,"ruleset_source":"orbit/test","ruleset_source_type":"Repository","parameters":{"required_status_checks":[{"context":"Protected (rust)","integration_id":"unavailable"}]}}]'; exit
+                        # A garbled body is transient; a rule shape the reader rejects is not [ORB-25870].
+                        echo 'unavailable'; exit
                     fi
                 fi
                 if [ -f "$forge/policy-empty" ] || [ -f "$forge/policy-no-rule" ]; then echo '[]'; exit; fi

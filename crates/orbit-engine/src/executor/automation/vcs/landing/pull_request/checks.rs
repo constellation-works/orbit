@@ -285,7 +285,8 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
                 operations::CI_CURRENT_GATES,
                 json!({"workspace_path":self.workspace,"pr":self.pr_number,
                     "head_sha":status.head_sha,"head_branch":status.head_branch,
-                    "base_branch":status.base_branch,"deadline_ms":self.deadline_ms}),
+                    "base_branch":status.base_branch,"deadline_ms":self.deadline_ms,
+                    "poll_interval_seconds":self.poll_interval_seconds}),
             )
             .map_err(|error| self.stop_on(error))?;
         if current["gates_passed"] == true {

@@ -109,7 +109,7 @@ pub(super) struct LandingPoll<'a, H: RuntimeHost + ?Sized> {
     pub(super) workspace: PathBuf,
     pub(super) workspace_path: String,
     pub(super) max_wait_seconds: u64,
-    poll_interval_seconds: u64,
+    pub(super) poll_interval_seconds: u64,
     started_ms: u64,
     pub(super) deadline_ms: u64,
     pub(super) pin: DeliveryPin,
