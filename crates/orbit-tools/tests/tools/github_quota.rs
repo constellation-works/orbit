@@ -439,3 +439,76 @@ fn unusable_rate_limit_answers_report_unknown_and_admit_reads() {
         }
     }
 }
+
+/// Regression [ORB-25933]: an admission that lands while a rate-limit refresh
+/// probe is in flight outside the lock must still be debited when the probe's
+/// answer commits, so a near-reserve refresh cannot lift remaining back above
+/// the reserve and admit an agent read.
+#[test]
+fn in_flight_refresh_preserves_overlapping_delivery_debits_for_reserve() {
+    for seeded in [true, false] {
+        let records = TempDir::new().unwrap();
+        let policy = GithubQuotaPolicy::default();
+        let start = now();
+        let reset = start + 1800;
+        let refresh_at = if seeded {
+            store(records.path()).refresh_if_due(&policy, ACCOUNT, start, &|| known(1001, reset));
+            start + policy.refresh_interval.as_secs()
+        } else {
+            start
+        };
+
+        let probe_started = Arc::new(Barrier::new(2));
+        let probe_finish = Arc::new(Barrier::new(2));
+        let refresher = std::thread::spawn({
+            let dir = records.path().to_path_buf();
+            let probe_started = Arc::clone(&probe_started);
+            let probe_finish = Arc::clone(&probe_finish);
+            move || {
+                store(&dir).refresh_if_due(&policy, ACCOUNT, refresh_at, &|| {
+                    probe_started.wait();
+                    probe_finish.wait();
+                    known(1001, reset)
+                });
+            }
+        });
+
+        probe_started.wait();
+        let delivery = store(records.path()).admit(
+            &policy,
+            ACCOUNT,
+            GithubCaller::Delivery,
+            RESOURCE_CORE,
+            refresh_at,
+            &|| unreachable!("refresh claim is already held"),
+        );
+        probe_finish.wait();
+        refresher.join().unwrap();
+        delivery.expect("delivery read must be admitted while near-reserve");
+
+        let core = store(records.path())
+            .status(&policy, ACCOUNT, refresh_at)
+            .resources
+            .into_iter()
+            .find(|resource| resource.resource == RESOURCE_CORE)
+            .unwrap();
+        assert_eq!(core.remaining, Some(1000), "seeded={seeded}");
+        assert_eq!(core.calls.delivery, 1, "seeded={seeded}");
+        assert!(core.agent_reads_refused, "seeded={seeded}");
+
+        let refusal = store(records.path())
+            .admit(
+                &policy,
+                ACCOUNT,
+                GithubCaller::Agent,
+                RESOURCE_CORE,
+                refresh_at,
+                &|| RateLimitAnswer::Unknown("not due".into()),
+            )
+            .expect_err("agent read must be refused at the 20% reserve");
+        assert_eq!(refusal.reason, QuotaRefusalReason::Reserve);
+        assert_eq!(refusal.remaining, Some(1000));
+        assert_eq!(refusal.limit, Some(5000));
+        assert_eq!(refusal.reserve, 1000);
+    }
+}
