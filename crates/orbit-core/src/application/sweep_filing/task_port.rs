@@ -1,37 +1,18 @@
 //! CI-sweep admission's side of the task-owned port [ORB-17936].
 
 use orbit_engine::DispatchError;
-use orbit_types::task::Task;
 use serde_json::Value;
 
 use super::ci_failure::admission;
 use crate::OrbitRuntime;
-use crate::application::task::{CiSweepAdmission, CiSweepFilingEvidence, TaskSweepFilingPort};
+use crate::application::task::{CiSweepAdmission, CiSweepAdmissionRequest, TaskSweepFilingPort};
 
 impl TaskSweepFilingPort for OrbitRuntime {
     fn ci_sweep_admission(
         &self,
-        action: &str,
-        task_id: &str,
-        task: &Task,
-        assessment: &Value,
-        selectors: &[String],
-        filing: &CiSweepFilingEvidence,
-        promotion_authorized: bool,
-        dependencies: &[String],
-        is_done: &dyn Fn(&str) -> bool,
+        request: CiSweepAdmissionRequest<'_>,
     ) -> Result<CiSweepAdmission, DispatchError> {
-        admission::assess_ci_sweep_admission(
-            action,
-            task_id,
-            task,
-            assessment,
-            selectors,
-            filing,
-            promotion_authorized,
-            dependencies,
-            is_done,
-        )
+        admission::assess_ci_sweep_admission(request)
     }
 
     fn ci_sweep_piloted_elsewhere(
