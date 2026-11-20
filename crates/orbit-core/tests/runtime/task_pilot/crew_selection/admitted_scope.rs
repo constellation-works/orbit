@@ -350,8 +350,13 @@ fn admission_serializes_scope_edits_between_selection_and_insertion() {
         .unwrap()
         .with_extension("bundle");
     let held_worker = hold_delivery_worker();
+    // The hook is skipped silently when admission never reaches the
+    // checkpoint, so record that it ran and assert it below.
+    let hook_ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let hook_ran_in_hook = std::sync::Arc::clone(&hook_ran);
     let admitted = orbit_core::test_support::with_crew_selection_checkpoint(
         move || {
+            hook_ran_in_hook.store(true, std::sync::atomic::Ordering::SeqCst);
             // Probe the same bundle write lock ordinary task updates take.
             // An independent thread cannot reenter the admitting thread's lock.
             let error = std::thread::spawn(move || {
@@ -380,6 +385,10 @@ fn admission_serializes_scope_edits_between_selection_and_insertion() {
         },
     )
     .unwrap();
+    assert!(
+        hook_ran.load(std::sync::atomic::Ordering::SeqCst),
+        "admission reached the selection checkpoint, so the lock ordering was probed"
+    );
     held_worker.wait_for_reap();
     let updated = workspace
         .runtime

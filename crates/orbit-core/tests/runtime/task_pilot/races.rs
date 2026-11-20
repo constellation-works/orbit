@@ -608,7 +608,9 @@ fn mixed_named_shipment_dispatches_eligible_and_audits_hold() {
     );
 }
 
-// Related boundary scenarios share the isolated table fixture.
+// Related boundary scenarios share the isolated table fixture. The row that
+// installs the process-wide pilot worker substitution has its own table below,
+// so no other row can inherit it whatever the row order.
 crate::scenario_table!(
     admitted_and_retired_targets_settle_as_superseded_without_pilot_writes_scenarios,
     admitted_and_retired_targets_settle_as_superseded_without_pilot_writes,
@@ -616,6 +618,10 @@ crate::scenario_table!(
     agent_before_echo_is_advisory_and_replays_use_the_prepared_snapshot,
     promoting_ci_sweep_replay_settles_already_applied_without_writes,
     superseded_sibling_survives_targeted_repair_and_a_valid_sibling_applies,
-    local_auto_ship_and_readiness_wait_for_an_active_pilot_checkpoint,
+    local_auto_ship_and_readiness_wait_for_an_active_pilot_checkpoint
+);
+
+crate::scenario_table!(
+    pilot_overlap_worker_scenarios,
     mixed_named_shipment_dispatches_eligible_and_audits_hold
 );

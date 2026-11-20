@@ -15,7 +15,6 @@ use serde_json::{Value, json};
 
 use super::Workspace;
 
-#[test]
 fn undecided_consequential_decision_holds_and_ordinary_choice_does_not() {
     let workspace = Workspace::new();
 
@@ -295,7 +294,6 @@ fn undecided_consequential_decision_holds_and_ordinary_choice_does_not() {
     assert_public_hold(&workspace, &upgraded, "the ownership policy");
 }
 
-#[test]
 fn unrelated_resolution_cue_does_not_clear_surface_hold() {
     let workspace = Workspace::new();
 
@@ -315,7 +313,6 @@ fn unrelated_resolution_cue_does_not_clear_surface_hold() {
     assert_public_hold(&workspace, &unrelated, "bounded description text");
 }
 
-#[test]
 fn wrapped_stop_and_report_convention_does_not_hold() {
     let workspace = Workspace::new();
 
@@ -336,7 +333,6 @@ fn wrapped_stop_and_report_convention_does_not_hold() {
     assert_public_clear(&workspace, &wrapped);
 }
 
-#[test]
 fn omitted_subject_stops_at_table_cell_separator() {
     let workspace = Workspace::new();
 
@@ -365,7 +361,6 @@ fn omitted_subject_stops_at_table_cell_separator() {
     assert_public_hold(&workspace, &table_row, "bounded description text");
 }
 
-#[test]
 fn unprefixed_markdown_table_rows_do_not_share_resolution_cues() {
     let workspace = Workspace::new();
 
@@ -506,3 +501,13 @@ fn public_warnings(
         .runtime
         .task_pilot_warning_findings(task, &comments, &|_| false)
 }
+
+// Each case builds a real workspace, so the rows share one isolated child.
+crate::scenario_table!(
+    consequential_decision_scenarios,
+    undecided_consequential_decision_holds_and_ordinary_choice_does_not,
+    unrelated_resolution_cue_does_not_clear_surface_hold,
+    wrapped_stop_and_report_convention_does_not_hold,
+    omitted_subject_stops_at_table_cell_separator,
+    unprefixed_markdown_table_rows_do_not_share_resolution_cues,
+);

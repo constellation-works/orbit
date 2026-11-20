@@ -891,10 +891,15 @@ fn operator_validation_holds_human_approved_work_and_requires_an_evidenced_decis
         agent_comment(&workspace, &task, comment.clone());
         // The registered agent tool cannot mint an operator decision even
         // when a caller omits provenance on a human-owned runtime.
-        let _ = workspace.runtime.run_tool(
-            "orbit.task.update",
-            json!({"id": task.id, "comment": comment}),
-        );
+        // The call is accepted as ordinary discussion, so an unrelated input
+        // error cannot stand in for the missing operator provenance below.
+        workspace
+            .runtime
+            .run_tool(
+                "orbit.task.update",
+                json!({"id": task.id, "comment": comment}),
+            )
+            .expect("the agent tool records the comment without operator authority");
         assert_admission(&workspace, &task, Some("operator_validation_handoff"));
         assert_no_event(&workspace, &task, "operator_validation_resolved");
         human_comment_err(
@@ -2066,7 +2071,11 @@ fn no_pilot_keeps_every_other_admission_rule() {
         })
         .unwrap();
     unready(&unassessed);
-    readiness_reason(&unassessed);
+    // Readiness reports the unassessed-complexity exclusion as a missing pilot.
+    assert_eq!(
+        readiness_reason(&unassessed),
+        "task_pilot_preparation_required"
+    );
 }
 
 crate::scenario_table!(
