@@ -1261,6 +1261,29 @@ fn slow_quota_probe_consuming_source_deadline_prevents_spawning_gh() {
     let records = tempfile::tempdir().expect("tempdir");
     let store = GithubQuotaStore::new(records.path().to_path_buf());
     let policy = GithubQuotaPolicy::default();
+    // A known record whose refresh is due, so the admission probe runs and the
+    // source budget clips it. The clipped probe must leave the record as it
+    // was, and the read admitted past its budget must not be charged to it.
+    let epoch_now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs())
+    };
+    let account = github_quota::inherited_account_key();
+    let seeded_at = epoch_now() - 10_000;
+    store.refresh_if_due(&policy, &account, seeded_at, &|| {
+        let quota = |remaining| github_quota::ObservedQuota {
+            limit: 5000,
+            remaining,
+            reset_epoch_seconds: seeded_at + 20_000,
+        };
+        github_quota::RateLimitAnswer::Known(
+            [github_quota::RESOURCE_CORE, github_quota::RESOURCE_GRAPHQL]
+                .into_iter()
+                .map(|resource| (resource.to_string(), quota(4000)))
+                .collect(),
+        )
+    });
 
     let spent = std::rc::Rc::new(std::cell::Cell::new(Duration::ZERO));
     let clock_spent = std::rc::Rc::clone(&spent);
@@ -1271,7 +1294,9 @@ fn slow_quota_probe_consuming_source_deadline_prevents_spawning_gh() {
         || {
             let source = Source::new(root.path());
             spent.set(super::super::source::SOURCE_DEADLINE - Duration::from_millis(80));
-            github_quota::with_scoped_guard(store, policy, || source.ci_cover_pull_request("#1"))
+            github_quota::with_scoped_guard(store.clone(), policy, || {
+                source.ci_cover_pull_request("#1")
+            })
         },
     )
     .expect_err("slow probe exhausting source deadline must defer");
@@ -1294,4 +1319,12 @@ fn slow_quota_probe_consuming_source_deadline_prevents_spawning_gh() {
         vec!["api rate_limit"],
         "expired quota probe must prevent spawning gh pr view"
     );
+    let status = store.status(&policy, &account, epoch_now());
+    for resource in &status.resources {
+        assert_eq!(
+            (resource.remaining, resource.calls.background),
+            (Some(4000), 0),
+            "a read admitted past its budget must leave the known record uncharged: {resource:?}"
+        );
+    }
 }
