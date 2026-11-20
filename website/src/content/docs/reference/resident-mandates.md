@@ -417,7 +417,10 @@ Each mandate, `totals` and `baseline` get the same four measures:
 Reading the numbers:
 
 - An author is a person when it is `human` or `operator`, or starts with
-  `human:` or `human-`.
+  `human:` or `human-`. A `stop` or `takeover` control also counts when Orbit
+  recorded it from a human actor, whatever the actor's label. Other writes
+  under a label that is not a person label do not count, and agent, system and
+  automation writers never count.
 - Active days are the mandate's active span inside the window, rounded up, at
   least one. The span starts at the later of the window start and the
   mandate's activation, its earliest resident event (such as attaching the
