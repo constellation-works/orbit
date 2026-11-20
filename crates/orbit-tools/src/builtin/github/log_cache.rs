@@ -79,6 +79,15 @@ impl LogCacheKey {
         Self::digest(&["job", source, run_id, job_id, scope])
     }
 
+    /// One completed job's whole log as the job log API serves it, which is
+    /// not the bytes `gh run view --job` prints for the same job (see
+    /// [`Self::job`]), so it has its own key. It does not depend on the request's
+    /// scope: scope only picks which jobs may be read, not what a job's log is.
+    /// `source` is as for [`Self::job`].
+    pub(crate) fn job_api(source: &str, run_id: &str, job_id: &str) -> Self {
+        Self::digest(&["job_api", source, run_id, job_id])
+    }
+
     /// One completed attempt of a run. A rerun keeps the run id, so the attempt
     /// is what keeps its log apart from the earlier one.
     /// `source` is as for [`Self::job`].

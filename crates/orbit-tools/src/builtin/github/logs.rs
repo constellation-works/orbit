@@ -616,6 +616,42 @@ fn stream_log_source(
     Ok(read)
 }
 
+/// Render a cached masked log through the collector one source read of `shape`
+/// feeds, so a warm read returns what the cold read that filled the cache did.
+fn replay_cached_log(
+    bounds: LogReadBounds,
+    shape: ExcerptShape,
+    selection: Option<LogSelection>,
+    log: &[u8],
+) -> StreamedLog {
+    let mut collector = log_collector(bounds, shape, selection);
+    for piece in log.chunks(4096) {
+        collector.push(piece);
+    }
+    collector.finish()
+}
+
+/// Mask a freshly read completed log, store it, and answer from the stored
+/// form so the first read matches every later one. A log that cannot be
+/// masked is not stored and answers from the read itself.
+fn store_completed_log(
+    key: &LogCacheKey,
+    cache: &LogCache,
+    bounds: LogReadBounds,
+    shape: ExcerptShape,
+    selection: Option<LogSelection>,
+    (log, source): (StreamedLog, Vec<u8>),
+) -> StreamedLog {
+    let Some(masked) = RedactedLog::from_source(&source) else {
+        return log;
+    };
+    cache.put(key, &masked);
+    if masked.as_bytes() == source.as_slice() {
+        return log;
+    }
+    replay_cached_log(bounds, shape, selection, masked.as_bytes())
+}
+
 /// The run-scoped `gh run view --log*` read, served from the log cache when
 /// a current status request shows the job or run it names completed under the
 /// caller's access and its log is already held for the resolved repository.
@@ -645,25 +681,22 @@ fn run_scoped_log(
         };
     let read = |keep_source: bool| read_from(&requests.run_log, keep_source);
     let replay = |log: &[u8]| {
-        let mut collector =
-            log_collector(bounds, ExcerptShape::EvenSplit, requests.selection.clone());
-        for piece in log.chunks(4096) {
-            collector.push(piece);
-        }
-        collector.finish()
+        replay_cached_log(
+            bounds,
+            ExcerptShape::EvenSplit,
+            requests.selection.clone(),
+            log,
+        )
     };
-    // Mask a freshly read completed log, store it, and answer from the stored
-    // form so the first read matches every later one. A log that cannot be
-    // masked is not stored and answers from the read itself.
-    let store = |key: &LogCacheKey, cache: &LogCache, (log, source): (StreamedLog, Vec<u8>)| {
-        let Some(masked) = RedactedLog::from_source(&source) else {
-            return log;
-        };
-        cache.put(key, &masked);
-        if masked.as_bytes() == source.as_slice() {
-            return log;
-        }
-        replay(masked.as_bytes())
+    let store = |key: &LogCacheKey, cache: &LogCache, fetched: (StreamedLog, Vec<u8>)| {
+        store_completed_log(
+            key,
+            cache,
+            bounds,
+            ExcerptShape::EvenSplit,
+            requests.selection.clone(),
+            fetched,
+        )
     };
     let Some(cache) = &requests.cache else {
         return read(false).map(|(log, _)| log);
@@ -803,6 +836,45 @@ impl FallbackJob {
     }
 }
 
+/// One verified fallback job's whole log (`request` is its guarded job-log
+/// read), served from the log cache when a current status request shows the job
+/// completed for this run under the caller's access and its log is already held
+/// for the resolved repository.
+///
+/// The same rules as [`run_scoped_log`] apply: a hit still needs the status
+/// request, a cold read of a completed job renders from the masked copy it
+/// stores, and every cache or metadata failure is a plain read. A failed,
+/// timed-out, over-limit or empty read never reaches the store. The key names
+/// the job log API apart from the run-scoped read's entries for the same job:
+/// the bytes differ, and so does the excerpt shape.
+fn fallback_job_log(
+    requests: &RunLogRequests,
+    bounds: LogReadBounds,
+    job: &FallbackJob,
+    request: &ExecRequest,
+    guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
+) -> Result<StreamedLog, OrbitError> {
+    const LABEL: &str = "gh api job logs";
+    let shape = ExcerptShape::TailWeighted;
+    let selection = requests.selection.clone();
+    let plain = || stream_bounded_log(request, bounds, shape, LABEL, selection.clone());
+    let Some(cache) = &requests.cache else {
+        return plain();
+    };
+    let job_id = job.id.to_string();
+    let Some(source) = completed_job_source(requests, &job_id, guard) else {
+        return plain();
+    };
+    let key = LogCacheKey::job_api(&source, &requests.run_id, &job_id);
+    if let Some(cached) = cache.get(&key) {
+        return Ok(replay_cached_log(bounds, shape, selection, &cached));
+    }
+    let read = stream_log_source(request, bounds, shape, LABEL, selection.clone(), true)?;
+    Ok(store_completed_log(
+        &key, cache, bounds, shape, selection, read,
+    ))
+}
+
 /// Read per-job logs until one yields text, keeping the empty run-scoped read
 /// as the result when none does.
 fn recover_from_job_logs(
@@ -850,13 +922,7 @@ fn recover_from_job_logs(
                 return unrecovered(qualify(error.to_string()), selection_unsupported, throttle);
             }
         };
-        match stream_bounded_log(
-            &request,
-            bounds,
-            ExcerptShape::TailWeighted,
-            "gh api job logs",
-            requests.selection.clone(),
-        ) {
+        match fallback_job_log(requests, bounds, job, &request, guard) {
             Ok(log) if !log.text.trim().is_empty() => {
                 return RunLogRead {
                     log,
