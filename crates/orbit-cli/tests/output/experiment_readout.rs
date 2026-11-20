@@ -140,7 +140,9 @@ impl Fixture {
                 ..TaskAddParams::default()
             })
             .expect("add task");
-        runtime.archive_task(&task.id).expect("archive task");
+        runtime
+            .archive_task_as_operator(&task.id, false)
+            .expect("archive task");
         let workspace_id = runtime.workspace_id().expect("workspace id");
         let digest = started
             .arms

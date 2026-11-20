@@ -1,0 +1,23 @@
+Archive a task
+
+Usage: orbit task archive [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+          Task ID
+
+Options:
+      --force
+          Archive even if a live local run owns the task
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header
+
+Archived is terminal: restore a task with `task update <id> --status <status> --force`.

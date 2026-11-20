@@ -93,7 +93,10 @@ new task with a `regression_from` relation. Only an operator's
 `orbit task update <id> --status <status> --force` restores them.
 `orbit task archive <id>` and the UI archive action are not table moves:
 they archive a task in any status, including `done` and `rejected`,
-through internal authority. The transition table governs `task update
+through internal authority. Both refuse to archive a task while a live local
+run owns it. An operator can override the refusal with `orbit task archive
+<id> --force` or the UI force action. Task history records the override as
+`forced`. The transition table governs `task update
 --status` instead, which refuses an off-table move to `archived`.
 `rejected` returns to `backlog` or
 `in-progress`. Follow supported transitions and the assigned workflow; agents

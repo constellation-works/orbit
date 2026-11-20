@@ -487,7 +487,7 @@ pub(super) fn seed_archived_run(orbit_dir: &Path, home: &Path, label: &str) -> (
         })
         .expect("GC fixture task");
     runtime
-        .archive_task(&task.id)
+        .archive_task_as_operator(&task.id, false)
         .expect("archive GC fixture task");
     let task_id = task.id.to_string();
     let now = Utc::now();

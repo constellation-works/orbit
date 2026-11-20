@@ -453,7 +453,7 @@ fn enroll_primary_sample(
                 },
             })
             .unwrap();
-        runtime.archive_task(&task_id).unwrap();
+        runtime.archive_task_as_operator(&task_id, false).unwrap();
     }
     task_id
 }
@@ -499,7 +499,7 @@ fn enroll_first_edit_sample(
             .unwrap();
     }
     if terminal {
-        runtime.archive_task(&task_id).unwrap();
+        runtime.archive_task_as_operator(&task_id, false).unwrap();
     }
     task_id
 }
@@ -805,7 +805,7 @@ fn readout_counts_tasks_with_a_recorded_explorer_call() {
                 },
             })
             .unwrap();
-        runtime.archive_task(&task_id).unwrap();
+        runtime.archive_task_as_operator(&task_id, false).unwrap();
     };
     seed(
         "treatment",
@@ -867,7 +867,7 @@ fn readout_counts_tasks_with_a_recorded_explorer_call() {
             })
             .unwrap();
     }
-    runtime.archive_task(&twice).unwrap();
+    runtime.archive_task_as_operator(&twice, false).unwrap();
     seed(
         "treatment",
         "implement_one",
@@ -972,7 +972,7 @@ fn readout_does_not_measure_or_rule_out_calls_from_a_truncated_tool_trace() {
             calls,
             tool_calls_incomplete,
         );
-        runtime.archive_task(&task_id).unwrap();
+        runtime.archive_task_as_operator(&task_id, false).unwrap();
     };
     // The early explorer and read were lost; only the late editor survives.
     seed("treatment", &["hashline_edit"], true);
@@ -1082,7 +1082,7 @@ fn readout_keeps_a_complete_first_edit_when_a_later_invocation_is_truncated() {
         false,
     );
     insert_implement_calls(&runtime, &retried, "retry-later", &["hashline_edit"], true);
-    runtime.archive_task(&retried).unwrap();
+    runtime.archive_task_as_operator(&retried, false).unwrap();
     let control = enroll_arm_task(&runtime, &experiment.id, "control", TaskComplexity::Low);
     insert_implement_calls(
         &runtime,
@@ -1091,7 +1091,7 @@ fn readout_keeps_a_complete_first_edit_when_a_later_invocation_is_truncated() {
         &["read_file", "hashline_edit"],
         false,
     );
-    runtime.archive_task(&control).unwrap();
+    runtime.archive_task_as_operator(&control, false).unwrap();
 
     let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
     let arm = |name: &str| readout.arms.iter().find(|arm| arm.name == name).unwrap();
@@ -1134,7 +1134,7 @@ fn readout_keeps_a_complete_first_edit_when_a_later_invocation_is_truncated() {
         &["hashline_edit"],
         true,
     );
-    runtime.archive_task(&truncated).unwrap();
+    runtime.archive_task_as_operator(&truncated, false).unwrap();
     let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
     assert_eq!(
         first_edit(&readout, "treatment"),
@@ -1243,7 +1243,7 @@ fn readout_counts_explorer_call_beyond_workspace_invocation_scan_limit() {
             },
         })
         .unwrap();
-    runtime.archive_task(&counted).unwrap();
+    runtime.archive_task_as_operator(&counted, false).unwrap();
 
     // An explorer call recorded before assignment does not count.
     let before_assignment = seed("agent_implement", "orbit_agent_invoke", "before-assignment");
@@ -1260,15 +1260,21 @@ fn readout_counts_explorer_call_beyond_workspace_invocation_scan_limit() {
             ],
         )
         .unwrap();
-    runtime.archive_task(&before_assignment).unwrap();
+    runtime
+        .archive_task_as_operator(&before_assignment, false)
+        .unwrap();
 
     // An explorer call outside an implement activity does not count.
     let review_only = seed("review", "orbit_agent_invoke", "review-only");
-    runtime.archive_task(&review_only).unwrap();
+    runtime
+        .archive_task_as_operator(&review_only, false)
+        .unwrap();
 
     // An implement invocation without an explorer call does not count.
     let no_explorer = seed("agent_implement", "orbit_task_show", "no-explorer");
-    runtime.archive_task(&no_explorer).unwrap();
+    runtime
+        .archive_task_as_operator(&no_explorer, false)
+        .unwrap();
 
     // One bounded fixture batch: exactly the old scan limit of newer,
     // unrelated (unlinked) implement invocations, in a transaction.
@@ -1605,7 +1611,7 @@ fn cost_readout_excludes_partial_sums_and_identifies_estimated_tasks() {
                     .unwrap();
             }
             if *terminal {
-                runtime.archive_task(&task_id).unwrap();
+                runtime.archive_task_as_operator(&task_id, false).unwrap();
             }
         }
     }
@@ -1724,7 +1730,7 @@ fn readout_warns_when_primary_is_unmeasured_on_every_settled_task() {
     for arm in ["control", "treatment"] {
         for _ in 0..2 {
             let task_id = enroll_arm_task(&runtime, &experiment.id, arm, TaskComplexity::Low);
-            runtime.archive_task(&task_id).unwrap();
+            runtime.archive_task_as_operator(&task_id, false).unwrap();
         }
     }
     // A still-open task must not suppress the warning.
@@ -1782,7 +1788,7 @@ fn readout_warns_when_primary_is_unmeasured_on_every_settled_task() {
             None,
         )
         .unwrap();
-    runtime.archive_task(&settled).unwrap();
+    runtime.archive_task_as_operator(&settled, false).unwrap();
     let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
     assert!(
         !readout

@@ -11,6 +11,56 @@ use serde_json::json;
 use crate::isolated_cli_fixture::Fixture;
 
 #[test]
+fn archive_of_a_run_owned_task_requires_explicit_force() {
+    if crate::isolated_test::run_in_child(
+        "live_run_status::archive_of_a_run_owned_task_requires_explicit_force",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let workspace = fixture.json(&["workspace", "show", "--json"]);
+    let runtime = OrbitRuntime::from_roots(
+        &fixture.root,
+        Path::new(workspace["orbit_root"].as_str().unwrap()),
+    )
+    .unwrap();
+    let tasks = fixture.json(&["task", "list", "--json"]);
+    let id = tasks[0]["id"].as_str().unwrap();
+    let run = RuntimeHost::insert_job_run(
+        &runtime,
+        "archive-fixture",
+        1,
+        Utc::now(),
+        Some(json!({ "task_ids": [id] })),
+        None,
+    )
+    .unwrap();
+    let before = fixture.json(&["task", "show", id, "--json"]);
+    let refused = fixture
+        .command(&["task", "archive", id, "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "archive must refuse a run-owned task"
+    );
+    let error: serde_json::Value = serde_json::from_slice(&refused.stderr).unwrap();
+    assert_eq!(error["code"], "force_overridable");
+    assert_eq!(error["guard"], "run_still_owns_task");
+    assert_eq!(error["run_id"], run.run_id);
+    assert_eq!(fixture.json(&["task", "show", id, "--json"]), before);
+
+    let archived = fixture.json(&["task", "archive", id, "--force", "--json"]);
+    assert_eq!(archived["id"], id);
+    assert_eq!(archived["status"], "archived");
+    assert_eq!(
+        archived["history"].as_array().unwrap().last().unwrap()["event"],
+        "forced"
+    );
+}
+
+#[test]
 fn status_changes_respect_local_run_ownership_and_explicit_force() {
     if crate::isolated_test::run_in_child(
         "live_run_status::status_changes_respect_local_run_ownership_and_explicit_force",
