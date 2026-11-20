@@ -45,18 +45,13 @@ fn append_during_initial_history_read_is_emitted_once_at_handoff() {
     let first = json!({"target": "orbit.test", "fields": {"message": "first"}}).to_string();
     write_fixture(&path, std::slice::from_ref(&first));
 
-    let (reached_tx, reached_rx) = mpsc::channel();
-    let (resume_tx, resume_rx) = mpsc::channel();
     let mut args = make_args(path.clone());
     args.lines = 2;
     args.follow = true;
     args.json_lines = true;
     args.target = Some("orbit.test".to_string());
-    let mut follower =
-        spawn_follower_with_args(args, Duration::ZERO, Some((reached_tx, resume_rx)));
-    reached_rx
-        .recv_timeout(HANDSHAKE_TIMEOUT)
-        .expect("initial reader paused after first line");
+    let mut follower = spawn_follower_with_args(args, Duration::ZERO, true);
+    follower.wait_until_paused();
 
     let during = json!({"target": "orbit.test", "fields": {"message": "during"}}).to_string();
     let ignored = json!({"target": "orbit.other", "fields": {"message": "ignored"}});
@@ -65,7 +60,7 @@ fn append_during_initial_history_read_is_emitted_once_at_handoff() {
         .open(&path)
         .expect("append fixture");
     writeln!(file, "{during}\n{ignored}").expect("append during initial read");
-    resume_tx.send(()).expect("resume initial reader");
+    follower.resume_initial_read();
     follower.wait_until_ready();
 
     let sentinel = json!({"target": "orbit.test", "fields": {"message": "sentinel"}}).to_string();
@@ -88,23 +83,18 @@ fn rotation_during_initial_read_keeps_the_old_reader_and_restarts_the_new_file()
     write_fixture(&path, std::slice::from_ref(&first));
     let mut archive_writer = OpenOptions::new().append(true).open(&path).unwrap();
 
-    let (reached_tx, reached_rx) = mpsc::channel();
-    let (resume_tx, resume_rx) = mpsc::channel();
     let mut args = make_args(path.clone());
     args.follow = true;
     args.json_lines = true;
-    let mut follower =
-        spawn_follower_with_args(args, Duration::ZERO, Some((reached_tx, resume_rx)));
-    reached_rx
-        .recv_timeout(HANDSHAKE_TIMEOUT)
-        .expect("initial reader paused");
+    let mut follower = spawn_follower_with_args(args, Duration::ZERO, true);
+    follower.wait_until_paused();
 
     std::fs::rename(&path, dir.path().join("archive.jsonl")).unwrap();
     let old = json!({"fields": {"message": "old-file-rest"}}).to_string();
     writeln!(archive_writer, "{old}").unwrap();
     let new = json!({"fields": {"message": "new-file-start"}}).to_string();
     write_fixture(&path, std::slice::from_ref(&new));
-    resume_tx.send(()).unwrap();
+    follower.resume_initial_read();
     follower.wait_until_ready();
 
     let output = follower.collect_through("new-file-start");
@@ -115,8 +105,22 @@ fn rotation_during_initial_read_keeps_the_old_reader_and_restarts_the_new_file()
 fn spawn_follower_with_args(
     args: TailArgs,
     startup_delay: Duration,
-    initial_read_pause: Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>,
+    pause_initial_read: bool,
 ) -> FollowWorker {
+    // The worker owns the resume sender so that dropping it (for example when
+    // the test panics while the reader is paused) disconnects the reader's
+    // resume wait instead of leaving it to run out its deadline.
+    let (initial_read_pause, reached_rx, resume_tx) = if pause_initial_read {
+        let (reached_tx, reached_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        (
+            Some((reached_tx, resume_rx)),
+            Some(reached_rx),
+            Some(resume_tx),
+        )
+    } else {
+        (None, None, None)
+    };
     let (output_tx, output_rx) = mpsc::channel();
     let (ready_tx, ready_rx) = mpsc::channel();
     let (stop_tx, stop_rx) = mpsc::channel();
@@ -135,6 +139,8 @@ fn spawn_follower_with_args(
         output_rx,
         ready_rx,
         stop_tx,
+        reached_rx,
+        resume_tx,
         handle: Some(handle),
     }
 }
@@ -143,10 +149,28 @@ struct FollowWorker {
     output_rx: mpsc::Receiver<String>,
     ready_rx: mpsc::Receiver<()>,
     stop_tx: mpsc::Sender<()>,
+    reached_rx: Option<mpsc::Receiver<()>>,
+    resume_tx: Option<mpsc::Sender<()>>,
     handle: Option<JoinHandle<io::Result<()>>>,
 }
 
 impl FollowWorker {
+    fn wait_until_paused(&self) {
+        self.reached_rx
+            .as_ref()
+            .expect("follower was spawned with an initial-read pause")
+            .recv_timeout(HANDSHAKE_TIMEOUT)
+            .expect("initial reader paused");
+    }
+
+    fn resume_initial_read(&mut self) {
+        self.resume_tx
+            .take()
+            .expect("initial reader has not been resumed")
+            .send(())
+            .expect("resume initial reader");
+    }
+
     fn wait_until_ready(&self) {
         self.ready_rx
             .recv_timeout(HANDSHAKE_TIMEOUT)
@@ -216,6 +240,8 @@ impl FollowWorker {
 
 impl Drop for FollowWorker {
     fn drop(&mut self) {
+        // Disconnect a still-paused initial reader before joining it.
+        self.resume_tx.take();
         let _ = self.stop_tx.send(());
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
