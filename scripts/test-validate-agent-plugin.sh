@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Exercise the repository-owned Agent Plugin validator and the Cursor local
-# plugins-directory discovery shape.
+# Exercise the repository-owned Agent Plugin validator, and check that a copy
+# laid out at Cursor's local plugins-directory path keeps its manifest, MCP
+# launch and skill at the paths that layout requires. Cursor's own discovery
+# is not run here.
 set -euo pipefail
 
 repo_root="${1:-${ORBIT_REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}"
@@ -122,7 +124,7 @@ def set_orbit_cwd(root: Path, cwd: str | None) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-# Cursor discovers Agent Plugins from ~/.cursor/plugins/local/<name>.
+# Cursor's local plugins directory is ~/.cursor/plugins/local/<name>.
 home = base_fixture / "fake-home"
 cursor_plugin = home / ".cursor" / "plugins" / "local" / "orbit"
 if cursor_plugin.exists():
@@ -150,8 +152,11 @@ if plugin_manifest.get("author", {}).get("name") != "constellation-works":
 
 plugin_blob = (cursor_plugin / "plugin.json").read_text(encoding="utf-8")
 mcp_blob = (cursor_plugin / "mcp.json").read_text(encoding="utf-8")
+# HOME=/ is the filesystem root, not a user home: a substring match would flag
+# every slash-containing value. Mirror the guard in validate-agent-plugin.sh.
+user_home = str(Path.home())
 for blob, label in ((plugin_blob, "plugin.json"), (mcp_blob, "mcp.json")):
-    if str(repo_root) in blob or str(Path.home()) in blob:
+    if str(repo_root) in blob or (user_home not in {"", "/"} and user_home in blob):
         errors.append(f"{label} embeds a repository- or user-specific absolute path")
 
 # Negative: missing official schema.

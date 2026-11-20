@@ -26,7 +26,7 @@ repo = Path(sys.argv[2])
 qa.__file__ = str(repo / "scripts/test-qa-full-sweep.py")
 qa.validate_inventory = lambda *_: ([], {"cli": []})
 qa.candidate_source = lambda *_: {"candidate_id": "fixture-candidate", "head": "a" * 40,
-                                "status": [], "diff_sha256": "fixture"}
+                                "status": [], "changed_paths": [], "diff_sha256": "fixture"}
 _mode = json.loads((repo / "mode.json").read_text())
 if not _mode.startswith("builtin-"):
     qa.run_builtins = lambda *_: ([], None)
@@ -231,7 +231,7 @@ qa.__file__ = str(repo / "scripts/test-qa-full-sweep.py")
 qa.validate_inventory = lambda *_: ([], {"cli": []})
 qa.cargo_inventory_errors = lambda *_, **__: []
 qa.candidate_source = lambda *_: {"candidate_id": "fixture-candidate", "head": "a" * 40,
-                                "status": [], "diff_sha256": "fixture"}
+                                "status": [], "changed_paths": [], "diff_sha256": "fixture"}
 _mode = json.loads((repo / "mode.json").read_text())
 if _mode["target"] != "builtin-setup":
     qa.run_builtins = lambda *_: ([], None)
@@ -331,7 +331,7 @@ qa.__file__ = __file__
 qa.validate_inventory = lambda *_: ([], {{"cli": []}})
 qa.cargo_inventory_errors = lambda *_, **__: []
 qa.candidate_source = lambda *_: {{"candidate_id": "fixture", "head": "a" * 40,
-                                  "status": [], "diff_sha256": "fixture"}}
+                                  "status": [], "changed_paths": [], "diff_sha256": "fixture"}}
 qa.main()
 ''')
         binary = repo / "orbit"
@@ -1496,7 +1496,7 @@ def source_identity_self_test(harness, scratch):
     followed byte identical, so only the entry's own identity can fail them.
     """
     stub = ('qa.candidate_source = lambda *_: {"candidate_id": "fixture-candidate", "head": "a" * 40,\n'
-            '                                "status": [], "diff_sha256": "fixture"}\n')
+            '                                "status": [], "changed_paths": [], "diff_sha256": "fixture"}\n')
     assert stub in DRIVER, "driver no longer stubs candidate_source"
     with tempfile.TemporaryDirectory(prefix="qa-source-identity-", dir=scratch) as tmp:
         root = Path(tmp)

@@ -46,6 +46,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -693,9 +694,13 @@ class Server:
     def get(self, path: str) -> dict:
         started = time.monotonic()
         request = urllib.request.Request(self.base + path)
-        with urllib.request.urlopen(request, timeout=300) as response:
-            body = response.read()
-            status = response.status
+        try:
+            with urllib.request.urlopen(request, timeout=300) as response:
+                body = response.read()
+                status = response.status
+        except urllib.error.HTTPError as error:
+            # urlopen raises for 4xx/5xx instead of returning the status.
+            raise RuntimeError(f"GET {path} returned {error.code}") from None
         if status != 200:
             raise RuntimeError(f"GET {path} returned {status}")
         return {"path": path, "ms": round((time.monotonic() - started) * 1000), "bytes": len(body)}

@@ -205,12 +205,16 @@ def judge_qa_results(request, inventory, report, candidate_id):
         if observed != set(scenario.get("assertions", [])):
             unavailable("assertions-mismatch", f"required scenario {name} has different assertions")
         # Parity with producer scenario_decision in test-qa-full-sweep.py:
-        # a required browser PASS row needs retained evidence, and every
-        # retired case with a command needs a row that executed that command.
+        # a required browser PASS row needs a retained-evidence manifest with
+        # a directory and at least one file (verify_retained_evidence rejects
+        # an empty one), and every retired case with a command needs a row
+        # that executed that command.
         if scenario.get("capability") == "browser" and any(
-                not row.get("retained_evidence") for row in rows):
+                not (isinstance(row.get("retained_evidence"), dict)
+                     and row["retained_evidence"].get("directory")
+                     and row["retained_evidence"].get("files")) for row in rows):
             unavailable("retained-evidence-missing",
-                        f"required scenario {name} has a browser PASS row without retained_evidence")
+                        f"required scenario {name} has a browser PASS row without a non-empty retained_evidence manifest")
         for case in scenario.get("retired_cases") or []:
             command = case.get("command") if isinstance(case, dict) else None
             if command and not any(row.get("command") == command for row in rows):

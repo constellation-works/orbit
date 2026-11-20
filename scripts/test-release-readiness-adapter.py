@@ -340,10 +340,27 @@ class NativeReadinessRegression(unittest.TestCase):
         # stay green if the browser check were removed.
         self.assertEqual(verdict["reasons"][0]["code"], "retained-evidence-missing", verdict)
 
-        # Fixing only the browser shape still fails on the retired shape.
+        # An empty retained manifest is not retained evidence: the producer
+        # rejects it (verify_retained_evidence), so the adapter must reject it
+        # on the same browser shape rather than clear the gate.
         for row in report["results"]:
             if row["scenario"] == "browser-x":
                 row["retained_evidence"] = {"directory": "/retained", "files": []}
+        request["evidence"]["artifacts"]["qa-full-sweep-report.json"]["json"] = report
+        result = subprocess.run(
+            [sys.executable, "-B", str(ROOT / "scripts/release-readiness-adapter.py")],
+            input=json.dumps(request), text=True, capture_output=True, timeout=30,
+            cwd=inputs, env={**os.environ, "ORBIT_SCRIPT_IN": str(inputs)})
+        verdict = json.loads(result.stdout)
+        self.assertEqual(verdict["status"], "unavailable", verdict)
+        self.assertEqual(verdict["reasons"][0]["code"], "retained-evidence-missing", verdict)
+
+        # A non-empty manifest clears the browser shape, so the retired shape
+        # is still the verdict.
+        for row in report["results"]:
+            if row["scenario"] == "browser-x":
+                row["retained_evidence"] = {"directory": "/retained",
+                                            "files": [{"path": "browser.png", "sha256": "0" * 64}]}
         request["evidence"]["artifacts"]["qa-full-sweep-report.json"]["json"] = report
         result = subprocess.run(
             [sys.executable, "-B", str(ROOT / "scripts/release-readiness-adapter.py")],
