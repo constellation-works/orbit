@@ -202,7 +202,7 @@ def scenario_existing_root(root, script):
 
 def scenario_invalid_process_count(root, script):
     errors = []
-    for index, value in enumerate(("0", "abc", "-1", "1.5", "01")):
+    for index, value in enumerate(("0", "00", "abc", "-1", "1.5", "+1")):
         case, work, events, env = make_fixture(root, script, f"processes-{index}")
         env["ORBIT_BUILD_BUDGET_BENCH_PROCESSES"] = value
         result = run(script, env)
@@ -337,9 +337,10 @@ def scenario_archive_failure(root, script):
     return errors
 
 
-def scenario_fresh_run(root, script):
-    case, work, events, env = make_fixture(root, script, "fresh-run", allow_rm=True)
+def scenario_fresh_run(root, script, processes="1"):
+    case, work, events, env = make_fixture(root, script, "fresh-run-" + processes, allow_rm=True)
     env["ORBIT_BUILD_BUDGET_BENCH_RESULT"] = "comparison.tsv"
+    env["ORBIT_BUILD_BUDGET_BENCH_PROCESSES"] = processes
     result = run(script, env)
     recorded = read_events(events)
     cargo = [event for event in recorded if event["tool"] == "cargo" and event["args"][:2] == ["check", "-p"]]
@@ -1215,6 +1216,8 @@ def main():
         ("result-escape", scenario_result_escape),
         ("archive-failure", scenario_archive_failure),
         ("fresh-run", scenario_fresh_run),
+        # A zero-padded count is its decimal value, one job per arm [ORB-25854].
+        ("fresh-run-zero-padded", lambda root, path: scenario_fresh_run(root, path, "01")),
         ("cancellation", scenario_cancellation),
         ("cancellation-spawn-window", scenario_cancellation_spawn_window),
         ("cancellation-flag-clear", scenario_cancellation_flag_clear),

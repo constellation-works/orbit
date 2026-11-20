@@ -12,11 +12,14 @@ SLOTS="${ORBIT_BUILD_BUDGET_BENCH_SLOTS:-2}"
 JOBS="${ORBIT_BUILD_BUDGET_BENCH_JOBS:-2}"
 
 # `seq 1 "$PROCESSES"` sits in a `for` word list, where `set -e` ignores its
-# failure: a non-numeric or zero count would run no builds yet exit 0.
-if [[ ! "$PROCESSES" =~ ^[1-9][0-9]*$ ]]; then
+# failure: a non-numeric or zero count would run no builds yet exit 0. Leading
+# zeros are decimal padding: `10#` normalizes them so `01` runs like `1`.
+# The 18-digit cap keeps the value inside Bash's signed 64-bit arithmetic.
+if [[ ! "$PROCESSES" =~ ^0*[1-9][0-9]{0,17}$ ]]; then
   printf 'bench-build-budget: ORBIT_BUILD_BUDGET_BENCH_PROCESSES must be a positive integer, got: %s\n' "$PROCESSES" >&2
   exit 2
 fi
+PROCESSES=$((10#$PROCESSES))
 
 refuse() {
   printf 'bench-build-budget: refusing paths: %s\n' "$*" >&2
