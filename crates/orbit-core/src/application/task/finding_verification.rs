@@ -6,8 +6,8 @@
 //! implementer's `finding-invalid.json` report
 //! ([`OrbitRuntime::reject_invalid_finding`]). That REJECTED verdict moves the
 //! task to `rejected` with its evidence. The trusted record is the
-//! `finding_verified` history entry the verification actor writes; its comment
-//! is the human-readable copy that `orbit task show` prints. Records the
+//! `finding_verified` history entry the verification actor writes, in full.
+//! Its comment is a one-line summary that `orbit task show` prints. Records the
 //! retired `finding_verification_pipeline` wrote ([ORB-22844]) keep loading:
 //! their verdict, crews and run id are read as before.
 
@@ -219,14 +219,34 @@ pub struct FindingVerification {
     pub verified_at: DateTime<Utc>,
 }
 
+/// Longest rejection sentence a verdict comment quotes, in characters.
+const SUMMARY_DETAIL_CHARS: usize = 120;
+
 impl FindingVerification {
-    fn comment(&self) -> Result<String, OrbitError> {
-        let record = serde_json::to_string_pretty(self)
-            .map_err(|error| OrbitError::Execution(format!("encode verdict: {error}")))?;
-        Ok(format!(
-            "{COMMENT_HEADER} {}\n{record}",
-            self.verdict.label()
-        ))
+    /// The task comment: the verdict header, then one summary line. The full
+    /// record stays in the `finding_verified` history note, so the comment
+    /// carries no fingerprint, schema version or evidence text.
+    fn comment(&self) -> String {
+        let confidence =
+            orbit_common::protocol::serde_string_label(&self.confidence).unwrap_or_default();
+        let reason = self
+            .rejection
+            .as_ref()
+            .and_then(|rejection| orbit_common::protocol::serde_string_label(&rejection.reason))
+            .map(|reason| format!(", {reason}"))
+            .unwrap_or_default();
+        let detail = self
+            .rejection
+            .as_ref()
+            .map(|rejection| detail_first_sentence(&rejection.detail))
+            .filter(|sentence| !sentence.is_empty())
+            .unwrap_or_else(|| evidence_summary(self.evidence.len()));
+        format!(
+            "{COMMENT_HEADER} {}\n{} at {}, {confidence} confidence{reason}: {detail}",
+            self.verdict.label(),
+            self.source.label(),
+            short_verified_sha(&self.verified_sha),
+        )
     }
 
     fn rejection_note(&self) -> String {
@@ -248,6 +268,31 @@ impl FindingVerification {
             ),
         }
     }
+}
+
+/// A verified commit id shortened for a verdict comment; the record keeps the
+/// full id.
+fn short_verified_sha(sha: &str) -> &str {
+    sha.get(..12).unwrap_or(sha)
+}
+
+/// The first sentence of a rejection's `detail`, read from its first line and
+/// capped at [`SUMMARY_DETAIL_CHARS`] characters.
+fn detail_first_sentence(detail: &str) -> String {
+    let line = detail.trim().lines().next().unwrap_or_default();
+    let end = line.find(". ").map_or(line.len(), |index| index + 1);
+    let sentence = &line[..end];
+    if sentence.chars().count() <= SUMMARY_DETAIL_CHARS {
+        return sentence.to_string();
+    }
+    let capped: String = sentence.chars().take(SUMMARY_DETAIL_CHARS).collect();
+    capped + "…"
+}
+
+/// The summary of a verdict that gives no rejection detail: its evidence count.
+fn evidence_summary(count: usize) -> String {
+    let noun = if count == 1 { "location" } else { "locations" };
+    format!("{count} evidence {noun}")
 }
 
 /// A review finding the task pilot or an implementer judged absent at
@@ -550,7 +595,7 @@ impl OrbitRuntime {
         self.ensure_coordination_task_write_permitted()?;
         let note = serde_json::to_string(record)
             .map_err(|error| OrbitError::Execution(format!("encode verdict: {error}")))?;
-        let comment = record.comment()?;
+        let comment = record.comment();
         self.with_task_write_locked(task_id, || {
             let task = self.get_task(task_id)?;
             if task.status != prepared_status {
