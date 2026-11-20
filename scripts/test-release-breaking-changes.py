@@ -580,6 +580,77 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "minor")
         self.assertEqual(report["next_version"], "0.36.0")
 
+    def _write_conditional_schema(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["allOf"] = [{
+            "if": {"required": ["fields"]},
+            "then": {
+                "required": ["id"],
+                "propertyNames": {"enum": ["id", "view", "fields"]},
+                "properties": {"view": {"type": "string"}},
+            },
+            "else": {"required": ["id"]},
+        }]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add conditional contract [ORB-53] (#1)")
+
+    def _assert_conditional_change_is_breaking(self, mutate, detail):
+        self._write_conditional_schema()
+        tools = self.repo.mcp()
+        mutate(tools[0]["inputSchema"]["allOf"][0])
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Change conditional contract [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(self.signals(report), {("ORB-54", "mcp-schema", detail)})
+        self.assertEqual(report["bump"], "minor")
+
+    def test_conditional_then_required_decides_minor(self):
+        self._assert_conditional_change_is_breaking(
+            lambda branch: branch["then"]["required"].append("view"),
+            "`orbit_task_show` property `inputSchema[then].view` newly required")
+
+    def test_conditional_else_required_decides_minor(self):
+        self._assert_conditional_change_is_breaking(
+            lambda branch: branch["else"]["required"].append("view"),
+            "`orbit_task_show` property `inputSchema[else].view` newly required")
+
+    def test_conditional_property_names_enum_drop_decides_minor(self):
+        self._assert_conditional_change_is_breaking(
+            lambda branch: branch["then"]["propertyNames"]["enum"].remove("view"),
+            "`orbit_task_show` `inputSchema{allOf0}[then][propertyNames]` "
+            'enum value "view" removed')
+
+    def test_conditional_then_property_removal_decides_minor(self):
+        self._assert_conditional_change_is_breaking(
+            lambda branch: branch["then"]["properties"].pop("view"),
+            "`orbit_task_show` property `inputSchema{allOf0}[then].view` "
+            "removed or renamed")
+
+    def test_conditional_additive_changes_decide_patch(self):
+        self._write_conditional_schema()
+        tools = self.repo.mcp()
+        branch = tools[0]["inputSchema"]["allOf"][0]
+        branch["then"]["propertyNames"]["enum"].append("limit")
+        branch["then"]["required"] = []
+        branch["if"]["required"].append("view")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Relax conditional contract [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
+    def test_help_removal_is_found_when_repo_is_a_subdirectory(self):
+        self.repo.write("tools/note.txt", "x\n")
+        self.repo.remove(f"{GOLDENS}/task/show.txt")
+        self.repo.commit("feat: Remove task show [ORB-55] (#1)")
+        report = json.loads(subprocess.run(
+            [sys.executable, str(SCRIPT), "--repo", str(self.repo.root / "tools"),
+             "--offline", "--json"],
+            env=git_environment(self.repo.env), capture_output=True, text=True,
+            timeout=self_test_hang.HANG_CEILING_SECONDS, check=True).stdout)
+        self.assertIn(("ORB-55", "cli-help"),
+                      {(s["task"], s["signal"]) for s in report["signals"]})
+
     def test_front_inserted_anyof_alternative_is_additive(self):
         # An inserted anyOf branch only admits input: {"view", "fields"} still
         # matches, so the decision stays patch.

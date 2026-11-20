@@ -55,20 +55,39 @@ fi
 
 # 2. One producer. A writer that assembles its own `workflow_run_failed` note
 #    bypasses the cap entirely, so only the owning module may emit that event.
+# `-U` lets the pattern cross lines, so a rustfmt-wrapped
+# `status_event: Some(\n    WORKFLOW_RUN_FAILED_EVENT` is still found. ripgrep's
+# status is captured: 0 is a hit, 1 is clean, anything else is a scan error and
+# must fail closed rather than read as "no producers".
+set +e
+producer_hits="$(rg -U --no-heading --line-number --glob '*.rs' --glob '!**/tests/**' \
+  'status_event:\s*Some\(\s*WORKFLOW_RUN_FAILED_EVENT' crates 2>&1)"
+producer_status=$?
+set -e
+if [[ "$producer_status" -gt 1 ]]; then
+  printf '%s\n' "$producer_hits" >&2
+  echo "check-history-note-size: ripgrep failed (exit $producer_status); failing closed" >&2
+  exit 1
+fi
+if [[ "$producer_status" -eq 1 ]]; then
+  producer_hits=""
+fi
 while IFS= read -r hit; do
   [[ -z "$hit" ]] && continue
   file="${hit%%:*}"
   [[ "$file" == "$owner" ]] && continue
+  # A multi-line match prints every matched line; only the line that opens the
+  # `status_event` field is the producer site.
+  code="${hit#*:*:}"
+  [[ "$code" == *status_event* ]] || continue
   # Naming the pattern in prose is not emitting it. A doc comment has to be able
   # to say which event this rule governs and why a call site stopped building it.
-  code="${hit#*:*:}"
   if [[ "${code#"${code%%[![:space:]]*}"}" == //* ]]; then
     continue
   fi
   echo "workflow_run_failed notes must be built by workflow_failure_note in $owner: $hit"
   failed=1
-done < <(rg --no-heading --line-number --glob '*.rs' --glob '!**/tests/**' \
-  'status_event:\s*Some\(\s*WORKFLOW_RUN_FAILED_EVENT' crates || true)
+done <<<"$producer_hits"
 
 # 3. The elision must keep saying where the full text is. A pointer-free
 #    elision would turn a bounded note into a lossy one from the reader's side.

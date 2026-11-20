@@ -23,6 +23,7 @@ from pathlib import Path
 
 root = Path(sys.argv[1])
 failures = []
+unreadable = []
 scanned = 0
 
 
@@ -385,11 +386,22 @@ for path in sorted((root / "crates").glob("*/src/**/*.rs")):
     fence = None
     try:
         text = path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
-    except OSError:
+    except OSError as error:
+        # An unreadable source would otherwise count as scanned and pass.
+        unreadable.append(f"{path.relative_to(root)}: cannot read source: {error}")
         continue
     for lineno, content in doc_lines(text):
         fence = consider_fence(path, lineno, content, fence)
 
+if unreadable:
+    for message in unreadable:
+        print(f"check-doctest-fences: {message}", file=sys.stderr)
+    print(
+        f"check-doctest-fences: {len(unreadable)} unreadable source file(s); "
+        "refusing to report a clean scan",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 if failures:
     for failure in failures:
         print(f"check-doctest-fences: {failure}", file=sys.stderr)

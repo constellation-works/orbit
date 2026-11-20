@@ -60,6 +60,22 @@ class PanicInventoryTests(unittest.TestCase):
         self.assertEqual(report['per_crate']['orbit-config']['blast_radius'], 0)
         self.assertEqual(set(report['blast_radius_sites']), {'orbit-agent'})
 
+    def test_cfg_not_test_module_is_production_code(self):
+        scripts = self.root / 'scripts'
+        scripts.mkdir()
+        for name in ('audit_panics.py', 'audit_panics.sh', 'require-python.sh'):
+            shutil.copy2(SCRIPTS / name, scripts / name)
+        (self.root / 'Cargo.toml').write_text('[workspace]\nmembers = ["crates/orbit-agent"]\n')
+        crate = self.root / 'crates/orbit-agent'
+        (crate / 'src').mkdir(parents=True)
+        (crate / 'Cargo.toml').write_text('[package]\nname = "orbit-agent"\nversion = "0.1.0"\n')
+        (crate / 'src/lib.rs').write_text(
+            'pub fn first() { panic!("first"); }\n'
+            '#[cfg(not(test))]\nmod production {\n    pub fn run() { panic!("prod"); }\n}\n')
+        report = self.audit(self.root)
+        self.assertEqual(report['totals']['non_test'], 2)
+        self.assertEqual(report['totals']['blast_radius'], 2)
+
 
 if __name__ == '__main__':
     unittest.main()
