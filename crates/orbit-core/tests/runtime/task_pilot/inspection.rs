@@ -351,11 +351,18 @@ fn routine_status_does_not_wait_behind_a_queued_task_commit_writer() {
         })
         .collect();
 
+    // The reader announces it is about to read, so "not finished" below means
+    // blocked on the turnstile, not a thread the scheduler has yet to run.
+    let (about_to_read, reader_started) = std::sync::mpsc::channel();
     let ordinary = {
         let runtime = workspace.runtime.clone();
         let id = task.id.clone();
-        std::thread::spawn(move || runtime.get_task(&id).map(|task| task.id))
+        std::thread::spawn(move || {
+            about_to_read.send(()).unwrap();
+            runtime.get_task(&id).map(|task| task.id)
+        })
     };
+    reader_started.recv().unwrap();
     let queued = automation(&workspace, now);
     let ordinary_waiting = !ordinary.is_finished();
     drop(turnstiles);
@@ -400,7 +407,6 @@ policy:
 /// same-kind peer shares its target. `routine show` and `list` must report that
 /// skip, not the evaluator's dry-run reason. A disabled routine owns nothing and
 /// keeps its own reason. [ORB-17918]
-#[test]
 fn status_reports_the_duplicate_skip_the_sweep_records_for_a_state_routine() {
     let workspace = Workspace::new();
     workspace.install_pilot_job();
@@ -443,5 +449,6 @@ crate::scenario_table!(
     routine_status_reads_cached_refs_while_clock_sweep_fetches_scenarios,
     routine_status_reads_cached_refs_while_clock_sweep_fetches,
     inspection_uses_cached_origin_and_preserves_unfetched_source_reasons,
-    inspection_of_a_repository_libgit2_cannot_open_matches_the_in_process_read
+    inspection_of_a_repository_libgit2_cannot_open_matches_the_in_process_read,
+    status_reports_the_duplicate_skip_the_sweep_records_for_a_state_routine
 );

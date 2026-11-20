@@ -93,6 +93,7 @@ impl Workspace {
 
     /// `new`, with `config` as the workspace crew registry.
     fn with_config(config: &str) -> Self {
+        crate::scenarios::require_isolated_mutable_fixture("task_pilot::Workspace::with_config");
         let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("home/.orbit");
         let repo = root.path().join("repo");

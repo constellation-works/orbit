@@ -185,6 +185,7 @@ fn missing_or_scalar_evidence_gaps_are_normalised_to_an_array() {
     let task = workspace.pilot_task("conforming");
     let prepared = workspace.prepare_partitioned(&[&task.id], 1);
     let applied = workspace.apply_results(&prepared, json!([result(&task.id, Some(0))]));
+    assert_eq!(applied["status"], "succeeded", "{applied}");
     assert!(applied["tasks"][0].get("pilot_normalizations").is_none());
 
     let task = workspace.pilot_task("object");
