@@ -1480,6 +1480,24 @@ class RelativeImportTests(unittest.TestCase):
             with self.subTest(relative=relative):
                 self.check_rows([(relative, source)], rejected=True, base=store)
 
+    def test_tools_builtin_grouped_imports_rejected_in_either_spelling(self):
+        # [ORB-26107] `r#builtin` names the same module as `builtin`. The
+        # tokenizer once split the raw identifier into `r` and `#`, so a grouped
+        # alias of it passed while a consumer used the alias.
+        tools = self.root / "crates/orbit-tools/src"
+        self.check_rows([
+            ("quota_probe.rs", source + "\n") for source in (
+                "use crate::{builtin as adapters};",
+                "use crate::{r#builtin as adapters};",
+                "use crate::{OrbitTool, r#builtin as adapters};",
+                "use crate::{\n    OrbitTool,\n    r#builtin::{Probe},\n};",
+            )
+        ], rejected=True, base=tools)
+        self.check_rows([
+            ("quota_probe.rs",
+             "use crate::{r#builtins as adapters, r#builtin_probe::Probe};\n"),
+        ], rejected=False, base=tools)
+
     def test_existing_direct_imports_rejected(self):
         # One batch per detector, as in the forecast shim rows above.
         self.check_rows([
