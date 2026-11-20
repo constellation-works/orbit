@@ -73,7 +73,7 @@ With `--all`, the output has one line per workspace:
 | `synced` | Changes were applied; the line lists them. |
 | `pending` | With `--check` only: a sync would apply changes. |
 | `already current` | Nothing to apply. |
-| `skipped` | Left untouched, with the reason: a missing checkout or `.orbit/` directory, a path that is not a Git checkout, a data root shared with an earlier workspace, or a live drain or run. |
+| `skipped` | Left untouched, with the reason: a missing checkout or `.orbit/` directory, a path that is not a Git checkout, a data root shared with an earlier workspace that synced, or a live drain or run. |
 | `failed` | Sync raised an error; the line carries it. |
 
 One failure does not stop the rest. The command exits 1 if any workspace
@@ -83,10 +83,14 @@ counts.
 
 ### If a workspace is skipped for a live run
 
-Sync does not rewrite a workspace while a drain or run is using it, and no
-flag overrides that. When the drain or run ends, run
+`orbit workspace sync --all` does not rewrite a workspace while a drain or run
+is using it, and no flag overrides that. When the drain or run ends, run
 `orbit workspace sync --all` again. `--check` only reads, so it never skips
 for a live run.
+
+Single-checkout `orbit workspace sync` does not check for live runs: it
+rewrites the workspace even while a drain or run is executing its managed
+definitions, so run it only once the workspace is idle.
 
 ### If `.orbit/` files are tracked by Git
 
