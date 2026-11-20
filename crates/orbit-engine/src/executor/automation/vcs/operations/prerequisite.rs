@@ -689,7 +689,16 @@ pub(super) fn gate_passed(gate: &RequiredGate, checks: &[Value], statuses: &[Val
 }
 
 /// Diagnose only an absent protected context with a static failed dependency.
+/// A rate-limited read anywhere in the pass, after the snapshot included,
+/// waits for the provider's reset within the deadline and reads the evidence
+/// again; nothing here mutates.
 pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
+    let workspace = Path::new(required_string(input, "workspace_path")?);
+    let deadline = Deadline::from_input(input)?;
+    super::read_reset::read_through_throttles(deadline, workspace, || evidence_once(input))
+}
+
+fn evidence_once(input: &Value) -> Result<Value, OrbitError> {
     let workspace = Path::new(required_string(input, "workspace_path")?);
     let pr = required_string(input, "pr")?;
     let head = required_string(input, "head_sha")?;
@@ -963,7 +972,15 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
 
 /// Observe the reserved attempt and all current gates before any completion.
 /// A missing gate is never inferred to pass from the PR's CLEAN state.
+/// Observation only reads: a rate-limited read waits for the reset within the
+/// deadline and observes again, and never resends the reserved mutation.
 pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
+    let workspace = Path::new(required_string(input, "workspace_path")?);
+    let deadline = Deadline::from_input(input)?;
+    super::read_reset::read_through_throttles(deadline, workspace, || observe_once(input))
+}
+
+fn observe_once(input: &Value) -> Result<Value, OrbitError> {
     let workspace = Path::new(required_string(input, "workspace_path")?);
     let evidence: PrInfrastructureEvidence = serde_json::from_value(input["evidence"].clone())
         .map_err(|_| unreadable("reserved evidence"))?;
