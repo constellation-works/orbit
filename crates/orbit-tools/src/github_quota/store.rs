@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use orbit_common::ProviderReadThrottle;
 use serde::{Deserialize, Serialize};
@@ -310,6 +310,9 @@ pub struct GithubResourceStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GithubQuotaStore {
     directory: PathBuf,
+    /// The monotonic instant a finite request's budget runs out. Every record
+    /// lock wait is cut off there; `None` keeps the shared lock helper's default.
+    deadline: Option<Instant>,
 }
 
 /// Directory under the Orbit data root.
@@ -317,7 +320,33 @@ const STORE_DIRECTORY: [&str; 2] = ["state", "github-quota"];
 
 impl GithubQuotaStore {
     pub fn new(directory: PathBuf) -> Self {
-        Self { directory }
+        Self {
+            directory,
+            deadline: None,
+        }
+    }
+
+    /// This store with every record lock wait bounded by `deadline`, so a
+    /// contended record cannot outlast the request that asked. `None` leaves
+    /// the lock helper's default wait.
+    #[must_use]
+    pub fn bounded_by(&self, deadline: Option<Instant>) -> Self {
+        Self {
+            directory: self.directory.clone(),
+            deadline,
+        }
+    }
+
+    /// The lock acquisition policy: the helper's default, shortened to what is
+    /// left of the request's budget (none left tries the lock once).
+    fn lock_options(&self) -> orbit_common::fs::io::FileLockOptions {
+        let mut options = orbit_common::fs::io::FileLockOptions::default();
+        if let Some(deadline) = self.deadline {
+            options.timeout = options
+                .timeout
+                .min(deadline.saturating_duration_since(Instant::now()));
+        }
+        options
     }
 
     /// The store under the Orbit data root: `ORBIT_ROOT` when set, else the
@@ -361,7 +390,8 @@ impl GithubQuotaStore {
         })
     }
 
-    /// Read-modify-write `account`'s record under its exclusive lock.
+    /// Read-modify-write `account`'s record under its exclusive lock, waiting for it
+    /// no longer than the store's deadline.
     fn update<T>(
         &self,
         account: &str,
@@ -369,13 +399,18 @@ impl GithubQuotaStore {
     ) -> io::Result<T> {
         let path = self.record_path(account);
         orbit_common::fs::io::create_private_dir_all(&self.directory)?;
-        orbit_common::fs::io::with_exclusive_file_lock(&path, "github quota record", || {
-            let mut record = Self::load(&path)?;
-            let output = change(&mut record);
-            let text = serde_json::to_string(&record).map_err(io::Error::other)?;
-            orbit_common::fs::io::atomic_write_text_volatile(&path, &text)?;
-            Ok(output)
-        })
+        orbit_common::fs::io::with_exclusive_file_lock_options(
+            &path,
+            "github quota record",
+            self.lock_options(),
+            || {
+                let mut record = Self::load(&path)?;
+                let output = change(&mut record);
+                let text = serde_json::to_string(&record).map_err(io::Error::other)?;
+                orbit_common::fs::io::atomic_write_text_volatile(&path, &text)?;
+                Ok(output)
+            },
+        )
     }
 
     /// Admit or refuse one read of `resource` by `caller`, first refreshing

@@ -29,7 +29,7 @@ mod store;
 pub use fixture::FixtureGh;
 
 use std::sync::RwLock;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use orbit_common::{OrbitError, PrivateVcsFailure, PrivateVcsFailureClass, ProviderReadThrottle};
 use orbit_exec::{ExecRequest, NoSandbox, run_process};
@@ -110,10 +110,39 @@ fn now_epoch_seconds() -> u64 {
         .map_or(0, |elapsed| elapsed.as_secs())
 }
 
+/// The instant `request`'s finite timeout budget runs out, counted from
+/// `started`; `None` for a request without one. Every wait the guard makes for
+/// the request (record locks, the rate-limit probe, the child itself) is cut
+/// off at this one instant.
+fn request_deadline(request: &ExecRequest, started: Instant) -> Option<Instant> {
+    request
+        .timeout_ms
+        .and_then(|budget_ms| started.checked_add(Duration::from_millis(budget_ms)))
+}
+
+/// Whole milliseconds left before `deadline`; 0 once it has passed.
+fn remaining_millis(deadline: Instant) -> u64 {
+    u64::try_from(
+        deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX)
+}
+
 /// Admit `request` for `caller`, or refuse it locally with a typed throttle.
 /// A request that spends no API quota, and every request while the guard is
-/// off, is admitted.
+/// off, is admitted. Waits for the shared record no longer than `request`'s
+/// own timeout budget.
 pub fn admit_gh_request(caller: GithubCaller, request: &ExecRequest) -> Result<(), OrbitError> {
+    admit_by_deadline(caller, request, request_deadline(request, Instant::now()))
+}
+
+fn admit_by_deadline(
+    caller: GithubCaller,
+    request: &ExecRequest,
+    deadline: Option<Instant>,
+) -> Result<(), OrbitError> {
     let Some((store, policy)) = active_guard() else {
         return Ok(());
     };
@@ -122,20 +151,22 @@ pub fn admit_gh_request(caller: GithubCaller, request: &ExecRequest) -> Result<(
     };
     let account = request::request_account(request);
     store
+        .bounded_by(deadline)
         .admit(
             &policy,
             &account,
             caller,
             resource,
             now_epoch_seconds(),
-            &|| request::read_rate_limit(request),
+            &|| request::read_rate_limit(request, deadline),
         )
         .map_err(|refusal| refusal_error(&refusal, request))
 }
 
 /// Record what `result` of an admitted `request` says about the quota: an
 /// authenticated primary rate-limit answer holds every read of its resource
-/// on the host until the reset.
+/// on the host until the reset. Waits for the shared record no longer than
+/// `request`'s own timeout budget.
 pub fn observe_gh_result(request: &ExecRequest, result: &ExecutionResult) {
     if !result.success {
         observe_gh_failure(request, &result.stderr);
@@ -144,6 +175,10 @@ pub fn observe_gh_result(request: &ExecRequest, result: &ExecutionResult) {
 
 /// [`observe_gh_result`] for a failed `request` whose diagnostic is `stderr`.
 pub fn observe_gh_failure(request: &ExecRequest, stderr: &str) {
+    observe_failure_by_deadline(request, stderr, request_deadline(request, Instant::now()));
+}
+
+fn observe_failure_by_deadline(request: &ExecRequest, stderr: &str, deadline: Option<Instant>) {
     let Some((store, policy)) = active_guard() else {
         return;
     };
@@ -163,7 +198,7 @@ pub fn observe_gh_failure(request: &ExecRequest, stderr: &str) {
         .as_deref()
         .filter(|named| *named == RESOURCE_CORE || *named == RESOURCE_GRAPHQL)
         .unwrap_or(resource);
-    store.record_throttle(
+    store.bounded_by(deadline).record_throttle(
         &policy,
         &request::request_account(request),
         resource,
@@ -172,17 +207,16 @@ pub fn observe_gh_failure(request: &ExecRequest, stderr: &str) {
     );
 }
 
-/// Remaining timeout budget after `elapsed`, or `None` when `request`'s
-/// finite budget is already exhausted.
+/// `request` with the budget left before `deadline`, or `None` when its finite
+/// budget is exhausted.
 fn remaining_request_budget(
     request: &ExecRequest,
-    elapsed: std::time::Duration,
+    deadline: Option<Instant>,
 ) -> Option<ExecRequest> {
-    let Some(budget_ms) = request.timeout_ms else {
+    let Some(deadline) = deadline else {
         return Some(request.clone());
     };
-    let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
-    let remaining_ms = budget_ms.saturating_sub(elapsed_ms);
+    let remaining_ms = remaining_millis(deadline);
     if remaining_ms == 0 {
         return None;
     }
@@ -204,7 +238,9 @@ fn timed_out_before_start(duration_ms: u64) -> ExecutionResult {
 }
 
 /// [`admit_gh_request`], run `request` without a sandbox with the remaining
-/// timeout budget, then [`observe_gh_result`].
+/// timeout budget, then [`observe_gh_result`]. One deadline, taken when this
+/// starts, bounds the admission's lock waits and probe, the child and the
+/// post-call accounting.
 pub fn run_gh_request(
     caller: GithubCaller,
     request: &ExecRequest,
@@ -212,16 +248,18 @@ pub fn run_gh_request(
     if request.timeout_ms == Some(0) {
         return Ok(timed_out_before_start(0));
     }
-    let started = std::time::Instant::now();
-    admit_gh_request(caller, request)?;
-    let elapsed = started.elapsed();
-    let Some(bounded_request) = remaining_request_budget(request, elapsed) else {
+    let started = Instant::now();
+    let deadline = request_deadline(request, started);
+    admit_by_deadline(caller, request, deadline)?;
+    let Some(bounded_request) = remaining_request_budget(request, deadline) else {
         return Ok(timed_out_before_start(
-            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         ));
     };
     let result = run_process(&bounded_request, &NoSandbox)?;
-    observe_gh_result(&bounded_request, &result);
+    if !result.success {
+        observe_failure_by_deadline(&bounded_request, &result.stderr, deadline);
+    }
     Ok(result)
 }
 
@@ -252,18 +290,20 @@ pub enum SharedReset {
 /// read through the host-shared record. The rate-limit endpoint is read only
 /// when no process on the host has within the refresh interval, so a lookup
 /// right after an admission probe does not call it again. `request` supplies
-/// the program, environment, directory and timeout budget of that read.
+/// the program, environment, directory and timeout budget of that read; that
+/// budget also bounds every wait for the record's lock.
 pub fn shared_exhausted_reset(request: &ExecRequest, resources: &[&str]) -> SharedReset {
     let Some((store, policy)) = active_guard() else {
         return SharedReset::Unguarded;
     };
     let account = request::request_account(request);
-    SharedReset::Guarded(store.exhausted_reset(
+    let deadline = request_deadline(request, Instant::now());
+    SharedReset::Guarded(store.bounded_by(deadline).exhausted_reset(
         &policy,
         &account,
         resources,
         now_epoch_seconds(),
-        &|| request::read_rate_limit(request),
+        &|| request::read_rate_limit(request, deadline),
     ))
 }
 
@@ -276,7 +316,9 @@ pub fn host_quota_status() -> Option<GithubQuotaStatus> {
     probe.timeout_ms = None;
     let account = request::request_account(&probe);
     let now = now_epoch_seconds();
-    store.refresh_if_due(&policy, &account, now, &|| request::read_rate_limit(&probe));
+    store.refresh_if_due(&policy, &account, now, &|| {
+        request::read_rate_limit(&probe, None)
+    });
     Some(store.status(&policy, &account, now))
 }
 

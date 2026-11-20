@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::Instant;
 
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process};
 use serde_json::Value;
@@ -130,7 +131,21 @@ pub(crate) fn rate_limit_probe_request(request: &ExecRequest) -> Option<ExecRequ
 /// Read GitHub's rate-limit endpoint with `request`'s program, environment
 /// and directory, so it answers for the same account. The endpoint does not
 /// count against the quota.
-pub(crate) fn read_rate_limit(request: &ExecRequest) -> RateLimitAnswer {
+///
+/// With a `deadline`, the probe gets what is left of it when the read starts,
+/// not `request`'s original budget; an expired deadline skips the read.
+pub(crate) fn read_rate_limit(request: &ExecRequest, deadline: Option<Instant>) -> RateLimitAnswer {
+    let remaining;
+    let request = match deadline {
+        Some(deadline) => {
+            remaining = ExecRequest {
+                timeout_ms: Some(super::remaining_millis(deadline)),
+                ..request.clone()
+            };
+            &remaining
+        }
+        None => request,
+    };
     let Some(probe) = rate_limit_probe_request(request) else {
         return RateLimitAnswer::Clipped(
             "rate-limit read skipped: timeout budget exhausted".to_string(),
