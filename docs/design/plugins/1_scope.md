@@ -982,7 +982,10 @@ Writable is a named inventory, never the roots:
 `state/plugin-secrets/` and core's decision-channel store `state/decision-channels/` have a
 broad read deny for every plugin child, regardless of manifest grants. The last keeps every
 channel's token key; a channel's bound plugin receives its own key only as `channel_key` in
-`context.secrets`, so nothing in it is granted back. On macOS, denied ancestors of an allowed state tree or single file admit metadata reads
+`context.secrets`, so nothing in it is granted back. The broker's GitHub run-log cache
+`state/github-run-logs/` has the same deny, with nothing granted back: an agent reads a cached
+log only through the bounded, redacted `github.run.logs` response [ORB-25955]. On macOS, denied
+ancestors of an allowed state tree or single file admit metadata reads
 for path traversal, but no directory listing or content reads. Each child gets back exactly its
 own session record and own grant witness (single files), and its
 own `state/plugins/<ns>` (`{{plugin_state}}`, a whole tree); nothing in the secret store is
