@@ -712,6 +712,7 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/test-validate-agent-plugin.sh"
   run_guard "$repo_root/scripts/test-make-install.py"
   run_guard "$repo_root/scripts/test-cross-revision-check.sh"
+  run_guard "$repo_root/scripts/test-cleanup-branches.sh"
   run_guard "$repo_root/scripts/test-check-nextest-partitions.py"
   run_guard "$repo_root/scripts/test-ci-await-jobs.py"
   run_guard "$repo_root/scripts/test-ci-p90.py"
