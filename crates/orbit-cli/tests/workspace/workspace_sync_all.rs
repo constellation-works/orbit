@@ -428,3 +428,37 @@ fn sync_all_preserves_workspace_held_by_parked_dead_owner() {
     assert_eq!(Host::changed_paths(&before, &after), Vec::<PathBuf>::new());
     assert!(!parked.join(".orbit").join(SHIPPED_AUTO_TASK).exists());
 }
+
+#[test]
+fn sync_all_converges_a_shared_data_root_when_the_first_sharer_was_skipped() {
+    let host = Host::new();
+    let first = host.register_stale_workspace("alpha");
+    let second = host.register_stale_workspace("beta");
+
+    // Point alpha's checkout at beta's data root, then remove alpha's
+    // checkout: the first sharer is skipped, so the root is still unsynced.
+    let registry_path = host.home.join(".orbit/workspaces.json");
+    let mut registry: Value =
+        serde_json::from_slice(&std::fs::read(&registry_path).unwrap()).expect("parse registry");
+    let alpha_id = host.workspace_id(&first);
+    let beta_orbit_dir = second.join(".orbit");
+    for checkout in registry["checkouts"].as_array_mut().unwrap() {
+        if checkout["workspace_id"] == alpha_id.as_str() {
+            checkout["orbit_dir"] = Value::String(beta_orbit_dir.to_string_lossy().into_owned());
+        }
+    }
+    std::fs::write(
+        &registry_path,
+        serde_json::to_vec_pretty(&registry).unwrap(),
+    )
+    .expect("write registry with a shared data root");
+    std::fs::remove_dir_all(&first).unwrap();
+
+    let output = host.sync_all(&[]);
+    let by_name = records(&output);
+
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(by_name["alpha"]["status"], "skipped", "{by_name:?}");
+    assert_eq!(by_name["beta"]["status"], "synced", "{by_name:?}");
+    assert!(second.join(".orbit").join(SHIPPED_AUTO_TASK).is_file());
+}

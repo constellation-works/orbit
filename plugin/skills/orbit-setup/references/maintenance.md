@@ -329,8 +329,9 @@ or run `orbit workspace sync --all` once per host from any directory to converge
 every registered workspace. `--all` reports `synced`, `already current`,
 `skipped` or `failed` per workspace, keeps going past a failure (exit 1), and
 skips, never rewrites, a workspace a live drain or run holds; rerun it when the
-drain ends. It never reaches across hosts and cannot be combined with
-`--workspace`.
+drain ends. Single-checkout `orbit workspace sync` does not check for live
+runs, so run it only when the workspace is idle. `--all` never reaches across
+hosts and cannot be combined with `--workspace`.
 It reconciles both host-global and workspace-local managed assets, including
 skill references, jobs, activities, routines, and auto-task definitions.
 Provenance distinguishes untouched shipped content from local edits. Read
