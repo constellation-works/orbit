@@ -667,6 +667,35 @@ pub(crate) fn run_sweep_at_with_providers_at(
         );
     }
 
+    // [ORB-25991] Standing drain keeper: once the generation has settled and
+    // after upgrade resume has had its turn, an owner whose
+    // `workflow.standing_drain.enabled` is set and whose drain intent is `on`
+    // gets one bounded drain when none is live and work waits. Off (the
+    // default) reads and writes nothing. Owner entries only; replicas never
+    // submit.
+    if !options.dry_run && orbit_common::fs::generation::pending_switch(global_root).is_none() {
+        each_workspace_in_tick(
+            discovered.entries.iter(),
+            deadline,
+            &mut skipped_workspaces,
+            Some("sweep.standing_drain_keeper_failed"),
+            None,
+            |workspace, runtime| {
+                if let Some(crate::application::job::KeeperDecision::Submitted { run_id }) =
+                    runtime.run_standing_drain_keeper_tick(now_utc)?
+                {
+                    tracing::info!(
+                        target: "orbit.core.sweep",
+                        workspace = %workspace.name,
+                        run_id = %run_id,
+                        "sweep.standing_drain_keeper_submitted"
+                    );
+                }
+                Ok(())
+            },
+        );
+    }
+
     // [ORB-14617] A delivery run held because the forge refused its push is
     // resumed from its checkpoints each tick, within its retry window; past
     // the window its tasks are blocked for a human.

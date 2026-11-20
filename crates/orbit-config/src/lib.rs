@@ -171,8 +171,8 @@ pub use registry::{
     AUTO_CONCURRENCY_PROFILE_WINDOW, AutoConcurrencySettings, CONFIG_KEY_REGISTRY,
     ConfigAllowedValues, ConfigKeyDescriptor, ConfigKeyTier, ConfigSection, ConfigSnapshot,
     ExperimentSettings, MachineSettings, MidRunSteeringSettings, ResourceThrottleSettings,
-    WorkerContainmentSettings, admit_config_key, admit_settable_config_key, config_key_options,
-    describe as describe_config_key, immutable_key_note, is_global_only_key,
+    StandingDrainSettings, WorkerContainmentSettings, admit_config_key, admit_settable_config_key,
+    config_key_options, describe as describe_config_key, immutable_key_note, is_global_only_key,
 };
 pub use regression_layers::RegressionLayerDefinition;
 pub use resolved::{

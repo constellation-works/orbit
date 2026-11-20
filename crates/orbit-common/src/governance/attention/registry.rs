@@ -47,6 +47,8 @@ const KINDS: &[EnumValue] = &[
     EnumValue::plain("notice_open"),
     EnumValue::plain("resident_stalled"),
     EnumValue::plain("routine_tripped"),
+    EnumValue::plain("drain_paused"),
+    EnumValue::plain("drain_breaker_open"),
 ];
 const SEVERITIES: &[EnumValue] = &[
     EnumValue::plain("low"),

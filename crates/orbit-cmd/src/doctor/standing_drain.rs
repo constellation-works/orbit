@@ -2,6 +2,9 @@
 //! owner host, the workspace's drain intent and how long work waited with no
 //! drain admitting it over the last week.
 //!
+//! While `workflow.standing_drain.enabled` is set (ORB-25991) it also shows
+//! the keeper's effective flags, crash breaker and last decision.
+//!
 //! Read-only and informational: it reports, and nothing acts on it.
 
 use orbit_core::{IDLE_WITH_WORK_DAYS, IdleWithWork, OrbitRuntime};
@@ -43,6 +46,7 @@ pub(super) fn standing_drain_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResul
             format!("unreadable ({error})")
         }
     };
+    let keeper = keeper_sentence(runtime);
     match runtime.drain_idle_with_work(IDLE_WITH_WORK_DAYS) {
         // An intent this binary cannot read is never a healthy row, even when
         // the idle measure reads (ORB-26041).
@@ -52,13 +56,55 @@ pub(super) fn standing_drain_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResul
             } else {
                 WorkspaceDoctorStatus::Ok
             },
-            format!("Drain intent: {intent}. {}", idle_sentence(&idle)),
+            format!("Drain intent: {intent}.{keeper} {}", idle_sentence(&idle)),
         ),
         Err(error) => row(
             WorkspaceDoctorStatus::Warning,
-            format!("Drain intent: {intent}. Cannot measure idle-with-work time: {error}"),
+            format!("Drain intent: {intent}.{keeper} Cannot measure idle-with-work time: {error}"),
         ),
     }
+}
+
+/// The keeper's state and effective flags, with a leading space; empty while
+/// the keeper is off, so the off row reads as before.
+fn keeper_sentence(runtime: &OrbitRuntime) -> String {
+    let view = match runtime.standing_drain_keeper_view() {
+        Ok(view) => view,
+        Err(error) => return format!(" Standing-drain keeper: unreadable ({error})."),
+    };
+    let settings = view.settings;
+    if !settings.enabled {
+        return String::new();
+    }
+    let concurrency = settings
+        .concurrency
+        .map_or_else(|| "job default".to_string(), |value| value.to_string());
+    let mut sentence = format!(
+        " Standing-drain keeper: enabled with window {}s, concurrency {concurrency}, \
+         complete {}, approve_proposed {}, auto_fix {}, min resubmit interval {}s.",
+        settings.window_seconds,
+        settings.complete,
+        settings.approve_proposed,
+        settings.auto_fix,
+        settings.min_resubmit_interval_seconds,
+    );
+    if let Some(breaker) = view.breaker {
+        sentence.push_str(&format!(
+            " Crash breaker {} ({} of {} keeper drains failed or interrupted in the last hour).",
+            if breaker.open() { "open" } else { "closed" },
+            breaker.failed,
+            breaker.threshold,
+        ));
+    }
+    if let Some(last) = view.last_decision {
+        sentence.push_str(&format!(
+            " Last keeper decision: {} {} at {}.",
+            last.decision,
+            last.detail.as_deref().unwrap_or("-"),
+            last.at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        ));
+    }
+    sentence
 }
 
 /// The measured figure, then one `day hours` pair per UTC day, oldest first,

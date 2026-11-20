@@ -2666,10 +2666,12 @@ Each workspace records one drain intent in its store, beside its drain runs
   dashboard or MCP records it, and so does `orbit run auto --pull` on a replica.
   A routine-submitted run records nothing.
 
-Phase 1 only records and reports the intent. Nothing reads it to start, extend
-or refuse a drain, so drain behaviour is unchanged on every workspace and host,
-followers included, and no attention item is raised. If the write fails, the
-stop or start still succeeds and the failure is logged.
+Recording the intent changes no drain behaviour. Only the opt-in keeper
+([phase 2](#standing-drain-keeper-phase-2)) reads it, and only while
+`workflow.standing_drain.enabled` is set; with the keeper off (the default) nothing
+starts, extends or refuses a drain because of it, on any workspace or host, and
+no attention item is raised. If the write fails, the stop or start still
+succeeds and the failure is logged.
 
 Where to read it:
 
@@ -2693,6 +2695,64 @@ admissions stop, a cancel or its end, whichever comes first. The figure counts
 every `backlog` and `proposed` task as waiting, including those held by unmet
 dependencies or pilot refusals, so it is a ceiling on idle time with admissible
 work.
+
+## Standing drain keeper (phase 2)
+
+The keeper is off by default on every workspace and host. Turning it on
+(`workflow.standing_drain.enabled = true`) and choosing its flags, including
+`approve_proposed`, is the operator's (Daniel's) decision. No agent session sets
+it on a live host, for a test or otherwise; QA uses a disposable home. Keys and
+defaults: [CONFIG.md](../CONFIG.md#workflowstanding_drain--the-opt-in-drain-keeper).
+
+While it is enabled, each clock tick on the workspace's owner host checks, after
+the clock's upgrade resume, whether to submit one drain. It submits only when all
+of these hold:
+
+- the drain intent is `on` (a hand start set it), never `paused` or `off`;
+- this checkout is the owner (a replica never submits);
+- no `workspace_auto_pipeline` run is pending or running, and the newest one is not `held`;
+- a `backlog` or `proposed` task is waiting;
+- `min_resubmit_interval` (default 10 min) has passed since the newest drain ended;
+- the crash breaker is closed: fewer than `max_failed_resubmits` (default 3) keeper
+  drains ended `failed` or `interrupted` within the last hour since the last hand
+  start. Upgrade interruptions do not count.
+
+The drain goes through `orbit run auto`'s own submission path and admission
+ladder. Its window, concurrency, `complete`, `approve_proposed` and `auto_fix`
+come from config, never from the previous run. Its trigger names the routine
+`standing-drain-keeper`, so `orbit run history` shows that name, and a keeper
+submission leaves the drain intent unchanged. A window end or a crash does not
+pause, so the keeper resubmits after the interval. A pending host shutdown holds
+it like every other clock submission.
+
+Audit events (`orbit audit` tool names):
+
+- `drain.keeper.submit`: `run_id`, `window_seconds`, `concurrency` (`null` uses the
+  job default), `complete`, `approve_proposed`, `auto_fix`.
+- `drain.keeper.skip`: the same flags plus `reason`, one of `intent_off`,
+  `intent_paused`, `drain_live`, `drain_held`, `min_resubmit_interval`, `no_work`,
+  `breaker_open`, or `submit_refused` (a refused submission, recorded as a failure
+  with the error). A skip is recorded when its reason differs from the keeper's
+  previous decision, not on every tick.
+
+Where to read it while it is enabled:
+
+- `orbit run readiness --json` → `drain_keeper`: `enabled`, `flags`,
+  `min_resubmit_interval_seconds`, `breaker` (`open`, `failed_in_last_hour`,
+  `threshold`) and `last_decision`. The human output adds a
+  `Standing-drain keeper:` line. With the keeper off, `drain_keeper` is
+  `{"enabled": false}` and no line is printed.
+- The owner's `orbit doctor` `standing-drain` row adds the effective flags, the
+  breaker and the last decision.
+- Attention: `drain_paused` (medium) when the intent has been `paused` for over
+  12 hours while work waits, and `drain_breaker_open` (high) while the breaker is
+  open. Neither kind is ever raised while the keeper is off.
+
+To pause the keeper, stop the drain (`orbit run auto --stop`); it stays paused
+until someone starts a drain by hand. To close an open breaker, find why the
+keeper's drains failed (`orbit run history`), then start a drain by hand. To turn
+the keeper off, set `workflow.standing_drain.enabled = false`; the next tick stops
+submitting. A live keeper drain keeps running until its window ends or it is stopped.
 
 ## Scheduled host shutdown or reboot
 

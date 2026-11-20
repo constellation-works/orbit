@@ -694,6 +694,8 @@ pub(super) fn read_attention_sources(
         for kind in filter.kinds.iter().copied().filter(|kind| {
             *kind == K::NoticeOpen
                 || *kind == K::ResidentStalled
+                || *kind == K::DrainPaused
+                || *kind == K::DrainBreakerOpen
                 || AttentionKind::TASK_LEVEL_NAMES.contains(&kind.as_str())
         }) {
             result.degraded.push(workspace_degraded(
@@ -795,6 +797,42 @@ pub(super) fn read_attention_sources(
         result
             .timings
             .insert("friction_untriaged".into(), started.elapsed().as_micros());
+    }
+    // [ORB-25991] The standing-drain keeper's items exist only while it is
+    // enabled, and only the owner reports them; off, nothing is read.
+    let keeper_kinds = (
+        filter.selected(K::DrainPaused),
+        filter.selected(K::DrainBreakerOpen),
+    );
+    if keeper_kinds.0 || keeper_kinds.1 {
+        let started = Instant::now();
+        match super::drain_keeper_sources::drain_keeper_items(
+            runtime,
+            workspace,
+            host,
+            keeper_kinds,
+            now,
+        ) {
+            Ok(items) => result.items.extend(items),
+            Err(error) => {
+                for (selected, kind) in [
+                    (keeper_kinds.0, K::DrainPaused),
+                    (keeper_kinds.1, K::DrainBreakerOpen),
+                ] {
+                    if selected {
+                        result.degraded.push(workspace_degraded(
+                            workspace,
+                            kind.as_str(),
+                            "source_unavailable",
+                            error.to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+        result
+            .timings
+            .insert("standing_drain".into(), started.elapsed().as_micros());
     }
     let task_kinds = filter
         .kinds

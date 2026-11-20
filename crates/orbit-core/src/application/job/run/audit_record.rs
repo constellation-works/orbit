@@ -32,6 +32,9 @@ pub(crate) struct PipelineAuditRow<'a> {
     pub(crate) status: AuditEventStatus,
     pub(crate) arguments: Value,
     pub(crate) error_message: Option<String>,
+    /// The logical workspace the row belongs to, for a decision about the
+    /// workspace rather than one run; `None` for a run's own rows.
+    pub(crate) workspace_id: Option<String>,
 }
 
 pub(crate) fn pipeline_audit(
@@ -65,7 +68,7 @@ pub(crate) fn pipeline_audit(
         host: row.actor.map(ToOwned::to_owned),
         pid: std::process::id(),
         session_id: None,
-        workspace_id: None,
+        workspace_id: row.workspace_id,
         caller_machine_id: None,
         caller_machine_name: None,
         process_machine_id: None,
@@ -236,7 +239,21 @@ impl OrbitRuntime {
                 status,
                 arguments,
                 error_message,
+                workspace_id: None,
             },
         )
+    }
+
+    /// Record one pipeline audit event about this workspace as a whole,
+    /// stamped with its logical workspace id so a read can scope to it.
+    pub(crate) fn record_workspace_pipeline_audit(
+        &self,
+        row: PipelineAuditRow<'_>,
+    ) -> Result<(), OrbitError> {
+        let row = PipelineAuditRow {
+            workspace_id: Some(self.workspace_id()?),
+            ..row
+        };
+        pipeline_audit(self.stores().audit_events(), &self.paths().repo_root, row)
     }
 }

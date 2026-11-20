@@ -29,6 +29,7 @@ mod run;
 pub use run::with_run_root_cause_write_hook;
 mod run_stage;
 mod run_worktree;
+mod standing_drain_keeper;
 mod task_port;
 mod triage_submit;
 mod upgrade_resume;
@@ -116,4 +117,5 @@ pub(crate) use run::{
     running_run_owner_is_stale,
 };
 pub(crate) use run::{kept_candidate, kept_clause};
+pub(crate) use standing_drain_keeper::KeeperDecision;
 pub use triage_submit::{EscalationTriageRefusal, EscalationTriageSubmitError};

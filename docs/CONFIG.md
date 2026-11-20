@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Orbit Configuration
-last_validated: 2026-11-19
+last_validated: 2026-11-20
 ---
 
 # Orbit Configuration
@@ -900,6 +900,35 @@ The run's first task-context prompt for a task records the watermark. A persiste
 With it on, `task_pr_pipeline` and `task_local_pipeline` gate `commit` ([design](design/mid-run-steering/2_design.md#3-promotion-gate)). Before committing, the run re-reads the task, and while an operator comment its prompts never carried in full remains, it does not commit. Each refusal spends one steering round, recorded under `steering_rounds` in the run's state: the implement step runs again, even for a carried candidate, with `input.steering_round` set, and its prompt delivers the comments onto the candidate still uncommitted in the worktree. A run that carries an earlier run's candidate judges from the watermark that earlier run's prompts left, so a comment written after that prompt and before the new run is outstanding; a carried candidate whose source cannot be traced fails the run before `commit` (`[steering_gate_unreadable]`). When the run has spent `max_rounds`, or its last round delivered none of the comments still outstanding (one too long for the block, for example), the task is blocked under a `steering_unconsumed` history event naming each outstanding comment, and the run fails without committing. Read the comments with `orbit task show <id>`, then requeue the task, answer them differently, or accept the candidate as it is through the normal review record. A gate that cannot read the task or the run fails the run before `commit` (`[steering_gate_unreadable]`), and a task that is `done` or `archived` stops it there, naming the steering it never received. A resumed run starts with its full budget of rounds. Both claimed pipelines gate `commit` too, reading the comment log and the claim's watermark from the owner; an owner the leaf cannot read fails the run before `commit` (`[steering_gate_unreadable]`), and a replica never certifies delivery. A claim's watermark outlives its settlement, so the task's next claim or owner run never delivers the same comments again. While an execution claim protects a task, the owner allows human operator comment-only writes; other unscoped writes stay refused. The live leaf reads those comments and records delivery through its owner.
 
 Steering settings refresh at prompt and gate checkpoints. Enabling with runs in flight leaves missing watermarks absent: their gates treat post-dispatch operator comments as undelivered (or use an inherited candidate/claim baseline when present). Disabling stops recording and gating at the next checkpoint; existing watermarks and steering-round state stay inert, not deleted. Invalid config retains the last successfully resolved settings. Prefer enabling between drains; enabling does not change admission authority. A new global config seeded by `orbit init` sets `workflow.mid_run_steering.enabled = true`; when the key is absent the built-in default `false` applies. See [migration](design/mid-run-steering/specs/steering-delivery.md#migration).
+
+### `[workflow.standing_drain]` — the opt-in drain keeper
+
+```toml
+[workflow.standing_drain]
+enabled = false
+window = "24h"
+# concurrency = 5            (unset: the drain job's default)
+complete = false
+approve_proposed = false
+auto_fix = false
+min_resubmit_interval = "10m"
+max_failed_resubmits = 3
+```
+
+| Key | Default | What it does |
+|---|---|---|
+| `workflow.standing_drain.enabled` | `false` | Lets the owner host's clock tick submit one bounded `workspace_auto_pipeline` drain, through the same path as `orbit run auto`, when none is pending, running or held, `backlog` or `proposed` work is waiting, and the workspace's drain intent is `on`. `false` on every workspace and host: nothing is submitted and no keeper attention item appears. |
+| `workflow.standing_drain.window` | `"24h"` | **Advanced.** Window of each keeper drain (`1m`–`24h`), the `run auto --for` value. |
+| `workflow.standing_drain.concurrency` | unset | **Advanced.** Worker ceiling of each keeper drain (`1`–`64`). Unset uses the drain job's default (5), as `run auto` without `--concurrency` does. The forecast mode stays `machine.auto_concurrency.mode`. |
+| `workflow.standing_drain.complete` | `false` | **Advanced.** Keeper drains land shipped tasks and mark them `done`, as `run auto --complete` does. |
+| `workflow.standing_drain.approve_proposed` | `false` | **Advanced.** Keeper drains approve `proposed` tasks that pass the task pilot, as `run auto --approve-proposed` does. |
+| `workflow.standing_drain.auto_fix` | `false` | **Advanced.** Keeper drains repair failing checks and conflicts on their pull requests, as `run auto --auto-fix` does. |
+| `workflow.standing_drain.min_resubmit_interval` | `"10m"` | **Advanced.** Least time from the newest drain's end to the keeper's next submission (`1m`–`24h`). |
+| `workflow.standing_drain.max_failed_resubmits` | `3` | **Advanced.** Crash breaker: once this many keeper drains end `failed` or `interrupted` within an hour (an upgrade interruption does not count), the keeper submits nothing until a person starts a drain (`1`–`100`). |
+
+**Setting `enabled` and `approve_proposed` is the operator's (Daniel's) decision**, as creating a routine is: `enabled` lets the clock start drains with nobody present, and `approve_proposed` lets those drains approve work. No agent session sets them, and no session sets `enabled = true` on a live host for a test; QA runs under a disposable home. Orbit has no operator-only class of config key, so this is a rule, not something the config layer enforces.
+
+The keeper never resumes a pause: a hand stop (`orbit run auto --stop`, the dashboard's Stop) records the intent `paused`, and only a hand start (CLI, dashboard or MCP) sets it back to `on`. A workspace whose intent was never recorded (`off`) is not acted on either. A window end or a crashed drain does not pause; the keeper resubmits after `min_resubmit_interval`. The keeper admits no task: the drain it submits goes through the unchanged admission ladder, its flags come from these keys and never from the last run, and a replica checkout never submits. Its submissions are recorded as the keeper's (trigger routine and actor `standing-drain-keeper`) and leave a `drain.keeper.submit` audit event with the effective window, concurrency, `complete`, `approve_proposed` and `auto_fix`; a skip leaves `drain.keeper.skip` with its `reason` when the reason differs from the keeper's previous decision. Settings are re-read each tick, so turning `enabled` off stops the keeper at its next tick. While it is enabled, `orbit run readiness`, the owner's `orbit doctor` `standing-drain` row and the attention kinds `drain_paused` (paused over 12 hours with work waiting) and `drain_breaker_open` report it. Operation: [distributed-drain runbook](runbooks/distributed-drain.md#standing-drain-keeper-phase-2).
 
 <a id="task-riskiness-scores"></a>
 
