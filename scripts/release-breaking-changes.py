@@ -256,7 +256,11 @@ def schema_facts(schema, path, facts):
     # request_id-mode requirements of a tool) and `propertyNames` its key
     # enum; all three constrain instances like any inline schema. `if` is a
     # selector, not a constraint: editing it moves instances between
-    # branches, so it has no monotonic breaking direction and stays skipped.
+    # branches, so it has no monotonic breaking direction. Record it whole
+    # and let detect_mcp_changes judge which branch the moved instances land in.
+    if isinstance(schema.get("if"), (dict, bool)):
+        facts.setdefault("conditionals", {})[path] = {
+            key: schema[key] for key in ("if", "then", "else") if key in schema}
     for key in ("items", "additionalProperties", "then", "else", "propertyNames"):
         if isinstance(schema.get(key), (dict, bool)):
             schema_facts(schema[key], f"{path}[{key}]", facts)
@@ -888,10 +892,81 @@ def detect_mcp_changes(git, parent, commit, changed):
 
         before_locations = {location(p) for p in before.get("schema_nodes", set())}
         before_required = required_by_location(before)
+
+        def without_required(schema):
+            if isinstance(schema, dict):
+                return {key: value for key, value in schema.items() if key != "required"}
+            return schema
+
+        def branch_required(schema):
+            required = schema.get("required") if isinstance(schema, dict) else None
+            return set(required) if isinstance(required, list) else set()
+
+        def selector_required(schema):
+            """The `if` as a required-names set, or None when it has any other shape."""
+            if (isinstance(schema, dict) and set(schema) == {"required"}
+                    and isinstance(schema["required"], list)):
+                return set(schema["required"])
+            return None
+
+        def conditional_edit_demands(path, old_cond, new_cond):
+            """Branches that newly judge instances an edited `if` moves to them.
+
+            An instance valid before met its old branch. After the edit it
+            meets the branch its new selector picks, so the move rejects it
+            when the destination demands more than the source did: a
+            required name neither the source nor the enclosing schema
+            required, or non-required constraints the source did not carry.
+            Narrowing a required-names selector sends then-instances to
+            else; widening sends else-instances to then; any other edit may
+            move both ways.
+            """
+            old_names = selector_required(old_cond.get("if"))
+            new_names = selector_required(new_cond.get("if"))
+            if old_names is not None and new_names is not None:
+                if new_names == old_names:
+                    return []
+                moves = []
+                if new_names > old_names:
+                    moves = [("then", "else")]
+                elif new_names < old_names:
+                    moves = [("else", "then")]
+                else:
+                    moves = [("then", "else"), ("else", "then")]
+            else:
+                moves = [("then", "else"), ("else", "then")]
+            enclosing = before_required.get(location(path), set())
+            demands = []
+            for source_key, target_key in moves:
+                source = old_cond.get(source_key, True)
+                target = new_cond.get(target_key, True)
+                if target is True or target == {}:
+                    continue
+                extra = sorted(branch_required(target) - branch_required(source) - enclosing)
+                stricter = (constrains_instances(without_required(target))
+                            and _json_value_key(without_required(target))
+                            != _json_value_key(without_required(source)))
+                if extra or stricter or target is False:
+                    demands.append((target_key, extra))
+            return demands
         translated_after = dict(after)
         translated_after["required"] = translated_facts(after.get("required", {}), path_map, unmatched)
         after_locations = {location(p) for p in after_nodes}
         after_required = required_by_location(translated_after)
+        for path, new_cond in sorted(after.get("conditionals", {}).items()):
+            if under_unmatched_alternative(path, unmatched):
+                continue
+            baseline = remap_alternative_path(path, path_map)
+            old_cond = before.get("conditionals", {}).get(baseline)
+            if old_cond is None or "if" not in old_cond:
+                continue
+            if _json_value_key(old_cond["if"]) == _json_value_key(new_cond["if"]):
+                continue
+            for target_key, extra in conditional_edit_demands(baseline, old_cond, new_cond):
+                needs = (" and now requires " + ", ".join(f"`{item}`" for item in extra)
+                         if extra else "")
+                report(f"`{name}` `{path}` conditional `if` edited: instances it moves "
+                       f"into `{target_key}` meet a stricter branch{needs}")
         removed_properties = []
         for path, names in before.get("properties", {}).items():
             if path in after_properties:

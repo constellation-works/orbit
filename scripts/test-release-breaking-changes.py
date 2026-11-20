@@ -664,6 +664,61 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["signals"], [])
         self.assertEqual(report["bump"], "patch")
 
+    def _write_guarded_request_schema(self):
+        # Shape of orbit_task_add: a request_id-mode `then`, and an `else`
+        # that demands `complexity`, which neither the root nor `then` does.
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["allOf"] = [{
+            "if": {"required": ["request_id"]},
+            "then": {"required": ["id", "view"]},
+            "else": {"required": ["id", "complexity"]},
+        }]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add guarded request contract [ORB-53] (#1)")
+
+    def test_conditional_if_edit_into_stricter_else_decides_minor(self):
+        self._write_guarded_request_schema()
+        tools = self.repo.mcp()
+        # `{id, request_id, view}` was valid; with `crew` also selecting the
+        # `then` branch it now falls into `else` and lacks `complexity`.
+        tools[0]["inputSchema"]["allOf"][0]["if"]["required"].append("crew")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Narrow guarded request selector [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(self.signals(report), {(
+            "ORB-54", "mcp-schema",
+            "`orbit_task_show` `inputSchema{allOf0}` conditional `if` edited: "
+            "instances it moves into `else` meet a stricter branch and now "
+            "requires `complexity`")})
+        self.assertEqual(report["bump"], "minor")
+
+    def test_conditional_if_edit_into_stricter_then_decides_minor(self):
+        self._write_guarded_request_schema()
+        tools = self.repo.mcp()
+        # Dropping the selector name sends requests without `request_id` to
+        # `then`, which demands `view`.
+        tools[0]["inputSchema"]["allOf"][0]["if"] = {"required": []}
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Widen guarded request selector [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual({detail for _, _, detail in self.signals(report)}, {
+            "`orbit_task_show` `inputSchema{allOf0}` conditional `if` edited: "
+            "instances it moves into `then` meet a stricter branch and now "
+            "requires `view`"})
+
+    def test_conditional_selector_only_edit_into_looser_else_stays_patch(self):
+        self._write_conditional_schema()
+        tools = self.repo.mcp()
+        # Requests that left `then` land in `else`, which asks only for the
+        # root-required `id`, so nothing previously valid is rejected.
+        tools[0]["inputSchema"]["allOf"][0]["if"]["required"].append("view")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Narrow conditional selector [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
     def test_help_removal_is_found_when_repo_is_a_subdirectory(self):
         self.repo.write("tools/note.txt", "x\n")
         self.repo.remove(f"{GOLDENS}/task/show.txt")
