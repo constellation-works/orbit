@@ -164,8 +164,11 @@ pub fn admit_gh_request_within_budget(
         return Err(exhausted());
     }
     let deadline = gh_request_deadline(request, Instant::now());
-    admit_by_deadline(caller, request, deadline)?;
-    remaining_request_budget(request, deadline).ok_or_else(exhausted)
+    let admitted = admit_by_deadline(caller, request, deadline);
+    // As in `run_gh_request`, a spent budget wins over the refusal it caused.
+    let bounded = remaining_request_budget(request, deadline).ok_or_else(exhausted)?;
+    admitted?;
+    Ok(bounded)
 }
 
 /// Admit `request` against `deadline`. A read admitted once the deadline has
@@ -291,12 +294,15 @@ pub fn run_gh_request(
     }
     let started = Instant::now();
     let deadline = gh_request_deadline(request, started);
-    admit_by_deadline(caller, request, deadline)?;
+    let admitted = admit_by_deadline(caller, request, deadline);
+    // The budget is checked before a refusal propagates: a refusal decided
+    // once the budget is spent is the timeout, not a throttle to wait out.
     let Some(bounded_request) = remaining_request_budget(request, deadline) else {
         return Ok(timed_out_before_start(
             u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         ));
     };
+    admitted?;
     let result = run_process(&bounded_request, &NoSandbox)?;
     if !result.success {
         observe_gh_failure_by_deadline(&bounded_request, &result.stderr, deadline);
