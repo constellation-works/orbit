@@ -247,6 +247,135 @@ fn baseline_marks_underivable_measures_not_derivable() {
     assert_eq!(baseline_report["escalations"]["count"], 0, "{report}");
 }
 
+fn closed_interactive_baseline_bounds_related_task_events_to_active_span() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let related = runtime
+        .add_task(TaskAddParams {
+            title: "interactive baseline related task".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let related_id = related.id.to_string();
+    let baseline = runtime
+        .add_task(TaskAddParams {
+            title: "closed interactive baseline".into(),
+            relations: vec![TaskRelation {
+                relation_type: TaskRelationType::RelatedTo,
+                target: related.id,
+                regression: None,
+            }],
+            status: Some(TaskStatus::InProgress),
+            ..Default::default()
+        })
+        .unwrap();
+    let baseline_id = baseline.id.to_string();
+
+    // The related task records events on both sides of the baseline's active
+    // span, plus matching events while the baseline is active.
+    let before = baseline.created_at - Duration::seconds(1);
+    append_comment(
+        &runtime,
+        &related_id,
+        before,
+        "human:daniel",
+        "before baseline",
+    );
+    seed_agent_decision_request(
+        &runtime,
+        &related_id,
+        before,
+        before + Duration::days(3),
+        "Before the baseline started?",
+    );
+
+    let inside = Utc::now();
+    append_comment(
+        &runtime,
+        &related_id,
+        inside,
+        "human:daniel",
+        "inside baseline span",
+    );
+    let inside_request = seed_agent_decision_request(
+        &runtime,
+        &related_id,
+        inside,
+        inside + Duration::days(3),
+        "During the baseline?",
+    );
+
+    runtime
+        .apply_task_automation_update(
+            &baseline_id,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Review),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let closed_at = runtime
+        .get_task_history(&baseline_id)
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|entry| entry.to_status == Some(TaskStatus::Review))
+        .unwrap()
+        .at;
+    let after = Utc::now();
+    assert!(
+        after > closed_at,
+        "post-close event must follow {closed_at}"
+    );
+    append_comment(
+        &runtime,
+        &related_id,
+        after,
+        "human:daniel",
+        "after baseline review",
+    );
+    seed_agent_decision_request(
+        &runtime,
+        &related_id,
+        after,
+        after + Duration::days(3),
+        "After the baseline closed?",
+    );
+
+    let report = call(
+        &runtime,
+        "orbit.resident.metrics",
+        json!({"baseline": baseline_id, "since": "21d"}),
+    )
+    .unwrap();
+    let baseline_report = &report["baseline"];
+    assert_eq!(baseline_report["active_days"], 1.0, "{report}");
+    assert_eq!(baseline_report["interventions"]["count"], 1, "{report}");
+    assert_eq!(
+        baseline_report["interventions"]["items"][0]["task_id"], related_id,
+        "{report}"
+    );
+    assert_eq!(
+        baseline_report["interventions"]["items"][0]["at"],
+        json!(inside),
+        "{report}"
+    );
+    assert_eq!(
+        baseline_report["interventions"]["per_mandate_day"], 1.0,
+        "{report}"
+    );
+    assert_eq!(baseline_report["escalations"]["count"], 1, "{report}");
+    assert_eq!(
+        baseline_report["escalations"]["requests"],
+        json!([inside_request.id]),
+        "{report}"
+    );
+    assert_eq!(
+        baseline_report["escalations"]["per_mandate_day"], 1.0,
+        "{report}"
+    );
+}
+
 fn task_creation_is_not_an_intervention_but_later_status_changes_are() {
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let runtime = runtime_at(root.path());
@@ -484,8 +613,27 @@ fn baseline_reads_references_in_another_workspace() {
         })
         .unwrap()
         .id;
+    assert!(
+        runtime.get_task(&foreign_id.to_string()).is_err(),
+        "the fixture task must live outside the baseline's workspace"
+    );
+
+    let baseline = runtime
+        .add_task(TaskAddParams {
+            title: "[orchestration]: interactive cross-workspace".into(),
+            relations: vec![TaskRelation {
+                relation_type: TaskRelationType::RelatedTo,
+                target: foreign_id.clone(),
+                regression: None,
+            }],
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+        .to_string();
+
     // A human status write and an agent-raised decision request, both in
-    // the owning workspace.
+    // the owning workspace and after the baseline began.
     foreign
         .update_task_as_human(
             &foreign_id.to_string(),
@@ -518,24 +666,6 @@ fn baseline_reads_references_in_another_workspace() {
             filer: "codex".into(),
         })
         .unwrap();
-    assert!(
-        runtime.get_task(&foreign_id.to_string()).is_err(),
-        "the fixture task must live outside the baseline's workspace"
-    );
-
-    let baseline = runtime
-        .add_task(TaskAddParams {
-            title: "[orchestration]: interactive cross-workspace".into(),
-            relations: vec![TaskRelation {
-                relation_type: TaskRelationType::RelatedTo,
-                target: foreign_id.clone(),
-                regression: None,
-            }],
-            ..Default::default()
-        })
-        .unwrap()
-        .id
-        .to_string();
 
     let report = call(
         &runtime,
@@ -1123,6 +1253,7 @@ crate::scenario_table!(
     invalid_and_day_windows_at_tool_boundary,
     human_write_undoes_checkpoint_action_once,
     baseline_marks_underivable_measures_not_derivable,
+    closed_interactive_baseline_bounds_related_task_events_to_active_span,
     task_creation_is_not_an_intervention_but_later_status_changes_are,
     totals_divide_per_mandate_day_by_summed_active_days,
     baseline_reads_references_in_another_workspace,

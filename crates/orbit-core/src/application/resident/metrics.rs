@@ -380,9 +380,10 @@ impl OrbitRuntime {
         if let Some(baseline_id) = baseline.map(str::trim).filter(|value| !value.is_empty()) {
             let task = self.get_task(baseline_id)?;
             let history = self.get_task_history(&task.id)?;
+            let active_start = task.created_at.max(start);
             let active_end = assignment_closed_at(&task, &history).map_or(now, |end| end.min(now));
-            let days = active_days(task.created_at.max(start), active_end);
-            let inputs = self.measure_task(&task.id.to_string(), start, now, now)?;
+            let days = active_days(active_start, active_end);
+            let inputs = self.measure_task(&task.id.to_string(), active_start, active_end, now)?;
             value["baseline"] =
                 mandate_json(&task.id.to_string(), days, window_days, &inputs, true);
         }
