@@ -78,7 +78,7 @@ that one gap accounts for about 370 task-hours.
 | Resident orchestrator with `dispatch` | Yes, opt-in | All six causes | `resident-cycle-orbit` is disabled on the box. Each restart would be a model decision made on that model's schedule, which is a heavy and slow way to do a deterministic step. Its design already names this pain (`drain-relaunch-after-binary-update`, [resident-orchestrator 2_design](../resident-orchestrator/2_design.md)) |
 | `orbit run extend` | Yes | Window expiry, if run before the end | It works only on a live drain. A closed or stopped window is refused. It can't be scheduled from a routine |
 | `drain-adopt-v1` and the clock's upgrade resume | Yes | Deploy | The deploy wrapper defeats it. `update-orbit.sh` (constellation, ORB-19698) runs `orbit run auto --stop` on every poll and "never restarts" what it stopped. The clock's upgrade resume skips drains whose admissions were stopped |
-| Live pool re-read (ORB-25866, ORB-25893) | Yes, since 11-20 | Pool-change restarts | Landed after most of the week. Window, `max_active_leaf_runs`, review timing and the flags are still fixed when a drain starts. A live window can be lengthened with `run extend`, but not shortened |
+| Live pool re-read (ORB-25866, ORB-25893) | Yes, since 11-20 | Pool-change restarts | Landed after most of the week. The worker ceiling (`max_active_leaf_runs`) can be retuned on a live drain with `orbit run concurrency <run> --set N`, with `orbit run extend <run> --for <d> --concurrency N`, or with the operator `orbit_workflow` tool's `auto` action in `mode: "resize"`. A live window can be lengthened with `run extend`, but not shortened. Review timing and the flags are still fixed when a drain starts; no live verb changes them |
 | Paused / idle surface | Partial | — | `run readiness` says "no drain is live". Attention has no item for "work waiting, no drain", and doctor has no drain check |
 
 So existing pieces cover the pool-change and usage-limit causes. The resident covers the rest only if
@@ -151,13 +151,22 @@ satisfies the chief's gate: there is no dispatch path outside the ladder.
 |---|---|---|
 | `workflow.standing_drain.enabled` | `false` | Turns the keeper on for this workspace. When off, intent and holds are still recorded, but nothing is submitted |
 | `workflow.standing_drain.window` | `"24h"` | Window for each submitted drain (≤ 24 h) |
-| `workflow.standing_drain.concurrency` | unset | Unset uses the configured auto-concurrency, as a plain `run auto` does |
+| `workflow.standing_drain.concurrency` | unset | The worker ceiling (`max_active_leaf_runs`) of each submitted drain. Unset omits it, so the job default applies: 5, from `workspace_auto_pipeline` `default_input`. This matches a plain `run auto` without `--concurrency` |
 | `workflow.standing_drain.complete` / `.approve_proposed` / `.auto_fix` | `false` | Same meaning as the `run auto` flags |
 | `workflow.standing_drain.min_resubmit_interval` | `"10m"` | Minimum time from one drain's end to the keeper's next submission |
 | `workflow.standing_drain.max_failed_resubmits` | `3` | Crash-breaker threshold per rolling hour |
 
 The `false` default applies to every workspace and every host, followers and workspaces that
 never keep a drain included.
+
+The worker ceiling and the forecast mode are separate settings, and the keeper keeps them apart.
+The ceiling bounds how many `task_auto_pipeline` leaf runs are live at once. The forecast admission
+mode is `machine.auto_concurrency.mode` (default `off`), which `run auto --auto-concurrency` can
+override for one run. An unset `concurrency` never reads the forecast mode. The keeper has no
+forecast-mode flag, so each drain it submits captures `machine.auto_concurrency.mode` when it is
+inserted, with source `configured`, as a plain `run auto` does. A live retune (`orbit run concurrency`,
+`orbit run extend --concurrency`, or the operator `auto` action in `mode: "resize"`) changes only that run's ceiling.
+The next keeper drain starts from the configured value, or from the job default when it is unset.
 
 ### Authority
 
