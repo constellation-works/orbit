@@ -593,11 +593,22 @@ impl Commands {
             ),
             Commands::Doctor(command) => {
                 use super::super::doctor::DoctorSubcommand;
-                // Focused inspection avoids reconciliation on open. Receipt
-                // compaction, like the health checks and repairs, needs the
-                // full runtime and its writable generation gate.
+                // Inspection avoids reconciliation on open: the bare report
+                // changes no durable state (STD-01 §R31), so it opens the
+                // observation runtime. Receipt compaction and the repair
+                // flags need the full runtime and its writable generation
+                // gate.
                 let (subcommand, target_type, target_id, runtime_need) = match &command.command {
-                    None => (None, "workspace", None, RuntimeNeed::Required),
+                    None => (
+                        None,
+                        "workspace",
+                        None,
+                        if command.repairs.any_requested() {
+                            RuntimeNeed::Required
+                        } else {
+                            RuntimeNeed::ReadOnly
+                        },
+                    ),
                     Some(DoctorSubcommand::AdmissionReceipts(args)) => (
                         Some("admission-receipts"),
                         "workspace",

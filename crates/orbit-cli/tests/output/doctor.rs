@@ -585,12 +585,16 @@ fn default_doctor_checks_schema_and_deep_detects_corrupt_data() {
         .unwrap_or_default();
     let named = names.split(", ").any(|n| n == "database");
     assert!(named, "audit must name database: {failed}");
+    // The report only observes, so the writable commands above installed the
+    // job definitions it can now see; compare the table with a report taken
+    // in that same state.
+    let settled_rows = rows(&doctor(&f, &["--deep"]));
     let table = run(&f, &["doctor", "--deep", "--format", "table"]);
     assert_eq!(table.status.code(), Some(1));
     let stdout = utf8(table.stdout);
     let (_, findings) = stdout.split_once("Findings:").expect("CLI findings");
     // An `info` row is a fact about the setup, not a finding.
-    for d in deep_rows
+    for d in settled_rows
         .iter()
         .filter(|d| d["status"] != "ok" && d["status"] != "info")
     {
@@ -1979,4 +1983,58 @@ fn broken_script_only_refuses_jobs_that_reference_it() {
     has(&error, &manifest.display().to_string());
     has(&error, "repair that manifest");
     has(&error, "orbit script revoke broken");
+}
+
+fn job_run_state(db: &std::path::Path, run_id: &str) -> (String, Option<String>) {
+    Connection::open(db)
+        .expect("open orbit.db")
+        .query_row(
+            "SELECT state, finished_at FROM job_runs WHERE run_id = ?1",
+            [run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("job run row")
+}
+
+/// STD-01 §R31: a bare report must not reconcile the stale run it reports.
+#[cfg(unix)]
+#[test]
+fn bare_doctor_reports_a_stale_run_without_reconciling_it() {
+    if in_child("doctor::bare_doctor_reports_a_stale_run_without_reconciling_it") {
+        return;
+    }
+    let f = WorkCheckout::new();
+    run_ok(&f, &["workspace", "init", "--name", "doctor-readonly"]);
+    let runtime =
+        orbit_core::OrbitRuntime::from_roots(&f.home.join(".orbit"), &f.work.join(".orbit"))
+            .expect("runtime");
+    let workspace_id = runtime.workspace_id().expect("workspace id");
+    drop(runtime);
+    let mut gone = std::process::Command::new("true").spawn().expect("spawn");
+    let dead_pid = gone.id();
+    gone.wait().expect("wait");
+    let db = f.home.join(".orbit/orbit.db");
+    let run_id = "jrun-stale-doctor";
+    let started = (chrono::Utc::now() - chrono::Duration::minutes(10)).to_rfc3339();
+    Connection::open(&db)
+        .expect("open orbit.db")
+        .execute(
+            "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_auto_pipeline',1,'running','{}',?3,?3,?3,?4)",
+            rusqlite::params![run_id, workspace_id, started, dead_pid],
+        )
+        .expect("seed stale run");
+    let before = job_run_state(&db, run_id);
+    assert_eq!(before.0, "running");
+
+    let report = rows(&doctor(&f, &[]));
+    let job_runs = row(&report, "job-runs");
+    assert_eq!(job_runs["status"], "warning", "{job_runs}");
+    msg_has(job_runs, run_id);
+    assert_eq!(
+        job_run_state(&db, run_id),
+        before,
+        "a bare doctor leaves the stale run as it found it"
+    );
+    let again = rows(&doctor(&f, &[]));
+    msg_has(row(&again, "job-runs"), run_id);
 }
