@@ -2713,9 +2713,10 @@ of these hold:
 - no `workspace_auto_pipeline` run is pending or running, and the newest one is not `held`;
 - a `backlog` or `proposed` task is waiting;
 - `min_resubmit_interval` (default 10 min) has passed since the newest drain ended;
-- the crash breaker is closed: fewer than `max_failed_resubmits` (default 3) keeper
-  drains ended `failed` or `interrupted` within the last hour since the last hand
-  start. Upgrade interruptions do not count.
+- the crash breaker is closed: no `max_failed_resubmits` (default 3) keeper drains
+  ended `failed` or `interrupted` within one hour of each other since the last hand
+  start. The breaker latches: once tripped it stays open however much time passes,
+  until a hand start. Upgrade interruptions do not count.
 
 The drain goes through `orbit run auto`'s own submission path and admission
 ladder. Its window, concurrency, `complete`, `approve_proposed` and `auto_fix`
@@ -2738,8 +2739,8 @@ Audit events (`orbit audit` tool names):
 Where to read it while it is enabled:
 
 - `orbit run readiness --json` → `drain_keeper`: `enabled`, `flags`,
-  `min_resubmit_interval_seconds`, `breaker` (`open`, `failed_in_last_hour`,
-  `threshold`) and `last_decision`. The human output adds a
+  `min_resubmit_interval_seconds`, `breaker` (`open`, `failed_in_last_hour` (the failures
+  inside the hour that tripped it, once open), `threshold`) and `last_decision`. The human output adds a
   `Standing-drain keeper:` line. With the keeper off, `drain_keeper` is
   `{"enabled": false}` and no line is printed.
 - The owner's `orbit doctor` `standing-drain` row adds the effective flags, the

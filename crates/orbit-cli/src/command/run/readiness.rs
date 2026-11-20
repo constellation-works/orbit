@@ -375,7 +375,7 @@ fn drain_keeper_line(keeper: &Value) -> Option<String> {
     let breaker = &keeper["breaker"];
     if breaker["open"].as_bool() == Some(true) {
         line.push_str(&format!(
-            "; crash breaker open ({} failed keeper drains in the last hour) until a person starts a drain",
+            "; crash breaker open ({} failed keeper drains within an hour) until a person starts a drain",
             breaker["failed_in_last_hour"].as_u64().unwrap_or_default()
         ));
     }

@@ -147,6 +147,7 @@ mod search_hydration;
 mod security_alert_sweep;
 mod session_events;
 mod shared_root_identity;
+mod standing_drain_keeper;
 mod step_recovery;
 mod system_work_crews;
 mod workspace_seed;
