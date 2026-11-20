@@ -609,7 +609,6 @@
         "task/tests/pr_forge_rerun.rs::rerun_still_refuses_without_failed_or_running_workflows_on_head",
         "task/tests/pr_forge_rerun.rs::rerun_waits_for_running_workflow_before_requesting_failed_jobs",
         "tests/config_path.rs::root_path_tilde_expansion_uses_home_and_only_one_prefix",
-        "tests/git_sandbox.rs::git_scan_many_fan_outs_keep_complete_cross_subtree_link_counts",
         "tests/git_sandbox.rs::git_scan_revalidation_denies_unsafe_replacements",
         "tests/git_sandbox.rs::git_scan_survives_worker_spawn_failure_with_the_same_refusals",
         "tests/git_sandbox.rs::metadata_aliases_and_invalid_pointers_fail_closed",
