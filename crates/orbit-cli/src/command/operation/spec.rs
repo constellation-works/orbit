@@ -42,6 +42,11 @@ pub enum RuntimeNeed {
     PipelineWorker,
     /// Read an existing workspace without stale-run reconciliation on open.
     ReadOnly,
+    /// Audit an existing workspace with a write-free open: no store or
+    /// registry is created or migrated, and no layout upgraded, before the
+    /// report runs (STD-01 §R31). A missing or outdated store fails the open
+    /// and the report names the setup step.
+    Inspection,
     /// Inspect host plugins without treating an unregistered cwd as a workspace.
     PluginReadOnly,
     /// Host-scoped read without treating an unregistered cwd as a workspace

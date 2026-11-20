@@ -15,10 +15,13 @@ impl DoctorCommand {
     /// open, or `None` to let the bootstrap error stand.
     ///
     /// Only a plain health check qualifies: a focused subcommand or a repair
-    /// flag needs the runtime it asked for. The one finding reported without
-    /// a runtime is a misplaced global `[plugin_enablement]` table, read
-    /// straight from the host config because that table is what makes the
-    /// layered config refuse to load. Every other command still fails closed.
+    /// flag needs the runtime it asked for. The plain check opens the
+    /// runtime write-free, so a workspace whose stores were never created or
+    /// need a migration fails that open; the report then names the setup
+    /// step instead of the bare storage error (STD-01 §R31). A misplaced
+    /// global `[plugin_enablement]` table, read straight from the host config
+    /// because that table is what makes the layered config refuse to load, is
+    /// reported alongside.
     pub(crate) fn degraded_report(
         &self,
         root_override: Option<&std::path::Path>,
@@ -35,18 +38,26 @@ impl DoctorCommand {
             )
             .ok()?
             .global_root;
-        let misplaced = orbit_cmd::misplaced_plugin_enablement_row(&global_root)?;
+        let misplaced = orbit_cmd::misplaced_plugin_enablement_row(&global_root);
+        let missing_store = !global_root.join("orbit.db").exists()
+            || !global_root.join("tasks").join("index.sqlite").exists();
+        if misplaced.is_none() && !missing_store {
+            return None;
+        }
+        let remediation = if missing_store {
+            "Run `orbit task list` once to create the workspace stores, then rerun `orbit doctor`."
+        } else {
+            "Fix the check above, then rerun `orbit doctor` for the full report."
+        };
         let runtime = WorkspaceDoctorResult {
             duration_ms: 0,
             check_name: "runtime".to_string(),
             status: WorkspaceDoctorStatus::Error,
             message: format!("The runtime did not open, so no other check ran: {bootstrap}"),
-            remediation: Some(
-                "Fix the check above, then rerun `orbit doctor` for the full report.".to_string(),
-            ),
+            remediation: Some(remediation.to_string()),
         };
         Some(report_output(
-            vec![misplaced, runtime],
+            misplaced.into_iter().chain([runtime]).collect(),
             self.problems,
             self.check.as_deref(),
         ))

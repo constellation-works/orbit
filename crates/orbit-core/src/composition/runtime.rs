@@ -215,21 +215,41 @@ impl OrbitRuntime {
         shared_root: &Path,
         binding: WorkspaceRuntimeBinding,
     ) -> Result<Self, OrbitError> {
-        ProductProfile::Orbit.validate_roots(&[global_root, shared_root])?;
-        let _generation = pin_executable_generation(global_root, true)?;
-        let layout_report = observe_or_upgrade_layout(shared_root, true)?;
-        let config = ResolvedConfig::load(&ConfigRoots::new(global_root, shared_root))?;
+        let roots = OrbitRuntimeRoots {
+            global_root: global_root.to_path_buf(),
+            shared_root: shared_root.to_path_buf(),
+            local_root: shared_root.to_path_buf(),
+        };
+        Self::initialize_from_resolved_roots_observational(roots, Some(binding))
+    }
+
+    /// Open existing state for an inspection report (`orbit doctor`) that must
+    /// not create, migrate or repair anything before it audits: no store or
+    /// registry creation, no schema migration, no layout upgrade, no policy or
+    /// allocator seeding and no stale-run reconciliation. A store that is
+    /// missing or needs migration is refused here, and the report names the
+    /// setup step instead (STD-01 §R31).
+    pub fn initialize_from_resolved_roots_observational(
+        roots: OrbitRuntimeRoots,
+        binding: Option<WorkspaceRuntimeBinding>,
+    ) -> Result<Self, OrbitError> {
+        ProductProfile::Orbit.validate_roots(&[
+            &roots.global_root,
+            &roots.shared_root,
+            &roots.local_root,
+        ])?;
+        let _generation = pin_executable_generation(&roots.global_root, true)?;
+        let layout_report = observe_or_upgrade_layout(&roots.shared_root, true)?;
+        let config =
+            ResolvedConfig::load(&ConfigRoots::new(&roots.global_root, &roots.shared_root))?;
+        let config_loader = runtime_config_loader(&roots.global_root, &roots.shared_root);
         RuntimeKernel::build_from_resolved_config_write_free(
-            &OrbitRuntimeRoots {
-                global_root: global_root.to_path_buf(),
-                shared_root: shared_root.to_path_buf(),
-                local_root: shared_root.to_path_buf(),
-            },
-            Some(binding),
+            &roots,
+            binding,
             &config,
             layout_report,
             HostLifetime::ShortLived,
-            runtime_config_loader(global_root, shared_root),
+            config_loader,
             &APPLICATION_PORT,
         )
         .map(Self::from_kernel)

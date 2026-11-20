@@ -206,6 +206,12 @@ fn doctor_reports_and_clears_zombie_holder_through_confirmed_repair() {
     let holder_bytes = serde_json::to_vec(&holder_json).expect("serialize holder");
     fs::write(&lock_path, &holder_bytes).expect("write zombie lock");
 
+    // Doctor audits stores a writable command created; it never creates them.
+    fixture
+        .orbit()
+        .args(["task", "list"])
+        .output()
+        .expect("create stores");
     // The plain diagnosis reports the unreaped holder as stale.
     let output = fixture
         .orbit()

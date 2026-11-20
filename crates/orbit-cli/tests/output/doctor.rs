@@ -24,7 +24,22 @@ fn command(fixture: &WorkCheckout) -> assert_cmd::Command {
     command
 }
 fn run(fixture: &WorkCheckout, args: &[&str]) -> Output {
+    if args.first() == Some(&"doctor") {
+        settle_stores(fixture);
+    }
     command(fixture).args(args).output().expect("orbit command")
+}
+/// Bare `doctor` audits stores a writable command created and never creates
+/// them itself (STD-01 §R31), so a fixture that audits first creates them the
+/// way any first command does.
+fn settle_stores(fixture: &WorkCheckout) {
+    let global = fixture.home.join(".orbit");
+    if !global.join("orbit.db").exists() || !global.join("tasks/index.sqlite").exists() {
+        command(fixture)
+            .args(["task", "list"])
+            .output()
+            .expect("create stores");
+    }
 }
 fn run_ok(fixture: &WorkCheckout, args: &[&str]) -> Output {
     let out = run(fixture, args);
@@ -32,6 +47,7 @@ fn run_ok(fixture: &WorkCheckout, args: &[&str]) -> Output {
     out
 }
 fn doctor(fixture: &WorkCheckout, extra: &[&str]) -> Output {
+    settle_stores(fixture);
     let mut cmd = command(fixture);
     cmd.args(["doctor", "--json"]).args(extra);
     cmd.output().expect("doctor report")
@@ -190,6 +206,94 @@ fn doctor_admission_receipts_reports_storage_and_compacts() {
         assert_eq!(v, 0, "{report}");
     }
 }
+/// STD-01 §R31: launching bare `doctor` observes the registry before it
+/// audits. A registry that is gone stays gone and one that needs migration
+/// stays at its recorded schema, while the report names the setup step.
+#[test]
+fn bare_doctor_startup_neither_creates_nor_migrates_the_task_registry() {
+    if in_child("doctor::bare_doctor_startup_neither_creates_nor_migrates_the_task_registry") {
+        return;
+    }
+    let f = WorkCheckout::new();
+    run_ok(&f, &["workspace", "init", "--name", "doctor-startup"]);
+    // Opening a writable runtime is what creates the stores doctor audits.
+    run_ok(&f, &["task", "list"]);
+    let tasks = global_dir(&f).join("tasks");
+    let registry = tasks.join("index.sqlite");
+    let ledger = |path: &std::path::Path| -> Vec<String> {
+        let conn = Connection::open(path).expect("open registry");
+        let mut stmt = conn
+            .prepare("SELECT key FROM schema_meta WHERE key LIKE 'migration.%' ORDER BY key")
+            .expect("prepare ledger query");
+        let keys = stmt.query_map([], |row| row.get(0)).expect("query ledger");
+        keys.collect::<Result<_, _>>().expect("ledger rows")
+    };
+
+    // A registry whose ledger lags this binary: it needs a writable migration.
+    let applied = ledger(&registry);
+    assert!(applied.len() > 1, "{applied:?}");
+    Connection::open(&registry)
+        .expect("open registry")
+        .execute(
+            "DELETE FROM schema_meta WHERE key = ?1",
+            [applied.last().expect("newest ledger row")],
+        )
+        .expect("downgrade registry ledger");
+    let lagging = ledger(&registry);
+    assert_eq!(lagging.len(), applied.len() - 1);
+    let out = command(&f)
+        .args(["doctor", "--json"])
+        .output()
+        .expect("doctor");
+    let report =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(
+        report.contains("requires a writable migration"),
+        "the report names the setup the registry needs: {report}"
+    );
+    assert_eq!(
+        ledger(&registry),
+        lagging,
+        "bare doctor must not migrate the registry"
+    );
+
+    // A workspace layout older than this binary stays as inspected.
+    let marker = f.work.join(".orbit/state/layout.version");
+    assert!(
+        marker.is_file(),
+        "workspace init records the layout version"
+    );
+    fs::write(&marker, "0\n").expect("age the layout marker");
+    let _ = command(&f)
+        .args(["doctor", "--json"])
+        .output()
+        .expect("doctor");
+    assert_eq!(
+        read_str(&marker).trim(),
+        "0",
+        "bare doctor must not upgrade the workspace layout"
+    );
+
+    // A registry that is gone.
+    drop(fs::remove_file(&registry));
+    for suffix in ["-wal", "-shm"] {
+        drop(fs::remove_file(tasks.join(format!("index.sqlite{suffix}"))));
+    }
+    let out = command(&f)
+        .args(["doctor", "--json"])
+        .output()
+        .expect("doctor");
+    let report =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(
+        report.contains("orbit task list"),
+        "the report names the setup that creates the registry: {report}"
+    );
+    assert!(
+        !registry.exists(),
+        "bare doctor must not create the registry"
+    );
+}
 /// ORB-16351: `clock-unit: ok` requires an enabled, active systemd timer.
 #[cfg(target_os = "linux")]
 #[test]
@@ -200,6 +304,7 @@ fn doctor_clock_unit_requires_an_enabled_active_systemd_timer() {
     for mode in ["disabled", "inactive", "enabled"] {
         let f = WorkCheckout::new();
         install_matching_sweep_unit(&f.home);
+        settle_stores(&f);
         let bin = write_substitute_systemctl(f.temp.path());
         let path_var = {
             let mut e = vec![bin.clone()];
@@ -271,6 +376,14 @@ fn doctor_warns_about_selected_root_skill_links_without_changing_discovery_entri
     let home_target = f.home.join("missing-skill");
     link(&home_target, &home_link);
     let invoke = |args: &[&str]| {
+        if args.first() == Some(&"doctor") {
+            command(&f)
+                .arg("--root")
+                .arg(&global)
+                .args(["task", "list"])
+                .output()
+                .expect("create stores");
+        }
         command(&f)
             .arg("--root")
             .arg(&global)
@@ -457,7 +570,10 @@ fn search_index_doctor_checks_local_coverage_on_owner_and_replica() {
     let json = |fixture: &WorkCheckout, args: &[&str]| -> Value {
         serde_json::from_slice(&cli(fixture, args).stdout).unwrap()
     };
-    let coverage = |fixture| json(fixture, &["doctor", "--check", "search-index", "--json"]);
+    let coverage = |fixture| {
+        cli(fixture, &["task", "list"]);
+        json(fixture, &["doctor", "--check", "search-index", "--json"])
+    };
     let rebuild = |fixture| json(fixture, &["search", "reindex", "--json"]);
 
     cli(&owner, &["workspace", "init", "--name", "coverage"]);
@@ -1654,6 +1770,7 @@ fn doctor_keeps_a_missing_cli_an_error_on_a_host_the_executor_supports() {
     ] {
         let f = routed_crew_fixture(crew, provider);
         let launcher = pin_missing_launcher(&f, provider);
+        settle_stores(&f);
         let mut cmd = command(&f);
         cmd.env("PATH", f.temp.path()).args(["doctor", "--json"]);
         let out = cmd.output().expect("doctor");

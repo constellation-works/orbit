@@ -150,6 +150,18 @@ pub fn workspace_runtime_binding(
     orbit_core::runtime::workspace_runtime_binding(workspace, checkout)
 }
 
+/// How much state opening a runtime may write.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OpenAccess {
+    /// An ordinary command.
+    Write,
+    /// An observation command: no stale-run reconciliation on open.
+    ReadOnly,
+    /// An inspection report: no store, registry or layout creation or
+    /// migration on open.
+    Observational,
+}
+
 /// Registry-aware runtime factory. Registered checkouts carry an explicit
 /// Core workspace binding.
 pub struct RegisteredRuntimeFactory;
@@ -245,7 +257,12 @@ impl RegisteredRuntimeFactory {
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
     ) -> Result<OrbitRuntime, OrbitError> {
-        Self::initialize_with_overrides_mode(root_override, workspace_selector, false, false)
+        Self::initialize_with_overrides_mode(
+            root_override,
+            workspace_selector,
+            OpenAccess::Write,
+            false,
+        )
     }
 
     /// Construct a workspace runtime for an observation command without the
@@ -254,7 +271,28 @@ impl RegisteredRuntimeFactory {
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
     ) -> Result<OrbitRuntime, OrbitError> {
-        Self::initialize_with_overrides_mode(root_override, workspace_selector, true, false)
+        Self::initialize_with_overrides_mode(
+            root_override,
+            workspace_selector,
+            OpenAccess::ReadOnly,
+            false,
+        )
+    }
+
+    /// Construct a workspace runtime for an inspection report that audits
+    /// existing state without creating, migrating or repairing any of it
+    /// first (`orbit doctor`, STD-01 §R31). A store that is missing or needs
+    /// migration fails the open, and the report names the setup step.
+    pub fn initialize_observational_with_overrides(
+        root_override: Option<&Path>,
+        workspace_selector: Option<&str>,
+    ) -> Result<OrbitRuntime, OrbitError> {
+        Self::initialize_with_overrides_mode(
+            root_override,
+            workspace_selector,
+            OpenAccess::Observational,
+            false,
+        )
     }
 
     /// Plugin inspection uses a registered checkout when one is selected by
@@ -264,7 +302,12 @@ impl RegisteredRuntimeFactory {
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
     ) -> Result<OrbitRuntime, OrbitError> {
-        Self::initialize_with_overrides_mode(root_override, workspace_selector, true, true)
+        Self::initialize_with_overrides_mode(
+            root_override,
+            workspace_selector,
+            OpenAccess::ReadOnly,
+            true,
+        )
     }
 
     /// Host-scoped inspection uses a registered checkout when one is selected
@@ -276,15 +319,21 @@ impl RegisteredRuntimeFactory {
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
     ) -> Result<OrbitRuntime, OrbitError> {
-        Self::initialize_with_overrides_mode(root_override, workspace_selector, true, true)
+        Self::initialize_with_overrides_mode(
+            root_override,
+            workspace_selector,
+            OpenAccess::ReadOnly,
+            true,
+        )
     }
 
     fn initialize_with_overrides_mode(
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
-        read_only: bool,
+        access: OpenAccess,
         host_fallback: bool,
     ) -> Result<OrbitRuntime, OrbitError> {
+        let read_only = access != OpenAccess::Write;
         let explicit_selector = workspace_selector
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -360,7 +409,9 @@ impl RegisteredRuntimeFactory {
                 .as_ref()
                 .and_then(|selection| replica_owner_for_checkout(&selection.checkout));
             let global_root = roots.global_root.clone();
-            let runtime = if read_only {
+            let runtime = if access == OpenAccess::Observational {
+                OrbitRuntime::initialize_from_resolved_roots_observational(roots, binding)
+            } else if read_only {
                 OrbitRuntime::initialize_from_resolved_roots_read_only(roots, binding)
             } else {
                 OrbitRuntime::initialize_from_resolved_roots_with_task_prefix(
@@ -388,7 +439,13 @@ impl RegisteredRuntimeFactory {
         let selected = Self::resolve_selector_in(&registry, &selector, identity.id())?;
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let local_root = local_root_for_runtime_open(&selected, &cwd, read_only);
-        if read_only {
+        if access == OpenAccess::Observational {
+            Self::open_registered_checkout_observational(
+                &global_root,
+                &selected.workspace,
+                &selected.checkout,
+            )
+        } else if read_only {
             Self::open_registered_checkout_read_only_with_identity(
                 &global_root,
                 &selected.workspace,

@@ -390,6 +390,11 @@ fn clock_ticks_refused_by_a_breaking_migration_are_reported_by_doctor() {
     }
     drop(drain);
 
+    // Doctor audits stores a writable command created; it never creates them.
+    orbit(&work, &home)
+        .args(["--root", root_arg, "task", "list"])
+        .output()
+        .expect("create stores");
     let doctor = orbit(&work, &home)
         .args(["--root", root_arg, "doctor", "--json"])
         .output()

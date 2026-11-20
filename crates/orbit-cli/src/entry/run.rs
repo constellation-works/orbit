@@ -159,7 +159,10 @@ pub(crate) fn run() {
             &root,
             matches!(
                 runtime_need,
-                RuntimeNeed::ReadOnly | RuntimeNeed::PluginReadOnly | RuntimeNeed::HostReadOnly
+                RuntimeNeed::ReadOnly
+                    | RuntimeNeed::Inspection
+                    | RuntimeNeed::PluginReadOnly
+                    | RuntimeNeed::HostReadOnly
             ),
             participant_role(&cli.command),
             handover_capability(&cli.command),
@@ -299,6 +302,12 @@ pub(crate) fn run() {
                     workspace_selector.as_deref(),
                 ),
             },
+            RuntimeNeed::Inspection => {
+                RegisteredRuntimeFactory::initialize_observational_with_overrides(
+                    root_override.as_deref(),
+                    workspace_selector.as_deref(),
+                )
+            }
             RuntimeNeed::PluginReadOnly => {
                 RegisteredRuntimeFactory::initialize_plugin_read_only_with_overrides(
                     root_override.as_deref(),
