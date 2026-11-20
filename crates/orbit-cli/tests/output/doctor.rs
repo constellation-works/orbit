@@ -316,6 +316,34 @@ fn bare_doctor_startup_neither_creates_nor_migrates_the_task_registry() {
         !report.contains("orbit task list"),
         "an unsupported registry cannot be migrated by a writable open: {report}"
     );
+
+    // An empty, unledgered registry stamped v6 is not the recognized additive
+    // v6 shape, so a writable open refuses it too: bare doctor gives the same
+    // unsupported guidance and leaves the file as it was.
+    Connection::open(&registry)
+        .expect("open registry")
+        .execute_batch("PRAGMA user_version = 6")
+        .expect("stamp unrecognized v6");
+    let out = command(&f)
+        .args(["doctor", "--json"])
+        .output()
+        .expect("doctor");
+    let report =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{report}");
+    assert!(
+        report.contains("Upgrade the selected Orbit executable"),
+        "an unrecognized v6 keeps the unsupported-schema guidance: {report}"
+    );
+    assert!(
+        !report.contains("orbit task list"),
+        "an unrecognized v6 must not be pointed at a writable migration: {report}"
+    );
+    let stamped = Connection::open(&registry).expect("reopen registry");
+    let version: i64 = stamped
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("read user_version");
+    assert_eq!(version, 6, "bare doctor leaves the registry as it was");
 }
 /// ORB-16351: `clock-unit: ok` requires an enabled, active systemd timer.
 #[cfg(target_os = "linux")]

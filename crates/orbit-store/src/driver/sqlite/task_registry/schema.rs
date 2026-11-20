@@ -85,7 +85,10 @@ pub(super) fn assert_readable_schema(
     if user_version == PRE_LEDGER_COMPATIBLE && action_keys {
         return Ok(ReadableRegistry { pre_ledger: true });
     }
-    if user_version > 6 {
+    // A ledgerless v6 is adoptable only when its shape is the recognized
+    // additive one. An unrecognized v6 gets the unsupported guidance a writable
+    // open gives, not a setup step that open would refuse.
+    if !is_adoptable(conn)? {
         return Err(unsupported_schema(user_version, path));
     }
     let action_keys = if action_keys {
