@@ -525,9 +525,10 @@ before teardown.
 
 Capture `orbit workspace show --json` and
 `orbit workspace source-remote show --json` before a change. After removal or
-teardown, use `orbit workspace list --json` to confirm the workspace is no
-longer registered on this host. After a rebind, use
-`orbit workspace list --json`, `orbit workspace show --json` and
+teardown, use `orbit workspace list --all --json` to confirm the workspace is no
+longer registered on this host. `--all` includes replica checkouts, which the
+default list hides. After a rebind, use `orbit workspace list --all --json`,
+`orbit workspace show --json` and
 `orbit workspace source-remote show --json` to verify the registration and
 new source identity.
 
@@ -584,12 +585,16 @@ Verify from the new directory:
 
 ```bash
 cd /new/checkout
-orbit workspace list --json
+orbit workspace list --all --json
 orbit workspace show --json
 orbit tool run orbit.task.list --input '{}'
 ```
 
-`workspace list --json` should still list the workspace on this host, and
+`workspace list --all --json` should list the workspace on this host. `--all`
+is required to include a replica checkout, which the default list hides. The
+record's `repo_root` should be the new path, and its `role` (`owner` or
+`replica`) is unchanged by the rebind. The default listing,
+`orbit workspace list --json`, still shows an owner checkout.
 `workspace show --json` should resolve it from the new directory. The runtime
 command confirms that the store opens against the moved checkout. A successful
 rebind also appears in `orbit audit list --json`.
