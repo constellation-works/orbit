@@ -355,7 +355,9 @@ pub(crate) fn resolve_family_input(
             }
             ("orbit.friction", "show" | "list" | "comment") => {
                 "; to read or list friction records, use `orbit.search` with kind `friction`: \
-                 set `query` to the friction ID to read one record, or omit `query` to list"
+                 to read one record, search {\"kind\":\"friction\",\"query\":\"<friction ID>\",\"all\":true} \
+                 and take the hit whose `id` equals the friction ID (a query matches as a substring of \
+                 several fields, and `all` includes triaged and resolved records), or omit `query` to list"
             }
             _ => "",
         };

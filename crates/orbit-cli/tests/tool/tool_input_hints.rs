@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{git_repo, tool_input_hint_cases};
 
@@ -163,6 +163,92 @@ fn friction_read_actions_recommend_orbit_search() {
             "the refusal must say how to read one record and how to list: {message}"
         );
     }
+}
+
+/// [ORB-25881] A refused friction read prescribes an `orbit.search` input that
+/// must return a resolved record when queried by its ID. Each refusal is
+/// followed as written: the JSON it prescribes runs with `query` set to the
+/// friction ID, and the search must return that record.
+#[test]
+fn friction_read_hint_reads_resolved_record() {
+    let root = tempfile::tempdir().expect("fixture");
+    let home = root.path().join("home");
+    let work = root.path().join("work");
+    std::fs::create_dir_all(&home).expect("fixture home");
+    git_repo::init(&work);
+    orbit_command(&work, &home)
+        .args(["workspace", "init", "--name", "friction-read-hint"])
+        .assert()
+        .success();
+
+    let add = json!({
+        "action": "add",
+        "title": "Resolved read probe",
+        "body": "Filed, then resolved, to check the read route the refusal names.",
+        "model": "codex",
+    })
+    .to_string();
+    let filed = tool_stdout_json(&work, &home, &["orbit.friction", "--input", &add]);
+    let filed_id = filed["id"].as_str().expect("filed friction id").to_string();
+    let resolve = json!({"action": "update", "id": filed_id, "status": "resolved"}).to_string();
+    tool_stdout_json(&work, &home, &["orbit.friction", "--input", &resolve]);
+
+    let show = json!({"action": "show", "id": filed_id}).to_string();
+    let inactive_show = json!({"id": filed_id, "model": "codex"}).to_string();
+    let routes = [
+        (
+            "orbit.friction",
+            run_tool(&work, &home, &["orbit.friction", "--input", &show]),
+        ),
+        (
+            "orbit.friction.show",
+            run_tool(
+                &work,
+                &home,
+                &["orbit.friction.show", "--input", &inactive_show],
+            ),
+        ),
+    ];
+    for (route, refusal) in routes {
+        let mut prescribed = prescribed_search_input(&refusal);
+        prescribed["query"] = json!(filed_id);
+        let searched = tool_stdout_json(
+            &work,
+            &home,
+            &["orbit.search", "--input", &prescribed.to_string()],
+        );
+        let hits = searched["results"].as_array().expect("search results");
+        assert!(
+            hits.iter().any(|hit| hit["id"] == filed_id),
+            "the search prescribed by the `{route}` refusal must return the resolved friction queried by its ID: {refusal}\n{searched}"
+        );
+    }
+}
+
+/// The `orbit.search` input a refusal prescribes, read from the JSON object it
+/// carries. A refusal that names the search only in prose prescribes nothing
+/// an agent can run.
+fn prescribed_search_input(refusal: &str) -> Value {
+    let start = refusal.find(r#"{"kind":"friction""#).unwrap_or_else(|| {
+        panic!("the refusal must prescribe a friction search as JSON: {refusal}")
+    });
+    serde_json::Deserializer::from_str(&refusal[start..])
+        .into_iter::<Value>()
+        .next()
+        .expect("the prescribed input is present")
+        .expect("the prescribed input is valid JSON")
+}
+
+fn tool_stdout_json(work: &Path, home: &Path, args: &[&str]) -> Value {
+    let output = orbit_command(work, home)
+        .arg("tool")
+        .arg("run")
+        .args(args)
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    serde_json::from_slice(&output.stdout).expect("JSON tool output")
 }
 
 /// Malformed `--input` and an unreadable `--input-file` fail before workspace
