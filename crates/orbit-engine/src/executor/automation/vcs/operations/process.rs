@@ -243,6 +243,9 @@ pub(in crate::executor::automation::vcs) fn run_vcs_process_within(
         return run_process(&request, &NoSandbox);
     }
     let admit_started = std::time::Instant::now();
+    // The instant the original budget runs out; the post-child accounting
+    // waits for the quota record only until then.
+    let deadline = orbit_tools::github_quota::gh_request_deadline(&request, admit_started);
     let admission = orbit_tools::github_quota::admit_gh_request(
         orbit_tools::github_quota::GithubCaller::Delivery,
         &request,
@@ -252,7 +255,7 @@ pub(in crate::executor::automation::vcs) fn run_vcs_process_within(
     admission?;
     request.timeout_ms = Some(remaining_ms);
     let result = run_process(&request, &NoSandbox)?;
-    orbit_tools::github_quota::observe_gh_result(&request, &result);
+    orbit_tools::github_quota::observe_gh_result_by_deadline(&request, &result, deadline);
     Ok(result)
 }
 

@@ -166,6 +166,9 @@ impl<'a> Source<'a> {
         // rate-limit probe to what remains of this command and source budget,
         // and re-check both before spawning the provider command.
         let mut quota_request = gh_quota_request(program, args, env, self.root);
+        // The instant the request's finite budget runs out, so a throttle the
+        // child reports after the wait is recorded inside that budget.
+        let mut quota_deadline = None;
         let effective_budget = if let Some(request) = quota_request.as_mut() {
             if !frozen_clock {
                 let probe_budget = budget.min(remaining_source_before);
@@ -176,6 +179,7 @@ impl<'a> Source<'a> {
             }
             let command_started = super::budget_now();
             let wall_started = std::time::Instant::now();
+            quota_deadline = orbit_tools::github_quota::gh_request_deadline(request, wall_started);
             let admitted = orbit_tools::github_quota::admit_gh_request(
                 orbit_tools::github_quota::GithubCaller::Background,
                 request,
@@ -307,7 +311,11 @@ impl<'a> Source<'a> {
         if !outcome.success {
             let failure = failure_text(&mut diagnostics, &failure_fallback(&outcome));
             if let Some(request) = &quota_request {
-                orbit_tools::github_quota::observe_gh_failure(request, &failure);
+                orbit_tools::github_quota::observe_gh_failure_by_deadline(
+                    request,
+                    &failure,
+                    quota_deadline,
+                );
             }
             return Err(AutomationError::Deferred(
                 DeferredReason::EvidenceUnavailable(format!(
