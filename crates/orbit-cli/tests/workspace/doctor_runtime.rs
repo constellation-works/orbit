@@ -164,6 +164,28 @@ fn task_relations_probe_reports_a_missing_registry_without_creating_it() {
     assert!(!registry.exists(), "the audit must not create the registry");
 }
 
+fn task_relations_probe_reports_corrupt_bundle_without_registry_setup_advice() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let runtime = workspace_runtime(&temp);
+    let task = add_task(&runtime, "Corrupt bundle", Vec::new());
+    let workspace_id = runtime.workspace_id().expect("workspace id");
+    let envelope = orbit_cmd::task_store_partition_path(&temp.path().join("global"), &workspace_id)
+        .join(task)
+        .join("task.yaml");
+    fs::write(&envelope, "schemaVersion: [\n").expect("corrupt envelope");
+
+    let row = task_relations_row(&runtime);
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning, "{row:?}");
+    assert!(row.message.contains("task.yaml"), "{row:?}");
+    assert!(
+        !row.remediation
+            .as_deref()
+            .unwrap_or_default()
+            .contains("orbit task list"),
+        "{row:?}"
+    );
+}
+
 #[cfg(unix)]
 fn retired_graph_cleanup_unlinks_boundaries_without_following_them() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -309,6 +331,10 @@ fn doctor_runtime_contracts() {
         (
             "task_relations_probe_reports_a_missing_registry_without_creating_it",
             task_relations_probe_reports_a_missing_registry_without_creating_it as fn(),
+        ),
+        (
+            "task_relations_probe_reports_corrupt_bundle_without_registry_setup_advice",
+            task_relations_probe_reports_corrupt_bundle_without_registry_setup_advice as fn(),
         ),
         (
             "browser_kit_backlog_warns_while_ui_tasks_wait_for_this_hosts_kit",

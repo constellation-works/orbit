@@ -31,7 +31,7 @@ pub(in crate::doctor) fn doctor_check_task_relations(
             "task-relations",
             WorkspaceDoctorStatus::Warning,
             format!("cannot audit task relations: {error}"),
-            "The audit only reads the task registry and never creates or migrates it. Run any writable Orbit command, such as `orbit task list`, once to create or migrate the registry, then rerun `orbit doctor`.".to_string(),
+            "Resolve the reported audit error, then rerun `orbit doctor`.".to_string(),
         ),
         Ok(dangling) if dangling.is_empty() => check(
             "task-relations",
