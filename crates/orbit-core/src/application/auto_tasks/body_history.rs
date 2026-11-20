@@ -48,6 +48,7 @@ fn body_digest(definition: &AutoTaskDefinition, base_branch: &str) -> Result<Str
             "enabled",
             "schedule",
             "dedupe",
+            "granted_tools",
             "created_by",
             "created_at",
             "updated_by",
@@ -139,6 +140,7 @@ pub(super) fn historical_overrides(
         historical.template.crew = defaults.crew.clone();
         historical.template.complexity = defaults.complexity;
         historical.template.tags = defaults.tags.clone();
+        historical.granted_tools = defaults.granted_tools.clone().unwrap_or_default();
         let historical_diff = split_overrides(&historical, definition);
         if !historical_diff.body_fields.is_empty() {
             continue;
