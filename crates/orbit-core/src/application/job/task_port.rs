@@ -22,9 +22,42 @@ use crate::application::contracts::{
     AutoEffortSubject, CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool,
     OwnerSourceIdentityRefusal, RetryKey,
 };
-use crate::application::task::{NativePublicationIdentity, TaskJobPort, TaskRow};
+use crate::application::task::{
+    DeliveryCompletion, NativePublicationIdentity, TaskJobPort, TaskRow,
+};
 
 impl TaskJobPort for OrbitRuntime {
+    fn delivery_completion(&self, task_id: &str) -> Result<DeliveryCompletion, OrbitError> {
+        let Some(run) = self.newest_single_task_delivery_run(task_id)? else {
+            return Ok(DeliveryCompletion::NotAuthorized);
+        };
+        let authorized = run
+            .input
+            .as_ref()
+            .and_then(|input| input.get("completion"))
+            .and_then(Value::as_str)
+            == Some("done");
+        let eligible = match run.state {
+            workflow::JobRunState::Pending
+            | workflow::JobRunState::Running
+            | workflow::JobRunState::Retrying => return Ok(DeliveryCompletion::Live),
+            workflow::JobRunState::Success => true,
+            workflow::JobRunState::Held => self
+                .stores()
+                .jobs()
+                .get_job_run(&run.run_id)?
+                .as_ref()
+                .and_then(super::pr_repair::held_refusal)
+                .is_some_and(super::pr_repair::handed_back_hold),
+            _ => false,
+        };
+        Ok(if authorized && eligible {
+            DeliveryCompletion::Authorized { run_id: run.run_id }
+        } else {
+            DeliveryCompletion::NotAuthorized
+        })
+    }
+
     fn is_forecast_delivery_run(&self, run: &JobRun) -> bool {
         !matches!(
             run.job_id.as_str(),

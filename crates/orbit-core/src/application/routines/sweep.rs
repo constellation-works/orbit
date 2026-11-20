@@ -391,6 +391,30 @@ pub(crate) fn run_sweep_at_with_providers_at(
         );
     }
 
+    // [ORB-25966] Merge and settle the delivered pull requests whose
+    // authorised delivery ended with nobody left to finish them. Runs after
+    // settlement so a merge made elsewhere settles first. Owner entries only.
+    if !options.dry_run {
+        each_workspace_in_tick(
+            discovered.entries.iter(),
+            deadline,
+            &mut skipped_workspaces,
+            Some("sweep.owner_auto_landing_failed"),
+            None,
+            |workspace, runtime| {
+                for landed in runtime.land_completion_authorized_tasks()? {
+                    tracing::info!(
+                        workspace = %workspace.name,
+                        task_id = %landed.task_id,
+                        pull_request = landed.pull_request,
+                        "sweep.owner_auto_landed"
+                    );
+                }
+                Ok(())
+            },
+        );
+    }
+
     // Fleet notices linked to a done task in another workspace this host
     // owns are materialized closed here; reads already report them closed,
     // so this only keeps the store honest. Like settlement it starts no

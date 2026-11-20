@@ -2176,6 +2176,38 @@ not refuse it. The task's other open Orbit pull requests close as on any landing
 `orbit task settle-merged <task-id>` names the reason a task does not settle, such
 as its own live claim or no merge into its target branch.
 
+### A delivered pull request whose checks passed and nobody is left to merge it
+
+A delivery run started with `--complete` (`completion: done`) can end with its
+pull request open and the task in `review`: it held after a checks retrigger or
+a rerun hold, or ended before the checks went green. Each owner clock tick
+(`orbit clock tick` / `orbit sweep`) merges and settles such a task itself,
+exactly as `orbit.workflow.land` does, so a green pull request waits at most one
+tick interval. It needs all of these:
+
+- the task is in `review`, no run or claim of its own is live, and no decision
+  request is open;
+- its newest delivery run carried `completion: done` and ended `success`, or
+  `held` on a delivery hold a fresh forge read can clear (the codes listed under
+  [a conflicting or red pull request no run is watching](#a-conflicting-or-red-pull-request-no-run-is-watching));
+- no `completion.hold` rule holds it (a matching rule records `completion_held`
+  and leaves the merge to you), and the pre-landing review covers the pull
+  request's head;
+- its one open delivery pull request is mergeable with every required check passed.
+
+Checks still running, or mergeability GitHub has not computed, wait for the next
+tick. When Orbit does not merge, the task says why: a `landing_follow_up` history
+entry with a typed `code` and the `owner` of the next step, written once per code
+and pull request head:
+
+| `code` | Meaning | Next step (`owner: operator`) |
+|---|---|---|
+| `completion_not_authorized` | The checks passed but the delivery never carried `--complete` | Merge the pull request, then `orbit task settle-merged <task-id>` settles it |
+| `pull_request_conflicting` | The pull request conflicts with its base | Fix PR, or rebase it |
+| `required_checks_failed` | A required check failed on the head | Fix PR, or repair it |
+| `review_not_settled` | The required pre-landing review does not cover the head | Requeue the task for review |
+| `merge_refused` | The forge refused the merge; the entry quotes why | Read the reason and merge by hand |
+
 ### After revoking a claimed handoff
 
 Revoking a claimed handoff's completion authority (the dashboard's **Revoke

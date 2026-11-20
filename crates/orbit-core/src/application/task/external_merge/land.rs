@@ -59,7 +59,7 @@ pub struct TaskPullRequestLanding {
     pub settlement_pending: Option<String>,
 }
 
-fn landing_refused(id: &str, reason: impl std::fmt::Display) -> OrbitError {
+pub(super) fn landing_refused(id: &str, reason: impl std::fmt::Display) -> OrbitError {
     OrbitError::PolicyDenied(format!(
         "{TASK_LANDING_REFUSED}: task '{id}' did not land: {reason}"
     ))
@@ -126,7 +126,7 @@ impl OrbitRuntime {
                 settlement_pending: None,
             });
         };
-        let merge_commit = self.merge_delivery_pull_request(id, number)?;
+        let merge_commit = self.merge_delivery_pull_request(id, number, None)?;
         // The work has landed, so a settlement that fails now is not a failed
         // landing: the owner's settlement pass reads the same merge.
         let settlement_pending = self
@@ -196,7 +196,10 @@ impl OrbitRuntime {
     /// The candidate's one open PR that may deliver it, or `None` when none of
     /// its PRs is open. An open PR that cannot deliver the task, or more than
     /// one that can, is refused: the choice is not this call's to make.
-    fn open_delivery_pull_request(&self, candidate: &Candidate) -> Result<Option<u64>, OrbitError> {
+    pub(super) fn open_delivery_pull_request(
+        &self,
+        candidate: &Candidate,
+    ) -> Result<Option<u64>, OrbitError> {
         let id = candidate.task.id.as_str();
         let repo_root = self.context.paths().repo_root.clone();
         let forge = self.task_pr_forge();
@@ -250,10 +253,23 @@ impl OrbitRuntime {
     }
 
     /// Merge `number` at the head whose required checks were just read.
-    fn merge_delivery_pull_request(&self, id: &str, number: u64) -> Result<String, OrbitError> {
+    /// `expected_head` pins the head a caller already judged (the owner's
+    /// automatic landing); a pull request that moved since is refused.
+    pub(super) fn merge_delivery_pull_request(
+        &self,
+        id: &str,
+        number: u64,
+        expected_head: Option<&str>,
+    ) -> Result<String, OrbitError> {
         let repo_root = self.context.paths().repo_root.clone();
         let forge = self.task_pr_forge();
         let blockers = await_known_merge_blockers(id, number, forge, &repo_root)?;
+        if expected_head.is_some_and(|head| head != blockers.head_sha) {
+            return Err(landing_refused(
+                id,
+                format_args!("pull request #{number} head changed since it was judged"),
+            ));
+        }
         if blockers.conflicting {
             return Err(landing_refused(
                 id,

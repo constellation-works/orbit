@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use crate::external_merge_fixture::*;
 pub(crate) use crate::external_merge_fixture::{Fixture, Handoff};
 
+mod auto_landing;
 mod pr_supersession;
 
 crate::scenario_table!(
