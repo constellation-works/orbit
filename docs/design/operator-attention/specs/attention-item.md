@@ -153,7 +153,7 @@ The task-level implementation returns at most 32 warning findings in `detail.fin
 
 `next` is `{summary, tool, input, command, needs?, also?}`:
 
-- `summary` is a short imperative ("Re-pilot after fixing the cited warning").
+- `summary` is a short imperative ("Edit the description, acceptance criteria or context_files to re-pilot automatically; a comment does not. Operator route: `task repilot`").
 - `tool` and `input` are the exact MCP call; `command` is the same call rendered for the CLI.
   `tool` and `input` are omitted when no MCP tool performs the action (the operator-only
   `orbit decision answer`, `orbit run cancel`, `orbit task update --approve`); `command` is
