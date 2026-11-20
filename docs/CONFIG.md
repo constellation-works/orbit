@@ -2983,7 +2983,7 @@ The former `notice.*` keys are deprecated and ignored ([validation and errors](#
 - **Job-scoped reads (`job` given).** Keyed on repository, run, job and scope. A completed job's log never changes, so a hit makes no GitHub call. On a miss the read first checks, with one `gh api` request, that GitHub reports the job completed; only then is the log kept.
 - **Run-scoped reads.** Keyed on repository, run, run attempt and scope. Every read first asks GitHub for the run's status and attempt (one `gh api` request) and serves from the cache only when the run is completed at a cached attempt; a rerun has a new attempt and downloads its own log.
 - **Never cached.** A log of a job or run that is not completed, an empty log, a log over the 8 MiB source read limit, and a read whose status request failed. A failed status request or cache file falls back to the plain read; the cache never turns a read into an error.
-- **Bounds.** At most 256 MiB in total and 24 hours per entry. Every store removes entries past either bound (oldest first for size, and staging files a crashed write left behind), and a lookup removes the entry it finds expired.
+- **Bounds.** At most 256 MiB in total and 24 hours per entry. Every store removes entries past either bound (oldest first for size, and staging files a crashed write left behind), and a lookup removes the entry it finds expired. A removal only deletes the file it classified: if a concurrent store has since published a fresh entry under the same name, that entry is kept (stores and removals share one lock file beside the cache directory).
 
 ### `[security_alert_sweep]` — security finding severity
 
