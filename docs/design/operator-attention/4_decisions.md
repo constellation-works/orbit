@@ -309,6 +309,10 @@ that token and is the only way a shell without a capability reads attention.
   shell cannot mint its own, and the federated aggregator, `host` and `candidate_read` are refused.
 - **The shell without a grant is refused.** A missing, malformed, unknown or expired token is
   `capability_denied`, as is `all`, `host`, or a workspace the grant does not name.
+- **A selector is not a capability.** A shell holding none is refused `orbit attention` with or
+  without `--workspace`, `--host` or `--all`; the CLI refuses it with `capability_denied` before the
+  federated read, which would otherwise attribute the call to an agent session and return task-level
+  items. A caller holding `agent` or `operator` still reads federated attention.
 - **Stateless cursor, local grant.** The grant is one private file per token under the global root
   holding the SHA-256 of the token, the workspace ids and names, and the expiry; expired files are
   pruned on the next mint. The delta itself still uses the stateless cursor from the read that

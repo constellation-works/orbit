@@ -567,6 +567,50 @@ fn a_routed_call_carries_the_callers_authority_and_no_more() {
     );
 }
 
+/// A shell holding no capability is refused `orbit attention` whatever scope it
+/// names: a workspace, host or `--all` selector must not route around the
+/// grant-only rule through the federated read.
+fn a_shell_without_a_capability_reads_no_attention_through_a_selector() {
+    let routed = Routed::new();
+    let bravo = routed.bravo_selector();
+    let cases: [&[&str]; 6] = [
+        &["attention", "--json"],
+        &["attention", "--workspace", "local-ws", "--json"],
+        &["attention", "--workspace", &bravo, "--json"],
+        &[
+            "attention",
+            "--host",
+            "bravo",
+            "--workspace",
+            "bravo-ws",
+            "--json",
+        ],
+        &["attention", "--all", "--json"],
+        &["attention", "--host", "bravo", "--json"],
+    ];
+    for args in cases {
+        let (code, message) = routed.refused(args);
+        assert_eq!(code, "capability_denied", "{args:?}: {message}");
+    }
+    // An operator still reads across hosts.
+    let output = routed
+        .fleet
+        .orbit_in(
+            &routed.fleet.local.home,
+            &routed.fleet.local_repo,
+            &["attention", "--all", "--json"],
+        )
+        .env("ORBIT_OPERATOR", "1")
+        .output()
+        .expect("spawn orbit");
+    assert!(
+        output.status.success(),
+        "an operator reads federated attention: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn a_write_through_a_mirror_selector_is_refused_by_that_hosts_sole_writer_rule() {
     let routed = Routed::new();
     // B keeps a replica checkout of A's workspace: a mirror of A's tasks.
@@ -1578,6 +1622,10 @@ fn host_routing_contracts_1() {
         (
             "host_flag_resolves_to_the_selector_that_host_lists",
             host_flag_resolves_to_the_selector_that_host_lists as fn(),
+        ),
+        (
+            "a_shell_without_a_capability_reads_no_attention_through_a_selector",
+            a_shell_without_a_capability_reads_no_attention_through_a_selector as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");
