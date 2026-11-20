@@ -91,7 +91,12 @@ fn unreadable_prerequisite_retries_until_green_or_the_original_deadline() {
                     );
                     if persistent {
                         let error = result.unwrap_err().to_string();
-                        assert!(error.contains("workflow prerequisite evidence is unavailable (required integration)"), "{error}");
+                        assert!(
+                            error.contains(
+                                "workflow prerequisite evidence is unavailable (invalid API JSON)"
+                            ),
+                            "{error}"
+                        );
                         assert_eq!(
                             clock.get(),
                             1_030_000,

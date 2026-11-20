@@ -58,6 +58,114 @@ pub(super) struct Snapshot {
     pub(super) statuses: Value,
     pub(super) runs: Value,
 }
+/// First wait between reads of unreadable-but-possibly-transient evidence.
+const FIRST_RETRY_WAIT_MS: u64 = 5_000;
+
+/// Poll interval a snapshot's retry wait grows to when the caller names none:
+/// the completion wait's default.
+const DEFAULT_POLL_INTERVAL_MS: u64 = 30_000;
+
+/// The one classification of unreadable causes. Every cause not listed here is
+/// transient: the provider may simply not have reported it yet (a head that
+/// lags the pull request, a check or status not reported), so the snapshot
+/// reads again with a growing wait. Each listed cause cannot change within
+/// seconds, and some not at all without a new head or an operator, so the
+/// snapshot returns it at once instead of spending REST quota on retries.
+const NON_TRANSIENT_CAUSES: &[(&str, &str)] = &[
+    (
+        "PR/head selector",
+        "the selector does not parse, and a read cannot repair it",
+    ),
+    (
+        "PR number",
+        "the pull request number does not parse, and a read cannot repair it",
+    ),
+    (
+        "truncated check_runs",
+        "a list over 100 entries only grows while the head stands",
+    ),
+    (
+        "truncated statuses",
+        "a list over 100 entries only grows while the head stands",
+    ),
+    (
+        "truncated workflow_runs",
+        "a list over 100 entries only grows while the head stands",
+    ),
+    (
+        "truncated effective rules",
+        "a rule list over 100 entries only grows until an operator trims it",
+    ),
+    (
+        "classic branch rule",
+        "the classic branch rule shape is one the reader does not accept",
+    ),
+    (
+        "classic required contexts",
+        "the classic required-context shape is one the reader does not accept",
+    ),
+    (
+        "classic integration identity",
+        "the classic integration identity shape is one the reader does not accept",
+    ),
+    (
+        "effective required checks",
+        "the ruleset's required-check shape is one the reader does not accept",
+    ),
+    (
+        "required integration",
+        "the ruleset's integration identity is one the reader does not accept",
+    ),
+    (
+        "ruleset_id",
+        "the ruleset shape is one the reader does not accept",
+    ),
+    (
+        "ruleset_source",
+        "the ruleset shape is one the reader does not accept",
+    ),
+    (
+        "ruleset_source_type",
+        "the ruleset shape is one the reader does not accept",
+    ),
+    (
+        "an additional administrative rule may block completion",
+        "a ruleset the reader does not accept stays until an operator changes it",
+    ),
+    (
+        "required or unreadable review decision",
+        "a review decision that is neither approved nor absent waits on a reviewer, not on a retry",
+    ),
+];
+
+/// Why `error` is an unreadable cause no retry can clear, or `None` when it is
+/// transient (or not an unreadable-evidence error at all).
+fn non_transient_reason(error: &OrbitError) -> Option<&'static str> {
+    let OrbitError::WorkflowEvidenceUnavailable(evidence) = error else {
+        return None;
+    };
+    NON_TRANSIENT_CAUSES
+        .iter()
+        .find(|(cause, _)| *cause == evidence.reason)
+        .map(|(_, why)| *why)
+}
+
+/// The caller's poll interval, in milliseconds: the optional
+/// `poll_interval_seconds` input within the completion wait's bounds
+/// (5 s to 10 min), else its 30 s default.
+pub(super) fn poll_interval_ms(input: &Value) -> u64 {
+    input
+        .get("poll_interval_seconds")
+        .and_then(Value::as_u64)
+        .map_or(DEFAULT_POLL_INTERVAL_MS, |seconds| {
+            seconds.clamp(5, 600) * 1_000
+        })
+}
+
+/// Read the current-gates evidence once it is readable. An unreadable cause
+/// that cannot change returns at once; a transient one is read again after a
+/// wait that starts at 5 s and doubles up to `poll_interval_ms`, until the
+/// deadline ends the wait with the last unreadable cause.
 pub(super) fn snapshot(
     deadline: Deadline,
     workspace: &Path,
@@ -65,6 +173,7 @@ pub(super) fn snapshot(
     head: &str,
     branch: &str,
     base: &str,
+    poll_interval_ms: u64,
 ) -> Result<Snapshot, OrbitError> {
     if pr.is_empty()
         || !pr.bytes().all(|byte| byte.is_ascii_digit())
@@ -74,6 +183,8 @@ pub(super) fn snapshot(
     }
     let mut previous_unreadable = None;
     let mut throttle_waits = 0;
+    let wait_cap = poll_interval_ms.max(1);
+    let mut next_wait = FIRST_RETRY_WAIT_MS.min(wait_cap);
     loop {
         let error = match snapshot_once(deadline, workspace, pr, head, branch, base) {
             Ok(snapshot) => return Ok(snapshot),
@@ -95,14 +206,25 @@ pub(super) fn snapshot(
         if !matches!(&error, OrbitError::WorkflowEvidenceUnavailable(_)) {
             return Err(error);
         }
+        // [ORB-25870] A cause a read cannot clear is not worth another read.
+        if let Some(why) = non_transient_reason(&error) {
+            tracing::debug!(
+                target: "orbit_engine::executor::automation::vcs::operations",
+                reason = why,
+                "workflow prerequisite evidence is unreadable and will not change on a retry"
+            );
+            return Err(error);
+        }
         // Unreadable evidence may come from a stale repository identity.
         super::read_cache::forget_repository_identity(workspace);
-        let Ok(remaining) = deadline.remaining() else {
+        // The wait is bounded by the deadline itself, not by one read's cap.
+        let Ok(remaining) = deadline.remaining_uncapped() else {
             return Err(error);
         };
         super::super::remote_probe::fixed_wait(std::time::Duration::from_millis(
-            remaining.min(5_000),
+            remaining.min(next_wait),
         ));
+        next_wait = next_wait.saturating_mul(2).min(wait_cap);
         // Keep the original unreadable-evidence diagnostic at exhaustion,
         // rather than replacing it with a generic deadline error.
         if deadline.remaining().is_err() {
@@ -574,7 +696,15 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     let branch = required_string(input, "head_branch")?;
     let base = required_string(input, "base_branch")?;
     let deadline = Deadline::from_input(input)?;
-    let snapshot = snapshot(deadline, workspace, pr, head, branch, base)?;
+    let snapshot = snapshot(
+        deadline,
+        workspace,
+        pr,
+        head,
+        branch,
+        base,
+        poll_interval_ms(input),
+    )?;
     let checks = complete_list(&snapshot.checks, "check_runs")?;
     let statuses = complete_list(&snapshot.statuses, "statuses")?;
     let missing = snapshot
@@ -844,7 +974,12 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
                 "candidate-owned workflow failure cannot authorize infrastructure recovery",
             ));
         }
-        return super::failed_workflow::observe_failed_workflow(deadline, workspace, &evidence);
+        return super::failed_workflow::observe_failed_workflow(
+            deadline,
+            workspace,
+            &evidence,
+            poll_interval_ms(input),
+        );
     }
     if evidence.required.is_empty() {
         return Err(unreadable("reserved protected contexts"));
@@ -856,6 +991,7 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
         &evidence.head_sha,
         &evidence.head_branch,
         &evidence.base_branch,
+        poll_interval_ms(input),
     )?;
     if snapshot.repository != evidence.repository
         || snapshot.repository_id != evidence.repository_id

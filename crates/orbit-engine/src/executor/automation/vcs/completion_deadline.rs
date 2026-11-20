@@ -37,7 +37,9 @@ impl Deadline {
             .map(Self)
             .ok_or_else(|| error("missing completion deadline"))
     }
-    fn remaining_uncapped(self) -> Result<u64, OrbitError> {
+    /// Time to the absolute deadline, without one read's cap: a wait between
+    /// reads is bounded by the deadline itself.
+    pub(super) fn remaining_uncapped(self) -> Result<u64, OrbitError> {
         self.0
             .checked_sub(now_ms()?)
             .filter(|ms| *ms > 0)
