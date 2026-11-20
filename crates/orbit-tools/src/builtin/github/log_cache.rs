@@ -17,6 +17,12 @@
 //! entries past either bound, oldest first, and a lookup removes the entry it
 //! finds expired.
 //!
+//! A removal acts on the entry it classified, not on whatever now holds the
+//! name: a concurrent store may have replaced it with a fresh log. Publishing
+//! and removing therefore take one advisory lock (a sibling `<directory>.lock`
+//! file, so it is never an entry), and a removal re-checks, under that lock,
+//! that the name still holds the file it classified.
+//!
 //! Entries live under `<Orbit data root>/cache/github-run-logs/`, in a `0700`
 //! directory, as `0600` files written through a staging file and an atomic
 //! rename. The logs are stored as GitHub served them, before redaction, so
@@ -24,7 +30,7 @@
 //! owning user can read it. Any failure to read or write the cache is a miss,
 //! never a read error.
 
-use std::fs;
+use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -117,6 +123,44 @@ impl LogCache {
         self.directory.join(format!("{}.{ENTRY_EXTENSION}", key.0))
     }
 
+    /// Take the exclusive publish/remove lock. `None` when it cannot be taken;
+    /// the caller then leaves the entry alone (a removal is only housekeeping).
+    /// The lock is released when the returned file is dropped.
+    fn lock_mutations(&self) -> Option<File> {
+        let mut name = self.directory.as_os_str().to_owned();
+        name.push(".lock");
+        let lock_path = PathBuf::from(name);
+        if let Some(parent) = lock_path.parent() {
+            orbit_common::fs::io::create_private_dir_all(parent).ok()?;
+        }
+        let lock = File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path)
+            .ok()?;
+        lock.lock().ok()?;
+        Some(lock)
+    }
+
+    /// Remove the file at `path` only while it is still the file `classified`
+    /// describes. A path that now holds a different file (a fresh publication
+    /// replaced the one that was classified) is left in place. Returns whether
+    /// the path was removed.
+    pub(crate) fn remove_if_unchanged(&self, path: &Path, classified: &fs::Metadata) -> bool {
+        let Some(_lock) = self.lock_mutations() else {
+            return false;
+        };
+        let Ok(current) = fs::symlink_metadata(path) else {
+            return false;
+        };
+        if !same_file(&current, classified) {
+            return false;
+        }
+        fs::remove_file(path).is_ok()
+    }
+
     /// The cached source bytes for `key`, or `None` on a miss. An entry past
     /// the age bound, or one that is not a plain file within the size bound, is
     /// removed and reported as a miss.
@@ -128,7 +172,7 @@ impl LogCache {
             || metadata.len() > self.max_total_bytes
             || self.expired(&metadata, SystemTime::now())
         {
-            let _ = fs::remove_file(&path);
+            self.remove_if_unchanged(&path, &metadata);
             return None;
         }
         let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).ok()?);
@@ -163,6 +207,9 @@ impl LogCache {
             .tempfile_in(&self.directory)?;
         staged.write_all(bytes)?;
         orbit_common::fs::io::sync_file(staged.as_file())?;
+        let _lock = self
+            .lock_mutations()
+            .ok_or_else(|| std::io::Error::other("github run log cache lock unavailable"))?;
         staged
             .persist(self.entry_path(key))
             .map_err(|error| error.error)?;
@@ -185,7 +232,7 @@ impl LogCache {
             return;
         };
         let now = SystemTime::now();
-        let mut live: Vec<(SystemTime, u64, PathBuf)> = Vec::new();
+        let mut live: Vec<(SystemTime, PathBuf, fs::Metadata)> = Vec::new();
         for entry in entries.flatten() {
             let path = entry.path();
             let Ok(metadata) = entry.metadata() else {
@@ -195,21 +242,34 @@ impl LogCache {
                 continue;
             }
             if self.expired(&metadata, now) {
-                let _ = fs::remove_file(&path);
+                self.remove_if_unchanged(&path, &metadata);
                 continue;
             }
             let written = metadata.modified().unwrap_or(now);
-            live.push((written, metadata.len(), path));
+            live.push((written, path, metadata));
         }
-        let mut total: u64 = live.iter().map(|(_, size, _)| size).sum();
-        live.sort_by_key(|(written, _, path)| (path == keep, *written));
-        for (_, size, path) in live {
+        let mut total: u64 = live.iter().map(|(_, _, metadata)| metadata.len()).sum();
+        live.sort_by_key(|(written, path, _)| (path == keep, *written));
+        for (_, path, metadata) in live {
             if total <= self.max_total_bytes {
                 break;
             }
-            if fs::remove_file(&path).is_ok() {
-                total = total.saturating_sub(size);
+            if self.remove_if_unchanged(&path, &metadata) {
+                total = total.saturating_sub(metadata.len());
             }
         }
     }
+}
+
+/// Whether two metadata snapshots describe the same file, not merely the same
+/// name: a replaced entry differs in inode (Unix), write time or length.
+fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if left.dev() != right.dev() || left.ino() != right.ino() {
+            return false;
+        }
+    }
+    left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }

@@ -112,3 +112,32 @@ fn entries_are_owner_only_and_a_staging_file_is_never_an_entry() {
     fs::write(cache_dir.join(".staging-half"), b"partial").unwrap();
     assert_eq!(cache.get(&key("2")), None);
 }
+
+/// A reader or prune that classified an expired entry must not remove the
+/// fresh entry a concurrent store published under the same name before the
+/// removal ran; an unchanged expired entry is still removed.
+#[test]
+fn a_fresh_publication_survives_the_removal_of_the_entry_it_replaced() {
+    let dir = TempDir::new().unwrap();
+    let cache_dir = dir.path().join("c");
+    let cache = LogCache::new(cache_dir.clone(), 1 << 20, Duration::from_secs(60));
+    cache.put(&key("1"), b"old log");
+    age(&cache_dir, Duration::from_secs(120));
+    let path = fs::read_dir(&cache_dir)
+        .unwrap()
+        .flatten()
+        .next()
+        .unwrap()
+        .path();
+    let stale = fs::symlink_metadata(&path).unwrap();
+
+    cache.put(&key("1"), b"fresh log");
+    assert!(!cache.remove_if_unchanged(&path, &stale));
+    assert!(cache.get(&key("1")).is_some());
+
+    // An unchanged expired entry is still removed.
+    age(&cache_dir, Duration::from_secs(120));
+    let expired = fs::symlink_metadata(&path).unwrap();
+    assert!(cache.remove_if_unchanged(&path, &expired));
+    assert_eq!(cache.get(&key("1")), None);
+}
