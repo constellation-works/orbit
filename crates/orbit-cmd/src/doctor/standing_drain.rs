@@ -90,10 +90,15 @@ fn keeper_sentence(runtime: &OrbitRuntime) -> String {
     );
     if let Some(breaker) = view.breaker {
         sentence.push_str(&format!(
-            " Crash breaker {} ({} of {} keeper drains failed or interrupted in the last hour).",
+            " Crash breaker {} ({} of {} keeper drains failed or interrupted within an hour{}).",
             if breaker.open() { "open" } else { "closed" },
             breaker.failed,
             breaker.threshold,
+            if breaker.open() {
+                "; stays open until a person starts a drain"
+            } else {
+                ""
+            },
         ));
     }
     if let Some(last) = view.last_decision {

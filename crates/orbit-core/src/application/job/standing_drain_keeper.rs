@@ -15,10 +15,12 @@
 //!    task it may pilot. This is the waiting set the idle-with-work figure
 //!    counts, so it is a ceiling; the drain's own admission ladder decides.
 //! 5. `min_resubmit_interval` has passed since the newest drain ended.
-//! 6. The crash breaker is closed: fewer than `max_failed_resubmits` keeper
-//!    drains ended failed or interrupted in the last hour since a person last
-//!    started a drain. An upgrade interruption is a deploy, not a crash, and
-//!    does not count.
+//! 6. The crash breaker is closed: no `max_failed_resubmits` keeper drains
+//!    ended failed or interrupted within one hour of each other since a
+//!    person last started a drain. The breaker latches: once that many
+//!    failures cluster inside an hour it stays open however much time passes,
+//!    until a hand start. An upgrade interruption is a deploy, not a crash,
+//!    and does not count.
 //!
 //! The keeper admits no task and adds no dispatch path: the drain it submits
 //! goes through the unchanged admission ladder. Its flags come from config,
@@ -53,7 +55,7 @@ pub(crate) const KEEPER_SUBMIT_AUDIT: &str = "drain.keeper.submit";
 /// Audit tool name of a keeper skip.
 pub(crate) const KEEPER_SKIP_AUDIT: &str = "drain.keeper.skip";
 
-/// The rolling window the crash breaker counts failed keeper drains in.
+/// The span in which `max_failed_resubmits` keeper failures trip the breaker.
 const BREAKER_WINDOW: TimeDelta = TimeDelta::hours(1);
 /// Failed keeper drains read per breaker check; above any admitted threshold.
 const BREAKER_SCAN_LIMIT: usize = 128;
@@ -70,15 +72,19 @@ pub enum KeeperDecision {
 /// The crash breaker's reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeeperBreaker {
-    /// Keeper drains that ended failed or interrupted inside the window.
+    /// Keeper drains that ended failed or interrupted inside the hour that
+    /// tripped the breaker; while the breaker is closed, inside the last hour.
     pub failed: usize,
     /// `workflow.standing_drain.max_failed_resubmits`.
     pub threshold: u32,
-    /// The newest such failure.
+    /// The newest failure counted in `failed`.
     pub last_failed_at: Option<DateTime<Utc>>,
 }
 
 impl KeeperBreaker {
+    /// Whether the breaker is open. The reading latches (see
+    /// [`OrbitRuntime::standing_drain_keeper_breaker`]), so this does not
+    /// close as the failures age.
     #[must_use]
     pub fn open(&self) -> bool {
         self.failed >= self.threshold as usize
@@ -280,17 +286,19 @@ impl OrbitRuntime {
             .any(|task| matches!(task.status, TaskStatus::Backlog | TaskStatus::Proposed)))
     }
 
-    /// The crash breaker: keeper drains that ended failed or interrupted in
-    /// the last hour, after the hand start that set the intent `on` (a person
-    /// starting a drain closes the breaker). Upgrade interruptions are
-    /// deploys and do not count.
+    /// The crash breaker. It latches: it is open once `max_failed_resubmits`
+    /// keeper drains ended failed or interrupted within one hour of each
+    /// other, and stays open however long ago that was, until a hand start
+    /// (the drain intent set `on` by a person) closes it. Only drains created
+    /// after the latest hand start count. Upgrade interruptions are deploys
+    /// and do not count. While closed, `failed` is the number of failures in
+    /// the last hour.
     pub(crate) fn standing_drain_keeper_breaker(
         &self,
         settings: &StandingDrainSettings,
         intent: Option<&DrainIntentRecord>,
         now: DateTime<Utc>,
     ) -> Result<KeeperBreaker, OrbitError> {
-        let since = now - BREAKER_WINDOW;
         let hand_start = intent
             .filter(|intent| intent.intent == DrainIntentState::On)
             .map(|intent| intent.updated_at);
@@ -298,18 +306,14 @@ impl OrbitRuntime {
             job_id: Some(WORKSPACE_AUTO_PIPELINE_JOB.to_string()),
             trigger_routine: Some(STANDING_DRAIN_KEEPER.to_string()),
             states: vec![JobRunState::Failed, JobRunState::Interrupted],
-            recency_since: Some(since),
+            created_since: hand_start,
             order_by: JobRunOrder::Recency,
             limit: Some(BREAKER_SCAN_LIMIT),
             include_steps: true,
             input_keys: Some(&[]),
             ..JobRunQuery::default()
         })?;
-        let mut breaker = KeeperBreaker {
-            failed: 0,
-            threshold: settings.max_failed_resubmits,
-            last_failed_at: None,
-        };
+        let mut ended_at = Vec::new();
         for run in failed {
             // A drain created before the latest hand start belongs to the
             // breaker that start closed.
@@ -319,13 +323,34 @@ impl OrbitRuntime {
             if super::upgrade_resume::upgrade_interrupted(&run) {
                 continue;
             }
-            let Some(ended) = run.finished_at.filter(|ended| *ended >= since) else {
-                continue;
-            };
-            breaker.failed += 1;
-            breaker.last_failed_at = breaker.last_failed_at.max(Some(ended));
+            if let Some(ended) = run.finished_at {
+                ended_at.push(ended);
+            }
         }
-        Ok(breaker)
+        // Newest first.
+        ended_at.sort_unstable_by(|a, b| b.cmp(a));
+        let threshold = settings.max_failed_resubmits;
+        let span = usize::try_from(threshold).unwrap_or(usize::MAX).max(1);
+        // The newest run of `threshold` failures that fit inside one hour
+        // trips the breaker.
+        let tripped = ended_at
+            .windows(span)
+            .position(|run| run[0].signed_duration_since(run[span - 1]) <= BREAKER_WINDOW);
+        let (since, newest) = match tripped {
+            Some(newest) => (ended_at[newest] - BREAKER_WINDOW, newest),
+            None => (now - BREAKER_WINDOW, 0),
+        };
+        let counted: Vec<DateTime<Utc>> = ended_at
+            .iter()
+            .skip(newest)
+            .copied()
+            .take_while(|ended| *ended >= since)
+            .collect();
+        Ok(KeeperBreaker {
+            failed: counted.len(),
+            threshold,
+            last_failed_at: counted.first().copied(),
+        })
     }
 
     /// The keeper's configuration, breaker and last decision, for readiness,

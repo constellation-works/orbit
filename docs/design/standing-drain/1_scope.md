@@ -150,7 +150,8 @@ satisfies the chief's gate: there is no dispatch path outside the ladder.
 - `min_resubmit_interval` (default 10 min) limits how fast it can churn.
 - Crash breaker: if `max_failed_resubmits` (default 3) keeper-started drains end failed or
   interrupted within an hour, the intent stays `on`, the keeper stops submitting, and attention reports it until a
-  person starts a drain or lifts the breaker.
+  person starts a drain. The breaker latches: the hour is only how closely the failures must cluster to trip it, so
+  it stays open however much time passes with no hand start.
 - Owner only, and only on hosts where the clock runs. If the host is off, nothing happens. The 18.25 h shutdown
   gap is not in scope.
 
@@ -163,7 +164,7 @@ satisfies the chief's gate: there is no dispatch path outside the ladder.
 | `workflow.standing_drain.concurrency` | unset | The worker ceiling (`max_active_leaf_runs`) of each submitted drain. Unset omits it, so the job default applies: 5, from `workspace_auto_pipeline` `default_input`. This matches a plain `run auto` without `--concurrency` |
 | `workflow.standing_drain.complete` / `.approve_proposed` / `.auto_fix` | `false` | Same meaning as the `run auto` flags |
 | `workflow.standing_drain.min_resubmit_interval` | `"10m"` | Minimum time from one drain's end to the keeper's next submission |
-| `workflow.standing_drain.max_failed_resubmits` | `3` | Crash-breaker threshold per rolling hour |
+| `workflow.standing_drain.max_failed_resubmits` | `3` | Crash-breaker threshold: failures within one hour trip it, and it stays open until a hand start |
 
 The `false` default applies to every workspace and every host, followers and workspaces that
 never keep a drain included.

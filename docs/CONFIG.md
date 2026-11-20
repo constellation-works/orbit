@@ -924,7 +924,7 @@ max_failed_resubmits = 3
 | `workflow.standing_drain.approve_proposed` | `false` | **Advanced.** Keeper drains approve `proposed` tasks that pass the task pilot, as `run auto --approve-proposed` does. |
 | `workflow.standing_drain.auto_fix` | `false` | **Advanced.** Keeper drains repair failing checks and conflicts on their pull requests, as `run auto --auto-fix` does. |
 | `workflow.standing_drain.min_resubmit_interval` | `"10m"` | **Advanced.** Least time from the newest drain's end to the keeper's next submission (`1m`–`24h`). |
-| `workflow.standing_drain.max_failed_resubmits` | `3` | **Advanced.** Crash breaker: once this many keeper drains end `failed` or `interrupted` within an hour (an upgrade interruption does not count), the keeper submits nothing until a person starts a drain (`1`–`100`). |
+| `workflow.standing_drain.max_failed_resubmits` | `3` | **Advanced.** Crash breaker: once this many keeper drains end `failed` or `interrupted` within one hour of each other (an upgrade interruption does not count), the keeper submits nothing, however much time passes, until a person starts a drain (`1`–`100`). |
 
 **Setting `enabled` and `approve_proposed` is the operator's (Daniel's) decision**, as creating a routine is: `enabled` lets the clock start drains with nobody present, and `approve_proposed` lets those drains approve work. No agent session sets them, and no session sets `enabled = true` on a live host for a test; QA runs under a disposable home. Orbit has no operator-only class of config key, so this is a rule, not something the config layer enforces.
 
