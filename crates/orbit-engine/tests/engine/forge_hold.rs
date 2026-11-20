@@ -458,10 +458,16 @@ fn an_outage_past_the_budget_holds_the_run_and_a_resume_pushes_the_same_head() {
             let job = delivery(&fixture, 3);
             let held = ForgeHost::default();
 
+            let before = Utc::now();
             let outcome = execute(&job, &held, None);
+            let after = Utc::now();
 
             assert!(!outcome.success);
             let hold = outcome.forge_hold.clone().expect("a typed forge hold");
+            assert!(
+                hold.held_at >= before && hold.held_at <= after,
+                "hold timestamp must reflect the hold instant: {hold:?}"
+            );
             assert_eq!(hold.step_id, "push");
             assert_eq!(hold.head_sha, fixture.head);
             assert_eq!(hold.target_ref, format!("refs/heads/{BRANCH}"));
@@ -519,7 +525,6 @@ fn an_outage_past_the_budget_holds_the_run_and_a_resume_pushes_the_same_head() {
                 resumed.inputs("open_pull_request")[0]["head_sha"],
                 fixture.head.as_str()
             );
-            assert!(Utc::now() >= hold.held_at);
         },
     );
 }

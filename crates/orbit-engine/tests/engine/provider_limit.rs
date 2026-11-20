@@ -320,8 +320,9 @@ fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
                 );
             }
             "codex" => {
+                // `<+05>-5` is UTC+5, so 15:42 local on 2026-10-09 is 10:42 UTC.
                 let expected = Utc
-                    .with_ymd_and_hms(2026, 10, 9, 15, 42, 0)
+                    .with_ymd_and_hms(2026, 10, 9, 10, 42, 0)
                     .single()
                     .unwrap();
                 assert_eq!(limit.resets_at, Some(expected), "{label}");
@@ -394,6 +395,8 @@ fn an_antigravity_error_result_on_exit_zero_is_a_usage_limit() {
 /// `rate_limit_info` names the window and its epoch reset, and fails the turn
 /// even on exit 0.
 fn reported_resets_and_windows_are_read_from_the_providers_own_words() {
+    let offset = *Local::now().offset();
+    assert_ne!(offset.local_minus_utc(), 0);
     let before = Local::now().date_naive();
     let (_, message, _, _) = dispatch(
         0,
@@ -408,10 +411,31 @@ fn reported_resets_and_windows_are_read_from_the_providers_own_words() {
     );
     let limit = typed_limit(message.as_deref(), "codex");
     let after = Local::now().date_naive();
-    let local = limit
-        .resets_at
-        .expect("codex said when it resets")
-        .with_timezone(&Local);
+    let resets_at = limit.resets_at.expect("codex said when it resets");
+    let expected_before = before
+        .and_hms_opt(15, 42, 0)
+        .unwrap()
+        .and_local_timezone(offset)
+        .single()
+        .unwrap()
+        .with_timezone(&Utc);
+    let expected_after = after
+        .and_hms_opt(15, 42, 0)
+        .unwrap()
+        .and_local_timezone(offset)
+        .single()
+        .unwrap()
+        .with_timezone(&Utc);
+    assert!(
+        resets_at >= expected_before && resets_at <= expected_after,
+        "UTC instant must honor host offset {offset}: {resets_at} not in {expected_before}..={expected_after}"
+    );
+    assert_eq!(
+        (resets_at.hour(), resets_at.minute()),
+        (10, 42),
+        "{message:?}"
+    );
+    let local = resets_at.with_timezone(&Local);
     assert_eq!((local.hour(), local.minute()), (15, 42), "{message:?}");
     assert!(local.date_naive() >= before && local.date_naive() <= after);
     assert_eq!(limit.model, None, "the limit names no model");
@@ -539,10 +563,11 @@ fn provider_limit_contracts_1() {
     crate::git_fixture::isolated_with_timezone(
         module_path!(),
         "provider_limit_contracts_1",
-        Some("UTC"),
+        Some("<+05>-5"),
         || {
-            assert_eq!(std::env::var("TZ").as_deref(), Ok("UTC"));
-            assert_eq!(Local::now().offset().local_minus_utc(), 0);
+            assert_eq!(std::env::var("TZ").as_deref(), Ok("<+05>-5"));
+            assert_eq!(Local::now().offset().local_minus_utc(), 5 * 3600);
+            assert_ne!(Local::now().offset().local_minus_utc(), 0);
             crate::git_fixture::run_scenarios(&[
                 (
                     "usage_limits_are_typed_only_from_text_the_failed_provider_wrote",

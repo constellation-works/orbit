@@ -795,6 +795,8 @@ struct ForgeState {
     job_times: HashMap<u64, (&'static str, &'static str)>,
     /// Exercise the real branch-run adapter against a local substitute gh.
     base_push_provider: bool,
+    /// Exercise the real `ci.rerun_plan` adapter against a local substitute gh.
+    real_rerun_plan: bool,
     /// Commits whose job query fails.
     unreadable: Vec<String>,
     /// Deterministic log collector timeouts before the real log becomes readable.
@@ -1077,6 +1079,10 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
         let candidate = &self.context.candidate;
         match operation {
             "ci.rerun_plan" => {
+                if state.real_rerun_plan {
+                    drop(state);
+                    return orbit_engine::run_private_vcs_operation(operation, &input);
+                }
                 if let Some(error) = state.rerun_plan_error {
                     return Err(OrbitError::Execution(error.into()));
                 }
@@ -2538,34 +2544,40 @@ fn inherited_landing_waits_for_a_later_passing_base_and_updates_again() {
 
 #[test]
 fn landing_accepts_two_clean_operator_base_merges_and_refuses_a_dirty_hop() {
-    for shape in [
-        UpdateShape::CleanMerge,
-        UpdateShape::Dirty,
-        UpdateShape::NotAMerge,
-        UpdateShape::Foreign,
-    ] {
-        let sandbox = tempdir().unwrap();
-        let remote = tempdir().unwrap();
-        let mut forge = FakeForge::new(sandbox.path(), false);
-        fix_base(&forge.repo);
-        forge.publish(remote.path());
-        let candidate = forge.context.candidate.candidate.commit.clone();
-        let first = provider_update(remote.path(), &candidate, shape);
-        let second = provider_update(remote.path(), &first, UpdateShape::CleanMerge);
-        forge.state.lock().unwrap().head = second.clone();
-        forge.job(&second, passed(1, 11));
-        let result = land_now(&forge);
-        if matches!(shape, UpdateShape::CleanMerge) {
-            assert_eq!(
-                result.expect("both clean hops are the accepted candidate")["phase"],
-                "landed"
-            );
-            assert_eq!(forge.sent("pr.merge")[0]["reviewed_head_sha"], second);
-        } else {
-            result.expect_err("a clean outer merge cannot hide an invalid inner hop");
-            assert_not_sent(&forge, &["pr.merge"], "invalid inner hop");
-        }
-    }
+    crate::git_fixture::isolated(
+        module_path!(),
+        "landing_accepts_two_clean_operator_base_merges_and_refuses_a_dirty_hop",
+        || {
+            for shape in [
+                UpdateShape::CleanMerge,
+                UpdateShape::Dirty,
+                UpdateShape::NotAMerge,
+                UpdateShape::Foreign,
+            ] {
+                let sandbox = tempdir().unwrap();
+                let remote = tempdir().unwrap();
+                let mut forge = FakeForge::new(sandbox.path(), false);
+                fix_base(&forge.repo);
+                forge.publish(remote.path());
+                let candidate = forge.context.candidate.candidate.commit.clone();
+                let first = provider_update(remote.path(), &candidate, shape);
+                let second = provider_update(remote.path(), &first, UpdateShape::CleanMerge);
+                forge.state.lock().unwrap().head = second.clone();
+                forge.job(&second, passed(1, 11));
+                let result = land_now(&forge);
+                if matches!(shape, UpdateShape::CleanMerge) {
+                    assert_eq!(
+                        result.expect("both clean hops are the accepted candidate")["phase"],
+                        "landed"
+                    );
+                    assert_eq!(forge.sent("pr.merge")[0]["reviewed_head_sha"], second);
+                } else {
+                    result.expect_err("a clean outer merge cannot hide an invalid inner hop");
+                    assert_not_sent(&forge, &["pr.merge"], "invalid inner hop");
+                }
+            }
+        },
+    );
 }
 
 /// [ORB-16322] An inherited check that still fails after the one branch
@@ -2744,7 +2756,7 @@ fn a_candidate_caused_check_failure_requeues_the_candidate() {
 
 /// A green base run, even an earlier one, only authorizes one unchanged-head
 /// PR rerun. The same signature on that rerun is candidate-caused; a passing
-/// rerun clears it, and missing base evidence remains a bounded hold.
+/// rerun clears it, and a newly failing base remains a bounded hold.
 #[test]
 fn untouched_failure_requires_the_same_signature_unchanged_head_rerun() {
     // Runner checkout paths, as a hosted lockfile audit cites them.
@@ -2916,17 +2928,8 @@ fn untouched_failure_requires_the_same_signature_unchanged_head_rerun() {
                     >= 2,
                 "{case}: re-check the base after its stale run"
             );
-            if case == "fresh_green" {
-                assert_reason(&forge, case, &["classified `candidate`"]);
-            } else if case == "fresh_red" {
-                assert_reason(&forge, case, &["classified `inherited`"]);
-            } else {
-                assert!(
-                    forge.last_evidence().contains("base-suspect"),
-                    "{}",
-                    forge.last_evidence()
-                );
-            }
+            assert_eq!(case, "fresh_red");
+            assert_reason(&forge, case, &["classified `inherited`"]);
         }
     }
 }
@@ -3519,27 +3522,159 @@ fn a_transient_check_failure_respects_the_configured_retry_limit() {
     }
 }
 
+/// Non-`pull_request` transient workflow runs (such as `push` or
+/// `workflow_dispatch`) are refused by the real `ci.rerun_plan` adapter before
+/// any rerun or repair is sent.
+#[cfg(unix)]
 #[test]
-fn transient_non_pull_request_rerun_records_the_source_event() {
-    for event in ["push", "workflow_dispatch"] {
-        let (_sandbox, forge, candidate, _base) = forge_fixture(true, false);
-        let mut failure = failed(1, 11, NETWORK_FLAKE);
-        failure.event = event;
-        forge.job(&candidate, failure);
-        assert!(
-            land_now(&forge).is_err(),
-            "{event}: a foreign event cannot authorize a PR retry"
-        );
-        assert!(forge.sent("ci.rerun_failed").is_empty());
-        assert!(
-            !forge
-                .history
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|row| row.event == "ci_check_rerun")
-        );
-    }
+fn transient_non_pull_request_rerun_is_refused_without_retrying() {
+    use std::os::unix::fs::PermissionsExt;
+
+    crate::git_fixture::isolated(
+        module_path!(),
+        "transient_non_pull_request_rerun_is_refused_without_retrying",
+        || {
+            for event in ["push", "workflow_dispatch"] {
+                let (_sandbox, forge, candidate, base) = forge_fixture(true, false);
+                let mut failure = failed(1, 11, NETWORK_FLAKE);
+                failure.event = event;
+                forge.job(&candidate, failure);
+                forge.state.lock().unwrap().real_rerun_plan = true;
+
+                let repo_json = json!({
+                    "id": 1,
+                    "full_name": "owner/repository",
+                    "url": "https://api.github.com/repos/owner/repository",
+                });
+                let pr_json = json!({
+                    "number": 42,
+                    "state": "open",
+                    "merged": false,
+                    "head": {"sha": candidate, "ref": "orbit/T1", "repo": repo_json},
+                    "base": {"sha": base, "ref": "main", "repo": repo_json},
+                });
+                let policy_json = json!({
+                    "data": {
+                        "repository": {
+                            "pullRequest": {
+                                "headRefOid": candidate,
+                                "baseRefName": "main",
+                                "reviewDecision": null,
+                                "baseRef": {
+                                    "branchProtectionRule": {
+                                        "requiredStatusChecks": [
+                                            {"context": "clippy", "app": {"databaseId": 15368}}
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+                let checks_json = json!({
+                    "total_count": 1,
+                    "check_runs": [{
+                        "id": 100,
+                        "head_sha": candidate,
+                        "name": "clippy",
+                        "app": {"id": 15368, "slug": "github-actions"},
+                        "status": "completed",
+                        "conclusion": "failure",
+                        "check_suite": {"id": 10}
+                    }]
+                });
+                let statuses_json = json!({
+                    "sha": candidate,
+                    "repository": repo_json,
+                    "total_count": 0,
+                    "statuses": []
+                });
+                let runs_json = json!({
+                    "total_count": 1,
+                    "workflow_runs": [{"id": 1, "workflow_id": 1, "run_attempt": 1}]
+                });
+                let run_json = json!({
+                    "id": 1,
+                    "workflow_id": 1,
+                    "run_attempt": 1,
+                    "repository": {"id": 1},
+                    "head_repository": {"id": 1},
+                    "head_sha": candidate,
+                    "head_branch": "orbit/T1",
+                    "event": event,
+                });
+                for (name, body) in [
+                    ("gh-repo.json", repo_json),
+                    ("gh-pr.json", pr_json),
+                    ("gh-policy.json", policy_json),
+                    ("gh-rules.json", json!([])),
+                    ("gh-checks.json", checks_json),
+                    ("gh-statuses.json", statuses_json),
+                    ("gh-runs.json", runs_json),
+                    ("gh-run.json", run_json),
+                ] {
+                    std::fs::write(forge.repo.join(name), body.to_string()).unwrap();
+                }
+                let bin = forge.repo.join("bin");
+                std::fs::create_dir(&bin).unwrap();
+                let gh = bin.join("gh");
+                std::fs::write(
+                    &gh,
+                    "#!/bin/sh\nset -eu\ncase \"$*\" in\n\
+                     *'graphql'*) cat gh-policy.json ;;\n\
+                     *'pulls/42'*) cat gh-pr.json ;;\n\
+                     *'rules/branches/'*) cat gh-rules.json ;;\n\
+                     *'check-runs'*) cat gh-checks.json ;;\n\
+                     *'/status'*) cat gh-statuses.json ;;\n\
+                     *'/actions/runs?'*) cat gh-runs.json ;;\n\
+                     *'/actions/runs/1'*) cat gh-run.json ;;\n\
+                     *'repos/{owner}/{repo}') cat gh-repo.json ;;\n\
+                     *) exit 1 ;;\n\
+                     esac\n",
+                )
+                .unwrap();
+                std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+                let mut paths = vec![bin];
+                paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+                let path = std::env::join_paths(paths).unwrap();
+                let _env = orbit_common::test_env::scoped([("PATH", Some(path.to_str().unwrap()))]);
+
+                let error = land_with(
+                    &forge,
+                    json!({"max_wait_seconds": 0, "max_base_ci_cycles": 1}),
+                )
+                .expect_err("a foreign event cannot authorize a PR retry");
+                assert!(
+                    error.to_string().contains("workflow event"),
+                    "{event}: expected real adapter workflow event refusal: {error}"
+                );
+                assert_steps(
+                    &forge.steps(),
+                    &[HandoffLandingStep::Stop { repairable: false }],
+                    event,
+                );
+                assert_reason(
+                    &forge,
+                    event,
+                    &["workflow event", "nothing is rerun, updated or repaired"],
+                );
+                assert_not_sent(
+                    &forge,
+                    &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+                    event,
+                );
+                assert!(
+                    !forge
+                        .history
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|row| row.event == "ci_check_rerun"),
+                    "{event}: no rerun recorded"
+                );
+            }
+        },
+    );
 }
 
 /// [ORB-15970] A classification needs every read it rests on. A failed job
@@ -3650,51 +3785,57 @@ fn a_check_failure_whose_evidence_cannot_be_read_spends_nothing() {
 /// that cannot be fetched are still refused.
 #[test]
 fn a_branch_update_is_verified_against_the_base_it_merged() {
-    for (shape, lands) in [
-        (UpdateShape::CleanMerge, true),
-        (UpdateShape::Foreign, false),
-        (UpdateShape::Dirty, false),
-        (UpdateShape::NotAMerge, false),
-        (UpdateShape::BaseGone, false),
-    ] {
-        let sandbox = tempdir().unwrap();
-        let remote = tempdir().unwrap();
-        let mut forge = FakeForge::new(sandbox.path(), true);
-        let candidate = forge.context.candidate.candidate.commit.clone();
-        let base = forge.context.candidate.base.commit.clone();
-        let fixed = fix_base(&forge.repo);
-        forge.publish(remote.path());
-        inherited_jobs(&forge, &candidate, &base, &fixed, passed(3, 31));
-        {
-            let mut state = forge.state.lock().unwrap();
-            state.after_update = Some(passed(4, 41));
-            state.update = shape;
-        }
+    crate::git_fixture::isolated(
+        module_path!(),
+        "a_branch_update_is_verified_against_the_base_it_merged",
+        || {
+            for (shape, lands) in [
+                (UpdateShape::CleanMerge, true),
+                (UpdateShape::Foreign, false),
+                (UpdateShape::Dirty, false),
+                (UpdateShape::NotAMerge, false),
+                (UpdateShape::BaseGone, false),
+            ] {
+                let sandbox = tempdir().unwrap();
+                let remote = tempdir().unwrap();
+                let mut forge = FakeForge::new(sandbox.path(), true);
+                let candidate = forge.context.candidate.candidate.commit.clone();
+                let base = forge.context.candidate.base.commit.clone();
+                let fixed = fix_base(&forge.repo);
+                forge.publish(remote.path());
+                inherited_jobs(&forge, &candidate, &base, &fixed, passed(3, 31));
+                {
+                    let mut state = forge.state.lock().unwrap();
+                    state.after_update = Some(passed(4, 41));
+                    state.update = shape;
+                }
 
-        let outcome = land_now(&forge);
+                let outcome = land_now(&forge);
 
-        assert_sent_len(&forge, "pr.update_branch", 1, "update");
-        let head = head_of(&forge);
-        if lands {
-            assert_eq!(
-                outcome.expect("the verified update lands")["phase"],
-                "landed",
-                "{shape:?}"
-            );
-            assert_eq!(
-                forge.sent("pr.merge")[0]["reviewed_head_sha"],
-                head.as_str()
-            );
-        } else {
-            outcome.expect_err("an unverified head stops the landing");
-            assert_steps(
-                &forge.steps(),
-                &[HandoffLandingStep::Stop { repairable: false }],
-                "unverified",
-            );
-            assert_not_sent(&forge, &["pr.merge"], "unverified");
-        }
-    }
+                assert_sent_len(&forge, "pr.update_branch", 1, "update");
+                let head = head_of(&forge);
+                if lands {
+                    assert_eq!(
+                        outcome.expect("the verified update lands")["phase"],
+                        "landed",
+                        "{shape:?}"
+                    );
+                    assert_eq!(
+                        forge.sent("pr.merge")[0]["reviewed_head_sha"],
+                        head.as_str()
+                    );
+                } else {
+                    outcome.expect_err("an unverified head stops the landing");
+                    assert_steps(
+                        &forge.steps(),
+                        &[HandoffLandingStep::Stop { repairable: false }],
+                        "unverified",
+                    );
+                    assert_not_sent(&forge, &["pr.merge"], "unverified");
+                }
+            }
+        },
+    );
 }
 
 /// [ORB-15976] An earlier provider update and its base are already cached
@@ -3758,10 +3899,11 @@ fn a_cached_branch_update_requires_a_fresh_landing_base() {
 
 /// [ORB-16185] A required aggregate check outside any workflow fails with
 /// source annotations while its job-backed checks pass or fail for their
-/// own reasons. Annotations naming only files the candidate changed earn the
-/// one repair (a backlog requeue once spent); annotations on a file it did not change are
-/// inconclusive, and they stop the landing even beside a transient job
-/// failure that alone would have been rerun.
+/// own reasons. Annotations naming only files the candidate changed return the
+/// candidate to the backlog (noting when the automatic repair is already
+/// spent); annotations on a file it did not change are inconclusive, and they
+/// stop the landing even beside a transient job failure that alone would have
+/// been rerun.
 #[test]
 fn a_required_aggregate_failure_is_classified_from_its_source_annotations() {
     for (case, clippy, annotated, spent) in [
@@ -3779,7 +3921,7 @@ fn a_required_aggregate_failure_is_classified_from_its_source_annotations() {
         forge.job(&candidate, clippy);
         forge.state.lock().unwrap().aggregate = Some(annotated);
 
-        land_now(&forge).expect_err("a failed required aggregate stops the landing");
+        let error = land_now(&forge).expect_err("a failed required aggregate stops the landing");
 
         let step = match case {
             "candidate" | "spent" => HandoffLandingStep::StopForRequeue,
@@ -3788,6 +3930,12 @@ fn a_required_aggregate_failure_is_classified_from_its_source_annotations() {
         assert_steps(&forge.steps(), &[step], case);
         let reason = forge.stop_reason();
         let class = if case == "candidate" || case == "spent" {
+            assert_candidate_requeue_held(&error, &forge, &candidate, case);
+            assert_eq!(
+                reason.contains("the automatic repair is already spent"),
+                case == "spent",
+                "{case}: {reason}"
+            );
             "classified `candidate`"
         } else {
             "classified `inconclusive`"
@@ -4238,49 +4386,55 @@ fn landing_refusals_keep_typed_holds_and_candidate_red_stays_failed() {
 /// The active wait also observes an operator merge with its deleted PR head.
 #[test]
 fn externally_merged_base_chain_lands_after_fetching_the_retained_pull_ref() {
-    let sandbox = tempdir().unwrap();
-    let remote = tempdir().unwrap();
-    let mut forge = FakeForge::new(sandbox.path(), false);
-    forge.publish(remote.path());
-    let candidate = forge.context.candidate.candidate.commit.clone();
-    let first = provider_update(remote.path(), &candidate, UpdateShape::CleanMerge);
-    let head = provider_update(remote.path(), &first, UpdateShape::CleanMerge);
-    let tree = git(remote.path(), &["rev-parse", &format!("{head}^{{tree}}")]);
-    let merged = git(
-        remote.path(),
-        &[
-            "commit-tree",
-            &tree,
-            "-p",
-            "main",
-            "-m",
-            "external squash merge",
-        ],
-    );
-    git(remote.path(), &["update-ref", "refs/heads/main", &merged]);
-    git(remote.path(), &["update-ref", "refs/pull/42/head", &head]);
-    git(remote.path(), &["update-ref", "-d", "refs/heads/orbit/T1"]);
-    {
-        let mut state = forge.state.lock().unwrap();
-        state.head = head.clone();
-        state.merged = true;
-        state.merge_commit = Some(merged);
-    }
-    assert_eq!(
-        land_now(&forge).expect("a clean externally merged chain completes")["phase"],
-        "landed"
-    );
-    assert_not_sent(&forge, &["pr.merge", "pr.update_branch"], "already merged");
-    assert_eq!(git(&forge.repo, &["rev-parse", "FETCH_HEAD"]), head);
-    let updates = forge.updates.lock().unwrap();
-    let completion = updates
-        .iter()
-        .find(|update| update.step == HandoffLandingStep::Complete)
-        .expect("the landing completes from the external merge");
-    let evidence: Value = serde_json::from_str(&completion.evidence).unwrap();
-    assert_eq!(
-        evidence["external_merge"], true,
-        "the completion history note records the merge as external"
+    crate::git_fixture::isolated(
+        module_path!(),
+        "externally_merged_base_chain_lands_after_fetching_the_retained_pull_ref",
+        || {
+            let sandbox = tempdir().unwrap();
+            let remote = tempdir().unwrap();
+            let mut forge = FakeForge::new(sandbox.path(), false);
+            forge.publish(remote.path());
+            let candidate = forge.context.candidate.candidate.commit.clone();
+            let first = provider_update(remote.path(), &candidate, UpdateShape::CleanMerge);
+            let head = provider_update(remote.path(), &first, UpdateShape::CleanMerge);
+            let tree = git(remote.path(), &["rev-parse", &format!("{head}^{{tree}}")]);
+            let merged = git(
+                remote.path(),
+                &[
+                    "commit-tree",
+                    &tree,
+                    "-p",
+                    "main",
+                    "-m",
+                    "external squash merge",
+                ],
+            );
+            git(remote.path(), &["update-ref", "refs/heads/main", &merged]);
+            git(remote.path(), &["update-ref", "refs/pull/42/head", &head]);
+            git(remote.path(), &["update-ref", "-d", "refs/heads/orbit/T1"]);
+            {
+                let mut state = forge.state.lock().unwrap();
+                state.head = head.clone();
+                state.merged = true;
+                state.merge_commit = Some(merged);
+            }
+            assert_eq!(
+                land_now(&forge).expect("a clean externally merged chain completes")["phase"],
+                "landed"
+            );
+            assert_not_sent(&forge, &["pr.merge", "pr.update_branch"], "already merged");
+            assert_eq!(git(&forge.repo, &["rev-parse", "FETCH_HEAD"]), head);
+            let updates = forge.updates.lock().unwrap();
+            let completion = updates
+                .iter()
+                .find(|update| update.step == HandoffLandingStep::Complete)
+                .expect("the landing completes from the external merge");
+            let evidence: Value = serde_json::from_str(&completion.evidence).unwrap();
+            assert_eq!(
+                evidence["external_merge"], true,
+                "the completion history note records the merge as external"
+            );
+        },
     );
 }
 
