@@ -47,7 +47,7 @@ impl RuntimeKernel {
     /// Whether `crew` names a human crew (`[crews.<name>] kind = "human"`):
     /// operator work that no drain, follower or task pilot picks up.
     pub fn is_human_crew(&self, crew: Option<&str>) -> bool {
-        self.human_crew(crew).is_some()
+        find_human_crew(crew, &self.admission_crew_settings().human_crews).is_some()
     }
 
     /// Canonicalize the crew a task is assigned. A task, unlike a dispatch,
@@ -57,7 +57,8 @@ impl RuntimeKernel {
         &self,
         crew: Option<&str>,
     ) -> Result<Option<String>, OrbitError> {
-        match self.human_crew(crew) {
+        let crew_settings = self.admission_crew_settings();
+        match find_human_crew(crew, &crew_settings.human_crews) {
             Some(human) => Ok(Some(human.name.clone())),
             None => self.canonical_crew_name(crew),
         }
@@ -83,7 +84,7 @@ impl RuntimeKernel {
         let Some(crew) = crew.map(str::trim).filter(|value| !value.is_empty()) else {
             return Ok(None);
         };
-        resolve_crew(crew, self.context.settings().crews())
+        resolve_crew(crew, &self.admission_crew_settings().crews)
             .map(Some)
             .map_err(Into::into)
     }
@@ -156,7 +157,7 @@ impl RuntimeKernel {
             Some(name)
                 if orbit_config::names_retired_system_crew(
                     name,
-                    self.context.settings().crews(),
+                    &self.admission_crew_settings().crews,
                 ) =>
             {
                 tracing::warn!(crew = name, "{}", orbit_config::RETIRED_SYSTEM_CREW_WARNING);
@@ -175,10 +176,11 @@ impl RuntimeKernel {
         // by RuntimeConfig. That projection has already resolved workspace >
         // environment > system-default precedence, so lower tiers are not
         // re-read here and cannot drift during a run.
+        let crew_settings = self.admission_crew_settings();
         let selection = select_crew_name(
             cli_override,
             self.crew_unless_retired(task_crew),
-            self.context.settings().default_crew(),
+            crew_settings.default_crew.as_deref(),
             None,
             None,
         );
@@ -191,7 +193,7 @@ impl RuntimeKernel {
         };
         // A human crew is never an agent: refuse it by name rather than as an
         // undefined crew, and never fall back to another crew for it.
-        if self.is_human_crew(Some(selected)) {
+        if find_human_crew(Some(selected), &crew_settings.human_crews).is_some() {
             let subject = match source {
                 ProviderSource::TaskConfig => "task.crew",
                 _ => "the selected crew",
@@ -201,7 +203,7 @@ impl RuntimeKernel {
                 selected.trim(),
             )));
         }
-        let crew = resolve_crew(selected, self.context.settings().crews())?;
+        let crew = resolve_crew(selected, &crew_settings.crews)?;
         Ok((crew, source))
     }
 

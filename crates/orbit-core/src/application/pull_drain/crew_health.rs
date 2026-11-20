@@ -47,7 +47,8 @@ pub(crate) fn record_pool_crew_health(
             exclusions
         };
         let unset = runtime.unset_crew_env();
-        let crews = runtime.context.settings().crews();
+        let crew_settings = runtime.admission_crew_settings();
+        let crews = &crew_settings.crews;
         let mut excluded = BTreeMap::new();
         // Crews excluded by a provider usage window with a known reset, and
         // crews an operator's `--allow-crew` window intentionally leaves out.

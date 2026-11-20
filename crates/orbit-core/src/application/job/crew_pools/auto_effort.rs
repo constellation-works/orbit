@@ -73,7 +73,8 @@ impl OrbitRuntime {
         weight: u32,
         subject: Option<&AutoEffortSubject>,
     ) -> Result<Option<CrewCandidate>, OrbitError> {
-        let registry = self.context.settings().crews();
+        let crew_settings = self.admission_crew_settings();
+        let registry = &crew_settings.crews;
         let Some(base) = auto_effort_base(name) else {
             if !orbit_types::identity::find_crew(name, registry).is_some_and(|crew| crew.enabled) {
                 return Ok(None);
@@ -102,7 +103,8 @@ impl OrbitRuntime {
         crew: &Crew,
         subject: Option<&AutoEffortSubject>,
     ) -> AutoEffortChoice {
-        let policy = self.context.settings().auto_effort();
+        let crew_settings = self.admission_crew_settings();
+        let policy = &crew_settings.auto_effort;
         let Some(subject) = subject else {
             return policy.resolve(crew, &AutoEffortSignal::default(), None);
         };
@@ -126,7 +128,8 @@ impl OrbitRuntime {
         candidates: Vec<CrewCandidate>,
         subject: &AutoEffortSubject,
     ) -> Result<Vec<CrewCandidate>, OrbitError> {
-        let registry = self.context.settings().crews();
+        let crew_settings = self.admission_crew_settings();
+        let registry = &crew_settings.crews;
         let mut resolved = Vec::with_capacity(candidates.len());
         for candidate in candidates {
             let Some(base) = candidate

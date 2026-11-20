@@ -520,11 +520,15 @@ pub(super) fn backlog_snapshot_in_mode(
         | BacklogReadMode::Admission { .. } => runtime.unset_crew_env(),
     };
     let has_muse = LazyCell::new(|| {
-        runtime.context.settings().crews().values().any(|crew| {
-            crew.enabled
-                && Provider::parse(&crew.assignment.provider)
-                    .is_ok_and(|provider| provider == Provider::Muse)
-        })
+        runtime
+            .admission_crew_settings()
+            .crews
+            .values()
+            .any(|crew| {
+                crew.enabled
+                    && Provider::parse(&crew.assignment.provider)
+                        .is_ok_and(|provider| provider == Provider::Muse)
+            })
     });
     backlog.retain(|task| {
         let model_access_applies = task.job_run_id.is_some() && *has_muse;
