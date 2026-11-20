@@ -8,13 +8,18 @@ use serde_json::Value;
 use super::super::usage_window::percent;
 
 /// Read provider control data only; the human-readable `response` is ignored.
+/// The second value is whether every known, enabled bucket was readable: only
+/// then does the reading name every window the account still has, so a window
+/// it lacks is gone. A known bucket with an unreadable field is still
+/// present, and its previous reading must stand. [ORB-26000]
 pub(crate) fn antigravity_usage_windows(
     body: &[u8],
     now: DateTime<Utc>,
-) -> Vec<ProviderLimitObservation> {
+) -> (Vec<ProviderLimitObservation>, bool) {
     let Some(buckets) = buckets(body) else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
+    let mut complete = true;
     // A reading may carry its own Argon bucket. Then the shared Gemini quota
     // does not cover Argon, so never apply it there. Without one, the shared
     // bucket covers every Gemini model. The layout can change between
@@ -25,6 +30,7 @@ pub(crate) fn antigravity_usage_windows(
     let mut observations = Vec::new();
     for bucket in buckets {
         let Some((id, scopes, minutes, used, reset)) = reading(&bucket, separate_argon) else {
+            complete &= !unreadable_known_bucket(&bucket);
             continue;
         };
         // The store scopes models by substring. Split shared groups into
@@ -49,7 +55,28 @@ pub(crate) fn antigravity_usage_windows(
             });
         }
     }
-    observations
+    (observations, complete)
+}
+
+/// Bucket ids `reading` knows. One that is enabled yet unreadable is still
+/// reported by agy, so it is not a removed window.
+const KNOWN_BUCKET_IDS: &[&str] = &[
+    "gemini-weekly",
+    "gemini-5h",
+    "3p-weekly",
+    "3p-5h",
+    "gemini-argon-wtu-weekly",
+];
+
+fn unreadable_known_bucket(bucket: &Value) -> bool {
+    let disabled = bucket
+        .get("disabled")
+        .is_some_and(|disabled| disabled != false);
+    !disabled
+        && bucket
+            .get("id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| KNOWN_BUCKET_IDS.contains(&id))
 }
 
 fn buckets(body: &[u8]) -> Option<Vec<Value>> {

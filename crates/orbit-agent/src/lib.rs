@@ -18,8 +18,8 @@ pub use providers::{
     antigravity_terminal_error_diagnostic, apply_antigravity_print_timeout,
     assign_recorded_tool_calls, latest_assistant_message, muse_terminal_failure_diagnostic,
     muse_terminal_rejects_model, normalize_cli_stdout, project_cli_response,
-    provider_long_prompt_requests, provider_supports_continuity, provider_usage_windows,
-    recorded_tool_calls,
+    provider_long_prompt_requests, provider_supports_continuity, provider_usage_snapshot,
+    provider_usage_windows, recorded_tool_calls,
 };
 pub use types::{AgentRequest, AgentResponseStatus};
 pub use types::{
