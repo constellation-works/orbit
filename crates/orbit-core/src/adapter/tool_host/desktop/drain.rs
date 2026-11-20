@@ -151,14 +151,13 @@ pub(in crate::adapter::tool_host) fn control(
                     .as_bool()
                     .ok_or_else(|| OrbitError::InvalidInput("force must be a boolean".into()))?,
             };
+            // The surface word is the call's own provenance, the same one a
+            // start records (`mcp`, `cli`), never a fixed desktop label.
+            let surface = trigger.kind.as_str();
             let stopped = runtime.stop_workspace_auto_admissions(DrainAdmissionsStopRequest {
-                actor: "desktop",
-                source: "desktop",
-                reason: Some(if force {
-                    "Stopped with force from Orbit Control Center"
-                } else {
-                    "Stopped from Orbit Control Center"
-                }),
+                actor: surface,
+                source: surface,
+                reason: None,
                 claim_token: claim.as_deref(),
                 force,
             })?;

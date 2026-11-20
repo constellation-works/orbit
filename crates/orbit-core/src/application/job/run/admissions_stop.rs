@@ -268,7 +268,7 @@ impl OrbitRuntime {
 
     /// [ORB-25965] A hand stop that succeeded means "pause" until someone
     /// starts a drain again, whether or not a drain was live to stop. The
-    /// request's `actor` names the surface (`cli`, `dashboard`, `desktop`),
+    /// request's `actor` names the surface (`cli`, `dashboard`, `mcp`),
     /// the same word a start records.
     fn record_stop_drain_intent(&self, request: DrainAdmissionsStopRequest<'_>) {
         self.record_hand_drain_intent(

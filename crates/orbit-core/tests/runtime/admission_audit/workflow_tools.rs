@@ -375,3 +375,35 @@ crate::scenario_table!(
     mcp_run_show_rejects_a_recycled_pid_and_refuses_to_judge_a_foreign_namespace,
     mcp_run_show_reports_a_running_invocations_latest_message
 );
+
+/// A hand stop over `orbit.workflow.auto` records the surface it came from,
+/// the same word a start records, and no Control Center reason.
+#[test]
+fn workflow_auto_stop_records_the_calling_surface_as_drain_intent_source() {
+    for (origin_session_id, surface) in [(Some("session-1".to_string()), "mcp"), (None, "cli")] {
+        let (_root, runtime, _repo_root) = test_runtime();
+        let session_context = ToolSessionContext {
+            effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+            origin_session_id,
+            ..ToolSessionContext::default()
+        };
+        runtime
+            .run_tool_with_context(
+                "orbit.workflow.auto",
+                json!({"workspace": runtime.workspace_id().unwrap(), "action": "stop"}),
+                ToolContext {
+                    session_context,
+                    ..ToolContext::default()
+                },
+            )
+            .expect("stop with no live drain still pauses");
+
+        let intent = crate::admission_audit::store_support::jobs(&runtime)
+            .drain_intent()
+            .expect("read drain intent")
+            .expect("a hand stop records an intent");
+        assert_eq!(intent.intent.as_str(), "paused");
+        assert_eq!(intent.source, surface);
+        assert_eq!(intent.reason, None);
+    }
+}
