@@ -120,6 +120,9 @@ impl crate::Tool for GithubRunLogsTool {
         let admission = super::super::quota_admission(ctx);
         let read =
             read_run_log_guarded(&requests, LogReadBounds::new(max_bytes), None, &admission)?;
+        if let Some(refusal) = read.throttle_refusal() {
+            return Err(refusal);
+        }
         let log = read.log;
         let selection = log
             .selection

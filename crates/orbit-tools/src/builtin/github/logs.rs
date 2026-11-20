@@ -16,7 +16,7 @@
 //! passed can never be returned as failed-step evidence.
 
 use orbit_common::security::redaction::redact_all;
-use orbit_common::{OrbitError, ProviderReadThrottle};
+use orbit_common::{OrbitError, PrivateVcsFailure, PrivateVcsFailureClass, ProviderReadThrottle};
 use orbit_exec::{ExecRequest, NoSandbox, run_process, run_process_streaming_stdout};
 use serde_json::{Value, json};
 
@@ -344,6 +344,24 @@ pub struct RunLogRead {
     pub selection_unsupported: bool,
 }
 
+impl RunLogRead {
+    /// The typed throttle refusal when the read ended with no text because a
+    /// fallback read was throttled, whether by the host's quota guard or by
+    /// GitHub: the same typed error a direct read of that call returns, so a
+    /// public caller sees the resource and retry time instead of an
+    /// empty-but-successful (or missing-selection) answer.
+    pub fn throttle_refusal(&self) -> Option<OrbitError> {
+        let throttle = self.fallback_throttle.clone()?;
+        let message = self.fallback_error.clone()?;
+        Some(OrbitError::PrivateVcs(Box::new(PrivateVcsFailure {
+            operation: "github.run.logs".to_string(),
+            class: PrivateVcsFailureClass::Other,
+            message,
+            read_throttle: Some(throttle),
+        })))
+    }
+}
+
 /// Read one bounded log excerpt, recovering from per-job logs when the
 /// run-scoped read succeeds with no output or reports the known parent-run
 /// readiness error for this exact run.
@@ -451,6 +469,9 @@ fn ensure_selection_found(
 ) -> Result<RunLogRead, OrbitError> {
     if requests.selection.is_none() || read.log.selection_found {
         return Ok(read);
+    }
+    if let Some(refusal) = read.throttle_refusal() {
+        return Err(refusal);
     }
     Err(selection_not_found_error(
         requests,
