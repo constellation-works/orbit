@@ -132,7 +132,9 @@ trusted managed-run binding; a caller outside a resident cycle keeps the operato
 [Residents re-pilot and requeue under `dispatch`](../4_decisions.md#residents-re-pilot-and-requeue-under-dispatch).
 A sandboxed cycle's ship, re-pilot and requeue go through its run's broker, so the leaf's or pilot's
 worker starts on the host beside the cycle's read-only sandbox, not inside it, and the requeue writes
-the task there. A sandboxed cycle's `orbit.decision` action `raise` goes through the same broker, because its lock
+the task there. A resident's requeue credits the run's trusted agent identity in the target task's
+history entry and comment (`resident requeue: <reason>`), never the host's process actor, so it is
+not counted as a human intervention. A sandboxed cycle's `orbit.decision` action `raise` goes through the same broker, because its lock
 lies in the `.orbit` that sandbox mounts read-only.
 
 `orbit.workflow` action `land` is how a resident lands a delivery, and passes the operator row and managed-run

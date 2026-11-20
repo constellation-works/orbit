@@ -340,6 +340,31 @@ impl OrbitRuntime {
         discard: bool,
         actor: Option<&str>,
     ) -> Result<Value, OrbitError> {
+        self.requeue_blocked_task_by(id, reason, discard, actor, "operator requeue")
+    }
+
+    /// A resident cycle's requeue. `agent_actor` is the trusted agent identity
+    /// of the cycle's run: the task's history entry and comment name it, never
+    /// the host's process actor, and the comment reads `resident requeue` so a
+    /// person's requeue stays distinguishable.
+    pub(crate) fn requeue_blocked_task_as_resident(
+        &self,
+        id: &str,
+        reason: &str,
+        discard: bool,
+        agent_actor: &str,
+    ) -> Result<Value, OrbitError> {
+        self.requeue_blocked_task_by(id, reason, discard, Some(agent_actor), "resident requeue")
+    }
+
+    fn requeue_blocked_task_by(
+        &self,
+        id: &str,
+        reason: &str,
+        discard: bool,
+        actor: Option<&str>,
+        comment_label: &str,
+    ) -> Result<Value, OrbitError> {
         let reason = redact_all(reason.trim());
         if reason.is_empty() {
             return Err(OrbitError::InvalidInput(
@@ -411,7 +436,7 @@ impl OrbitRuntime {
                 at: now,
                 by: actor.clone(),
                 message: format!(
-                    "operator requeue{}: {reason}",
+                    "{comment_label}{}: {reason}",
                     if discard { " (candidate discarded)" } else { "" }
                 ),
                 operation_id: None,

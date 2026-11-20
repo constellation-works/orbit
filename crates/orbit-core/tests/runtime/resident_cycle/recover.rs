@@ -154,6 +154,30 @@ fn a_cycle_with_dispatch_repilots_and_requeues_and_nothing_else_is_widened() {
             "{requeued}"
         );
 
+        // The target task credits the run's agent identity, not the host's
+        // process actor, and reads as a resident requeue, not a person's.
+        let process_actor = fx.runtime.actor().resolve_write_label(None, None).unwrap();
+        assert_ne!(
+            process_actor, "codex",
+            "the host's actor is a separate identity"
+        );
+        let history = fx.runtime.get_task_history(&held).unwrap();
+        let entry = history
+            .iter()
+            .find(|entry| entry.event == "operator_requeued")
+            .expect("requeue history entry");
+        assert_eq!(entry.by, "codex", "{history:?}");
+        let comments = fx.runtime.get_task_comments(&held).unwrap();
+        let comment = comments
+            .iter()
+            .find(|comment| comment.message.starts_with("resident requeue"))
+            .expect("resident requeue comment");
+        assert_eq!(comment.by, "codex", "{comments:?}");
+        assert!(
+            comments.iter().all(|comment| comment.by != process_actor),
+            "no comment credits the host actor: {comments:?}"
+        );
+
         // Exactly these two actions are exempt: the right reaches no other
         // operator-only recover, run or pipeline tool.
         for (tool, input) in operator_only_calls(&held, &run, &workspace) {
