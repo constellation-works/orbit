@@ -9,7 +9,7 @@ feature: resident-orchestrator
 tags: [resident-orchestrator, spec, security]
 related_features: [resident-orchestrator, human-decision-channel, granted-tools]
 related_artifacts: [ORB-21229, ORB-21242]
-last_updated: 2026-11-02
+last_updated: 2026-11-20
 ---
 
 # Spec: Mandate and authority
@@ -121,13 +121,18 @@ route too; MCP and `orbit tool run` do not expose lint. Outside a resident cycle
 restoration is unchanged. Other refused writes include `orbit.task.update` with `approve` or `force`, other status
 targets, `orbit.notice.close`, `orbit.resident.grant`, decision answers and administration,
 `orbit.command.exec`, desktop writes and every write on another noun. Operator-only tools stay
-operator-only, because their capability check runs before the guard, so `orbit.task.recover` action `requeue`/`repilot`,
-`orbit.run.auto`/`resume` and `orbit.pipeline.invoke` in the table above are refused as
-`capability_denied` even with the right. `orbit.workflow` action `ship` (`orbit.run.ship` in the table) is the
-exception and the tool a resident dispatches with: a cycle's run passes its operator row and its managed-run refusal,
-and the guard decides the live cycle, the right and the workspace. A sandboxed cycle's ship goes through
-its run's broker, so the leaf's worker starts on the host beside the cycle's read-only sandbox, not
-inside it. A sandboxed cycle's `orbit.decision` action `raise` goes through the same broker, because its lock
+operator-only, because their capability check runs before the guard, so `orbit.run.auto`/`resume`,
+`orbit.pipeline.invoke` and every other `orbit.task.recover` action are refused as `capability_denied`
+even with the right. Three `dispatch` tools are the exception: `orbit.workflow` action `ship`
+(`orbit.run.ship` in the table), the tool a resident dispatches with, and `orbit.task.recover` actions
+`repilot` (a `proposed` or `backlog` task) and `requeue` (a held, `blocked` delivery). A cycle's run
+passes their operator row and managed-run refusal, and the guard decides the live cycle, the right and
+the workspace and keys the action on the ledger, exactly as for a ship. The run is a cycle only by its
+trusted managed-run binding; a caller outside a resident cycle keeps the operator requirement. See
+[Residents re-pilot and requeue under `dispatch`](../4_decisions.md#residents-re-pilot-and-requeue-under-dispatch).
+A sandboxed cycle's ship, re-pilot and requeue go through its run's broker, so the leaf's or pilot's
+worker starts on the host beside the cycle's read-only sandbox, not inside it, and the requeue writes
+the task there. A sandboxed cycle's `orbit.decision` action `raise` goes through the same broker, because its lock
 lies in the `.orbit` that sandbox mounts read-only.
 
 `orbit.workflow` action `land` is how a resident lands a delivery, and passes the operator row and managed-run

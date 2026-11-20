@@ -1,8 +1,8 @@
 //! The host side of a run's plugin broker: execute one authenticated request
 //! — a plugin tool, one of the read-only `github.*` built-ins that need the
 //! host's `gh` credentials, one of a claimed worker's owner calls that need
-//! the claim's owner route, a resident cycle's ship whose
-//! leaf worker must not start inside the cycle's sandbox, a resident cycle's
+//! the claim's owner route, a resident cycle's ship or re-pilot whose
+//! worker must not start inside the cycle's sandbox, its requeue, a resident cycle's
 //! decision raise whose lock that sandbox mounts read-only, or a resident
 //! cycle's landing or move to `done` that reads the forge — through the audited
 //! dispatch, under the run's authority (`docs/design/plugins/2_agent_call_broker.md` §3, §4.3–§4.4, §5).
@@ -29,9 +29,9 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::runtime::plugin::broker::{
-    BROKERED_RESIDENT_LAND_TOOL, BROKERED_RESIDENT_RAISE_TOOL, BROKERED_RESIDENT_SHIP_TOOL,
-    BrokerDispatch, BrokerRequest, EntryPoint, is_brokered_resident_completion,
-    is_host_credentialed_read,
+    BROKERED_RESIDENT_LAND_TOOL, BROKERED_RESIDENT_RAISE_TOOL, BROKERED_RESIDENT_REPILOT_TOOL,
+    BROKERED_RESIDENT_REQUEUE_TOOL, BROKERED_RESIDENT_SHIP_TOOL, BrokerDispatch, BrokerRequest,
+    EntryPoint, is_brokered_resident_completion, is_host_credentialed_read,
 };
 use crate::runtime::tool_exec::CapabilityEnforcement;
 
@@ -44,6 +44,8 @@ fn brokered_resident_action(tool: &str, input: &Value) -> Option<OrbitBuiltinAct
         BROKERED_RESIDENT_SHIP_TOOL => Some(OrbitBuiltinAction::Workflow(WorkflowVerb::Ship)),
         BROKERED_RESIDENT_RAISE_TOOL => Some(OrbitBuiltinAction::Decision(DecisionVerb::Raise)),
         BROKERED_RESIDENT_LAND_TOOL => Some(OrbitBuiltinAction::Workflow(WorkflowVerb::Land)),
+        BROKERED_RESIDENT_REPILOT_TOOL => Some(OrbitBuiltinAction::Task(TaskVerb::Repilot)),
+        BROKERED_RESIDENT_REQUEUE_TOOL => Some(OrbitBuiltinAction::Task(TaskVerb::Requeue)),
         _ if is_brokered_resident_completion(tool, input) => {
             Some(OrbitBuiltinAction::Task(TaskVerb::Update))
         }

@@ -8,7 +8,7 @@ tags: [plugins, security, sandbox, secrets, ipc]
 paths: ["crates/orbit-core/src/adapter/engine_host/actions/sandbox/**", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-runtime/src/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
 related_features: [policy-sandbox, plugins]
 related_artifacts: [ORB-13038, ORB-13008, ORB-13009, ORB-14017, ORB-14194, F2026-09-230]
-last_updated: 2026-11-15
+last_updated: 2026-11-20
 last_validated: 2026-11-15
 ---
 
@@ -163,6 +163,13 @@ worktree nor start its own agent sandbox. With `ORBIT_PLUGIN_BROKER` set and the
 naming a resident cycle's run, the nested `orbit` forwards the call. The broker refuses it unless the
 job run it serves is a cycle, then runs the ship through the tool host for that run, so the cycle guard
 decides the live grant, the `dispatch` right and the workspace and writes the action ledger row.
+
+**A resident cycle's re-pilot and requeue.** `orbit.task.recover` action `repilot` submits a pilot run
+whose worker, like a ship's leaf, must start beside the cycle's read-only sandbox, and action `requeue`
+restores a held task and its preserved candidate, which the read-only sandbox cannot write. The nested `orbit` forwards both
+on the same terms as the ship, and the broker runs them through the tool host for the run it serves,
+so the cycle guard decides the live grant, the `dispatch` right and the workspace. No other
+`orbit.task.recover` action is brokered.
 
 **A resident cycle's decision raise.** A cycle escalates with `orbit.decision` action `raise`, whose
 workspace-wide raise lock lies in `.orbit`, which the cycle's sandbox mounts read-only. The nested

@@ -1,13 +1,13 @@
 ---
 title: Resident Orchestrator — Decisions
 owner: claude
-last_updated: 2026-11-02
+last_updated: 2026-11-20
 last_validated: 2026-11-02
 status: Draft
 feature: resident-orchestrator
 doc_role: decisions
 type: design
-summary: "Why the rewrite owns coordination only, rides the clock, keeps loops out of chats and consoles, gates widening on the human, trusts only Orbit state, and keeps evolution apart from friction"
+summary: "Why the rewrite owns coordination only, rides the clock, keeps loops out of chats and consoles, gates widening on the human, trusts only Orbit state, keeps evolution apart from friction, and lets `dispatch` re-pilot and requeue"
 tags: [resident-orchestrator]
 paths: ["crates/orbit-core/src/application/resident/**", "crates/orbit-core/assets/jobs/**"]
 related_features: [distributed-drain, routines, activity-job, human-decision-channel, fleet-notices]
@@ -237,9 +237,49 @@ differently* (evolution)?
 - Cost: one more record kind, with its own tools and states, and agents must choose between two
   records for borderline events. Some events will be logged in both.
 
+## Residents re-pilot and requeue under `dispatch`
+
+**Recorded:** 2026-11-20 · [ORB-25959] · decided by the formation chief under Daniel's delegation
+of 2026-11-20 (the chief's ruling on on-call [ORB-25951]); not Daniel's own approval
+
+**Code anchors:** `crates/orbit-runtime/src/authorization.rs` `RESIDENT_CYCLE_RIGHT_GATED_OPERATIONS`;
+`crates/orbit-tools/src/builtin/orbit/task/operation.rs` `TaskVerb::preempt`;
+`crates/orbit-core/src/adapter/tool_host/task/operation.rs` `dispatch`
+
+### Context
+
+The rights table gave `dispatch` `orbit.task.recover` actions `repilot` and `requeue`, but the
+operator row ran before the cycle guard, so a cycle holding the right was refused
+`capability_denied`; only `orbit.workflow` action `ship` was exempt. Every re-pilot or requeue a
+resident had prepared became a blocking escalation to the human, pilot-warned tasks waited
+overnight for a human orchestrator, and residents recorded the gap as a cost in nearly every
+checkpoint. The alternative was to keep both operator-only and leave them to escalations.
+
+### Decision
+
+A resident cycle's run passes the operator row and the managed-run refusal for exactly two recover
+actions, `repilot` and `requeue`, under the same guard as `ship`: the run is a cycle only by its
+trusted managed-run binding, never by input, and the cycle guard requires its live cycle, the
+`dispatch` right and a covered workspace, and keys the write on the action ledger. The handlers'
+own operator checks are skipped only for a call that guard ledgered. Every other recover action,
+`orbit.run` actions `auto` and `resume`, and `orbit.pipeline.invoke` stay operator-only. A future
+operator-row tool reaches residents the same way: name it in the exemption list and let the cycle
+guard decide, never by widening the row itself.
+
+### Consequences
+
+- A resident re-pilots a stale or warned task and requeues a held delivery itself, keyed and
+  auditable, instead of escalating.
+- Callers outside a resident cycle keep the operator requirement.
+- Cost: a resident with `dispatch` can override a recorded escalation (requeue) and spend pilot runs
+  (re-pilot) without a human in the loop; the grant is the only gate, so `dispatch` is a wider right
+  than it was, and the change takes the security review the chief's ruling asked for.
+
 ## Task References
 
 - [ORB-21229] — rewrote the resident-orchestrator design and recorded these decisions
+- [ORB-25959] — let resident cycles with `dispatch` re-pilot and requeue
+- [ORB-25951] — on-call whose chief ruling delegated and conditioned that change
 - [ORB-12488] — removed the epic pipeline and the earlier resident-orchestrator folder
 - [ORB-10815] — revised the earlier design to v2: epic-owned worktree and windowed drain
 - [ORB-10776] — moved the earlier design's fire clock outside Orbit and added its session log

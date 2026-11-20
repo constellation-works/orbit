@@ -30,11 +30,15 @@ use super::super::json::{
 use super::write::{TaskWriteOutput, write_response_fields};
 
 /// Run one migrated task verb. A write also answers the id it persisted, for
-/// the redaction audit.
+/// the redaction audit. `resident_cycle_admitted` says the resident cycle guard
+/// ledgered this call for a live cycle holding the right the verb needs; it
+/// replaces the operator check only for the verbs a resident's `dispatch`
+/// right covers (`repilot`, `requeue`).
 pub(in crate::adapter::tool_host) fn dispatch(
     runtime: &OrbitRuntime,
     caller: ToolCaller<'_>,
     operator: bool,
+    resident_cycle_admitted: bool,
     verb: TaskVerb,
     input: Value,
 ) -> Result<(Value, Option<String>), OrbitError> {
@@ -89,7 +93,9 @@ pub(in crate::adapter::tool_host) fn dispatch(
             input.as_value(),
         )),
         TaskVerb::Repilot => {
-            runtime.admit_operator_operation("orbit.task.repilot", caller.session_context)?;
+            if !resident_cycle_admitted {
+                runtime.admit_operator_operation("orbit.task.repilot", caller.session_context)?;
+            }
             let id = input.required_string("id")?;
             let trigger = if caller.session_context.transport.is_some() {
                 orbit_types::workflow::JobRunTrigger::mcp()
@@ -111,9 +117,12 @@ pub(in crate::adapter::tool_host) fn dispatch(
             ))
         }
         TaskVerb::Requeue => {
-            // The tool chokepoint admits only an operator; a managed agent is
-            // refused here as well, including an accidentally elevated run.
-            if orbit_common::governance::authorization::agent_context_declared() {
+            // The tool chokepoint admits only an operator or a resident cycle;
+            // any other managed agent is refused here as well, including an
+            // accidentally elevated run.
+            if !resident_cycle_admitted
+                && orbit_common::governance::authorization::agent_context_declared()
+            {
                 return Err(OrbitError::CapabilityDenied(
                     "managed agents cannot requeue blocked tasks".into(),
                 ));
