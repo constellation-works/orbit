@@ -235,11 +235,24 @@ pub(crate) fn weighted_candidates(
         return None;
     }
     let pressure = pressure_read();
+    // An exhausted account is left out of the draw while another member
+    // has quota, rather than kept at the floor ticket.
+    let exhausted = candidates
+        .iter()
+        .map(|candidate| candidate.weight > 0 && pressure.crew_exhausted(&candidate.crew))
+        .collect::<Vec<_>>();
+    let leave_out = exhausted.iter().any(|exhausted| *exhausted)
+        && candidates
+            .iter()
+            .zip(&exhausted)
+            .any(|(candidate, exhausted)| candidate.weight > 0 && !exhausted);
     let mut members = BTreeMap::new();
-    for candidate in candidates.iter_mut() {
+    for (candidate, exhausted) in candidates.iter_mut().zip(exhausted) {
         let crew_pressure = pressure.crew(&candidate.crew);
         let configured = candidate.weight;
-        if configured > 0 {
+        if leave_out && exhausted {
+            candidate.weight = 0;
+        } else if configured > 0 {
             let multiplier = pressure_policy.multiplier(crew_pressure.pressure);
             let tickets = (f64::from(configured) * multiplier * PRESSURE_TICKET_SCALE)
                 .round()

@@ -192,7 +192,9 @@ impl OrbitRuntime {
             // A descendant runs under the policy its coordinator froze,
             // including that run's overrides and crew allowlist.
             Some(parent) => {
-                input[POOLS_KEY] = parent[POOLS_KEY].clone();
+                // Config-sourced pools are read again at each admission, so
+                // this run's input records the pools its admission used.
+                input[POOLS_KEY] = json!(self.refresh_auto_crew_pools(pools_from_input(&parent)?));
                 // Keep separately explicit constraints authoritative through every child.
                 if let Some(allowed) = parent.get("allowed_crews") {
                     input["allowed_crews"] = allowed.clone();
@@ -308,7 +310,10 @@ impl OrbitRuntime {
         task: &Task,
         random: &mut impl FnMut() -> Result<u64, OrbitError>,
     ) -> Result<AdmissionTaskWrites, OrbitError> {
-        let pools = pools_from_input(input)?;
+        let pools = self.refresh_auto_crew_pools(pools_from_input(input)?);
+        if !pools.is_empty() {
+            input[POOLS_KEY] = json!(pools);
+        }
         let task_id = &task.id;
         let experiment_pool = if input
             .get("crew")
