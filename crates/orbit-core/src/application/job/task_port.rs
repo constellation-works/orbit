@@ -55,13 +55,13 @@ impl TaskJobPort for OrbitRuntime {
             }
             _ => false,
         };
-        Ok(if authorized && eligible {
-            DeliveryCompletion::Authorized {
+        Ok(match (authorized, eligible) {
+            (true, true) => DeliveryCompletion::Authorized {
                 run_id: run.run_id,
                 needs_passed_check,
-            }
-        } else {
-            DeliveryCompletion::NotAuthorized
+            },
+            (true, false) => DeliveryCompletion::Stopped,
+            (false, _) => DeliveryCompletion::NotAuthorized,
         })
     }
 
