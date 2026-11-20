@@ -2193,7 +2193,7 @@ tick interval. It needs all of these:
 - no `completion.hold` rule holds it (a matching rule records `completion_held`
   and leaves the merge to you), and the pre-landing review covers the pull
   request's head;
-- its one open delivery pull request is mergeable with every required check passed.
+- its one open delivery pull request (several open ones record `ambiguous_delivery_pull_requests` and merge nothing) is mergeable with every required check passed.
 
 Checks still running, or mergeability GitHub has not computed, wait for the next
 tick. When Orbit does not merge, the task says why: a `landing_follow_up` history
@@ -2207,6 +2207,7 @@ and pull request head:
 | `required_checks_failed` | A required check failed on the head | Fix PR, or repair it |
 | `publication_identity_changed` | The pull request no longer matches the revision the stopped run published; the entry names what differs | Check the new head, then discard the candidate with `orbit task update <task-id> --status backlog --discard-candidate`: this closes the moved pull request, and the next run implements fresh and publishes a new one |
 | `review_not_settled` | The required pre-landing review does not cover the head | Requeue the task for review |
+| `ambiguous_delivery_pull_requests` | Several open pull requests deliver the task, so Orbit merges none of them; the entry lists them and is written again only when that set changes | Close all but the pull request to land |
 | `merge_refused` | The forge refused the merge; the entry quotes why | Read the reason and merge by hand |
 
 ### After revoking a claimed handoff

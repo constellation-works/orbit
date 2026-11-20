@@ -20,7 +20,8 @@ crate::scenario_table!(
     a_held_absent_runs_delivery_is_not_merged_until_a_required_check_passes,
     a_succeeded_authorised_run_with_a_passed_observation_is_merged,
     a_delivery_without_completion_authority_records_who_merges_it,
-    an_authorised_conflicting_pull_request_records_its_follow_up_once
+    an_authorised_conflicting_pull_request_records_its_follow_up_once,
+    two_open_delivery_pull_requests_record_one_ambiguity_follow_up
 );
 
 /// A finished delivery run of `task` that carried `completion`.
@@ -216,4 +217,47 @@ fn an_authorised_conflicting_pull_request_records_its_follow_up_once() {
     let recorded = follow_ups(&fx, &task);
     assert_eq!(recorded.len(), 1, "recorded once: {recorded:?}");
     assert_eq!(recorded[0].code, "pull_request_conflicting");
+}
+
+fn two_open_delivery_pull_requests_record_one_ambiguity_follow_up() {
+    // ORB-25997: two open pull requests deliver the task, so the sweep must not
+    // pick one, and must leave the operator a reason instead of only logging.
+    const SECOND_PR: u64 = LAND_PR + 1;
+    let fx = Fixture::new();
+    let task = fx.add_task("Ambiguous land", TaskStatus::Review, &[LAND_PR, SECOND_PR]);
+    fx.forge
+        .script_land(&task, &fx.base.clone(), &[], MergeabilityAnswer::Mergeable);
+    fx.forge.0.lock().unwrap().open.insert(
+        SECOND_PR,
+        ForgePullRequest {
+            number: SECOND_PR,
+            head_branch: format!("orbit/{task}-5a5a5a5a"),
+            body: format!("Delivers {task}.\n\nOrbit run jrun-2"),
+            author: BOT.into(),
+        },
+    );
+    delivery_run(&fx, &task, "done", JobRunState::Success, None);
+    for _ in 0..2 {
+        assert!(
+            fx.runtime
+                .land_completion_authorized_tasks()
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert!(
+        fx.forge.merges().is_empty(),
+        "an ambiguous delivery never merges"
+    );
+    fx.assert_status(&task, TaskStatus::Review, "left for the operator");
+    let recorded = follow_ups(&fx, &task);
+    assert_eq!(recorded.len(), 1, "recorded once: {recorded:?}");
+    assert_eq!(recorded[0].code, "ambiguous_delivery_pull_requests");
+    assert_eq!(recorded[0].owner, "operator");
+    assert!(
+        recorded[0].detail.contains(&LAND_PR.to_string())
+            && recorded[0].detail.contains(&SECOND_PR.to_string()),
+        "names both pull requests: {}",
+        recorded[0].detail
+    );
 }
