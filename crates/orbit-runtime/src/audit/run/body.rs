@@ -127,7 +127,7 @@ pub enum RunTrailBody {
         failure_phase: Option<String>,
         #[serde(default, deserialize_with = "lenient")]
         error_message: Option<String>,
-        #[serde(default, deserialize_with = "lenient")]
+        #[serde(default, deserialize_with = "lenient_object")]
         decision: Option<RunTrailRecoveryDecision>,
     },
     FinalRecoveryAttempted {
@@ -152,8 +152,8 @@ pub enum RunTrailBody {
     Other,
 }
 
-/// The read-back decision of a step recovery. Absent when `status` or
-/// `retry_admitted` is missing or malformed.
+/// The read-back decision of a step recovery. Absent when it is not an object
+/// or its `status` or `retry_admitted` is missing or malformed.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct RunTrailRecoveryDecision {
     pub status: String,
@@ -236,6 +236,21 @@ where
     T: DeserializeOwned,
 {
     let value = Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
+}
+
+/// Like [`lenient`], but a JSON array never reads as `T`: serde accepts a
+/// positional array for a derived struct, which would turn a wrong-shaped
+/// historical value into an apparent record.
+fn lenient_object<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    let value = Value::deserialize(deserializer)?;
+    if !value.is_object() {
+        return Ok(None);
+    }
     Ok(serde_json::from_value(value).ok())
 }
 
