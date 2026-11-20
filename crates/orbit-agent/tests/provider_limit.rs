@@ -301,7 +301,7 @@ fn antigravity_quota_command_reports_scoped_windows_without_reading_answer_text(
     let readings = provider_usage_windows(Provider::Antigravity, ANTIGRAVITY_USAGE, None, now);
     assert_eq!(
         readings.len(),
-        9,
+        13,
         "five buckets split by their covered model families"
     );
     for reading in &readings {
@@ -321,7 +321,9 @@ fn antigravity_quota_command_reports_scoped_windows_without_reading_answer_text(
                 reading.resets_at,
                 Some("2026-10-24T08:49:02Z".parse().unwrap())
             );
-            assert!(["flash", "pro"].contains(&reading.model.as_deref().unwrap()));
+            assert!(
+                ["flash", "pro", "neon", "hydrogen"].contains(&reading.model.as_deref().unwrap())
+            );
         } else {
             assert_eq!(reading.used_percent, Some(0.0));
             assert!(reading.resets_at.is_some());
@@ -337,6 +339,16 @@ fn antigravity_quota_command_reports_scoped_windows_without_reading_answer_text(
         "Argon's separate quota cannot inherit Flash/Pro limits"
     );
     assert_eq!(argon[0].window.as_deref(), Some("gemini-argon-wtu-weekly"));
+    // agy 1.5.13 lists Gemini 4 Neon and Hydrogen in the shared Gemini group;
+    // their crews must stay gated by it beside Argon's own bucket. [ORB-25818]
+    for model in ["neon", "hydrogen"] {
+        let windows = readings
+            .iter()
+            .filter(|reading| reading.model.as_deref() == Some(model))
+            .filter_map(|reading| reading.window.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(windows, ["gemini-weekly", "gemini-5h"], "{model}");
+    }
 
     // Without a separate bucket, Gemini's reported quota covers the family.
     let mut shared: serde_json::Value = serde_json::from_slice(ANTIGRAVITY_USAGE).unwrap();
