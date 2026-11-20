@@ -766,8 +766,24 @@ file is an ordinary tracked input: changed bytes get a fresh mtime, and Cargo
 rebuilds a consumer only if it records that file, through an `include_str!`
 path or a build script's `cargo:rerun-if-changed`.
 
-The restore step prints `changed_inputs`, `reused_inputs` and `source_head`;
-`git diff --name-only <source_head> <tested_head>` names the changed inputs.
+The restore step prints one JSON object whose fields depend on whether the
+restored `target/` holds a source manifest. With no manifest, which includes a
+cold cache miss, it prints only `cache: "miss"` and `reused_inputs: 0`: there
+is no `source_head` and no `changed_inputs`. A restore prints
+`cache: "restored"`, `reused_inputs`, `changed_inputs` and `source_head`, the
+commit the manifest was captured at. A partial `restore-keys` match can carry a
+manifest from an older protected-branch commit than the base.
+
+The two lists differ. `git diff --name-only <source_head> <tested_head>` names
+the tracked paths whose content differs between those commits, deletions
+included; it never names an untracked file. `changed_inputs` counts the current
+regular files, tracked or non-ignored untracked, whose bytes, mode or size
+differ from the manifest or that the manifest does not record. Each counted
+file gets a fresh mtime. A deleted input is not counted, and a new non-ignored
+untracked file is counted without appearing in the commit diff. Use the commit
+diff for the committed change list, and read `changed_inputs` only as the
+number of inputs refreshed; neither is an exact inventory of the other.
+
 The folded list-build (`check-ci-macos.sh --workspace-build`) reads Cargo's
 JSON messages, so Cargo's own progress does not reach the log; it prints
 `check-ci-macos: workspace units rebuilt=N fresh=M rebuilt_packages=…`
