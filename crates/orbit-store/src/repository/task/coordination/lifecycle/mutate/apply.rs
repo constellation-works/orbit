@@ -638,6 +638,7 @@ impl TaskCommitBoundary {
                             | "ci_infrastructure_retry_exhausted"
                             | orbit_types::workflow::CI_FAILURE_RECORDED_EVENT
                             | orbit_types::workflow::CI_FAILURE_RECLASSIFIED_EVENT
+                            | orbit_types::workflow::CI_BASE_SUSPECT_RECLASSIFIED_EVENT
                     ) {
                         return Err(invalid("unsupported handoff landing history event"));
                     }

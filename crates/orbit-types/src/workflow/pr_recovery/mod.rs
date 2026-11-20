@@ -1,6 +1,7 @@
 //! Durable ledgers for delivery PR recovery.
 
 mod auto_fix;
+mod base_suspect_reclassified;
 mod base_update;
 mod ci_failure;
 mod ci_rerun;
@@ -16,6 +17,9 @@ pub use auto_fix::{
     PrAutoFixFailedCheck, PrAutoFixHeadFailure, PrAutoFixNoEditRerun, PrAutoFixPush,
     PrAutoFixReadDeferral, PrAutoFixReadReset, decide_pr_auto_fix, is_pr_auto_fix_check_repair,
     pr_auto_fix_attempts, pr_auto_fix_no_edit_reruns, pr_auto_fix_pushes,
+};
+pub use base_suspect_reclassified::{
+    CI_BASE_SUSPECT_RECLASSIFIED_EVENT, CiBaseSuspectReclassification,
 };
 pub use base_update::{
     PR_BASE_UPDATE_BUDGET_SPENT, PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission,

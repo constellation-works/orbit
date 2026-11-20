@@ -1041,6 +1041,7 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                     | "ci_infrastructure_retry_exhausted"
                     | orbit_types::workflow::CI_FAILURE_RECORDED_EVENT
                     | orbit_types::workflow::CI_FAILURE_RECLASSIFIED_EVENT
+                    | orbit_types::workflow::CI_BASE_SUSPECT_RECLASSIFIED_EVENT
             )
         {
             return Err(OrbitError::InvalidInput(
@@ -2981,14 +2982,133 @@ fn untouched_failure_escalates_after_configured_base_ci_cycles() {
             .iter()
             .filter(|input| input["commit"] == base && input["latest_push_branch"] == "main")
             .count(),
-        2,
-        "one base ancestry observation per configured cycle"
+        3,
+        "one base ancestry observation per configured cycle, plus the final base proof (ORB-25926)"
     );
     assert_not_sent(
         &forge,
         &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
         "base cycle limit",
     );
+}
+
+/// ORB-25809 / ORB-25871: a follower handoff whose required check fails on
+/// the candidate, held base-suspect because the failure cites only untouched
+/// files, used to stop at the end of base observation even though the same
+/// check passed on the base. When observation ends with that pass proven and
+/// no same-check failure on the base, the failure is the candidate's: it is
+/// recorded as reclassified and takes the candidate requeue route. A base
+/// with no same-check pass, or a red tip, keeps today's base hold.
+#[test]
+fn base_suspect_failure_on_a_proven_green_base_requeues_the_candidate() {
+    for case in ["proven green", "no base pass", "red tip"] {
+        let (_sandbox, forge, candidate, base) = forge_fixture(false, false);
+        // A push run on the head is never a verified pull_request rerun, so
+        // the only way out of base suspicion is the base's own evidence.
+        let mut head_job = failed(1, 11, UNTOUCHED_TEST_FAILURE);
+        head_job.event = "push";
+        forge.job(&candidate, head_job);
+        if case != "no base pass" {
+            forge.job(&base, passed(2, 21));
+        }
+        let tip = (case == "red tip").then(|| fix_base(&forge.repo));
+        if let Some(tip) = &tip {
+            forge.job(tip, failed(3, 31, UNTOUCHED_TEST_FAILURE));
+        }
+        {
+            let mut state = forge.state.lock().unwrap();
+            state
+                .job_times
+                .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
+            state
+                .job_times
+                .insert(21, ("2026-10-26T13:00:00Z", "2026-10-26T13:01:00Z"));
+            // Started before the head failed, so it is not a fresh inherited failure.
+            state
+                .job_times
+                .insert(31, ("2026-10-26T13:30:00Z", "2026-10-26T13:31:00Z"));
+        }
+
+        let error = orbit_engine::test_support::with_vcs_retry_wait(
+            |_| {},
+            || {
+                land_with(
+                    &forge,
+                    json!({
+                        "max_wait_seconds": 30,
+                        "poll_interval_seconds": 5,
+                        "max_base_ci_cycles": 2,
+                    }),
+                )
+            },
+        )
+        .expect_err(case);
+
+        assert_not_sent(
+            &forge,
+            &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+            case,
+        );
+        let reclassified = forge
+            .history
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|row| row.event == orbit_types::workflow::CI_BASE_SUSPECT_RECLASSIFIED_EVENT)
+            .filter_map(|row| {
+                orbit_types::workflow::CiBaseSuspectReclassification::from_history_note(
+                    row.note.as_deref(),
+                )
+            })
+            .collect::<Vec<_>>();
+        if case == "proven green" {
+            assert_candidate_requeue_held(&error, &forge, &candidate, case);
+            assert_steps(&forge.steps(), &[HandoffLandingStep::StopForRequeue], case);
+            assert_reason(
+                &forge,
+                case,
+                &["classified `candidate`", "base-suspect observation ended"],
+            );
+            let [record] = reclassified.as_slice() else {
+                panic!("{case}: one reclassification record, got {reclassified:?}");
+            };
+            assert_eq!(
+                (
+                    record.base_run_id,
+                    record.base_sha.as_str(),
+                    record.check.as_str(),
+                    record.head.as_str(),
+                    record.from.as_str(),
+                    record.to.as_str(),
+                ),
+                (
+                    Some(2),
+                    base.as_str(),
+                    "CI / clippy",
+                    candidate.as_str(),
+                    "base-suspect",
+                    "candidate",
+                ),
+                "{case}: {record:?}"
+            );
+        } else {
+            assert!(
+                matches!(&error, OrbitError::DeliveryRefused { refusal, message }
+                    if *refusal == DeliveryRefusal::BaseChecksPending
+                        && message.contains("escalated after 2 base CI observation cycles")),
+                "{case}: an unproven base keeps the base hold: {error}"
+            );
+            assert_steps(
+                &forge.steps(),
+                &[HandoffLandingStep::Stop { repairable: false }],
+                case,
+            );
+            assert!(
+                reclassified.is_empty(),
+                "{case}: nothing is reclassified: {reclassified:?}"
+            );
+        }
+    }
 }
 
 /// A base-suspect failure whose landing tip has moved is decided only by
