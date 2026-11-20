@@ -42,7 +42,7 @@ This choice determines the whole integration. Do not revive the deleted v1 execu
 | An interactive-capable coding-agent CLI that receives an Orbit task envelope | `direct_agent` / `agent_cli` through the v2 CLI-agent path | provider identity, model and effort where supported, prompt bytes on stdin, tool authority, response envelope, provider state grant | shell command data from task input |
 | A deterministic program or script step | `local_shell` deterministic action | static `command` + `args` (or the selected definition's `command`/`args` defaults when the activity names no program) or explicit `shell` + `script`, fixed env, cwd, timeout, exit/output report | model, prompt, agent tool authority, registry/workspace identity variables |
 
-`local_shell` is the supported v2 successor to the old `cli_command` spelling. Its parser accepts that legacy spelling for existing definitions, but new assets use `local_shell`. It shares process supervision and optional sandbox selection with the agent runner; it is not an agent adapter. See [the local-shell reference](../design/executors/specs/local-shell.md) for the activity shape.
+`local_shell` is the supported v2 successor to the old `cli_command` spelling. Set `executor_type: local_shell`; the old `cli_command` value is no longer accepted. After changing that value, the existing `command`, `args`, `env` and `timeout_seconds` fields remain available as step defaults. It shares process supervision and optional sandbox selection with the agent runner; it is not an agent adapter. See [the local-shell reference](../design/executors/specs/local-shell.md) for the activity shape.
 
 ## Source and symbol map
 

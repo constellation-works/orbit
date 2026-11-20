@@ -48,8 +48,8 @@ use crate::context::RuntimeHost;
 use super::StateExecutionContext;
 use super::input::{canonicalize_existing_dir, input_string_field};
 
-/// Executor definition consulted when `config.executor` is absent. It ships
-/// with Orbit and is the definition legacy `cli_command` assets already carry.
+/// Executor definition consulted when `config.executor` is absent. Orbit ships
+/// this definition for deterministic shell steps.
 const DEFAULT_SHELL_EXECUTOR: &str = "local-shell";
 
 /// Wall-clock budget applied when neither the activity config nor the executor
@@ -349,10 +349,9 @@ fn parse_shell_config(config: &Value) -> Result<ShellConfig, OrbitError> {
 
 /// Merge the executor definition's defaults with the activity's declaration.
 ///
-/// The definition's `command` is the fallback program — this is what a legacy
-/// `cli_command` definition's `command` field means under the current runtime —
-/// and its `args` are a static prefix, so an operator can pin a wrapper once
-/// instead of repeating it in every activity.
+/// The definition's `command` is the fallback program and its `args` are a
+/// static prefix, so an operator can pin a wrapper once instead of repeating
+/// it in every activity.
 fn compose_argv(
     config: &ShellConfig,
     executor: &crate::activity_job::ResolvedShellExecutor,

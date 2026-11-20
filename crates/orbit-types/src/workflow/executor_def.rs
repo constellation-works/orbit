@@ -16,12 +16,6 @@ pub enum ExecutorType {
     /// Deterministic local command execution. Dispatched by the `local_shell`
     /// deterministic action, never by the agent CLI runner: it carries no
     /// model, prompt, or agent tool authority.
-    ///
-    /// `cli_command` is the pre-[ORB-11294] spelling of this same executor
-    /// family and stays accepted on load, so a bundled or user-authored
-    /// definition written before the rename keeps working. Definitions are
-    /// re-serialized under the canonical `local_shell` name.
-    #[serde(alias = "cli_command")]
     LocalShell,
     /// The former `external` transport was retired by the External Executor
     /// Protocol retirement decision (ORB-10395). This variant remains so old

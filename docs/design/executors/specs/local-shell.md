@@ -202,15 +202,14 @@ Script form:
     timeout_ms: 900000
 ```
 
-## Compatibility with `cli_command` definitions
+## Migrating `cli_command` definitions
 
 `local_shell` is the current spelling of the executor family that older
-definitions call `cli_command`. `ExecutorType` accepts `cli_command` as an
-alias, so a bundled or user-authored definition written before [ORB-11294] loads
-unchanged; it is re-serialized under the canonical `local_shell` name the next
-time it is written.
+definitions called `cli_command`. The `cli_command` value is no longer accepted
+for `executor_type`; change it to `local_shell` before loading an older
+definition.
 
-Such a definition's fields keep working as step defaults:
+After that change, the definition's fields keep working as step defaults:
 
 - `command` → the program for a step that names none.
 - `args` → a static prefix in front of the step's own arguments.
