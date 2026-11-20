@@ -306,6 +306,26 @@ pub(super) fn run_log_request(input: &Value) -> Result<ExecRequest, OrbitError> 
     Ok(super::gh_exec_request(args, None, TIMEOUT_LONG_MS))
 }
 
+/// Bind a whole-run `gh run view --log*` request to one `attempt`, so a
+/// concurrent rerun cannot switch the downloaded log behind `gh`.
+fn attempt_bound_run_log_request(request: &ExecRequest, attempt: u64) -> ExecRequest {
+    let mut bound = request.clone();
+    let insert_at = if bound
+        .args
+        .last()
+        .is_some_and(|flag| flag == "--log" || flag == "--log-failed")
+    {
+        bound.args.len() - 1
+    } else {
+        bound.args.len()
+    };
+    bound.args.splice(
+        insert_at..insert_at,
+        ["--attempt".to_string(), attempt.to_string()],
+    );
+    bound
+}
+
 /// One bounded log read, and where its bytes came from.
 pub struct RunLogRead {
     pub log: StreamedLog,
@@ -612,16 +632,18 @@ fn run_scoped_log(
     guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
 ) -> Result<StreamedLog, OrbitError> {
     const LABEL: &str = "gh run view --log";
-    let read = |keep_source: bool| -> Result<(StreamedLog, Vec<u8>), OrbitError> {
-        stream_log_source(
-            &guard(&requests.run_log)?,
-            bounds,
-            ExcerptShape::EvenSplit,
-            LABEL,
-            requests.selection.clone(),
-            keep_source,
-        )
-    };
+    let read_from =
+        |request: &ExecRequest, keep_source: bool| -> Result<(StreamedLog, Vec<u8>), OrbitError> {
+            stream_log_source(
+                &guard(request)?,
+                bounds,
+                ExcerptShape::EvenSplit,
+                LABEL,
+                requests.selection.clone(),
+                keep_source,
+            )
+        };
+    let read = |keep_source: bool| read_from(&requests.run_log, keep_source);
     let replay = |log: &[u8]| {
         let mut collector =
             log_collector(bounds, ExcerptShape::EvenSplit, requests.selection.clone());
@@ -675,7 +697,17 @@ fn run_scoped_log(
     if let Some(cached) = cache.get(&key) {
         return Ok(replay(&cached));
     }
-    Ok(store(&key, cache, read(true)?))
+    // Bind the download to `attempt` and re-verify the completed attempt
+    // afterwards before caching, so a rerun between metadata and download
+    // never writes another attempt's bytes under `key`.
+    let attempt_request = attempt_bound_run_log_request(&requests.run_log, attempt);
+    let (log, downloaded) = read_from(&attempt_request, true)?;
+    if downloaded.is_empty()
+        || completed_run_attempt(requests, guard).as_ref() != Some(&(source, attempt))
+    {
+        return Ok(log);
+    }
+    Ok(store(&key, cache, (log, downloaded)))
 }
 
 /// One lightweight metadata read, or `None` when it cannot be made or parsed.
