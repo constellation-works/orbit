@@ -80,6 +80,24 @@ impl FakeGh {
                echo 'gh: API rate limit exceeded for user ID 42. (HTTP 403)' >&2\n\
                exit 1\n\
              fi\n\
+             if [ \"$(cat \"$dir/answer\")\" = slow-throttle ]; then\n\
+               sleep 1\n\
+               printf 'throttled\\n' >> \"$dir/throttled\"\n\
+               echo 'gh: API rate limit exceeded for user ID 42. (HTTP 403)' >&2\n\
+               exit 1\n\
+             fi\n\
+             if [ \"$(cat \"$dir/answer\")\" = empty-then-slow-throttle ]; then\n\
+               case \"$*\" in *--log*) exit 0 ;; esac\n\
+               sleep 1\n\
+               printf 'throttled\\n' >> \"$dir/throttled\"\n\
+               echo 'gh: API rate limit exceeded for user ID 42. (HTTP 403)' >&2\n\
+               exit 1\n\
+             fi\n\
+             if [ \"$(cat \"$dir/answer\")\" = empty-then-throttle ]; then\n\
+               case \"$*\" in *--log*) exit 0 ;; esac\n\
+               echo 'gh: API rate limit exceeded for user ID 42. (HTTP 403)' >&2\n\
+               exit 1\n\
+             fi\n\
              echo '{}'\n",
         )
         .unwrap();
@@ -1274,5 +1292,208 @@ fn stale_clipped_release_does_not_clobber_newer_refresh_generation() {
             Some(expected_remaining),
             "completed_before={complete_newer_before_release}"
         );
+    }
+}
+
+/// Regression [ORB-26108]: `stream_log_source`, `read_api_json` and
+/// `fallback_jobs` must bound their post-child primary-throttle recording by
+/// the deadline left at child exit rather than minting a fresh timeout budget.
+/// With a peer holding the quota record lock, a child finishing near its
+/// 1.6 s budget gives up at that deadline instead of waiting another 1.6 s;
+/// with the lock available, each reader still records the host-wide hold.
+#[test]
+fn run_log_readers_bound_post_child_throttle_recording_by_remaining_deadline() {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Reader {
+        Stream,
+        Metadata,
+        Fallback,
+    }
+
+    let build_requests = |reader: Reader, probe: &ExecRequest, cache_dir: &Path| {
+        let input = match reader {
+            Reader::Metadata => json!({"run": "123", "job": "9", "repo": "acme/orbit"}),
+            Reader::Stream | Reader::Fallback => json!({"run": "123", "repo": "acme/orbit"}),
+        };
+        let mut requests = orbit_tools::github_cli::RunLogRequests::from_input(&input).unwrap();
+        if reader == Reader::Metadata {
+            requests = requests.with_test_log_cache(cache_dir);
+        }
+        for request in [&mut requests.run_log, &mut requests.run_view] {
+            request.program = probe.program.clone();
+            request.environment_mode = probe.environment_mode.clone();
+            request.timeout_ms = Some(1_600);
+        }
+        requests
+    };
+
+    let policy = GithubQuotaPolicy::default();
+
+    for reader in [Reader::Stream, Reader::Metadata, Reader::Fallback] {
+        let records = TempDir::new().unwrap();
+        let cache_dir = TempDir::new().unwrap();
+        let answer = match reader {
+            Reader::Fallback => "empty-then-slow-throttle",
+            Reader::Stream | Reader::Metadata => "slow-throttle",
+        };
+        let gh = FakeGh::new("{}", answer);
+        let probe = gh.request(&["run", "view", "123"]);
+        let account = github_quota::request_account_key(&probe);
+        let record_path = records.path().join(format!("{account}.json"));
+        let now = now();
+        let reset = now + 1800;
+        store(records.path()).refresh_if_due(&policy, &account, now, &|| known(4000, reset));
+        let requests = build_requests(reader, &probe, cache_dir.path());
+
+        let (admitted_tx, admitted_rx) = std::sync::mpsc::channel();
+        let (lock_held_tx, lock_held_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            admitted_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("target child was never admitted");
+            let _lock = orbit_common::fs::io::hold_exclusive_file_lock_options(
+                &record_path,
+                "contending quota holder",
+                orbit_common::fs::io::FileLockOptions::default(),
+            )
+            .unwrap();
+            lock_held_tx.send(()).unwrap();
+            let _ = release_rx.recv_timeout(Duration::from_secs(60));
+        });
+
+        let target_call = usize::from(reader == Reader::Fallback);
+        let call_index = AtomicUsize::new(0);
+        let target_started = std::sync::Mutex::new(None);
+        let result = github_quota::with_scoped_guard(store(records.path()), policy, || {
+            orbit_tools::github_cli::read_run_log_guarded(
+                &requests,
+                orbit_tools::github_cli::LogReadBounds::new(4096),
+                None,
+                &|request| {
+                    let index = call_index.fetch_add(1, Ordering::SeqCst);
+                    if reader == Reader::Metadata && index > target_call {
+                        return Err(orbit_common::OrbitError::Execution(
+                            "stop after metadata read".to_string(),
+                        ));
+                    }
+                    let admitted = github_quota::admit_gh_request_within_budget(
+                        GithubCaller::Delivery,
+                        request,
+                    )?;
+                    if index == target_call {
+                        admitted_tx.send(()).unwrap();
+                        lock_held_rx
+                            .recv_timeout(Duration::from_secs(10))
+                            .expect("holder never acquired record lock");
+                        *target_started.lock().unwrap() = Some(std::time::Instant::now());
+                    }
+                    Ok(admitted)
+                },
+            )
+        });
+        let elapsed = target_started
+            .lock()
+            .unwrap()
+            .expect("target child never ran")
+            .elapsed();
+        release_tx.send(()).unwrap();
+        holder.join().unwrap();
+
+        assert!(
+            gh.dir.path().join("throttled").exists(),
+            "{reader:?}: child must finish sleeping and emit primary throttle rather than timing out"
+        );
+        assert!(
+            elapsed < Duration::from_millis(2_200),
+            "{reader:?}: post-child lock wait must stop at remaining deadline (~1.6 s), took {elapsed:?}"
+        );
+        match reader {
+            Reader::Stream => {
+                let error = result.err().expect("throttled stream must fail");
+                assert!(refused_throttle(&error).principal.is_some(), "{error}");
+            }
+            Reader::Metadata => {
+                let error = result.err().expect("metadata stop marker must fail");
+                assert!(
+                    error.to_string().contains("stop after metadata read"),
+                    "{error}"
+                );
+            }
+            Reader::Fallback => {
+                let read = result.expect("unscoped fallback returns RunLogRead");
+                let throttle = read.throttle_refusal().expect("typed fallback throttle");
+                assert!(
+                    refused_throttle(&throttle).principal.is_some(),
+                    "{throttle}"
+                );
+            }
+        }
+    }
+
+    // With the lock available, every reader records the primary throttle hold.
+    for reader in [Reader::Stream, Reader::Metadata, Reader::Fallback] {
+        let records = TempDir::new().unwrap();
+        let cache_dir = TempDir::new().unwrap();
+        let answer = match reader {
+            Reader::Fallback => "empty-then-throttle",
+            Reader::Stream | Reader::Metadata => "throttle",
+        };
+        let gh = FakeGh::new("{}", answer);
+        let probe = gh.request(&["run", "view", "123"]);
+        let account = github_quota::request_account_key(&probe);
+        let now = now();
+        let reset = now + 1800;
+        store(records.path()).refresh_if_due(&policy, &account, now, &|| known(4000, reset));
+        let requests = build_requests(reader, &probe, cache_dir.path());
+
+        let result = github_quota::with_scoped_guard(store(records.path()), policy, || {
+            orbit_tools::github_cli::read_run_log_guarded(
+                &requests,
+                orbit_tools::github_cli::LogReadBounds::new(4096),
+                None,
+                &|request| {
+                    github_quota::admit_gh_request_within_budget(GithubCaller::Delivery, request)
+                },
+            )
+        });
+        match reader {
+            Reader::Stream => {
+                let error = result.err().expect("throttled stream must fail");
+                assert!(refused_throttle(&error).principal.is_some(), "{error}");
+            }
+            Reader::Metadata => {
+                let error = result.err().expect("throttled metadata must hold read");
+                assert_eq!(
+                    refused_throttle(&error).resource.as_deref(),
+                    Some(RESOURCE_CORE),
+                    "{error}"
+                );
+            }
+            Reader::Fallback => {
+                let read = result.expect("unscoped fallback returns RunLogRead");
+                assert!(read.throttle_refusal().is_some(), "{reader:?}");
+            }
+        }
+        if reader == Reader::Metadata {
+            assert_eq!(
+                gh.calls(),
+                vec!["api --method GET repos/acme/orbit/actions/jobs/9".to_string()],
+                "recorded metadata throttle must hold the fallback stream locally"
+            );
+        }
+
+        let held = store(records.path())
+            .admit(
+                &policy,
+                &account,
+                GithubCaller::Delivery,
+                RESOURCE_CORE,
+                now + 1,
+                &|| RateLimitAnswer::Unknown("not consulted".into()),
+            )
+            .expect_err("recorded primary throttle must hold core reads");
+        assert_eq!(held.reason, QuotaRefusalReason::Exhausted, "{reader:?}");
+        assert_eq!(held.resume_epoch_seconds, reset, "{reader:?}");
     }
 }

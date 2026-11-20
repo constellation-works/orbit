@@ -249,6 +249,12 @@ impl RunLogRequests {
         self
     }
 
+    /// Serve repeat reads of a completed job or run from a test cache under `dir`.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_test_log_cache(self, dir: &std::path::Path) -> Self {
+        self.with_log_cache(Some(LogCache::in_root(dir)))
+    }
+
     /// Run every request from `dir`, the checkout the query is about.
     pub fn in_directory(mut self, dir: &str) -> Self {
         self.run_log.current_dir = Some(dir.to_string());
@@ -597,6 +603,7 @@ fn stream_log_source(
     selection: Option<LogSelection>,
     keep_source: bool,
 ) -> Result<(StreamedLog, Vec<u8>), OrbitError> {
+    let deadline = crate::github_quota::gh_request_deadline(request, std::time::Instant::now());
     let (result, read) = run_process_streaming_stdout(request, &NoSandbox, move |mut stdout| {
         use std::io::Read;
 
@@ -624,7 +631,7 @@ fn stream_log_source(
             }
         }
     })?;
-    crate::github_quota::observe_gh_result(request, &result);
+    crate::github_quota::observe_gh_result_by_deadline(request, &result, deadline);
     // The supervisor's verdict, not the stderr note it appends, says the read
     // was killed; callers bounding the read by a deadline match this variant.
     if result.timed_out {
@@ -770,8 +777,9 @@ fn read_api_json(
     guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
 ) -> Option<Value> {
     let request = guard(&request).ok()?;
+    let deadline = crate::github_quota::gh_request_deadline(&request, std::time::Instant::now());
     let result = run_process(&request, &NoSandbox).ok()?;
-    crate::github_quota::observe_gh_result(&request, &result);
+    crate::github_quota::observe_gh_result_by_deadline(&request, &result, deadline);
     if !result.success {
         return None;
     }
@@ -1011,9 +1019,11 @@ fn fallback_jobs(
                 reason: error.to_string(),
                 throttle: throttle_of(&error).map(Box::new),
             })?;
+            let deadline =
+                crate::github_quota::gh_request_deadline(&request, std::time::Instant::now());
             let result = run_process(&request, &NoSandbox)
                 .map_err(|error| format!("gh run view could not run: {error}"))?;
-            crate::github_quota::observe_gh_result(&request, &result);
+            crate::github_quota::observe_gh_result_by_deadline(&request, &result, deadline);
             check_read_result(&result, "gh run view").map_err(|error| FallbackGap {
                 reason: error.to_string(),
                 throttle: throttle_of(&error).map(Box::new),

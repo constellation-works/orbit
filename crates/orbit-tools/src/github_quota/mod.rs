@@ -211,20 +211,9 @@ fn admit_by_deadline(
 /// Record what `result` of an admitted `request` says about the quota: an
 /// authenticated primary rate-limit answer holds every read of its resource
 /// on the host until the reset. Waits for the shared record no longer than
-/// `request`'s own timeout budget, or up to the 30-second file-lock default
-/// when `request` has none.
-pub fn observe_gh_result(request: &ExecRequest, result: &ExecutionResult) {
-    observe_gh_result_by_deadline(
-        request,
-        result,
-        gh_request_deadline(request, Instant::now()),
-    );
-}
-
-/// [`observe_gh_result`] bounded by `deadline` (from [`gh_request_deadline`])
-/// instead of a fresh `request` budget, for a caller that spent part of the
-/// budget before the child's answer arrived. `None` leaves each record-lock
-/// wait at the shared file-lock default of 30 seconds.
+/// `deadline` (from [`gh_request_deadline`]), so post-child accounting stays
+/// inside the caller's remaining budget. `None` leaves each record-lock wait
+/// at the shared file-lock default of 30 seconds.
 pub fn observe_gh_result_by_deadline(
     request: &ExecRequest,
     result: &ExecutionResult,
@@ -301,9 +290,9 @@ fn timed_out_before_start(duration_ms: u64) -> ExecutionResult {
 }
 
 /// [`admit_gh_request`], run `request` without a sandbox with the remaining
-/// timeout budget, then [`observe_gh_result`]. One deadline, taken when this
-/// starts, bounds the admission's lock waits and probe, the child and the
-/// post-call accounting.
+/// timeout budget, then [`observe_gh_failure_by_deadline`]. One deadline,
+/// taken when this starts, bounds the admission's lock waits and probe, the
+/// child and the post-call accounting.
 pub fn run_gh_request(
     caller: GithubCaller,
     request: &ExecRequest,
