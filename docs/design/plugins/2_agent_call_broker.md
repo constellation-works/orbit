@@ -670,7 +670,8 @@ granting `unsandboxed`.
 
 `<global_root>/state/plugins/` and `<global_root>/state/plugin-secrets/`, for reads and writes,
 on both platforms. The same mask also hides core's decision-channel store
-`<global_root>/state/decision-channels/`, which keeps every channel's token key, and `clock.env`
+`<global_root>/state/decision-channels/`, which keeps every channel's token key, the broker's
+GitHub run-log cache `<global_root>/state/github-run-logs/`, and `clock.env`
 ([policy-sandbox design](../policy-sandbox/2_design.md)). Other nested-`orbit` reads under the
 global root are unchanged. That includes `plugins/`, `plugins/.grants/` (the loader verifies
 witnesses when it builds the tool surface) and `state/plugin-callbacks/`.

@@ -15,6 +15,7 @@ pub mod auth;
 pub mod dependabot_alerts;
 mod diagnostic;
 mod log_cache;
+pub use log_cache::{GITHUB_RUN_LOG_CACHE_DIR, remove_legacy_github_run_log_cache};
 mod nextest_regions;
 pub(crate) mod throttle;
 pub use diagnostic::strip_ansi_sequences;

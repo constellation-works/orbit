@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 
 use crate::TIMEOUT_LONG_MS;
 
-use super::log_cache::{LogCache, LogCacheKey};
+use super::log_cache::{LogCache, LogCacheKey, RedactedLog};
 use super::throttle::{check_read_result, throttle_of};
 use super::{LogSelection, StreamedLog, StreamedLogCollector};
 
@@ -599,10 +599,12 @@ fn stream_log_source(
 /// The run-scoped `gh run view --log*` read, served from the log cache when
 /// the job or run it names is completed and its log is already held.
 ///
-/// The cache holds source bytes and replays them through the collector an
-/// uncached read would have used, so the result is identical either way. Every
-/// cache or metadata failure falls back to the plain read: the cache can make a
-/// read cheaper, never fail it.
+/// The cache holds a masked copy of the source (see `log_cache.rs`) with the
+/// source's lengths, and every read of a cacheable log, the one that fills the
+/// cache included, replays that copy through the collector, so a cold and a
+/// warm read return the same result in source coordinates. Every cache or
+/// metadata failure falls back to the plain read: the cache can make a read
+/// cheaper, never fail it.
 fn run_scoped_log(
     requests: &RunLogRequests,
     bounds: LogReadBounds,
@@ -619,13 +621,26 @@ fn run_scoped_log(
             keep_source,
         )
     };
-    let replay = |source: &[u8]| {
+    let replay = |log: &[u8]| {
         let mut collector =
             log_collector(bounds, ExcerptShape::EvenSplit, requests.selection.clone());
-        for piece in source.chunks(4096) {
+        for piece in log.chunks(4096) {
             collector.push(piece);
         }
         collector.finish()
+    };
+    // Mask a freshly read completed log, store it, and answer from the stored
+    // form so the first read matches every later one. A log that cannot be
+    // masked is not stored and answers from the read itself.
+    let store = |key: &LogCacheKey, cache: &LogCache, (log, source): (StreamedLog, Vec<u8>)| {
+        let Some(masked) = RedactedLog::from_source(&source) else {
+            return log;
+        };
+        cache.put(key, &masked);
+        if masked.as_bytes() == source.as_slice() {
+            return log;
+        }
+        replay(masked.as_bytes())
     };
     let Some(cache) = &requests.cache else {
         return read(false).map(|(log, _)| log);
@@ -637,15 +652,15 @@ fn run_scoped_log(
     // call. Completion is learned on the miss that fetches the log.
     if let Some(job) = &requests.job {
         let key = LogCacheKey::job(repository, &requests.run_id, job, scope);
-        if let Some(source) = cache.get(&key) {
-            return Ok(replay(&source));
+        if let Some(cached) = cache.get(&key) {
+            return Ok(replay(&cached));
         }
         let completed = job_is_completed(requests, job, guard);
-        let (log, source) = read(completed)?;
+        let read = read(completed)?;
         if completed {
-            cache.put(&key, &source);
+            return Ok(store(&key, cache, read));
         }
-        return Ok(log);
+        return Ok(read.0);
     }
 
     // A rerun keeps the run id and puts the run back in progress, so each read
@@ -654,12 +669,10 @@ fn run_scoped_log(
         return read(false).map(|(log, _)| log);
     };
     let key = LogCacheKey::run_attempt(repository, &requests.run_id, attempt, scope);
-    if let Some(source) = cache.get(&key) {
-        return Ok(replay(&source));
+    if let Some(cached) = cache.get(&key) {
+        return Ok(replay(&cached));
     }
-    let (log, source) = read(true)?;
-    cache.put(&key, &source);
-    Ok(log)
+    Ok(store(&key, cache, read(true)?))
 }
 
 /// One lightweight metadata read, or `None` when it cannot be made or parsed.
