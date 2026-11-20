@@ -258,8 +258,11 @@ orbit search "<terms>" --kind friction        # lexical friction search
 The `orbit friction` commands above are for people at a terminal. They are not
 `orbit.friction` actions, and that tool refuses `show`, `list` and `comment`. An
 MCP session or `orbit tool run` caller reads and lists only through
-`orbit.search`: `{"kind":"friction","query":"<ID>"}` reads one record, and the
-same input without `query` lists them.
+`orbit.search`. `{"kind":"friction","query":"<ID>","all":true}` reads one record.
+The query is a substring match over several fields, so take the hit whose `id`
+equals `<ID>`. `all` is required to reach a triaged or resolved record, since a
+query otherwise defaults to open records. Omit `query` to list them, across every
+status.
 
 Frictions use lexical matching. Search by the words someone would actually have used.
 → [search.md](search.md)

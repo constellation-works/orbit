@@ -406,7 +406,7 @@ fn agent_alternative(name: &str) -> Option<&'static str> {
             Some("Agents list friction with orbit.search (kind \"friction\", no query)")
         }
         "orbit.friction.show" => Some(
-            "Agents read one friction record with orbit.search (kind \"friction\", query set to the friction ID)",
+            "Agents read one friction record with orbit.search {\"kind\":\"friction\",\"query\":\"<friction ID>\",\"all\":true} and take the hit whose id equals the friction ID",
         ),
         _ => None,
     }
