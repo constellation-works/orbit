@@ -334,7 +334,7 @@ nothing else.
 **Where the broker lives.** It runs in the `orbit job run-pipeline-worker` process that
 executes the agent step. `run_cli_backend` reaches `invoke_cli_provider`
 (`crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch/subprocess.rs`), which spawns the sandboxed
-provider through `spawn_child_with_optional_sandbox` (`cli_runner/spawn.rs`), records the child
+provider through `spawn_child_with_optional_sandbox` (`crates/orbit-engine/src/sandbox_spawn.rs`), records the child
 PID and, on Linux, its Bubblewrap PID namespace, and then blocks in `spawn_with_timeout` until
 the provider exits. That process is outside the sandbox and stays alive for the whole agent
 run. It already holds the run's authoritative context: run ID, task ID, workspace, the
