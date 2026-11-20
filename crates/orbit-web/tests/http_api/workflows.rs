@@ -135,6 +135,51 @@ wf_test!(
         eq!(after => before, "refused ship/resume clicks must not persist or change any run");
     }
 );
+wf_test!(
+    ship_refuses_in_flight_duplicate_whose_task_holds_a_live_claim,
+    {
+        let fixture = Fixture::new();
+        fixture.job("task_auto_pipeline");
+        let in_flight_task = backlog_task(&fixture, "HTTP ship claimed dedupe", &[]);
+        let mut ship = fixture.seed_run("jrun-ship-claimed", "task_auto_pipeline", Running);
+        ship.input = Some(json!({"mode":"local","task_ids":[in_flight_task.id]}));
+        fixture.save_run(&ship);
+        // A run past admission holds its task's execution claim as well as the run.
+        super::distributed_contracts::owner_state_with_claims(
+            &fixture.runtime,
+            [(
+                "claim-in-flight".into(),
+                in_flight_task.id.clone(),
+                orbit_store::contracts::ExecutionClaimPhase::Running,
+            )],
+        );
+        let server = fixture.server(false);
+        let before = listed_runs(&fixture);
+        let payload = ecode!(server.send("POST", &ship_uri(), json!({"task_ids":[in_flight_task.id],"mode":"local"})) => 409, "ship_run_in_flight");
+        check!(payload, "/run_id": ship.run_id, "/task_id": in_flight_task.id);
+        eq!(listed_runs(&fixture) => before, "a refused duplicate ship must not persist a run");
+        // A held task with no in-flight run is still refused at submission, but not as an in-flight duplicate.
+        let held_task = backlog_task(&fixture, "HTTP ship held alone", &[]);
+        super::distributed_contracts::owner_state_with_claims(
+            &fixture.runtime,
+            [(
+                "claim-held-alone".into(),
+                held_task.id.clone(),
+                orbit_store::contracts::ExecutionClaimPhase::Running,
+            )],
+        );
+        let refused = server.send(
+            "POST",
+            &ship_uri(),
+            json!({"task_ids":[held_task.id],"mode":"local"}),
+        );
+        let status = status_of(&refused);
+        let body: Value = refused.json().unwrap();
+        assert!(!(200..300).contains(&status), "{body}");
+        assert_ne!(body["code"], json!("ship_run_in_flight"), "{body}");
+        eq!(listed_runs(&fixture) => before, "a refused held ship must not persist a run");
+    }
+);
 wf_test!(auto_stop_is_idempotent_and_preserves_in_flight_children, {
     let fixture = Fixture::new();
     let coordinator = fixture.seed_run("jrun-auto", "workspace_auto_pipeline", Running);

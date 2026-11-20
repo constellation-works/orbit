@@ -208,6 +208,12 @@ impl OrbitRuntime {
         let operator_override = operator_override && !task_ids.is_empty();
         self.validate_strict_worker_containment(strict_containment)?;
         self.require_workspace_claim("orbit.workflow.ship", claim_token)?;
+        // [ORB-25745] A duplicate of a task a live run already carries is refused
+        // as that run, before the claim ledger's entry refusal below can name the
+        // task's execution claim instead: a run past admission holds that claim too.
+        if let Some(conflict) = self.in_flight_ship_run_for_tasks(task_ids)? {
+            return Err(conflict);
+        }
         // [ORB-12500] Explicit shipment converges on the same admission
         // decision the drain, the retained sweep and pull admission make: a
         // replica serves no owner coordination, and a task a live claim is
@@ -331,9 +337,6 @@ impl OrbitRuntime {
                     preview["excluded"]
                 )));
             }
-        }
-        if let Some(conflict) = self.in_flight_ship_run_for_tasks(task_ids)? {
-            return Err(conflict);
         }
         // The worker starts as soon as the run is submitted, so the override
         // is on record before then.
