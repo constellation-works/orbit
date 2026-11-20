@@ -349,7 +349,7 @@ class CiCacheWorkflowTests(unittest.TestCase):
         self.assertEqual(set(writers), {"ci", "docs", "guardrails", "test-1", "test-2",
                                                 "test-3", "test-build", "test-extra", "test-partition-2",
                                                 "test-partition-6", "test-partition-7", "test-partition-8",
-                                                "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"})
+                                                "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12", "test-partition-13"})
         self.assertEqual(self.document.get("on", self.document.get(True, {}))["push"]["branches"], ["main", "agent-main"],
                          "push-only saves are trusted only while pushes come from protected branches")
 
@@ -1097,7 +1097,7 @@ class NextestShardWorkflowTests(unittest.TestCase):
                          sorted([f"Test shard {k}/{shards}" for k in range(1, shards + 1)]
                                 + [jobs["test-extra"]["name"], jobs["test-partition-2"]["name"],
                                    jobs["test-partition-6"]["name"], jobs["test-partition-7"]["name"],
-                                   jobs["test-partition-8"]["name"], *[jobs[f"test-partition-{k}"]["name"] for k in range(9, 13)]]))
+                                   jobs["test-partition-8"]["name"], *[jobs[f"test-partition-{k}"]["name"] for k in range(9, 14)]]))
         [wait] = self.run_step(jobs["ci"], "Await the test build and nextest shards")
         self.assertEqual(wait[0], "scripts/ci-await-jobs.py")
         awaited = wait[2::2]
@@ -1125,7 +1125,7 @@ class NextestShardWorkflowTests(unittest.TestCase):
                              ("test-partition-6", "Run nextest shard"),
                              ("test-partition-7", "Run nextest shard"),
                              ("test-partition-8", "Run nextest shard"),
-                             *[(f"test-partition-{k}", "Run nextest shard") for k in range(9, 13)]):
+                             *[(f"test-partition-{k}", "Run nextest shard") for k in range(9, 14)]):
             with self.subTest(job=job_id):
                 [nextest] = self.run_step(jobs[job_id], step)
                 # The full archive's partition guard fails the test build on an
@@ -1421,7 +1421,7 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
                     job["if"], "push", dependency_skipped=True, bindings={SCOPE: mode})}
                 self.assertEqual(admitted, {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2",
                                             "test-3", "test-extra", "test-partition-2",
-                                            "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"})
+                                            "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12", "test-partition-13"})
         self.assertEqual(self.push("docs/guide.md", same_tree=True, before_check="cancelled"), "skip",
                          "an exact tree that passed on the PR head is safe independently of BEFORE")
 
@@ -1444,9 +1444,9 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
         jobs = document["jobs"]
         expected = {
-            "full": {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"},
-            "affected:orbit-cli": {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"},
-            "": {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"},
+            "full": {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12", "test-partition-13"},
+            "affected:orbit-cli": {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12", "test-partition-13"},
+            "": {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12", "test-partition-13"},
             "docs": {"scope", "docs"},
             "skip": {"scope"},
         }
