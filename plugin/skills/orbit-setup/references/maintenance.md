@@ -569,8 +569,13 @@ If the directory has already moved and the store is missing, move it back to
 its registered path, run the runtime command there, then move it again and
 rebind.
 
-Preview first. `--dry-run` validates and reports the binding without writing
-anything. Review its output, then repeat the command without `--dry-run`:
+Preview first. `--dry-run` validates and reports the new binding. It leaves the
+checkout's binding in the workspace registry and task store, the pending rebind
+record and the audit log unchanged. Normal generation admission and registry
+lock bookkeeping can still write, so a preview does not promise that the host
+root is untouched. A missing host store is refused earlier, before generation
+admission, as the precondition above describes. Review the output, then repeat
+the command without `--dry-run`:
 
 ```bash
 orbit --workspace <registered-name-or-id> workspace rebind --path /new/checkout --dry-run --json

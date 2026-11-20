@@ -11,13 +11,13 @@ use crate::command::{CommandOut, Payload};
 #[derive(Args)]
 #[command(
     about = "Rebind this host to a checkout directory the operator already moved",
-    after_long_help = "Stop workspace runs and release claims before moving the directory. Remove retained Orbit-managed worktrees first. This command never moves files, changes the source remote, or changes another host. It requires the registered Git origin and .orbit identity, and an existing host store (orbit.db). Before moving a newly initialized checkout, run a runtime command such as `orbit tool run orbit.task.list --input '{}'` to initialize the host store. A missing store is refused even with --dry-run. Keep the host store outside the moved directory. Repeat the same command to finish an interrupted rebind.\n\nExamples:\n  orbit --workspace <name> workspace rebind --path /new/checkout --dry-run --json\n  orbit --workspace <name> workspace rebind --path /new/checkout --json"
+    after_long_help = "Stop workspace runs and release claims before moving the directory. Remove retained Orbit-managed worktrees first. This command never moves files, changes the source remote, or changes another host. It requires the registered Git origin and .orbit identity, and an existing host store (orbit.db). Before moving a newly initialized checkout, run a runtime command such as `orbit tool run orbit.task.list --input '{}'` to initialize the host store. A missing store is refused before generation admission, with or without --dry-run, and writes nothing. `--dry-run` leaves the checkout's binding in the workspace registry and task store, the pending rebind record and the audit log unchanged; generation admission and registry lock bookkeeping can still write. Keep the host store outside the moved directory. Repeat the same command to finish an interrupted rebind.\n\nExamples:\n  orbit --workspace <name> workspace rebind --path /new/checkout --dry-run --json\n  orbit --workspace <name> workspace rebind --path /new/checkout --json"
 )]
 pub struct WorkspaceRebindArgs {
     /// Existing Git checkout directory after the operator moved it
     #[arg(long, value_name = "DIR")]
     path: PathBuf,
-    /// Validate and report the binding without writing anything (default: apply)
+    /// Validate and report the new binding without changing the checkout binding, pending rebind record or audit log; generation admission and lock bookkeeping can still write (default: apply)
     #[arg(long)]
     dry_run: bool,
 }
