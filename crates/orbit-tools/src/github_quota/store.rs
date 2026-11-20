@@ -399,7 +399,9 @@ impl GithubQuotaStore {
 
     /// Read the rate-limit endpoint through `refresh` when no process on the
     /// host has within the interval. The claim is taken under the record's
-    /// lock before the read, so concurrent callers refresh at most once.
+    /// lock before the read, so concurrent callers refresh at most once, and a
+    /// caller whose sampled `now` is older than the active claim never moves
+    /// it backward.
     pub fn refresh_if_due(
         &self,
         policy: &GithubQuotaPolicy,
@@ -410,9 +412,17 @@ impl GithubQuotaStore {
         let interval = policy.refresh_seconds();
         let claimed = self
             .update(account, |record| {
-                let due = record
-                    .refresh_claimed_at
-                    .is_none_or(|at| now < at || now - at >= interval);
+                // `now` was sampled before the lock, so a caller that waited
+                // behind a later claimant can hold an older time: that is
+                // inside the claim's interval, not due. Only a claim further
+                // ahead than one interval (a clock stepped back) is stale.
+                let due = record.refresh_claimed_at.is_none_or(|at| {
+                    if now < at {
+                        at - now > interval
+                    } else {
+                        now - at >= interval
+                    }
+                });
                 if due {
                     record.refresh_claimed_at = Some(now);
                 }

@@ -308,6 +308,32 @@ fn concurrent_readers_refresh_at_most_once_per_interval() {
     assert_eq!(refreshes.load(Ordering::SeqCst), 2);
 }
 
+/// A caller that sampled its time before waiting behind a later claimant
+/// cannot move the claim backward and start a second read inside the interval.
+#[test]
+fn out_of_order_samples_never_move_the_refresh_claim_backward() {
+    let records = TempDir::new().unwrap();
+    let policy = GithubQuotaPolicy::default();
+    let refreshes = AtomicUsize::new(0);
+    let start = now();
+    let refresh = || {
+        refreshes.fetch_add(1, Ordering::SeqCst);
+        known(4000, start + 3600)
+    };
+    let store = store(records.path());
+    store.refresh_if_due(&policy, ACCOUNT, start + 1, &refresh);
+    store.refresh_if_due(&policy, ACCOUNT, start, &refresh);
+    assert_eq!(refreshes.load(Ordering::SeqCst), 1, "older sample waits");
+    store.refresh_if_due(&policy, ACCOUNT, start + 60, &refresh);
+    assert_eq!(
+        refreshes.load(Ordering::SeqCst),
+        1,
+        "the claim stayed at start + 1"
+    );
+    store.refresh_if_due(&policy, ACCOUNT, start + 61, &refresh);
+    assert_eq!(refreshes.load(Ordering::SeqCst), 2, "interval elapsed");
+}
+
 /// Criteria 3 and 9: concurrent writers never tear the record, and it counts
 /// every call by caller class.
 #[test]
