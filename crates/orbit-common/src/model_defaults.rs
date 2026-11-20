@@ -73,6 +73,11 @@ pub const ANTIGRAVITY_NEON_MODEL: &str = "gemini-4-neon-high";
 /// High is the model's default thinking level. [ORB-25818]
 pub const ANTIGRAVITY_HYDROGEN_MODEL: &str = "gemini-4-hydrogen-high";
 
+/// Antigravity (`agy`) model for the built-in `carbon` crew: a slug from
+/// `agy models`, verified against Antigravity CLI 1.5.13. Carbon is offered
+/// on Google AI Ultra and Enterprise accounts only. [ORB-25944]
+pub const ANTIGRAVITY_CARBON_MODEL: &str = "gemini-4-carbon-high";
+
 /// Default Grok Build model (the canonical model listed by `grok models`).
 pub const GROK_DEFAULT_MODEL: &str = "grok-4.7";
 

@@ -120,7 +120,7 @@ argument. What to know per executor:
 |---|---|
 | `codex` | Sandbox mode and approval policy are separate settings: [`execution.codex.*`](/reference/config/#settable-keys). |
 | `muse` | Runs on macOS and Linux. |
-| `antigravity` | Model ids carry an effort suffix and must come from `agy models`; a bare Gemini CLI id such as `gemini-3.8-flash` is rejected at config load. `xhigh` and `max` are not accepted, although `agy --effort` advertises them. When `agy` is detected, `orbit init` also seeds an `argon` crew (`gemini-4-argon-high`) into the `hard` complexity pool. |
+| `antigravity` | Model ids carry an effort suffix and must come from `agy models`; a bare Gemini CLI id such as `gemini-3.8-flash` is rejected at config load. `xhigh` and `max` are not accepted, although `agy --effort` advertises them. When `agy` is detected, `orbit init` also seeds its built-in Gemini 4 crews into the complexity pools: `hydrogen` in `medium`, `argon` and `neon` in `hard`, and `carbon` (`gemini-4-carbon-high`) in `xhard`. |
 | `grok` | Effort depends on the model: `grok-4.7` and `grok-4.6` accept `low`–`xhigh`, `grok-4.5` accepts `low`–`high`. With any other model, or none, `effort` is ignored. |
 | `copilot` | The retired `gh-copilot` gh extension is a different tool and is not an Orbit executor. |
 | `gemini` | Legacy Google lane. Individual Gemini CLI accounts stopped on 2026-06-18; enterprise Gemini Code Assist and API-key authentication still work. For new setups use `antigravity`, which `orbit init` picks when `agy` is installed. |
