@@ -1627,6 +1627,89 @@ fn unschedulable_dependency_withholds_full_totals_and_reports_a_subset() {
     );
 }
 
+/// One-hour history has no regression-fix bundles, and a review dependency
+/// leaves part of the cohort unschedulable. The adjusted scenario must not
+/// keep the subset quantiles that draw produced without follow-up work.
+#[test]
+fn unsupported_regression_withholds_adjusted_subset_quantiles() {
+    isolated(
+        "backlog_forecast::unsupported_regression_withholds_adjusted_subset_quantiles",
+        || {
+            let fixture = Fixture::new();
+            one_hour_history(&fixture);
+            let in_review = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Waiting for review".into(),
+                    complexity: TaskComplexity::Medium,
+                    status: Some(TaskStatus::Review),
+                    ..Default::default()
+                })
+                .unwrap()
+                .id
+                .to_string();
+            let blocked =
+                backlog_task(&fixture, "After review", &["file:a.rs"], &[], &[&in_review]);
+            backlog_task(&fixture, "Downstream", &["file:b.rs"], &[], &[&blocked]);
+            backlog_task(&fixture, "Free", &["file:c.rs"], &[], &[]);
+            fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Proposed free work".into(),
+                    complexity: TaskComplexity::Medium,
+                    status: Some(TaskStatus::Proposed),
+                    context_files: vec!["file:proposed.rs".into()],
+                    ..Default::default()
+                })
+                .unwrap();
+            let server = fixture.server(false);
+            let response = json_ok(server.get(&format!("{ENDPOINT}&concurrency=2")));
+            let unknown = json!({"p50": null, "p90": null});
+            for key in ["forecast", "if_approved"] {
+                let scenario = &response[key];
+                assert_eq!(
+                    scenario["regression_rework"]["available"], false,
+                    "{key} follow-up must be unsupported: {scenario}"
+                );
+                assert_eq!(
+                    scenario["unavailable"]["regression_history_missing"], true,
+                    "{key}"
+                );
+                let subset = &scenario["schedulable_subset"];
+                let tasks = subset["tasks"].as_u64().unwrap();
+                let of = subset["of"].as_u64().unwrap();
+                assert!(tasks >= 1 && of > tasks, "{key} subset {tasks} of {of}");
+                for metric in ["time_to_drain_hours", "tokens", "usd"] {
+                    assert_eq!(
+                        subset[metric], unknown,
+                        "{key} adjusted {metric} must not keep a pre-regression quantile"
+                    );
+                }
+                let baseline = &scenario["pre_regression_baseline"]["schedulable_subset"];
+                assert_eq!(baseline["tasks"], subset["tasks"], "{key}");
+                assert_eq!(baseline["of"], subset["of"], "{key}");
+                for metric in ["time_to_drain_hours", "tokens", "usd"] {
+                    for rank in ["p50", "p90"] {
+                        assert!(
+                            baseline[metric][rank].as_f64().is_some(),
+                            "{key} baseline {metric}.{rank} must keep the subset quantile: {baseline}"
+                        );
+                    }
+                }
+            }
+            assert!(
+                response["if_approved"]["schedulable_subset"]["of"]
+                    .as_u64()
+                    .unwrap()
+                    > response["forecast"]["schedulable_subset"]["of"]
+                        .as_u64()
+                        .unwrap(),
+                "the proposed task joins only if_approved"
+            );
+        },
+    );
+}
+
 #[test]
 fn lock_blocked_critical_work_reserves_its_surface() {
     isolated(

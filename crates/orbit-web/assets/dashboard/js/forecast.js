@@ -709,16 +709,33 @@ function proposedWarning(info, hasBaseline) {
   return unavailableWarning(`${reason}${limit}`, info.kind);
 }
 
+function subsetHasQuantile(subset) {
+  return Boolean(subset) && (quantilePair(subset.time_to_drain_hours) || quantilePair(subset.usd) || quantilePair(subset.tokens));
+}
+
 // Unforecastable dependencies withhold the full totals; the schedulable
-// subset is what the simulation could still drain.
+// subset is what the simulation could still drain. A draw that omitted
+// regression follow-up keeps those figures only on the pre-regression
+// baseline. An older stored snapshot may still have copied them onto the
+// adjusted scenario; either way they are labelled as that baseline.
 function subsetNote(forecast) {
-  const subset = forecast.schedulable_subset;
-  if (!subset) return null;
+  const adjusted = forecast?.schedulable_subset;
+  if (!adjusted || typeof adjusted !== "object") return null;
+  const baseline = forecast.pre_regression_baseline?.schedulable_subset;
+  const fromBaseline = forecast.regression_rework?.available === false
+    && (subsetHasQuantile(baseline) || subsetHasQuantile(adjusted));
+  const subset = fromBaseline && subsetHasQuantile(baseline) ? baseline : adjusted;
   const left = (subset.of ?? 0) - (subset.tasks ?? 0);
-  return el("p", { class: "fc-line fc-subset", role: "note" }, [
+  const figures = `drain ${formatForecastQuantileRange(subset.time_to_drain_hours, formatForecastHours)}, cost ${formatForecastQuantileRange(subset.usd, formatForecastUsd)}, tokens ${formatForecastQuantileRange(subset.tokens, formatForecastTokens)} (p50 – p90).`;
+  const detail = fromBaseline
+    ? `Pre-regression baseline, which excludes regression follow-up work: the other ${subset.tasks} of ${subset.of}: ${figures}`
+    : `The other ${subset.tasks} of ${subset.of}: ${figures}`;
+  const note = el("p", { class: "fc-line fc-subset", role: "note" }, [
     el("strong", { text: `No full total: ${left} task${left === 1 ? "" : "s"} depend${left === 1 ? "s" : ""} on work the drain cannot start. ` }),
-    `The other ${subset.tasks} of ${subset.of}: drain ${formatForecastQuantileRange(subset.time_to_drain_hours, formatForecastHours)}, cost ${formatForecastQuantileRange(subset.usd, formatForecastUsd)}, tokens ${formatForecastQuantileRange(subset.tokens, formatForecastTokens)} (p50 – p90).`,
+    detail,
   ]);
+  if (fromBaseline) note.dataset.forecastBaseline = "pre-regression";
+  return note;
 }
 
 function emptyState(title, detail) {

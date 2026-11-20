@@ -435,6 +435,19 @@ impl Outcome {
             for metric in ["followups", "work_hours", "tokens", "usd"] {
                 result["regression_rework"][metric] = json!({"p50": null, "p90": null});
             }
+            // Subset quantiles were drawn with no regression bundles. The
+            // baseline cloned above keeps them, except when the run was cut
+            // and no baseline is retained. The adjusted scenario must not
+            // present that draw as follow-up-inclusive.
+            if !rework_supported
+                && let Some(subset) = result
+                    .get_mut("schedulable_subset")
+                    .filter(|value| value.is_object())
+            {
+                for metric in ["time_to_drain_hours", "tokens", "usd"] {
+                    subset[metric] = json!({"p50": null, "p90": null});
+                }
+            }
         }
         if let Some(cut) = cut {
             result["unavailable"]["simulation_cut"] = json!(true);
