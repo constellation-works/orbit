@@ -447,7 +447,10 @@ authority over either restriction. `qa-sweep` keeps its claimed path: its shared
 requirements are `orbit.task.add`, `orbit.task.artifact` action `put`, and
 `orbit.task.show`. It persists the execution summary with `orbit.task.update`
 only on the owner; a claimed worker returns that summary for owner import, so
-the template does not unconditionally require that tool.
+the template does not unconditionally require that tool. `path-risk-review`
+takes the same route for its creation-grant reauthorization: it runs the step
+when `orbit.task.update` is available and otherwise leaves the filed task held
+for the pilot, so it declares no grant and its placement stays unchanged.
 
 A template that declares exactly `github.auth.status`, `github.run.list`,
 `github.run.view`, `github.run.logs`, and `github.pr.list` is the worked

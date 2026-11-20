@@ -436,7 +436,10 @@ re-init does not overwrite a workspace-authored definition of the same name.
   `no-auto-approve`, with `context_files` and a `spawned_from` relation to the
   minted chore. A split or new module names each file it creates in
   `context_files` and is filed with `allow_missing_context: true`, so the task
-  carries `context_creation_authorized`. A fix changes the mechanism behind its
+  carries `context_creation_authorized`. A filed task without that grant is
+  reauthorized with `orbit.task.update` on the owner host; where that tool is
+  unavailable (claimed mode denies it), the task is left held for the pilot
+  rather than recorded as filed. A fix changes the mechanism behind its
   path class (a footprint or lock rule, a generator check, or a split of a
   coupling hotspot), never one regression. A workspace whose rankings all sit
   below `min_support` is a successful no-op that reports each ranking's
