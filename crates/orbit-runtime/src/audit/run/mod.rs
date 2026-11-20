@@ -2,6 +2,7 @@
 //! the bounded run-detail projection, the run-events query, the CLI-invocation
 //! log profiles, script-step attempts, and the pure projections they share.
 
+mod body;
 pub(crate) mod detail;
 pub mod events;
 pub mod logs;
@@ -10,6 +11,7 @@ mod projection;
 mod scripts;
 mod trail;
 
+pub use body::{RunTrailBody, RunTrailRecoveryDecision, RunTrailScriptExecution};
 pub use outcome::AuditStepOutcome;
 pub use scripts::RunScriptExecution;
 

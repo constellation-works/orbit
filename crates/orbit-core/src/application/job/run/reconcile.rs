@@ -9,6 +9,7 @@ use orbit_types::workflow::{JobRun, JobRunState, OPERATOR_STOPPED_ERROR_CODE};
 
 use crate::OrbitRuntime;
 use crate::application::job::log_best_effort;
+use crate::runtime::audit::run::RunTrailBody;
 
 use super::WORKER_TERMINATED_ERROR_CODE;
 #[cfg(unix)]
@@ -537,7 +538,7 @@ impl OrbitRuntime {
     ) -> Result<Option<DateTime<Utc>>, OrbitError> {
         for event in self.collect_run_audit_events(run_id)? {
             if matches!(event.event_type.as_deref(), Some("run.finished"))
-                || matches!(event.body_kind.as_deref(), Some("run_finished"))
+                || matches!(event.body, RunTrailBody::RunFinished { .. })
             {
                 return Ok(event.timestamp);
             }

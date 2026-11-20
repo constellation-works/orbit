@@ -30,6 +30,7 @@ use serde_json::Value;
 use crate::RuntimeKernel;
 use orbit_store::V2AuditEventFilter;
 
+use super::body::RunTrailRow;
 use super::trail::RunAuditEvent;
 
 /// Hard cap on rows a kind-filtered forward page scans from one run.
@@ -221,18 +222,19 @@ impl RuntimeKernel {
         let mut page: Vec<Value> = Vec::with_capacity(RUN_EVENTS_PAGE_CAPACITY_HINT);
         let mut matched: usize = 0;
         for payload in payloads {
-            let Ok(value) = serde_json::from_str::<Value>(&payload) else {
+            let Some(row) = RunTrailRow::parse(&payload) else {
                 continue;
             };
-            let body_kind = value.get("body_kind").and_then(Value::as_str).unwrap_or("");
-            if body_kind != kind {
+            // `kind` is caller-supplied and may name a kind `RunTrailBody`
+            // keeps as `Other`, so match the parsed tag, not a variant.
+            if row.envelope.body_kind.as_deref().unwrap_or("") != kind {
                 continue;
             }
             if matched < offset {
                 matched = matched.saturating_add(1);
                 continue;
             }
-            page.push(value);
+            page.push(row.raw);
             matched = matched.saturating_add(1);
             if page.len() >= limit {
                 break;

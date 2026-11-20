@@ -10,9 +10,9 @@ use serde_json::Value;
 
 use crate::RuntimeKernel;
 
+use super::body::{RunTrailBody, RunTrailRow, RunTrailScriptExecution};
 use super::trail::RunAuditEvent;
 
-const SCRIPT_EXECUTION_BODY_KIND: &str = "script_execution";
 const SCRIPT_HISTORY_PAGE_SIZE: usize = 500;
 
 /// One attempt of a script step, refusals included.
@@ -86,8 +86,15 @@ pub(super) fn script_executions_from_events(
 ) -> Vec<RunScriptExecution> {
     events
         .iter()
-        .filter(|event| event.body_kind.as_deref() == Some(SCRIPT_EXECUTION_BODY_KIND))
-        .filter_map(|event| script_execution(run_id, &event.event_id, event.timestamp, &event.raw))
+        .filter_map(|event| match &event.body {
+            RunTrailBody::ScriptExecution(Some(execution)) => Some(script_execution(
+                run_id,
+                &event.event_id,
+                event.timestamp,
+                execution,
+            )),
+            _ => None,
+        })
         .collect()
 }
 
@@ -95,16 +102,15 @@ fn script_execution(
     run_id: &str,
     event_id: &str,
     timestamp: Option<DateTime<Utc>>,
-    raw: &Value,
-) -> Option<RunScriptExecution> {
-    let record = serde_json::from_value::<ScriptExecutionRecord>(raw.clone()).ok()?;
-    Some(RunScriptExecution {
+    execution: &RunTrailScriptExecution,
+) -> RunScriptExecution {
+    RunScriptExecution {
         event_id: event_id.to_string(),
         run_id: run_id.to_string(),
-        step_id: raw.get("step_id").and_then(Value::as_str)?.to_string(),
+        step_id: execution.step_id.clone(),
         timestamp,
-        record,
-    })
+        record: execution.record.clone(),
+    }
 }
 
 impl RuntimeKernel {
@@ -128,19 +134,22 @@ impl RuntimeKernel {
             })?;
             let fetched = page.len();
             for row in page {
-                let Ok(raw) = serde_json::from_str::<Value>(&row.payload_json) else {
+                let Some(RunTrailBody::ScriptExecution(Some(execution))) =
+                    RunTrailRow::parse(&row.payload_json).map(|parsed| parsed.body)
+                else {
                     continue;
                 };
-                if raw.get("script").and_then(Value::as_str) != Some(name) {
+                if execution.record.script != name {
                     continue;
                 }
-                if let Some(execution) =
-                    script_execution(&row.run_id, &row.event_id, Some(row.ts), &raw)
-                {
-                    found.push(execution);
-                    if found.len() >= limit {
-                        break;
-                    }
+                found.push(script_execution(
+                    &row.run_id,
+                    &row.event_id,
+                    Some(row.ts),
+                    &execution,
+                ));
+                if found.len() >= limit {
+                    break;
                 }
             }
             if fetched < SCRIPT_HISTORY_PAGE_SIZE {
