@@ -228,7 +228,7 @@ impl ImplementationLane {
                 }
             }
         }
-        for (_, criterion, sentences) in positive_criterion_sentences(task) {
+        for (_, _, sentences) in positive_criterion_sentences(task) {
             for sentence in sentences {
                 if requires_owner_sign_off(&sentence) {
                     findings.push(OWNER_SIGN_OFF_FINDING.into());
@@ -237,13 +237,7 @@ impl ImplementationLane {
                     }
                 }
                 for tool in self.tools_named_in(&sentence) {
-                    self.report(
-                        tool,
-                        &sentence,
-                        &criterion,
-                        granted.as_deref(),
-                        &mut findings,
-                    );
+                    self.report(tool, &sentence, granted.as_deref(), &mut findings);
                     if findings.is_full() {
                         return findings.ordered;
                     }
@@ -279,7 +273,6 @@ impl ImplementationLane {
         &self,
         tool: &str,
         sentence: &str,
-        criterion: &str,
         granted: Option<&[String]>,
         findings: &mut Findings,
     ) {
@@ -312,15 +305,17 @@ impl ImplementationLane {
             findings.push(finding);
         }
 
-        // Only a criterion that asks the implementer to invoke the tool
-        // against the live credentialed service needs external credentials.
-        // A subject-only mention or a criterion stating a credential-free run
-        // (fake executable, fixture, no live API) stays clear [ORB-25953].
+        // Only a sentence that asks the implementer to invoke the tool against
+        // the live credentialed service needs external credentials. A
+        // subject-only mention, or an invocation whose own clause states a
+        // credential-free run (fake executable, fixture, no live API), stays
+        // clear [ORB-25953]. Credential wording elsewhere does not clear it
+        // [ORB-25975].
         if sentence_requires_tool_invocation(sentence, tool)
             && let Some((_, credential)) = EXTERNAL_CREDENTIALS
                 .iter()
                 .find(|(family, _)| tool.starts_with(family))
-            && !states_credential_free_run(criterion, credential)
+            && !invocation_states_credential_free_run(sentence, tool, credential)
         {
             findings.push(format!(
                 "acceptance criterion requires `{tool}`, whose result depends on {credential} in the executing lane; `required_tools` cannot supply credentials, so state that precondition or hand the check to an operator"
@@ -329,11 +324,54 @@ impl ImplementationLane {
     }
 }
 
-/// Whether `criterion` states that the run needs no `credential` — for
-/// example, no authentication/credentials needed, no live API call, or an
-/// isolated fake/stub/mock executable or fixture.
-fn states_credential_free_run(criterion: &str, credential: &str) -> bool {
-    let padded = format!(" {} ", normalize_prose(criterion));
+/// Connectors that open a clause about something other than the sentence's
+/// subject, such as `and that its log output contains no credentials`. Wording
+/// after one describes that other subject, not the call.
+const SUBJECT_SHIFT_CONNECTORS: &[&str] = &[
+    " and that ",
+    " and its ",
+    " and their ",
+    " and the ",
+    " whose ",
+];
+
+/// Whether the clause of `sentence` that names `tool` states that the run
+/// needs no `credential`. Only that clause counts: credential wording in
+/// another clause describes something else, and wording in another sentence
+/// of the criterion is never read here [ORB-25975].
+fn invocation_states_credential_free_run(sentence: &str, tool: &str, credential: &str) -> bool {
+    invocation_clauses(sentence)
+        .into_iter()
+        .filter(|clause| names_tool(clause, tool))
+        .any(|clause| states_credential_free_run(clause, credential))
+}
+
+/// Split `sentence` at subject-shifting connectors. Commas and parentheses do
+/// not split, so a list of credential-free wordings still reads as one clause.
+fn invocation_clauses(sentence: &str) -> Vec<&str> {
+    let lowered = sentence.to_ascii_lowercase();
+    let mut cuts: Vec<usize> = SUBJECT_SHIFT_CONNECTORS
+        .iter()
+        .flat_map(|connector| lowered.match_indices(connector).map(|(index, _)| index))
+        .collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+
+    let mut clauses = Vec::with_capacity(cuts.len() + 1);
+    let mut start = 0;
+    for cut in cuts {
+        clauses.push(&sentence[start..cut]);
+        start = cut;
+    }
+    clauses.push(&sentence[start..]);
+    clauses
+}
+
+/// Whether `clause` states that the run needs no `credential` — for example,
+/// no authentication/credentials needed, no live API call, or an isolated
+/// fake/stub/mock executable or fixture.
+fn states_credential_free_run(clause: &str, credential: &str) -> bool {
+    let padded = format!(" {} ", normalize_prose(clause));
     let credential = normalize_prose(credential);
 
     let no_credential_phrases = [
@@ -346,7 +384,7 @@ fn states_credential_free_run(criterion: &str, credential: &str) -> bool {
     ];
     if no_credential_phrases
         .iter()
-        .any(|phrase| padded.contains(phrase))
+        .any(|phrase| affirmed_by(&padded, phrase))
     {
         return true;
     }
@@ -406,7 +444,7 @@ fn states_credential_free_run(criterion: &str, credential: &str) -> bool {
     ];
     if CREDENTIAL_FREE_PHRASES
         .iter()
-        .any(|phrase| padded.contains(phrase))
+        .any(|phrase| affirmed_by(&padded, phrase))
     {
         return true;
     }
@@ -440,12 +478,29 @@ fn states_credential_free_run(criterion: &str, credential: &str) -> bool {
         " fixture response ",
         " fixture data ",
     ];
-    FAKE_EXECUTABLE_PHRASES.iter().any(|phrase| {
-        padded.match_indices(phrase).any(|(idx, _)| {
-            let prefix = &padded[..idx];
-            !prefix.ends_with(" not") && !prefix.ends_with(" not a")
-        })
-    })
+    FAKE_EXECUTABLE_PHRASES
+        .iter()
+        .any(|phrase| affirmed_by(&padded, phrase))
+}
+
+/// Whether `phrase` occurs in the padded clause as a statement about the run,
+/// not inside a negated or requiring predicate.
+fn affirmed_by(padded: &str, phrase: &str) -> bool {
+    padded
+        .match_indices(phrase)
+        .any(|(index, _)| !negated_before(&padded[..index]))
+}
+
+/// Whether `not` or `never` falls within the three words before a match, so
+/// the match negates or requires its own predicate. `must not run without
+/// authentication` asks for authentication; it does not state a credential-free
+/// run.
+fn negated_before(prefix: &str) -> bool {
+    prefix
+        .split_whitespace()
+        .rev()
+        .take(3)
+        .any(|word| matches!(word, "not" | "never"))
 }
 
 /// Normalize prose to lowercase ASCII alphanumeric words separated by single
