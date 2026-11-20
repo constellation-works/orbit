@@ -1182,7 +1182,9 @@ removed. A typed task field would do the same job as the tag but change the pers
   `orbit <word>`, including a host-disabled plugin's namespace, is clap's unknown-subcommand
   error. A plugin switched off in the current workspace keeps its group, and a call refuses
   through the audited dispatch with `plugin_disabled_in_workspace`.
-  `orbit --help` lists groups under `Plugins:`; `orbit <ns> --help` lists verbs.
+  `orbit --help` lists groups under `Plugins:`; `orbit <ns> --help` lists verbs. Those rows and
+  each `-h` line show only the first sentence of the manifest description, cut to one line; the
+  full description is in `--help` and `orbit plugin show`.
 - The tree is built at startup from the enabled `plugins` rows (SQLite opened read-only; no
   enabled row, no manifest read). Manifests are cached per process and shared by CLI, runtime
   and host-global MCP discovery; a changed `plugin.yaml` stamp re-checks the digest before the
