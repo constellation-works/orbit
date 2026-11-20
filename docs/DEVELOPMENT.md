@@ -546,9 +546,9 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   and runs `cargo nextest run --profile ci --partition count:k/N` from that
   extraction's `--binaries-metadata` and `--cargo-metadata`,
   where N is `NEXTEST_PARTITIONS` and k is the job's `PARTITION`.
-  The `Test extra partition`, `Test partition 2` and `6`–`12` jobs
-  run the same steps on nine more test runners, selecting partitions 5, 2 and
-  6–12 and uploading `nextest-junit-extra` and `nextest-junit-partition-k`.
+  The `Test extra partition`, `Test partition 2` and `6`–`13` jobs
+  run the same steps on ten more test runners, selecting partitions 5, 2 and
+  6–13 and uploading `nextest-junit-extra` and `nextest-junit-partition-k`.
   They start after the whole build job has finished, including the partition proof the build waits for after the upload. None of them is a `Test shard k/N` job, so
   `NEXTEST_SHARDS` and the ruleset's names stay unchanged; the Check job
   awaits them like shards. Profile `ci`
@@ -620,7 +620,7 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   is ARM, and no gate pairs that `cfg` with one `target_arch`, so this single
   target covers those items. It then
   waits for `Test build`, every shard, `Test extra partition`, `Test partition 2`,
-  `6`–`12`, `CI guardrails` and `CI QA guardrails`, and fails as soon as one of them
+  `6`–`13`, `CI guardrails` and `CI QA guardrails`, and fails as soon as one of them
   completes without success. Its elapsed time therefore covers the whole gate,
   including any queue wait for the other jobs' runners. That is the time the
   400-second budget measures, and its
@@ -766,6 +766,18 @@ file is an ordinary tracked input: changed bytes get a fresh mtime, and Cargo
 rebuilds a consumer only if it records that file, through an `include_str!`
 path or a build script's `cargo:rerun-if-changed`.
 
+The restore step prints `changed_inputs`, `reused_inputs` and `source_head`;
+`git diff --name-only <source_head> <tested_head>` names the changed inputs.
+The folded list-build (`check-ci-macos.sh --workspace-build`) reads Cargo's
+JSON messages, so Cargo's own progress does not reach the log; it prints
+`check-ci-macos: workspace units rebuilt=N fresh=M rebuilt_packages=…`
+instead. A change to a library's `src/` rebuilds that library and every
+selected workspace dependent, while a test-only change rebuilds its test
+target. `orbit-cli`'s build script also reruns whenever a watched path under
+`crates/` or `scripts/` (or the Git index) changes, so its units appear in
+almost every PR's rebuilt set. Attribute list-build time from these two
+lines before comparing runner CPUs.
+
 The 2026-11-17 investigation found a workspace-cache miss preceding a 279 s
 folded test build in hosted run 44043933622 (Check: 516 s). The workflow file
 was part of the cache hash, so workflow edits invalidated the previous cache
@@ -812,7 +824,7 @@ Cargo metadata cannot see a test reading another crate's files. The ones that ma
 
 `Test build` passes the mode to `ci-guardrails.sh --test-archive` as `CI_TEST_SCOPE`. For an `affected:` scope, `ci-test-affected.py --test-build-packages` checks the crates against the PR head's metadata and adds the unselected members that keep every dependency's resolved features equal to the workspace build's (`cargo tree`). Resolver 2 unifies features over the selected packages only, so a narrower set would rebuild dependencies the CI caches hold with the workspace's features. `orbit-cli` depends on every other crate, so it is in nearly every selection, and its dev-dependencies name the features only other crates' tests enable (`tokio`'s `test-util`, `rusqlite`'s `hooks`, the `test-support` of `orbit-exec` and `orbit-mcp`), so it normally needs no anchor: an anchor compiles its unit-test harness, which no target flag excludes. A new gap adds an anchor at that compile cost, and the build's reason line names it. Both the folded build (`check-ci-macos.sh --workspace-build --packages`, which lists only the macOS workflow's filters for crates in the build) and `cargo nextest archive` then take `-p` for that set. A crate the head lacks, or a feature gap no member closes, builds the whole workspace. The archive's package list is written to `PATH.packages`, and the partition guard then runs with `--allow-empty`: an archive with few tests can leave a count partition empty, but every test must still be in exactly one shard.
 
-The archive holds the build set's tests, but every partition (the shards and the nine additional test runners) passes `-E 'package(a) | package(b) …'` for the `affected:` crates, so a feature anchor's tests are built, not run; the partition guard lists the same filter. The shards keep their names and run with `--no-tests pass`, so a shard whose partition is empty runs nothing and passes. The full archive cannot have an empty shard, because its partition guard fails `Test build`. Shard 1's Linux sandbox/policy enforcement gate runs on every full run and on every `affected:` run that includes `orbit-exec`; without `orbit-exec`, neither the sandbox code nor its dependencies changed, and the gate is skipped. Production Clippy, documentation and the repository guards stay workspace-wide, and every test job still runs: a failed or skipped one fails the `Check / Clippy / Test` wait. The MSRV check is no longer part of pull-request runs; it runs push-only in `.github/workflows/msrv.yml`.
+The archive holds the build set's tests, but every partition (the shards and the ten additional test runners) passes `-E 'package(a) | package(b) …'` for the `affected:` crates, so a feature anchor's tests are built, not run; the partition guard lists the same filter. The shards keep their names and run with `--no-tests pass`, so a shard whose partition is empty runs nothing and passes. The full archive cannot have an empty shard, because its partition guard fails `Test build`. Shard 1's Linux sandbox/policy enforcement gate runs on every full run and on every `affected:` run that includes `orbit-exec`; without `orbit-exec`, neither the sandbox code nor its dependencies changed, and the gate is skipped. Production Clippy, documentation and the repository guards stay workspace-wide, and every test job still runs: a failed or skipped one fails the `Check / Clippy / Test` wait. The MSRV check is no longer part of pull-request runs; it runs push-only in `.github/workflows/msrv.yml`.
 
 A PR run can still miss a failure only the full suite shows, such as a test reading another crate's file through a path neither a dependency edge nor `FILE_READERS` records. The `agent-main` push run after the merge is the check of the merged tree and always tests every crate.
 

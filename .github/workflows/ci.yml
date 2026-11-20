@@ -49,7 +49,7 @@ env:
   # Check job's wait read this value; the literal "Test shard k/N" jobs must
   # match it (scripts/test-pr-state-workflows.py).
   NEXTEST_SHARDS: "3"
-  # Twelve count partitions run on twelve test runners. Each starts once the
+  # Thirteen count partitions run on thirteen test runners. Each starts once the
   # build job has finished: it publishes the archive, then proves exact-once
   # coverage before the test runners take it. Literal
   # "Test shard k/N" names and the agent-main ruleset remain unchanged.
@@ -59,7 +59,13 @@ env:
   # Full-run partition 2 spent 144 s on 501 tests, with 859.8 summed test
   # seconds and a 58.8 s longest case (run 42757620515). Four more runners
   # target that CPU-bound tail and add four downloads of the same archive.
-  NEXTEST_PARTITIONS: "12"
+  # [ORB-26069] Every hosted partition is CPU-bound (busy 87-97%), so the
+  # slowest partition's wall is its summed test time over six slots. Count
+  # partitions assign round-robin by sorted name within each binary; at 13 the
+  # two 13-carrier families land one per partition and the heaviest partition's
+  # summed hosted test time on run 44710096272 falls from 693 to 551 s
+  # (docs/design-patterns/test_strategy.md, "Thirteenth count partition").
+  NEXTEST_PARTITIONS: "13"
   # The nextest transfer travels as this many artifacts, which each shard
   # downloads in parallel. One stream from the artifact store ran at 3-10 MB/s
   # on some runners (153 s for 448 MB); the "Upload nextest archive part k/N"
@@ -230,7 +236,7 @@ jobs:
   # the workspace tests once and archives them (on an `affected:` PR, only the
   # affected crates' build set); NEXTEST_SHARDS "Test shard" jobs run nextest
   # from that archive, one count partition each, in parallel, as do the "Test
-  # extra partition" and "Test partition 2" and 6–12 jobs. On an
+  # extra partition" and "Test partition 2" and 6–13 jobs. On an
   # `affected:` PR every partition runs only
   # the affected and always-run crates' tests (ALWAYS_RUN in
   # scripts/ci-test-affected.py). [ORB-20394] "CI guardrails" runs the
@@ -484,7 +490,8 @@ jobs:
                            "--job", "Test partition 6", "--job", "Test partition 7",
                            "--job", "Test partition 8", "--job", "Test partition 9",
                            "--job", "Test partition 10", "--job", "Test partition 11",
-                           "--job", "Test partition 12", "--job", "CI guardrails",
+                           "--job", "Test partition 12", "--job", "Test partition 13",
+                           "--job", "CI guardrails",
                            "--job", "CI QA guardrails"]
               exec(compile(producer_bytes, producer, "exec"),
                    {"__name__": "__main__", "__file__": producer,
@@ -1066,7 +1073,7 @@ jobs:
   # count matches NEXTEST_SHARDS (scripts/test-pr-state-workflows.py).
   # SHARD names the job (its JUnit report and the shard-1 sandbox gate);
   # PARTITION is the count partition it runs. "Test extra partition" runs
-  # partition 5 and each "Test partition k" job runs partition k (2, 6–12),
+  # partition 5 and each "Test partition k" job runs partition k (2, 6–13),
   # so the shard jobs run partitions 1, 3 and 4 of NEXTEST_PARTITIONS.
   # agent-main's ruleset requires these exact names: renaming a shard, or
   # changing NEXTEST_SHARDS, needs the same ruleset change before merge.
@@ -1534,4 +1541,19 @@ jobs:
     env:
       SHARD: "partition-12"
       PARTITION: "12"
+    steps: *test-shard-steps
+
+  # [ORB-26069] The thirteenth count partition (see NEXTEST_PARTITIONS). Check
+  # awaits this literal job like the other partition jobs.
+  test-partition-13:
+    needs: [pr-state, scope, test-build]
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
+    name: Test partition 13
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      SHARD: "partition-13"
+      PARTITION: "13"
     steps: *test-shard-steps

@@ -1346,6 +1346,132 @@ completed PR `ci.yml` runs carry this revision, the operator runs
 shard's first-download step elapsed against the 31.8 s maximum above: a first attempt
 that times out at one minute while healthy would show as repeated attempts.
 
+### Thirteenth count partition (2026-11-20)
+
+ORB-26069 follows the ORB-26068 watch: the latest 20 completed PR `ci.yml`
+runs (44694679925 to 44709039226), 15 executed Checks (14 success, one
+failure), five skipped, none cancelled or missing; nearest-rank p90 **476 s**,
+median 393 s, maximum 523 s, seven of 15 over 400 s. In every executed run
+the last awaited job was a test partition or shard. The binding path was
+`Test build` followed by the last partition, which ran 11–45 s past the
+median partition on the eleven runs selecting 2,775 or more tests.
+
+Conditions for every local figure: base `4070823a4`, one checkout, a shared
+32-logical-CPU AMD Ryzen AI MAX+ 395 Linux host (load average 5–9), Rust
+1.98.1, nextest 0.9.136, the `ci.yml` environment, build-budget admission and
+sequential runs with no synthetic load. One full archive (4,238 selected
+tests, built with `ci-guardrails.sh --test-archive`) served every run. Each
+partition ran as the shard step runs it (`--profile ci`, extracted
+`--binaries-metadata`, `--no-fail-fast`), pinned with `taskset -c 0-3`, with
+the base `.config/nextest.toml` passed as `--config-file` to both arms. This
+host is not a hosted 4-vCPU runner.
+
+**The imbalance is load, not order.** Partition 8 took 44.0 s in both base
+runs against a 33.8 s median. Its summed test time was 261 s, 43.6 s over six
+slots, within 0.4 s of its wall; every partition ended within 1.5 s of its
+summed time over six slots, so no slot sat idle and no priority order can
+shorten it. Its carriers were `same_pr_publication_scenarios` (18.0 s),
+`validation_repairs_and_logs` (13.8 s), `resume_lifecycle_contracts_0`
+(12.5 s), `local_candidate_contracts_1` (12.2 s) and
+`every_selected_window_hides_credential_fragments` (9.2 s), all started at
+once except the fourth. Hosted, the same base's full push run 44710096272
+shows the same shape: every partition whose `cpu-util` line was read ran
+82–97% CPU-busy, and each nextest Summary was within 4.1 s of its summed
+per-test time over six slots (the per-test `PASS` lines of the ten jobs whose
+log was read whole; shard 1 runs a second nextest command and partition 6's
+log was read incompletely). There partition 5 was
+slowest (693 test-seconds, Summary 116.4 s, a 79.7 s
+`bounded_nextest_retry_observes_results_and_never_resends_unknown_replies`)
+against 58.4 s for partition 2.
+
+**The change.** `NEXTEST_PARTITIONS` is 13 and `Test partition 13` runs
+partition 13 with the shard steps; the Check job awaits it. Count partitions
+assign round-robin by sorted name within each binary, so the two 13-carrier
+families split in the 2026-11-16 pass now land one per partition instead of
+two in one. The priority set, test bodies, group caps, profile and
+`check-nextest-partitions.py` are unchanged. The proof at 13 covers all 4,238
+tests exactly once, and the cohort's eight-crate `affected:` archive's 2,777
+tests exactly once. The union of both assignments equals the unpartitioned
+listing. The per-test assignment before and after is the task artifact
+`ci-budget/partition-assignment.json.gz`.
+
+Replaying measured durations over each listing (load = summed test time over
+six slots, or the longest test if larger). Hosted durations come from run
+44710096272's `PASS` lines, with 47 unlogged tests scaled from local (×2.65):
+
+| Selection (crates) | Hosted 12 | Hosted 13 | Local 12 | Local 13 |
+|---|---:|---:|---:|---:|
+| full | 115.5 | 91.8 | 43.6 | 34.1 |
+| 11 (core and engine) | 114.2 | 91.0 | 41.2 | 33.1 |
+| 8 (core, no engine) | 79.5 | 68.7 | 32.2 | 26.0 |
+| 7 (no core) | 42.2 | 38.2 | 17.5 | 15.4 |
+| 5 (always-run plus `orbit-cli`) | 33.9 | 30.6 | 14.8 | 12.8 |
+
+The slowest partition's load in seconds. On the full selection, 14 count
+partitions were worse than 13 (hosted 103.4, local 35.6); 15 and 16 were
+2–10 s lower hosted at two and three more runners. `slice:` and `hash:` at
+12 and 13 were all worse than `count:` at 13 (hosted 97.7–114.0) and would
+also change the proof's partition form.
+
+**Measured walls, same archive, CPUs and profile (seconds).**
+
+| Arm | Run | Slowest | Median | Spread to median | Fastest | Sum of partition walls |
+|---|---|---:|---:|---:|---:|---:|
+| Base, 12 partitions | 1 | 44.0 (p8) | 33.8 | 10.2 | 26.5 | 411.2 |
+| Base, 12 partitions | 2 | 44.0 (p8) | 33.8 | 10.2 | 26.5 | 412.3 |
+| Candidate, 13 partitions | 1 | 37.5 (p1) | 31.4 | 6.1 | 28.2 | 410.2 |
+| Candidate, 13 partitions | 2 | 36.0 (p1) | 31.5 | 4.5 | 27.8 | 407.6 |
+
+The work moved, not shrank: the summed walls agree within 1%. The
+deterministic figure is the slowest partition's summed test time (261 → 222
+local test-seconds; 693 → 551 hosted on the replay). The thirteenth runner
+adds one runner's setup and archive download per run beside the others; its
+queue time falls inside the Check job's elapsed time.
+
+**Same-selection list-build spread.** Runs 44697311622 (40 s) and
+44697034246 (184 s) both restored workspace cache
+`...-b84d66ec12d8d72f2c8f690165c36faa935ada51` and both tested the same
+eight crates. Their restore lines differ: `changed_inputs` 1 against 5. The
+first head changed only `crates/orbit-core/tests/runtime/resident_metrics.rs`;
+the second changed two files under `crates/orbit-core/src/` and three
+`orbit-core` test files. Reproduced locally with that scope, touching the
+same paths on a warm target (two runs each, `taskset -c 0-3`):
+
+| Change | Workspace units rebuilt / fresh | Rebuilt packages | List-build |
+|---|---:|---|---:|
+| none | 0 / 46 | none | 0 s |
+| test file only | 9 / 37 | `orbit-cli`, `orbit-core` | 29–30 s |
+| library and test files | 20 / 26 | `orbit-cli`, `orbit-cmd`, `orbit-core`, `orbit-web` | 85–86 s |
+
+Locally the library change costs 2.9× the test-only change; hosted it was
+4.6×. The rest may come from the runners' CPUs (EPYC 9V45 against 7763), which
+is unconfirmed. The bulk of the spread comes from what each change
+invalidated, not from the cache or a serialization. Rebuilding
+`orbit-core`'s dependents after a library change is required. `orbit-cli`'s
+eight units rebuild whenever its identity build script reruns, which it is
+designed to do. Nothing avoidable was found, and the cache identity is
+unchanged. The list-build now prints
+`check-ci-macos: workspace units rebuilt=N fresh=M rebuilt_packages=…`
+from Cargo's JSON messages, so the next watch can attribute list-build time
+per run ([DEVELOPMENT.md](../DEVELOPMENT.md)).
+
+No test, check, assertion or required check name changed, and none was
+retired. The shard-1 sandbox gate, the always-run set, the archive digest
+verification and `scripts/check-nextest-partitions.py` are unchanged.
+
+**Hosted compliance remains open.** These are local and replayed figures,
+not a hosted measurement or a p90, and the build still binds on broad
+selections. **The 400 s budget is not restored by this pass.** After
+publication, once the latest 20 completed PR `ci.yml` runs carry this
+revision, the operator runs
+`python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` under the
+[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff). They
+report executed, failed, skipped, cancelled and missing Check counts,
+nearest-rank p90, median and maximum, queue wait separately, the tally of
+last-awaited jobs (now including `Test partition 13`), the `rebuilt=` lines
+of `Test build`, and the selection and cache strata, with every gap kept as
+uncertainty, never zero.
+
 ## Why
 
 On 2026-10-03, unit tests under `crates/*/src/**` were about 295k lines and 7,675 test functions, more lines than the production code they covered. Crate-root integration tests were 37k lines. Most unit tests pinned internals, so a refactor that kept behaviour unchanged still broke dozens of them, and each break cost an agent tokens to repair a test rather than find a bug. A review of all of them kept 180 (2.3%).

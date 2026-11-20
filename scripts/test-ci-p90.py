@@ -43,7 +43,7 @@ class CiP90ReplayTests(unittest.TestCase):
         # The Check job awaits CI guardrails beside the test jobs (ci.yml), so
         # when guardrails completes last it gates the run and must be named.
         for last in ("CI guardrails", "CI QA guardrails",
-                     *(f"Test partition {k}" for k in range(9, 13))):
+                     *(f"Test partition {k}" for k in range(9, 14))):
             with self.subTest(last=last):
                 summary = self.replay([{"databaseId": 1, "headSha": "abcdef1234567", "jobs": [
                     job("Check / Clippy / Test", ended=500),
