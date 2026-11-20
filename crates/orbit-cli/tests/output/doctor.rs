@@ -1010,10 +1010,11 @@ fn doctor_lists_a_retired_config_key_and_the_fix_removes_only_that_key() {
         .into_iter()
         .filter(|r| r["status"] == "warning")
         .collect();
+    // `[task]` has no registered keys left, so the unknown table is reported whole.
     for key in [
         "workflow.system_crew",
         "lease.enabled",
-        "task.approval",
+        "task",
         "workflow.future",
         "future",
     ] {
