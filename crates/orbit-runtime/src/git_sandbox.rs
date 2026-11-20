@@ -652,9 +652,13 @@ thread_local! {
     static REFUSED_SPAWNS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
-/// Per-thread seam that makes every scan worker spawn fail the way an
+/// Per-thread seam that makes every scan worker spawn attempt fail the way an
 /// exhausted thread limit does, without placing load on the host. While held,
-/// the scan always takes its threaded path so the failure is reached.
+/// an object-store scan takes its threaded path, and so attempts a spawn, only
+/// with two or more object-store subdirectories. With zero or one subdirectory
+/// it scans on the calling thread, attempts no spawn, and `refused` stays at
+/// zero. Outside the seam the thread count is also capped by the host's
+/// available parallelism.
 #[cfg(any(test, feature = "test-support"))]
 pub struct GitWorkerSpawnRefusal;
 
