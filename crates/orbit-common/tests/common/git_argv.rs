@@ -87,6 +87,9 @@ fn program_running_argv_is_refused_before_git_runs() {
         vec!["rev-parse", "HEAD\0"],
         vec![],
         vec!["-c"],
+        vec!["--git-dir"],
+        vec!["--git-dir="],
+        vec!["--git-dir", ""],
     ];
     for args in refused {
         match run_git(repo.path(), &args) {

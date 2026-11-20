@@ -101,10 +101,30 @@ pub fn process_handover() -> Option<&'static str> {
 /// the authority it joined, requested by another process for an identity
 /// other than its own.
 pub fn pending_switch_for_this_process() -> Option<PendingSwitch> {
-    let participation = PARTICIPATION.get()?;
-    pending_switch(&participation.root).filter(|switch| {
-        switch.pid != std::process::id() && switch.target != participation.identity
-    })
+    live_joined_authorities()
+        .into_iter()
+        .find_map(|(root, identity)| {
+            pending_switch(&root)
+                .filter(|switch| switch.pid != std::process::id() && switch.target != identity)
+        })
+}
+
+/// Every authority this process joined that it still holds: the first one it
+/// ever joined, plus each other root with a live generation guard.
+fn live_joined_authorities() -> Vec<(PathBuf, CompatibilityIdentity)> {
+    let Some(participation) = PARTICIPATION.get() else {
+        return Vec::new();
+    };
+    let mut joined = vec![(participation.root.clone(), participation.identity.clone())];
+    joined.extend(
+        PROCESS_JOINS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|join| join.hold.strong_count() > 0)
+            .map(|join| (join.root.clone(), join.identity.clone())),
+    );
+    joined
 }
 
 /// Whether an updater that renames nothing asked this process to hand over
@@ -129,15 +149,7 @@ pub(in super::super) fn refresh_requested_for_this_process(capability: Option<&s
     let Ok(digest) = process_digest(None, false) else {
         return false;
     };
-    let mut joined = vec![(participation.root.clone(), participation.identity.clone())];
-    joined.extend(
-        PROCESS_JOINS
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-            .filter(|join| join.hold.strong_count() > 0)
-            .map(|join| (join.root.clone(), join.identity.clone())),
-    );
+    let joined = live_joined_authorities();
     joined.iter().any(|(root, identity)| {
         pending_switch(root).is_some_and(|switch| {
             switch.refresh

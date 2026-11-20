@@ -174,10 +174,10 @@ fn resolve_symlinks_bounded(path: PathBuf, follows: usize) -> Result<PathBuf, Or
             return resolve_symlinks_bounded(rejoined, follows + 1);
         }
 
-        let name = ancestor.file_name().ok_or_else(|| {
+        let name = missing_tail_name(ancestor).ok_or_else(|| {
             OrbitError::InvalidInput(format!("path has no file name: {}", path.display()))
         })?;
-        missing.push(name.to_os_string());
+        missing.push(name);
         ancestor = ancestor.parent().ok_or_else(|| {
             OrbitError::InvalidInput(format!("path has no existing parent: {}", path.display()))
         })?;
@@ -186,10 +186,33 @@ fn resolve_symlinks_bounded(path: PathBuf, follows: usize) -> Result<PathBuf, Or
     let mut resolved = ancestor
         .canonicalize()
         .map_err(|error| OrbitError::Io(format!("canonicalize {}: {error}", ancestor.display())))?;
-    for name in missing.iter().rev() {
-        resolved.push(name);
-    }
+    append_missing_tail(&mut resolved, &missing);
     Ok(resolved)
+}
+
+/// The last component of a path that does not exist: its name, or `..`.
+/// `None` for a path with neither (a root, a prefix or an empty path).
+fn missing_tail_name(path: &Path) -> Option<OsString> {
+    match path.components().next_back()? {
+        component @ (Component::Normal(_) | Component::ParentDir) => {
+            Some(component.as_os_str().to_os_string())
+        }
+        Component::CurDir | Component::RootDir | Component::Prefix(_) => None,
+    }
+}
+
+/// Re-append a missing tail (collected last name first) to a canonical prefix.
+/// A `..` in the tail cancels the missing name before it, or climbs out of the
+/// canonical prefix when nothing missing precedes it: a name that does not
+/// exist cannot be a link, and the prefix holds no links.
+fn append_missing_tail(resolved: &mut PathBuf, missing: &[OsString]) {
+    for name in missing.iter().rev() {
+        if name == ".." {
+            resolved.pop();
+        } else {
+            resolved.push(name);
+        }
+    }
 }
 
 /// Split a path into the deepest ancestor that already exists and the
@@ -242,7 +265,9 @@ pub fn canonicalize_existing_prefix_checked(path: &Path) -> Result<Option<PathBu
 /// This is not a lenient wrapper of [`canonicalize_existing_prefix_checked`]:
 /// it moves past *any* canonicalization error, not just `NotFound`, so a path
 /// under a regular file or an unreadable directory still resolves against a
-/// higher ancestor; and it skips a trailing `..` rather than stopping at it.
+/// higher ancestor; and it applies a `..` in the missing tail rather than
+/// stopping at it (it cancels the missing name before it, as in
+/// [`physical_with_missing_tail`]).
 pub fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
     if let Ok(canonical) = path.canonicalize() {
         return canonical;
@@ -254,14 +279,11 @@ pub fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
         if parent == ancestor {
             break;
         }
-        if let Some(name) = ancestor.file_name() {
-            missing.push(name.to_os_string());
+        if let Some(name) = missing_tail_name(ancestor) {
+            missing.push(name);
         }
-        if let Ok(canonical) = parent.canonicalize() {
-            let mut resolved = canonical;
-            for name in missing.iter().rev() {
-                resolved.push(name);
-            }
+        if let Ok(mut resolved) = parent.canonicalize() {
+            append_missing_tail(&mut resolved, &missing);
             return resolved;
         }
         ancestor = parent;

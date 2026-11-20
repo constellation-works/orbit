@@ -341,8 +341,14 @@ fn admitted_git_args<'a>(args: &[&'a str]) -> Result<Vec<&'a str>, OrbitError> {
             }
             index += 2;
         } else if arg == "--git-dir" {
+            if args.get(index + 1).is_none_or(|value| value.is_empty()) {
+                return refuse("`--git-dir` has no path".to_string());
+            }
             index += 2;
-        } else if arg.starts_with("--git-dir=") {
+        } else if let Some(value) = arg.strip_prefix("--git-dir=") {
+            if value.is_empty() {
+                return refuse("`--git-dir=` has no path".to_string());
+            }
             index += 1;
         } else {
             return refuse(format!("global option `{arg}` is not admitted"));
