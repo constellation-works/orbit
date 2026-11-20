@@ -225,16 +225,25 @@ Recognise the outcome in `orbit run show <run_id> --json`:
   follows on the lines after it. `run.error_message` carries that text, and so does
   the `error_message` of the failing `steps` entry.
 - `steps_source` says where the top-level `steps` came from. A run whose record
-  holds only the job-level failure, the usual v2 case, reads `audit`: those entries
-  are rebuilt from the audit trail, so their `error_code` is always null. Find the
-  marker in `error_message` instead. A `record` source keeps each entry's stored
-  `error_code`, which may also be null.
+  holds only the job-level failure, the usual v2 case, reads `audit` when its audit
+  trail has step entries: those are rebuilt from the audit trail, so their
+  `error_code` is always null. Find the failing step's marker in `error_message`
+  instead. When the audit trail has no step entries, the record's own job-level
+  entries are shown and `steps_source` reads `record`. A `record` source keeps each
+  entry's stored `error_code`, which may also be null.
+- On an audit-sourced step, `error_code` and `agent_response_json` are always null.
+  `exit_code` is filled only when that step's checkpoint in the run's pipeline state
+  is a command result, so an earlier command step in the same run can carry its exit
+  code while the refused agent step keeps it null. `duration_ms` is computed from
+  `started_at` and `finished_at` when the audit recorded both. For an unfinished step
+  of a terminal run, `state` takes the run's terminal state and `outcome` reads
+  `interrupted`; a finished step with no recorded outcome reads `finished`. `outcome`
+  is null only for an unfinished step of a run that is not terminal, whose `state`
+  then reads `running`. `started_at`, `finished_at`, `lock_wait_ms` and
+  `error_diagnostic` are null when the audit recorded no value.
 - Fields that may be null: `run.error_code` is `upgrade_pending` only when the run
-  record kept that code, and is otherwise null. On an audit-sourced step,
-  `error_code`, `exit_code` and `agent_response_json` are always null, and
-  `started_at`, `finished_at`, `duration_ms`, `lock_wait_ms`, `outcome` and
-  `error_diagnostic` are null when the audit recorded no value. `root_cause` is null
-  because the owner run failed on its own.
+  record kept that code, and is otherwise null. `root_cause` is null because the
+  owner run failed on its own.
 - The run is not reported as `upgrade_paused`, so `--failures` and the reliability
   counts treat it as a failure.
 
