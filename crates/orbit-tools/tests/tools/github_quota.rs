@@ -813,6 +813,97 @@ fn contended_record_lock_is_bounded_by_the_request_deadline() {
     );
 }
 
+/// Regression [ORB-26105]: a finite request whose admission spends its budget
+/// reports the timeout, not the typed throttle, when the quota record is
+/// readable and holds a live hold. A peer holds the record lock past the
+/// request's deadline, so admission reads the held record without the lock. A
+/// refusal decided with budget left keeps its typed throttle, and the
+/// child-spawning admission with the same spent budget returns its timeout.
+#[test]
+fn expired_admission_over_a_readable_hold_returns_the_timeout() {
+    let policy = GithubQuotaPolicy::default();
+    let records = TempDir::new().unwrap();
+    let gh = FakeGh::new("{}", "ok");
+    let now = now();
+    let reset = now + 1800;
+    let account = github_quota::request_account_key(&gh.request(&["run", "view", "123"]));
+    // A fresh core answer keeps the refresh interval claimed, so no probe is
+    // due; the primary hold then leaves a readable record with a live hold.
+    store(records.path()).refresh_if_due(&policy, &account, now, &|| known(4000, reset));
+    store(records.path()).record_throttle(
+        &policy,
+        &account,
+        RESOURCE_CORE,
+        &orbit_common::ProviderReadThrottle {
+            retry_after_seconds: None,
+            reset_epoch_seconds: Some(reset),
+            resource: Some(RESOURCE_CORE.to_string()),
+            principal: None,
+            request_id: None,
+        },
+        now,
+    );
+
+    // Budget left: the refusal stays the typed throttle, and nothing spawns.
+    let mut within = gh.request(&["run", "view", "123"]);
+    within.timeout_ms = Some(5_000);
+    let refused = github_quota::with_scoped_guard(store(records.path()), policy, || {
+        github_quota::run_gh_request(GithubCaller::Delivery, &within)
+    })
+    .expect_err("a live core hold refuses a read admitted within its budget");
+    assert_eq!(
+        refused_throttle(&refused).resource.as_deref(),
+        Some(RESOURCE_CORE)
+    );
+    assert!(gh.calls().is_empty(), "{:?}", gh.calls());
+
+    // Budget spent waiting on a peer-held record lock: the record is still
+    // readable and holds the core read, yet both child-spawning entry points
+    // return their timeout, and neither reaches `gh`.
+    let record_path = records.path().join(format!("{account}.json"));
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        let _lock = orbit_common::fs::io::hold_exclusive_file_lock_options(
+            &record_path,
+            "contending quota holder",
+            orbit_common::fs::io::FileLockOptions::default(),
+        )
+        .unwrap();
+        held_tx.send(()).unwrap();
+        // Bounded so a failed assertion cannot strand the holder.
+        let _ = release_rx.recv_timeout(Duration::from_secs(60));
+    });
+    held_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the holder never took the account lock");
+
+    let mut expired = gh.request(&["run", "view", "456"]);
+    expired.timeout_ms = Some(40);
+    let mut expired_spawn = gh.request(&["run", "view", "789"]);
+    expired_spawn.timeout_ms = Some(40);
+    let (run, admitted) = github_quota::with_scoped_guard(store(records.path()), policy, || {
+        (
+            github_quota::run_gh_request(GithubCaller::Delivery, &expired),
+            github_quota::admit_gh_request_within_budget(GithubCaller::Delivery, &expired_spawn),
+        )
+    });
+    release_tx.send(()).unwrap();
+    holder.join().unwrap();
+
+    let run = run.expect("an expired budget returns the timeout outcome, not the hold's throttle");
+    assert!(run.timed_out, "{run:?}");
+    assert!(!run.success, "{run:?}");
+    assert!(
+        matches!(
+            admitted,
+            Err(orbit_common::OrbitError::ProcessTimeout { timeout_ms: 40, .. })
+        ),
+        "an expired budget returns the process timeout, not the hold's throttle: {admitted:?}"
+    );
+    assert!(gh.calls().is_empty(), "{:?}", gh.calls());
+}
+
 /// Regression [ORB-26101]: the accounting a caller runs after its own child
 /// returns belongs to the original request deadline, not a fresh budget. A
 /// primary throttle reported with 50 ms of a 5 s budget left must give up on a
