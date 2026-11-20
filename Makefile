@@ -64,7 +64,7 @@ help:
 	@echo "  make install      Install CLI locally (INSTALL_PROFILE=debug optional)"
 	@echo "  make uninstall    Remove installed binary"
 	@echo "  make clean        Clean build artifacts"
-	@echo "  make cleanup-branches  Force-remove worktrees and branches except main/agent-main (DESTRUCTIVE)"
+	@echo "  make cleanup-branches  Force-remove every worktree and local branch except the primary and invoking checkouts, main, agent-main and their checked-out branches (DESTRUCTIVE)"
 	@echo "  make build-budget-test   Test cross-worktree build admission and bench workdir ownership without compiling"
 	@echo "  make build-budget-bench  Compare current and budgeted concurrent Cargo checks"
 	@echo "  make compiler-cache-status  Show whether the opt-in rustc cache would enable"

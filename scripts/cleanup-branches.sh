@@ -15,8 +15,10 @@ git worktree prune
 
 echo "Removing worktrees..."
 invoking_path=$(pwd -P)
-# The first entry of the worktree list is always the primary worktree.
-primary_path=$(git worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')
+# The first entry of the worktree list is always the primary worktree. awk reads
+# the whole listing: exiting early would SIGPIPE git (141) under pipefail once
+# the listing outgrows the pipe buffer.
+primary_path=$(git worktree list --porcelain | awk '/^worktree / && !seen { print substr($0, 10); seen = 1 }')
 primary_path=$(cd "$primary_path" 2>/dev/null && pwd -P || printf '%s' "$primary_path")
 
 failures=0
