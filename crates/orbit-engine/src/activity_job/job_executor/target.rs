@@ -1,6 +1,6 @@
 use super::reviewer::ReviewerInvocation;
 use super::*;
-use crate::activity_job::DECLARED_FAILURE_EVIDENCE_KEY;
+use crate::context::dispatch_contract::DECLARED_FAILURE_EVIDENCE_KEY;
 use orbit_types::workflow::{AGENT_IMPLEMENT_ACTIVITY, IMPLEMENT_ONE_STEP_ID};
 
 /// Run-input keys the executor owns and hands every nested target of the

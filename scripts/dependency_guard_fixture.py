@@ -65,6 +65,10 @@ SCAN_DIRECTORIES = (
     f"{VCS}/candidate_resume",
     # The engine dispatch-contract leaf directory [ORB-25491].
     "crates/orbit-engine/src/context",
+    # The engine activity_job children the ORB-26097 DECLARED_FAILURE_EVIDENCE_KEY
+    # guard scans for a root re-import.
+    "crates/orbit-engine/src/activity_job/cli_runner",
+    "crates/orbit-engine/src/activity_job/job_executor",
 )
 
 # Single-file modules scanned directly. tag_instructions and agent_corpus are
@@ -81,6 +85,9 @@ SCAN_FILES = (
     f"{VCS}/push.rs",
     f"{VCS}/claim/published.rs",
     "crates/orbit-engine/src/context/dispatch_contract.rs",
+    # The sandboxed spawn leaf the ORB-26097 executor/automation and
+    # sandbox_spawn guards scan directly.
+    "crates/orbit-engine/src/sandbox_spawn.rs",
 )
 
 CONFIG_FILES = (

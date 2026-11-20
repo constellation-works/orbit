@@ -15,8 +15,6 @@ pub mod script_catalog;
 pub mod sqlite_sink;
 pub mod workspace;
 
-const DECLARED_FAILURE_EVIDENCE_KEY: &str = "_orbit_declared_failure_evidence";
-
 pub use audit_writer::V2AuditWriter;
 pub use crew::{ResolvedAgentSettings, resolve_crew_settings};
 pub use dispatcher::{

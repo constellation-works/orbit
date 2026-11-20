@@ -113,6 +113,11 @@ pub struct SandboxMask {
     pub files: Vec<PathBuf>,
 }
 
+/// Orbit-owned step-output key carrying the error message from a declared
+/// `status: "failed"` response envelope between CLI completion projection and
+/// job-executor target handling.
+pub(crate) const DECLARED_FAILURE_EVIDENCE_KEY: &str = "_orbit_declared_failure_evidence";
+
 /// Outcome of a v2 dispatch attempt.
 #[derive(Debug, Clone)]
 pub struct DispatchOutcome {

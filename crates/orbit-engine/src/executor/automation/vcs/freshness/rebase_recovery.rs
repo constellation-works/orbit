@@ -59,8 +59,9 @@ pub(super) fn certify_empty_rebase<H: RuntimeHost + ?Sized>(
         )?;
     let run_id = recovery_run_id(input, context);
     let workspace_path = workspace.to_string_lossy().into_owned();
-    let dispatch =
-        |error: crate::activity_job::DispatchError| OrbitError::Execution(error.to_string());
+    let dispatch = |error: crate::context::dispatch_contract::DispatchError| {
+        OrbitError::Execution(error.to_string())
+    };
     let attempt = host
         .begin_rebase_recovery_attempt(
             run_id,

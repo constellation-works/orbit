@@ -39,11 +39,9 @@ use orbit_common::security::redaction::redact_all;
 use orbit_exec::spawn_owned_supervised_cancellable;
 use serde_json::{Value, json};
 
-use crate::activity_job::cli_runner::spawn::{
-    prepare_sandbox_for_dispatch, spawn_child_with_optional_sandbox,
-};
-use crate::activity_job::dispatcher::DispatchError;
 use crate::context::RuntimeHost;
+use crate::context::dispatch_contract::{DispatchError, ResolvedShellExecutor};
+use crate::sandbox_spawn::{prepare_sandbox_for_dispatch, spawn_child_with_optional_sandbox};
 
 use super::StateExecutionContext;
 use super::input::{canonicalize_existing_dir, input_string_field};
@@ -354,7 +352,7 @@ fn parse_shell_config(config: &Value) -> Result<ShellConfig, OrbitError> {
 /// it in every activity.
 fn compose_argv(
     config: &ShellConfig,
-    executor: &crate::activity_job::ResolvedShellExecutor,
+    executor: &ResolvedShellExecutor,
 ) -> Result<(String, Vec<String>), OrbitError> {
     match &config.invocation {
         Some(Invocation::Argv { command, args }) => {

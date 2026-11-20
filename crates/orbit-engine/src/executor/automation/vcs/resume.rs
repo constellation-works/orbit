@@ -8,8 +8,8 @@ use orbit_types::workflow::activity_job::JobV2;
 use orbit_types::workflow::{FailureHandoffDecision, JobRunState, PipelineState};
 use serde_json::Value;
 
-use crate::DispatchError;
 use crate::context::RuntimeHost;
+use crate::context::dispatch_contract::DispatchError;
 use crate::executor::automation::input::{
     canonicalize_existing_dir, input_string_field, required_input_string,
 };

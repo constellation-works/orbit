@@ -8,10 +8,10 @@ mod orchestrator;
 mod plugin_broker;
 mod prompt_file;
 mod response_diagnostics;
-/// Sandbox-aware child creation. `pub(crate)` because the deterministic
-/// `local_shell` action reuses the same spawn seam rather than growing a second
-/// implementation of sandbox selection and process-group setup [ORB-11294].
-pub(crate) mod spawn;
+/// Compatibility re-export shim for `crate::sandbox_spawn`, kept for
+/// `cli_runner` internals while callers migrate (retiring the shim is a
+/// follow-up).
+mod spawn;
 mod spawn_diagnostics;
 mod stdout_preview;
 mod supervisor;
