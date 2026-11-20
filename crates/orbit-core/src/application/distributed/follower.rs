@@ -400,6 +400,7 @@ impl crate::OrbitRuntime {
             input[crate::runtime::engine::crew::ALLOWED_CREWS_INPUT_KEY] = json!(allowed_crews);
         }
         let drift = self.gate_drift(input.get(OWNER_GATES_INPUT_KEY));
+        let start_trigger = trigger.kind;
         let submitted = self.submit_pipeline_run_with_trigger(
             PULL_DRAIN_JOB,
             input,
@@ -407,6 +408,8 @@ impl crate::OrbitRuntime {
             request.actor,
             trigger,
         )?;
+        // [ORB-25965] A hand start of a pull drain lifts this replica's pause.
+        self.record_drain_start_intent(start_trigger);
         if let Some(drift) = drift {
             tracing::warn!("pull drain {}: {drift}", submitted.run_id);
         }

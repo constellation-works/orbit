@@ -154,7 +154,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
 | [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Re-file the slice 10 pilot (ORB-21251 archived 2026-11-03, not done) once a bounded mandate with an operator authority grant and a manager session is ready | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
-| [Standing Drain](./design/standing-drain/1_scope.md) | Phase 1 (intent and surfaces) is ORB-25965; the keeper, ORB-25991, follows it | claude |
+| [Standing Drain](./design/standing-drain/1_scope.md) | Phase 1 (intent and surfaces) is built; next is the keeper, ORB-25991 | claude |
 
 ### Designing (6)
 

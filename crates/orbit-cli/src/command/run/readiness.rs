@@ -108,6 +108,9 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
     if let Some(run_id) = capacity["drain_run_id"].as_str() {
         lines.push(format!("Running drain: {run_id}."));
     }
+    if let Some(line) = drain_intent_line(&payload["drain_intent"]) {
+        lines.push(line);
+    }
     if let Some(run_id) = capacity["pull_drain_run_id"].as_str() {
         let stopped = if capacity["pull_drain_admissions_stopped"].as_bool() == Some(true) {
             " (admissions stopped)"
@@ -319,6 +322,33 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
         ));
     }
     lines
+}
+
+/// [ORB-25965] The recorded drain intent: who paused it and when, or who
+/// last started a drain by hand.
+fn drain_intent_line(intent: &Value) -> Option<String> {
+    let by = intent["by"].as_str().unwrap_or("unknown");
+    let source = intent["source"].as_str().unwrap_or("unknown");
+    let at = intent["at"].as_str().unwrap_or("unknown time");
+    match intent["intent"].as_str()? {
+        "paused" => {
+            let reason = intent["reason"]
+                .as_str()
+                .map(|reason| format!(": {reason}"))
+                .unwrap_or_default();
+            Some(format!(
+                "Drain intent: paused by {by} from {source} at {at}{reason}."
+            ))
+        }
+        "on" => Some(format!(
+            "Drain intent: on (last started by {by} from {source} at {at})."
+        )),
+        "off" => Some("Drain intent: off.".to_string()),
+        _ => Some(format!(
+            "Drain intent: unreadable ({}).",
+            intent["error"].as_str().unwrap_or("unknown error")
+        )),
+    }
 }
 
 /// Live repairs and the latest drain pass's skipped repair candidates.

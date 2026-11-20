@@ -18,6 +18,7 @@ use super::host_workspaces::host_workspace_convergence_row;
 use super::permissions::state_directory_permissions_row;
 use super::scan_workers::{forced_pool_size, spawn_scan_worker};
 use super::script_grants::script_grant_rows;
+use super::standing_drain::standing_drain_row;
 use super::worker_containment::worker_containment_row;
 use super::{DoctorProbe, WORKSPACE_PROBES, WorkspaceDoctorResult, WorkspaceDoctorStatus};
 
@@ -51,6 +52,7 @@ const REPORT_PROBES: &[DoctorProbe] = &[
         host_workspace_convergence_row(runtime)
     }),
     DoctorProbe::one("host-labels", |runtime, _| host_labels_row(runtime)),
+    DoctorProbe::one("standing-drain", |runtime, _| standing_drain_row(runtime)).slow(),
     DoctorProbe::one("plugin-enablement", |runtime, _| {
         plugin_enablement_row(runtime)
     }),

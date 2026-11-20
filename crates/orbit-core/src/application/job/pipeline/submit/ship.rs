@@ -419,13 +419,17 @@ impl OrbitRuntime {
             request.review,
             self.automatic_delivery_ship_mode() == crate::application::workflow::ShipMode::Local,
         )?;
-        self.submit_pipeline_run_with_trigger(
+        let trigger = request.trigger.kind;
+        let submitted = self.submit_pipeline_run_with_trigger(
             workflow_job_id,
             input,
             None,
             request.actor,
             request.trigger,
-        )
+        )?;
+        // [ORB-25965] A hand start lifts a pause; it changes nothing else.
+        self.record_drain_start_intent(trigger);
+        Ok(submitted)
     }
 
     fn validate_strict_worker_containment(&self, strict: bool) -> Result<(), OrbitError> {

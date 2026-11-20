@@ -190,6 +190,7 @@ impl OrbitRuntime {
                 json!({ "coordinator_count": 0 }),
                 None,
             )?;
+            self.record_stop_drain_intent(request);
             return Ok(DrainAdmissionsStopResult {
                 outcome: DrainAdmissionsStopOutcome::Idle,
                 coordinators: Vec::new(),
@@ -256,12 +257,25 @@ impl OrbitRuntime {
         } else {
             DrainAdmissionsStopOutcome::Unchanged
         };
+        self.record_stop_drain_intent(request);
         Ok(DrainAdmissionsStopResult {
             outcome,
             coordinators: changes,
             pull_settlements: self.settle_workspace_pulls(),
             replica_owner_machine_id: self.coordination_write_owner().map(str::to_owned),
         })
+    }
+
+    /// [ORB-25965] A hand stop that succeeded means "pause" until someone
+    /// starts a drain again, whether or not a drain was live to stop. The
+    /// request's `actor` names the surface (`cli`, `dashboard`, `desktop`),
+    /// the same word a start records.
+    fn record_stop_drain_intent(&self, request: DrainAdmissionsStopRequest<'_>) {
+        self.record_hand_drain_intent(
+            orbit_store::contracts::DrainIntentState::Paused,
+            request.actor,
+            request.reason,
+        );
     }
 
     /// Whether this run's persisted control forbids further auto admissions.
