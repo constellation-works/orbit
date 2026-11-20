@@ -86,8 +86,9 @@ stub serves job and run metadata only when a case writes `job_metadata` or
 `denied` file makes every later call fail as a caller that lost access. The
 tests cover one download across two windows of a completed job (plus the status
 request a warm read makes), owner-only entry permissions, the age bound, a job
-that is not completed (never cached), refused access (never served from the
-cache) and another resolved repository (its own entry). Rerun-attempt keying
+or run that is not completed (never cached), refused access after a warm fill
+(never served from the cache) and another resolved repository with unchanged run
+ID and attempt (its own entry), for both job-scoped and whole-run requests. Rerun-attempt keying
 and the secret-free cache live in `tests/tools/github_log_cache.rs`. The size
 bound, staging-file cleanup and publish-versus-expiry race of the cache are
 internal to it and have no public-boundary carrier.
