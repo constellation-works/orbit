@@ -33,7 +33,6 @@ use super::super::super::dispatcher::DispatchError;
 
 const SLOT_COUNT: usize = 16;
 const POOL_DIR: &str = "source-inspections-v1";
-const LEGACY_POOL_DIR: &str = "orbit-source-inspections-v1";
 const OWNER: &str = "orbit-source-inspection-v1\n";
 
 pub(in crate::activity_job::cli_runner) struct SourceInspection {
@@ -101,9 +100,6 @@ impl SourceInspection {
         )?;
         let common = common.trim();
         let format = git(source, &["rev-parse", "--show-object-format"])?;
-        if let Err(error) = retire_legacy_pool(Path::new(common)) {
-            tracing::warn!(%error, "retiring the in-metadata inspection pool needs operator attention");
-        }
         let pool = prepare_pool(Path::new(common))?;
         for index in 0..SLOT_COUNT {
             let slot = pool.join(index.to_string());
@@ -314,51 +310,6 @@ fn prepare_pool(common: &Path) -> Result<PathBuf, DispatchError> {
         directory(&pool).map_err(io_failure)?;
     }
     Ok(pool)
-}
-
-/// Retire the pool this module used to keep inside the common Git directory.
-///
-/// A checkout abandoned there by a crash is no longer reclaimed by the current
-/// pool, and would sit under authoritative Git metadata forever — where host
-/// protection refuses its tracked symlinks and so blocks every sandboxed
-/// activity in the repository. Only slots still carrying this module's owner
-/// marker are removed; anything else is left for an operator to inspect.
-fn retire_legacy_pool(common: &Path) -> io::Result<()> {
-    let legacy = common.join(LEGACY_POOL_DIR);
-    reject_symlink(&legacy)?;
-    if !legacy.is_dir() {
-        return Ok(());
-    }
-    for entry in fs::read_dir(&legacy)? {
-        let slot = entry?.path();
-        reject_symlink(&slot)?;
-        let marker = slot.join("owner");
-        reject_symlink(&marker)?;
-        if fs::read_to_string(&marker).unwrap_or_default() != OWNER {
-            return Err(io::Error::other(format!(
-                "unowned entry in the retired inspection pool: {}",
-                slot.display()
-            )));
-        }
-        // A slot an older build still leases is cleaning up after itself.
-        let lock_path = slot.join("lease");
-        reject_symlink(&lock_path)?;
-        let lease = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(&lock_path)?;
-        match lease.try_lock() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => return Ok(()),
-            Err(TryLockError::Error(error)) => return Err(error),
-        }
-
-        remove_checkout(&slot.join("checkout"))?;
-        fs::remove_dir_all(&slot)?;
-    }
-    fs::remove_dir(&legacy)
 }
 
 fn remove_checkout(root: &Path) -> io::Result<()> {
