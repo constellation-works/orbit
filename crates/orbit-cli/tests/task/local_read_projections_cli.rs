@@ -11,7 +11,9 @@ use orbit_core::application::task::{
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{ActorIdentity, OrbitRuntime};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate, blocked_workflow_failure_update};
-use orbit_types::task::{ExecutionLocation, ExternalRef, TaskComplexity, TaskStatus};
+use orbit_types::task::{
+    ExecutionLocation, ExternalRef, TaskComplexity, TaskHistoryEntry, TaskStatus,
+};
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 
@@ -102,6 +104,37 @@ fn task_show_formats_status_history_and_whole_second_timestamps_without_changing
         .as_str()
         .unwrap()
         .to_string();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let _authority = orbit_common::test_env::unset(
+        orbit_common::test_env::INHERITED_AUTHORITY_ENV
+            .iter()
+            .copied(),
+    );
+    let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+        .unwrap()
+        .with_actor(ActorIdentity::human("history-fixture"));
+    let note = json!({
+        "summary": "Choose the delivery route",
+        "operation_id": "secret-operation-id",
+        "binding": {"digest": "sha256:secret-digest"},
+        "answers": ["a".repeat(4000)],
+    })
+    .to_string();
+    let entry = |event: &str, note: &str| TaskHistoryEntry {
+        at: Utc::now(),
+        by: "system".into(),
+        event: event.into(),
+        note: Some(note.into()),
+        from_status: None,
+        to_status: None,
+        operation_id: None,
+        decision: None,
+    };
+    runtime.apply_task_automation_update(&id, TaskAutomationUpdate {
+        append_history: vec![entry("decision_requested", &note), entry("resident_action", r#"{"tool":"orbit.task.show","phase":"started","input_digest":"sha256:secret-digest","key":"secret-operation-id"}"#), entry("fixture_event", "ordinary note")],
+        ..Default::default()
+    }).unwrap();
     let changed = fixture.json(&["task", "update", &id, "--status", "backlog", "--json"]);
     assert!(changed["history"].as_array().unwrap().iter().any(|entry| {
         entry["event"] == "status_changed"
@@ -133,6 +166,44 @@ fn task_show_formats_status_history_and_whole_second_timestamps_without_changing
         .stdout
         .clone();
     let human = String::from_utf8(human).unwrap();
+    let line = human
+        .lines()
+        .find(|line| line.contains("decision_requested"))
+        .unwrap();
+    assert!(line.chars().count() <= 160, "{line}");
+    assert!(line.contains("Choose the delivery route"), "{line}");
+    assert!(
+        !line.contains("sha256") && !line.contains("secret-operation-id"),
+        "{line}"
+    );
+    assert!(
+        human
+            .lines()
+            .any(|line| line.contains("fixture_event (ordinary note)")),
+        "{human}"
+    );
+    let history = fixture.json(&["task", "show", &id, "--field", "history", "--json"]);
+    assert!(
+        history
+            .to_string()
+            .contains(&serde_json::to_string(&note).unwrap()),
+        "{history}"
+    );
+    let field = fixture
+        .command(&["task", "show", &id, "--field", "history"])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let field = String::from_utf8(field).unwrap();
+    assert!(
+        field.lines().any(|line| line.contains("decision_requested")
+            && line.chars().count() <= 160
+            && !line.contains("sha256")),
+        "{field}"
+    );
     assert!(human.contains("status proposed → backlog"), "{human}");
     assert!(human.contains("timestamp comment"), "{human}");
     assert!(
