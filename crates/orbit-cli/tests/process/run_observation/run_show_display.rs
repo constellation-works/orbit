@@ -608,6 +608,68 @@ fn run_show_lists_a_final_recovery_resume_with_its_rationale() {
     assert!(shown(&fixture, &[]).contains(rationale));
 }
 
+/// A persisted step recovery whose `decision` is not an object reads as
+/// slotless, like a historical event: a successful recovery keeps its single
+/// re-attempt. A valid object that declines it still does not.
+fn run_show_reads_a_malformed_recovery_decision_as_absent() {
+    let fixture = Fixture::terminal();
+    seed_interrupted_run(&fixture);
+    let cases = [
+        (
+            "array",
+            serde_json::json!(["verified", "retry", "x", false]),
+            true,
+        ),
+        ("string", serde_json::json!("declined"), true),
+        (
+            "object",
+            serde_json::json!({"status": "verified", "verdict": "not_recovered",
+                "retry_admitted": false}),
+            false,
+        ),
+    ];
+    for (index, (name, decision, _)) in cases.iter().enumerate() {
+        let payload = serde_json::json!({
+            "event_id": format!("recovery-{name}"), "body_kind": "step_recovery_attempted",
+            "step_id": "validate", "recovery_activity": "recovery",
+            "recovery_succeeded": true, "decision": decision,
+            "ts": format!("2026-10-08T04:0{index}:00+00:00"),
+        });
+        fixture
+            .db()
+            .execute(
+                "INSERT INTO v2_audit_events (workspace_id, event_id, source, schema_version,
+                event_type, ts, run_id, agent_identity, payload_json)
+             VALUES (?1, ?2, 'v2_envelope', 1, 'step.recovery_attempted',
+                ?3, ?4, 'test', ?5)",
+                params![
+                    fixture.workspace_id(),
+                    format!("recovery-{name}"),
+                    format!("2026-10-08T04:0{index}:00+00:00"),
+                    INTERRUPTED,
+                    payload.to_string()
+                ],
+            )
+            .unwrap();
+    }
+    let json = fixture.json(&["run", "show", INTERRUPTED, "--no-reconcile", "--json"]);
+    let attempts = json["recovery_attempts"]["items"].as_array().unwrap();
+    assert_eq!(attempts.len(), cases.len(), "{attempts:?}");
+    for (name, _, admitted) in cases {
+        let attempt = attempts
+            .iter()
+            .find(|attempt| attempt["event_id"] == format!("recovery-{name}"))
+            .unwrap_or_else(|| panic!("{name}: missing in {attempts:?}"));
+        assert_eq!(attempt["retry_admitted"], admitted, "{name}: {attempt}");
+        assert_eq!(attempt["outcome"], "succeeded", "{name}");
+        if name == "object" {
+            assert_eq!(attempt["decision"]["verdict"], "not_recovered");
+        } else {
+            assert!(attempt["decision"].is_null(), "{name}: {attempt}");
+        }
+    }
+}
+
 /// [ORB-16330] `orbit run show --json` names the claimed worker the way MCP
 /// does, and an unreadable pipeline checkpoint is a warning with
 /// `pipeline_state` null rather than a failed command.
@@ -1438,6 +1500,10 @@ fn run_show_contracts() {
         (
             "run_show_lists_a_final_recovery_resume_with_its_rationale",
             run_show_lists_a_final_recovery_resume_with_its_rationale as fn(),
+        ),
+        (
+            "run_show_reads_a_malformed_recovery_decision_as_absent",
+            run_show_reads_a_malformed_recovery_decision_as_absent as fn(),
         ),
         (
             "run_show_names_a_sigkilled_workers_rescue_candidate",
