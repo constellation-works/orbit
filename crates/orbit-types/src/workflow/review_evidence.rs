@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::ReviewGateHistoryEvent;
 use super::ValidationOutcome;
 use super::automation::SourceRevision;
 use super::host_evidence::EvidenceHostOs;
@@ -12,12 +13,12 @@ pub const REVIEW_EVIDENCE_HOLD_ARTIFACT: &str = "review-evidence-hold.json";
 
 /// The task history event that queues a held task for fresh review once every
 /// named check arrived. Its note begins `run=<hold run>;`.
-pub const REVIEW_EVIDENCE_RECEIVED_EVENT: &str = "review_evidence_received";
+pub const REVIEW_EVIDENCE_RECEIVED_EVENT: &str = ReviewGateHistoryEvent::EvidenceReceived.as_str();
 
 /// [ORB-18660] The task history event that queues a held task to repair its
 /// kept candidate after an owner evidence run reported findings on it. Its
 /// note begins `run=<hold run>;`.
-pub const REVIEW_EVIDENCE_FINDINGS_EVENT: &str = "review_evidence_findings";
+pub const REVIEW_EVIDENCE_FINDINGS_EVENT: &str = ReviewGateHistoryEvent::EvidenceFindings.as_str();
 
 /// [ORB-18660] The findings an owner evidence run reported on a held
 /// candidate, written by Orbit's system writer only. The candidate's repair

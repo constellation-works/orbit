@@ -12,7 +12,9 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::{
     ClaimInspection, ClaimSettlementKind, ExecutionClaimPhase, LeafRootCause, LeafRunEvidence,
 };
-use orbit_types::workflow::{BASELINE_RED_HOLD_EVENT, ClaimFailureClass, OrbitBuild};
+use orbit_types::workflow::{
+    BASELINE_RED_HOLD_EVENT, ClaimFailureClass, OrbitBuild, ReviewGateHistoryEvent,
+};
 use serde::Serialize;
 
 use crate::runtime::upgrade_handover::UPGRADE_QUIESCE_ERROR_CODE;
@@ -24,7 +26,7 @@ const SETTLEMENT_EVENTS: &[&str] = &[
     "claim_failed",
     "claim_released",
     "claim_release_budget_exhausted",
-    "review_awaiting_evidence",
+    ReviewGateHistoryEvent::AwaitingEvidence.as_str(),
     BASELINE_RED_HOLD_EVENT,
 ];
 
@@ -308,10 +310,12 @@ impl LeafSettlement {
                 }
             };
         }
-        match settlement.last_event.as_str() {
-            "review_awaiting_evidence" => settlement.evidence = "evidence_hold",
-            event if event == BASELINE_RED_HOLD_EVENT => settlement.evidence = "baseline_red",
-            _ => {}
+        if ReviewGateHistoryEvent::from_event(&settlement.last_event)
+            == Some(ReviewGateHistoryEvent::AwaitingEvidence)
+        {
+            settlement.evidence = "evidence_hold";
+        } else if settlement.last_event == BASELINE_RED_HOLD_EVENT {
+            settlement.evidence = "baseline_red";
         }
         settlement.accounting = SettlementAccounting::derive(&settlement);
         Some(settlement)

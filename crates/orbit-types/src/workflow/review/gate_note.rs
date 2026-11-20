@@ -102,6 +102,50 @@ fn legacy_review_fix_validation_failure(comment: &TaskComment) -> bool {
         && task::recorded_review_settlements(&[], std::slice::from_ref(comment)).is_empty()
 }
 
+/// The review-gate history events whose notes [`ReviewGateHistoryNote`] owns.
+///
+/// History rows keep `event` as a string on disk; this closed set names the
+/// four spellings once so producers write through it and readers parse it at
+/// the point they read history. Other history events are an open set and are
+/// not variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewGateHistoryEvent {
+    /// The reviewer exceeded its wall clock and delivery was requeued.
+    TimeoutIncomplete,
+    /// The candidate is held for named external evidence.
+    AwaitingEvidence,
+    /// Every named external check arrived; a fresh review is queued.
+    EvidenceReceived,
+    /// An owner evidence run reported findings; the candidate is queued to repair.
+    EvidenceFindings,
+}
+
+impl ReviewGateHistoryEvent {
+    /// The historical spelling recorded as the history `event`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TimeoutIncomplete => "review_timeout_incomplete",
+            Self::AwaitingEvidence => "review_awaiting_evidence",
+            Self::EvidenceReceived => "review_evidence_received",
+            Self::EvidenceFindings => "review_evidence_findings",
+        }
+    }
+
+    /// The review-gate event a stored history `event` names, if it names one.
+    #[must_use]
+    pub fn from_event(event: &str) -> Option<Self> {
+        [
+            Self::TimeoutIncomplete,
+            Self::AwaitingEvidence,
+            Self::EvidenceReceived,
+            Self::EvidenceFindings,
+        ]
+        .into_iter()
+        .find(|known| known.as_str() == event)
+    }
+}
+
 /// Fields a review-gate history note carries for the automation that reads it.
 ///
 /// The note text also carries human prose (the failed step, the branch, why

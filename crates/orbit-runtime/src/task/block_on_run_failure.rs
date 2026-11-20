@@ -76,8 +76,8 @@ use orbit_engine::{
 use orbit_types::task::{Task, TaskDecision, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     AgentBlocker, BaselineRedHold, HeldFailure, JobRun, JobRunState, ProviderFailureClass,
-    ReviewGateHistoryNote, UPGRADE_PENDING_REQUEUED_EVENT, is_baseline_red_failure,
-    is_footprint_unavailable, is_operator_stopped, is_upgrade_pending,
+    ReviewGateHistoryEvent, ReviewGateHistoryNote, UPGRADE_PENDING_REQUEUED_EVENT,
+    is_baseline_red_failure, is_footprint_unavailable, is_operator_stopped, is_upgrade_pending,
 };
 
 use crate::RuntimeKernel;
@@ -461,22 +461,11 @@ impl RuntimeKernel {
                         .rev()
                         .find(|entry| {
                             entry.to_status.is_some()
-                                || matches!(
-                                    entry.event.as_str(),
-                                    "review_timeout_incomplete"
-                                        | "review_awaiting_evidence"
-                                        | "review_evidence_received"
-                                        | "review_evidence_findings"
-                                )
+                                || ReviewGateHistoryEvent::from_event(&entry.event).is_some()
                         })
                         .is_some_and(|entry| {
-                            matches!(
-                                entry.event.as_str(),
-                                "review_timeout_incomplete"
-                                    | "review_awaiting_evidence"
-                                    | "review_evidence_received"
-                                    | "review_evidence_findings"
-                            ) && entry.note.as_deref().is_some_and(|note| {
+                            ReviewGateHistoryEvent::from_event(&entry.event).is_some()
+                                && entry.note.as_deref().is_some_and(|note| {
                                 ReviewGateHistoryNote::from_text(note)
                                     .is_some_and(|parsed| parsed.run_id == run_id)
                             })

@@ -9,6 +9,7 @@ use orbit_store::contracts::{JobRunStepParams, TaskReservationReleaseReason};
 use orbit_types::record::OrbitEvent;
 use orbit_types::workflow::{
     HeldFailure, JobRun, JobRunState, JobRunTrigger, JobTargetType, PipelineState,
+    ReviewGateRefusal,
 };
 use serde_json::{Value, json};
 
@@ -160,7 +161,7 @@ impl OrbitRuntime {
                         run,
                         started_at,
                         finished_at,
-                        Some("review_awaiting_evidence"),
+                        Some(ReviewGateRefusal::AwaitingEvidence.error_code()),
                         "Delivery awaits named external evidence; receipt queues a fresh review.",
                         JobRunState::Held,
                     ),

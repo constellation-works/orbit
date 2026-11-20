@@ -4,8 +4,8 @@ use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::workflow::handoff::{HandoffArtifactRef, HandoffReviewEvidence};
 use orbit_types::workflow::{
     REVIEW_GATE_ARTIFACT, REVIEW_LANDING_DECISION_PENDING, REVIEW_MANIFEST_ARTIFACT,
-    REVIEW_REPORT_ARTIFACT, ReviewCertificate, ReviewGateAdmitted, ReviewGateHistoryNote,
-    ReviewManifest, ReviewTiming,
+    REVIEW_REPORT_ARTIFACT, ReviewCertificate, ReviewGateAdmitted, ReviewGateHistoryEvent,
+    ReviewGateHistoryNote, ReviewManifest, ReviewTiming,
 };
 use serde_json::{Value, json};
 
@@ -76,7 +76,9 @@ pub(super) fn settled_outcome(
                     TaskAutomationUpdate {
                         expected_status: Some(orbit_types::task::TaskStatus::InProgress),
                         status: Some(orbit_types::task::TaskStatus::InProgress),
-                        status_event: Some("review_awaiting_evidence".into()),
+                        status_event: Some(
+                            ReviewGateHistoryEvent::AwaitingEvidence.as_str().into(),
+                        ),
                         status_note: Some(ReviewGateHistoryNote::awaiting_evidence_text(
                             &context.run_id,
                             &hold.candidate.commit,
