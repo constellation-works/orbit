@@ -10,6 +10,6 @@ pub use machine::{
     AUTO_CONCURRENCY_PROFILE_WINDOW, AutoConcurrencySettings, MachineSettings,
     ResourceThrottleSettings, WorkerContainmentSettings,
 };
-pub(crate) use resolve::resolve_percent;
+pub(crate) use resolve::resolve_bounded_range;
 pub use snapshot::{ExperimentSettings, MidRunSteeringSettings};
 pub use table::{CONFIG_KEY_REGISTRY, ConfigSnapshot};

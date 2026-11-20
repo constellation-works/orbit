@@ -45,7 +45,7 @@ macro_rules! assemble_config_settings {
         description: "Maximum forecast CPU utilization as a percentage of host cores.",
         section: ConfigSection::Machine, order: 33,
         allowed: PERCENT,
-        resolve: |raw: Option<u8>| resolve_percent(raw, 90, "machine.auto_concurrency.admit_cpu_percent"),
+        resolve: |raw: Option<u8>| resolve_bounded_range(raw, 90, "machine.auto_concurrency.admit_cpu_percent"),
     },
     machine_auto_concurrency_min_profile_deliveries: u32 => u32 {
         key: "machine.auto_concurrency.min_profile_deliveries", value_type: "integer",
