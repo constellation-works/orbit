@@ -148,7 +148,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Application Approvals](./design/application-approvals/1_scope.md) | Orbit slices 1-5 shipped; office profile remains ORB-20363, compatibility retirement ORB-21043 | claude |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | File phase 3: host scope and notifications | claude |
-| [Crew Memory](./design/crew-memory/1_overview.md) | M5 shadow runs (ORB-23117); live from 2026-11-15, then conclude by 2026-12-20 (ORB-23110) | claude |
+| [Crew Memory](./design/crew-memory/1_overview.md) | Daniel: conclude exp-5342a4d6 (no difference) and decide the consolidation proposal (ORB-25838) | claude |
 | [Experiments](./design/experiments/1_scope.md) | The horizon decision-channel step remains unfiled | claude |
 | [Model Ranking](./design/model-ranking/1_overview.md) | R4 has no open task (ORB-23305 rejected): file the freeze and 4-week shadow run | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
