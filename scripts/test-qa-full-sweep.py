@@ -4882,6 +4882,32 @@ def import_platform_evidence(paths, inventory, candidate, repo):
     return imported
 
 
+def managed_asset_manifest_record(repo: Path):
+    """Digest the owner-managed manifests under the checkout, or mark the search unavailable.
+
+    A managed worktree or candidate clone lacks the gitignored owner-managed
+    manifests, so an empty map would read as a successful search with nothing to
+    record. The record names the root it searched either way. The walk skips
+    `.orbit/state` (other runs' worktrees and inspections) and `.orbit/tmp` (this
+    sweep's scratch): their copies do not bind to this candidate.
+    """
+    root = repo / ".orbit"
+    manifests = {}
+    for directory, subdirs, files in os.walk(root):
+        if directory == str(root):
+            subdirs[:] = [name for name in subdirs if name not in ("state", "tmp")]
+        if ".orbit-managed-assets.json" in files:
+            path = Path(directory, ".orbit-managed-assets.json")
+            manifests[str(path.relative_to(repo))] = hashlib.sha256(path.read_bytes()).hexdigest()
+    record = {"searched_root": str(root.resolve()), "manifests": manifests}
+    if manifests:
+        return {"status": "resolved", **record}
+    return {"status": "unavailable",
+            "unavailable_reason": ("no .orbit-managed-assets.json under the searched root; managed worktrees "
+                                   "and candidate clones do not carry owner-managed manifests"),
+            **record}
+
+
 def main():
     _LOCAL_COMMAND_CLEANUP.clear()
     parser = argparse.ArgumentParser()
@@ -5212,8 +5238,7 @@ def main():
         "source_state": {"status": candidate["status"], "diff_sha256": candidate["diff_sha256"],
                          "changed_file_sha256": changed_hashes},
         "binary": binary_record, "browser": browser_record,
-        "managed_assets": {str(path.relative_to(repo)):hashlib.sha256(path.read_bytes()).hexdigest()
-                           for path in repo.glob(".orbit/**/.orbit-managed-assets.json")},
+        "managed_assets": managed_asset_manifest_record(repo),
         "environment": {"os":platform.system(), "release":platform.release(), "architecture":platform.machine(),
                         "capabilities":capabilities},
         "inventory_sha256": hashlib.sha256(inventory_path.read_bytes()).hexdigest(),

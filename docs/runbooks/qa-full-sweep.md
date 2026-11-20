@@ -405,6 +405,10 @@ or cleanup requirements:
     Git revision. `candidate.id` is a separate digest of that revision, the tracked diff, and
     relevant untracked inputs; confirm result rows use that same candidate ID rather than comparing
     it directly with the Git revision hash.
+  - Check `managed_assets`: `status` `resolved` lists each owner-managed manifest path under `.orbit/`
+    with its SHA256 under `manifests`, skipping `.orbit/state` and `.orbit/tmp`; `status` `unavailable`
+    names the `searched_root` and records no manifests. A sweep from a managed worktree or candidate
+    clone is expected to report `unavailable`.
   - Check that all inventory scenarios are accounted for in `results[]` (78+ PASS, declared capability
     gaps recorded as NOT_RUN/BLOCKED).
   - Verify that `decision` is `INCOMPLETE` whenever required capability gaps (such as macOS on Linux or

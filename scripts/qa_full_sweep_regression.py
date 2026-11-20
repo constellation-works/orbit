@@ -312,16 +312,10 @@ def auxiliary_cleanup_self_test(harness, scratch):
                     raise AssertionError(f"report omits the unverified {target} command: {state}")
 
 
-def report_output_self_test(harness, scratch):
-    """Both public entrypoints keep default reports in ignored scratch storage."""
-    with tempfile.TemporaryDirectory(prefix="qa-report-output-", dir=scratch) as tmp:
-        repo = Path(tmp)
-        (repo / "scripts").mkdir()
-        (repo / "scripts/qa-full-sweep-inventory.json").write_text('{"scenarios": []}')
-        wrapper = repo / "scripts/qa-full-sweep.sh"
-        wrapper.write_bytes(harness.with_name("qa-full-sweep.sh").read_bytes())
-        entrypoint = repo / "scripts/test-qa-full-sweep.py"
-        entrypoint.write_text(f'''
+def sweep_entrypoint(repo, harness):
+    """Write a fixture copy of the public sweep entrypoint that substitutes only repository adapters."""
+    entrypoint = repo / "scripts/test-qa-full-sweep.py"
+    entrypoint.write_text(f'''
 import importlib.util
 from pathlib import Path
 spec = importlib.util.spec_from_file_location("qa", {str(harness)!r})
@@ -334,6 +328,18 @@ qa.candidate_source = lambda *_: {{"candidate_id": "fixture", "head": "a" * 40,
                                   "status": [], "changed_paths": [], "diff_sha256": "fixture"}}
 qa.main()
 ''')
+    return entrypoint
+
+
+def report_output_self_test(harness, scratch):
+    """Both public entrypoints keep default reports in ignored scratch storage."""
+    with tempfile.TemporaryDirectory(prefix="qa-report-output-", dir=scratch) as tmp:
+        repo = Path(tmp)
+        (repo / "scripts").mkdir()
+        (repo / "scripts/qa-full-sweep-inventory.json").write_text('{"scenarios": []}')
+        wrapper = repo / "scripts/qa-full-sweep.sh"
+        wrapper.write_bytes(harness.with_name("qa-full-sweep.sh").read_bytes())
+        entrypoint = sweep_entrypoint(repo, harness)
         binary = repo / "orbit"
         binary.write_text("#!/bin/sh\necho 'fixture orbit'\n")
         binary.chmod(0o755)
@@ -351,6 +357,50 @@ qa.main()
                 assert report["schema_version"] == 2, report
                 assert not (repo / "qa-full-sweep-report.json").exists(), child.stdout
                 output.unlink()
+
+
+def managed_asset_manifest_self_test(harness, scratch):
+    """A report names the searched manifest root when none resolves, and digests each manifest it finds."""
+    with tempfile.TemporaryDirectory(prefix="qa-managed-assets-", dir=scratch) as tmp:
+        repo = Path(tmp)
+        (repo / "scripts").mkdir()
+        (repo / "scripts/qa-full-sweep-inventory.json").write_text('{"scenarios": []}')
+        entrypoint = sweep_entrypoint(repo, harness)
+        binary = repo / "orbit"
+        binary.write_text("#!/bin/sh\necho 'fixture orbit'\n")
+        binary.chmod(0o755)
+
+        def managed_assets_for(name):
+            output = repo / ".orbit/tmp" / f"{name}.json"
+            child = subprocess.run(
+                [sys.executable, str(entrypoint), "--orbit-bin", str(binary), "--output", str(output)],
+                cwd=repo, capture_output=True, text=True, timeout=60)
+            assert child.returncode == 0 and output.is_file(), (
+                name, child.returncode, child.stdout, child.stderr)
+            managed = json.loads(output.read_text())["managed_assets"]
+            output.unlink()
+            return managed
+
+        # A managed worktree or candidate clone has no owner-managed manifests, so an empty
+        # map would hide that the search happened at all.
+        unavailable = managed_assets_for("unavailable")
+        assert unavailable.get("status") == "unavailable" and unavailable.get("manifests") == {}, unavailable
+        assert unavailable.get("searched_root") == str((repo / ".orbit").resolve()), unavailable
+
+        # An owner checkout records every manifest path and its digest, but never the copies
+        # other runs keep under .orbit/state or the sweep's own .orbit/tmp scratch.
+        manifests = {
+            ".orbit/auto_tasks/.orbit-managed-assets.json": b'{"assets": []}\n',
+            ".orbit/routines/.orbit-managed-assets.json": b'{"assets": [{"id": "routine"}]}\n',
+        }
+        foreign = [".orbit/state/worktrees/other-run/.orbit-managed-assets.json",
+                   ".orbit/tmp/orbit-qa-full-scratch/.orbit-managed-assets.json"]
+        for relative, body in [*manifests.items(), *((path, b"{}\n") for path in foreign)]:
+            (repo / relative).parent.mkdir(parents=True, exist_ok=True)
+            (repo / relative).write_bytes(body)
+        resolved = managed_assets_for("resolved")
+        assert resolved.get("status") == "resolved" and resolved.get("manifests") == {
+            relative: hashlib.sha256(body).hexdigest() for relative, body in manifests.items()}, resolved
 
 
 def builtin_readback_self_test(harness, scratch):
@@ -408,6 +458,7 @@ def self_test():
     scratch.mkdir(parents=True, exist_ok=True)
     builtin_readback_self_test(harness, scratch)
     report_output_self_test(harness, scratch)
+    managed_asset_manifest_self_test(harness, scratch)
     candidate_build_report_self_test(harness, scratch)
     native_emitter_cleanup_self_test(harness, scratch)
     native_recorder_prefix_self_test(harness, scratch)
