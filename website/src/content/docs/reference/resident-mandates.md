@@ -401,7 +401,7 @@ orbit resident metrics --baseline <task id>
 
 | Flag | Effect |
 |---|---|
-| `--mandate <task id>` | Reports one mandate. Without it, the report covers every mandate in the workspace and adds `totals`. |
+| `--mandate <task id>` | Reports one mandate: the named task, tagged or not, if it carries the mandate artifact. Without it, the report covers the workspace's `resident`-tagged mandates whose active span overlaps the window. |
 | `--since <window>` | The window start: a span such as `7d`, `24h` or `2w` (units `m`, `h`, `d`, `w`), an RFC 3339 instant or a `YYYY-MM-DD` date. Default 30 days. |
 | `--baseline <task id>` | Adds the same measures for an assignment a person worked interactively, for comparison. Alone, it reports only the baseline. |
 
@@ -410,7 +410,7 @@ Each mandate, `totals` and `baseline` get the same four measures:
 | Measure | What it counts in the window |
 |---|---|
 | Interventions | Times a person changed the course of the work: unprompted relays, plus comments, status changes and requeue, cancel, stop or takeover events a person wrote, on the assignment and the tasks it watches. Answers to escalations and grants do not count. |
-| Escalation load | Decision requests the resident raised, with the median seconds to an answer, the share answered with the recommended option, and the number that expired unanswered. |
+| Escalation load | Decision requests the resident raised, with the median seconds to an answer, the share answered with the recommended option, and the count in each state: answered, open, expired unanswered, or superseded (the binding stopped matching before an answer arrived). The four counts sum to the total. |
 | Reversal rate | The share of the resident's decisions and successful actions, from checkpoints in the window, that a person undid within 7 days: by a relay with `--reverses`, by moving the action's subject to `proposed` or `rejected`, or by recording a revert. |
 | Recovery cost | For cycles that ended without a complete checkpoint: the crashed cycles, the actions that ran a second time, and the slot minutes of the recovery cycles. `--json` adds the median and maximum time to the next complete checkpoint. |
 
@@ -418,16 +418,26 @@ Reading the numbers:
 
 - An author is a person when it is `human` or `operator`, or starts with
   `human:` or `human-`.
-- Interventions and escalations also show a rate per active mandate-day. Active
-  days run from the later of the mandate's creation and the window start to
-  now, rounded up, at least one.
+- Active days are the mandate's active span inside the window, rounded up, at
+  least one. The span starts at the later of the window start and the
+  mandate's activation, its earliest resident event (such as attaching the
+  mandate, its first cycle or its first checkpoint). It ends at the earliest of
+  a stop, a passed deadline, the assignment closing (done, archived or
+  rejected) or moving to `review`, and now. An unfiltered report omits a
+  mandate whose span does not overlap the window; `--mandate` always reports
+  its mandate.
+- Interventions show a rate per active mandate-day, and totals divide by the
+  sum of the mandates' active days. Escalations also show a rate per human-day.
+  That rate divides by the calendar days of the window, from `--since` to now,
+  rounded up, at least one, because one person handles escalations across the
+  whole window.
 - A rate is blank when there is nothing to judge. A baseline with no
   checkpoints reports `not_derivable` for reversal rate and recovery cost.
 - A watched task in another registered workspace on this machine contributes
   its history and decision requests, not its comments. A reference no
   registered workspace holds is listed under `references.unreachable`.
 
-`--json` returns `window` and `mandates`, plus `totals` and `baseline` when
-they apply. Each measure appears under two keys: `interventions` and
+`--json` returns `window` and `mandates`, plus `totals` (except for a
+`--baseline` run alone) and `baseline` when they apply. Each measure appears under two keys: `interventions` and
 `manual_interventions`, `escalations` and `escalation_load`, `reversals` and
 `reversal_rate`, `recovery` and `recovery_cost`.

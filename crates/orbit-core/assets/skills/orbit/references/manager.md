@@ -163,12 +163,15 @@ Residents report only through Orbit; there is no inbox to check.
   requests, checkpoints and audit rows. It reports manual interventions (per
   mandate and per active mandate-day), escalation load (per mandate-day and
   per human-day, median answer latency, share answered with the recommended
-  option, expired-unanswered), reversal rate (resident decisions and actions
-  a human undid within 7 days, each counted once), and crashed-cycle recovery
-  cost (cycles without a checkpoint, time to the next good checkpoint,
-  recovery slot minutes, repeated actions, human interventions needed). It
-  covers every resident mandate in the workspace with workspace totals unless
-  scoped, and it writes nothing. It is part of the `resident` toolset.
+  option, and the answered, open, expired-unanswered and superseded counts),
+  reversal rate (resident decisions and actions a human undid within 7 days,
+  each counted once), and crashed-cycle recovery cost (cycles without a
+  checkpoint, time to the next good checkpoint, recovery slot minutes, repeated
+  actions, human interventions needed). Unscoped, it covers the workspace's
+  `resident`-tagged mandates whose active span overlaps the window, with
+  workspace totals. `--mandate` reports the named task instead, tagged or not,
+  when it carries the mandate artifact, with totals over that one mandate. It
+  writes nothing. It is part of the `resident` toolset.
 
 Run it as `orbit resident metrics [--mandate <MANDATE>] [--since <SINCE>]
 [--baseline <BASELINE>]`, or call `orbit.resident.metrics` with the same
@@ -183,8 +186,11 @@ unmanaged work; a baseline measure that cannot be derived reports
 The digest is the operational view for the shift — state, open escalations,
 reversible decisions awaiting veto, top pains, pending proposals, plus
 metrics totals. The metrics report is the evidence behind those totals:
-per-mandate and per-day rates to read before a widening decision. To verify,
-run `orbit resident metrics --json` and read the returned measures.
+per-mandate and per-day rates to read before a widening decision. Per-mandate-day
+rates divide by each mandate's active days; the per-human-day escalation rate
+divides by the window's calendar days, because one person handles escalations
+across the whole window. To verify, run `orbit resident metrics --json` and
+read the returned measures.
 - `orbit.attention` — everything waiting on the human, including a stalled
   resident (`resident_stalled`: no checkpoint for twice its heartbeat,
   three `incomplete` checkpoints in a row, or its workspace's cycle routine

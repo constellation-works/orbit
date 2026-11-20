@@ -626,9 +626,12 @@ Measures that cannot be derived report `not_derivable`, never zero.
 **As implemented ([ORB-21247], updated in [ORB-25960]).** `orbit resident metrics [--mandate <task>] [--since <window>]
 [--baseline <task>]` (tool `orbit.resident.metrics`, read-only; `--since` takes a span such as
 `7d`, `24h` or `2w`, or an RFC 3339 instant, default `30d`) reports per mandate and, without
-`--mandate`, across mandates with workspace totals. Only `resident`-tagged tasks that carry a
-`resident/mandate.json` artifact are counted as mandates; tasks carrying the tag without the
-mandate artifact are excluded. Each mandate's active span is bounded by its activation (when
+`--mandate`, across mandates with workspace totals; `totals` is absent only for a `--baseline` run
+without `--mandate`, which reports the baseline alone. Without `--mandate`, only `resident`-tagged
+tasks that carry a `resident/mandate.json` artifact are counted as mandates; tagged tasks without
+the mandate artifact are excluded. `--mandate` checks the artifact only (`metrics.rs` explicit
+lookup): the named task counts when it carries the artifact, whatever its tags, and it is reported
+even when its active span does not overlap the window. Each mandate's active span is bounded by its activation (when
 `resident/mandate.json` was attached, or its earliest resident lifecycle event if the artifact was
 later edited) and its end (`resident_control` stop, passed mandate `deadline`, or closed/`review`
 assignment status), intersected with the report window `[start, now]`; unfiltered reports omit
@@ -641,10 +644,13 @@ each mandate, its bounded active span within the window rounded up to whole days
 (with a 1-day floor). `per_human_day` divides by **human calendar days**: the length of the report
 window (`window.days`, from `--since` to `now`, rounded up to whole days with a 1-day floor) for
 both individual mandates and `totals`, because one human operator fields escalations across the
-whole calendar window. A resident-raised escalation is a decision request named by a checkpoint
-`requests[]` or a `resident.request` record, or an agent-raised request on a task related to the
-assignment. Every counted escalation lands in exactly one state bucket among `answered`, `open`,
-`expired_unanswered` and `superseded` (`answered + open + expired_unanswered + superseded == count`).
+whole calendar window. Only escalations carry a per-human-day rate. A resident-raised escalation is a
+decision request named by a checkpoint `requests[]` or a `resident.request` record, or an
+agent-raised request on a task related to the assignment. Every counted escalation lands in exactly
+one state bucket among `answered`, `open`, `expired_unanswered` and `superseded`
+(`answered + open + expired_unanswered + superseded == count`): `superseded` is a request whose
+binding stopped matching before an answer arrived, and `expired_unanswered` is one whose expiry
+passed while it was still open.
 A reversal is counted once per checkpoint decision or completed action: a `resident.answer` with
 `reverses` naming the decision id or action key, or a human status write on the action's subject to
 `proposed` or `rejected` (or a revert), within 7 days of the checkpoint. Recovery cost counts
