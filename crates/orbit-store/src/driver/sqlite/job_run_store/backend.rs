@@ -422,6 +422,18 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         )
     }
 
+    fn drain_intent(&self) -> Result<Option<crate::contracts::DrainIntentRecord>, OrbitError> {
+        self.store.drain_intent_for_workspace(&self.workspace_id)
+    }
+
+    fn record_drain_intent(
+        &self,
+        record: &crate::contracts::DrainIntentRecord,
+    ) -> Result<(), OrbitError> {
+        self.store
+            .record_drain_intent_for_workspace(&self.workspace_id, record)
+    }
+
     fn insert_job_run(
         &self,
         job_id: &str,

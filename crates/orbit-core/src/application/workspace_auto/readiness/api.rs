@@ -21,6 +21,12 @@ pub struct FleetReadinessFacts {
 fn attach_readiness_runtime_fields(runtime: &OrbitRuntime, payload: &mut Value) {
     payload["replica"] = json!(runtime.replica_owner_machine().is_some());
     payload["validation_env_warning"] = json!(runtime.readiness_validation_env_warning());
+    // [ORB-25965] The recorded drain intent, with who paused it and when. An
+    // unreadable row is reported as such, never as `off`.
+    payload["drain_intent"] = match runtime.workspace_drain_intent() {
+        Ok(record) => crate::application::job::drain_intent_json(record.as_ref()),
+        Err(error) => json!({ "intent": "unknown", "error": error.to_string() }),
+    };
 }
 
 /// Explain the same snapshot that auto-drain uses without performing its

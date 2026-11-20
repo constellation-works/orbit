@@ -6,7 +6,7 @@ import { loadFleetSnapshot, paintRailDrainReading, repaintRailDrainFromFleet } f
 import { $, feedback, operationsState, pendingOperations, registerOperationsReset, runLink, selectedWorkspace, workspaceReadOnlyReason } from './operations-shared.js';
 import { taskList, taskState } from './task-shared.js';
 import { configureOperationsDrainControls, autoDrainConcurrencyValue, autoDrainStopButton, autoDrainStopNote, refreshDrainAfterAction, renderAutoDrainStart } from './operations-drain-controls.js';
-import { autoDrainBlocked, autoDrainCapacity, autoDrainCounts, autoDrainPhase, autoDrainPlural, autoDrainProviderAuth, autoDrainProviderLimitNote, autoDrainReasons, autoDrainShortRunId, autoDrainThrottleLine, autoDrainTimeLeft, updateDrainIndicators } from './operations-drain-capacity.js';
+import { autoDrainBlocked, autoDrainCapacity, autoDrainCounts, autoDrainIntentNote, autoDrainPhase, autoDrainPlural, autoDrainProviderAuth, autoDrainProviderLimitNote, autoDrainReasons, autoDrainShortRunId, autoDrainThrottleLine, autoDrainTimeLeft, updateDrainIndicators } from './operations-drain-capacity.js';
 
 let announcedDrainState = null;
 // Set while Start or Stop is refreshing the card after reporting its result, so
@@ -699,6 +699,7 @@ function renderAutoDrain(payload, generation = drainScopeGeneration) {
   renderAutoDrainHead(payload);
   const reasons = autoDrainReasons(payload, scope?.refusal);
   const holds = [
+    autoDrainIntentNote(payload),
     autoDrainThrottleLine(payload.capacity),
     autoDrainProviderLimitNote(payload.provider_limits),
     autoDrainProviderAuth(payload.provider_auth_failures),

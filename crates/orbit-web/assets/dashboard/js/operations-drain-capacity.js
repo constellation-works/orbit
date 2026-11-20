@@ -452,3 +452,41 @@ export function autoDrainProviderAuth(failures) {
   }
   return list;
 }
+
+// [ORB-25965] The workspace's drain intent: a hand Stop records "paused" with
+// who stopped it and when, a hand Start records "on". A pause always shows;
+// "on" and "off" show only while no drain is live, where they explain the
+// idle card. Older payloads without the field show nothing.
+export function autoDrainIntentNote(payload) {
+  const intent = payload?.drain_intent;
+  if (!intent || typeof intent !== "object" || typeof intent.intent !== "string") return null;
+  const { phase, pulling } = autoDrainPhase(payload);
+  const idle = phase === "idle" && !pulling;
+  const who = typeof intent.by === "string" && intent.by ? intent.by : "unknown";
+  const when = intent.at ? time(intent.at) : "";
+  let text = "";
+  let detail = "";
+  if (intent.intent === "paused") {
+    text = `Paused by ${who}${when ? ` · ${when}` : ""}`;
+    detail = [
+      `Drain intent: paused from ${intent.source || "an unknown surface"}.`,
+      typeof intent.reason === "string" && intent.reason ? `Reason: ${intent.reason}` : "",
+      "Starting a drain by hand lifts the pause.",
+    ].filter(Boolean).join("\n");
+  } else if (!idle) {
+    return null;
+  } else if (intent.intent === "on") {
+    text = `Intent on · last started by ${who}${when ? ` · ${when}` : ""}`;
+    detail = "The last hand action started a drain; none is live now.";
+  } else if (intent.intent === "off") {
+    text = "Intent off";
+    detail = "No drain has been started or stopped by hand since the intent was recorded.";
+  } else {
+    text = "Drain intent unreadable";
+    detail = typeof intent.error === "string" ? intent.error : "";
+  }
+  // The line ellipsizes at the phone dock width; the hint repeats it whole.
+  detail = [text, detail].filter(Boolean).join("\n");
+  const message = el("p", { class: "drain-slots", text });
+  return el("div", { class: "drain-slots-row" }, [message, infoHint(detail)]);
+}

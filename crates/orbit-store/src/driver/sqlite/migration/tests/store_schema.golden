@@ -577,3 +577,7 @@ v93 routine_breakers
 
 v94 job_run_crew_model_backfill
 
+v95 drain_intents
++ ["index","sqlite_autoindex_drain_intents_1","drain_intents",null]
++ ["table","drain_intents","drain_intents","CREATE TABLE drain_intents (\n                workspace_id TEXT PRIMARY KEY,\n                intent TEXT NOT NULL,\n                actor TEXT NOT NULL,\n                source TEXT NOT NULL,\n                reason TEXT,\n                updated_at TEXT NOT NULL\n            )"]
+

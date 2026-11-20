@@ -15,6 +15,7 @@ mod baseline;
 mod condition_triggers;
 mod crew_memory;
 mod crew_performance;
+mod drain_intent;
 mod evolution;
 mod executor_census;
 mod experiments;
@@ -57,6 +58,7 @@ use backlog_forecasts::apply_backlog_forecasts;
 use baseline::apply_baseline_schema;
 use condition_triggers::apply_condition_triggers;
 use crew_performance::{apply_agent_task_facts, apply_crew_performance_snapshot};
+use drain_intent::apply_drain_intents;
 use executor_census::apply_executor_census;
 use experiments::{
     apply_experiment_admissions, apply_experiment_delete, apply_experiments,

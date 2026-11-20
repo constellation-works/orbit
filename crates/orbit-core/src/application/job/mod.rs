@@ -110,6 +110,7 @@ pub use run::{
     run_error_step, run_execution_progress_to_json, run_upgrade_paused,
     trim_full_show_agent_invocation_answer,
 };
+pub(crate) use run::{DrainAdmissionWindow, drain_intent_json};
 pub(crate) use run::{
     RunOwnerLiveness, drain_deadline, pull_window_closed, run_owner_liveness,
     running_run_owner_is_stale,

@@ -55,6 +55,7 @@ mod reconcile;
 mod recorded;
 mod rescue_candidate;
 mod root_cause;
+mod standing_drain;
 #[cfg(feature = "test-support")]
 pub use root_cause::with_run_root_cause_write_hook;
 mod state_write;
@@ -99,6 +100,7 @@ pub use root_cause::{
     RunFailureCause, RunFailureContext, RunFailureContextProfile, RunFailureContextWarning,
     RunFailureEvidence, RunFailureRead, RunIncident, fold_run_incidents, run_upgrade_paused,
 };
+pub(crate) use standing_drain::{DrainAdmissionWindow, drain_intent_json};
 pub use types::{
     JobRunCancelOutcome, JobRunCancelResult, JobRunCancelResultProfile, JobRunListParams,
     JobRunOrder, UnstoppedChild, UnstoppedLeaf,

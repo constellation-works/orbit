@@ -310,6 +310,10 @@ pub trait JobRunStoreBackend: Send + Sync {
         Ok(self.get_job_run(run_id)?.map(|run| run.state))
     }
     fn list_pending_or_running_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError>;
+    /// This workspace's recorded drain intent; `None` is the default `off`.
+    fn drain_intent(&self) -> Result<Option<super::DrainIntentRecord>, OrbitError>;
+    /// Replace this workspace's drain intent with `record`.
+    fn record_drain_intent(&self, record: &super::DrainIntentRecord) -> Result<(), OrbitError>;
     fn insert_job_run(
         &self,
         job_id: &str,

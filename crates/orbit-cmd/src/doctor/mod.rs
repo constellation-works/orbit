@@ -55,6 +55,7 @@ mod retired_config;
 mod scan_workers;
 mod script_grants;
 mod seeding;
+mod standing_drain;
 mod system;
 mod task;
 mod worker_containment;

@@ -8,6 +8,7 @@ mod approvals;
 mod automation_port;
 mod classify;
 mod drains;
+mod idle_with_work;
 mod job_port;
 mod limiters;
 mod live_agents;
@@ -25,5 +26,6 @@ pub(crate) use approvals::{
 pub(crate) use classify::classify_workspace_auto_tasks;
 #[cfg(feature = "test-support")]
 pub use classify::release_failure_hook::with_reservation_release_failure;
+pub use idle_with_work::{IDLE_WITH_WORK_DAYS, IdleWithWork};
 pub use readiness::FleetReadinessFacts;
 pub(crate) use window::drain_window;

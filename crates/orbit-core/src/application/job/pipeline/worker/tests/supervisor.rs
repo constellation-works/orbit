@@ -120,6 +120,19 @@ impl JobRunStoreBackend for ReadFaultStore {
         self.inner.list_pending_or_running_job_runs(job_id)
     }
 
+    fn drain_intent(
+        &self,
+    ) -> Result<Option<orbit_store::contracts::DrainIntentRecord>, OrbitError> {
+        self.inner.drain_intent()
+    }
+
+    fn record_drain_intent(
+        &self,
+        record: &orbit_store::contracts::DrainIntentRecord,
+    ) -> Result<(), OrbitError> {
+        self.inner.record_drain_intent(record)
+    }
+
     fn insert_job_run(
         &self,
         job_id: &str,

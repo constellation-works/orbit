@@ -214,6 +214,7 @@ pub use application::search::{
 pub use application::task::LockContentionReport;
 pub use application::workflow::{CompletionPolicy, ShipMode, find_workflow, resolved_ship_mode};
 pub use application::workspace_auto::FleetReadinessFacts;
+pub use application::workspace_auto::{IDLE_WITH_WORK_DAYS, IdleWithWork};
 pub use application::workspace_live_runs::workspace_live_run_ids;
 pub use application::workspace_sync::{
     ManagedArtifactOutcome, ManagedArtifactScope, WorkspaceManagedArtifactSyncReport,

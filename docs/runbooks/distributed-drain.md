@@ -10,7 +10,7 @@ paths:
   - "crates/orbit-web/src/api/distributed.rs"
 related_features: [distributed-drain, federated-mcp, host-registry, remote-access]
 related_artifacts: [ORB-15639, ORB-14260, ORB-14194, ORB-13908, ORB-13941, ORB-14149, ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
-last_validated: 2026-10-25
+last_validated: 2026-11-20
 ---
 
 # Set Up and Recover a Single-Owner Distributed Drain
@@ -2645,6 +2645,50 @@ unregistered workspace ids. Each replicated workspace still needs its own
 routine, or a pass from that workspace, before its run audit and run state
 are pruned. A delivery- or state-triggered copy of the job stays owner work
 and is listed `owner-only`.
+
+## Drain intent (standing drain phase 1)
+
+Each workspace records one drain intent in its store, beside its drain runs
+([scope](../design/standing-drain/1_scope.md)):
+
+- `off`: the default. No drain has been started or stopped by hand since the
+  intent existed.
+- `paused`: the last hand action was a stop. `orbit run auto --stop` (with or
+  without `--force`), the dashboard's Stop and the desktop control's Stop record
+  it, with who stopped it (the acting identity), from which surface, the reason
+  if one was given, and when. A stop records the pause even when no drain was
+  live.
+- `on`: the last hand action was a start. `orbit run auto` from the CLI, the
+  dashboard or MCP records it, and so does `orbit run auto --pull` on a replica.
+  A routine-submitted run records nothing.
+
+Phase 1 only records and reports the intent. Nothing reads it to start, extend
+or refuse a drain, so drain behaviour is unchanged on every workspace and host,
+followers included, and no attention item is raised. If the write fails, the
+stop or start still succeeds and the failure is logged.
+
+Where to read it:
+
+- `orbit run readiness --json` has a `drain_intent` object: `intent` (`off`,
+  `on` or `paused`), and, once recorded, `by`, `source`, `at` and `reason`. An
+  unreadable row reports `intent: "unknown"` with `error`. The human output
+  prints a `Drain intent:` line.
+- The dashboard's Auto-drain card shows a pause, with who and when, in every
+  phase. While no drain is live it also shows `Intent on` or `Intent off`.
+- `orbit doctor` on the owner host has a `standing-drain` row (`skipped` on a
+  replica). It names the intent and reports the time over the last 7 UTC days,
+  today included, when `backlog` or `proposed` work existed but no auto drain
+  held an admission window. It also gives the same time summed per waiting
+  task (task-hours), the hours drains admitted, and one figure per UTC day. This
+  daily series is the idle-with-work figure the perf-review auto-task reads
+  (`orbit doctor --json`, row `standing-drain`).
+
+The idle figure is rebuilt on each read from task status histories and drain
+runs. A drain's admission window runs from its start until its deadline, an
+admissions stop, a cancel or its end, whichever comes first. The figure counts
+every `backlog` and `proposed` task as waiting, including those held by unmet
+dependencies or pilot refusals, so it is a ceiling on idle time with admissible
+work.
 
 ## Scheduled host shutdown or reboot
 

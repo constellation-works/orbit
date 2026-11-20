@@ -5,7 +5,7 @@ last_updated: 2026-11-20
 last_validated: 2026-11-20
 status: Draft
 stage: building
-next: "Phase 1 (intent and surfaces) is ORB-25965; the keeper, ORB-25991, follows it"
+next: "Phase 1 (intent and surfaces) is built; next is the keeper, ORB-25991"
 feature: standing-drain
 doc_role: scope
 type: design
@@ -247,9 +247,17 @@ and a mean of 6.36 M tokens including cache reads. Excluding cache reads it was 
 
 ## Phasing
 
-1. **Surface only ([ORB-25965]).** Add the intent, pause attribution, the owner-host
-   `standing-drain` doctor row, the readiness field and the daily idle-with-work figure. Nothing
-   is submitted. This shows the numbers before anything steers.
+1. **Surface only ([ORB-25965]), built.** The intent is a `drain_intents` store row (schema
+   v95). A hand stop (CLI, dashboard or desktop, forced or not) records `paused` with the acting
+   identity, surface, reason and time. A hand start from the CLI, dashboard or MCP, local or
+   `--pull`, records `on`; routine submissions record nothing. `orbit run readiness`
+   (`drain_intent`) and the dashboard's Auto-drain card show it. The owner host's `orbit doctor`
+   `standing-drain` row reports the idle-with-work hours, task-hours and a per-UTC-day series
+   for the last 7 days, rebuilt from task status histories and drain admission windows. That
+   series is the daily figure the perf review reads. It counts `backlog` and `proposed` tasks
+   as waiting, so it is a ceiling on admissible work. Nothing reads the intent, nothing is
+   submitted and no config key was added. Operation:
+   [distributed-drain runbook](../../runbooks/distributed-drain.md#drain-intent-standing-drain-phase-1).
 2. **Keeper ([ORB-25991]).** Clock-tick re-submission behind `workflow.standing_drain.enabled`,
    with the bounds, authority rules and audit events above. It depends on phase 1, gets an
    independent review, and is in that night's security review if it lands before it.
