@@ -2,7 +2,7 @@ use chrono::Utc;
 use orbit_common::fs::io::hold_step;
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_types::task::TaskStatus;
-use orbit_types::workflow::{ClaimFailureClass, ReviewGateHistoryNote};
+use orbit_types::workflow::{ClaimFailureClass, ReviewGateHistoryEvent, ReviewGateHistoryNote};
 
 use super::super::super::TaskCommitBoundary;
 use super::super::super::landing::LandingStop;
@@ -468,7 +468,8 @@ impl TaskCommitBoundary {
                                     &hold.candidate.commit,
                                     Some(reason),
                                 ));
-                            state.last_event = "review_awaiting_evidence".into();
+                            state.last_event =
+                                ReviewGateHistoryEvent::AwaitingEvidence.as_str().into();
                         // [ORB-14258] A release for a red base is recorded as the
                         // hold itself, so owner admission withholds the task until
                         // the command passes on a new base tip.

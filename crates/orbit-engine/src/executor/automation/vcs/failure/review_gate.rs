@@ -5,8 +5,8 @@ use orbit_common::OrbitError;
 use orbit_types::task::{TaskComment, TaskDecision, TaskStatus};
 use orbit_types::workflow::{
     FailureHandoffDecision, REVIEW_FIX_VALIDATION_FAILURE_SCHEMA_VERSION,
-    RecordedReviewFixValidationFailure, ReviewGateAdmissionOutput, ReviewGateHistoryNote,
-    ReviewGateRefusal,
+    RecordedReviewFixValidationFailure, ReviewGateAdmissionOutput, ReviewGateHistoryEvent,
+    ReviewGateHistoryNote, ReviewGateRefusal,
 };
 use serde_json::{Value, json};
 
@@ -112,7 +112,8 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         host.get_task_history(&task.id)?
             .iter()
             .filter(|entry| {
-                entry.event == "review_timeout_incomplete"
+                ReviewGateHistoryEvent::from_event(&entry.event)
+                    == Some(ReviewGateHistoryEvent::TimeoutIncomplete)
                     && entry.note.as_deref().is_some_and(|note| {
                         let parsed = ReviewGateHistoryNote::from_text(note);
                         parsed
@@ -133,7 +134,7 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
     let (status, event, decision) = if evidence_hold {
         (
             TaskStatus::InProgress,
-            "review_awaiting_evidence",
+            ReviewGateHistoryEvent::AwaitingEvidence.as_str(),
             FailureHandoffDecision::AwaitingReviewEvidence,
         )
     } else if timeout_exhausted {
@@ -145,7 +146,7 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
     } else if timed_out {
         (
             TaskStatus::Backlog,
-            "review_timeout_incomplete",
+            ReviewGateHistoryEvent::TimeoutIncomplete.as_str(),
             FailureHandoffDecision::IncompleteReviewTimeout,
         )
     } else {

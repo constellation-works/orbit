@@ -1,5 +1,7 @@
 //! Typed review-gate refusals the failure handoff decides on [ORB-15714].
 
+use super::ReviewGateHistoryEvent;
+
 /// Why the review gate stopped delivery, for the refusals the failure handoff
 /// treats differently from a generic step failure.
 ///
@@ -34,8 +36,8 @@ impl ReviewGateRefusal {
     #[must_use]
     pub const fn error_code(self) -> &'static str {
         match self {
-            Self::AwaitingEvidence => "review_awaiting_evidence",
-            Self::TimeoutIncomplete => "review_timeout_incomplete",
+            Self::AwaitingEvidence => ReviewGateHistoryEvent::AwaitingEvidence.as_str(),
+            Self::TimeoutIncomplete => ReviewGateHistoryEvent::TimeoutIncomplete.as_str(),
             Self::Abandoned => "review_abandoned",
             Self::Blocked => "review_gate_blocked",
         }

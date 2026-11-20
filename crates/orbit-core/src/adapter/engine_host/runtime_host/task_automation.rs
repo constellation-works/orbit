@@ -4,6 +4,7 @@ use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskStatus, push_external_ref_if_missing,
 };
+use orbit_types::workflow::ReviewGateHistoryEvent;
 use orbit_types::workflow::handoff::FindingInvalidReport;
 
 use crate::OrbitRuntime;
@@ -38,6 +39,11 @@ pub(super) fn apply_locked_task_automation_update(
             .find(|reference| reference.system == GITHUB_PR_EXTERNAL_REF_SYSTEM)
             .map(|reference| format!("pull request #{}", reference.id))
     });
+    let holds_evidence = update
+        .status_event
+        .as_deref()
+        .and_then(ReviewGateHistoryEvent::from_event)
+        == Some(ReviewGateHistoryEvent::AwaitingEvidence);
     let mut update = Some(update);
     let mut updated: Option<(Task, TaskStatus)> = None;
     runtime
@@ -49,7 +55,6 @@ pub(super) fn apply_locked_task_automation_update(
                     "task automation update body was invoked more than once".to_string(),
                 )
             })?;
-            let holds_evidence = update.status_event.as_deref() == Some("review_awaiting_evidence");
             updated = Some(apply_task_automation_update_under_lock(
                 runtime, task_id, update,
             )?);
