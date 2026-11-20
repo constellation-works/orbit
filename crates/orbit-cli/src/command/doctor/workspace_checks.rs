@@ -17,8 +17,11 @@ impl DoctorCommand {
     /// Only a plain health check qualifies: a focused subcommand or a repair
     /// flag needs the runtime it asked for. The plain check opens the
     /// runtime write-free, so a workspace whose stores were never created or
-    /// need a migration fails that open; the report then names the setup
-    /// step instead of the bare storage error (STD-01 §R31). A misplaced
+    /// whose stores need a migration fails that open; the report then names
+    /// the setup step instead of the bare storage error (STD-01 §R31). Stores
+    /// that exist but fail the open with a store error are the migration
+    /// case. Any other bootstrap failure with both stores present still
+    /// fails closed. A misplaced
     /// global `[plugin_enablement]` table, read straight from the host config
     /// because that table is what makes the layered config refuse to load, is
     /// reported alongside.
@@ -41,11 +44,14 @@ impl DoctorCommand {
         let misplaced = orbit_cmd::misplaced_plugin_enablement_row(&global_root);
         let missing_store = !global_root.join("orbit.db").exists()
             || !global_root.join("tasks").join("index.sqlite").exists();
-        if misplaced.is_none() && !missing_store {
+        let needs_migration = !missing_store && matches!(bootstrap, OrbitError::Store(_));
+        if misplaced.is_none() && !missing_store && !needs_migration {
             return None;
         }
         let remediation = if missing_store {
             "Run `orbit task list` once to create the workspace stores, then rerun `orbit doctor`."
+        } else if needs_migration {
+            "Run `orbit task list` once to migrate the workspace stores, then rerun `orbit doctor`."
         } else {
             "Fix the check above, then rerun `orbit doctor` for the full report."
         };

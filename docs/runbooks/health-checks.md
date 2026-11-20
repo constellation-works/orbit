@@ -21,8 +21,10 @@ A bare `orbit doctor` only observes: it does not reconcile stale job runs on ope
 orphaned run is reported by `job-runs` and left as it was found. It opens the workspace
 write-free: it never creates or migrates the store database or the task registry, and it
 upgrades no workspace layout, before it audits. A workspace whose stores were never created
-or still need a migration reports a `runtime` error row naming the setup step (run any
-ordinary command such as `orbit task list` once, then rerun `orbit doctor`). A workspace whose job definitions are not
+(`orbit init` and `orbit workspace init` do not create them), or whose stores exist but fail the
+open with a store error such as a ledger older than the binary, reports a `runtime` error row
+naming the setup step (run any ordinary command such as `orbit task list` once, then rerun
+`orbit doctor`); doctor leaves the stores as it found them. A workspace whose job definitions are not
 installed yet reports `pull-protocol` and `pull-gates` as `skipped` and names `orbit init`.
 Only the `--fix-*` repairs, `--remove-graph`, and `doctor admission-receipts --compact` open the
 writable runtime.

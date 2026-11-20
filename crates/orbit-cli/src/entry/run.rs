@@ -331,10 +331,11 @@ pub(crate) fn run() {
     let runtime = match bootstrapped {
         Ok(runtime) => runtime,
         Err(err) => {
-            // A misplaced host `[plugin_enablement]` table is what keeps the
-            // runtime from opening, so `orbit doctor` reports it from the
-            // file instead of failing with the bare refusal. Everything else
-            // fails closed.
+            // `orbit doctor` reports a runtime that would not open instead of
+            // failing with the bare refusal when the cause is a misplaced
+            // host `[plugin_enablement]` table (read from the file), a store
+            // that was never created, or a store that needs a writable
+            // migration. Everything else fails closed.
             if let command::Commands::Doctor(doctor) = &cli.command
                 && let Some(degraded) = doctor.degraded_report(root_override.as_deref(), &err)
             {
