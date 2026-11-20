@@ -49,10 +49,11 @@ pub use loader::{
 };
 pub(crate) use status::rewrite_enabled_line;
 pub use status::{
-    FireField, RoutineField, RoutineStatus, RoutineStatusReport, ScheduleDisplayState,
-    breaker_json, bypass_routine_breaker, pause_routine, project_fire, recent_fires,
-    reset_routine_breaker, resume_routine, routine_breaker_events, routine_statuses_with_providers,
-    select_listed_routine, set_routine_enabled, toggle_listed_routine,
+    FireField, RoutineBreakerAction, RoutineBreakerOutcome, RoutineField, RoutineStatus,
+    RoutineStatusReport, ScheduleDisplayState, breaker_json, control_listed_routine_breaker,
+    pause_routine, project_fire, recent_fires, resume_routine, routine_breaker_events,
+    routine_statuses_with_providers, select_listed_routine, set_routine_enabled,
+    toggle_listed_routine,
 };
 pub use sweep::{
     AutoTaskSweepReport, ExternalMergeSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome,

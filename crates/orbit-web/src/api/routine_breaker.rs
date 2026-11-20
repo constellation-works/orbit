@@ -9,14 +9,16 @@ use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_cmd::registry_routines::routine_statuses;
 use orbit_common::governance::authorization::DASHBOARD_ROUTINE_BREAKER;
-use orbit_core::application::routines::{bypass_routine_breaker, reset_routine_breaker};
+use orbit_core::application::routines::{
+    RoutineBreakerAction as CoreBreakerAction, RoutineEditRefusal, control_listed_routine_breaker,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::blocking;
 use super::routines::{
     OperationAudit, OperationsQuery, authorization_denied, authorized_caller, explicit_workspace,
-    named_entity_not_found, selection_conflict,
+    named_entity_not_found, routine_edit_refusal_reason, routine_edit_refused, selection_conflict,
 };
 use crate::state::{DashboardState, Ws};
 
@@ -70,22 +72,19 @@ pub(super) async fn control_routine_breaker(
     let (name, source, action) = (body.name.clone(), body.source.clone(), body.action);
     let outcome = match blocking("routine breaker", move || {
         let report = routine_statuses(&global_root)?;
-        let Some(status) = report
-            .statuses
-            .iter()
-            .find(|status| status.routine.definition.name == name)
-        else {
-            return Ok(Err(false));
+        let action = match action {
+            RoutineBreakerAction::Reset => CoreBreakerAction::Reset,
+            RoutineBreakerAction::Bypass => CoreBreakerAction::Bypass,
         };
-        if status.routine.source_workspace != source {
-            return Ok(Err(true));
-        }
-        let actor = "dashboard";
-        let changed = match action {
-            RoutineBreakerAction::Reset => reset_routine_breaker(&global_root, &name, actor)?,
-            RoutineBreakerAction::Bypass => bypass_routine_breaker(&global_root, &name, actor)?,
-        };
-        Ok(Ok(changed))
+        // The request names the source workspace but not its `.orbit` directory.
+        control_listed_routine_breaker(
+            &global_root,
+            &report,
+            &name,
+            Some((&source, None)),
+            action,
+            "dashboard",
+        )
     })
     .await
     {
@@ -98,20 +97,20 @@ pub(super) async fn control_routine_breaker(
         }
     };
     let changed = match outcome {
-        Ok(changed) => changed,
-        Err(false) => {
+        Ok(outcome) => outcome.changed(),
+        // An unlisted routine is a 404 with nothing to audit.
+        Err(RoutineEditRefusal::NotFound { .. }) => {
             return named_entity_not_found(
                 "routine_not_found",
                 format!("no routine named '{}' on this host", body.name),
             );
         }
-        Err(true) => {
-            let message = format!(
-                "routine '{}' is not defined by workspace '{}'; refresh and retry",
-                body.name, body.source
-            );
-            audit.failed(&caller, &message, started).await;
-            return selection_conflict("routine_source_changed", message);
+        // Owner authority and a source mismatch wrote nothing; audit and answer 409.
+        Err(refusal) => {
+            audit
+                .failed(&caller, &routine_edit_refusal_reason(&refusal), started)
+                .await;
+            return routine_edit_refused(&refusal);
         }
     };
     if !changed {

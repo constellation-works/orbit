@@ -4,7 +4,9 @@ use crate::command::{CommandOut, Payload};
 use clap::{Args, Subcommand};
 use orbit_cmd::registry_routines::routine_statuses;
 use orbit_core::OrbitError;
-use orbit_core::application::routines::{bypass_routine_breaker, reset_routine_breaker};
+use orbit_core::application::routines::{
+    RoutineBreakerAction, RoutineEditRefusal, control_listed_routine_breaker,
+};
 use serde_json::json;
 
 #[derive(Args)]
@@ -56,36 +58,36 @@ impl RoutineBreakerArgs {
     }
 
     pub fn execute_without_runtime(self, global_root: &Path) -> CommandOut {
-        let (name, reset) = match self.command {
-            RoutineBreakerSubcommand::Reset(target) => (target.name, true),
-            RoutineBreakerSubcommand::Bypass(target) => (target.name, false),
+        let (name, action) = match self.command {
+            RoutineBreakerSubcommand::Reset(target) => (target.name, RoutineBreakerAction::Reset),
+            RoutineBreakerSubcommand::Bypass(target) => (target.name, RoutineBreakerAction::Bypass),
         };
-        // A breaker is recorded by name; refuse a misspelt one rather than
-        // report that nothing was tripped.
         let report = routine_statuses(global_root)?;
-        if !report
-            .statuses
-            .iter()
-            .any(|status| status.routine.definition.name == name)
-        {
-            return Err(OrbitError::InvalidInput(format!(
-                "no routine named '{name}' (see `orbit routine list`)"
-            )));
-        }
-        let changed = if reset {
-            reset_routine_breaker(global_root, &name, "human")?
-        } else {
-            bypass_routine_breaker(global_root, &name, "human")?
-        };
-        let text = match (reset, changed) {
-            (true, true) => format!("reset the breaker of '{name}'; it fires as scheduled again"),
-            (false, true) => format!("'{name}' fires once on the next scheduler tick"),
+        // The shared routine selection; a breaker is host-local, so no source
+        // workspace narrows it. A misspelt name is refused rather than
+        // reported as not tripped.
+        let changed =
+            control_listed_routine_breaker(global_root, &report, &name, None, action, "human")?
+                .map_err(|refusal| match refusal {
+                    RoutineEditRefusal::NotFound { .. } => OrbitError::InvalidInput(format!(
+                        "no routine named '{name}' (see `orbit routine list`)"
+                    )),
+                    other => other.into(),
+                })?
+                .changed();
+        let text = match (action, changed) {
+            (RoutineBreakerAction::Reset, true) => {
+                format!("reset the breaker of '{name}'; it fires as scheduled again")
+            }
+            (RoutineBreakerAction::Bypass, true) => {
+                format!("'{name}' fires once on the next scheduler tick")
+            }
             (_, false) => format!("the breaker of '{name}' is not tripped on this host"),
         };
         Ok(Payload::detail(
             json!({
                 "routine": name,
-                "action": if reset { "reset" } else { "bypass" },
+                "action": action.as_str(),
                 "changed": changed,
             }),
             text,
