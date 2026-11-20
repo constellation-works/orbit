@@ -90,11 +90,12 @@ INLINE_TEST_FN = re.compile(r"^\s*#\[(?:test|tokio::test)\b", re.MULTILINE)
 
 
 def cfg_enables_test(expression: str) -> bool:
-    """True when a cfg expression names `test` outside any `not(...)`.
+    """True when a cfg expression names `test` under an even number of `not(...)`.
 
     `cfg(test)` and `cfg(any(test, feature = "x"))` select test builds;
     `cfg(not(test))` selects production code and must not be classified as
-    test-region. String literals are masked so `feature = "test"` is inert.
+    test-region, while `cfg(not(not(test)))` is equivalent to `cfg(test)`.
+    String literals are masked so `feature = "test"` is inert.
     """
     expression = re.sub(r'"(?:[^"\\]|\\.)*"', '""', expression)
     negations: list[bool] = []
@@ -105,7 +106,8 @@ def cfg_enables_test(expression: str) -> bool:
         elif token == ")":
             if negations:
                 negations.pop()
-        elif token == "test" and not any(negations):
+        # Each enclosing not(...) flips `test`; an even count cancels out.
+        elif token == "test" and sum(negations) % 2 == 0:
             return True
         previous = token
     return False
