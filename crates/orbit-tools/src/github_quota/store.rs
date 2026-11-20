@@ -342,11 +342,23 @@ impl GithubQuotaStore {
         self.directory.join(format!("{account}.json"))
     }
 
-    fn load(path: &Path) -> QuotaRecord {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
+    /// Read `path`, distinguishing a missing record (`NotFound`, initialized as
+    /// empty) from an existing unreadable or malformed record (returned so
+    /// callers preserve the bytes on disk).
+    fn load(path: &Path) -> io::Result<QuotaRecord> {
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(QuotaRecord::default());
+            }
+            Err(error) => return Err(error),
+        };
+        serde_json::from_str(&text).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("malformed quota record JSON: {error}"),
+            )
+        })
     }
 
     /// Read-modify-write `account`'s record under its exclusive lock.
@@ -358,7 +370,7 @@ impl GithubQuotaStore {
         let path = self.record_path(account);
         orbit_common::fs::io::create_private_dir_all(&self.directory)?;
         orbit_common::fs::io::with_exclusive_file_lock(&path, "github quota record", || {
-            let mut record = Self::load(&path);
+            let mut record = Self::load(&path)?;
             let output = change(&mut record);
             let text = serde_json::to_string(&record).map_err(io::Error::other)?;
             orbit_common::fs::io::atomic_write_text_volatile(&path, &text)?;
@@ -402,16 +414,24 @@ impl GithubQuotaStore {
             Err(error) => {
                 // A process that may read but not write the record (a
                 // sandboxed lane) still honours it, uncounted. One that cannot
-                // read it admits the read.
-                tracing::warn!(target: "orbit_tools::github_quota", %error,
-                    "GitHub quota record not writable; deciding from a read-only copy");
-                let record = Self::load(&self.record_path(account));
-                match record.resources.get(resource) {
-                    Some(entry) => match entry.refusal(policy, caller, resource, now) {
-                        Some(refusal) => Err(refusal),
-                        None => Ok(()),
-                    },
-                    None => Ok(()),
+                // read it preserves the file and admits the read.
+                match Self::load(&self.record_path(account)) {
+                    Ok(record) => {
+                        tracing::warn!(target: "orbit_tools::github_quota", %error,
+                            "GitHub quota record not writable; deciding from a read-only copy");
+                        match record.resources.get(resource) {
+                            Some(entry) => match entry.refusal(policy, caller, resource, now) {
+                                Some(refusal) => Err(refusal),
+                                None => Ok(()),
+                            },
+                            None => Ok(()),
+                        }
+                    }
+                    Err(read_error) => {
+                        tracing::warn!(target: "orbit_tools::github_quota", error = %read_error,
+                            "GitHub quota record unreadable; preserving record and admitting read");
+                        Ok(())
+                    }
                 }
             }
         }
@@ -431,41 +451,48 @@ impl GithubQuotaStore {
     ) {
         let interval = policy.refresh_seconds();
         let mut previous_claim = None;
-        let claim = self
-            .update(account, |record| {
-                // `now` was sampled before the lock, so a caller that waited
-                // behind a later claimant can hold an older time: that is
-                // inside the claim's interval, not due. Only a claim further
-                // ahead than one interval (a clock stepped back) is stale.
-                let due = record.refresh_claimed_at.is_none_or(|at| {
-                    if now < at {
-                        at - now > interval
-                    } else {
-                        now - at >= interval
-                    }
-                });
-                if due {
-                    previous_claim = record.refresh_claimed_at;
-                    record.refresh_claimed_at = Some(now);
-                    record.refresh_generation = record.refresh_generation.wrapping_add(1);
-                    record.refresh_in_flight = true;
-                    for entry in record.resources.values_mut() {
-                        entry.in_flight_debits = 0;
-                    }
-                    Some(record.refresh_generation)
+        let claim = match self.update(account, |record| {
+            // `now` was sampled before the lock, so a caller that waited
+            // behind a later claimant can hold an older time: that is
+            // inside the claim's interval, not due. Only a claim further
+            // ahead than one interval (a clock stepped back) is stale.
+            let due = record.refresh_claimed_at.is_none_or(|at| {
+                if now < at {
+                    at - now > interval
                 } else {
-                    None
+                    now - at >= interval
                 }
-            })
-            .ok()
-            .flatten();
+            });
+            if due {
+                previous_claim = record.refresh_claimed_at;
+                record.refresh_claimed_at = Some(now);
+                record.refresh_generation = record.refresh_generation.wrapping_add(1);
+                record.refresh_in_flight = true;
+                for entry in record.resources.values_mut() {
+                    entry.in_flight_debits = 0;
+                }
+                Some(record.refresh_generation)
+            } else {
+                None
+            }
+        }) {
+            Ok(claim) => claim,
+            Err(error) => {
+                tracing::warn!(target: "orbit_tools::github_quota", %error,
+                    "GitHub quota record unavailable; skipping refresh claim");
+                return;
+            }
+        };
         let Some(claim_generation) = claim else {
             return;
         };
         let answer = refresh();
-        let _ = self.update(account, |record| {
+        if let Err(error) = self.update(account, |record| {
             apply_answer(record, answer, now, claim_generation, previous_claim)
-        });
+        }) {
+            tracing::warn!(target: "orbit_tools::github_quota", %error,
+                "GitHub quota record unavailable; refresh answer not persisted");
+        }
     }
 
     /// The latest reset among `resources` that the record shows exhausted
@@ -483,7 +510,14 @@ impl GithubQuotaStore {
         refresh: &dyn Fn() -> RateLimitAnswer,
     ) -> Option<u64> {
         self.refresh_if_due(policy, account, now, refresh);
-        let record = Self::load(&self.record_path(account));
+        let record = match Self::load(&self.record_path(account)) {
+            Ok(record) => record,
+            Err(error) => {
+                tracing::warn!(target: "orbit_tools::github_quota", %error,
+                    "GitHub quota record unreadable; treating exhausted reset as unknown");
+                return None;
+            }
+        };
         resources
             .iter()
             .filter_map(|name| record.resources.get(*name)?.current(now))
@@ -504,7 +538,7 @@ impl GithubQuotaStore {
         throttle: &ProviderReadThrottle,
         now: u64,
     ) {
-        let _ = self.update(account, |record| {
+        if let Err(error) = self.update(account, |record| {
             let entry = record.resources.entry(resource.to_string()).or_default();
             let until = throttle
                 .reset_epoch_seconds
@@ -516,12 +550,21 @@ impl GithubQuotaStore {
             if entry.limit.is_some() {
                 entry.remaining = Some(0);
             }
-        });
+        }) {
+            tracing::warn!(target: "orbit_tools::github_quota", %error,
+                "GitHub quota record unavailable; throttle hold not persisted");
+        }
     }
 
     /// The operator's view of `account`'s record at `now`.
     pub fn status(&self, policy: &GithubQuotaPolicy, account: &str, now: u64) -> GithubQuotaStatus {
-        let record = Self::load(&self.record_path(account));
+        let (record, load_error) = match Self::load(&self.record_path(account)) {
+            Ok(record) => (record, None),
+            Err(error) => (
+                QuotaRecord::default(),
+                Some(bounded_error(&format!("quota record unreadable: {error}"))),
+            ),
+        };
         let resources = TRACKED_RESOURCES
             .iter()
             .map(|name| {
@@ -555,12 +598,16 @@ impl GithubQuotaStore {
         GithubQuotaStatus {
             account: account.to_string(),
             refreshed_at: record.refreshed_at.and_then(rfc3339),
-            refresh_error: record.refresh_error,
+            refresh_error: load_error.or(record.refresh_error),
             agent_reserve_percent: policy.agent_reserve_percent,
             background_reserve_percent: policy.background_reserve_percent,
             resources,
         }
     }
+}
+
+fn bounded_error(reason: &str) -> String {
+    reason.chars().take(MAX_ERROR_CHARS).collect()
 }
 
 fn apply_answer(
@@ -590,7 +637,7 @@ fn apply_answer(
             observed
         }
         RateLimitAnswer::Unknown(reason) | RateLimitAnswer::Clipped(reason) => {
-            record.refresh_error = Some(reason.chars().take(MAX_ERROR_CHARS).collect());
+            record.refresh_error = Some(bounded_error(&reason));
             BTreeMap::new()
         }
     };

@@ -693,3 +693,114 @@ fn refused_log_fallback_is_a_typed_throttle_for_unscoped_and_scoped_reads() {
     assert!(error.to_string().contains("log step not found"), "{error}");
     assert_eq!(calls.len(), 2, "{calls:?}");
 }
+
+/// Regression [ORB-26095]: an unreadable or partially malformed existing quota
+/// record must be preserved byte-for-byte across guard calls while admission
+/// stays fail-open and status surfaces the read/parse failure as unknown; a
+/// genuinely missing account file still initializes and counts normally.
+#[test]
+fn partially_malformed_record_survives_admit_and_reports_unknown_in_status() {
+    let records = TempDir::new().unwrap();
+    let policy = GithubQuotaPolicy::default();
+    let now = now();
+    let malformed_bytes =
+        br#"{"resources":{"core":{"calls":{"delivery":42,"agent":7},"remaining":"corrupt"}}}"#;
+    let record_path = records.path().join(format!("{ACCOUNT}.json"));
+    std::fs::write(&record_path, malformed_bytes).unwrap();
+
+    let refreshes = AtomicUsize::new(0);
+    store(records.path())
+        .admit(
+            &policy,
+            ACCOUNT,
+            GithubCaller::Agent,
+            RESOURCE_CORE,
+            now,
+            &|| {
+                refreshes.fetch_add(1, Ordering::SeqCst);
+                known(4000, now + 1800)
+            },
+        )
+        .expect("admission must stay fail-open on a malformed record");
+    assert_eq!(
+        refreshes.load(Ordering::SeqCst),
+        0,
+        "refresh probe must not run over an unreadable record"
+    );
+    assert_eq!(
+        std::fs::read(&record_path).unwrap(),
+        malformed_bytes,
+        "partially malformed record bytes must stay identical after admit"
+    );
+
+    let status = store(records.path()).status(&policy, ACCOUNT, now);
+    let error = status
+        .refresh_error
+        .as_deref()
+        .expect("status must surface the record read/parse failure");
+    assert!(
+        error.contains("unreadable") && error.contains("malformed"),
+        "unexpected refresh_error: {error}"
+    );
+    for resource in &status.resources {
+        assert_eq!(resource.state, "unknown");
+        assert_eq!(resource.remaining, None);
+        assert!(!resource.agent_reads_refused);
+    }
+
+    // Non-UTF-8 bytes also fail the read path before JSON parsing and stay intact.
+    let binary_account = "github.com-binary";
+    let binary_bytes = b"{\"calls\":42}\xff\xfe";
+    let binary_path = records.path().join(format!("{binary_account}.json"));
+    std::fs::write(&binary_path, binary_bytes).unwrap();
+    store(records.path())
+        .admit(
+            &policy,
+            binary_account,
+            GithubCaller::Agent,
+            RESOURCE_CORE,
+            now,
+            &|| known(4000, now + 1800),
+        )
+        .expect("admission must stay fail-open on an unreadable record");
+    assert_eq!(std::fs::read(&binary_path).unwrap(), binary_bytes);
+    let binary_status = store(records.path()).status(&policy, binary_account, now);
+    assert!(
+        binary_status
+            .refresh_error
+            .as_deref()
+            .is_some_and(|err| err.contains("unreadable")),
+        "{binary_status:?}"
+    );
+    assert!(
+        binary_status
+            .resources
+            .iter()
+            .all(|resource| resource.state == "unknown")
+    );
+
+    // A genuinely missing account file still initializes and counts calls.
+    let missing_account = "github.com-missing";
+    let before = store(records.path()).status(&policy, missing_account, now);
+    assert_eq!(before.refresh_error, None);
+    store(records.path())
+        .admit(
+            &policy,
+            missing_account,
+            GithubCaller::Agent,
+            RESOURCE_CORE,
+            now,
+            &|| known(4000, now + 1800),
+        )
+        .unwrap();
+    let after = store(records.path()).status(&policy, missing_account, now);
+    assert_eq!(after.refresh_error, None);
+    let core = after
+        .resources
+        .iter()
+        .find(|resource| resource.resource == RESOURCE_CORE)
+        .unwrap();
+    assert_eq!(core.state, "known");
+    assert_eq!(core.calls.agent, 1);
+    assert_eq!(core.remaining, Some(3999));
+}
