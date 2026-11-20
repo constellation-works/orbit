@@ -79,7 +79,7 @@ export function forecastCount(value) {
 // history-level counters describe a shared pool and must not be added.
 // A missing counter in either population stays unknown, never a measured zero.
 export function proposedForecastCoverage(payload) {
-  const keys = ["tasks", "uncosted", "uncovered_model", "no_history", "regression_history_missing", "risk_unestimated", "regression_history_thin"];
+  const keys = ["tasks", "uncosted", "uncovered_model", "no_history", "regression_history_missing", "regression_history_bounded", "risk_unestimated", "regression_history_thin"];
   return Object.fromEntries(keys.map((key) => {
     const current = payload.coverage?.[key];
     const proposed = payload.proposed_coverage?.[key];
@@ -114,8 +114,7 @@ function taskPredictions(forecast) {
   return Array.isArray(forecast?.task_predictions) ? forecast.task_predictions : [];
 }
 
-function regressionGapReasons(forecast) {
-  const gaps = forecast?.unavailable?.regression_history_gaps;
+function gapReasonCounts(gaps) {
   if (!gaps || typeof gaps !== "object" || Array.isArray(gaps)) return [];
   const preferred = REGRESSION_GAP_REASON_ORDER.filter((key) => Object.prototype.hasOwnProperty.call(gaps, key));
   const rest = Object.keys(gaps).filter((key) => !REGRESSION_GAP_REASON_ORDER.includes(key));
@@ -123,6 +122,53 @@ function regressionGapReasons(forecast) {
     const count = forecastCount(gaps[key]);
     return count > 0 ? [{ key, count, label: regressionGapReasonLabel(key) }] : [];
   });
+}
+
+function regressionGapReasons(forecast) {
+  return gapReasonCounts(forecast?.unavailable?.regression_history_gaps);
+}
+
+function formatGapShare(value) {
+  const n = num(value);
+  if (n == null) return "—";
+  const pct = n * 100;
+  if (pct > 0 && pct < 0.1) return "<0.1%";
+  const tenths = Math.round(pct * 10) / 10;
+  return Number.isInteger(tenths) ? `${tenths}%` : `${tenths.toFixed(1)}%`;
+}
+
+/// Bounded regression-gap qualification for an available scenario.
+/// Null when unavailable, when regression rework was withheld, or when
+/// the scenario's sampled pools hold no bounded gaps.
+export function forecastBoundedGap(forecast) {
+  if (!forecast || typeof forecast !== "object") return null;
+  if (forecast.regression_rework?.available === false || forecastUnavailableInfo(forecast)) return null;
+  const gap = forecast.regression_rework?.bounded_gap;
+  if (!gap || typeof gap !== "object" || Array.isArray(gap)) return null;
+  const gaps = forecastCount(gap.gaps);
+  if (!gaps) return null;
+  const drawnFixes = forecastCount(gap.drawn_fixes);
+  const observations = gaps + drawnFixes;
+  const tasks = forecastCount(gap.tasks);
+  const share = num(gap.gap_share) ?? (observations > 0 ? gaps / observations : null);
+  const shareText = formatGapShare(share);
+  const maxShare = num(gap.max_gap_share);
+  const maxShareText = maxShare != null ? formatGapShare(maxShare) : null;
+  const reasons = gapReasonCounts(gap.by_reason);
+  const reasonPhrase = reasons.map((reason) => `${reason.label} ${reason.count}`).join(", ");
+  const compact = `${gaps} of ${observations} fix observation${observations === 1 ? "" : "s"} missing (${shareText})`;
+  const summary = `Bounded regression gaps: ${compact}.`;
+  const scopeParts = [
+    tasks ? `${tasks} task${tasks === 1 ? "" : "s"} sample${tasks === 1 ? "s" : ""} a bounded regression pool` : "Sampled regression pools hold bounded gaps",
+    `${gaps} missing + ${drawnFixes} drawn fix${drawnFixes === 1 ? "" : "es"} = ${shareText}`,
+    reasonPhrase,
+    maxShareText ? `cap ${maxShareText}` : "",
+  ].filter(Boolean);
+  const detail = `${scopeParts[0]} (${scopeParts.slice(1).join("; ")}). Measured bundles stand in for unmeasured fixes.`;
+  return {
+    tasks, gaps, drawnFixes, observations, share, shareText, maxShare, maxShareText,
+    reasons, reasonPhrase, compact, summary, detail,
+  };
 }
 
 export function regressionGapReasonPhrase(forecast) {
@@ -307,6 +353,7 @@ export function backlogForecastSummary(payload) {
       tokens: quantilePair(forecast.tokens) ? formatForecastQuantileRange(forecast.tokens, formatForecastTokens) : null,
       bars: backlogBarQuantiles(forecast),
       references: backlogBarReferences(forecast.pre_regression_baseline),
+      boundedGap: forecastBoundedGap(forecast),
       scope, counts, freshness,
     };
   }
@@ -443,16 +490,19 @@ export function drainBacklogForecastLink(summary) {
   }
   const detail = [
     summary.freshness, summary.counts, ...(summary.scope?.lines || []),
+    summary.boundedGap?.detail,
     summary.drain && `Time to drain ${summary.drain}`, summary.cost && `Cost ${summary.cost}`,
     summary.tokens && `Tokens ${summary.tokens}`, summary.exactCost && `Exact cost ${summary.exactCost}`,
   ].filter(Boolean).join(" · ");
-  const accessibleDetail = [summary.counts, summary.exactCost && `Exact cost ${summary.exactCost}`].filter(Boolean).join(" · ");
+  const accessibleDetail = [summary.counts, summary.boundedGap?.summary, summary.exactCost && `Exact cost ${summary.exactCost}`].filter(Boolean).join(" · ");
   link.title = `p50 – p90 · ${detail}\nAnalytics › Forecast`;
+  if (summary.boundedGap) link.dataset.boundedGap = "true";
   const bars = backlogBarList(summary.bars, summary.references, "");
   link.append(...[
     el("span", { class: "drain-section-label", text: "Backlog" }),
     el("span", { class: "drain-forecast-meta drain-backlog-forecast-freshness", text: summary.freshness }),
     bars,
+    summary.boundedGap ? el("span", { class: "drain-forecast-meta drain-backlog-forecast-gap", text: summary.boundedGap.compact }) : null,
     summary.scope?.compact ? el("span", { class: "drain-forecast-meta drain-backlog-forecast-scope", text: summary.scope.compact }) : null,
     summary.references ? el("span", { class: "drain-backlog-forecast-legend", text: "pre-regression baseline p50" }) : null,
     el("span", { class: "visually-hidden", text: ` p50 – p90, ${accessibleDetail}` }),

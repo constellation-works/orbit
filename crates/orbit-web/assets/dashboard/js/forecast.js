@@ -32,7 +32,7 @@ import {
   COMPLEXITY_LABELS, scheduleShowsReview,
 } from './forecast-shared.js';
 import {
-  UNREPORTED_FORECAST_REASON, forecastUnavailableInfo, forecastBaselineFigures, formatForecastHours,
+  UNREPORTED_FORECAST_REASON, forecastBoundedGap, forecastUnavailableInfo, forecastBaselineFigures, formatForecastHours,
   formatForecastQuantileRange, formatForecastTokens, formatForecastUsd, fmtParallelism, fmtRank, fmtRate,
   fmtShare, forecastCount, hasHorizonCensoringEvidence, num, quantilePair, recordedPoolsContainGaps,
   regressionGapBecause, regressionHistoryIsAbsent, forecastDrainScope,
@@ -47,7 +47,7 @@ import {
 
 export {
   backlogForecastFailureSummary, backlogForecastSummary, drainBacklogForecastLink, forecastBaselineFigures,
-  forecastUnavailableInfo, formatForecastHours, formatForecastQuantileRange, formatForecastTokens, formatForecastUsd,
+  forecastBoundedGap, forecastUnavailableInfo, formatForecastHours, formatForecastQuantileRange, formatForecastTokens, formatForecastUsd,
 } from './forecast-summary.js';
 
 const $ = (id) => document.getElementById(id);
@@ -605,7 +605,10 @@ function arrivalsApprovedLine(scenario) {
   const coverage = forecastSummary.proposedForecastCoverage(view.payload);
   const figures = forecastUnavailableInfo(approved, { coverage }) ? approved.pre_regression_baseline : approved;
   if (!quantilePair(figures?.time_to_drain_hours) && !quantilePair(figures?.usd) && !quantilePair(figures?.tokens)) return null;
-  const basis = figures === approved ? "" : " (pre-regression baseline)";
+  const approvedGap = figures === approved ? forecastBoundedGap(approved) : null;
+  const basis = figures !== approved
+    ? " (pre-regression baseline)"
+    : approvedGap ? ` (${approvedGap.compact})` : "";
   return `If proposed work is also approved${basis}: drain ${formatForecastQuantileRange(figures.time_to_drain_hours, formatForecastHours)}, cost ${formatForecastQuantileRange(figures.usd, formatForecastUsd)}, tokens ${formatForecastQuantileRange(figures.tokens, formatForecastTokens)}.`;
 }
 
@@ -629,11 +632,12 @@ function tileValue(quantiles, fmt, missing) {
   return { text: text ?? missing, known: text != null };
 }
 
-function adjustedTiles(scenario) {
+function adjustedTiles(scenario, boundedGap = forecastBoundedGap(scenario.source)) {
   const { source } = scenario;
   const inputs = view.payload.inputs || {};
   const parallelism = rangeText(source.effective_parallelism, fmtParallelism);
   const criticalPath = rangeText(source.critical_path_hours, formatForecastHours);
+  const gapLine = boundedGap?.detail ?? null;
   return [
     totalTile("Time to drain", tileValue(source.time_to_drain_hours, formatForecastHours, "Unknown"), [
       drainReason(scenario, source.time_to_drain_hours),
@@ -642,9 +646,10 @@ function adjustedTiles(scenario) {
       parallelism ? `Effective parallelism ${parallelism} of ${inputs.concurrency ?? "?"} slots, averaged over the drain.` : null,
       criticalPath ? `Critical path ${criticalPath}: the longest dependency chain.` : null,
       arrivalsApprovedLine(scenario),
+      gapLine,
     ], "fc-kpi"),
-    totalTile("Cost", tileValue(source.usd, formatForecastUsd, "Unknown"), [metricReason(scenario, source.usd, "usd"), costedLine(scenario)], "fc-kpi"),
-    totalTile("Tokens", tileValue(source.tokens, formatForecastTokens, "Unknown"), [metricReason(scenario, source.tokens, "tokens")], "fc-kpi"),
+    totalTile("Cost", tileValue(source.usd, formatForecastUsd, "Unknown"), [metricReason(scenario, source.usd, "usd"), costedLine(scenario), gapLine], "fc-kpi"),
+    totalTile("Tokens", tileValue(source.tokens, formatForecastTokens, "Unknown"), [metricReason(scenario, source.tokens, "tokens"), gapLine], "fc-kpi"),
   ];
 }
 
@@ -745,6 +750,13 @@ function emptyState(title, detail) {
   ]);
 }
 
+function boundedGapNote(gap) {
+  if (!gap) return null;
+  const hint = pinnedInfoHint(gap.detail);
+  hint.classList.add("warn");
+  return el("p", { class: "fc-line fc-bounded-gap", role: "note" }, [gap.summary, hint]);
+}
+
 function totalsNodes(scenario) {
   const { source, info } = scenario;
   const inputs = view.payload.inputs || {};
@@ -755,7 +767,10 @@ function totalsNodes(scenario) {
       : `No task finished with recorded agent runs in the last ${inputs.lookback_days} days or among the newest ${inputs.min_history_tasks ?? 50} completions. Widen the history.`)];
   }
   if (!info) {
-    return [el("section", { class: "fc-figures", "aria-label": "Totals" }, adjustedTiles(scenario)), subsetNote(source)];
+    const boundedGap = forecastBoundedGap(source);
+    const figures = el("section", { class: "fc-figures", "aria-label": "Totals" }, adjustedTiles(scenario, boundedGap));
+    if (boundedGap) figures.dataset.boundedGap = "true";
+    return [figures, boundedGapNote(boundedGap), subsetNote(source)];
   }
   const hasBaseline = Boolean(forecastBaselineFigures(source.pre_regression_baseline));
   const figures = el("section", { class: hasBaseline ? "fc-figures fc-baseline" : "fc-figures", "aria-label": "Totals" }, withheldTiles(scenario));
