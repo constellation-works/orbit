@@ -10,7 +10,12 @@ fn redacted(source: &[u8]) -> RedactedLog {
 }
 
 fn key(name: &str) -> LogCacheKey {
-    LogCacheKey::job("acme/orbit", "1", name, "failed")
+    LogCacheKey::job(
+        "https://api.github.com/repos/acme/orbit",
+        "1",
+        name,
+        "failed",
+    )
 }
 
 fn age(cache_dir: &std::path::Path, by: Duration) {

@@ -72,15 +72,18 @@ pub(crate) struct LogCacheKey(String);
 impl LogCacheKey {
     /// One completed job's log. GitHub gives every attempt's jobs new job ids,
     /// so a completed job id names one immutable log whatever the run does
-    /// afterwards.
-    pub(crate) fn job(repository: &str, run_id: &str, job_id: &str, scope: &str) -> Self {
-        Self::digest(&["job", repository, run_id, job_id, scope])
+    /// afterwards. `source` is the host and repository GitHub resolved for the
+    /// job (see `logs.rs`), never the request's `owner/name` or `{owner}/{repo}`
+    /// text: the same placeholder names a different repository in each checkout.
+    pub(crate) fn job(source: &str, run_id: &str, job_id: &str, scope: &str) -> Self {
+        Self::digest(&["job", source, run_id, job_id, scope])
     }
 
     /// One completed attempt of a run. A rerun keeps the run id, so the attempt
     /// is what keeps its log apart from the earlier one.
-    pub(crate) fn run_attempt(repository: &str, run_id: &str, attempt: u64, scope: &str) -> Self {
-        Self::digest(&["run", repository, run_id, &attempt.to_string(), scope])
+    /// `source` is as for [`Self::job`].
+    pub(crate) fn run_attempt(source: &str, run_id: &str, attempt: u64, scope: &str) -> Self {
+        Self::digest(&["run", source, run_id, &attempt.to_string(), scope])
     }
 
     fn digest(parts: &[&str]) -> Self {

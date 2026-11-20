@@ -22,6 +22,7 @@ impl FakeGh {
              [ \"$1\" = --warm-up ] && exit 0\n\
              dir=$(dirname \"$0\")\n\
              printf '%s\\n' \"$*\" >> \"$dir/calls\"\n\
+             [ -e \"$dir/denied\" ] && { echo 'HTTP 404: Not Found' >&2; exit 1; }\n\
              case \"$*\" in\n\
                *actions/jobs/*) cat \"$dir/job.json\" ;;\n\
                *actions/runs/*) cat \"$dir/run.json\" ;;\n\
@@ -62,13 +63,56 @@ impl FakeGh {
         std::fs::write(self.dir.path().join("log"), text).unwrap();
     }
 
+    /// The host and repository GitHub resolves for every status answer.
+    fn source(&self) -> String {
+        std::fs::read_to_string(self.dir.path().join("source"))
+            .unwrap_or_else(|_| "https://api.github.com/repos/acme/orbit".to_string())
+    }
+
+    /// Point every later status answer at another repository, as a checkout
+    /// change does for a request that names `{owner}/{repo}`.
+    fn set_source(&self, source: &str) {
+        std::fs::write(self.dir.path().join("source"), source).unwrap();
+        let (job, run) = (self.job_status(), self.run_status());
+        self.set_job(&job);
+        self.set_run(&run.0, run.1);
+    }
+
+    /// Refuse every later call, as GitHub does a caller that lost access.
+    fn deny(&self) {
+        std::fs::write(self.dir.path().join("denied"), "").unwrap();
+    }
+
+    fn job_status(&self) -> String {
+        std::fs::read_to_string(self.dir.path().join("job.json"))
+            .ok()
+            .and_then(|body| serde_json::from_str::<Value>(&body).ok())
+            .and_then(|view| view["status"].as_str().map(ToString::to_string))
+            .unwrap_or_else(|| "completed".to_string())
+    }
+
+    fn run_status(&self) -> (String, u64) {
+        std::fs::read_to_string(self.dir.path().join("run.json"))
+            .ok()
+            .and_then(|body| serde_json::from_str::<Value>(&body).ok())
+            .map(|view| {
+                (
+                    view["status"].as_str().unwrap_or("completed").to_string(),
+                    view["run_attempt"].as_u64().unwrap_or(1),
+                )
+            })
+            .unwrap_or_else(|| ("completed".to_string(), 1))
+    }
+
     fn set_job(&self, status: &str) {
-        let body = json!({"id": 9, "run_id": 123, "status": status});
+        let url = format!("{}/actions/jobs/9", self.source());
+        let body = json!({"id": 9, "run_id": 123, "status": status, "url": url});
         std::fs::write(self.dir.path().join("job.json"), body.to_string()).unwrap();
     }
 
     fn set_run(&self, status: &str, attempt: u64) {
-        let body = json!({"id": 123, "status": status, "run_attempt": attempt});
+        let url = format!("{}/actions/runs/123", self.source());
+        let body = json!({"id": 123, "status": status, "run_attempt": attempt, "url": url});
         std::fs::write(self.dir.path().join("run.json"), body.to_string()).unwrap();
     }
 
@@ -154,9 +198,9 @@ fn two_windows_of_a_completed_job_download_its_log_once() {
         gh.calls()
     );
     assert_eq!(
-        gh.calls(),
-        calls_after_first,
-        "a cache hit makes no gh call at all"
+        gh.calls()[calls_after_first.len()..],
+        ["api --method GET repos/{owner}/{repo}/actions/jobs/9".to_string()],
+        "a cache hit makes only the status request that proves current access"
     );
     assert!(a["text"].as_str().unwrap().contains("first line 1"));
     assert!(b["text"].as_str().unwrap().contains("first line 5"));
@@ -260,5 +304,56 @@ fn every_input_shape_renders_identically_cold_warm_and_uncached() {
         let warm = rendered(&gh.requests(input.clone(), Some(&cache)), max_bytes);
         assert_eq!(cold, uncached, "cold cache: {input} max_bytes={max_bytes}");
         assert_eq!(warm, uncached, "warm cache: {input} max_bytes={max_bytes}");
+    }
+}
+
+/// ORB-25901: a cached log is served only to a caller whose own status request
+/// succeeds today, and only for the repository that request resolved.
+#[test]
+fn a_cached_log_is_not_served_once_access_is_refused() {
+    for input in [json!({"job": "9"}), json!({"scope": "all"})] {
+        let gh = FakeGh::new();
+        let root = TempDir::new().unwrap();
+        let cache = cache_dir(&root);
+        let warm = rendered(&gh.requests(input.clone(), Some(&cache)), 4096);
+        assert!(warm["text"].as_str().unwrap().contains("first line 1"));
+        assert_eq!(entries(&cache), 1, "{input}");
+
+        gh.deny();
+        let refused = rendered(&gh.requests(input.clone(), Some(&cache)), 4096);
+
+        assert!(
+            refused["error"].is_string(),
+            "{input}: a provider refusal stays an error: {refused}"
+        );
+        assert_eq!(
+            gh.downloads(),
+            2,
+            "{input}: the refused read still asks the provider"
+        );
+    }
+}
+
+#[test]
+fn a_cached_log_is_not_served_for_another_resolved_repository() {
+    for input in [json!({"job": "9"}), json!({"scope": "all"})] {
+        let gh = FakeGh::new();
+        let root = TempDir::new().unwrap();
+        let cache = cache_dir(&root);
+        // The same `{owner}/{repo}` request, before and after the checkout it
+        // runs in moves to another repository that reuses the ids.
+        let first = rendered(&gh.requests(input.clone(), Some(&cache)), 4096);
+        assert!(first["text"].as_str().unwrap().contains("first line 1"));
+
+        gh.set_source("https://api.github.com/repos/other/repo");
+        gh.set_log(&numbered_log("other"));
+        let second = rendered(&gh.requests(input.clone(), Some(&cache)), 4096);
+
+        assert!(
+            second["text"].as_str().unwrap().contains("other line 1"),
+            "{input}: another repository's read never returns the first one's log"
+        );
+        assert_eq!(gh.downloads(), 2, "{input}");
+        assert_eq!(entries(&cache), 2, "{input}");
     }
 }

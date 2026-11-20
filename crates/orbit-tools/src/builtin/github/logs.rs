@@ -597,7 +597,8 @@ fn stream_log_source(
 }
 
 /// The run-scoped `gh run view --log*` read, served from the log cache when
-/// the job or run it names is completed and its log is already held.
+/// a current status request shows the job or run it names completed under the
+/// caller's access and its log is already held for the resolved repository.
 ///
 /// The cache holds a masked copy of the source (see `log_cache.rs`) with the
 /// source's lengths, and every read of a cacheable log, the one that fills the
@@ -646,29 +647,31 @@ fn run_scoped_log(
         return read(false).map(|(log, _)| log);
     };
     let scope = requests.scope.as_str();
-    let repository = requests.repository.as_str();
 
-    // A completed job id names one immutable log, so a hit needs no GitHub
-    // call. Completion is learned on the miss that fetches the log.
+    // A completed job id names one immutable log, so a hit needs no download.
+    // It still needs the status request: that request runs under the current
+    // credential and checkout, so it is what proves this caller may read the
+    // job today, and what resolves the host and repository the entry belongs
+    // to (the request's own `{owner}/{repo}` placeholders resolve to whatever
+    // the checkout points at). A refused or unreadable status request is a
+    // plain read, which reports the provider's own error.
     if let Some(job) = &requests.job {
-        let key = LogCacheKey::job(repository, &requests.run_id, job, scope);
+        let Some(source) = completed_job_source(requests, job, guard) else {
+            return read(false).map(|(log, _)| log);
+        };
+        let key = LogCacheKey::job(&source, &requests.run_id, job, scope);
         if let Some(cached) = cache.get(&key) {
             return Ok(replay(&cached));
         }
-        let completed = job_is_completed(requests, job, guard);
-        let read = read(completed)?;
-        if completed {
-            return Ok(store(&key, cache, read));
-        }
-        return Ok(read.0);
+        return Ok(store(&key, cache, read(true)?));
     }
 
     // A rerun keeps the run id and puts the run back in progress, so each read
     // first asks which attempt the run is at and whether it has completed.
-    let Some(attempt) = completed_run_attempt(requests, guard) else {
+    let Some((source, attempt)) = completed_run_attempt(requests, guard) else {
         return read(false).map(|(log, _)| log);
     };
-    let key = LogCacheKey::run_attempt(repository, &requests.run_id, attempt, scope);
+    let key = LogCacheKey::run_attempt(&source, &requests.run_id, attempt, scope);
     if let Some(cached) = cache.get(&key) {
         return Ok(replay(&cached));
     }
@@ -689,32 +692,35 @@ fn read_api_json(
     serde_json::from_str(&result.stdout).ok()
 }
 
-/// Whether GitHub reports this job of this run completed.
-fn job_is_completed(
+/// The resolved source of a completed job of this run: the host and repository
+/// GitHub itself reports for the job (its `url`, minus the job endpoint), or
+/// `None` when the job is not reported completed, is not this run's job, or
+/// the status request failed or named no source.
+fn completed_job_source(
     requests: &RunLogRequests,
     job: &str,
     guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
-) -> bool {
+) -> Option<String> {
     let request = requests.api_request(format!("repos/{}/actions/jobs/{job}", requests.repository));
-    read_api_json(request, guard).is_some_and(|view| {
-        view.get("id")
-            .and_then(Value::as_u64)
-            .map(|id| id.to_string())
-            .as_deref()
-            == Some(job)
-            && view
-                .get("run_id")
-                .and_then(Value::as_u64)
-                .is_some_and(|run| run.to_string() == requests.run_id)
-            && view.get("status").and_then(Value::as_str) == Some("completed")
-    })
+    let view = read_api_json(request, guard)?;
+    let this_job = view.get("id").and_then(Value::as_u64)?.to_string() == job;
+    let this_run = view
+        .get("run_id")
+        .and_then(Value::as_u64)
+        .is_some_and(|run| run.to_string() == requests.run_id);
+    let completed = view.get("status").and_then(Value::as_str) == Some("completed");
+    if !(this_job && this_run && completed) {
+        return None;
+    }
+    resolved_source(&view, &format!("/actions/jobs/{job}"))
 }
 
-/// The attempt number of this run when GitHub reports it completed.
+/// The resolved source and attempt number of this run when GitHub reports it
+/// completed.
 fn completed_run_attempt(
     requests: &RunLogRequests,
     guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
-) -> Option<u64> {
+) -> Option<(String, u64)> {
     let request = requests.api_request(format!(
         "repos/{}/actions/runs/{}",
         requests.repository, requests.run_id
@@ -725,7 +731,18 @@ fn completed_run_attempt(
     if !(this_run && completed) {
         return None;
     }
-    view.get("run_attempt").and_then(Value::as_u64)
+    let source = resolved_source(&view, &format!("/actions/runs/{}", requests.run_id))?;
+    Some((source, view.get("run_attempt").and_then(Value::as_u64)?))
+}
+
+/// The host and repository a status payload names: its API `url` with the
+/// `endpoint` it must end in removed (`https://api.github.com/repos/o/n`).
+/// `None` when the payload carries no such URL, so an entry is never filed
+/// under a source nobody resolved.
+fn resolved_source(view: &Value, endpoint: &str) -> Option<String> {
+    let url = view.get("url").and_then(Value::as_str)?;
+    let source = url.strip_suffix(endpoint)?;
+    (source.starts_with("https://") || source.starts_with("http://")).then(|| source.to_string())
 }
 
 /// One job whose own log may stand in for an empty run-scoped read.

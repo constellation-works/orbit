@@ -19,7 +19,7 @@ const GH_STUB: &str = r#"#!/bin/sh
 dir=$(dirname "$0")
 printf '%s\n' "$*" >> "$dir/calls"
 case "$*" in
-  *actions/jobs/9*) printf '{"id":9,"run_id":123,"status":"completed"}\n'; exit 0 ;;
+  *actions/jobs/9*) printf '{"id":9,"run_id":123,"status":"completed","url":"https://api.github.com/repos/acme/orbit/actions/jobs/9"}\n'; exit 0 ;;
   *"run view"*) /bin/cat "$dir/log"; exit 0 ;;
 esac
 exit 1
