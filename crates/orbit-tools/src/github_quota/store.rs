@@ -379,15 +379,9 @@ impl GithubQuotaStore {
         self.directory.join(format!("{account}.json"))
     }
 
-    fn clipped_release_prefix(account: &str) -> String {
-        format!(".{account}.clipped.")
-    }
-
     fn clipped_release_path(&self, account: &str, generation: u64) -> PathBuf {
-        self.directory.join(format!(
-            "{}{generation}.json",
-            Self::clipped_release_prefix(account)
-        ))
+        self.directory
+            .join(format!(".{account}.clipped.{generation}.json"))
     }
 
     /// Persist a lock-free release marker for a clipped probe whose completion
@@ -408,42 +402,39 @@ impl GithubQuotaStore {
         orbit_common::fs::io::atomic_write_text_volatile(&path, &payload)
     }
 
-    /// Reconcile any staged clipped-claim releases under the exclusive lock,
-    /// returning marker paths to unlink after the updated record is committed.
-    fn reconcile_clipped_releases(&self, account: &str, record: &mut QuotaRecord) -> Vec<PathBuf> {
-        let Ok(entries) = std::fs::read_dir(&self.directory) else {
-            return Vec::new();
-        };
-        let prefix = Self::clipped_release_prefix(account);
-        let mut markers = Vec::new();
-        for entry in entries.flatten() {
-            let file_name = entry.file_name();
-            let Some(name) = file_name.to_str() else {
-                continue;
-            };
-            let Some(rest) = name.strip_prefix(&prefix) else {
-                continue;
-            };
-            let Some(gen_str) = rest.strip_suffix(".json") else {
-                continue;
-            };
-            if gen_str.parse::<u64>().is_err() {
-                continue;
-            }
-            let path = entry.path();
-            let Ok(text) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(release) = serde_json::from_str::<ClippedClaimRelease>(&text) else {
-                markers.push(path);
-                continue;
-            };
-            if record.refresh_in_flight && record.refresh_generation == release.generation {
-                release_clipped_claim(record, release.previous_claim);
-            }
-            markers.push(path);
+    /// Reconcile a staged clipped-claim release for the active generation under
+    /// the exclusive lock, returning its marker path to unlink after the updated
+    /// record is committed.
+    ///
+    /// Reads the active generation's marker directly by name so reconciliation
+    /// stays O(1) independent of unrelated directory entries and succeeds when
+    /// the quota directory denies listing.
+    fn reconcile_clipped_releases(
+        &self,
+        account: &str,
+        record: &mut QuotaRecord,
+    ) -> Option<PathBuf> {
+        if !record.refresh_in_flight {
+            return None;
         }
-        markers
+        let path = self.clipped_release_path(account, record.refresh_generation);
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
+            Err(error) => {
+                tracing::warn!(target: "orbit_tools::github_quota", %error,
+                    path = %path.display(),
+                    "staged clipped quota release marker unreadable");
+                return None;
+            }
+        };
+        let Ok(release) = serde_json::from_str::<ClippedClaimRelease>(&text) else {
+            return Some(path);
+        };
+        if release.generation == record.refresh_generation {
+            release_clipped_claim(record, release.previous_claim);
+        }
+        Some(path)
     }
 
     /// Read `path`, distinguishing a missing record (`NotFound`, initialized as
@@ -484,7 +475,7 @@ impl GithubQuotaStore {
                 let output = change(&mut record);
                 let text = serde_json::to_string(&record).map_err(io::Error::other)?;
                 orbit_common::fs::io::atomic_write_text_volatile(&path, &text)?;
-                for marker in reconciled {
+                if let Some(marker) = reconciled {
                     let _ = std::fs::remove_file(marker);
                 }
                 Ok(output)
