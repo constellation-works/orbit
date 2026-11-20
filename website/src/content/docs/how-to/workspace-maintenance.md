@@ -273,15 +273,19 @@ orbit --workspace my-project workspace show
 ```
 
 Passing `--dry-run --json` outputs the `old` and `new` `repo_root` and
-`orbit_dir` paths and reports whether the binding would succeed without writing
-to the registry.
+`orbit_dir` paths and reports whether the binding would succeed. Preview leaves
+the checkout's binding in the workspace registry and task store, the pending
+rebind record and the audit log unchanged; normal generation admission and
+registry lock bookkeeping can still write when the store exists. A missing host
+store is refused earlier, before generation admission, and writes nothing.
 
 ### Refusals and recovery
 
 Orbit validates preconditions before writing changes and refuses the rebind if:
 
 - `--workspace` is omitted;
-- the host store (`orbit.db`) is missing (refused even under `--dry-run`);
+- the host store (`orbit.db`) is missing (refused before generation admission,
+  even under `--dry-run`, and writes nothing);
 - the target is not a primary Git checkout root or its `origin` remote does not
   match the registered source remote;
 - the target lacks a local `.orbit/` directory, uses a symlink for `.orbit/`,
