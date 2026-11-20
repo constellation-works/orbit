@@ -298,5 +298,8 @@ both count.
   [Configuration](/reference/config/).
 - **`executor_type: external`.** The value still parses so old definitions
   load, but nothing is dispatched from it. Do not use it.
-- **`agent_cli` and `cli_command`.** These old spellings of `direct_agent`
-  and `local_shell` still load. Write the new names.
+- **`agent_cli`.** This old spelling of `direct_agent` still loads. Write
+  `direct_agent` in new definitions.
+- **`cli_command`.** This executor type is retired. Change
+  `executor_type: cli_command` to `executor_type: local_shell` before loading
+  the definition.

@@ -37,8 +37,8 @@ pub struct ResolvedCliExecutor {
 /// uses.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResolvedShellExecutor {
-    /// Program used when the activity config names no `command`. This is where
-    /// a legacy `cli_command` definition's `command` field lands.
+    /// Program used when the activity config names no `command`; this is where
+    /// a `local_shell` definition's `command` field lands.
     pub command: Option<String>,
     /// Static arguments prepended to the activity's `args`.
     pub args: Vec<String>,
