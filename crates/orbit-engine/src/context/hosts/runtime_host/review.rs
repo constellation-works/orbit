@@ -175,7 +175,8 @@ macro_rules! review_methods {
         /// attempt. `event` is restricted by the owner store to
         /// `ci_check_rerun`, `ci_base_suspect`, `ci_check_rerun_reserved`,
         /// `ci_infrastructure_retry_backoff`, `ci_infrastructure_retry_exhausted`,
-        /// `ci_failure_recorded` or `ci_failure_reclassified`.
+        /// `ci_failure_recorded`, `ci_failure_reclassified` or
+        /// `ci_base_suspect_reclassified`.
         fn record_handoff_landing_history(
             &self,
             handoff_id: &str,

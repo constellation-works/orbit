@@ -7,6 +7,8 @@ use std::ops::ControlFlow;
 use orbit_common::OrbitError;
 use serde_json::json;
 
+use orbit_types::workflow::{CI_BASE_SUSPECT_RECLASSIFIED_EVENT, CiBaseSuspectReclassification};
+
 use crate::context::{HandoffLandingContext, RuntimeHost};
 
 use super::super::super::operations;
@@ -15,12 +17,17 @@ use super::super::super::pr_answers::PullRequestStatus;
 use super::super::base_update::contains;
 use super::super::head::onto_passing_tip;
 use super::super::jobs::describe;
+use super::super::suspect::green_base_proof;
 use super::classify::{ClassifiedFailures, classify_failed_checks, task_history};
-use super::{CheckFailureClass, CheckRecovery, CheckRecoveryStep, unreadable_job_text};
+use super::{CheckFailureClass, CheckRecovery, CheckRecoveryStep, FailedJob, unreadable_job_text};
 
 /// The requeue evidence for a failure whose automatic repair is already spent.
 const REQUEUE_OUTCOME: &str = "the automatic repair is already spent, so the owner ends the claim \
      and returns the task to the backlog, where its next run repairs this candidate";
+
+/// The requeue evidence for a candidate failure whose repair is unspent.
+const CANDIDATE_OUTCOME: &str = "the owner ends the claim and returns the task to the backlog, \
+     where its next run repairs this candidate";
 
 /// Classify the failed checks on `status`'s head and act on them.
 ///
@@ -50,7 +57,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
     let history_cell = OnceCell::new();
     let ClassifiedFailures {
         moved_tip,
-        jobs,
+        mut jobs,
         answered_checks,
         code,
         has_aggregates,
@@ -248,6 +255,20 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 }
             }
             if let Some((cycles, check, signature)) = exhausted {
+                // [ORB-25926] Observation ended. A same-check pass on the
+                // base, with no failure there, proves the base innocent: the
+                // failure is the candidate's, and takes its requeue route.
+                if reclassify_proven_candidates(host, context, head, pr, landing_tip, &mut jobs)? {
+                    let classified = describe(CheckFailureClass::Candidate, &jobs);
+                    let outcome = if context.automatic_repair_spent {
+                        REQUEUE_OUTCOME
+                    } else {
+                        CANDIDATE_OUTCOME
+                    };
+                    return Ok(CheckRecoveryStep::Requeue(format!(
+                        "{reason}; {classified}; {outcome}"
+                    )));
+                }
                 Ok(CheckRecoveryStep::HoldForBase(evidence(&format!(
                     "escalated after {cycles} base CI observation cycles (limit {limit}): check '{check}' still fails with signature `{signature}` on unchanged head {head}; a matching pull_request rerun failure and a successful same-check agent-main run on the accepted base ancestry have not both been observed, so review the missing base/check evidence",
                 ))))
@@ -348,9 +369,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         CheckFailureClass::Flaky => Ok(CheckRecoveryStep::WaitForBase(evidence(
             "the unchanged-head retry has no authenticated repeated signature; no candidate repair",
         ))),
-        CheckFailureClass::Candidate => Ok(CheckRecoveryStep::Requeue(evidence(
-            "the owner ends the claim and returns the task to the backlog, where its next run repairs this candidate",
-        ))),
+        CheckFailureClass::Candidate => Ok(CheckRecoveryStep::Requeue(evidence(CANDIDATE_OUTCOME))),
         CheckFailureClass::Inconclusive => Ok(CheckRecoveryStep::HoldInReview(evidence(
             "its evidence could not be read in full, so nothing is rerun, updated or repaired \
              and the candidate stays in review",
@@ -359,4 +378,83 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         // is the same stop; this arm keeps the match exhaustive.
         CheckFailureClass::Unknown => Ok(unclassified(unreadable_job_text(&jobs))),
     }
+}
+
+/// [ORB-25926] Reclassify every base-suspect job `candidate` when the same
+/// check passed on a base-branch push run at a commit containing the
+/// candidate's base, with no same-check failure there or on the landing tip.
+/// Each reclassification is recorded in task history with the base run, base
+/// commit and check that proved the base green. Any unproven job (no such
+/// pass, a red base, or an unreadable base) changes nothing, so the landing
+/// keeps its base hold.
+fn reclassify_proven_candidates<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &HandoffLandingContext,
+    head: &str,
+    pr: u64,
+    landing_tip: Option<&str>,
+    jobs: &mut [FailedJob],
+) -> Result<bool, OrbitError> {
+    let base = context.candidate.base.commit.as_str();
+    let tip = landing_tip.unwrap_or(base);
+    let mut proofs = Vec::new();
+    for job in jobs
+        .iter()
+        .filter(|job| job.class == CheckFailureClass::BaseSuspect)
+    {
+        match green_base_proof(
+            host,
+            &context.workspace_path,
+            base,
+            tip,
+            &context.candidate.base_branch,
+            &job.label,
+        ) {
+            Ok(Some(proof)) => proofs.push((job.job_id, proof)),
+            Ok(None) => return Ok(false),
+            Err(error) => {
+                tracing::warn!(%error, head, check = %job.label, "base-suspect: the base could not be proven green; the landing keeps its base hold");
+                return Ok(false);
+            }
+        }
+    }
+    if proofs.is_empty() {
+        return Ok(false);
+    }
+    for (job_id, proof) in proofs {
+        let Some(job) = jobs.iter_mut().find(|job| job.job_id == job_id) else {
+            continue;
+        };
+        let record = CiBaseSuspectReclassification {
+            head: head.to_string(),
+            check: job.label.clone(),
+            signature: job.signature.clone(),
+            from: CheckFailureClass::BaseSuspect.as_str().into(),
+            to: CheckFailureClass::Candidate.as_str().into(),
+            base_run_id: proof.run_id,
+            base_sha: proof.base_sha.clone(),
+            base_tip: proof.tip.clone(),
+            pr_number: Some(pr),
+        };
+        let note = record
+            .to_history_note()
+            .map_err(|error| OrbitError::Execution(error.to_string()))?;
+        host.record_handoff_landing_history(
+            &context.handoff_id,
+            CI_BASE_SUSPECT_RECLASSIFIED_EVENT,
+            &note,
+        )?;
+        job.class = CheckFailureClass::Candidate;
+        job.why = format!(
+            "base-suspect observation ended and the same check passed on base run {} at {}, \
+             which contains the candidate's base, with no same-check failure through {}; \
+             reclassified as the candidate's",
+            proof
+                .run_id
+                .map_or_else(|| "(unidentified)".to_string(), |run| run.to_string()),
+            proof.base_sha,
+            proof.tip,
+        );
+    }
+    Ok(true)
 }

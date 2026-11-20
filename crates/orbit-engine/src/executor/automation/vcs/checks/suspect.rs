@@ -568,3 +568,74 @@ pub(super) fn record_base_suspect<H: RuntimeHost + ?Sized>(
     }
     Ok(())
 }
+
+/// [ORB-25926] A same-check base-branch pass that proves a base-suspect
+/// failure's base innocent.
+pub(super) struct GreenBaseProof {
+    /// The push run whose same check passed.
+    pub(super) run_id: Option<u64>,
+    /// The base-branch commit that run tested; it contains the candidate's base.
+    pub(super) base_sha: String,
+    /// The base-branch tip read for a same-check failure.
+    pub(super) tip: String,
+}
+
+/// Whether `check` passed on a base-branch push run at a commit from `base`
+/// through `tip`, with no same-check failure on that commit or on `tip`.
+/// `Ok(None)` is an unproven base: no such pass, or a red tip. A read the
+/// provider refused is an `Err`, and proves nothing either.
+pub(super) fn green_base_proof<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    base: &str,
+    tip: &str,
+    base_branch: &str,
+    check: &str,
+) -> Result<Option<GreenBaseProof>, String> {
+    let branch = base_branch.strip_prefix("origin/").unwrap_or(base_branch);
+    let read = |input: serde_json::Value| {
+        host.run_private_vcs_operation(operations::CI_COMMIT_JOBS, input)
+            .map_err(|error| error.to_string())
+            .and_then(|response| {
+                CiCommitJobsAnswer::decode_response(response)
+                    .map(|answer| answer.jobs)
+                    .ok_or_else(|| "the base jobs answer carried no job list".to_string())
+            })
+    };
+    let ancestry = read(
+        json!({"commit":base,"workspace_path":workspace,"latest_push_branch":branch,"base_push_tip":tip}),
+    )?;
+    let same_check = |job: &&CiCommitJobEvidence| jobs::job_label(job) == check;
+    let passed = ancestry
+        .iter()
+        .filter(same_check)
+        .filter(|job| {
+            job.run_status.value() == Some(&CiJobStatus::Completed)
+                && job.status.value() == Some(&CiJobStatus::Completed)
+                && job.conclusion.value() == Some(&CiJobConclusion::Success)
+        })
+        .filter_map(|job| Some((job, job.head_sha.text()?)))
+        .filter(|(_, sha)| {
+            !ancestry
+                .iter()
+                .filter(same_check)
+                .any(|other| other.head_sha.text() == Some(*sha) && jobs::unsuccessful(other))
+        })
+        .max_by_key(|(job, _)| job.completed_time);
+    let Some((job, sha)) = passed else {
+        return Ok(None);
+    };
+    let proof = GreenBaseProof {
+        run_id: job.run_id.number(),
+        base_sha: sha.to_string(),
+        tip: tip.to_string(),
+    };
+    if sha != tip {
+        let at_tip =
+            read(json!({"commit":tip,"workspace_path":workspace,"latest_push_branch":branch}))?;
+        if at_tip.iter().filter(same_check).any(jobs::unsuccessful) {
+            return Ok(None);
+        }
+    }
+    Ok(Some(proof))
+}
