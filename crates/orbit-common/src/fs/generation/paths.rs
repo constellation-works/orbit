@@ -4,6 +4,7 @@ use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
 use super::refusal;
+use crate::fs::physical;
 use crate::{OrbitError, UpgradeAdmissionRefusalKind};
 
 pub(super) const ADMISSION_LOCK: &str = ".generation-admission.lock";
@@ -155,9 +156,22 @@ fn normalize_missing_generation_root(root: &Path) -> Result<PathBuf, OrbitError>
             "generation root must not be empty",
         ));
     }
+    if !normalized.is_absolute() {
+        let cwd = std::env::current_dir().map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?;
+        normalized = cwd.join(normalized);
+    }
     match (normalized.parent(), normalized.file_name()) {
         (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
-            contained_under_parent(parent, name)
+            // Canonicalize the deepest existing ancestor, so the answer is the
+            // one `canonicalize` gives once the missing tail has been created.
+            let parent = physical::canonicalize_existing_prefix_checked(parent)
+                .map_err(|error| {
+                    refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+                })?
+                .unwrap_or_else(|| parent.to_path_buf());
+            contained_under_parent(&parent, name)
         }
         _ => Ok(normalized),
     }

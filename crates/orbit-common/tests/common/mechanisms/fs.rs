@@ -205,3 +205,44 @@ fn a_descriptor_inherited_by_a_forked_child_is_not_read_as_contention() {
         "reap the child"
     );
 }
+
+#[test]
+fn missing_tail_parent_dirs_are_applied_not_dropped_when_resolving_physical_paths() {
+    use orbit_common::fs::physical::{canonicalize_existing_prefix, resolve_symlinks};
+
+    let temp = TempDir::new().expect("tempdir");
+    let base = temp.path().canonicalize().expect("canonical base");
+    let workspace = base.join("workspace");
+    std::fs::create_dir(&workspace).expect("workspace");
+
+    let escaping = workspace.join("missing_dir/../../outside/secret");
+    assert_eq!(
+        canonicalize_existing_prefix(&escaping),
+        base.join("outside/secret"),
+        "`..` below a missing directory must climb out of the workspace"
+    );
+    assert_eq!(
+        resolve_symlinks(&workspace.join("missing_dir/../file")).expect("resolves"),
+        workspace.join("file"),
+        "`..` after a missing directory cancels it"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn authority_root_is_stable_across_creating_a_missing_root_under_a_symlinked_ancestor() {
+    use orbit_common::fs::generation::authority_root;
+
+    let temp = TempDir::new().expect("tempdir");
+    let base = temp.path().canonicalize().expect("canonical base");
+    let real = base.join("real");
+    std::fs::create_dir(&real).expect("real");
+    let link = base.join("link");
+    std::os::unix::fs::symlink(&real, &link).expect("symlink");
+
+    let root = link.join("new_home/.orbit");
+    let before = authority_root(&root).expect("missing root");
+    assert_eq!(before, real.join("new_home/.orbit"));
+    std::fs::create_dir_all(&root).expect("create root");
+    assert_eq!(authority_root(&root).expect("existing root"), before);
+}
