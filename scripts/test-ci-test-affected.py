@@ -20,12 +20,11 @@ from unittest import mock
 SCRIPTS = Path(__file__).resolve().parent
 
 
-def stop_owned_helper(proc, child_pid_paths=()):
+def stop_owned_helper(proc):
     """Ask the helper to clean its own children, then reap the helper."""
     if proc.returncode is not None:
         return
-    # A PID file does not reserve a child's group, even if the helper is
-    # still alive. SIGTERM lets run_observed clean up its own unreaped child.
+    # SIGTERM lets run_observed clean up its own unreaped child.
     with contextlib.suppress(ProcessLookupError):
         proc.send_signal(signal.SIGTERM)
     try:
@@ -754,7 +753,8 @@ def nextest_available():
         return False
 
 
-@unittest.skipUnless(nextest_available(), "the transport under test is real cargo-nextest")
+@unittest.skipUnless(nextest_available() or os.environ.get("GITHUB_ACTIONS") == "true",
+                     "the transport under test is real cargo-nextest")
 class NextestOutputTransportTests(unittest.TestCase):
     """[ORB-15161] Run the gate over a real crate under real nextest.
 
@@ -764,6 +764,11 @@ class NextestOutputTransportTests(unittest.TestCase):
     """
 
     NOTICE = "DEFERRED: bubblewrap unavailable: fixture: No permissions to create new namespace"
+
+    @classmethod
+    def setUpClass(cls):
+        if not nextest_available():
+            raise AssertionError("cargo-nextest must be installed in CI")
 
     def run_gate(self, test_body, returncode=0, selection=None, report_failure=False):
         temporary = tempfile.TemporaryDirectory()
@@ -958,7 +963,7 @@ class ObservedPipeDrainTests(unittest.TestCase):
                 self.assertEqual(result, {"code": 128 + signal.SIGTERM,
                                           "returncode": -signal.SIGKILL, "signal_restored": True})
             finally:
-                stop_owned_helper(proc, [root / "child.pid"])
+                stop_owned_helper(proc)
 
     def test_relay_failures_stop_backpressured_child_and_pipe_holding_grandchild(self):
         scratch = SCRIPTS.parent / ".orbit" / "tmp"
@@ -1090,7 +1095,7 @@ class ObservedPipeDrainTests(unittest.TestCase):
                     try:
                         stdout, stderr = proc.communicate(timeout=self.DEADLINE_SECONDS)
                     except subprocess.TimeoutExpired:
-                        stop_owned_helper(proc, [root / "child.pid", root / "grandchild.pid"])
+                        stop_owned_helper(proc)
                         self.fail("run_observed hung after a relay failure with a full pipe")
                     self.assertEqual(proc.returncode, 0, (stdout + stderr).decode(errors="replace"))
                     result = json.loads((root / "result.json").read_text())
@@ -1186,7 +1191,7 @@ class ObservedPipeDrainTests(unittest.TestCase):
         try:
             stdout, stderr = proc.communicate(timeout=self.DEADLINE_SECONDS)
         except subprocess.TimeoutExpired:
-            stop_owned_helper(proc, [result_path.with_suffix(".pid")])
+            stop_owned_helper(proc)
             self.fail("run_observed blocked past its deadline on a partial stdout line "
                       "while stderr held more than a pipe of data")
         self.assertEqual(proc.returncode, 0, stderr.decode("utf-8", errors="replace"))
@@ -1416,17 +1421,14 @@ class ObservedPipeDrainTests(unittest.TestCase):
         reaped = mock.Mock()
         reaped.returncode = 0
         reaped.pid = 4242
-        stop_owned_helper(reaped, [])
+        stop_owned_helper(reaped)
         reaped.send_signal.assert_not_called()
         reaped.communicate.assert_not_called()
         live = mock.Mock()
         live.returncode = None
         live.pid = 4242
         live.communicate.return_value = (b"", b"")
-        with tempfile.TemporaryDirectory() as temporary:
-            pid_path = Path(temporary) / "child.pid"
-            pid_path.write_text("5252")
-            stop_owned_helper(live, [pid_path])
+        stop_owned_helper(live)
         live.send_signal.assert_called_once_with(signal.SIGTERM)
         live.communicate.assert_called_once_with(timeout=5)
 

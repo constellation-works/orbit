@@ -277,7 +277,7 @@ jobs:
     # of the fixture stubs so a dropped run_guard line cannot shrink the
     # expected set together with the actual set.
     NON_GUARD_TEST_FILES = {
-        "test-bench-compiler-cache.py", "test-check-npm-package.py",
+        "test-bench-compiler-cache.py",
         "test-codeql-path-barriers.py", "test-desktop-advisories.py",
         "test-shell-waits-allowlist.json", "test-child-runner-allowlist.json",
         "test-state-backup.py",
@@ -2526,14 +2526,39 @@ sys.exit(int(os.environ.get("FAKE_DENY_EXIT", "0")))
         result = self.run_script("check", env_overrides={"FAKE_DENY_EXIT": "42"})
         self.assertEqual(result.returncode, 42)
 
-    def test_real_cargo_deny_with_writable_fixture(self):
+    def _require_real_cargo_deny(self):
         if not shutil.which("cargo-deny"):
+            if os.environ.get("GITHUB_ACTIONS") == "true":
+                self.fail("cargo-deny must be installed in CI")
             self.skipTest("cargo-deny not installed")
-        system_advisory = Path.home() / ".cargo/advisory-dbs"
-        if not system_advisory.exists():
-            self.skipTest("system advisory-dbs snapshot not found")
+
+    def _write_minimal_advisory_db(self, fixture):
+        db = fixture / "advisory-db-3157b0e258782691"
+        advisory_dir = db / "crates" / "fixture-unused-crate"
+        advisory_dir.mkdir(parents=True)
+        (advisory_dir / "RUSTSEC-2099-0001.md").write_text(
+            '```toml\n[advisory]\nid = "RUSTSEC-2099-0001"\npackage = "fixture-unused-crate"\n'
+            'date = "2099-01-01"\nurl = "https://example.invalid/advisory"\n```\n\n'
+            "# Fixture\n\nUnused offline fixture advisory.\n"
+        )
+        for args in (
+            ("init", "-q"),
+            ("config", "user.name", "Guard fixture"),
+            ("config", "user.email", "guard@example.invalid"),
+            ("remote", "add", "origin", "https://github.com/RustSec/advisory-db"),
+            ("add", "."),
+            ("commit", "-qm", "fixture advisory db"),
+        ):
+            subprocess.run(["git", "-C", str(db), *args], check=True, capture_output=True, text=True)
+
+    def test_real_cargo_deny_with_writable_fixture(self):
+        self._require_real_cargo_deny()
         fixture = self.root / "fixture-advisory-dbs"
-        shutil.copytree(str(system_advisory), str(fixture))
+        system_advisory = Path.home() / ".cargo/advisory-dbs"
+        if system_advisory.exists():
+            shutil.copytree(str(system_advisory), str(fixture))
+        else:
+            self._write_minimal_advisory_db(fixture)
         env = dict(os.environ, CARGO_DENY_DB_PATH=str(fixture), CARGO_DENY_DISABLE_FETCH="1")
         res = subprocess.run(
             ["/bin/bash", str(SCRIPTS / "cargo-deny.sh"), "check", "advisories"],
@@ -2545,8 +2570,7 @@ sys.exit(int(os.environ.get("FAKE_DENY_EXIT", "0")))
         self.assertTrue((fixture / "db.lock").exists())
 
     def test_real_cargo_deny_missing_data_fails_without_skip(self):
-        if not shutil.which("cargo-deny"):
-            self.skipTest("cargo-deny not installed")
+        self._require_real_cargo_deny()
         empty_fixture = self.root / "empty-dbs"
         empty_fixture.mkdir()
         env = dict(os.environ, CARGO_DENY_DB_PATH=str(empty_fixture), CARGO_DENY_DISABLE_FETCH="1")

@@ -440,7 +440,7 @@ assert_contains "$work/baseline.log" "cache=inherited" "--keep-compiler-cache mu
 assert_contains "$work/baseline.log" "wrapper=[/inherited/wrapper]" "--keep-compiler-cache must keep the wrapper"
 assert_contains "$out" "enabled by --keep-compiler-cache" "the report should disclose the opt-in"
 
-# --- 7. Argument handling ----------------------------------------------------
+# --- 8. Argument handling ----------------------------------------------------
 
 "$HELPER" --help >/dev/null || fail "--help should succeed"
 

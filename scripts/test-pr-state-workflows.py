@@ -313,7 +313,7 @@ class CiCacheWorkflowTests(unittest.TestCase):
         self.output.write_text("")
         self.envfile.write_text("")
         result = self_test_hang.run(
-            ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+            ["bash", "-e", "-c", step["run"]],
             step=str(step.get("id") or step.get("name") or "workflow step"),
             cwd=self.root, env=self.env, text=True, capture_output=True, timeout=timeout)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -385,7 +385,7 @@ exit "${FIXTURE_VERSION_EXIT:-0}"
         self.write(".orbit/tmp/workflow-ci/scripts/ci-probe-bubblewrap.sh",
                    helper.replace("/usr/bin/bwrap", str(fake_bwrap)))
         return self_test_hang.run(
-            ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+            ["bash", "-e", "-c", step["run"]],
             step="bubblewrap-probe", cwd=self.root, env=self.env,
             text=True, capture_output=True)
 
@@ -864,7 +864,7 @@ class NextestShardWorkflowTests(unittest.TestCase):
                     except subprocess.TimeoutExpired as error:
                         raise AssertionError("workflow step process did not stop") from error
 
-                start = subprocess.Popen(["bash", "-e", "-o", "pipefail", "-c", steps[start_name]["run"]],
+                start = subprocess.Popen(["bash", "-e", "-c", steps[start_name]["run"]],
                                          cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                          start_new_session=True)
                 self.addCleanup(stop_process_group, start)
@@ -878,7 +878,7 @@ class NextestShardWorkflowTests(unittest.TestCase):
                     pipe.write("go\n")
                 self.assertEqual(start.wait(timeout=10), 0)
                 await_file(root / "proof-running")
-                wait = subprocess.Popen(["bash", "-e", "-o", "pipefail", "-c", steps[wait_name]["run"]],
+                wait = subprocess.Popen(["bash", "-e", "-c", steps[wait_name]["run"]],
                                         cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                         start_new_session=True)
                 self.addCleanup(stop_process_group, wait)
@@ -933,7 +933,13 @@ class NextestShardWorkflowTests(unittest.TestCase):
                 capture_output=True, text=True, check=True).stdout.strip()
         script = self.root / "step-script"
         script.write_text(step["run"])
-        shell = step.get("shell", "bash --noprofile --norc -e -o pipefail {0}")
+        explicit_shell = step.get("shell")
+        if explicit_shell is None:
+            shell = "bash -e {0}"
+        elif explicit_shell == "bash":
+            shell = "bash --noprofile --norc -e -o pipefail {0}"
+        else:
+            shell = explicit_shell
         result = self_test_hang.run(
             [word.replace("{0}", str(script)) for word in shlex.split(shell)],
             step=name, cwd=cwd,
@@ -1058,7 +1064,7 @@ class NextestShardWorkflowTests(unittest.TestCase):
                         ("cancelled", 1, f"ci-await: {jobs['test-build']['name']} concluded cancelled: "
                                          "https://github.com/fixture/repository/actions/runs/7\n")):
                     completed = self_test_hang.run(
-                        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", require["run"]],
+                        ["bash", "-e", "-c", require["run"]],
                         step=require["name"], cwd=self.root, text=True, capture_output=True,
                         env={"PATH": os.environ["PATH"], "TEST_BUILD_RESULT": result,
                              "GITHUB_SERVER_URL": "https://github.com",

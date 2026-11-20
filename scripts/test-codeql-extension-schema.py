@@ -439,7 +439,7 @@ class CodeqlExtensionSchemaTests(unittest.TestCase):
         line = next(number for number, text in enumerate(mutated.splitlines(), start=1) if "\\:" in text)
         self._assert_escape_refused(self._public_guard(), data, line)
 
-    def test_block_scalar_unknown_escape_fails_with_line(self):
+    def test_double_quoted_scalar_unknown_escape_fails_with_line(self):
         source = TWO_VALID_ROWS.replace("pack: codeql/rust-all", 'pack: "codeql/ru\\:st-all"', 1)
         data = self.write_pack(source)
         line = next(number for number, text in enumerate(source.splitlines(), start=1) if "\\:" in text)
