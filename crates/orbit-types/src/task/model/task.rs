@@ -40,7 +40,7 @@ pub struct Task {
     /// hold, and status transitions never change it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_before: Option<DateTime<Utc>>,
-    #[serde(default, alias = "instructions")]
+    #[serde(default)]
     pub plan: String,
     #[serde(default)]
     pub execution_summary: String,
