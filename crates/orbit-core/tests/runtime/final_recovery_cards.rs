@@ -260,6 +260,19 @@ fn a_decide_decision_opens_one_request_with_summary_options_and_recommendation()
     assert_eq!(open["options"].as_array().unwrap().len(), 3, "{open}");
     assert_eq!(open["options"][0]["recommended"], true);
     assert_eq!(open["options"][1]["recommended"], false);
+    // The request carries the options, so the comment only points at it.
+    let comment = fx
+        .runtime
+        .get_task_comments(&task)
+        .unwrap()
+        .into_iter()
+        .find(|comment| comment.message.starts_with("final_recovery run_id="))
+        .expect("final recovery commented");
+    let lines = comment.message.lines().collect::<Vec<_>>();
+    assert!(lines[0].ends_with("outcome=escalated"), "{lines:?}");
+    assert!(lines[1].starts_with("diagnosis: "), "{lines:?}");
+    assert_eq!(lines[2], format!("decision: {request_id}"), "{lines:?}");
+    assert_eq!(lines.len(), 3, "{lines:?}");
 }
 
 fn a_terminal_recovery_option_makes_the_request_irreversible() {

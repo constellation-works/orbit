@@ -1442,6 +1442,8 @@ fn git(dir: &Path, args: &[&str]) -> String {
 }
 
 /// The owner's comments on `task`, as one searchable text.
+/// The task's comments and its open decision requests, where an
+/// escalation's human action lives.
 fn comments_of(task: &Value) -> String {
-    task["comments"].to_string()
+    format!("{} {}", task["comments"], task["open_decisions"])
 }
