@@ -349,3 +349,25 @@ fn source_repair_reader_terminal_still_running_refusal_offers_discard_not_cancel
     );
     assert_eq!(shown.detail, wrapped);
 }
+
+#[test]
+fn store_writable_open_owed_is_typed_and_reads_as_store_error() {
+    let detail =
+        "task registry '/tmp/the database is read-only/index.sqlite' requires a writable migration";
+    let typed = OrbitError::StoreWritableOpenOwed(detail.into());
+    let plain = OrbitError::Store(detail.into());
+
+    assert!(typed.owes_writable_store_open());
+    assert!(
+        !plain.owes_writable_store_open(),
+        "a Store error quoting the phrase must not classify as owing a writable open"
+    );
+    assert_eq!(typed.wire_code(), plain.wire_code());
+    assert_eq!(typed.storage_layer(), plain.storage_layer());
+    assert_eq!(typed.to_string(), plain.to_string());
+    assert_eq!(
+        serde_json::to_value(&typed).expect("serialize typed"),
+        serde_json::to_value(&plain).expect("serialize plain"),
+        "StoreWritableOpenOwed must serialize identically to Store"
+    );
+}

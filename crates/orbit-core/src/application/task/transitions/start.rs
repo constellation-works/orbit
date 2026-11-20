@@ -34,6 +34,9 @@ fn proposed_start_error_with_context(error: OrbitError, state: &str) -> OrbitErr
         OrbitError::InvalidInput(message) => OrbitError::InvalidInput(format!("{message}{suffix}")),
         OrbitError::Execution(message) => OrbitError::Execution(format!("{message}{suffix}")),
         OrbitError::Store(message) => OrbitError::Store(format!("{message}{suffix}")),
+        OrbitError::StoreWritableOpenOwed(message) => {
+            OrbitError::StoreWritableOpenOwed(format!("{message}{suffix}"))
+        }
         OrbitError::Io(message) => OrbitError::Io(format!("{message}{suffix}")),
         OrbitError::WorkspaceError(message) => {
             OrbitError::WorkspaceError(format!("{message}{suffix}"))

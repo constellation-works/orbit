@@ -478,6 +478,14 @@ pub enum OrbitError {
     #[error("invalid input: {}", task_delivery_unavailable_message(.0, &format!("orbit task show {}", .0)))]
     #[serde(untagged, serialize_with = "serialize_task_delivery_unavailable")]
     TaskDeliveryUnavailable(String),
+    /// An observation-only open found a supported store or task registry that
+    /// still owes a writable open (for example migration or additive setup),
+    /// rather than an unreadable or unsupported format. Displays, reports and
+    /// serializes identically to [`Self::Store`]; callers select writable-open
+    /// remediation from this variant alone, never from message text (STD-02 §R10).
+    #[error("store error: {0}")]
+    #[serde(untagged, serialize_with = "serialize_as_store")]
+    StoreWritableOpenOwed(String),
 }
 
 const _: () = assert!(
@@ -615,6 +623,13 @@ fn serialize_forge_push_hold<S: serde::Serializer>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(&failure.message)
+}
+
+fn serialize_as_store<S: serde::Serializer>(
+    message: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    OrbitError::Store(message.to_string()).serialize(serializer)
 }
 
 fn serialize_as_storage_layer<S: serde::Serializer>(

@@ -345,6 +345,102 @@ fn bare_doctor_startup_neither_creates_nor_migrates_the_task_registry() {
         .expect("read user_version");
     assert_eq!(version, 6, "bare doctor leaves the registry as it was");
 }
+
+#[test]
+fn bare_doctor_classifies_writable_open_remedy_independently_of_registry_path() {
+    if in_child(
+        "doctor::bare_doctor_classifies_writable_open_remedy_independently_of_registry_path",
+    ) {
+        return;
+    }
+    let f = WorkCheckout::new();
+    let root = f
+        .temp
+        .path()
+        .join("the database is read-only")
+        .join(".orbit");
+    command(&f)
+        .arg("--root")
+        .arg(&root)
+        .args([
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "phrase-path",
+            "--task-prefix",
+            "PP",
+        ])
+        .assert()
+        .success();
+    command(&f)
+        .arg("--root")
+        .arg(&root)
+        .args(["task", "list"])
+        .assert()
+        .success();
+
+    let tasks = root.join("tasks");
+    let registry = tasks.join("index.sqlite");
+    let ledger = |path: &std::path::Path| -> Vec<String> {
+        let conn = Connection::open(path).expect("open registry");
+        let mut stmt = conn
+            .prepare("SELECT key FROM schema_meta WHERE key LIKE 'migration.%' ORDER BY key")
+            .expect("prepare ledger query");
+        let keys = stmt.query_map([], |row| row.get(0)).expect("query ledger");
+        keys.collect::<Result<_, _>>().expect("ledger rows")
+    };
+
+    // A supported lagging registry under this path still receives writable-open
+    // remediation.
+    let applied = ledger(&registry);
+    assert!(applied.len() > 1, "{applied:?}");
+    Connection::open(&registry)
+        .expect("open registry")
+        .execute(
+            "DELETE FROM schema_meta WHERE key = ?1",
+            [applied.last().expect("newest ledger row")],
+        )
+        .expect("downgrade registry ledger");
+    let out = command(&f)
+        .arg("--root")
+        .arg(&root)
+        .args(["doctor", "--json"])
+        .output()
+        .expect("doctor on lagging registry");
+    let parsed = rows(&out);
+    let runtime = row(&parsed, "runtime");
+    assert_eq!(runtime["status"], "error", "{runtime}");
+    msg_has(runtime, "requires a writable migration");
+    fix_has(runtime, "orbit task list");
+
+    // An unsupported pre-ledger v9 registry under a path containing the
+    // diagnostic phrase must keep only the store's upgrade guidance.
+    drop(fs::remove_file(&registry));
+    for suffix in ["-wal", "-shm"] {
+        drop(fs::remove_file(tasks.join(format!("index.sqlite{suffix}"))));
+    }
+    Connection::open(&registry)
+        .expect("create v9 registry")
+        .execute_batch("PRAGMA user_version = 9")
+        .expect("stamp unsupported registry version");
+    let out = command(&f)
+        .arg("--root")
+        .arg(&root)
+        .args(["doctor", "--json"])
+        .output()
+        .expect("doctor on v9 registry");
+    let report =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{report}");
+    assert!(
+        report.contains("Upgrade the selected Orbit executable"),
+        "the report keeps the store's upgrade guidance: {report}"
+    );
+    assert!(
+        !report.contains("orbit task list"),
+        "an unsupported registry under a phrase-bearing path must not suggest writable migration: {report}"
+    );
+}
 /// ORB-16351: `clock-unit: ok` requires an enabled, active systemd timer.
 #[cfg(target_os = "linux")]
 #[test]

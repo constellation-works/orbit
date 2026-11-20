@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::STORE_WRITABLE_OPEN_OWED_PHRASE;
 use orbit_common::StorageLayer;
 use orbit_common::storage::sqlite::{sqlite_error, sqlite_store_error};
 use rusqlite::{Connection, Transaction, TransactionBehavior};
@@ -70,8 +69,8 @@ pub(super) fn assert_readable_schema(
         return Ok(ReadableRegistry { pre_ledger: false });
     }
     if version > 0 {
-        return Err(OrbitError::Store(format!(
-            "task registry '{}' requires a writable migration: {STORE_WRITABLE_OPEN_OWED_PHRASE}, and \
+        return Err(OrbitError::StoreWritableOpenOwed(format!(
+            "task registry '{}' requires a writable migration: the database is read-only, and \
              observing it found registry ledger version {version} instead of version \
              {SUPPORTED_REGISTRY_VERSION}. Open the registry once from writable storage, then \
              retry the observation",
@@ -96,9 +95,9 @@ pub(super) fn assert_readable_schema(
     } else {
         " without task action keys"
     };
-    Err(OrbitError::Store(format!(
+    Err(OrbitError::StoreWritableOpenOwed(format!(
         "task registry '{}' requires writable additive setup/recovery: \
-         {STORE_WRITABLE_OPEN_OWED_PHRASE}, and observing it found schema version {user_version}{action_keys} instead of version \
+         the database is read-only, and observing it found schema version {user_version}{action_keys} instead of version \
          {PRE_LEDGER_COMPATIBLE} with task action keys. Open the registry once from writable \
          storage, then retry the observation",
         path.display()
