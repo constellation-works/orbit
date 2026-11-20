@@ -1912,10 +1912,14 @@ captures still require their original full policy digest to match.
 GitHub's rate limit on the automation account's reads is shared by every
 pipeline on the host. When completion's workflow-prerequisite reads (the
 repository, pull request, branch policy, checks, statuses and workflow runs it
-reads before landing) are rate-limited, completion reads the reset from
+reads before landing, and the run, jobs and pinned workflow file it reads after
+them) are rate-limited, completion reads the reset from
 GitHub's `rate_limit` endpoint, which spends no quota, waits for it and reads
-again: at most three waits, each ending before the completion deadline, which
-is never extended. Each worktree keeps its repository identity for ten
+again: at most three waits for each read pass (the snapshot, then the
+evidence read around it), each ending before the completion deadline, which
+is never extended and is the only bound on the whole step. A wait only
+precedes a repeated read: a reserved workflow rerun is never sent again by a
+retried observation. Each worktree keeps its repository identity for ten
 minutes and a workflow file's contents at a commit SHA for good, so a
 completion poll does not read them again. When the reset falls
 past the deadline, the delivery step fails with GitHub's diagnostic and final

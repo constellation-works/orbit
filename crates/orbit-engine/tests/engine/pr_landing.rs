@@ -7033,6 +7033,19 @@ if [ -f "$forge/infrastructure" ]; then
             exit 1
         fi
     fi
+    # [ORB-25898] The same quota running out after the snapshot: the next N
+    # workflow-file reads are rate-limited.
+    if [ "$1" = api ] && [ -s "$forge/infra-contents-rate-limited" ]; then
+        case "${2:-}" in
+            */contents/*)
+                left=$(cat "$forge/infra-contents-rate-limited")
+                if [ "$left" -gt 0 ]; then
+                    echo $((left - 1)) > "$forge/infra-contents-rate-limited"
+                    echo 'gh: API rate limit exceeded for user ID 270255973. If you reach out to GitHub Support for help, please include the request ID DE78:121DB1:92BAD8:9B7940:6AFFAFC1 (HTTP 403)' >&2
+                    exit 1
+                fi ;;
+        esac
+    fi
     case "$1 ${2:-}" in
         "api graphql")
             case "$*" in
