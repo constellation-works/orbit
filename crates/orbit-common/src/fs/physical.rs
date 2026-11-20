@@ -26,9 +26,20 @@
 //!   none canonicalizes. Use for best-effort anchoring that a later check
 //!   still bounds (task selector anchors).
 //!
-//! Only [`physical_with_missing_tail`] and [`lexical_normalize`] interpret
-//! `..`, and only [`resolve_symlinks`] follows a dangling link; the others
-//! treat both as ordinary missing names.
+//! Parent components (`..`) and dangling symlinks in the missing part of a
+//! path are handled differently by each variant:
+//!
+//! | Variant | `..` in the missing tail | Dangling symlink |
+//! | --- | --- | --- |
+//! | [`physical_with_missing_tail`] | applied: cancels the missing name before it, else climbs the resolved prefix | not followed; a missing name |
+//! | [`lexical_normalize`] | applied by name alone | not followed; the filesystem is never read |
+//! | [`resolve_symlinks`] | applied: cancels the missing name before it, else climbs the canonical prefix | followed to its target, bounded by `ELOOP`; fails closed |
+//! | [`canonicalize_existing_prefix_checked`] | never applied: the walk answers `Ok(None)` on reaching one | not followed; a missing name |
+//! | [`canonicalize_existing_prefix`] | applied: cancels the missing name before it, else climbs the canonical prefix | not followed; a missing name |
+//!
+//! A `..` that follows an existing component is resolved by the kernel during
+//! canonicalization in every filesystem-reading variant. Only
+//! [`resolve_symlinks`] follows a dangling link.
 
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
