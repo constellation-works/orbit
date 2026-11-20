@@ -187,6 +187,14 @@ struct QuotaRecord {
     resources: BTreeMap<String, ResourceRecord>,
 }
 
+/// Lock-free release marker staged when a clipped probe cannot acquire the
+/// record lock before its deadline expires.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct ClippedClaimRelease {
+    generation: u64,
+    previous_claim: Option<u64>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct ResourceRecord {
     #[serde(default)]
@@ -371,6 +379,73 @@ impl GithubQuotaStore {
         self.directory.join(format!("{account}.json"))
     }
 
+    fn clipped_release_prefix(account: &str) -> String {
+        format!(".{account}.clipped.")
+    }
+
+    fn clipped_release_path(&self, account: &str, generation: u64) -> PathBuf {
+        self.directory.join(format!(
+            "{}{generation}.json",
+            Self::clipped_release_prefix(account)
+        ))
+    }
+
+    /// Persist a lock-free release marker for a clipped probe whose completion
+    /// lock was contended at its deadline, so the next lock holder restores the
+    /// prior claim without blocking this caller.
+    fn stage_clipped_release(
+        &self,
+        account: &str,
+        generation: u64,
+        previous_claim: Option<u64>,
+    ) -> io::Result<()> {
+        let path = self.clipped_release_path(account, generation);
+        let payload = serde_json::to_string(&ClippedClaimRelease {
+            generation,
+            previous_claim,
+        })
+        .map_err(io::Error::other)?;
+        orbit_common::fs::io::atomic_write_text_volatile(&path, &payload)
+    }
+
+    /// Reconcile any staged clipped-claim releases under the exclusive lock,
+    /// returning marker paths to unlink after the updated record is committed.
+    fn reconcile_clipped_releases(&self, account: &str, record: &mut QuotaRecord) -> Vec<PathBuf> {
+        let Ok(entries) = std::fs::read_dir(&self.directory) else {
+            return Vec::new();
+        };
+        let prefix = Self::clipped_release_prefix(account);
+        let mut markers = Vec::new();
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let Some(name) = file_name.to_str() else {
+                continue;
+            };
+            let Some(rest) = name.strip_prefix(&prefix) else {
+                continue;
+            };
+            let Some(gen_str) = rest.strip_suffix(".json") else {
+                continue;
+            };
+            if gen_str.parse::<u64>().is_err() {
+                continue;
+            }
+            let path = entry.path();
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(release) = serde_json::from_str::<ClippedClaimRelease>(&text) else {
+                markers.push(path);
+                continue;
+            };
+            if record.refresh_in_flight && record.refresh_generation == release.generation {
+                release_clipped_claim(record, release.previous_claim);
+            }
+            markers.push(path);
+        }
+        markers
+    }
+
     /// Read `path`, distinguishing a missing record (`NotFound`, initialized as
     /// empty) from an existing unreadable or malformed record (returned so
     /// callers preserve the bytes on disk).
@@ -405,9 +480,13 @@ impl GithubQuotaStore {
             self.lock_options(),
             || {
                 let mut record = Self::load(&path)?;
+                let reconciled = self.reconcile_clipped_releases(account, &mut record);
                 let output = change(&mut record);
                 let text = serde_json::to_string(&record).map_err(io::Error::other)?;
                 orbit_common::fs::io::atomic_write_text_volatile(&path, &text)?;
+                for marker in reconciled {
+                    let _ = std::fs::remove_file(marker);
+                }
                 Ok(output)
             },
         )
@@ -522,11 +601,22 @@ impl GithubQuotaStore {
             return;
         };
         let answer = refresh();
+        let clipped = matches!(answer, RateLimitAnswer::Clipped(_));
         if let Err(error) = self.update(account, |record| {
             apply_answer(record, answer, now, claim_generation, previous_claim)
         }) {
-            tracing::warn!(target: "orbit_tools::github_quota", %error,
-                "GitHub quota record unavailable; refresh answer not persisted");
+            if clipped {
+                if let Err(stage_error) =
+                    self.stage_clipped_release(account, claim_generation, previous_claim)
+                {
+                    tracing::warn!(target: "orbit_tools::github_quota", error = %stage_error,
+                        lock_error = %error,
+                        "GitHub quota record unavailable; clipped refresh claim release not persisted");
+                }
+            } else {
+                tracing::warn!(target: "orbit_tools::github_quota", %error,
+                    "GitHub quota record unavailable; refresh answer not persisted");
+            }
         }
     }
 
@@ -645,6 +735,16 @@ fn bounded_error(reason: &str) -> String {
     reason.chars().take(MAX_ERROR_CHARS).collect()
 }
 
+fn release_clipped_claim(record: &mut QuotaRecord, previous_claim: Option<u64>) {
+    // Give the interval back and keep what the record knew. Debits taken
+    // during the read were already applied to the known remaining count.
+    record.refresh_in_flight = false;
+    record.refresh_claimed_at = previous_claim;
+    for entry in record.resources.values_mut() {
+        entry.in_flight_debits = 0;
+    }
+}
+
 fn apply_answer(
     record: &mut QuotaRecord,
     answer: RateLimitAnswer,
@@ -655,16 +755,11 @@ fn apply_answer(
     if !record.refresh_in_flight || record.refresh_generation != claim_generation {
         return;
     }
-    record.refresh_in_flight = false;
     if matches!(answer, RateLimitAnswer::Clipped(_)) {
-        // Give the interval back and keep what the record knew. Debits taken
-        // during the read were already applied to the known remaining count.
-        record.refresh_claimed_at = previous_claim;
-        for entry in record.resources.values_mut() {
-            entry.in_flight_debits = 0;
-        }
+        release_clipped_claim(record, previous_claim);
         return;
     }
+    record.refresh_in_flight = false;
     record.refreshed_at = Some(now);
     let observed = match answer {
         RateLimitAnswer::Known(observed) => {
