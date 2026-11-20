@@ -299,6 +299,7 @@
         "application/job/tests/crew_pools/activity.rs::final_recovery_crew_is_drawn_once_and_frozen_for_the_run",
         "application/job/tests/crew_pools/admission.rs::a_claimed_leaf_redraws_an_automatic_crew_on_the_followers_own_pressure",
         "application/job/tests/crew_pools/admission.rs::a_limited_pool_member_is_never_drawn_until_its_reading_resets",
+        "application/job/tests/crew_pools/admission.rs::a_running_drains_admission_follows_the_current_crew_pools",
         "application/job/tests/delivery_attention.rs::abandoned_landing_review_settle_reports_abandoned_verdict",
         "application/job/tests/delivery_attention.rs::abandoned_landing_review_settle_step_error_reports_abandoned_verdict",
         "application/job/tests/delivery_attention.rs::blocked_landing_review_settle_still_parses_verdict_and_count",

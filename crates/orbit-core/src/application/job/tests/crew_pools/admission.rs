@@ -266,3 +266,123 @@ fn a_claimed_leaf_redraws_an_automatic_crew_on_the_followers_own_pressure() {
         "under static the claimed crew is unchanged"
     );
 }
+
+/// A running drain's launch-time pools follow the configuration: a crew
+/// removed from `workflow.<tier>_complexity_crews` is no longer drawn by a
+/// later admission, a crew added becomes drawable, and a tier the launch took
+/// from a run override stays as launched. The admitted input records the
+/// pools it used.
+#[test]
+fn a_running_drains_admission_follows_the_current_crew_pools() {
+    use std::collections::BTreeSet;
+
+    use orbit_types::task::{TaskComplexity, TaskStatus};
+
+    if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
+        &a_running_drains_admission_follows_the_current_crew_pools,
+    )) {
+        return;
+    }
+    let root = tempdir().expect("create tempdir");
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).expect("create global root");
+    std::fs::create_dir_all(&workspace).expect("create workspace root");
+    let crews = "[crews.sol]\nprovider = \"codex\"\nmodel = \"sol-model\"\n\n\
+                 [crews.sonnet]\nprovider = \"claude\"\nmodel = \"sonnet-model\"\n\n\
+                 [crews.neon]\nprovider = \"grok\"\nmodel = \"neon-model\"\n";
+    let write = |pool: &str| {
+        std::fs::write(
+            workspace.join("config.toml"),
+            format!("[workflow]\ndefault_crew = \"sol\"\n{pool}\n{crews}"),
+        )
+        .expect("write crew config");
+    };
+    // Created before the pool exists, the task draws the whole pool.
+    write("");
+    let task = OrbitRuntime::from_roots(&global, &workspace)
+        .expect("build runtime")
+        .add_task(crate::application::task::TaskAddParams {
+            title: "Running drain pool fixture".into(),
+            complexity: TaskComplexity::Medium,
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("add task");
+    write("medium_complexity_crews = [\"sol\", \"sonnet\"]");
+    let launch = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
+    let frozen = launch
+        .workspace_complexity_crew_pools()
+        .expect("capture the launch pools");
+    let drain = |pools: serde_json::Value| {
+        launch
+            .stores()
+            .jobs()
+            .insert_job_run(
+                "workspace_auto_pipeline",
+                1,
+                Utc::now(),
+                Some(json!({ "auto_crew_pools": pools })),
+                None,
+            )
+            .expect("insert drain")
+            .run_id
+    };
+    let launched = drain(frozen);
+    let mut overridden = launch
+        .workspace_complexity_crew_pools()
+        .expect("capture the launch pools");
+    overridden["medium"] =
+        json!({"crews": ["sonnet"], "source": "run_input.medium_complexity_crews"});
+    let overriding = drain(overridden);
+
+    // The operator removes `sonnet` and adds `neon` while the drain runs.
+    write("medium_complexity_crews = [\"sol\", \"neon\"]");
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
+    let draws = |parent: &str| {
+        let mut ticket = 16_u64;
+        let mut drawn = BTreeSet::new();
+        let mut last = json!(null);
+        for _ in 0..100 {
+            let mut input = json!({ "task_ids": [task.id] });
+            runtime
+                .install_auto_crew_admission(
+                    "task_local_pipeline",
+                    &mut input,
+                    Some(parent),
+                    false,
+                    &mut || {
+                        ticket += 1;
+                        Ok(ticket)
+                    },
+                )
+                .expect("admit");
+            drawn.insert(input["crew"].as_str().unwrap_or_default().to_string());
+            last = input;
+        }
+        (drawn, last)
+    };
+
+    let (drawn, admitted) = draws(&launched);
+    assert_eq!(
+        drawn,
+        ["neon", "sol"].map(String::from).into(),
+        "the removed crew is gone and the added one drawable"
+    );
+    assert_eq!(
+        admitted["auto_crew_pools"]["medium"]["source"],
+        "workflow.medium_complexity_crews"
+    );
+    let recorded = admitted["auto_crew_pools"]["medium"]["crews"].to_string();
+    assert!(
+        recorded.contains("neon") && !recorded.contains("sonnet"),
+        "the admitted input records the pool it used: {recorded}"
+    );
+
+    let (drawn, _) = draws(&overriding);
+    assert_eq!(
+        drawn,
+        ["sonnet"].map(String::from).into(),
+        "a launch override is not reread from configuration"
+    );
+}

@@ -134,7 +134,61 @@ impl OrbitRuntime {
         pools
     }
 
-    /// Classifiers use the coordinator's frozen policy, including CLI overrides.
+    /// `frozen` pools as a running drain admits with them now: every tier a
+    /// launch captured from `workflow.<tier>_complexity_crews` is read again
+    /// from the current configuration, so a crew removed from a pool stops
+    /// being drawn and a crew added becomes drawable at the drain's next
+    /// admission. A tier the launch took from a run override
+    /// (`run_input.<tier>_complexity_crews`) stays as launched, and so does
+    /// everything when no pools were captured or the configuration cannot be
+    /// read (logged). A change from the frozen pool is logged per tier.
+    pub(super) fn refresh_auto_crew_pools(&self, frozen: CapturedCrewPools) -> CapturedCrewPools {
+        if frozen.is_empty() {
+            return frozen;
+        }
+        let live = match self.capture_auto_crew_pools(&Value::Null) {
+            Ok(live) => live,
+            Err(error) => {
+                tracing::warn!(
+                    "could not read the current crew pools; admitting with the pools captured \
+                     at launch: {error}"
+                );
+                return frozen;
+            }
+        };
+        let names = |pool: &CapturedCrewPool| {
+            pool.crews
+                .iter()
+                .map(|entry| entry.name.clone())
+                .collect::<BTreeSet<_>>()
+        };
+        let mut pools = frozen;
+        for (tier, current) in live {
+            if let Some(launched) = pools.get(&tier)
+                && launched.source.starts_with("run_input.")
+            {
+                continue;
+            }
+            if let Some(launched) = pools.get(&tier) {
+                let (before, after) = (names(launched), names(&current));
+                if before != after {
+                    tracing::info!(
+                        tier = %tier,
+                        source = %current.source,
+                        removed = ?before.difference(&after).collect::<Vec<_>>(),
+                        added = ?after.difference(&before).collect::<Vec<_>>(),
+                        "crew pool changed since the run captured it; admitting with the \
+                         current configuration"
+                    );
+                }
+            }
+            pools.insert(tier, current);
+        }
+        pools
+    }
+
+    /// Classifiers use the coordinator's frozen policy, including CLI overrides,
+    /// with config-sourced pools read again ([`Self::refresh_auto_crew_pools`]).
     /// A read-only call without a run uses the current configuration.
     pub(crate) fn auto_crew_pools_for_input(
         &self,
@@ -146,10 +200,12 @@ impl OrbitRuntime {
             .and_then(non_empty)
             && let Some(run) = self.get_job_run_backend(run_id)?
         {
-            return pools_from_input(run.input.as_ref().unwrap_or(&Value::Null));
+            return Ok(self.refresh_auto_crew_pools(pools_from_input(
+                run.input.as_ref().unwrap_or(&Value::Null),
+            )?));
         }
         if input.get(POOLS_KEY).is_some() {
-            pools_from_input(input)
+            Ok(self.refresh_auto_crew_pools(pools_from_input(input)?))
         } else {
             self.capture_auto_crew_pools(input)
         }
@@ -508,7 +564,7 @@ impl OrbitRuntime {
                 .unwrap_or_else(|| (Vec::new(), source.to_string()))
         } else {
             let pools = if input.get(POOLS_KEY).is_some() {
-                pools_from_input(input)?
+                self.refresh_auto_crew_pools(pools_from_input(input)?)
             } else {
                 self.capture_auto_crew_pools(input)?
             };
