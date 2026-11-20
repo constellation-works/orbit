@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use chrono::{DateTime, Offset, Utc};
 use orbit_agent::{
     antigravity_terminal_error_diagnostic, muse_terminal_failure_diagnostic, provider_usage_limit,
-    provider_usage_limit_details, provider_usage_windows,
+    provider_usage_limit_details, provider_usage_snapshot,
 };
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::ProviderLimitFailure;
@@ -193,8 +193,10 @@ pub(super) fn record_usage_windows(
     } else {
         stdout
     };
-    let mut observations =
-        provider_usage_windows(provider, source, context.codex_home.as_deref(), Utc::now());
+    let snapshot =
+        provider_usage_snapshot(provider, source, context.codex_home.as_deref(), Utc::now());
+    let complete = snapshot.complete;
+    let mut observations = snapshot.observations;
     for observation in &mut observations {
         observation.run_id = (!run_id.is_empty()).then(|| run_id.to_string());
         observation.crew = crew.map(str::to_string);
@@ -202,7 +204,9 @@ pub(super) fn record_usage_windows(
     }
     // [ORB-25967] agy's `/usage` reports every window of the account, so a
     // window or scope it no longer reports is gone, not merely unchanged.
-    if provider == Provider::Antigravity {
+    // [ORB-26000] Only when every known bucket was readable: a still-present
+    // bucket with an unreadable field keeps its previous reading.
+    if provider == Provider::Antigravity && complete {
         if let Err(error) = host.record_provider_usage_reading(&observations) {
             tracing::warn!(
                 provider = provider.as_str(),

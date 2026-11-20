@@ -425,6 +425,57 @@ fi
         .find(|limit| limit.source == ProviderLimitSource::Error)
         .unwrap();
     assert_eq!(kept.resets_at, error.resets_at);
+
+    // [ORB-26000] A still-present known bucket with an unreadable field keeps
+    // its previous reading while its readable sibling updates.
+    let mut partly_unreadable = without_argon.clone();
+    for group in partly_unreadable["command"]["data"]["groups"]
+        .as_array_mut()
+        .unwrap()
+    {
+        for bucket in group["buckets"].as_array_mut().unwrap() {
+            match bucket["id"].as_str().unwrap() {
+                "gemini-5h" => bucket["reset_time"] = json!("not a time"),
+                "3p-weekly" => bucket["remaining_fraction"] = json!(0.5),
+                _ => {}
+            }
+        }
+    }
+    let mixed = run(&partly_unreadable);
+    assert_eq!(
+        scopes(&mixed),
+        scopes(&latest),
+        "the unreadable bucket's window is kept, not retired"
+    );
+    let used = |limits: &[ProviderLimitObservation], model: &str, window: &str| {
+        limits
+            .iter()
+            .find(|limit| {
+                limit.model.as_deref() == Some(model) && limit.window.as_deref() == Some(window)
+            })
+            .and_then(|limit| limit.used_percent)
+    };
+    assert_eq!(used(&mixed, "claude", "3p-weekly"), Some(50.0));
+    assert_eq!(
+        used(&mixed, "gemini", "gemini-5h"),
+        used(&latest, "gemini", "gemini-5h"),
+        "the unreadable bucket keeps its previous reading"
+    );
+
+    // A fully readable reading that lacks the bucket retires it.
+    let mut removed = without_argon.clone();
+    for group in removed["command"]["data"]["groups"].as_array_mut().unwrap() {
+        group["buckets"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|bucket| bucket["id"] != "gemini-5h");
+    }
+    let retired = run(&removed);
+    assert!(
+        !scopes(&retired).contains(&"gemini/gemini-5h".to_string()),
+        "{:?}",
+        scopes(&retired)
+    );
 }
 
 fn antigravity_preserves_launcher_prefix_arguments_in_quota_reads() {

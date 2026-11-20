@@ -7,7 +7,7 @@ use std::time::Duration;
 use chrono::{FixedOffset, TimeZone, Utc};
 use orbit_agent::{
     apply_antigravity_print_timeout, provider_quota_exceeded, provider_usage_limit,
-    provider_usage_limit_details, provider_usage_windows,
+    provider_usage_limit_details, provider_usage_snapshot, provider_usage_windows,
 };
 use orbit_types::workflow::activity_job::Provider;
 
@@ -433,6 +433,27 @@ fn antigravity_quota_command_ignores_unknown_and_invalid_control_data() {
             "invalid {field}"
         );
     }
+    // [ORB-26000] A known enabled bucket that cannot be read leaves the
+    // reading incomplete; an unknown, disabled or absent one does not.
+    let snapshot = |bucket: Value| {
+        let body = json!({"status":"SUCCESS", "command":{"name":"usage", "data":{"groups":[{"buckets":[bucket]}]}}});
+        provider_usage_snapshot(
+            Provider::Antigravity,
+            body.to_string().as_bytes(),
+            None,
+            now,
+        )
+    };
+    let mut unreadable = bucket.clone();
+    unreadable["reset_time"] = json!("invalid");
+    assert!(!snapshot(unreadable).complete);
+    assert!(snapshot(bucket.clone()).complete);
+    let mut other = bucket.clone();
+    other["id"] = json!("future-weekly");
+    assert!(snapshot(other).complete);
+    let mut disabled = bucket.clone();
+    disabled["disabled"] = json!(true);
+    assert!(snapshot(disabled).complete);
     assert!(provider_usage_windows(Provider::Antigravity, b"not json", None, now).is_empty());
     let body = json!({"status":"SUCCESS", "command":{"name":"usage", "data":{"groups":[{"buckets":[{"id":"3p-5h", "window":"5h", "remaining_fraction":0, "reset_time":"2026-10-24T09:00:00Z"}]}]}}});
     let readings = provider_usage_windows(

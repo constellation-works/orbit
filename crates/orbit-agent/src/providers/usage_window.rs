@@ -37,21 +37,56 @@ pub fn provider_usage_windows(
     codex_home: Option<&Path>,
     now: DateTime<Utc>,
 ) -> Vec<ProviderLimitObservation> {
+    provider_usage_snapshot(provider, stdout, codex_home, now).observations
+}
+
+/// One provider reading: its windows and whether they are the account's whole
+/// set. [ORB-26000]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderUsageSnapshot {
+    /// What [`provider_usage_windows`] returns.
+    pub observations: Vec<ProviderLimitObservation>,
+    /// Whether a window the reading lacks is gone from the account. `false`
+    /// when a still-reported window could not be read, so the reading must not
+    /// retire what an earlier one stored.
+    pub complete: bool,
+}
+
+/// [`provider_usage_windows`] with whether the reading is complete. Only
+/// Antigravity's `/usage` command names every window of the account, so every
+/// other provider's reading is incomplete.
+#[must_use]
+pub fn provider_usage_snapshot(
+    provider: Provider,
+    stdout: &[u8],
+    codex_home: Option<&Path>,
+    now: DateTime<Utc>,
+) -> ProviderUsageSnapshot {
+    let incomplete = |observations| ProviderUsageSnapshot {
+        observations,
+        complete: false,
+    };
     match provider {
-        Provider::Claude => claude_usage_windows(stdout, now),
-        Provider::Codex => {
-            codex_home.map_or_else(Vec::new, |home| codex_usage_windows(stdout, home, now))
+        Provider::Claude => incomplete(claude_usage_windows(stdout, now)),
+        Provider::Codex => incomplete(
+            codex_home.map_or_else(Vec::new, |home| codex_usage_windows(stdout, home, now)),
+        ),
+        Provider::Muse => incomplete(muse_usage_windows(stdout, now)),
+        Provider::Grok => incomplete(grok_usage_windows(stdout, now)),
+        Provider::Antigravity => {
+            let (observations, complete) = antigravity_usage_windows(stdout, now);
+            ProviderUsageSnapshot {
+                observations,
+                complete,
+            }
         }
-        Provider::Muse => muse_usage_windows(stdout, now),
-        Provider::Grok => grok_usage_windows(stdout, now),
-        Provider::Antigravity => antigravity_usage_windows(stdout, now),
         Provider::Gemini
         | Provider::Copilot
         | Provider::Ollama
         | Provider::OpenaiCompat
         | Provider::Cursor
         | Provider::Pi
-        | Provider::Opencode => Vec::new(),
+        | Provider::Opencode => incomplete(Vec::new()),
     }
 }
 
