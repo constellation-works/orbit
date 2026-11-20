@@ -168,6 +168,10 @@ struct QuotaRecord {
     #[serde(default)]
     refresh_claimed_at: Option<u64>,
     #[serde(default)]
+    refresh_generation: u64,
+    #[serde(default)]
+    refresh_in_flight: bool,
+    #[serde(default)]
     refreshed_at: Option<u64>,
     #[serde(default)]
     refresh_error: Option<String>,
@@ -194,6 +198,10 @@ struct ResourceRecord {
     calls: CallCounts,
     #[serde(default)]
     refused: CallCounts,
+    /// Reads admitted while an external rate-limit probe was in flight and not
+    /// yet committed by [`apply_answer`].
+    #[serde(default)]
+    in_flight_debits: u64,
 }
 
 impl ResourceRecord {
@@ -365,6 +373,7 @@ impl GithubQuotaStore {
     ) -> Result<(), QuotaRefusal> {
         self.refresh_if_due(policy, account, now, refresh);
         let decided = self.update(account, |record| {
+            let refresh_in_flight = record.refresh_in_flight;
             let entry = record.resources.entry(resource.to_string()).or_default();
             entry.roll_window(now);
             if let Some(refusal) = entry.refusal(policy, caller, resource, now) {
@@ -372,6 +381,9 @@ impl GithubQuotaStore {
                 return Err(refusal);
             }
             entry.calls.bump(caller);
+            if refresh_in_flight {
+                entry.in_flight_debits = entry.in_flight_debits.saturating_add(1);
+            }
             if entry.current(now).is_some() {
                 entry.remaining = entry.remaining.map(|left| left.saturating_sub(1));
             }
@@ -410,7 +422,7 @@ impl GithubQuotaStore {
         refresh: &dyn Fn() -> RateLimitAnswer,
     ) {
         let interval = policy.refresh_seconds();
-        let claimed = self
+        let claim = self
             .update(account, |record| {
                 // `now` was sampled before the lock, so a caller that waited
                 // behind a later claimant can hold an older time: that is
@@ -425,15 +437,25 @@ impl GithubQuotaStore {
                 });
                 if due {
                     record.refresh_claimed_at = Some(now);
+                    record.refresh_generation = record.refresh_generation.wrapping_add(1);
+                    record.refresh_in_flight = true;
+                    for entry in record.resources.values_mut() {
+                        entry.in_flight_debits = 0;
+                    }
+                    Some(record.refresh_generation)
+                } else {
+                    None
                 }
-                due
             })
-            .unwrap_or(false);
-        if !claimed {
+            .ok()
+            .flatten();
+        let Some(claim_generation) = claim else {
             return;
-        }
+        };
         let answer = refresh();
-        let _ = self.update(account, |record| apply_answer(record, answer, now));
+        let _ = self.update(account, |record| {
+            apply_answer(record, answer, now, claim_generation)
+        });
     }
 
     /// Record an authenticated primary rate-limit answer for `resource`:
@@ -507,7 +529,16 @@ impl GithubQuotaStore {
     }
 }
 
-fn apply_answer(record: &mut QuotaRecord, answer: RateLimitAnswer, now: u64) {
+fn apply_answer(
+    record: &mut QuotaRecord,
+    answer: RateLimitAnswer,
+    now: u64,
+    claim_generation: u64,
+) {
+    if !record.refresh_in_flight || record.refresh_generation != claim_generation {
+        return;
+    }
+    record.refresh_in_flight = false;
     record.refreshed_at = Some(now);
     let observed = match answer {
         RateLimitAnswer::Known(observed) => {
@@ -521,6 +552,7 @@ fn apply_answer(record: &mut QuotaRecord, answer: RateLimitAnswer, now: u64) {
     };
     for name in TRACKED_RESOURCES {
         let entry = record.resources.entry(name.to_string()).or_default();
+        let debits = std::mem::take(&mut entry.in_flight_debits);
         match observed.get(name) {
             Some(quota) => {
                 if entry.window_ends_at.is_some_and(|end| now >= end) {
@@ -531,7 +563,15 @@ fn apply_answer(record: &mut QuotaRecord, answer: RateLimitAnswer, now: u64) {
                     entry.window_ends_at = Some(quota.reset_epoch_seconds);
                 }
                 entry.limit = Some(quota.limit);
-                entry.remaining = Some(quota.remaining);
+                let remaining = if entry
+                    .active_hold(now)
+                    .is_some_and(|until| quota.reset_epoch_seconds <= until)
+                {
+                    0
+                } else {
+                    quota.remaining.saturating_sub(debits)
+                };
+                entry.remaining = Some(remaining);
                 entry.reset_epoch_seconds = Some(quota.reset_epoch_seconds);
                 entry.observed_at = Some(now);
                 if quota.remaining == 0 && quota.reset_epoch_seconds > now {
