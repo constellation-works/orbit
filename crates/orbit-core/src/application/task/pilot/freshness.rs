@@ -6,8 +6,17 @@ use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{Task, TaskComment, TaskHistoryEntry};
 
-const PILOT_REQUIREMENTS_EDITED_EVENT: &str = "pilot_requirements_edited";
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
+
+const PILOT_REQUIREMENTS_EDITED_EVENT: &str = "pilot_requirements_edited";
+/// History marker of a `context_files` edit by someone other than the pilot or
+/// Orbit, naming the pilot receipt it follows. A pilot warning or hold clears
+/// automatically when its latest receipt has one; run-time widenings, the
+/// pilot's own selector writes, plans, summaries and comments write none.
+pub(super) const PILOT_CONTEXT_FILES_EDITED_EVENT: &str = "pilot_context_files_edited";
+/// Orbit's own writes, which never ask for a fresh pilot.
+const SYSTEM_WRITER: &str = "system";
 
 impl OrbitRuntime {
     /// Return the latest applied assessment for automatic scheduling. An
@@ -168,6 +177,59 @@ impl OrbitRuntime {
             at: chrono::Utc::now(),
             by: actor.to_string(),
             event: PILOT_REQUIREMENTS_EDITED_EVENT.into(),
+            note: Some(json!({"pilot_operation_id": receipt.operation_id}).to_string()),
+            operation_id: None,
+            from_status: None,
+            to_status: None,
+            decision: None,
+        }))
+    }
+}
+
+/// Whether `history` records a `context_files` edit that followed the pilot
+/// receipt `operation_id`.
+pub(super) fn pilot_context_files_edited(history: &[TaskHistoryEntry], operation_id: &str) -> bool {
+    history.iter().any(|entry| {
+        entry.event == PILOT_CONTEXT_FILES_EDITED_EVENT
+            && entry
+                .note
+                .as_deref()
+                .and_then(|note| serde_json::from_str::<Value>(note).ok())
+                .is_some_and(|record| record["pilot_operation_id"].as_str() == Some(operation_id))
+    })
+}
+
+impl OrbitRuntime {
+    /// Record an ordinary writer's change to `context_files` against the
+    /// task's latest pilot receipt, so the next preparation pass re-pilots a
+    /// held task. The pilot's and Orbit's own writes, and writes that leave the
+    /// selector set unchanged, record nothing. Persisted atomically with the
+    /// task update.
+    pub(crate) fn pilot_context_files_edit_history(
+        &self,
+        task: &Task,
+        params: &TaskUpdateParams,
+        actor: &str,
+    ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
+        let Some(next) = params.context_files.as_ref() else {
+            return Ok(None);
+        };
+        let actor = actor.trim();
+        if actor == super::PILOT_ACTOR || actor == SYSTEM_WRITER {
+            return Ok(None);
+        }
+        let current: BTreeSet<&String> = task.context_files.iter().collect();
+        if next.iter().collect::<BTreeSet<_>>() == current {
+            return Ok(None);
+        }
+        let comments = self.get_task_comments(&task.id)?;
+        let Some((_, receipt)) = super::pilot_receipts(&comments).next() else {
+            return Ok(None);
+        };
+        Ok(Some(TaskHistoryEntry {
+            at: chrono::Utc::now(),
+            by: actor.to_string(),
+            event: PILOT_CONTEXT_FILES_EDITED_EVENT.into(),
             note: Some(json!({"pilot_operation_id": receipt.operation_id}).to_string()),
             operation_id: None,
             from_status: None,

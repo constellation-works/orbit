@@ -744,7 +744,8 @@ fn left_automatic_selection(
 }
 
 /// Whether `task_id`'s latest applied assessment no longer certifies its
-/// current meaning (description or acceptance criteria changed after it),
+/// current meaning (description or acceptance criteria changed after it, or
+/// `context_files` changed after it while the assessment holds a warning),
 /// no live execution claim holds the task, and no failed repilot holds its
 /// current requirements:
 /// automatic discovery reselects such a task for a fresh pilot instead of
@@ -776,21 +777,23 @@ fn stale_repilot_candidate(
         .rev()
         .find(|entry| entry.event == "task_pilot_applied")
         .map(|entry| entry.at);
-    // Only a later requirements edit releases a failed repilot. Envelope,
-    // plan and execution-summary updates must not restart automatic retries.
+    // Only a later requirements or `context_files` edit releases a failed
+    // repilot. Envelope, plan and execution-summary updates must not restart
+    // automatic retries.
     let latest_requirements_edit = history
         .iter()
         .rev()
         .find(|entry| {
-            entry.event == TASK_FIELDS_UPDATED_EVENT
-                && task_fields_updated_documents(entry.note.as_deref().unwrap_or_default())
-                    .iter()
-                    .any(|document| {
-                        matches!(
-                            *document,
-                            DESCRIPTION_DOCUMENT | ACCEPTANCE_CRITERIA_DOCUMENT
-                        )
-                    })
+            entry.event == super::freshness::PILOT_CONTEXT_FILES_EDITED_EVENT
+                || (entry.event == TASK_FIELDS_UPDATED_EVENT
+                    && task_fields_updated_documents(entry.note.as_deref().unwrap_or_default())
+                        .iter()
+                        .any(|document| {
+                            matches!(
+                                *document,
+                                DESCRIPTION_DOCUMENT | ACCEPTANCE_CRITERIA_DOCUMENT
+                            )
+                        }))
         })
         .map(|entry| entry.at);
     if history.iter().any(|entry| {
@@ -812,11 +815,33 @@ fn stale_repilot_candidate(
     let Ok(audit) = serde_json::from_str::<Value>(receipt.body) else {
         return Ok(Some(false));
     };
-    super::freshness::pilot_requirements_stale(&task, &audit, receipt.operation_id, &|| {
-        runtime.get_task_history(task_id)
+    let failed = |error: OrbitError| DispatchError::action_failed(action, error.to_string());
+    if super::freshness::pilot_requirements_stale(&task, &audit, receipt.operation_id, &|| {
+        Ok(history.clone())
     })
-    .map(Some)
-    .map_err(|error| DispatchError::action_failed(action, error.to_string()))
+    .map_err(failed)?
+    {
+        return Ok(Some(true));
+    }
+    // A `context_files` edit answers a holding warning or admission hold: the
+    // usual fix for a scope or footprint finding. A clean assessment is not
+    // reopened by one.
+    if !super::freshness::pilot_context_files_edited(&history, receipt.operation_id) {
+        return Ok(Some(false));
+    }
+    let warned = audit.get("assessment").is_some_and(|assessment| {
+        !super::promotion::warning_hold_findings(assessment, &task.dependencies(), &|id| {
+            runtime.warning_prerequisite_is_done(id)
+        })
+        .is_empty()
+    });
+    if warned {
+        return Ok(Some(true));
+    }
+    runtime
+        .pilot_admission_hold(task_id)
+        .map(|hold| Some(hold.is_some()))
+        .map_err(failed)
 }
 
 /// Whether `task_id` already carries an applied assessment; `None` when its

@@ -373,7 +373,7 @@ fn derive_subject_kind(
                 "orbit.task.recover",
                 "repilot",
                 "task repilot",
-                "Re-pilot after fixing the cited warning",
+                pilot::PILOT_HOLD_CLEARANCE_SUMMARY,
                 &[],
                 "",
             );
@@ -441,18 +441,19 @@ fn derive_subject_kind(
                 .or_else(|| entry.and_then(|entry| entry.note.clone()))
                 .or_else(|| receipt.map(|comment| comment.message.clone()))
                 .unwrap_or_else(|| task.title.clone());
-            let next = if matches!(hold, PilotAdmissionHold::StaleAssessment(_)) {
+            let mut next = if matches!(hold, PilotAdmissionHold::StaleAssessment(_)) {
                 subject.family_tool_next(
                     "orbit.task.recover",
                     "repilot",
                     "task repilot",
-                    "Re-pilot the changed requirements",
+                    pilot::PILOT_HOLD_CLEARANCE_SUMMARY,
                     &[],
                     "",
                 )
             } else {
                 subject.show_next()
             };
+            next.summary = pilot::PILOT_HOLD_CLEARANCE_SUMMARY.into();
             let state = json!({"hold": classification, "operation_id": operation_id.or_else(|| entry.and_then(|entry| entry.operation_id.clone())), "decision_id": null});
             (
                 subject.item(kind, since, &source, json!({"hold": classification}), next),

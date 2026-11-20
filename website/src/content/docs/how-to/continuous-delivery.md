@@ -56,8 +56,13 @@ orbit task show "$TASK_ID" --fields status,context_files
 
 Editing the description or acceptance criteria makes the assessment stale.
 Dispatch holds the task as `pilot_assessment_stale` until a fresh pilot
-completes. The routine and the drain queue that pilot themselves; other edits
-do not, so request one on the owner:
+completes. The routine and the drain queue that pilot themselves. So does an
+edit to `context_files` by a person or an agent session on a `proposed` or
+`backlog` task whose latest assessment holds a warning or an admission hold,
+the usual answer to a scope or footprint finding. A comment, a plan or
+execution-summary update, the pilot's own selector writes and the selectors a
+run adds do not queue a pilot, and an edit to any other field does not either.
+An operator can request one on the owner:
 
 ```bash
 orbit task repilot "$TASK_ID"
@@ -78,8 +83,9 @@ task details under the dashboard's [Tasks view](/how-to/dashboard/#tasks).
 | `utility_warnings` | A criterion needs evidence the agent cannot produce, such as an owner-only audit report. | Rewrite it to a check the agent can repeat, for example "Run `npm run check` and record the outcome". Keep owner-only evidence as a separate operator validation. |
 | `start_prerequisites` | The task says not to start until something else happens. | Record a dependency on the real task, or set `not_before` for a known start time. |
 
-After you add the evidence or rewrite the criterion, run
-`orbit task repilot "$TASK_ID"`. To clear the hold from the dashboard, see
+After you add the evidence, rewrite the criterion or fix the task's
+`context_files`, the next pilot pass reassesses the task on its own; a comment
+does not. An operator can also run `orbit task repilot "$TASK_ID"`. To clear the hold from the dashboard, see
 [Clear a pilot admission hold](/how-to/dashboard/#clear-a-pilot-admission-hold).
 An operator can skip an ordinary pilot-admission hold with the `no-pilot`
 tag; a current host-operational hold stays. See
@@ -154,7 +160,7 @@ whose `context_files` overlap cannot run at once;
 |---|---|---|
 | `surface_reserved` | A critical or high-priority task ahead in the queue is waiting on file locks this task overlaps. | Nothing. It starts once that task starts. |
 | `awaiting_footprint`, `awaiting_exclusive_slot` | The task has no `context_files`, so it holds no lock. The drain waits for the pilot to fill them in, then runs the task alone. | File such tasks as `proposed` so the pilot prepares them first, or have an operator [waive readiness](/how-to/dashboard/#waive-readiness) to let the drain run it beside other work. |
-| `pilot_assessment_stale` | The description or criteria changed after the last assessment. | [Repilot the task](#if-you-edit-a-piloted-task). |
+| `pilot_assessment_stale` | The description or criteria changed after the last assessment. | [Wait for the automatic pilot or repilot the task](#if-you-edit-a-piloted-task). |
 | `pilot_duplicate`, `pilot_already_landed` | The latest pilot assessment found duplicate or already-landed work. | Read the finding in the task comments, then repilot or [record a decision](#override-a-pilot-admission-hold). |
 | `native_os_required` | The criteria need native-host evidence this host cannot produce. | Route the task to a capable host, re-scope the criteria, or [record a decision](#override-a-pilot-admission-hold). |
 | `host_operational_handoff` | The latest pilot disposition is host-operational, and the work still matches that assessment. | Re-scope the acceptance criteria, or [record a decision](#override-a-pilot-admission-hold). Adding `no-pilot` does not release this hold. |
