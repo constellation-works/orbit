@@ -36,6 +36,7 @@ pub(crate) mod builtin;
 pub mod external;
 mod family;
 pub mod github_cli;
+pub mod github_quota;
 mod mcp;
 pub use mcp::builtin_mcp_rules;
 pub mod plugin;

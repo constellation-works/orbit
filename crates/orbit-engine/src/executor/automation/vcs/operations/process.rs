@@ -25,7 +25,9 @@ pub(in crate::executor::automation::vcs) const GITHUB_TRANSIENT_RETRY_DELAY: Dur
 /// used during completion and landing. Pushes have their own remote-confirming retry path;
 /// PR creation and merge are never retried in this process wrapper: `pr_open`
 /// reconciles ambiguous create failures by looking up the head before retrying,
-/// while resending a merge risks a duplicate side effect.
+/// while resending a merge risks a duplicate side effect. A failed read keeps
+/// GitHub's authenticated rate limit typed ([`succeeded_read`]), so the
+/// caller's policy can wait for the reset.
 pub(super) fn execute_with_transient_retry(
     program: &str,
     args: &[String],
@@ -35,7 +37,9 @@ pub(super) fn execute_with_transient_retry(
 ) -> Result<orbit_exec::ExecutionResult, OrbitError> {
     let mut attempt = 1;
     loop {
-        match execute(program, args.to_vec(), current_dir, timeout_ms, operation) {
+        let result = run_vcs_process(program, args.to_vec(), current_dir, timeout_ms)
+            .and_then(|result| succeeded_read(result, operation));
+        match result {
             Ok(result) => return Ok(result),
             Err(error) if attempt < GITHUB_TRANSIENT_ATTEMPTS && is_transient(&error) => {
                 tracing::warn!(target: "orbit_engine::executor::automation::vcs::operations",
@@ -177,6 +181,11 @@ pub(in crate::executor::automation::vcs) fn execute(
 }
 
 /// Run one VCS process and return its outcome, failed or not.
+///
+/// A `gh` call is delivery's spend of the host's GitHub quota: it is admitted
+/// against the host record first, so a hold after a rate-limit answer refuses
+/// it locally with a typed throttle and nothing runs, and its result is
+/// recorded so a rate-limit answer holds every other reader on the host.
 pub(in crate::executor::automation::vcs) fn run_vcs_process(
     program: &str,
     args: Vec<String>,
@@ -200,7 +209,13 @@ pub(in crate::executor::automation::vcs) fn run_vcs_process(
             debug: false,
         }
     };
-    run_process(&request, &NoSandbox)
+    if program == "git" {
+        return run_process(&request, &NoSandbox);
+    }
+    orbit_tools::github_quota::run_gh_request(
+        orbit_tools::github_quota::GithubCaller::Delivery,
+        &request,
+    )
 }
 
 pub(in crate::executor::automation::vcs) fn succeeded(

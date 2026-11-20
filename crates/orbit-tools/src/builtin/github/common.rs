@@ -37,6 +37,27 @@ pub(super) fn in_tool_workspace(mut request: ExecRequest, ctx: &ToolContext) -> 
     request
 }
 
+/// The quota class a `github.*` tool call spends as: an agent's, unless the
+/// host dispatched it as a deterministic job step.
+pub(crate) fn quota_caller(ctx: &ToolContext) -> crate::github_quota::GithubCaller {
+    match ctx.caller {
+        crate::ToolCaller::Agent => crate::github_quota::GithubCaller::Agent,
+        crate::ToolCaller::DeterministicStep(_) => crate::github_quota::GithubCaller::Background,
+    }
+}
+
+/// The `read_run_log_guarded` guard that admits each `gh` subprocess of a
+/// `github.*` tool call against the host's quota.
+pub(crate) fn quota_admission(
+    ctx: &ToolContext,
+) -> impl Fn(&ExecRequest) -> Result<ExecRequest, OrbitError> {
+    let caller = quota_caller(ctx);
+    move |request| {
+        crate::github_quota::admit_gh_request(caller, request)?;
+        Ok(request.clone())
+    }
+}
+
 pub(super) fn gh_schema(name: &str, description: &str, parameters: Vec<ToolParam>) -> ToolSchema {
     ToolSchema {
         name: name.to_string(),
@@ -83,7 +104,10 @@ macro_rules! gh_tool {
                 input: serde_json::Value,
             ) -> Result<serde_json::Value, orbit_common::OrbitError> {
                 let req = self.exec_request(ctx, &input)?;
-                let exec_result = orbit_exec::run_process(&req, &orbit_exec::NoSandbox)?;
+                let exec_result = crate::github_quota::run_gh_request(
+                    crate::builtin::github::quota_caller(ctx),
+                    &req,
+                )?;
                 let $response_ctx = ctx;
                 let $response_input = &input;
                 let $result = &exec_result;

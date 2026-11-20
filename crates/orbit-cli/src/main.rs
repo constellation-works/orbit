@@ -45,6 +45,9 @@ fn main() {
     // Before logging, generation pinning, or any store open. Test binaries
     // never enter `main`, so they keep unknown provenance.
     orbit_common::process::build::register_orbit_build(compiled_orbit_build());
+    // Every `gh` read this process makes spends the host's shared GitHub
+    // quota. Test binaries never enter `main`, so they run `gh` unguarded.
+    orbit_core::runtime::enable_github_quota_guard();
     entry::run::run();
     // Statics are never dropped, so returning from `main` would not flush the
     // JSONL feed either.

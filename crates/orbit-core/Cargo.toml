@@ -23,6 +23,7 @@ test-support = [
   "orbit-engine/test-support",
   "orbit-runtime/test-support",
   "orbit-store/test-support",
+  "orbit-tools/test-support",
 ]
 
 [dependencies]

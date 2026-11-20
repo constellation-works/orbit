@@ -174,6 +174,13 @@ the base every `RuntimeHost` test double in Engine and Core builds on, so the
 host. The test base forwards every capability, including overrides, through its
 blanket implementation.
 
+Tools' dev-only edge to itself enables its `test-support` feature for its own
+integration tests. The feature exports the GitHub quota guard's thread-local
+scoped override (`github_quota::with_scoped_guard`) and the substitute `gh`
+(`FixtureGh`); Engine, Runtime and Core enable it through their own
+`test-support` features to show that a refused read at their execution points
+runs nothing. Shipped builds have neither.
+
 The `orbit-core` → `orbit-exec` edge is a production edge: Core's script steps,
 CodeQL fulfilment, plugin conformance, browser kit reads and Linux host probe use
 Exec, and its sandbox regression tests also enable Exec's `test-support` feature.

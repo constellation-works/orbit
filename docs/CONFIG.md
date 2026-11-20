@@ -217,6 +217,7 @@ task_prefix = "ORB"
 | `machine.worker_tasks_max` | `4096` | Yes | **Advanced.** Scope `TasksMax=` (processes plus threads), at least 1. The macOS watchdog counts processes only. |
 | `machine.worker_cpu_quota` | `0` (unset) | Yes | **Advanced.** Scope `CPUQuota=` as a percentage of one core (`400` = four cores); `0` sets no CPU limit. Linux only. |
 | `machine.mcp.toolsets` | `[]` | Yes (`--global`) | MCP toolsets `orbit mcp serve` and `orbit mcp listen` advertise beside the role, or beside the default surface without one (`notice`, `tasks-write`, `default`, `all`, …). A server's `--toolset` replaces it. See [MCP roles and toolsets](#mcp-roles-and-toolsets). |
+| `machine.github_quota.*` | `20` / `10` / `60` | Yes (`--global`) | The host's GitHub API quota reserves and refresh interval. See [`[machine.github_quota]`](#machinegithub_quota--the-hosts-github-api-quota). |
 | `machine.mcp.role` | unset | Yes (`--global`) | The MCP role `orbit mcp serve` and `orbit mcp listen` serve: `operator`, `manager`, `resident`, `agent` or `reader`. Unset serves the default surface. A server's `--role` replaces it. See [MCP roles and toolsets](#mcp-roles-and-toolsets). |
 
 ### MCP roles and toolsets
@@ -2990,6 +2991,30 @@ The former `notice.*` keys are deprecated and ignored ([validation and errors](#
 - **Run-scoped reads.** Keyed on repository, run, run attempt and scope. Every read first asks GitHub for the run's status and attempt (one `gh api` request) and serves from the cache only when the run is completed at a cached attempt; a rerun has a new attempt and downloads its own log.
 - **Never cached.** A log of a job or run that is not completed, an empty log, a log over the 8 MiB source read limit, and a read whose status request failed. A failed status request or cache file falls back to the plain read; the cache never turns a read into an error.
 - **Bounds.** At most 256 MiB in total and 24 hours per entry. Every store removes entries past either bound (oldest first for size, and staging files a crashed write left behind), and a lookup removes the entry it finds expired. A removal only deletes the file it classified: if a concurrent store has since published a fresh entry under the same name, that entry is kept (stores and removals share one lock file beside the cache directory).
+
+### `[machine.github_quota]` — the host's GitHub API quota
+
+Global-only. Every `gh` call Orbit makes against the GitHub API on a host spends the same account quota: GitHub's REST (`core`) and GraphQL (`graphql`) buckets, 5,000 calls an hour each for a user token, counted apart. Orbit keeps one record per host, GitHub account and resource and refuses a read locally, without calling GitHub, before an agent's reads can stop a delivery [ORB-25868].
+
+```toml
+[machine.github_quota]
+agent_reserve_percent = 20
+background_reserve_percent = 10
+refresh_interval_seconds = 60
+```
+
+| Key | Default | What it is |
+|---|---|---|
+| `machine.github_quota.agent_reserve_percent` | `20` | Share of each resource's limit agent reads may not spend: an agent's `github.*` tool call is refused once the remaining count is at or below it. `0` disables the refusal; valid range `0..=100`. |
+| `machine.github_quota.background_reserve_percent` | `10` | The same for background reads: the CI and security-alert sweeps, auto-task sources and `github.*` calls a deterministic job step makes. `0` disables the refusal; valid range `0..=100`. |
+| `machine.github_quota.refresh_interval_seconds` | `60` | **Advanced.** Shortest interval between two reads of GitHub's rate-limit endpoint on the host, however many processes read; valid range `10..=3600`. The endpoint does not count against the quota. |
+
+- **Caller classes.** Delivery (the private VCS operations behind PR open, completion, landing and merge, and the task PR forge) keeps no reserve and runs the quota to zero. Background reads stop at their reserve, agent reads at theirs. Any other `github.*` call, including attention's CI read, is an agent read.
+- **Hold after a rate-limit answer.** After GitHub's authenticated primary rate-limit answer for a resource, or a rate-limit read showing it empty, every read of that resource on the host, delivery included, is refused locally until GitHub's reset (its `Retry-After` when no reset is known, else one refresh interval). The other resource is unaffected.
+- **Refusal.** A local refusal is the same typed throttle as GitHub's own answer: it names the resource and the time reads may resume and tells an agent not to retry before then, so a completion or landing waits for the reset under its existing deferral policy and a sweep defers as it does for GitHub's answer.
+- **Unknown.** An unreadable or unauthenticated rate-limit answer leaves reads allowed and reports the quota `unknown`, never zero remaining. A failure to read or write the record never refuses a read; a process that can read but not write it still applies the refusals.
+- **Record.** `<Orbit data root>/state/github-quota/<host>-<fingerprint>.json` (`$ORBIT_ROOT` when set, else `~/.orbit`), one file per GitHub host and credential; the fingerprint is a truncated SHA-256, never the token. It holds, per resource, the limit, remaining count, reset and observation time, any hold, and the calls each class made and had refused in the current window. Writes take a lock beside the file and land through an atomic rename. Only the `orbit` binary guards its `gh` calls.
+- **Status.** `orbit tool run github.auth.status` reports the record under `quota`: per resource the limit, remaining count, reset time (`state: unknown` when GitHub's answer could not be read), whether agent, background or delivery reads are currently refused, and each class's call and refusal counts in the current window.
 
 ### `[security_alert_sweep]` — security finding severity
 

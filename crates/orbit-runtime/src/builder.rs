@@ -78,6 +78,24 @@ pub(crate) fn build_context_from_roots(
     let write_free = access == StateAccess::WriteFree;
     let persistence = &runtime_config.persistence;
 
+    // The host's GitHub quota guard reserves come from the machine config; the
+    // guard itself is on only in the `orbit` binary.
+    orbit_tools::github_quota::configure_host_policy(
+        orbit_tools::github_quota::GithubQuotaPolicy {
+            agent_reserve_percent: runtime_config
+                .snapshot
+                .machine_github_quota_agent_reserve_percent,
+            background_reserve_percent: runtime_config
+                .snapshot
+                .machine_github_quota_background_reserve_percent,
+            refresh_interval: std::time::Duration::from_secs(u64::from(
+                runtime_config
+                    .snapshot
+                    .machine_github_quota_refresh_interval_seconds,
+            )),
+        },
+    );
+
     // Every footprint-overlap check this handle makes (reservations, claims,
     // owner admission) applies the owner's `workflow.lock_modes`.
     let footprint_lock_modes = runtime_config.snapshot.footprint_lock_modes()?;

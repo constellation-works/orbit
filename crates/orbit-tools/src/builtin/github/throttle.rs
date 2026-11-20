@@ -40,7 +40,7 @@ pub(super) fn throttle_of(error: &OrbitError) -> Option<ProviderReadThrottle> {
 /// other failure. Header lines (`Retry-After`, `X-RateLimit-Reset`,
 /// `X-RateLimit-Resource`, `X-GitHub-Request-Id`) are read only when the
 /// diagnostic carries them; an absent one stays unknown.
-fn read_throttle(diagnostic: &str) -> Option<ProviderReadThrottle> {
+pub(crate) fn read_throttle(diagnostic: &str) -> Option<ProviderReadThrottle> {
     let lower = diagnostic.to_ascii_lowercase();
     if !(has_status(&lower, "403") || has_status(&lower, "429")) {
         return None;

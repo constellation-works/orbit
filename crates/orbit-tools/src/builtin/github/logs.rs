@@ -583,6 +583,7 @@ fn stream_log_source(
             }
         }
     })?;
+    crate::github_quota::observe_gh_result(request, &result);
     // The supervisor's verdict, not the stderr note it appends, says the read
     // was killed; callers bounding the read by a deadline match this variant.
     if result.timed_out {
@@ -668,6 +669,7 @@ fn read_api_json(
 ) -> Option<Value> {
     let request = guard(&request).ok()?;
     let result = run_process(&request, &NoSandbox).ok()?;
+    crate::github_quota::observe_gh_result(&request, &result);
     if !result.success {
         return None;
     }
@@ -782,6 +784,7 @@ fn recover_from_job_logs(
         let request = match guard(&requests.job_log_request(job.id)) {
             Ok(request) => request,
             Err(error) => {
+                let throttle = throttle_of(&error).or(throttle);
                 return unrecovered(qualify(error.to_string()), selection_unsupported, throttle);
             }
         };
@@ -855,9 +858,13 @@ fn fallback_jobs(
     let view = match cached_run_view {
         Some(view) => view,
         None => {
-            let request = guard(&requests.run_view).map_err(|error| error.to_string())?;
+            let request = guard(&requests.run_view).map_err(|error| FallbackGap {
+                reason: error.to_string(),
+                throttle: throttle_of(&error).map(Box::new),
+            })?;
             let result = run_process(&request, &NoSandbox)
                 .map_err(|error| format!("gh run view could not run: {error}"))?;
+            crate::github_quota::observe_gh_result(&request, &result);
             check_read_result(&result, "gh run view").map_err(|error| FallbackGap {
                 reason: error.to_string(),
                 throttle: throttle_of(&error).map(Box::new),

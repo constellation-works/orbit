@@ -1148,3 +1148,56 @@ fn held_fetch_lock_consumes_only_the_remaining_source_deadline() {
     );
     drop(lock);
 }
+
+/// ORB-25868: once a rate-limit answer holds the host's `graphql` quota, a
+/// source pass's provider read defers without running `gh`.
+#[test]
+fn held_graphql_quota_defers_a_provider_read_without_running_gh() {
+    use orbit_tools::github_quota::{self, GithubQuotaPolicy, GithubQuotaStore, RateLimitAnswer};
+
+    let root = tempfile::tempdir().expect("tempdir");
+    let records = tempfile::tempdir().expect("tempdir");
+    let store = GithubQuotaStore::new(records.path().to_path_buf());
+    let policy = GithubQuotaPolicy::default();
+    let account = github_quota::inherited_account_key();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs();
+    // Claim this interval's refresh, so the pass reads nothing at all.
+    store.refresh_if_due(&policy, &account, now, &|| {
+        RateLimitAnswer::Unknown("fixture".into())
+    });
+    store.record_throttle(
+        &policy,
+        &account,
+        github_quota::RESOURCE_GRAPHQL,
+        &orbit_common::ProviderReadThrottle {
+            reset_epoch_seconds: Some(now + 600),
+            principal: Some("user ID 42".into()),
+            ..Default::default()
+        },
+        now,
+    );
+
+    let error = github_quota::with_scoped_guard(store.clone(), policy, || {
+        Source::new(root.path()).ci_cover_pull_request("#1")
+    })
+    .expect_err("a held provider read defers");
+    assert!(
+        matches!(
+            &error,
+            AutomationError::Deferred(DeferredReason::EvidenceUnavailable(detail))
+                if detail.contains("refused locally without calling GitHub")
+        ),
+        "{error:?}"
+    );
+    let graphql = store
+        .status(&policy, &account, now)
+        .resources
+        .into_iter()
+        .find(|resource| resource.resource == github_quota::RESOURCE_GRAPHQL)
+        .expect("graphql status");
+    assert_eq!(graphql.calls.background, 0, "no provider read may run");
+    assert_eq!(graphql.refused.background, 1);
+}

@@ -2316,12 +2316,14 @@ dependencies = [
 name = "orbit-tools"
 version = "0.51.1"
 dependencies = [
+ "chrono",
  "flate2",
  "jsonschema",
  "libc",
  "orbit-common",
  "orbit-exec",
  "orbit-policy",
+ "orbit-tools",
  "orbit-types",
  "regex",
  "serde",

@@ -155,6 +155,22 @@ impl<'a> Source<'a> {
             return Err(AutomationError::Deferred(DeferredReason::SourceDeadline));
         }
 
+        // A provider read spends the host's GitHub quota as background work:
+        // a read the guard refuses defers this pass and runs nothing.
+        let quota_request = gh_quota_request(program, args, env, self.root);
+        if let Some(request) = &quota_request {
+            orbit_tools::github_quota::admit_gh_request(
+                orbit_tools::github_quota::GithubCaller::Background,
+                request,
+            )
+            .map_err(|error| {
+                AutomationError::Deferred(DeferredReason::EvidenceUnavailable(format!(
+                    "{}: {error}",
+                    command_line(program, args)
+                )))
+            })?;
+        }
+
         let stdin = match input {
             None => Stdio::null(),
             Some(bytes) => {
@@ -246,11 +262,14 @@ impl<'a> Source<'a> {
             return Err(AutomationError::Deferred(DeferredReason::SourceBudget));
         }
         if !outcome.success {
+            let failure = failure_text(&mut diagnostics, &failure_fallback(&outcome));
+            if let Some(request) = &quota_request {
+                orbit_tools::github_quota::observe_gh_failure(request, &failure);
+            }
             return Err(AutomationError::Deferred(
                 DeferredReason::EvidenceUnavailable(format!(
-                    "{}: {}",
+                    "{}: {failure}",
                     command_line(program, args),
-                    failure_text(&mut diagnostics, &failure_fallback(&outcome))
                 )),
             ));
         }
@@ -382,6 +401,39 @@ impl<'a> Source<'a> {
 
 /// Bytes of a child's stderr kept for a deferral reason.
 const FAILURE_TEXT_LIMIT: u64 = 4096;
+
+/// The request the host's GitHub quota guard reads for a `gh` command: the
+/// child inherits this process's environment plus `env`, in `root`. `None`
+/// for any other program.
+fn gh_quota_request(
+    program: &str,
+    args: &[&str],
+    env: &[(&str, &str)],
+    root: &Path,
+) -> Option<orbit_exec::ExecRequest> {
+    if program != "gh" {
+        return None;
+    }
+    let environment_mode = if env.is_empty() {
+        orbit_exec::EnvironmentMode::Inherit
+    } else {
+        let mut merged = std::env::vars().collect::<Vec<_>>();
+        for (key, value) in env {
+            merged.retain(|(name, _)| name != key);
+            merged.push(((*key).to_string(), (*value).to_string()));
+        }
+        orbit_exec::EnvironmentMode::ClearAndSet(merged)
+    };
+    Some(orbit_exec::ExecRequest {
+        program: program.to_string(),
+        args: args.iter().map(|arg| (*arg).to_string()).collect(),
+        current_dir: Some(root.to_string_lossy().into_owned()),
+        timeout_ms: None,
+        stdin_mode: orbit_exec::StdinMode::Null,
+        environment_mode,
+        debug: false,
+    })
+}
 
 fn command_line(program: &str, args: &[&str]) -> String {
     std::iter::once(program)

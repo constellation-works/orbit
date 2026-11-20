@@ -17,7 +17,7 @@ doctest = false
 [features]
 # Test-only hooks for `orbit-core` and its downstream crates' tests. Enable it
 # only from `[dev-dependencies]` or `orbit-core`'s own `test-support` feature.
-test-support = []
+test-support = ["orbit-tools/test-support"]
 
 [dependencies]
 blake3.workspace = true
