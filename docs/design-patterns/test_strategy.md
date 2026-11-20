@@ -1275,6 +1275,77 @@ in which it was the last awaited job, which runs executed the self-tests, and th
 cache (`hit` or `miss`) and scope (`full` or `affected`) strata, with every gap
 kept as uncertainty, never zero. No local figure here claims the budget is restored.
 
+### Shard download attempts bounded at one minute (2026-11-20)
+
+ORB-25825 follows the ORB-25782 audit. In push run 44317809505 (job 134854277098,
+`Test partition 2`), the first `Download nextest archive` attempt logged all four
+digests and `Download artifact has finished successfully` 12.8 s after it started
+(14:00:34.57). The step ended only at the three-minute cap (14:03:21.76), so 167 s sat
+after the action had nothing left to do. Attempt 2 then took 29.5 s. That shard
+set the run's Check to 624 s. The earlier ORB-25511 incident (run 44227650517) was
+a different shape: one part's digest arrived 647 s in.
+
+**Measured before editing.** The shard `Download nextest archive` step of every
+shard job in the 20 most recent completed full-scope `ci.yml` runs (44671366238 back
+to 44666154537, 2026-11-20; 180 pull-request and 60 push shard jobs, 12 per run),
+read from the hosted job logs: step elapsed is the next step's first log line minus
+the step's group line, and the lag is that next line minus the action's own
+`finished successfully` line.
+
+| Measure over 240 first attempts | min | p50 | p90 | p99 | max |
+|---|---:|---:|---:|---:|---:|
+| Step elapsed (s) | 1.95 | 4.57 | 11.21 | 22.24 | **31.81** |
+| Lag after the action's success line (s) | 0.00 | 0.02 | 0.02 | 0.07 | 0.20 |
+
+All 240 downloaded four parts on the first attempt (no retry), three took over 20 s
+(22.2, 30.9 and 31.8 s) and none took over 60 s. The post-completion lag was at most
+0.2 s, so the 167 s case occurred 1 time in 240 jobs here and once in the audit's
+24 runs (about 1 in 290 shard jobs). The per-job rows with run and job IDs are
+attached to the task as `nextest-download-measure.json`.
+
+**The change.** Each of the three attempts has `timeout-minutes: 1` instead of 3
+(the runner takes whole minutes; fractional values were not relied on). One minute is
+about twice the measured maximum (31.8 s) and the 29.5 s retry in the incident, so a
+healthy transfer is not cut and retried. The worst-case stalled attempt now costs
+60 s, not 180 s, and the three attempts together cost at most 180 s, not 540 s, still
+below the 45-minute shard timeout. The incident's 180 s + 29.5 s would be about
+60 s + 30 s. Nothing else changed: three attempts, a fresh directory each, digest
+verification, extraction that requires every part, the last attempt failing the
+shard and Check, and every shard downloading every part. The 155 s single-stream
+transfer that justified the old cap predates the four-part transfer, whose parts
+run in parallel; a transfer that exceeds a minute is retried on fresh streams, as
+the 647 s part was.
+
+**Loopback replay.** The pinned `actions/download-artifact` v8.0.2 (commit
+`9000827ccba6bdab643e8b6fd33ac0654aef8333`) ran against a local Results API serving a
+four-part archive, with the workflow's step definitions and a 1/20 time scale (a workflow
+minute replays in 3 s). A held part and a process that stays alive after printing its
+success line (emulated with a preload that keeps the event loop open after that line)
+each ended at the step's bound, and the next attempt succeeded:
+
+| Replay (x20 = workflow seconds) | Base (3 min) | Candidate (1 min) |
+|---|---:|---:|
+| Hang after success line, then normal retry | 9.18 s (x20: 184 s) | 3.14 s (x20: 63 s) |
+| Held part, then normal retry | 9.17 s (x20: 183 s) | 3.15 s (x20: 63 s) |
+| Three stalled attempts (job fails) | not run | 9.02 s (x20: 180 s) |
+
+Every timeout ended within 0.01 s of its bound. Retries still downloaded all four parts
+into a new directory, extraction still failed on a missing part even though the part
+sat in the earlier directory, three digest mismatches still failed the job, and the
+exhausted case failed it. The replay runs on a laptop, so the time scale cannot show
+that a hosted runner cancels the step at the bound; it shows the bound is the only
+thing that ends such an attempt. Success-path overhead: 10 sequential base/candidate
+pairs of the download step took a median 0.178 s and 0.183 s (+0.005 s), with spreads
+of 0.113 s and 0.236 s; the change adds no step, sleep or transfer.
+
+**Hosted compliance remains open.** This repairs the post-download stall and the
+stalled-attempt cost; it claims no restored budget. After publication, once the latest 20
+completed PR `ci.yml` runs carry this revision, the operator runs
+`python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` under the
+[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff), and reads each
+shard's first-download step elapsed against the 31.8 s maximum above: a first attempt
+that times out at one minute while healthy would show as repeated attempts.
+
 ## Why
 
 On 2026-10-03, unit tests under `crates/*/src/**` were about 295k lines and 7,675 test functions, more lines than the production code they covered. Crate-root integration tests were 37k lines. Most unit tests pinned internals, so a refactor that kept behaviour unchanged still broke dozens of them, and each break cost an agent tokens to repair a test rather than find a bug. A review of all of them kept 180 (2.3%).

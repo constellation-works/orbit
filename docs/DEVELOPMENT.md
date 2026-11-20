@@ -534,7 +534,8 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   the partition proof it waits for after the upload.
 - `Test shard k/N` jobs, one per shard, each need the `Test build` job (`needs: [pr-state, scope, test-build]`), so each starts once the whole build job has finished, including the partition proof the build waits for after the upload. If the build did not succeed, the job fails in its first step, `Require a successful test build`, with `ci-await: Test build concluded <result>: <run url>`. Each job then downloads every part at once (one
   stream per artifact; a single stream ran at 3–10 MB/s on some runners),
-  in at most three download attempts of three minutes each. Each attempt
+  in at most three download attempts of one minute each (the slowest of 240
+  measured transfers took 31.8 s). Each attempt
   downloads to its own directory and verifies artifact digests. A failure or
   timeout in the first two attempts triggers the next one. A failed or timed-out
   third attempt fails the job before extraction. The shard reads every required
