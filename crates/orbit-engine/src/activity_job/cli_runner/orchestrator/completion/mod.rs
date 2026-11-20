@@ -4,6 +4,9 @@ mod failure;
 mod frames;
 mod projection;
 
+#[cfg(test)]
+mod tests;
+
 use std::path::Path;
 use std::time::Duration;
 
