@@ -616,20 +616,6 @@ pub fn validate(message: &str) -> Result<(), CommitMessageViolation> {
     Ok(())
 }
 
-/// The registered trailers of `message`'s final paragraph, in order. Empty
-/// when that paragraph is not wholly `Key: value` lines.
-pub fn parse_trailers(message: &str) -> Vec<Trailer> {
-    let paragraphs = paragraphs(message.trim_end());
-    match paragraphs.split_first() {
-        Some((_, rest)) if !rest.is_empty() => rest
-            .last()
-            .filter(|last| last.lines().all(|line| trailer_shape(line).is_some()))
-            .map(|last| last.lines().filter_map(Trailer::parse_line).collect())
-            .unwrap_or_default(),
-        _ => Vec::new(),
-    }
-}
-
 /// Every registered trailer in any trailer-shaped paragraph after the
 /// subject: what a squash collects from inner commits, including those
 /// written before the standard, whose trailers sat mid-body or shared a
