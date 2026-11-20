@@ -179,7 +179,8 @@ pub struct ProviderUsageStatus {
     pub threshold: ProviderLimitThreshold,
     /// Whether any live reading gates it now.
     pub gated: bool,
-    /// Display-only pressure of this account's account-wide weekly windows.
+    /// Display-only pressure of this account's weekly windows: its
+    /// account-wide ones, or, when none of those counts, its model-scoped ones.
     #[serde(flatten, default)]
     pub usage: UsagePressure,
     /// Its enabled configured crews.
@@ -246,8 +247,9 @@ pub struct ProviderLimitsView {
     /// Pressures for the usage bar: [`Self::providers`], plus one
     /// default-login row when per-model crews share a credential and no
     /// enabled crew of that provider uses the default login. That row's
-    /// pressure is the account-wide weekly pressure of the default login
-    /// and of those sharing accounts. Not part of readiness or doctor.
+    /// pressure is the weekly pressure of the default login and of those
+    /// sharing accounts, taken as [`ProviderUsageStatus::usage`] takes it.
+    /// Not part of readiness or doctor.
     #[serde(skip)]
     pub bar_pressures: Vec<ProviderUsageStatus>,
     /// Each configured crew some live gating reading covers, by name.
@@ -348,12 +350,12 @@ impl ProviderLimitsView {
                     shares_default_login.contains(&(provider.clone(), name.clone()))
                 });
                 ProviderUsageStatus {
-                    usage: UsagePressure::from_readings(
-                        observations.iter().filter(|reading| {
+                    usage: provider_weekly_pressure(
+                        observations,
+                        |reading| {
                             canonical_provider(&reading.provider) == provider
                                 && reading.account == account
-                                && reading.model.is_none()
-                        }),
+                        },
                         now,
                     ),
                     reports_usage: USAGE_REPORTING_PROVIDERS.contains(&provider.as_str()),
@@ -575,8 +577,8 @@ fn accounts_sharing_default_login(crews: &[&Crew]) -> BTreeSet<(String, String)>
 
 /// `providers`, plus a default-login pressure for each provider whose
 /// per-model crews share a credential and that has no default-login status.
-/// The added pressure covers account-wide weekly observations of the default
-/// login and of those sharing accounts, so the bar does not show a per-crew
+/// The added pressure covers weekly observations of the default login and of
+/// those sharing accounts, so the bar does not show a per-crew
 /// neutral value beside the login's own readings.
 fn usage_bar_pressures(
     providers: &[ProviderUsageStatus],
@@ -604,15 +606,15 @@ fn usage_bar_pressures(
             .filter_map(|status| status.account.as_deref())
             .collect();
         bar.push(ProviderUsageStatus {
-            usage: UsagePressure::from_readings(
-                observations.iter().filter(|reading| {
+            usage: provider_weekly_pressure(
+                observations,
+                |reading| {
                     canonical_provider(&reading.provider) == provider
-                        && reading.model.is_none()
                         && reading
                             .account
                             .as_deref()
                             .is_none_or(|account| sharing_accounts.contains(&account))
-                }),
+                },
                 now,
             ),
             reports_usage: USAGE_REPORTING_PROVIDERS.contains(&provider),
@@ -627,6 +629,33 @@ fn usage_bar_pressures(
         });
     }
     bar
+}
+
+/// The weekly pressure of the readings `covers` admits: the minimum over
+/// their account-wide weekly windows, or, when none of those counts, over
+/// their model-scoped weekly windows [ORB-25981]. A provider that reports
+/// every window under a model (antigravity) would otherwise read neutral
+/// beside its live readings.
+fn provider_weekly_pressure(
+    observations: &[ProviderLimitObservation],
+    covers: impl Fn(&ProviderLimitObservation) -> bool,
+    now: DateTime<Utc>,
+) -> UsagePressure {
+    let account_wide = UsagePressure::from_readings(
+        observations
+            .iter()
+            .filter(|reading| reading.model.is_none() && covers(reading)),
+        now,
+    );
+    if account_wide.pressure_window.is_some() {
+        return account_wide;
+    }
+    UsagePressure::from_readings(
+        observations
+            .iter()
+            .filter(|reading| reading.model.is_some() && covers(reading)),
+        now,
+    )
 }
 
 fn canonical_provider(provider: &str) -> String {
