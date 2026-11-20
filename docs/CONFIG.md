@@ -1919,9 +1919,15 @@ again: at most three waits for each read pass (the snapshot, then the
 evidence read around it), each ending before the completion deadline, which
 is never extended and is the only bound on the whole step. A wait only
 precedes a repeated read: a reserved workflow rerun is never sent again by a
-retried observation. Each worktree keeps its repository identity for ten
-minutes and a workflow file's contents at a commit SHA for good, so a
-completion poll does not read them again. When the reset falls
+retried observation. The host's process keeps two small caches so a completion
+poll can skip some repeat reads. A worktree's repository identity is reused for
+ten minutes, but inconclusive snapshot evidence drops it early, so the next
+read fetches it again. A workflow file's contents at a full commit SHA never
+change, so they are reused while cached; the cache is shared by every worktree
+in the process, holds at most 256 entries and is emptied when a new read finds
+it full, and it does not outlive the process. A read the cache no longer holds
+(or that another process makes) spends quota again, so count those reads when
+troubleshooting a rate limit. When the reset falls
 past the deadline, the delivery step fails with GitHub's diagnostic and final
 recovery requeues the unchanged publication without an agent, recording
 `provider-rate-limit`; the next run's completion waits for the reset within
