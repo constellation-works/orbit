@@ -129,8 +129,9 @@ start.
 - **Dashboard:** the Tasks dock's **Drain** tab shows eligible and waiting
   counts and the slots in use. The task list's **Backlog** card sorts tasks
   into **Eligible now**, **Waiting on locks**, **Waiting on capacity** and
-  **Waiting, other**; each row's tooltip names what it waits on. **Locks
-  held** lists the held file locks.
+  **Waiting, other**; each row's tooltip names what it waits on. The **In
+  progress** card counts the files running tasks have locked, and a running
+  row's tooltip lists them.
 - **CLI:**
 
   ```bash
@@ -478,8 +479,8 @@ orbit gc worktrees --reclaim --confirm   # free build output, keep checkouts
 ```
 
 `orbit gc worktrees` collects worktrees whose task is `done`, `rejected` or
-`archived`, or has been parked in `someday` for
-`worktree.parked_reclaim_after_hours` (default 336). `--reclaim` deletes only
+`archived`, or has been parked in `someday` for 14 days (336 hours; the
+`worktree.parked_reclaim_after_hours` key is ignored). `--reclaim` deletes only
 the paths in `worktree.reclaim`. A failed run's checkout stays available for
 rescue. The [`worktree-gc` routine](/how-to/recurring-work/#2-turn-on-routines)
 does the same on a schedule, and also prunes entries in the checkout's
