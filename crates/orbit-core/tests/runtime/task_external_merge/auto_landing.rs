@@ -23,6 +23,7 @@ crate::scenario_table!(
     a_stopped_authorised_run_is_not_reported_as_unauthorised,
     an_authorised_conflicting_pull_request_records_its_follow_up_once,
     two_open_delivery_pull_requests_record_one_ambiguity_follow_up,
+    alternating_blockers_on_one_head_record_each_code_once,
     a_retargeted_pull_request_is_not_merged_and_lands_once_restored
 );
 
@@ -346,4 +347,55 @@ fn a_retargeted_pull_request_is_not_merged_and_lands_once_restored() {
         );
         fx.assert_done(&task, "restored target settles to done");
     }
+}
+
+fn alternating_blockers_on_one_head_record_each_code_once() {
+    // ORB-25996: a failed check, then green checks awaiting the pre-landing
+    // review, then the failed check again on the same head. Each code is
+    // written once per head; a new head writes its own.
+    let fx = Fixture::with_config("[review]\ntiming = \"before_landing\"\n");
+    let task = fx.add_task("Alternating blockers", TaskStatus::Review, &[LAND_PR]);
+    fx.forge
+        .script_land(&task, &fx.base.clone(), &[], MergeabilityAnswer::Mergeable);
+    delivery_run(&fx, &task, "done", JobRunState::Success, None);
+    let owner_pass = || fx.runtime.land_completion_authorized_tasks().unwrap();
+
+    fx.forge.report_failed_checks(&["Check"]);
+    assert!(owner_pass().is_empty());
+    fx.forge.report_failed_checks(&[]);
+    assert!(owner_pass().is_empty());
+    fx.forge.report_failed_checks(&["Check"]);
+    assert!(owner_pass().is_empty());
+    assert!(fx.forge.merges().is_empty(), "a blocked head never merges");
+    fx.assert_status(&task, TaskStatus::Review, "blocked stays in review");
+    let recorded = follow_ups(&fx, &task);
+    assert_eq!(
+        recorded
+            .iter()
+            .map(|entry| (entry.code.as_str(), entry.head_sha.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("required_checks_failed", Some(LAND_HEAD)),
+            ("review_not_settled", Some(LAND_HEAD)),
+        ],
+        "each code is recorded once on the head: {recorded:?}"
+    );
+
+    let moved = "5a".repeat(20);
+    fx.forge.move_head(&moved);
+    fx.forge.report_failed_checks(&["Check"]);
+    assert!(owner_pass().is_empty());
+    let recorded = follow_ups(&fx, &task);
+    assert_eq!(
+        recorded
+            .iter()
+            .map(|entry| (entry.code.as_str(), entry.head_sha.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("required_checks_failed", Some(LAND_HEAD)),
+            ("review_not_settled", Some(LAND_HEAD)),
+            ("required_checks_failed", Some(moved.as_str())),
+        ],
+        "a new head records its own follow-up: {recorded:?}"
+    );
 }

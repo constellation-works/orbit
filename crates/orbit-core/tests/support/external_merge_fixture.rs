@@ -91,6 +91,10 @@ pub(crate) struct ForgeState {
     pub(crate) reads: u32,
     /// The head reports no required check run at all.
     pub(crate) no_required_checks: bool,
+    /// Required checks the scripted head reports as failed.
+    pub(crate) failed_checks: Vec<String>,
+    /// The scripted head's SHA once a test moves it; `LAND_HEAD` otherwise.
+    pub(crate) head: Option<String>,
     pub(crate) merges: Vec<(u64, String)>,
     pub(crate) landed: Option<MergedPullRequest>,
 }
@@ -148,6 +152,15 @@ impl FakeForge {
     /// Whether the scripted head reports no required check run.
     pub(crate) fn report_no_required_checks(&self, absent: bool) {
         self.0.lock().unwrap().no_required_checks = absent;
+    }
+    /// The required checks the scripted head reports as failed; empty clears them.
+    pub(crate) fn report_failed_checks(&self, names: &[&str]) {
+        self.0.lock().unwrap().failed_checks =
+            names.iter().map(|name| (*name).to_string()).collect();
+    }
+    /// Move the scripted pull request's head to `head`.
+    pub(crate) fn move_head(&self, head: &str) {
+        self.0.lock().unwrap().head = Some(head.to_string());
     }
     pub(crate) fn reads(&self) -> u32 {
         self.0.lock().unwrap().reads
@@ -219,23 +232,26 @@ impl TaskPrForge for FakeForge {
             state.reads <= LAND_READ_CAP,
             "mergeability reads ran past the landing budget"
         );
-        match state
+        let mut blockers = match state
             .answers
             .pop_front()
             .unwrap_or_else(|| state.repeat.unwrap())
         {
             MergeabilityAnswer::Unknown => {
-                Err(OrbitError::PullRequestMergeabilityUnknown { number })
+                return Err(OrbitError::PullRequestMergeabilityUnknown { number });
             }
-            MergeabilityAnswer::Conflicting => Ok(Some(Self::blockers(pull, true))),
+            MergeabilityAnswer::Conflicting => Self::blockers(pull, true),
             MergeabilityAnswer::Mergeable => {
                 let mut blockers = Self::blockers(pull, false);
                 if state.no_required_checks {
                     blockers.passed_required_checks.clear();
                 }
-                Ok(Some(blockers))
+                blockers
             }
-        }
+        };
+        blockers.head_sha = state.head.clone().unwrap_or_else(|| LAND_HEAD.into());
+        blockers.failed_required_checks = state.failed_checks.clone();
+        Ok(Some(blockers))
     }
     fn merge_pull_request(
         &self,
