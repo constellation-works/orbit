@@ -7046,6 +7046,16 @@ if [ -f "$forge/infrastructure" ]; then
                 fi ;;
         esac
     fi
+    # [ORB-25917] A snapshot read that stays throttled: the next N reads of the
+    # pull request are rate-limited, uncached, in every snapshot.
+    if [ "$*" = "api repos/{owner}/{repo}/pulls/42" ] && [ -s "$forge/infra-pulls-rate-limited" ]; then
+        left=$(cat "$forge/infra-pulls-rate-limited")
+        if [ "$left" -gt 0 ]; then
+            echo $((left - 1)) > "$forge/infra-pulls-rate-limited"
+            echo 'gh: API rate limit exceeded for user ID 270255973. If you reach out to GitHub Support for help, please include the request ID DE78:121DB1:92BAD8:9B7940:6AFFAFC1 (HTTP 403)' >&2
+            exit 1
+        fi
+    fi
     case "$1 ${2:-}" in
         "api graphql")
             case "$*" in
@@ -7093,6 +7103,9 @@ if [ -f "$forge/infrastructure" ]; then
             mode=$(cat "$forge/infrastructure")
             if [ "$mode" = auth ]; then echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1; fi
             if [ "$mode" != no_apply ]; then touch "$forge/rerun-applied"; fi
+            # [ORB-25917] Throttle the pull-request read from the rerun on, so the
+            # observation of the reserved attempt is the pass that is throttled.
+            if [ -s "$forge/infra-pulls-rate-limited-after-rerun" ]; then cp "$forge/infra-pulls-rate-limited-after-rerun" "$forge/infra-pulls-rate-limited"; fi
             if [ "$mode" = moved ]; then advance "$(cat "$forge/pr-head")" foreign; fi
             if [ "$mode" = deleted ]; then git --git-dir="$remote" update-ref -d "refs/heads/$(cat "$forge/pr-head")"; fi
             if [ "$mode" = lost ] || [ "$mode" = no_apply ]; then echo 'HTTP 503: lost mutation reply' >&2; exit 1; fi

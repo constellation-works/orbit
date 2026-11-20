@@ -278,6 +278,7 @@ pub(super) fn observe_failed_workflow(
     workspace: &Path,
     evidence: &PrInfrastructureEvidence,
     poll_interval_ms: u64,
+    pass: &super::read_reset::SnapshotWaits,
 ) -> Result<Value, OrbitError> {
     let snapshot = prerequisite::snapshot(
         deadline,
@@ -287,6 +288,7 @@ pub(super) fn observe_failed_workflow(
         &evidence.head_branch,
         &evidence.base_branch,
         poll_interval_ms,
+        pass,
     )?;
     if snapshot.repository_id != evidence.repository_id
         || snapshot.repository != evidence.repository
