@@ -140,8 +140,12 @@ keeps its candidate available to resume. Add `--block` to leave the task
 
 A task that fails on a replica goes to `blocked` on the owner, with a summary
 naming the replica's run. `orbit run show <run>` on the replica has the
-detail. After several failures in a row the drain stops asking for work. Fix
-the cause, move the blocked tasks back to `backlog`, and start a new drain.
+detail. After three failed claims in a row the drain stops asking for work, and
+`orbit run show <drain-run>` prints a `Breaker:` line. The drain does not stay
+stopped: after a cooldown (15 minutes by default) it asks for one probe task,
+and a probe that hands off closes the breaker. Fix the cause and move the
+blocked tasks back to `backlog`; if the drain's window has ended, start a new
+drain.
 
 Nothing reclaims a stuck claim on its own, and a dead replica holds its claims
 until you recover them. On the owner's dashboard, open the task, choose a
