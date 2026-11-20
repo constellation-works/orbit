@@ -942,3 +942,211 @@ fn partially_malformed_record_survives_admit_and_reports_unknown_in_status() {
     assert_eq!(core.calls.agent, 1);
     assert_eq!(core.remaining, Some(3999));
 }
+
+/// Regression [ORB-26102]: when a caller's probe is clipped while a peer holds
+/// the record lock at finalization, the caller must stay bounded by its
+/// deadline, preserve the prior valid observation, and still let the next
+/// caller refresh immediately once the lock is released.
+#[test]
+fn clipped_probe_with_contended_finalization_lock_releases_claim_and_preserves_record() {
+    let records = TempDir::new().unwrap();
+    let policy = GithubQuotaPolicy::default();
+    let now = now();
+    let reset = now + 1800;
+    let record_path = records.path().join(format!("{ACCOUNT}.json"));
+    store(records.path()).refresh_if_due(&policy, ACCOUNT, now - 120, &|| known(1000, reset));
+
+    let (probe_started_tx, probe_started_rx) = std::sync::mpsc::channel();
+    let (lock_held_tx, lock_held_rx) = std::sync::mpsc::channel();
+    let dir = records.path().to_path_buf();
+    let started = std::time::Instant::now();
+    let refresher = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_millis(80);
+        store(&dir)
+            .bounded_by(Some(deadline))
+            .refresh_if_due(&policy, ACCOUNT, now, &|| {
+                probe_started_tx.send(()).unwrap();
+                lock_held_rx
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("holder never acquired lock");
+                std::thread::sleep(Duration::from_millis(100));
+                RateLimitAnswer::Clipped("rate-limit read cut short".into())
+            });
+    });
+
+    probe_started_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("probe never started");
+    let lock = orbit_common::fs::io::hold_exclusive_file_lock_options(
+        &record_path,
+        "contending finalization lock",
+        orbit_common::fs::io::FileLockOptions::default(),
+    )
+    .unwrap();
+    lock_held_tx.send(()).unwrap();
+
+    // The clipped refresher must finish within its deadline while the lock is
+    // still held.
+    refresher.join().unwrap();
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "clipped refresh must stay deadline-bounded under finalization contention, took {elapsed:?}"
+    );
+    drop(lock);
+
+    let before = store(records.path()).status(&policy, ACCOUNT, now);
+    let core_before = before
+        .resources
+        .iter()
+        .find(|resource| resource.resource == RESOURCE_CORE)
+        .unwrap();
+    assert_eq!(core_before.state, "known");
+    assert_eq!(core_before.remaining, Some(1000));
+    assert_eq!(before.refresh_error, None);
+    assert!(core_before.agent_reads_refused);
+
+    // Immediately after the lock is released (at the same `now`), the next
+    // caller can refresh without waiting out the interval.
+    let refreshes = AtomicUsize::new(0);
+    store(records.path())
+        .admit(
+            &policy,
+            ACCOUNT,
+            GithubCaller::Agent,
+            RESOURCE_CORE,
+            now,
+            &|| {
+                refreshes.fetch_add(1, Ordering::SeqCst);
+                known(3500, reset)
+            },
+        )
+        .expect("fresh observation above reserve must admit agent read");
+    assert_eq!(
+        refreshes.load(Ordering::SeqCst),
+        1,
+        "subsequent caller must refresh immediately after contended clipped finalization"
+    );
+    let after = store(records.path()).status(&policy, ACCOUNT, now);
+    let core_after = after
+        .resources
+        .iter()
+        .find(|resource| resource.resource == RESOURCE_CORE)
+        .unwrap();
+    assert_eq!(core_after.remaining, Some(3499));
+}
+
+/// Regression [ORB-26102]: a delayed clipped-claim release from an older
+/// refresh generation must never roll back or clear an active or completed
+/// newer refresh generation.
+#[test]
+fn stale_clipped_release_does_not_clobber_newer_refresh_generation() {
+    for complete_newer_before_release in [true, false] {
+        let records = TempDir::new().unwrap();
+        let policy = GithubQuotaPolicy::default();
+        let start = now();
+        let t1 = start + 60;
+        let t2 = t1 + 60;
+        let reset = t2 + 1800;
+        let record_path = records.path().join(format!("{ACCOUNT}.json"));
+        store(records.path()).refresh_if_due(&policy, ACCOUNT, start, &|| known(1000, reset));
+
+        let (a_started_tx, a_started_rx) = std::sync::mpsc::channel();
+        let (a_proceed_tx, a_proceed_rx) = std::sync::mpsc::channel();
+        let dir_a = records.path().to_path_buf();
+        let caller_a = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_millis(80);
+            store(&dir_a)
+                .bounded_by(Some(deadline))
+                .refresh_if_due(&policy, ACCOUNT, t1, &|| {
+                    a_started_tx.send(()).unwrap();
+                    a_proceed_rx
+                        .recv_timeout(Duration::from_secs(10))
+                        .expect("caller A never signaled to finish");
+                    std::thread::sleep(Duration::from_millis(100));
+                    RateLimitAnswer::Clipped("stale clipped probe".into())
+                });
+        });
+
+        a_started_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("caller A never claimed generation");
+
+        let mut caller_b = None;
+        let b_finish = Arc::new(Barrier::new(2));
+        if complete_newer_before_release {
+            store(records.path()).refresh_if_due(&policy, ACCOUNT, t2, &|| known(3500, reset));
+        } else {
+            let b_started = Arc::new(Barrier::new(2));
+            let dir_b = records.path().to_path_buf();
+            let b_started_worker = Arc::clone(&b_started);
+            let b_finish_worker = Arc::clone(&b_finish);
+            caller_b = Some(std::thread::spawn(move || {
+                store(&dir_b).refresh_if_due(&policy, ACCOUNT, t2, &|| {
+                    b_started_worker.wait();
+                    b_finish_worker.wait();
+                    known(3500, reset)
+                });
+            }));
+            b_started.wait();
+        }
+
+        // Hold the record lock so caller A must stage its clipped release
+        // instead of acquiring the completion lock.
+        let lock = orbit_common::fs::io::hold_exclusive_file_lock_options(
+            &record_path,
+            "contending lock for stale clipped release",
+            orbit_common::fs::io::FileLockOptions::default(),
+        )
+        .unwrap();
+        a_proceed_tx.send(()).unwrap();
+        caller_a.join().unwrap();
+        drop(lock);
+
+        if let Some(worker) = caller_b {
+            // While generation 3 is still in flight, reconciling the stale
+            // generation 2 release must leave `refresh_in_flight` and
+            // `in_flight_debits` intact.
+            store(records.path())
+                .admit(
+                    &policy,
+                    ACCOUNT,
+                    GithubCaller::Delivery,
+                    RESOURCE_CORE,
+                    t2,
+                    &|| unreachable!("newer generation refresh is already in flight"),
+                )
+                .unwrap();
+            b_finish.wait();
+            worker.join().unwrap();
+        }
+
+        let refreshes = AtomicUsize::new(0);
+        store(records.path()).refresh_if_due(&policy, ACCOUNT, t2, &|| {
+            refreshes.fetch_add(1, Ordering::SeqCst);
+            known(999, reset)
+        });
+        assert_eq!(
+            refreshes.load(Ordering::SeqCst),
+            0,
+            "stale clipped release must not reopen newer generation's interval (completed_before={complete_newer_before_release})"
+        );
+
+        let status = store(records.path()).status(&policy, ACCOUNT, t2);
+        let core = status
+            .resources
+            .iter()
+            .find(|resource| resource.resource == RESOURCE_CORE)
+            .unwrap();
+        let expected_remaining = if complete_newer_before_release {
+            3500
+        } else {
+            3499
+        };
+        assert_eq!(
+            core.remaining,
+            Some(expected_remaining),
+            "completed_before={complete_newer_before_release}"
+        );
+    }
+}
