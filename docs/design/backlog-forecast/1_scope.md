@@ -100,32 +100,42 @@ with empty selectors made the whole workspace unavailable.
     (gaps plus its distinct drawn fixes). A bounded pool reports adjusted
     totals drawn from its measured bundles. The scenario's
     `regression_rework.bounded_gap` then discloses the bounded members'
-    distinct `gaps`, `drawn_fixes`, `gap_share`, `max_gap_share`,
-    `by_reason` and `tasks`. An unbounded pool with any gap still withholds
-    the scenario's adjusted totals with `pre_regression_baseline`.
+    distinct `gaps`, `drawn_fixes`, `gap_share` (the fraction of those fix
+    observations that are gaps), `max_gap_share`, `by_reason` and `tasks`.
+    An unbounded pool with any gap still withholds the scenario's adjusted
+    totals with `pre_regression_baseline`.
   - *Honest limitation.* A bounded forecast assumes the unmeasured fixes
     cost what the measured bundles cost. Bundles of an origin with both
     measured and hand-repaired fixes are drawn without the hand repairs. The
-    disclosed share caps that bias rather than hiding it. No proxy cost is
-    invented for a hand repair.
+    disclosed `gap_share` reports how many fix observations are unmeasured
+    (each bounded pool holds at most 10%), not how far their costs may differ
+    from the measured ones; that error is neither bounded nor estimated. No
+    proxy cost is invented for a hand repair.
   - An item's rework is supported when it has a risk probability, a
     nonempty pool, and either no gap in it or bounded gaps. A gap outside
     the pool an item samples does not affect it. No completed fix at all,
     or a pool whose every fix is unmeasured, leaves the pool empty and the
     rework unavailable (`regression_history_missing`), never zero.
 - **Response.** `inputs.regression_rework` (and each scenario's
-  `regression_rework.support`) keeps `missing_fix_history`, now the
-  unsupported gap count, and adds `missing_by_reason`,
-  `recovered_footprints` and `excluded`. Each task prediction and stored
-  task adds `regression_history_gaps`, the gaps in its pool.
-  `unavailable.regression_history_missing` is true when a member's pool is
-  empty or holds a gap. The new `unavailable.regression_history_gaps`
-  counts the gaps relevant to the scenario's members by reason.
+  `regression_rework.support`) keeps `missing_fix_history`, the count of all
+  recorded gaps with bounded ones included (not only the unsupported ones),
+  and adds `missing_by_reason`, `recovered_footprints` and `excluded`. Each
+  task prediction and stored task adds `regression_history_gaps`, the gaps in
+  its pool.
+  `unavailable.regression_history_missing` is true only when a member's
+  `history_supported` is false: its pool is empty or holds a gap that is not
+  bounded. A bounded gap pool leaves it false. The new
+  `unavailable.regression_history_gaps` counts the gaps relevant to the
+  scenario's members by reason.
   `coverage.regression_history_missing` counts those tasks. Model 21 adds
   `coverage.regression_history_bounded`, the tasks reported over bounded
   gaps, along with `support.recovered_in_origin_review`,
   `support.max_bounded_gap_share` and the scenario's
-  `regression_rework.bounded_gap` (null when no member's pool is bounded).
+  `regression_rework.bounded_gap`. It is null whenever any included member's
+  rework is unsupported (`regression_rework.available` is false), even when
+  another pool is bounded. It is present only when every included member's
+  rework is supported (a risk probability and a supported pool) and at least
+  one of those pools is bounded.
 - **Storage.** Stored model-13 rows stay readable and scored under their
   own version. While 14 was current, the default read served only a
   model-14 snapshot, so a fresh model-13 row was recomputed live, under
