@@ -15,7 +15,8 @@
 //!   or `held` on a delivery hold a fresh forge read can clear;
 //! - no `completion.hold` rule holds it, and the pre-landing review covers the
 //!   pull request's head;
-//! - its one open delivery pull request is mergeable with every required
+//! - its one open delivery pull request (several record
+//!   `ambiguous_delivery_pull_requests` and merge nothing) is mergeable with every required
 //!   check passed, and, when a stopped native run published it, still is the
 //!   revision that run published: settlement rejects any other, so a moved
 //!   branch records `publication_identity_changed` and merges nothing.
@@ -41,6 +42,7 @@ use orbit_types::workflow::handoff::{
 use orbit_types::workflow::{COMPLETION_HELD_EVENT, current_completion_hold};
 use serde::{Deserialize, Serialize};
 
+use super::land::OpenDelivery;
 use crate::OrbitRuntime;
 use crate::application::task::{
     DeliveryCompletion, TaskJobPort, TaskRecordUpdateParams, TaskRecords, TaskReviewPort,
@@ -55,6 +57,9 @@ pub const LANDING_FOLLOW_UP_EVENT: &str = "landing_follow_up";
 /// Who records the follow-up and settles the merge in task history.
 const AUTO_LAND_ACTOR: &str = "owner-landing";
 
+/// Follow-up code for a task with several open delivery pull requests.
+const AMBIGUOUS_DELIVERY_CODE: &str = "ambiguous_delivery_pull_requests";
+
 /// The owner of a follow-up that needs a person.
 pub const FOLLOW_UP_OWNER_OPERATOR: &str = "operator";
 
@@ -63,11 +68,13 @@ pub const FOLLOW_UP_OWNER_OPERATOR: &str = "operator";
 pub struct LandingFollowUp {
     /// Stable reason code: `completion_not_authorized`,
     /// `pull_request_conflicting`, `required_checks_failed`,
-    /// `publication_identity_changed`, `review_not_settled` or `merge_refused`.
+    /// `publication_identity_changed`, `review_not_settled`, `merge_refused` or
+    /// `ambiguous_delivery_pull_requests`.
     pub code: String,
     /// Who acts next: `operator`.
     pub owner: String,
-    /// The pull request.
+    /// The pull request; for `ambiguous_delivery_pull_requests`, the lowest of
+    /// the several open ones (the detail lists all).
     pub pull_request: u64,
     /// The pull request head the reason was judged at.
     pub head_sha: Option<String>,
@@ -158,8 +165,28 @@ impl OrbitRuntime {
         {
             return Ok(None);
         }
-        let Some(number) = self.open_delivery_pull_request(&candidate)? else {
-            return Ok(None);
+        let number = match self.open_delivery_pull_request(&candidate)? {
+            OpenDelivery::One(number) => number,
+            OpenDelivery::None => return Ok(None),
+            OpenDelivery::Several(numbers) => {
+                // Choosing between them is the operator's: merge nothing and
+                // say so on the task.
+                self.record_follow_up(
+                    &task,
+                    &history,
+                    LandingFollowUp {
+                        code: AMBIGUOUS_DELIVERY_CODE.to_string(),
+                        owner: FOLLOW_UP_OWNER_OPERATOR.to_string(),
+                        pull_request: numbers[0],
+                        head_sha: None,
+                        detail: format!(
+                            "several open pull requests deliver this task: {numbers:?}; \
+                             close all but the one to land"
+                        ),
+                    },
+                )?;
+                return Ok(None);
+            }
         };
         let repo_root = self.context.paths().repo_root.clone();
         let forge = self.task_pr_forge();
@@ -348,7 +375,8 @@ impl OrbitRuntime {
         )
     }
 
-    /// Append `follow_up` unless the newest one already names this code and head.
+    /// Append `follow_up` unless the newest one already names this code and head
+    /// (and, for an ambiguity, the same set of pull requests).
     fn record_follow_up(
         &self,
         task: &Task,
@@ -361,7 +389,10 @@ impl OrbitRuntime {
             .filter(|entry| entry.event == LANDING_FOLLOW_UP_EVENT)
             .find_map(|entry| serde_json::from_str::<LandingFollowUp>(entry.note.as_deref()?).ok());
         if newest.as_ref().is_some_and(|recorded| {
-            recorded.code == follow_up.code && recorded.head_sha == follow_up.head_sha
+            recorded.code == follow_up.code
+                && recorded.head_sha == follow_up.head_sha
+                && (follow_up.code != AMBIGUOUS_DELIVERY_CODE
+                    || recorded.detail == follow_up.detail)
         }) {
             return Ok(());
         }

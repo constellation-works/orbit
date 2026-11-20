@@ -59,6 +59,17 @@ pub struct TaskPullRequestLanding {
     pub settlement_pending: Option<String>,
 }
 
+/// The open delivery pull requests a task has.
+pub(super) enum OpenDelivery {
+    /// None of the task's recorded pull requests is open.
+    None,
+    /// Exactly one open pull request delivers the task.
+    One(u64),
+    /// Several open pull requests deliver the task, ascending. Which one lands
+    /// is not Orbit's choice.
+    Several(Vec<u64>),
+}
+
 pub(super) fn landing_refused(id: &str, reason: impl std::fmt::Display) -> OrbitError {
     OrbitError::PolicyDenied(format!(
         "{TASK_LANDING_REFUSED}: task '{id}' did not land: {reason}"
@@ -109,22 +120,31 @@ impl OrbitRuntime {
         self.ensure_mutation_proposals_applied(&candidate.task)
             .map_err(|error| landing_refused(id, error))?;
 
-        let Some(number) = self.open_delivery_pull_request(&candidate)? else {
-            // Nothing is open: a merge this call lost the reply of, or one made
-            // outside Orbit, settles here; otherwise this names why not.
-            let settled = self
-                .settle_externally_merged_task_as(id, actor)
-                .map_err(|error| match error {
-                    OrbitError::InvalidInput(reason) => landing_refused(id, reason),
-                    error => error,
-                })?;
-            return Ok(TaskPullRequestLanding {
-                task_id: settled.task_id,
-                pull_request: settled.pr_number,
-                merge_commit: settled.merge_commit,
-                status: TaskStatus::Done,
-                settlement_pending: None,
-            });
+        let number = match self.open_delivery_pull_request(&candidate)? {
+            OpenDelivery::One(number) => number,
+            OpenDelivery::Several(numbers) => {
+                return Err(landing_refused(
+                    id,
+                    format_args!("it has several open delivery pull requests: {numbers:?}"),
+                ));
+            }
+            OpenDelivery::None => {
+                // Nothing is open: a merge this call lost the reply of, or one made
+                // outside Orbit, settles here; otherwise this names why not.
+                let settled = self.settle_externally_merged_task_as(id, actor).map_err(
+                    |error| match error {
+                        OrbitError::InvalidInput(reason) => landing_refused(id, reason),
+                        error => error,
+                    },
+                )?;
+                return Ok(TaskPullRequestLanding {
+                    task_id: settled.task_id,
+                    pull_request: settled.pr_number,
+                    merge_commit: settled.merge_commit,
+                    status: TaskStatus::Done,
+                    settlement_pending: None,
+                });
+            }
         };
         let merge_commit = self.merge_delivery_pull_request(id, number, None)?;
         // The work has landed, so a settlement that fails now is not a failed
@@ -193,13 +213,13 @@ impl OrbitRuntime {
         Ok(())
     }
 
-    /// The candidate's one open PR that may deliver it, or `None` when none of
-    /// its PRs is open. An open PR that cannot deliver the task, or more than
-    /// one that can, is refused: the choice is not this call's to make.
+    /// The candidate's open PRs that may deliver it. An open PR that cannot
+    /// deliver the task is refused; several that can are reported as
+    /// [`OpenDelivery::Several`], because the choice is not this call's to make.
     pub(super) fn open_delivery_pull_request(
         &self,
         candidate: &Candidate,
-    ) -> Result<Option<u64>, OrbitError> {
+    ) -> Result<OpenDelivery, OrbitError> {
         let id = candidate.task.id.as_str();
         let repo_root = self.context.paths().repo_root.clone();
         let forge = self.task_pr_forge();
@@ -216,7 +236,7 @@ impl OrbitRuntime {
             }
         }
         if open.is_empty() {
-            return Ok(None);
+            return Ok(OpenDelivery::None);
         }
         let authors = self.settlement_authors(&repo_root);
         let mut delivering = Vec::new();
@@ -243,13 +263,11 @@ impl OrbitRuntime {
             }
             delivering.push(pull.number);
         }
-        match delivering.as_slice() {
-            [number] => Ok(Some(*number)),
-            numbers => Err(landing_refused(
-                id,
-                format_args!("it has several open delivery pull requests: {numbers:?}"),
-            )),
-        }
+        delivering.sort_unstable();
+        Ok(match delivering.as_slice() {
+            [number] => OpenDelivery::One(*number),
+            _ => OpenDelivery::Several(delivering),
+        })
     }
 
     /// Merge `number` at the head whose required checks were just read.
