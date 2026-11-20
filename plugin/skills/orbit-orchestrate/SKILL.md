@@ -34,7 +34,9 @@ Inspect → deduplicate → author → prepare → promote → dispatch → veri
   `orbit.attention` (`orbit attention`) on the owning host for the workspaces
   you supervise. Clear each `pilot_warning` and `pilot_hold`: repair the task
   (criteria, context, dependencies; `required_tools` is set only at filing, so
-  re-file to change it) and re-pilot, or record on the task why it stays.
+  re-file to change it), then re-pilot only if the hold stays, or record on the
+  task why it stays. A `context_files` edit by you on a proposed or backlog task
+  re-pilots it on its own.
   Treat an empty result as clear only when `degraded` is empty and the read
   reached the owner: a federated read that misses the owner can return
   nothing. A caller holding neither the agent nor the operator capability
