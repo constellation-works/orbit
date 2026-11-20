@@ -231,7 +231,9 @@ A retired key still loads, with a deprecation warning that names its
 replacement or the value now fixed. `orbit config get` and `set` refuse it.
 Delete it, or run `orbit doctor --fix-retired-config-keys`, which backs up
 each affected file, writes renamed values under their replacement and removes
-the rest. Most ignored keys stop being recognised on 2026-12-07 or
+the rest. A deprecated boolean `machine.worker_containment` is not a retired key:
+the repair rewrites its value in place and keeps the key, which stays settable.
+Most ignored keys stop being recognised on 2026-12-07 or
 2026-12-08, as their warning says, and then count as unknown settings.
 
 | Retired | Now |
@@ -240,7 +242,8 @@ the rest. Most ignored keys stop being recognised on 2026-12-07 or
 | `operation.review_minutes`, `operation.review_crew` | `review.minutes`, `workflow.purpose_crews.review` |
 | `workflow.final_recovery_crews` | `workflow.purpose_crews.final_recovery` |
 | The `ci_failure_sweep`, `dependabot` and `merged_head_repair` purpose pools | `workflow.purpose_crews.sweep_tasks`. A file whose old pools differ fails to load until you merge them. |
-| `machine.worker_containment_strict`, a boolean `machine.worker_containment` | `machine.worker_containment` set to `off`, `warn` or `strict` |
+| `machine.worker_containment_strict` | `machine.worker_containment` set to `strict` when `true`; `false` keeps the boolean's mode |
+| A boolean `machine.worker_containment` (a deprecated value, not a retired key) | Rewritten in place, and the key stays settable: `true` becomes `warn`, `false` becomes `off`, or `strict` when `worker_containment_strict = true` is also set |
 | `workflow.crew_performance_types` | `workflow.task_types` |
 | `workflow.system_crew`, `crew: system` in a template or job | Ignored. System work routes through the [pools](#system-work). |
 | `[visual_review]`, `[ux_rules]`, `[lease]`, `[assistance]`, `[workflow.crew_ladder]`, `[workflow.regression_risk]`, `[workflow.explore_brief]`, `[review.selective_before_landing]`, `[machine.web_terminal]`, `[machine.web_session]`, `workflow.explore.*`, `workflow.crew_performance*`, `workflow.auto_ship`, `review.verify_findings`, `publication.routine_*`, the `explorer` and `visual_review` purpose pools | Ignored. The feature was removed. |
@@ -613,7 +616,7 @@ and `machine.task_prefix`. `orbit config keys` prints the same list.
 | `machine.labels` | array of strings · **Default:** `[]`<br>Global only. Capability labels, such as `["gpu", "xcode"]`. A host starts a task only when it carries every label in the task's `requires_labels`. Its OS (`linux`, `macos` or `windows`) is an implicit label. |
 | `machine.id` | string · **Default:** Set by `orbit init`<br>Global only, read-only. This machine's generated identity (`hm_…`), written once by `orbit init`. |
 | `machine.task_prefix` | string · **Default:** Set by `orbit init`<br>Global only, read-only. Namespace for task IDs minted on this machine (2–5 uppercase ASCII letters), chosen once at `orbit init`. |
-| `machine.worker_containment` | string · **Default:** `warn`<br>Global only. How detached pipeline workers are bounded. `warn`: on Linux each runs in a systemd user scope under the `machine.worker_*` limits (uncontained, with a warning, without a user manager); on macOS a watchdog stops a run past `worker_memory_max` or `worker_tasks_max`. `strict` refuses a launch without kernel containment, including every macOS launch. `off` uses neither. |
+| `machine.worker_containment` | string · **Default:** `warn`<br>Global only. How detached pipeline workers are bounded. `warn`: on Linux each runs in a systemd user scope under the `machine.worker_*` limits (uncontained, with a warning, without a user manager); on macOS a watchdog stops a run past `worker_memory_max` or `worker_tasks_max`. `strict` refuses a launch without kernel containment, including every macOS launch. `off` uses neither. A boolean is deprecated: `true` reads as `warn` (or `strict` beside `worker_containment_strict = true`) and `false` as `off`. |
 | `machine.worker_memory_high` | **Advanced.** string · **Default:** `40%`<br>Global only. Linux worker scope `MemoryHigh=` (throttle point): a size such as `6G`, a percentage of RAM, or `infinity`. Not applied on macOS. |
 | `machine.worker_memory_max` | **Advanced.** string · **Default:** `50%`<br>Global only. Worker scope `MemoryMax=` (OOM point), same format. The macOS watchdog uses it as its memory ceiling. |
 | `machine.worker_tasks_max` | **Advanced.** integer · **Default:** `4096`<br>Global only. Worker scope `TasksMax=` (processes plus threads). The macOS watchdog counts processes only. |

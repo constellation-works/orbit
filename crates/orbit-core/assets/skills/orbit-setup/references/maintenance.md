@@ -177,7 +177,7 @@ inexplicably. It has targeted repairs, each narrow on purpose:
 | `--fix-stale-locks` | Lock files whose recorded holder process is dead. |
 | `--fix-stale-task-locks` | Task reservations whose owner and task state are conclusively inactive. |
 | `--fix-stale-artifacts` | Retires deprecated skills, jobs, activities, auto-tasks, and routines that Orbit itself wrote. Locally modified ones are preserved, not deleted. |
-| `--fix-retired-config-keys` | Backs up each edited `config.toml` and removes retired or deprecated keys, first writing each deprecated key's translated value under its replacement key in the same layer while preserving explicit modern values. A second successful run writes nothing. Any legacy after-landing policy refuses before either config is changed or backed up; migrate it manually first. |
+| `--fix-retired-config-keys` | Backs up each edited `config.toml` and removes retired or deprecated keys, first writing each deprecated key's translated value under its replacement key in the same layer while preserving explicit modern values. The exception is a deprecated boolean `machine.worker_containment`: the repair rewrites its value in place (`true` to `"warn"`, `false` to `"off"`, or `"strict"` when `worker_containment_strict = true` is also set) and keeps the key, which stays settable. A second successful run writes nothing. Any legacy after-landing policy refuses before either config is changed or backed up; migrate it manually first. |
 | `--fix-automation-pins` | Deletes this Orbit root and workspace's own state-routine attempt pins that no consumer or live run still names. Legacy shared `refs/orbit/automation/<attempt>` pins and other roots' or workspaces' pins are retained and reported. Refuses while a routine sweep runs. |
 | `--fix-state-directory-permissions` | Restricts writable Orbit state directories to owner-only access, excluding run worktrees, Cargo target trees, and child symlinks (Unix only). |
 | `--fix-orphan-task-stores` | Deletes empty unclaimed task-store partitions, and populated partitions whose bound checkout is confirmed absent, including their task bundles. Unowned or unreachable populated partitions are left alone. Requires `--confirm`. |
@@ -276,8 +276,8 @@ value wins and the old key is simply removed.
 | `workflow.final_recovery_crews` | `workflow.purpose_crews.final_recovery`, the same pool | None stated |
 | `workflow.purpose_crews.ci_failure_sweep`, `dependabot`, `merged_head_repair` | `workflow.purpose_crews.sweep_tasks`, the one pool every sweep-filed task draws from. Load fails while one file sets them to different pools. | None stated |
 | `review.before_pr`, `review.before_landing` | `review.timing`: `before_pr`, `before_landing` or `off`. Both set to `true` fails load. | None stated |
-| `machine.worker_containment` as `true` or `false` | `"warn"` or `"off"` (rewritten in place; key stays settable) | None stated |
-| `machine.worker_containment_strict` | `machine.worker_containment = "strict"` when `true`; refused beside `false` | None stated |
+| `machine.worker_containment` as `true` or `false`, with `machine.worker_containment_strict` absent | `"warn"` or `"off"` (rewritten in place; key stays settable) | None stated |
+| `machine.worker_containment_strict` | `machine.worker_containment = "strict"` when `true`; `false` keeps the boolean's mode. Refused beside a `false` boolean. | None stated |
 | `workflow.crew_performance_types` | `workflow.task_types`, the same ordered entries | 2026-12-07 |
 
 **Ignored** keys have no value to set. Delete them.
