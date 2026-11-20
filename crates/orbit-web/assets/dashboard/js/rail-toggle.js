@@ -25,8 +25,10 @@ export function initRailToggle() {
   const rail = document.getElementById("navigation-rail");
   const button = document.getElementById("rail-toggle");
   const host = document.getElementById("host-block");
+  const tabs = document.getElementById("tabs");
   const shell = rail?.closest(".shell");
-  if (!shell || !button || !host) return;
+  if (!shell || !button) return;
+  const slideTarget = tabs || host;
   const phone = window.matchMedia("(max-width: 760px)");
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   let rememberedCollapsed = loadRailCollapsedPref();
@@ -38,7 +40,7 @@ export function initRailToggle() {
     button.setAttribute("aria-label", collapsed ? "Show navigation" : "Hide navigation");
     // Keep focus on the surviving button before withdrawing its neighbours.
     if (collapsed && rail.contains(document.activeElement)) button.focus();
-    for (const content of rail.querySelectorAll(".rail-host, .rail-workspace, .tabs, #host-block, .rail-conn, .clock-zone")) {
+    for (const content of rail.querySelectorAll(".rail-host, .rail-workspace, .tabs, .rail-foot, #host-block, .rail-conn, .clock-zone")) {
       content.inert = collapsed;
     }
     if (phone.matches && (document.activeElement === button || toggleHadFocus)) {
@@ -50,7 +52,7 @@ export function initRailToggle() {
   function afterRailSlide(done) {
     let timer = 0;
     const cancel = () => {
-      host.removeEventListener("transitionend", onEnd);
+      slideTarget?.removeEventListener("transitionend", onEnd);
       window.clearTimeout(timer);
       cancelPendingSlide = null;
     };
@@ -59,9 +61,9 @@ export function initRailToggle() {
       done();
     };
     const onEnd = (event) => {
-      if (event.target === host && event.propertyName === "opacity") finish();
+      if (event.target === slideTarget && event.propertyName === "opacity") finish();
     };
-    host.addEventListener("transitionend", onEnd);
+    slideTarget?.addEventListener("transitionend", onEnd);
     timer = window.setTimeout(finish, RAIL_SLIDE_FALLBACK_MS);
     cancelPendingSlide = cancel;
   }
@@ -86,9 +88,9 @@ export function initRailToggle() {
       return;
     }
     shell.classList.remove("rail-collapsed");
-    if (!reducedMotion.matches) {
+    if (!reducedMotion.matches && slideTarget) {
       shell.classList.add("rail-entering");
-      void getComputedStyle(host).opacity;
+      void getComputedStyle(slideTarget).opacity;
       shell.classList.remove("rail-entering");
     }
   }
