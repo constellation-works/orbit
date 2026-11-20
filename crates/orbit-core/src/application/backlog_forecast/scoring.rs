@@ -586,6 +586,51 @@ pub(super) fn score_backlog_forecasts(
     })
 }
 
+/// The first model version that recovers a `defect-record` fix repaired
+/// inside its origin's measured delivery instead of counting it as a gap.
+const IN_ORIGIN_REPAIR_VERSION: u32 = 21;
+
+/// Whether `fix_id` is a `defect-record` fix spawned from every origin it
+/// regresses, each of which has measured invocations after the forecast.
+/// Hand repairs (no `defect-record` tag or no `spawned_from` link) and
+/// forecasts of earlier models keep their missing spend.
+fn repaired_in_measured_origin(
+    forecast: &StoredBacklogForecast,
+    fix_id: &str,
+    tasks: &HashMap<String, Task>,
+    runs: &HashMap<String, Vec<ForecastRun>>,
+) -> bool {
+    let Some(fix) = tasks.get(fix_id) else {
+        return false;
+    };
+    if forecast.model_version < IN_ORIGIN_REPAIR_VERSION
+        || !fix
+            .tags
+            .iter()
+            .any(|tag| tag == super::rework::DEFECT_RECORD_TAG)
+    {
+        return false;
+    }
+    let mut origins = fix
+        .relations
+        .iter()
+        .filter(|link| link.relation_type == TaskRelationType::RegressionFrom)
+        .peekable();
+    origins.peek().is_some()
+        && origins.all(|origin| {
+            let target = origin.target.as_str();
+            fix.relations.iter().any(|link| {
+                link.relation_type == TaskRelationType::SpawnedFrom
+                    && link.target.as_str() == target
+            }) && super::forecast_usage(
+                runs.get(target).map_or(&[][..], Vec::as_slice),
+                Some(forecast.forecast_at),
+            )
+            .invocations
+                > 0
+        })
+}
+
 /// One generation of actually filed fixes, including filings after the
 /// original queue went empty. Initial fixes are never charged twice.
 fn rework_actuals(
@@ -644,11 +689,19 @@ fn rework_actuals(
             })
             .collect();
         let used = super::forecast_usage(&bounded, Some(forecast.forecast_at));
-        let draw = if used.invocations == 0
+        let unmeasured_done = used.invocations == 0
             && tasks
                 .get(id)
-                .is_some_and(|task| task.status == TaskStatus::Done)
+                .is_some_and(|task| task.status == TaskStatus::Done);
+        let draw = if unmeasured_done
+            && is_fix
+            && repaired_in_measured_origin(forecast, id, tasks, runs)
         {
+            // Model 21 recognises this repair as inside its origin's
+            // measured delivery: that spend is already in the origin's draw,
+            // so it adds nothing and erases nothing.
+            super::model::Draw::ZERO
+        } else if unmeasured_done {
             super::model::Draw::MISSING
         } else {
             super::model::Draw {

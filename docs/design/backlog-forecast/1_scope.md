@@ -83,7 +83,12 @@ with empty selectors made the whole workspace unavailable.
     inside that origin's history sample, which the forecast draws as
     ordinary initial work, so it is not drawn again as follow-up.
     Otherwise it is an `unmeasured_delivery` gap like any other. The
-    support report counts it as `recovered_in_origin_review`.
+    support report counts it as `recovered_in_origin_review`. Scoring
+    applies the same rule to a model 21 or later snapshot's actuals: the
+    repair is counted as a follow-up but adds no spend of its own, so the
+    origin's measured tokens and USD are reported once and stay scorable.
+    A hand repair with no invocation keeps its missing actuals, and earlier
+    models keep their original scoring.
   - *Gaps are bounded or withheld, never zero.* Every other gap (an
     unmeasured hand or operator repair, an unrecoverable footprint, a
     missing origin completion) still counts against the pools its origins
