@@ -3911,9 +3911,6 @@ fn claimed_known_red_rows(test: &str, selected: &[&str]) {
                     candidate_tests,
                     false,
                 );
-                if base.is_empty() || candidate_tests.is_some_and(|tests| tests.is_empty()) {
-                    continue;
-                }
                 let claimed = named_tests(candidate_tests.unwrap()).into_iter().collect();
                 let refusal = owner_check(&fx.base_sha, &claimed)
                     .expect_err(&format!("{case}: the owner refuses the report"));

@@ -131,23 +131,25 @@ fn a_before_landing_reviewer_fix_is_validated_pushed_under_a_lease_and_lands() {
 }
 
 /// Every outcome other than an approve stops in the before-landing gate:
-/// nothing is merged and `landing_push` does not run, and the failed step is a
-/// completion-stage one, whose failure handoff keeps the PR open and the
-/// task in review.
+/// nothing is merged, the failed step is a completion-stage one, and the
+/// scripted failure handoff runs with the open PR in its pipeline state.
 fn a_rejected_incomplete_or_timed_out_before_landing_review_never_merges() {
-    for (outcome, failed_action, reason) in [
+    for (outcome, failed_step_id, failed_action, reason) in [
         (
             Outcome::Reject,
+            "landing_review_gate_settle",
             "test_stub_review_gate_settle",
             "review_gate_blocked: verdict reject",
         ),
         (
             Outcome::Incomplete,
+            "landing_review_gate_settle",
             "test_stub_review_gate_settle",
             "review_gate_blocked: verdict incomplete",
         ),
         (
             Outcome::Timeout,
+            "landing_review",
             "test_stub_agent_review_repair",
             "review_timeout_incomplete",
         ),
@@ -163,14 +165,10 @@ fn a_rejected_incomplete_or_timed_out_before_landing_review_never_merges() {
             "{outcome:?} must not reach completion"
         );
         assert!(
-            inputs_of(&calls, "test_stub_git_push").is_empty(),
-            "{outcome:?} makes no `landing_push`; these stubs record no reviewer commit"
-        );
-        assert!(
             actions(&calls).contains(&"test_stub_pr_open"),
             "{outcome:?}: the PR was already open"
         );
-        let (last, input) = calls.last().expect("calls");
+        let (last, input) = calls.get(calls.len() - 2).expect("failed step call");
         assert_eq!(last, failed_action, "{outcome:?}");
         assert_eq!(
             input
@@ -178,6 +176,28 @@ fn a_rejected_incomplete_or_timed_out_before_landing_review_never_merges() {
                 .or(input.get("attempt_id")),
             Some(&json!("rvw-landing")),
             "{outcome:?} stops in the before-landing gate"
+        );
+        let handoffs = inputs_of(&calls, "test_stub_pr_failure_handoff");
+        assert_eq!(
+            handoffs.len(),
+            1,
+            "{outcome:?}: the terminal failure handoff runs"
+        );
+        assert_eq!(handoffs[0]["failed_step_id"], failed_step_id, "{outcome:?}");
+        assert_eq!(
+            handoffs[0]["pipeline"]["pr_open"]["pr_number"], "41",
+            "{outcome:?}: the open PR stays in the handoff's pipeline state"
+        );
+        assert_eq!(
+            handoffs[0]["pipeline"]["promote_tasks"]["promoted"], true,
+            "{outcome:?}"
+        );
+        assert!(
+            handoffs[0]["error_message"]
+                .as_str()
+                .is_some_and(|message| message.contains(reason)),
+            "{outcome:?}: {}",
+            handoffs[0]
         );
         let failure = format!("{result:?}");
         assert!(failure.contains(reason), "{outcome:?}: {failure}");
@@ -295,8 +315,9 @@ fn shipped_job() -> orbit_types::workflow::JobV2 {
         "prepare_branch",
         "sync_base"
     ])));
-    // The shipped input defaults, which execution merges under every run's input.
+    // The shipped input defaults and failure handoff, resolved to the stub catalog.
     job.default_input = shipped.default_input.clone();
+    job.failure_activity = shipped.failure_activity.clone();
     for id in [
         "review_gate_admit",
         "review",
@@ -333,6 +354,7 @@ fn shipped_job() -> orbit_types::workflow::JobV2 {
         "git_push",
         "pr_complete",
         "pr_conflict_recovery",
+        "pr_failure_handoff",
         RECOVERY,
     ] {
         catalog.insert(
@@ -605,6 +627,7 @@ impl orbit_engine::test_support::NullRuntimeHost for Host {
                 })
             }
             "test_stub_pr_complete" => self.complete(input),
+            "test_stub_pr_failure_handoff" => json!({ "decision": "kept_in_review" }),
             other => panic!("unexpected action `{other}`"),
         };
         Ok(output)

@@ -227,16 +227,23 @@ fn a_conflict_after_the_second_re_review_stops_delivery() {
     let host = CompletionReviewHost::new(3, &[]);
     let result = run(&host);
 
-    assert!(
-        !matches!(&result, Ok(outcome) if outcome.success),
-        "{result:?}"
-    );
+    let error = result.expect_err("the third conflict refuses as stale");
+    assert!(error.to_string().contains("review_gate_stale"), "{error}");
     let calls = host.calls();
     assert_eq!(
         actions(&calls).last().copied(),
         Some("test_stub_pr_complete")
     );
-    assert_eq!(inputs_of(&calls, "test_stub_pr_complete").len(), 3);
+    let completions = inputs_of(&calls, "test_stub_pr_complete");
+    assert_eq!(completions.len(), 3);
+    assert!(
+        completions
+            .last()
+            .unwrap()
+            .get("re_review_on_conflict")
+            .is_none(),
+        "the last completion round cannot ask for another"
+    );
     assert_eq!(inputs_of(&calls, "test_stub_agent_review_repair").len(), 3);
     assert!(inputs_of(&calls, CONFLICT_RECOVERY).is_empty());
 }

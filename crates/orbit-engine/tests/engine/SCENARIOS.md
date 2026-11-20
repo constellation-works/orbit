@@ -410,6 +410,7 @@ certifies the repaired head as both the original head and publication lease.
 
 ### `handoff_landing::handoff_landing_contracts_2`
 
+- `landing_refusals_keep_typed_holds_and_candidate_red_stays_failed`
 - `only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair`
 - `an_owed_hosted_check_must_pass_before_the_owner_merges`
 
@@ -515,7 +516,7 @@ certifies the repaired head as both the original head and publication lease.
 
 ### `pr_landing::claimed_known_red_superset_and_disjoint`
 
-- `a_claimed_candidate_failing_only_known_red_tests_hands_off_a_report_the_owner_rechecks`: superset, disjoint
+- `a_claimed_candidate_failing_only_known_red_tests_hands_off_a_report_the_owner_rechecks`: shared-plus-new, disjoint-six-vs-one
 
 
 ## Reconciled PR families (ORB-15959 salvage)
@@ -607,7 +608,7 @@ These families reuse one bounded child and pristine Git seed; each named row sti
 ### `pr_landing::supervisor_and_truncated_failures`
 
 - `supervisor_stops_are_environment_failures_and_never_poison_the_base_cache`
-- `a_failure_only_the_truncated_middle_names_still_holds_the_candidate`
+- `a_failure_only_the_truncated_middle_names_still_requires_candidate_repair`
 
 ### `pr_landing::network_retry_and_cached_base`
 
@@ -677,7 +678,6 @@ Each named row keeps a fresh disposable home, temporary directory, cwd, authorit
 
 - `a_forged_admission_value_does_not_admit_the_mode`
 - `an_admission_alone_does_not_remove_an_ordinary_activitys_sandbox`
-- `distinct_target_keeps_the_pipeline_step_id_in_trusted_host_audit`
 
 ## QA required selector reconciliation
 
@@ -727,8 +727,11 @@ current-source Linux result is recorded below.
   `known_red_validation_and_subset`; its claimed assertions use the existing
   `claimed_known_red_rows` dispatcher. `equal` and `subset` remain in the
   positive family. The former `superset` and `disjoint` rows map to upstream's
-  stronger `shared-plus-new` and `disjoint-six-vs-one`; `candidate-unknown`,
-  `base-unknown` and `both-unknown` also execute in the existing negative family.
+  stronger `shared-plus-new` and `disjoint-six-vs-one` in
+  `claimed_known_red_superset_and_disjoint` (ORB-16844 retired
+  `candidate-unknown`, `base-unknown` and `both-unknown` from the claimed
+  route; they remain covered on the owner route in
+  `a_candidate_failing_only_known_red_tests_proceeds_and_records_them`).
   Complete failure identities, candidate-repair classification, baseline log
   linkage, absent publication and independent owner recheck assertions are
   preserved. The historical truncated-middle helper name
