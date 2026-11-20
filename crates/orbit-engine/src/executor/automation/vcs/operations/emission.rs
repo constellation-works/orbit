@@ -219,6 +219,7 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
         branch,
         base,
         poll_interval_ms(input),
+        &super::read_reset::SnapshotWaits::default(),
     )?;
     let checks = complete_list(&current.checks, "check_runs")?;
     let statuses = complete_list(&current.statuses, "statuses")?;
@@ -483,6 +484,7 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
         text(proof, "head_branch", unreadable)?,
         text(proof, "base_branch", unreadable)?,
         poll_interval_ms(input),
+        &super::read_reset::SnapshotWaits::default(),
     )?;
     same(
         &json!(current.repository),
@@ -620,6 +622,7 @@ pub(super) fn current_gates(input: &Value) -> Result<Value, OrbitError> {
         required_string(input, "head_branch")?,
         required_string(input, "base_branch")?,
         poll_interval_ms(input),
+        &super::read_reset::SnapshotWaits::default(),
     )?;
     let revisions = policy_revisions(deadline, workspace, &current.policy)?;
     let checks = complete_list(&current.checks, "check_runs")?;

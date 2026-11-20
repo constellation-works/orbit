@@ -166,6 +166,7 @@ pub(super) fn poll_interval_ms(input: &Value) -> u64 {
 /// that cannot change returns at once; a transient one is read again after a
 /// wait that starts at 5 s and doubles up to `poll_interval_ms`, until the
 /// deadline ends the wait with the last unreadable cause.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn snapshot(
     deadline: Deadline,
     workspace: &Path,
@@ -174,6 +175,7 @@ pub(super) fn snapshot(
     branch: &str,
     base: &str,
     poll_interval_ms: u64,
+    pass: &super::read_reset::SnapshotWaits,
 ) -> Result<Snapshot, OrbitError> {
     if pr.is_empty()
         || !pr.bytes().all(|byte| byte.is_ascii_digit())
@@ -194,6 +196,11 @@ pub(super) fn snapshot(
         // within the deadline and reads the whole snapshot again.
         if super::read_reset::wait_for_reset(deadline, workspace, &error, &mut throttle_waits) {
             continue;
+        }
+        // The snapshot's waits are spent: the enclosing pass must not read
+        // the snapshot again over the same throttle.
+        if super::read_reset::is_rate_limited(&error) {
+            pass.mark_spent();
         }
         // An in-flight retry can itself run out of time. Keep the last
         // unavailable snapshot's cause when that happens as well.
@@ -695,7 +702,9 @@ pub(super) fn gate_passed(gate: &RequiredGate, checks: &[Value], statuses: &[Val
 pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     let workspace = Path::new(required_string(input, "workspace_path")?);
     let deadline = Deadline::from_input(input)?;
-    super::read_reset::read_through_throttles(deadline, workspace, || evidence_once(input))
+    super::read_reset::read_through_throttles(deadline, workspace, |pass| {
+        evidence_once(input, pass)
+    })
 }
 
 /// [ORB-25918] A prerequisite log whose fallback read the provider throttled.
@@ -711,7 +720,10 @@ fn throttled_prerequisite_log(diagnostic: &str, throttle: &ProviderReadThrottle)
     }))
 }
 
-fn evidence_once(input: &Value) -> Result<Value, OrbitError> {
+fn evidence_once(
+    input: &Value,
+    pass: &super::read_reset::SnapshotWaits,
+) -> Result<Value, OrbitError> {
     let workspace = Path::new(required_string(input, "workspace_path")?);
     let pr = required_string(input, "pr")?;
     let head = required_string(input, "head_sha")?;
@@ -726,6 +738,7 @@ fn evidence_once(input: &Value) -> Result<Value, OrbitError> {
         branch,
         base,
         poll_interval_ms(input),
+        pass,
     )?;
     let checks = complete_list(&snapshot.checks, "check_runs")?;
     let statuses = complete_list(&snapshot.statuses, "statuses")?;
@@ -995,10 +1008,13 @@ fn evidence_once(input: &Value) -> Result<Value, OrbitError> {
 pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
     let workspace = Path::new(required_string(input, "workspace_path")?);
     let deadline = Deadline::from_input(input)?;
-    super::read_reset::read_through_throttles(deadline, workspace, || observe_once(input))
+    super::read_reset::read_through_throttles(deadline, workspace, |pass| observe_once(input, pass))
 }
 
-fn observe_once(input: &Value) -> Result<Value, OrbitError> {
+fn observe_once(
+    input: &Value,
+    pass: &super::read_reset::SnapshotWaits,
+) -> Result<Value, OrbitError> {
     let workspace = Path::new(required_string(input, "workspace_path")?);
     let evidence: PrInfrastructureEvidence = serde_json::from_value(input["evidence"].clone())
         .map_err(|_| unreadable("reserved evidence"))?;
@@ -1014,6 +1030,7 @@ fn observe_once(input: &Value) -> Result<Value, OrbitError> {
             workspace,
             &evidence,
             poll_interval_ms(input),
+            pass,
         );
     }
     if evidence.required.is_empty() {
@@ -1027,6 +1044,7 @@ fn observe_once(input: &Value) -> Result<Value, OrbitError> {
         &evidence.head_branch,
         &evidence.base_branch,
         poll_interval_ms(input),
+        pass,
     )?;
     if snapshot.repository != evidence.repository
         || snapshot.repository_id != evidence.repository_id

@@ -4,6 +4,8 @@
 //! completes, and a repeated snapshot reuses the repository identity.
 //! [ORB-25898] The same wait covers the reads after the snapshot.
 //! [ORB-25918] So does a throttled fallback behind an empty prerequisite log.
+//! [ORB-25917] A snapshot that spent its waits ends the pass instead of
+//! being read again with a fresh count.
 use super::*;
 use std::{cell::Cell, cell::RefCell, rc::Rc};
 
@@ -329,6 +331,97 @@ fn a_throttled_prerequisite_log_reset_past_the_budget_keeps_the_provider_diagnos
                         .trim(),
                     "8",
                     "the throttled fallback read was not repeated"
+                );
+            });
+        },
+    );
+}
+
+/// Allow `reset` seconds on the logical clock for the core quota to reset.
+fn name_core_reset(fx: &Fixture, reset: u64) {
+    fs::write(
+        fx.forge.join("infra-rate-limit"),
+        json!({"resources":{
+            "core":{"limit":5000,"remaining":0,"reset":reset},
+            "graphql":{"limit":5000,"remaining":4000,"reset":reset}
+        }})
+        .to_string(),
+    )
+    .unwrap();
+}
+
+/// [ORB-25917] A snapshot read that stays throttled spends the snapshot's three
+/// waits and ends the pass with GitHub's diagnostic. The enclosing evidence
+/// pass does not read the snapshot again with a fresh count, so there are four
+/// snapshot reads, three reset lookups and no rerun.
+#[test]
+fn a_persistently_throttled_snapshot_stops_after_its_three_waits() {
+    isolated(
+        "infrastructure::rate_limit::a_persistently_throttled_snapshot_stops_after_its_three_waits",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let fx = fixture_with_workflow(row);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                action(
+                    &host,
+                    "pr_open",
+                    &fx.open_input(&fx.candidate, &fx.base_sha),
+                )
+                .unwrap();
+                setup(&fx, "positive");
+                name_core_reset(&fx, 1300);
+                fs::write(fx.forge.join("infra-pulls-rate-limited"), "99").unwrap();
+                let (result, waits) = complete_on_logical_clock(&host, &complete_review_input(&fx));
+                let error = result.expect_err("a spent snapshot keeps the provider diagnostic");
+                assert!(
+                    error.to_string().contains("API rate limit exceeded"),
+                    "the provider diagnostic is kept: {error}"
+                );
+                assert_eq!(waits.len(), 3, "the snapshot's three waits only: {waits:?}");
+                assert_eq!(
+                    calls(&fx, "api repos/{owner}/{repo}/pulls/42"),
+                    4,
+                    "no snapshot read beyond the first and its three repeats"
+                );
+                assert_eq!(calls(&fx, "api rate_limit"), 3, "one reset lookup per wait");
+                assert_eq!(calls(&fx, "run rerun"), 0, "no rerun was sent");
+            });
+        },
+    );
+}
+
+/// [ORB-25917] The same bound holds when observing a reserved rerun: a
+/// snapshot that stays throttled from the rerun on ends the observation after
+/// its three waits and sends no further mutation.
+#[test]
+fn a_persistently_throttled_observation_snapshot_stops_after_its_three_waits() {
+    isolated(
+        "infrastructure::rate_limit::a_persistently_throttled_observation_snapshot_stops_after_its_three_waits",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let fx = fixture_with_workflow(row);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                action(
+                    &host,
+                    "pr_open",
+                    &fx.open_input(&fx.candidate, &fx.base_sha),
+                )
+                .unwrap();
+                setup(&fx, "positive");
+                name_core_reset(&fx, 1300);
+                fs::write(fx.forge.join("infra-pulls-rate-limited-after-rerun"), "99").unwrap();
+                let (result, waits) = complete_on_logical_clock(&host, &complete_review_input(&fx));
+                let error = result.expect_err("a spent snapshot keeps the provider diagnostic");
+                assert!(
+                    error.to_string().contains("API rate limit exceeded"),
+                    "the provider diagnostic is kept: {error}"
+                );
+                assert_eq!(waits.len(), 3, "the snapshot's three waits only: {waits:?}");
+                assert_eq!(calls(&fx, "api rate_limit"), 3, "one reset lookup per wait");
+                assert_eq!(
+                    calls(&fx, "run rerun"),
+                    1,
+                    "observing the reserved rerun sends no additional mutation"
                 );
             });
         },

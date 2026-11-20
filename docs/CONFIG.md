@@ -1918,7 +1918,9 @@ them) are rate-limited, completion reads the reset from
 GitHub's `rate_limit` endpoint, which spends no quota, waits for it and reads
 again: at most three waits for each read pass (the snapshot, then the
 evidence read around it), each ending before the completion deadline, which
-is never extended and is the only bound on the whole step. A wait only
+is never extended and is the only bound on the whole step. A snapshot that
+spends its three waits ends the step with GitHub's diagnostic; the evidence
+read around it never reads the snapshot again with a fresh count. A wait only
 precedes a repeated read: a reserved workflow rerun is never sent again by a
 retried observation. The host's process keeps two small caches so a completion
 poll can skip some repeat reads. A worktree's repository identity is reused for

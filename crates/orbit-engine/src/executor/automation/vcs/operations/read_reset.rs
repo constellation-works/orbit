@@ -9,7 +9,10 @@
 //! That bound is per snapshot, not a global cap: the reads after the
 //! snapshot (run, jobs, the prerequisite log's fallback, pinned workflow file,
 //! check suite) wait the same way through [`read_through_throttles`], with
-//! their own count, so the deadline alone bounds the whole operation. A wait
+//! their own count, so the deadline alone bounds the whole operation. A
+//! snapshot that spent its waits ends the whole pass with the provider's
+//! diagnostic ([`SnapshotWaits`]): the pass is never read again over it, which
+//! would hand the snapshot a fresh count. A wait
 //! only ever precedes a repeated read; a reserved mutation is never part of
 //! what is read again.
 //! `gh` names no reset in its rendered diagnostic, so the reset is read from
@@ -18,6 +21,7 @@
 
 use orbit_common::{OrbitError, ProviderReadThrottle};
 use serde_json::Value;
+use std::cell::Cell;
 use std::path::Path;
 
 use super::super::completion_deadline::{Deadline, now_ms};
@@ -26,27 +30,57 @@ use crate::executor::automation::read_throttle::{read_not_before, rfc3339_ms};
 /// Waits one snapshot may take for rate-limited reads.
 const MAX_THROTTLED_READ_WAITS: u64 = 3;
 
+/// Whether the snapshot inside one pass gave up on a rate-limited read: it
+/// spent its own waits, or its reset falls outside the deadline. The pass
+/// that holds this ends with the snapshot's error rather than being read
+/// again, so the snapshot's wait count is never restarted.
+#[derive(Debug, Default)]
+pub(super) struct SnapshotWaits {
+    spent: Cell<bool>,
+}
+
+impl SnapshotWaits {
+    /// Record that the snapshot is returning a rate-limited error it will not
+    /// wait out.
+    pub(super) fn mark_spent(&self) {
+        self.spent.set(true);
+    }
+
+    fn spent(&self) -> bool {
+        self.spent.get()
+    }
+}
+
 /// Run `read` (a whole read-only pass over the prerequisite evidence) and,
 /// when it fails on a rate-limited read whose reset fits before `deadline`,
 /// wait for the reset and run it again, so every authenticated read it
-/// makes is repeated. Any other failure, and a reset outside the deadline,
-/// returns the read's original error unchanged.
+/// makes is repeated. Any other failure, a reset outside the deadline, and
+/// a snapshot that already spent its waits ([`SnapshotWaits`]) return the
+/// read's original error unchanged.
 pub(super) fn read_through_throttles<T>(
     deadline: Deadline,
     workspace: &Path,
-    mut read: impl FnMut() -> Result<T, OrbitError>,
+    mut read: impl FnMut(&SnapshotWaits) -> Result<T, OrbitError>,
 ) -> Result<T, OrbitError> {
     let mut waits = 0;
     loop {
-        match read() {
+        let snapshot = SnapshotWaits::default();
+        match read(&snapshot) {
             Ok(value) => return Ok(value),
             Err(error) => {
-                if !wait_for_reset(deadline, workspace, &error, &mut waits) {
+                if snapshot.spent() || !wait_for_reset(deadline, workspace, &error, &mut waits) {
                     return Err(error);
                 }
             }
         }
     }
+}
+
+/// Whether `error` is a rate-limited read the provider named a throttle for.
+pub(super) fn is_rate_limited(error: &OrbitError) -> bool {
+    error
+        .private_vcs_failure()
+        .is_some_and(|failure| failure.read_throttle.is_some())
 }
 
 /// When `error` is a rate-limited read and its reset fits before
