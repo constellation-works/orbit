@@ -14,6 +14,7 @@ pub use self::streaming::*;
 pub mod auth;
 pub mod dependabot_alerts;
 mod diagnostic;
+mod log_cache;
 mod nextest_regions;
 pub(crate) mod throttle;
 pub use diagnostic::strip_ansi_sequences;
@@ -24,3 +25,6 @@ pub mod run;
 pub mod task_prs;
 
 pub(crate) mod landing;
+
+#[cfg(test)]
+mod tests;

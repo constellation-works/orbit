@@ -2954,6 +2954,16 @@ Fleet notices have no settings [ORB-22808]. Their limits are fixed:
 
 The former `notice.*` keys are deprecated and ignored ([validation and errors](#validation-and-errors) lists them).
 
+### GitHub run-log cache — fixed limits
+
+`github.run.logs` keeps the log of a completed job or run on the host, so paging one log in byte or line windows (or by step) downloads it once instead of once per window. It has no settings; its limits are fixed:
+
+- **Location.** `<Orbit data root>/cache/github-run-logs/` (`$ORBIT_ROOT` when set, else `~/.orbit`), a `0700` directory of `0600` files, each written through a staging file and renamed into place, so a partial download is never read as an entry. Entries hold the log as GitHub served it, before redaction, and are as sensitive as the logs; redaction, bounds and selection are applied on every read, so the output for an input is the same with or without a cached copy.
+- **Job-scoped reads (`job` given).** Keyed on repository, run, job and scope. A completed job's log never changes, so a hit makes no GitHub call. On a miss the read first checks, with one `gh api` request, that GitHub reports the job completed; only then is the log kept.
+- **Run-scoped reads.** Keyed on repository, run, run attempt and scope. Every read first asks GitHub for the run's status and attempt (one `gh api` request) and serves from the cache only when the run is completed at a cached attempt; a rerun has a new attempt and downloads its own log.
+- **Never cached.** A log of a job or run that is not completed, an empty log, a log over the 8 MiB source read limit, and a read whose status request failed. A failed status request or cache file falls back to the plain read; the cache never turns a read into an error.
+- **Bounds.** At most 256 MiB in total and 24 hours per entry. Every store removes entries past either bound (oldest first for size, and staging files a crashed write left behind), and a lookup removes the entry it finds expired.
+
 ### `[security_alert_sweep]` — security finding severity
 
 `dependabot_alert_sweep_pipeline` files Dependabot and Code scanning findings of `moderate` severity and above. Secret scanning findings are always filed. The floor is fixed [ORB-22808]; `security_alert_sweep.min_severity` is [deprecated](#validation-and-errors).

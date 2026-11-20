@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 
 use crate::TIMEOUT_LONG_MS;
 
+use super::log_cache::{LogCache, LogCacheKey};
 use super::throttle::{check_read_result, throttle_of};
 use super::{LogSelection, StreamedLog, StreamedLogCollector};
 
@@ -128,6 +129,8 @@ pub struct RunLogRequests {
     pub repository: String,
     /// Optional step/window selection applied to the log excerpt.
     pub selection: Option<LogSelection>,
+    /// Where completed logs are kept between reads. `None` reads every time.
+    cache: Option<LogCache>,
 }
 
 fn optional_usize(input: &Value, key: &str) -> Result<Option<usize>, OrbitError> {
@@ -236,7 +239,14 @@ impl RunLogRequests {
             scope: LogScope::from_input(input)?,
             repository: super::repository_path(input)?,
             selection: log_selection_from_input(input)?,
+            cache: None,
         })
+    }
+
+    /// Serve repeat reads of a completed job or run from `cache`.
+    pub(crate) fn with_log_cache(mut self, cache: Option<LogCache>) -> Self {
+        self.cache = cache;
+        self
     }
 
     /// Run every request from `dir`, the checkout the query is about.
@@ -259,6 +269,20 @@ impl RunLogRequests {
                 "--method".to_string(),
                 "GET".to_string(),
                 format!("repos/{}/actions/jobs/{job_id}/logs", self.repository),
+            ],
+            ..self.run_log.clone()
+        }
+    }
+
+    /// One `gh api` metadata read, shaped like [`Self::job_log_request`]: it
+    /// keeps the run-log request's CLI, checkout, timeout and environment.
+    fn api_request(&self, endpoint: String) -> ExecRequest {
+        ExecRequest {
+            args: vec![
+                "api".to_string(),
+                "--method".to_string(),
+                "GET".to_string(),
+                endpoint,
             ],
             ..self.run_log.clone()
         }
@@ -331,13 +355,7 @@ pub fn read_run_log_guarded(
     cached_run_view: Option<&Value>,
     guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
 ) -> Result<RunLogRead, OrbitError> {
-    let log = match stream_bounded_log(
-        &guard(&requests.run_log)?,
-        bounds,
-        ExcerptShape::EvenSplit,
-        "gh run view --log",
-        requests.selection.clone(),
-    ) {
+    let log = match run_scoped_log(requests, bounds, guard) {
         Ok(log) => log,
         Err(error) if is_parent_run_log_readiness_error(&error, &requests.run_id) => {
             let empty = match &requests.selection {
@@ -490,6 +508,31 @@ fn is_parent_run_log_readiness_error(error: &OrbitError, run_id: &str) -> bool {
     detail == readiness || detail == format!("failed to get run log: {readiness}")
 }
 
+/// The collector one read of `shape` feeds its source bytes into.
+fn log_collector(
+    bounds: LogReadBounds,
+    shape: ExcerptShape,
+    selection: Option<LogSelection>,
+) -> StreamedLogCollector {
+    let LogReadBounds {
+        max_bytes,
+        max_evidence_lines,
+        ..
+    } = bounds;
+    match (shape, selection) {
+        (ExcerptShape::EvenSplit, Some(selection)) => {
+            StreamedLogCollector::scoped(max_bytes, max_evidence_lines, selection)
+        }
+        (ExcerptShape::TailWeighted, Some(selection)) => {
+            StreamedLogCollector::tail_weighted_scoped(max_bytes, max_evidence_lines, selection)
+        }
+        (ExcerptShape::EvenSplit, None) => StreamedLogCollector::new(max_bytes, max_evidence_lines),
+        (ExcerptShape::TailWeighted, None) => {
+            StreamedLogCollector::tail_weighted(max_bytes, max_evidence_lines)
+        }
+    }
+}
+
 /// Read one `gh` stdout stream up to the source cap, retaining only bounded
 /// display, command, and checkout evidence. No unbounded source copy is held.
 fn stream_bounded_log(
@@ -499,28 +542,25 @@ fn stream_bounded_log(
     label: &str,
     selection: Option<LogSelection>,
 ) -> Result<StreamedLog, OrbitError> {
-    let LogReadBounds {
-        max_bytes,
-        max_evidence_lines,
-        ..
-    } = bounds;
-    let (result, log) = run_process_streaming_stdout(request, &NoSandbox, move |mut stdout| {
+    stream_log_source(request, bounds, shape, label, selection, false).map(|(log, _)| log)
+}
+
+/// [`stream_bounded_log`], also returning the source bytes it read when
+/// `keep_source` is set. The copy is bounded by the same source read limit, and
+/// exists only for a read the caller is about to cache.
+fn stream_log_source(
+    request: &ExecRequest,
+    bounds: LogReadBounds,
+    shape: ExcerptShape,
+    label: &str,
+    selection: Option<LogSelection>,
+    keep_source: bool,
+) -> Result<(StreamedLog, Vec<u8>), OrbitError> {
+    let (result, read) = run_process_streaming_stdout(request, &NoSandbox, move |mut stdout| {
         use std::io::Read;
 
-        let mut collector = match (shape, selection) {
-            (ExcerptShape::EvenSplit, Some(selection)) => {
-                StreamedLogCollector::scoped(max_bytes, max_evidence_lines, selection)
-            }
-            (ExcerptShape::TailWeighted, Some(selection)) => {
-                StreamedLogCollector::tail_weighted_scoped(max_bytes, max_evidence_lines, selection)
-            }
-            (ExcerptShape::EvenSplit, None) => {
-                StreamedLogCollector::new(max_bytes, max_evidence_lines)
-            }
-            (ExcerptShape::TailWeighted, None) => {
-                StreamedLogCollector::tail_weighted(max_bytes, max_evidence_lines)
-            }
-        };
+        let mut collector = log_collector(bounds, shape, selection);
+        let mut source = Vec::new();
         let mut chunk = [0_u8; 4096];
         let mut source_bytes = 0usize;
         loop {
@@ -528,7 +568,7 @@ fn stream_bounded_log(
                 OrbitError::Execution(format!("failed reading gh log stream: {error}"))
             })?;
             if read == 0 {
-                return Ok(collector.finish());
+                return Ok((collector.finish(), source));
             }
             source_bytes += read;
             if source_bytes > super::MAX_CHECKOUT_LOG_SCAN_BYTES {
@@ -538,6 +578,9 @@ fn stream_bounded_log(
                 ));
             }
             collector.push(&chunk[..read]);
+            if keep_source {
+                source.extend_from_slice(&chunk[..read]);
+            }
         }
     })?;
     // The supervisor's verdict, not the stderr note it appends, says the read
@@ -549,7 +592,125 @@ fn stream_bounded_log(
         });
     }
     check_read_result(&result, label)?;
+    Ok(read)
+}
+
+/// The run-scoped `gh run view --log*` read, served from the log cache when
+/// the job or run it names is completed and its log is already held.
+///
+/// The cache holds source bytes and replays them through the collector an
+/// uncached read would have used, so the result is identical either way. Every
+/// cache or metadata failure falls back to the plain read: the cache can make a
+/// read cheaper, never fail it.
+fn run_scoped_log(
+    requests: &RunLogRequests,
+    bounds: LogReadBounds,
+    guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
+) -> Result<StreamedLog, OrbitError> {
+    const LABEL: &str = "gh run view --log";
+    let read = |keep_source: bool| -> Result<(StreamedLog, Vec<u8>), OrbitError> {
+        stream_log_source(
+            &guard(&requests.run_log)?,
+            bounds,
+            ExcerptShape::EvenSplit,
+            LABEL,
+            requests.selection.clone(),
+            keep_source,
+        )
+    };
+    let replay = |source: &[u8]| {
+        let mut collector =
+            log_collector(bounds, ExcerptShape::EvenSplit, requests.selection.clone());
+        for piece in source.chunks(4096) {
+            collector.push(piece);
+        }
+        collector.finish()
+    };
+    let Some(cache) = &requests.cache else {
+        return read(false).map(|(log, _)| log);
+    };
+    let scope = requests.scope.as_str();
+    let repository = requests.repository.as_str();
+
+    // A completed job id names one immutable log, so a hit needs no GitHub
+    // call. Completion is learned on the miss that fetches the log.
+    if let Some(job) = &requests.job {
+        let key = LogCacheKey::job(repository, &requests.run_id, job, scope);
+        if let Some(source) = cache.get(&key) {
+            return Ok(replay(&source));
+        }
+        let completed = job_is_completed(requests, job, guard);
+        let (log, source) = read(completed)?;
+        if completed {
+            cache.put(&key, &source);
+        }
+        return Ok(log);
+    }
+
+    // A rerun keeps the run id and puts the run back in progress, so each read
+    // first asks which attempt the run is at and whether it has completed.
+    let Some(attempt) = completed_run_attempt(requests, guard) else {
+        return read(false).map(|(log, _)| log);
+    };
+    let key = LogCacheKey::run_attempt(repository, &requests.run_id, attempt, scope);
+    if let Some(source) = cache.get(&key) {
+        return Ok(replay(&source));
+    }
+    let (log, source) = read(true)?;
+    cache.put(&key, &source);
     Ok(log)
+}
+
+/// One lightweight metadata read, or `None` when it cannot be made or parsed.
+fn read_api_json(
+    request: ExecRequest,
+    guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
+) -> Option<Value> {
+    let request = guard(&request).ok()?;
+    let result = run_process(&request, &NoSandbox).ok()?;
+    if !result.success {
+        return None;
+    }
+    serde_json::from_str(&result.stdout).ok()
+}
+
+/// Whether GitHub reports this job of this run completed.
+fn job_is_completed(
+    requests: &RunLogRequests,
+    job: &str,
+    guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
+) -> bool {
+    let request = requests.api_request(format!("repos/{}/actions/jobs/{job}", requests.repository));
+    read_api_json(request, guard).is_some_and(|view| {
+        view.get("id")
+            .and_then(Value::as_u64)
+            .map(|id| id.to_string())
+            .as_deref()
+            == Some(job)
+            && view
+                .get("run_id")
+                .and_then(Value::as_u64)
+                .is_some_and(|run| run.to_string() == requests.run_id)
+            && view.get("status").and_then(Value::as_str) == Some("completed")
+    })
+}
+
+/// The attempt number of this run when GitHub reports it completed.
+fn completed_run_attempt(
+    requests: &RunLogRequests,
+    guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
+) -> Option<u64> {
+    let request = requests.api_request(format!(
+        "repos/{}/actions/runs/{}",
+        requests.repository, requests.run_id
+    ));
+    let view = read_api_json(request, guard)?;
+    let this_run = view.get("id").and_then(Value::as_u64)?.to_string() == requests.run_id;
+    let completed = view.get("status").and_then(Value::as_str) == Some("completed");
+    if !(this_run && completed) {
+        return None;
+    }
+    view.get("run_attempt").and_then(Value::as_u64)
 }
 
 /// One job whose own log may stand in for an empty run-scoped read.

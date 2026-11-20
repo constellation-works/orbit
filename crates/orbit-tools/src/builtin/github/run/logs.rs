@@ -37,7 +37,8 @@ impl GithubRunLogsTool {
                 "line_end",
             ],
         )?;
-        let requests = RunLogRequests::from_input(input)?;
+        let requests = RunLogRequests::from_input(input)?
+            .with_log_cache(super::super::log_cache::LogCache::in_data_root());
         Ok(match super::super::tool_workspace_dir(ctx) {
             Some(dir) => requests.in_directory(&dir),
             None => requests,
