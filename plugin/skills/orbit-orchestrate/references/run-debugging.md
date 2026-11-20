@@ -251,16 +251,35 @@ What happens to the step and the task:
 
 - The step is not retried. Neither step recovery nor final recovery runs, and the
   candidate is kept.
-- A claimed leaf releases its claim as transient, with the candidate on the
+- A claimed leaf releases its claim as `transient`, with the candidate on the
   release. A claimed PR leaf that already published its head reuses it, and an
   unchanged published head needs no extra ref; a tip past it, or an unpublished
-  tip, is first pushed to a durable ref. The task returns to the owner's backlog, and its next claim resumes the candidate
-  under the placement rule below. The leaf's crew sits out the rest of that
-  drain's window.
-- An owner `task_pr_pipeline` run commits what the agent left and pushes it to
-  its durable ref, `refs/orbit/candidates/<task-id>/<run-id>`, on `origin`. It
-  opens no pull request. Run finalization returns the task to the backlog with
-  the history event `upgrade_pending_requeued`.
+  tip, is first pushed to a durable ref. An ordinary `upgrade_pending` refusal
+  carries neither `provider_limit` nor `owner_busy`, so the owner counts it
+  against the task's **2-in-24h release budget**:
+  - Within budget (fewer than 2 prior budgeted releases in 24h): the claim ends in
+    phase `revoked` (`last_event` `claim_released`), the task returns to the
+    owner's `backlog`, and its next claim resumes the kept candidate under the
+    placement rule below. The leaf's crew sits out the rest of that drain's
+    window.
+  - Budget exhausted (3rd+ budgeted release within 24h): the owner fails the
+    claim and moves the task to `blocked` instead of `backlog`, still keeping any
+    committed candidate in `claim_candidate_kept`. Identify this state on the owner
+    via `orbit task show <task-id>` (`orbit.task.show`) and
+    `orbit run settlements --json`: `status` is `blocked`; task history has a
+    `claim_release_budget_exhausted` event whose `note` starts
+    `release budget exhausted (2 in 24h): …`; a system comment starting
+    `Blocked: follower drains released this claim … times within 24h for failures
+    that were not the candidate's, and it failed again.` lists every counted
+    release's timestamp, failure class and reason; and on the settlement/claim,
+    `phase` is `failed` and `last_event` is `claim_release_budget_exhausted`
+    (`release.budget_exhausted: true` on the stored claim record). No next claim
+    can start until an operator returns the task to `backlog`.
+- An owner `task_pr_pipeline` run spends no claim release budget and never sets
+  the task to `blocked`: it commits what the agent left, pushes it to its durable
+  ref, `refs/orbit/candidates/<task-id>/<run-id>`, on `origin`, and opens no pull
+  request. Run finalization returns the task to the backlog with the history event
+  `upgrade_pending_requeued`.
 - That push can be refused. The hold still succeeds and the candidate stays on
   the holding host. The evidence depends on who held it:
   - Owner run: the task's `candidate_held` history entry. A host-local candidate
@@ -284,11 +303,15 @@ What happens to the step and the task:
     no candidate (`not_durable`) and implements the task afresh. Pushing the
     commit to `origin` by hand does not change this, because placement reads the
     durable ref recorded in the history entry.
-- The task is never set to `blocked`, so an operator does not move it back, as
-  they must after a `task_blocked_by_agent` stop. Check that the upgrade has
-  settled and that the next run or claim picks the candidate up. For a
-  host-local candidate, expect a resume only on the holding host; anywhere else
-  the next run starts afresh.
+- Owner requeues (`upgrade_pending_requeued`) and in-budget claimed releases
+  (`claim_released`) never set the task to `blocked`, so an operator does not move
+  them back as they must after a `task_blocked_by_agent` stop — check that the
+  upgrade has settled and that the next run or claim picks the candidate up. Only
+  a claimed release that exhausts the 2-in-24h release budget sets the task to
+  `blocked` (`claim_release_budget_exhausted`, claim `phase: failed`);
+  after confirming the upgrade has settled, an operator must move that task back
+  to `backlog` before a next claim can start. For a host-local candidate, expect a
+  resume only on the holding host; anywhere else the next run starts afresh.
 
 Three outcomes can look alike. The state and the code tell them apart:
 
@@ -298,7 +321,10 @@ Three outcomes can look alike. The state and the code tell them apart:
   a worker yields at a step boundary, its checkpoint is kept, and the run is
   `interrupted`. The clock resumes it once the generation settles.
 - `upgrade_pending` (this section): the step stops mid-run, the run is `failed`,
-  and the task returns to the backlog without an operator action.
+  and the task returns to the backlog without an operator action on owner runs
+  (`upgrade_pending_requeued`) and in-budget claimed releases (`claim_released`),
+  or moves to `blocked` (`claim_release_budget_exhausted`) once a claimed release
+  exhausts its 2-in-24h budget.
 
 To avoid stopping a step at all, let long agent steps finish before the installed
 `orbit` is replaced, or install while no drain is live. A running step keeps going

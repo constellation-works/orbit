@@ -385,13 +385,36 @@ interrupt:
   on the release. A claimed PR leaf that already published its head reuses it: an
   unchanged published head needs no extra ref and the release names it as
   published. A tip past that head, or an unpublished tip, is pushed to a durable
-  ref first (`refs/orbit/candidates/<task-id>/<run-id>`). The task returns to the
-  owner's backlog, and its next claim resumes the candidate under the placement
-  rule below. As with any transient release, the leaf's crew sits out the rest of
-  that drain's window.
+  ref first (`refs/orbit/candidates/<task-id>/<run-id>`). An ordinary
+  `upgrade_pending` refusal carries neither `provider_limit` nor `owner_busy`, so
+  the owner counts the release against the task's per-task release budget (**2
+  budgeted releases within 24 hours**, resetting after an operator unblocks a
+  budget-exhausted task):
+  - *Within budget* (fewer than 2 prior budgeted releases in 24 hours): the claim
+    ends in phase `revoked` (`last_event` `claim_released`), the task returns to
+    the owner's `backlog`, any committed candidate is kept (`claim_candidate_kept`),
+    and its next claim resumes the candidate under the placement rule below. As
+    with any transient release, the leaf's crew sits out the rest of that drain's
+    window.
+  - *Budget exhausted* (the 3rd or later budgeted release within 24 hours): the
+    owner does **not** return the task to `backlog`; instead it fails the claim
+    and moves the task to `blocked`, so no next claim can start until an operator
+    returns it to `backlog` after the upgrade settles (any committed candidate is
+    still kept in `claim_candidate_kept`). Identify this blocked state on the owner
+    (`orbit task show <task-id>` or `orbit.task.show`, and `orbit run settlements --json`):
+    - task `status` `blocked` with a `claim_release_budget_exhausted` history
+      event whose `note` starts `release budget exhausted (2 in 24h): …`;
+    - a system comment starting `Blocked: follower drains released this claim …
+      times within 24h for failures that were not the candidate's, and it failed
+      again.` listing every counted release's timestamp, failure class and reason;
+      and
+    - on the settlement/claim record, `phase` `failed` and `last_event`
+      `claim_release_budget_exhausted` (`release.budget_exhausted: true` in the
+      stored claim inspection).
 - **Owner `task_pr_pipeline` run:** the failure handoff commits what the agent left and
   pushes it to its durable ref, `refs/orbit/candidates/<task-id>/<run-id>`, on `origin`.
-  It opens no PR. Run finalization returns the task to the backlog
+  It opens no PR. An owner run spends no claim release budget and never blocks the
+  task: run finalization returns the task to the backlog
   (`upgrade_pending_requeued`), and the next run resumes the candidate once the upgrade
   settles.
 
@@ -421,8 +444,12 @@ Placement:
   leaf's note reads `only on <machine>`. Pushing the commit to `origin` by hand does
   not make it resumable elsewhere, because placement reads the recorded durable ref.
 
-The task is never `blocked`. To avoid stopping a step at all, let long steps finish
-before installing, or install while no drain is live.
+An owner `task_pr_pipeline` run never sets the task to `blocked`, and a claimed leaf
+returns it to `backlog` while its 2-in-24h release budget holds; only a claimed
+release that exhausts that budget moves the task to `blocked`
+(`claim_release_budget_exhausted`) until an operator returns it to `backlog`. To
+avoid stopping a step at all, let long steps finish before installing, or install
+while no drain is live.
 
 Ordinary startups whose identities the recorded envelope already admits join under
 **shared** admission, so any number of
