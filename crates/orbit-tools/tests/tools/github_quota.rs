@@ -904,6 +904,96 @@ fn expired_admission_over_a_readable_hold_returns_the_timeout() {
     assert!(gh.calls().is_empty(), "{:?}", gh.calls());
 }
 
+/// Regression [ORB-26129]: a finite read whose budget runs out while it probes
+/// a writable record with a live core hold returns its timeout, spawns no
+/// protected call and leaves the core refusal count unchanged. The same hold
+/// refusing a read with budget left still returns the typed throttle and
+/// counts that refusal once.
+#[test]
+fn expired_refusal_over_a_writable_hold_leaves_the_refusal_count() {
+    let policy = GithubQuotaPolicy::default();
+    let now = now();
+    let reset = now + 1800;
+    let hold = orbit_common::ProviderReadThrottle {
+        retry_after_seconds: None,
+        reset_epoch_seconds: Some(reset),
+        resource: Some(RESOURCE_CORE.to_string()),
+        principal: None,
+        request_id: None,
+    };
+    let refused_by_delivery = |records: &Path, account: &str| {
+        store(records)
+            .status(&policy, account, now)
+            .resources
+            .iter()
+            .find(|resource| resource.resource == RESOURCE_CORE)
+            .expect("the core resource is reported")
+            .refused
+            .delivery
+    };
+
+    // Budget left: the live hold refuses the read with the typed throttle,
+    // counts that refusal once for its caller class, and nothing spawns.
+    let within_records = TempDir::new().unwrap();
+    let within_gh = FakeGh::new("{}", "ok");
+    let mut within = within_gh.request(&["run", "view", "123"]);
+    within.timeout_ms = Some(5_000);
+    let within_account = github_quota::request_account_key(&within);
+    store(within_records.path())
+        .refresh_if_due(&policy, &within_account, now, &|| known(4000, reset));
+    store(within_records.path()).record_throttle(
+        &policy,
+        &within_account,
+        RESOURCE_CORE,
+        &hold,
+        now,
+    );
+    let refused = github_quota::with_scoped_guard(store(within_records.path()), policy, || {
+        github_quota::run_gh_request(GithubCaller::Delivery, &within)
+    })
+    .expect_err("a live core hold refuses a read admitted within its budget");
+    assert_eq!(
+        refused_throttle(&refused).resource.as_deref(),
+        Some(RESOURCE_CORE)
+    );
+    assert!(within_gh.calls().is_empty(), "{:?}", within_gh.calls());
+    assert_eq!(
+        refused_by_delivery(within_records.path(), &within_account),
+        1
+    );
+
+    // Budget spent probing a due refresh: the clipped probe keeps the hold,
+    // the writable record refuses the read, and the caller gets its timeout
+    // with the refusal left uncounted.
+    let expired_records = TempDir::new().unwrap();
+    let expired_gh = FakeGh::new("hang", "ok");
+    let mut expired = expired_gh.request(&["run", "view", "456"]);
+    expired.timeout_ms = Some(60);
+    let expired_account = github_quota::request_account_key(&expired);
+    // Last claimed ten minutes ago, so the refresh is due and its probe runs
+    // inside the 60 ms budget.
+    store(expired_records.path())
+        .refresh_if_due(&policy, &expired_account, now - 600, &|| known(4000, reset));
+    store(expired_records.path()).record_throttle(
+        &policy,
+        &expired_account,
+        RESOURCE_CORE,
+        &hold,
+        now,
+    );
+    let run = github_quota::with_scoped_guard(store(expired_records.path()), policy, || {
+        github_quota::run_gh_request(GithubCaller::Delivery, &expired)
+    })
+    .expect("an expired budget returns the timeout outcome, not the hold's throttle");
+    assert!(run.timed_out && !run.success, "{run:?}");
+    assert_eq!(expired_gh.calls(), vec!["api rate_limit".to_string()]);
+    assert_eq!(
+        refused_by_delivery(expired_records.path(), &expired_account),
+        0,
+        "a refusal the caller receives as a timeout must not be counted"
+    );
+}
+
 /// Regression [ORB-26101]: the accounting a caller runs after its own child
 /// returns belongs to the original request deadline, not a fresh budget. A
 /// primary throttle reported with 50 ms of a 5 s budget left must give up on a

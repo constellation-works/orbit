@@ -542,13 +542,17 @@ impl GithubQuotaStore {
             let refresh_in_flight = record.refresh_in_flight;
             let entry = record.resources.entry(resource.to_string()).or_default();
             entry.roll_window(now);
+            // The deadline is read under the record lock, so a read that ran
+            // out of budget while waiting for it or probing is neither charged
+            // nor counted as refused: its caller returns the timeout instead.
+            let expired = !charge_expired && self.deadline.is_some_and(|at| Instant::now() >= at);
             if let Some(refusal) = entry.refusal(policy, caller, resource, now) {
-                entry.refused.bump(caller);
+                if !expired {
+                    entry.refused.bump(caller);
+                }
                 return Err(refusal);
             }
-            // The deadline is read under the record lock, so a read that ran
-            // out of budget while waiting for it or probing is not charged.
-            if !charge_expired && self.deadline.is_some_and(|at| Instant::now() >= at) {
+            if expired {
                 return Ok(());
             }
             entry.calls.bump(caller);
