@@ -612,6 +612,89 @@ fn contended_record_lock_is_bounded_by_the_request_deadline() {
     );
 }
 
+/// Regression [ORB-26101]: the accounting a caller runs after its own child
+/// returns belongs to the original request deadline, not a fresh budget. A
+/// primary throttle reported with 50 ms of a 5 s budget left must give up on a
+/// peer-held record lock at that instant, not wait another 5 s; with the
+/// record available the same near-expiry answer still records the hold.
+#[test]
+fn post_child_throttle_accounting_waits_only_for_the_remaining_budget() {
+    let records = TempDir::new().unwrap();
+    let policy = GithubQuotaPolicy::default();
+    let gh = FakeGh::new("{}", "ok");
+    let mut request = gh.request(&["run", "view", "123"]);
+    request.timeout_ms = Some(5_050);
+    let account = github_quota::request_account_key(&request);
+    let record_path = records.path().join(format!("{account}.json"));
+    let now = now();
+    let reset = now + 1800;
+    store(records.path()).refresh_if_due(&policy, &account, now, &|| known(4000, reset));
+    let throttled = orbit_exec::ExecutionResult {
+        success: false,
+        timed_out: false,
+        stdout: String::new(),
+        stderr: "gh: API rate limit exceeded for user ID 42. (HTTP 403)".to_string(),
+        exit_code: Some(1),
+        duration_ms: 5_000,
+        output: None,
+    };
+    let held_deadline = || {
+        // The request started 5 s ago: 50 ms of its budget remain.
+        let started = std::time::Instant::now()
+            .checked_sub(Duration::from_secs(5))
+            .expect("monotonic clock far enough from its origin");
+        github_quota::gh_request_deadline(&request, started)
+    };
+
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        let _lock = orbit_common::fs::io::hold_exclusive_file_lock_options(
+            &record_path,
+            "contending quota holder",
+            orbit_common::fs::io::FileLockOptions::default(),
+        )
+        .unwrap();
+        held_tx.send(()).unwrap();
+        // Bounded so a failed assertion cannot strand the holder.
+        let _ = release_rx.recv_timeout(Duration::from_secs(60));
+    });
+    held_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the holder never took the account lock");
+
+    let deadline = held_deadline();
+    let started = std::time::Instant::now();
+    github_quota::with_scoped_guard(store(records.path()), policy, || {
+        github_quota::observe_gh_result_by_deadline(&request, &throttled, deadline);
+    });
+    let elapsed = started.elapsed();
+    release_tx.send(()).unwrap();
+    holder.join().unwrap();
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "the record wait must stop at the original deadline, took {elapsed:?}"
+    );
+
+    // An available record takes the hold even with the budget nearly spent.
+    let deadline = std::time::Instant::now() + Duration::from_millis(500);
+    github_quota::with_scoped_guard(store(records.path()), policy, || {
+        github_quota::observe_gh_result_by_deadline(&request, &throttled, Some(deadline));
+    });
+    let held = store(records.path())
+        .admit(
+            &policy,
+            &account,
+            GithubCaller::Delivery,
+            RESOURCE_CORE,
+            now + 1,
+            &|| RateLimitAnswer::Unknown("not consulted".into()),
+        )
+        .expect_err("the throttle must hold core reads");
+    assert_eq!(held.reason, QuotaRefusalReason::Exhausted);
+    assert_eq!(held.resume_epoch_seconds, reset);
+}
+
 /// Regression [ORB-25964]: a probe cut short by one caller's remaining deadline
 /// says nothing about the account, so it must neither claim the refresh
 /// interval nor replace a known record with an unknown one. A second caller

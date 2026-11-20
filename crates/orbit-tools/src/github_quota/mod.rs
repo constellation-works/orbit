@@ -113,8 +113,11 @@ fn now_epoch_seconds() -> u64 {
 /// The instant `request`'s finite timeout budget runs out, counted from
 /// `started`; `None` for a request without one. Every wait the guard makes for
 /// the request (record locks, the rate-limit probe, the child itself) is cut
-/// off at this one instant.
-fn request_deadline(request: &ExecRequest, started: Instant) -> Option<Instant> {
+/// off at this one instant. A caller that runs the child itself takes the
+/// instant before admission and hands it to [`observe_gh_result_by_deadline`]
+/// or [`observe_gh_failure_by_deadline`], so the post-child accounting stays
+/// inside the same budget.
+pub fn gh_request_deadline(request: &ExecRequest, started: Instant) -> Option<Instant> {
     request
         .timeout_ms
         .and_then(|budget_ms| started.checked_add(Duration::from_millis(budget_ms)))
@@ -135,7 +138,11 @@ fn remaining_millis(deadline: Instant) -> u64 {
 /// off, is admitted. Waits for the shared record no longer than `request`'s
 /// own timeout budget.
 pub fn admit_gh_request(caller: GithubCaller, request: &ExecRequest) -> Result<(), OrbitError> {
-    admit_by_deadline(caller, request, request_deadline(request, Instant::now()))
+    admit_by_deadline(
+        caller,
+        request,
+        gh_request_deadline(request, Instant::now()),
+    )
 }
 
 fn admit_by_deadline(
@@ -168,17 +175,33 @@ fn admit_by_deadline(
 /// on the host until the reset. Waits for the shared record no longer than
 /// `request`'s own timeout budget.
 pub fn observe_gh_result(request: &ExecRequest, result: &ExecutionResult) {
+    observe_gh_result_by_deadline(
+        request,
+        result,
+        gh_request_deadline(request, Instant::now()),
+    );
+}
+
+/// [`observe_gh_result`] bounded by `deadline` (from [`gh_request_deadline`])
+/// instead of a fresh `request` budget, for a caller that spent part of the
+/// budget before the child's answer arrived. `None` waits without a bound.
+pub fn observe_gh_result_by_deadline(
+    request: &ExecRequest,
+    result: &ExecutionResult,
+    deadline: Option<Instant>,
+) {
     if !result.success {
-        observe_gh_failure(request, &result.stderr);
+        observe_gh_failure_by_deadline(request, &result.stderr, deadline);
     }
 }
 
-/// [`observe_gh_result`] for a failed `request` whose diagnostic is `stderr`.
-pub fn observe_gh_failure(request: &ExecRequest, stderr: &str) {
-    observe_failure_by_deadline(request, stderr, request_deadline(request, Instant::now()));
-}
-
-fn observe_failure_by_deadline(request: &ExecRequest, stderr: &str, deadline: Option<Instant>) {
+/// [`observe_gh_result_by_deadline`] for a failed `request` whose diagnostic is
+/// `stderr`.
+pub fn observe_gh_failure_by_deadline(
+    request: &ExecRequest,
+    stderr: &str,
+    deadline: Option<Instant>,
+) {
     let Some((store, policy)) = active_guard() else {
         return;
     };
@@ -249,7 +272,7 @@ pub fn run_gh_request(
         return Ok(timed_out_before_start(0));
     }
     let started = Instant::now();
-    let deadline = request_deadline(request, started);
+    let deadline = gh_request_deadline(request, started);
     admit_by_deadline(caller, request, deadline)?;
     let Some(bounded_request) = remaining_request_budget(request, deadline) else {
         return Ok(timed_out_before_start(
@@ -258,7 +281,7 @@ pub fn run_gh_request(
     };
     let result = run_process(&bounded_request, &NoSandbox)?;
     if !result.success {
-        observe_failure_by_deadline(&bounded_request, &result.stderr, deadline);
+        observe_gh_failure_by_deadline(&bounded_request, &result.stderr, deadline);
     }
     Ok(result)
 }
@@ -297,7 +320,7 @@ pub fn shared_exhausted_reset(request: &ExecRequest, resources: &[&str]) -> Shar
         return SharedReset::Unguarded;
     };
     let account = request::request_account(request);
-    let deadline = request_deadline(request, Instant::now());
+    let deadline = gh_request_deadline(request, Instant::now());
     SharedReset::Guarded(store.bounded_by(deadline).exhausted_reset(
         &policy,
         &account,
