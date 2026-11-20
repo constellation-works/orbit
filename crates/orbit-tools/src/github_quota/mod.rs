@@ -136,13 +136,13 @@ fn remaining_millis(deadline: Instant) -> u64 {
 /// Admit `request` for `caller`, or refuse it locally with a typed throttle.
 /// A request that spends no API quota, and every request while the guard is
 /// off, is admitted. Waits for the shared record no longer than `request`'s
-/// own timeout budget.
+/// own timeout budget. A request admitted once that budget is spent is not
+/// charged: the caller returns its typed budget error without spawning `gh`.
 pub fn admit_gh_request(caller: GithubCaller, request: &ExecRequest) -> Result<(), OrbitError> {
     admit_by_deadline(
         caller,
         request,
         gh_request_deadline(request, Instant::now()),
-        true,
     )
 }
 
@@ -164,18 +164,17 @@ pub fn admit_gh_request_within_budget(
         return Err(exhausted());
     }
     let deadline = gh_request_deadline(request, Instant::now());
-    admit_by_deadline(caller, request, deadline, false)?;
+    admit_by_deadline(caller, request, deadline)?;
     remaining_request_budget(request, deadline).ok_or_else(exhausted)
 }
 
-/// `spawns_after_deadline` is true for a caller that runs the child even once
-/// the budget is spent; otherwise a read admitted past the deadline is not
-/// charged, because no protected call follows it.
+/// Admit `request` against `deadline`. A read admitted once the deadline has
+/// passed is not charged: every caller checks its own budget after admission
+/// and returns instead of spawning `gh`, so no protected call follows it.
 fn admit_by_deadline(
     caller: GithubCaller,
     request: &ExecRequest,
     deadline: Option<Instant>,
-    spawns_after_deadline: bool,
 ) -> Result<(), OrbitError> {
     let Some((store, policy)) = active_guard() else {
         return Ok(());
@@ -186,8 +185,8 @@ fn admit_by_deadline(
     let account = request::request_account(request);
     let store = store.bounded_by(deadline);
     let probe = || request::read_rate_limit(request, deadline);
-    let decided = if spawns_after_deadline {
-        store.admit(
+    store
+        .admit_unless_expired(
             &policy,
             &account,
             caller,
@@ -195,17 +194,7 @@ fn admit_by_deadline(
             now_epoch_seconds(),
             &probe,
         )
-    } else {
-        store.admit_unless_expired(
-            &policy,
-            &account,
-            caller,
-            resource,
-            now_epoch_seconds(),
-            &probe,
-        )
-    };
-    decided.map_err(|refusal| refusal_error(&refusal, request))
+        .map_err(|refusal| refusal_error(&refusal, request))
 }
 
 /// Record what `result` of an admitted `request` says about the quota: an
@@ -302,7 +291,7 @@ pub fn run_gh_request(
     }
     let started = Instant::now();
     let deadline = gh_request_deadline(request, started);
-    admit_by_deadline(caller, request, deadline, false)?;
+    admit_by_deadline(caller, request, deadline)?;
     let Some(bounded_request) = remaining_request_budget(request, deadline) else {
         return Ok(timed_out_before_start(
             u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
