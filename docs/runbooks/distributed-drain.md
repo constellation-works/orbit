@@ -2472,6 +2472,16 @@ pull request, merge commit and verified head. Live owner jobs, unresolved
 merge intents, unapproved handoffs and changed heads keep their existing
 fences, and operator-revoked handoffs keep their existing settlement route.
 
+### External merges of stopped native deliveries
+
+The clock tick or owner drain admission pass can also settle a blocked or
+stalled native delivery. Orbit matches a merged PR's number and URL,
+published head and target branch against the stopped completion run's
+publication checkpoints. This works when the REST quota is exhausted and
+the forge can still list merged PRs. The task history records the PR, merge
+time and merge commit under `external_merge_settled`. A closed, unmerged PR
+leaves the task where it was.
+
 ## Migration recipe: leftover epic, child, review, and reservations
 
 Epic execution is retired. Hierarchy remains for reading; admission ignores

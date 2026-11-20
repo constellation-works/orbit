@@ -39,7 +39,7 @@ use crate::application::contracts::{
 pub(in crate::application::task) type CrewPools = <crate::OrbitRuntime as TaskJobPort>::CrewPools;
 
 /// The authenticated identity of the pull request a task's own native run
-/// published, as desktop review compares it with the forge.
+/// published, as review and settlement compare it with the forge.
 pub(in crate::application) struct NativePublicationIdentity {
     /// The published head branch.
     pub(in crate::application) branch: String,
@@ -304,6 +304,13 @@ pub(in crate::application) trait TaskJobPort {
         &self,
         task: &Task,
     ) -> Result<NativePublicationIdentity, OrbitError>;
+
+    /// The stopped completion run's authenticated publication, if it has an
+    /// inline PR checkpoint. A checkpoint that cannot be verified is an error.
+    fn stopped_publication_identity(
+        &self,
+        task: &Task,
+    ) -> Result<Option<NativePublicationIdentity>, OrbitError>;
 
     /// The enabled members of `purpose`'s `workflow.purpose_crews` pool,
     /// with the draw's source. With `inspection`, only members whose provider

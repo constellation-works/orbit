@@ -344,3 +344,17 @@ pub fn candidate_completion_hold(
     let changed = pull_request_changed_paths(workspace, Some(base), false, Some(candidate));
     evaluate_completion_hold(rules, std::slice::from_ref(task), &changed, run_id)
 }
+
+/// Evaluate completion holds against the base commit a published candidate
+/// was built on. The current base may already include the merged candidate.
+pub fn candidate_commit_completion_hold(
+    rules: &[CompletionHoldRule],
+    task: &Task,
+    workspace: &Path,
+    base_commit: &str,
+    candidate_commit: &str,
+    run_id: &str,
+) -> Result<Option<CompletionHold>, OrbitError> {
+    let changed = candidate_commit_changed_paths(workspace, base_commit, candidate_commit);
+    evaluate_completion_hold(rules, std::slice::from_ref(task), &changed, run_id)
+}
