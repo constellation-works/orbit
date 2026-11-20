@@ -896,6 +896,75 @@ fn local_read_projection_contracts() {
     }
 }
 
+/// A retry-exhaustion note keeps its classification and attempt count only as
+/// JSON fields; the text history line must still name them.
+#[test]
+fn task_show_text_names_retry_exhaustion_classification_and_attempts() {
+    if crate::isolated_test::run_in_child(
+        "local_read_projections_cli::task_show_text_names_retry_exhaustion_classification_and_attempts",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let id = fixture.json(&["task", "list", "--json"])[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    let _authority = orbit_common::test_env::unset(
+        orbit_common::test_env::INHERITED_AUTHORITY_ENV
+            .iter()
+            .copied(),
+    );
+    let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+        .unwrap()
+        .with_actor(ActorIdentity::human("retry-readout-fixture"));
+    let note = json!({
+        "head": "0123456789abcdef0123456789abcdef01234567",
+        "pr_number": 7,
+        "classification": "transient",
+        "attempts": 3,
+        "reason": "fixture budget spent",
+    })
+    .to_string();
+    runtime
+        .apply_task_automation_update(
+            &id,
+            TaskAutomationUpdate {
+                append_history: vec![TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: "system".into(),
+                    event: "ci_infrastructure_retry_exhausted".into(),
+                    note: Some(note),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: None,
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let human = fixture
+        .command(&["task", "show", &id])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8(human).unwrap();
+    let line = human
+        .lines()
+        .find(|line| line.contains("ci_infrastructure_retry_exhausted"))
+        .unwrap();
+    assert!(
+        line.contains("classification=transient") && line.contains("attempts=3"),
+        "{human}"
+    );
+}
+
 /// The public show record explains the current block, including an escalation
 /// recorded while the task was already blocked, without leaking stale reasons.
 #[test]
