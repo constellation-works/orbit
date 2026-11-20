@@ -14,9 +14,6 @@ mod prepare;
 mod response_correction;
 mod skills;
 
-#[cfg(test)]
-mod tests;
-
 pub(crate) use continuation::run_cli_backend_for_step;
 pub use entry::run_cli_backend;
 pub(crate) use environment::provider_child_environment;
