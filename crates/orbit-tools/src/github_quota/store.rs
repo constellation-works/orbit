@@ -41,11 +41,14 @@ const MAX_ERROR_CHARS: usize = 240;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GithubCaller {
-    /// Landing, the completion wait and the merge. Runs the quota to zero.
+    /// The private VCS operations behind PR open, completion, landing and merge,
+    /// and every request the task PR forge makes. Runs the quota to zero.
     Delivery,
-    /// The CI and security sweeps, attention, drain passes and task PR forge reads.
+    /// The CI and security-alert sweeps, auto-task sources, and `github.*`
+    /// calls a deterministic job step makes.
     Background,
-    /// Every `github.*` tool call an agent makes.
+    /// Every `github.*` tool call a deterministic job step does not make,
+    /// attention's CI read included.
     Agent,
 }
 
