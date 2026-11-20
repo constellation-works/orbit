@@ -86,7 +86,10 @@ class Git:
         if tree.returncode != 0 or not tree_id:
             return {}
         if tree_id not in self._trees:
-            listing = self.run("ls-tree", "-r", "--name-only", rev, "--", directory).stdout
+            # --full-tree: the pathspec and the output stay root-relative even
+            # when --repo names a subdirectory of the repository.
+            listing = self.run("ls-tree", "-r", "--name-only", "--full-tree",
+                               rev, "--", directory).stdout
             self._trees[tree_id] = {path: self.show(rev, path)
                                     for path in listing.splitlines() if path}
         return self._trees[tree_id]
@@ -249,7 +252,12 @@ def schema_facts(schema, path, facts):
         facts.setdefault("properties_keywords", {})[path] = properties
         for name, child in properties.items():
             schema_facts(child, f"{path}.{name}", facts)
-    for key in ("items", "additionalProperties"):
+    # `then`/`else` carry the conditional contract (for example the
+    # request_id-mode requirements of a tool) and `propertyNames` its key
+    # enum; all three constrain instances like any inline schema. `if` is a
+    # selector, not a constraint: editing it moves instances between
+    # branches, so it has no monotonic breaking direction and stays skipped.
+    for key in ("items", "additionalProperties", "then", "else", "propertyNames"):
         if isinstance(schema.get(key), (dict, bool)):
             schema_facts(schema[key], f"{path}[{key}]", facts)
     for key in ("anyOf", "oneOf", "allOf"):

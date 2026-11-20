@@ -89,6 +89,28 @@ def strip_string_and_char_literals(line: str) -> str:
 INLINE_TEST_FN = re.compile(r"^\s*#\[(?:test|tokio::test)\b", re.MULTILINE)
 
 
+def cfg_enables_test(expression: str) -> bool:
+    """True when a cfg expression names `test` outside any `not(...)`.
+
+    `cfg(test)` and `cfg(any(test, feature = "x"))` select test builds;
+    `cfg(not(test))` selects production code and must not be classified as
+    test-region. String literals are masked so `feature = "test"` is inert.
+    """
+    expression = re.sub(r'"(?:[^"\\]|\\.)*"', '""', expression)
+    negations: list[bool] = []
+    previous = None
+    for token in re.findall(r"[A-Za-z_]\w*|[()]", expression):
+        if token == "(":
+            negations.append(previous == "not")
+        elif token == ")":
+            if negations:
+                negations.pop()
+        elif token == "test" and not any(negations):
+            return True
+        previous = token
+    return False
+
+
 def classify_lines(text: str) -> list[bool]:
     """Return a list[bool] aligned to file lines: True if line is "test-region".
 
@@ -121,7 +143,7 @@ def classify_lines(text: str) -> list[bool]:
                 if depth == 0:
                     end = pos
                     break
-        if end is None or not re.search(r"\btest\b", text[m.end():end]):
+        if end is None or not cfg_enables_test(text[m.end():end]):
             continue
         rest = text[end + 1:]
         mod = re.match(

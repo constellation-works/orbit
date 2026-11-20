@@ -11,6 +11,13 @@ PROCESSES="${ORBIT_BUILD_BUDGET_BENCH_PROCESSES:-4}"
 SLOTS="${ORBIT_BUILD_BUDGET_BENCH_SLOTS:-2}"
 JOBS="${ORBIT_BUILD_BUDGET_BENCH_JOBS:-2}"
 
+# `seq 1 "$PROCESSES"` sits in a `for` word list, where `set -e` ignores its
+# failure: a non-numeric or zero count would run no builds yet exit 0.
+if [[ ! "$PROCESSES" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'bench-build-budget: ORBIT_BUILD_BUDGET_BENCH_PROCESSES must be a positive integer, got: %s\n' "$PROCESSES" >&2
+  exit 2
+fi
+
 refuse() {
   printf 'bench-build-budget: refusing paths: %s\n' "$*" >&2
   return 1

@@ -200,6 +200,21 @@ def scenario_existing_root(root, script):
     return errors
 
 
+def scenario_invalid_process_count(root, script):
+    errors = []
+    for index, value in enumerate(("0", "abc", "-1", "1.5", "01")):
+        case, work, events, env = make_fixture(root, script, f"processes-{index}")
+        env["ORBIT_BUILD_BUDGET_BENCH_PROCESSES"] = value
+        result = run(script, env)
+        if result.returncode == 0:
+            errors.append(f"process count {value!r} was accepted")
+        if "positive integer" not in result.stderr:
+            errors.append(f"process count {value!r} was not named in the refusal")
+        if read_events(events) or work.exists():
+            errors.append(f"process count {value!r} ran work before refusing")
+    return errors
+
+
 def scenario_root_symlink(root, script):
     case, work, events, env = make_fixture(root, script, "root-symlink")
     target = case / "operator-data"
@@ -1193,6 +1208,7 @@ def main():
     scratch.mkdir(parents=True, exist_ok=True)
     scenarios = (
         ("existing-root", scenario_existing_root),
+        ("invalid-process-count", scenario_invalid_process_count),
         ("root-symlink", scenario_root_symlink),
         ("internal-tree-symlink", lambda root, path: scenario_internal_symlink(root, path, "tree")),
         ("internal-target-symlink", lambda root, path: scenario_internal_symlink(root, path, "target")),
