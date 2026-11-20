@@ -150,16 +150,6 @@ impl FailureHandoffDecision {
     pub const fn is_blocked_pull_request(self) -> bool {
         matches!(self, Self::BlockedFailurePr | Self::BlockedConflictPr)
     }
-
-    /// Whether this decision is a review failure (`landing_review_failure`
-    /// or `review_completion_failure`). For follow-up Core readers.
-    #[must_use]
-    pub const fn is_review_failure(self) -> bool {
-        matches!(
-            self,
-            Self::LandingReviewFailure | Self::ReviewCompletionFailure
-        )
-    }
 }
 
 /// One weighted member of the pool an activity crew draw ran on.
