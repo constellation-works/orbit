@@ -1235,35 +1235,28 @@ fn partially_malformed_record_survives_admit_and_reports_unknown_in_status() {
     assert_eq!(core.remaining, Some(3999));
 }
 
-/// Regression [ORB-26102]: when a caller's probe is clipped while a peer holds
-/// the record lock at finalization, the caller must stay bounded by its
-/// deadline, preserve the prior valid observation, and still let the next
-/// caller refresh immediately once the lock is released.
-#[test]
-fn clipped_probe_with_contended_finalization_lock_releases_claim_and_preserves_record() {
-    let records = TempDir::new().unwrap();
-    let policy = GithubQuotaPolicy::default();
-    let now = now();
-    let reset = now + 1800;
-    let record_path = records.path().join(format!("{ACCOUNT}.json"));
-    store(records.path()).refresh_if_due(&policy, ACCOUNT, now - 120, &|| known(1000, reset));
-
+fn run_contended_clipped_probe(dir: &Path, policy: GithubQuotaPolicy, account: &str, now: u64) {
+    let record_path = dir.join(format!("{account}.json"));
     let (probe_started_tx, probe_started_rx) = std::sync::mpsc::channel();
     let (lock_held_tx, lock_held_rx) = std::sync::mpsc::channel();
-    let dir = records.path().to_path_buf();
+    let dir_buf = dir.to_path_buf();
+    let account_owned = account.to_string();
     let started = std::time::Instant::now();
     let refresher = std::thread::spawn(move || {
         let deadline = std::time::Instant::now() + Duration::from_millis(80);
-        store(&dir)
-            .bounded_by(Some(deadline))
-            .refresh_if_due(&policy, ACCOUNT, now, &|| {
+        store(&dir_buf).bounded_by(Some(deadline)).refresh_if_due(
+            &policy,
+            &account_owned,
+            now,
+            &|| {
                 probe_started_tx.send(()).unwrap();
                 lock_held_rx
                     .recv_timeout(Duration::from_secs(10))
                     .expect("holder never acquired lock");
                 std::thread::sleep(Duration::from_millis(100));
                 RateLimitAnswer::Clipped("rate-limit read cut short".into())
-            });
+            },
+        );
     });
 
     probe_started_rx
@@ -1286,8 +1279,19 @@ fn clipped_probe_with_contended_finalization_lock_releases_claim_and_preserves_r
         "clipped refresh must stay deadline-bounded under finalization contention, took {elapsed:?}"
     );
     drop(lock);
+}
 
-    let before = store(records.path()).status(&policy, ACCOUNT, now);
+fn assert_contended_clipped_recovery(
+    dir: &Path,
+    policy: GithubQuotaPolicy,
+    account: &str,
+    now: u64,
+    reset: u64,
+) {
+    store(dir).refresh_if_due(&policy, account, now - 120, &|| known(1000, reset));
+    run_contended_clipped_probe(dir, policy, account, now);
+
+    let before = store(dir).status(&policy, account, now);
     let core_before = before
         .resources
         .iter()
@@ -1301,10 +1305,10 @@ fn clipped_probe_with_contended_finalization_lock_releases_claim_and_preserves_r
     // Immediately after the lock is released (at the same `now`), the next
     // caller can refresh without waiting out the interval.
     let refreshes = AtomicUsize::new(0);
-    store(records.path())
+    store(dir)
         .admit(
             &policy,
-            ACCOUNT,
+            account,
             GithubCaller::Agent,
             RESOURCE_CORE,
             now,
@@ -1319,13 +1323,120 @@ fn clipped_probe_with_contended_finalization_lock_releases_claim_and_preserves_r
         1,
         "subsequent caller must refresh immediately after contended clipped finalization"
     );
-    let after = store(records.path()).status(&policy, ACCOUNT, now);
+    let after = store(dir).status(&policy, account, now);
     let core_after = after
         .resources
         .iter()
         .find(|resource| resource.resource == RESOURCE_CORE)
         .unwrap();
     assert_eq!(core_after.remaining, Some(3499));
+}
+
+/// Regression [ORB-26102]: when a caller's probe is clipped while a peer holds
+/// the record lock at finalization, the caller must stay bounded by its
+/// deadline, preserve the prior valid observation, and still let the next
+/// caller refresh immediately once the lock is released.
+#[test]
+fn clipped_probe_with_contended_finalization_lock_releases_claim_and_preserves_record() {
+    let records = TempDir::new().unwrap();
+    let policy = GithubQuotaPolicy::default();
+    let now = now();
+    let reset = now + 1800;
+    assert_contended_clipped_recovery(records.path(), policy, ACCOUNT, now, reset);
+}
+
+/// Regression [ORB-26114]: a writable/searchable quota directory that denies
+/// listing (`0o300`) must still reconcile a staged clipped release by name,
+/// refresh once at the same logical instant, admit an agent once the new
+/// observation clears its reserve, and leave newer claims and debits intact.
+#[cfg(unix)]
+#[test]
+fn clipped_probe_recovers_without_directory_listing_and_ignores_unrelated_entries() {
+    use std::os::unix::fs::PermissionsExt;
+
+    struct RestorePermissions<'a>(&'a Path);
+    impl Drop for RestorePermissions<'_> {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(self.0, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+
+    let records = TempDir::new().unwrap();
+    let policy = GithubQuotaPolicy::default();
+    let now = now();
+    let reset = now + 1800;
+
+    for index in 0..8 {
+        std::fs::write(records.path().join(format!("unrelated-{index}.json")), "{}").unwrap();
+    }
+
+    let _restore = RestorePermissions(records.path());
+    std::fs::set_permissions(records.path(), std::fs::Permissions::from_mode(0o300)).unwrap();
+    assert!(
+        std::fs::read_dir(records.path()).is_err(),
+        "test fixture requires a directory that denies listing"
+    );
+
+    assert_contended_clipped_recovery(records.path(), policy, ACCOUNT, now, reset);
+
+    // Generation 2's marker must have been unlinked after reconciliation.
+    assert!(
+        !records
+            .path()
+            .join(format!(".{ACCOUNT}.clipped.2.json"))
+            .exists(),
+        "reconciled clipped marker should be removed"
+    );
+
+    // A stale generation-3 marker written while generation 4 is in flight must
+    // leave generation 4's interval and overlapping debits intact.
+    let t1 = now + 60;
+    let started = Arc::new(Barrier::new(2));
+    let finish = Arc::new(Barrier::new(2));
+    let dir_worker = records.path().to_path_buf();
+    let started_worker = Arc::clone(&started);
+    let finish_worker = Arc::clone(&finish);
+    let refresher = std::thread::spawn(move || {
+        store(&dir_worker).refresh_if_due(&policy, ACCOUNT, t1, &|| {
+            started_worker.wait();
+            finish_worker.wait();
+            known(3500, reset + 1800)
+        });
+    });
+    started.wait();
+
+    let stale_marker = records.path().join(format!(".{ACCOUNT}.clipped.3.json"));
+    std::fs::write(&stale_marker, r#"{"generation":3,"previous_claim":null}"#).unwrap();
+
+    // Delivery admission during gen 4 records an in-flight debit and must not
+    // be clobbered by the stale generation-3 marker.
+    store(records.path())
+        .admit(
+            &policy,
+            ACCOUNT,
+            GithubCaller::Delivery,
+            RESOURCE_CORE,
+            t1,
+            &|| unreachable!("newer generation refresh is already in flight"),
+        )
+        .unwrap();
+    finish.wait();
+    refresher.join().unwrap();
+
+    let refreshes = AtomicUsize::new(0);
+    store(records.path()).refresh_if_due(&policy, ACCOUNT, t1, &|| {
+        refreshes.fetch_add(1, Ordering::SeqCst);
+        known(999, reset + 1800)
+    });
+    assert_eq!(refreshes.load(Ordering::SeqCst), 0);
+
+    let status = store(records.path()).status(&policy, ACCOUNT, t1);
+    let core = status
+        .resources
+        .iter()
+        .find(|resource| resource.resource == RESOURCE_CORE)
+        .unwrap();
+    assert_eq!(core.remaining, Some(3499));
 }
 
 /// Regression [ORB-26102]: a delayed clipped-claim release from an older
