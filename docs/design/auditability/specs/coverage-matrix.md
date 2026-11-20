@@ -28,8 +28,8 @@ Every Orbit operation that touches code, task state, persistent runtime state, e
 | Filesystem policy decision inside v2 run | V2 envelope audit row | profile, op, path, allowed, matched rule |
 | Filesystem or proc-spawn policy denial live projection | Global tracing JSONL | target, tool, path, profile, matched_rule |
 | Friction record submission live projection | Global tracing JSONL | target, workspace_id, friction_id, task_id, agent, model, summary |
-| HTTP provider turn | Loop audit row plus blob store | run id, session id, provider, model, request/response blob hashes |
-| Tool call inside HTTP loop | Loop audit row plus blob store | run id, session id, tool name, input/output blob hashes, outcome |
+| HTTP provider turn (retired) | Historical loop audit row plus blob store; not emitted by current runtime ([event-schema.md](./event-schema.md#historical-loop-audit-rows)) | run id, session id, provider, model, request/response blob hashes |
+| Tool call inside HTTP loop (retired) | Historical loop audit row plus blob store; not emitted by current runtime ([event-schema.md](./event-schema.md#historical-loop-audit-rows)) | run id, session id, tool name, input/output blob hashes, outcome |
 | CLI backend provider invocation | V2 envelope audit row | provider, redacted argv, stdin/stdout/stderr blob refs, timeout, exit code |
 | Invocation cost/usage | Invocation store | job run id, activity id, task ids, agent, model, token usage, tool-call summary |
 | Audit export/prune | Command audit row (planned) | command, actor, target, status |
