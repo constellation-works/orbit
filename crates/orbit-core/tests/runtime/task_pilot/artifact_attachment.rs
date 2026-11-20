@@ -336,10 +336,98 @@ fn a_passive_invocation_request_still_warns_for_an_ungranted_tool() {
     }
 }
 
+/// [ORB-25953] A `github.*` tool named only as the subject under test or
+/// invoked against an isolated fake/fixture executable with no GitHub
+/// authentication needed must not emit the external-credential warning or hold
+/// drain promotion, reproducing the ORB-25904 wording.
+fn github_subject_or_credential_free_criteria_produce_no_credential_warning_or_hold() {
+    for criterion in [
+        "The test drives the registered `github.run.logs` tool through the public golden harness with an isolated fake `gh` and needs no GitHub authentication and makes no live API call.",
+        "Run `github.run.logs` through the public golden harness with an isolated fake `gh`; it needs no GitHub authentication and makes no live API call.",
+        "Call `github.run.logs` against a fake `gh` executable in the test harness.",
+        "Invoke `github.run.logs` against a `gh` fixture; no live API call is made.",
+        "The `github.run.logs` tool schema documents the `limit` option.",
+    ] {
+        let workspace = Workspace::new();
+        install_real_implement_activity(&workspace);
+        let task = ui_task(&workspace, vec![criterion.into()]);
+        let (audit, decision) = apply(&workspace, &task, &[]);
+        let validation = strings(&audit["assessment"]["validation_tool_warnings"]);
+        assert!(
+            validation.is_empty(),
+            "`{criterion}` must not raise an external-credential warning: {validation:?}"
+        );
+        assert_ne!(
+            decision["classification"], "warnings",
+            "`{criterion}` must not hold promotion: {decision}"
+        );
+    }
+}
+
+/// [ORB-25953] A criterion that asks the implementer to invoke a `github.*`
+/// tool against live GitHub still raises the external-credential warning
+/// naming what clears it, and a credential-free sibling criterion does not
+/// suppress it.
+fn live_github_invocation_still_warns_with_clearing_guidance() {
+    for (criterion, tool) in [
+        (
+            "Run `github.run.list` to verify the latest workflow run on main.",
+            "github.run.list",
+        ),
+        (
+            "Inspect the failing CI step via `github.run.logs`.",
+            "github.run.logs",
+        ),
+        (
+            "Call `github.run.view` against live GitHub (requires GitHub authentication).",
+            "github.run.view",
+        ),
+    ] {
+        let workspace = Workspace::new();
+        install_real_implement_activity(&workspace);
+        let task = ui_task(&workspace, vec![criterion.into()]);
+        let (audit, decision) = apply(&workspace, &task, &[]);
+        let validation = strings(&audit["assessment"]["validation_tool_warnings"]);
+        assert_eq!(
+            validation.len(),
+            1,
+            "`{criterion}` must produce one credential warning: {validation:?}"
+        );
+        let warning = &validation[0];
+        assert!(
+            warning.contains(tool)
+                && warning.contains("GitHub authentication")
+                && warning.contains("state that precondition")
+                && warning.contains("hand the check to an operator"),
+            "warning must name tool, credential, and clearing remedies: {warning}"
+        );
+        assert_eq!(decision["decision"], "withhold", "{decision}");
+        assert_eq!(decision["classification"], "warnings", "{decision}");
+    }
+
+    let mixed = Workspace::new();
+    install_real_implement_activity(&mixed);
+    let task = ui_task(
+        &mixed,
+        vec![
+            "The test drives `github.run.logs` through the golden harness with an isolated fake `gh` and needs no GitHub authentication.".into(),
+            "Call `github.run.list` to verify the live workflow status.".into(),
+        ],
+    );
+    let (audit, decision) = apply(&mixed, &task, &[]);
+    let validation = strings(&audit["assessment"]["validation_tool_warnings"]);
+    assert_eq!(validation.len(), 1, "{validation:?}");
+    assert!(validation[0].contains("github.run.list"), "{validation:?}");
+    assert_eq!(decision["decision"], "withhold", "{decision}");
+    assert_eq!(decision["classification"], "warnings", "{decision}");
+}
+
 crate::scenario_table!(
     screenshot_attachment_is_feasible_and_an_ungranted_tool_still_warns_scenarios,
     screenshot_attachment_is_feasible_and_an_ungranted_tool_still_warns,
     a_capture_or_render_gap_stays_and_holds_approval_while_an_allowlist_claim_does_not,
     a_tool_described_as_the_change_subject_produces_no_allowlist_finding_or_hold,
     a_passive_invocation_request_still_warns_for_an_ungranted_tool,
+    github_subject_or_credential_free_criteria_produce_no_credential_warning_or_hold,
+    live_github_invocation_still_warns_with_clearing_guidance,
 );

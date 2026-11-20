@@ -35,28 +35,41 @@ pub(crate) fn positive_validation_tools<'a>(
     requirements
 }
 
+/// The unquoted text of each 1-based acceptance criterion alongside its positive
+/// sentences, preserving fenced quoting across criteria split into lines by
+/// task input normalization.
+pub(crate) fn positive_criterion_sentences(task: &Task) -> Vec<(usize, String, Vec<String>)> {
+    let combined = task.acceptance_criteria.join("\n");
+    let blanked = blank_quoted_regions(&combined);
+    let mut characters = blanked.chars();
+    let mut criteria = Vec::with_capacity(task.acceptance_criteria.len());
+    for (index, raw) in task.acceptance_criteria.iter().enumerate() {
+        let criterion: String = characters.by_ref().take(raw.chars().count()).collect();
+        characters.next();
+        let positive = sentences(&criterion)
+            .into_iter()
+            .filter(|sentence| !expects_denial(sentence))
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        if !positive.is_empty() {
+            criteria.push((index + 1, criterion, positive));
+        }
+    }
+    criteria
+}
+
 /// Preserve fenced quoting across criteria split into lines by task input
 /// normalization. Otherwise a copied tool name between two fence-only
 /// criteria would look like a positive requirement at admission.
 pub(crate) fn positive_validation_sentences(task: &Task) -> Vec<(usize, String)> {
-    let combined = task.acceptance_criteria.join("\n");
-    let blanked = blank_quoted_regions(&combined);
-    let mut characters = blanked.chars();
-    let mut positive = Vec::new();
-    for (index, criterion) in task.acceptance_criteria.iter().enumerate() {
-        let criterion: String = characters
-            .by_ref()
-            .take(criterion.chars().count())
-            .collect();
-        positive.extend(
-            sentences(&criterion)
+    positive_criterion_sentences(task)
+        .into_iter()
+        .flat_map(|(criterion_index, _, sentences)| {
+            sentences
                 .into_iter()
-                .filter(|sentence| !expects_denial(sentence))
-                .map(|sentence| (index + 1, sentence.to_string())),
-        );
-        characters.next();
-    }
-    positive
+                .map(move |sentence| (criterion_index, sentence))
+        })
+        .collect()
 }
 
 /// Blank the regions a criterion uses to quote something rather than to
