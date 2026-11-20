@@ -108,8 +108,20 @@ fn exact_remote(
 /// The stop for a prerequisite evidence read that could not be read
 /// conclusively (for example the attempt is still running, was superseded, or
 /// did not fail). The stop is deliberate, so it is held rather than recorded
-/// as a run failure; other read failures keep their class.
+/// as a run failure; other read failures keep their class. A throttled read
+/// whose reset did not fit the completion deadline is held the same way, with
+/// the provider's diagnostic [ORB-25918]: `hold_auto_fix_stop` holds only an
+/// `Execution` stop, and `stopped_by` would keep the throttled `PrivateVcs`.
 fn unreadable_prerequisite_evidence_stop(pr: &str, error: &OrbitError) -> OrbitError {
+    let throttled = error
+        .private_vcs_failure()
+        .is_some_and(|failure| failure.read_throttle.is_some());
+    if throttled {
+        return hold_auto_fix_stop(
+            stopped(pr, &error.to_string()),
+            DeliveryRefusal::CheckEvidenceInconclusive,
+        );
+    }
     let stop = stopped_by(pr, &error.to_string(), error);
     if matches!(error, OrbitError::WorkflowEvidenceUnavailable(_)) {
         hold_auto_fix_stop(stop, DeliveryRefusal::CheckEvidenceInconclusive)

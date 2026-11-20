@@ -2,12 +2,12 @@
 //! The engine receives verified generic evidence; no workflow is special-cased.
 use super::super::completion_deadline::Deadline;
 use super::{
-    MAX_WORKFLOW_SOURCE_BYTES,
+    CI_PREREQUISITE_EVIDENCE, MAX_WORKFLOW_SOURCE_BYTES,
     ci::ci_job_log,
     input::{number, required_string, same, text},
     workflow_dependency::dependency,
 };
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, PrivateVcsFailure, PrivateVcsFailureClass, ProviderReadThrottle};
 use orbit_types::workflow::{PrInfrastructureEvidence, RequiredGate};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -698,6 +698,19 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     super::read_reset::read_through_throttles(deadline, workspace, || evidence_once(input))
 }
 
+/// [ORB-25918] A prerequisite log whose fallback read the provider throttled.
+/// The throttle stays on the error as a private VCS failure, so the pass
+/// waits for the reset inside its deadline and reads the log again. When no
+/// wait fits, the provider's diagnostic rides the held stop.
+fn throttled_prerequisite_log(diagnostic: &str, throttle: &ProviderReadThrottle) -> OrbitError {
+    OrbitError::PrivateVcs(Box::new(PrivateVcsFailure {
+        operation: CI_PREREQUISITE_EVIDENCE.to_string(),
+        class: PrivateVcsFailureClass::Other,
+        message: format!("workflow prerequisite log could not be read: {diagnostic}"),
+        read_throttle: Some(throttle.clone()),
+    }))
+}
+
 fn evidence_once(input: &Value) -> Result<Value, OrbitError> {
     let workspace = Path::new(required_string(input, "workspace_path")?);
     let pr = required_string(input, "pr")?;
@@ -900,7 +913,12 @@ fn evidence_once(input: &Value) -> Result<Value, OrbitError> {
                 &json!({"workspace_path":workspace,"run_id":run_id.to_string(),"job_id":job_id.to_string(),"deadline_ms":deadline.0}),
             )?;
             if log.truncated != Some(false) || log.fallback_error.is_some() {
-                return Err(unreadable("truncated/unreadable prerequisite log"));
+                return Err(match (&log.fallback_error, log.known_fallback_throttle()) {
+                    (Some(diagnostic), Some(throttle)) => {
+                        throttled_prerequisite_log(diagnostic, throttle)
+                    }
+                    _ => unreadable("truncated/unreadable prerequisite log"),
+                });
             }
             let log = log
                 .log

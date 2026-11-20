@@ -7,10 +7,11 @@
 //! [`MAX_THROTTLED_READ_WAITS`] times, and only while that not-before falls
 //! before the completion's absolute deadline, which is never extended.
 //! That bound is per snapshot, not a global cap: the reads after the
-//! snapshot (run, jobs, pinned workflow file, check suite) wait the same way
-//! through [`read_through_throttles`], with their own count, so the deadline
-//! alone bounds the whole operation. A wait only ever precedes a repeated
-//! read; a reserved mutation is never part of what is read again.
+//! snapshot (run, jobs, the prerequisite log's fallback, pinned workflow file,
+//! check suite) wait the same way through [`read_through_throttles`], with
+//! their own count, so the deadline alone bounds the whole operation. A wait
+//! only ever precedes a repeated read; a reserved mutation is never part of
+//! what is read again.
 //! `gh` names no reset in its rendered diagnostic, so the reset is read from
 //! GitHub's `rate_limit` endpoint, which spends no quota. Anything this
 //! policy refuses keeps the read's original failure.

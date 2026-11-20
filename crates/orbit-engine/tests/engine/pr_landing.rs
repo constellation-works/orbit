@@ -7060,6 +7060,28 @@ if [ -f "$forge/infrastructure" ]; then
         "api repos/{owner}/{repo}/actions/workflows/600") cat "$forge/infra-workflow"; exit ;;
         "api repos/{owner}/{repo}/check-suites/800") cat "$forge/infra-suite"; exit ;;
         "run view")
+            # [ORB-25918] The primary log read may come back empty, and the
+            # fallback's run-metadata read (`--json`) may be throttled. Each
+            # counter names how many of its reads still answer that way.
+            case "$*" in
+                *' --json '*)
+                    if [ -s "$forge/infra-run-rate-limited" ]; then
+                        left=$(cat "$forge/infra-run-rate-limited")
+                        if [ "$left" -gt 0 ]; then
+                            echo $((left - 1)) > "$forge/infra-run-rate-limited"
+                            echo 'gh: API rate limit exceeded for user ID 270255973. If you reach out to GitHub Support for help, please include the request ID DE78:121DB1:92BAD8:9B7940:6AFFAFC1 (HTTP 403)' >&2
+                            exit 1
+                        fi
+                    fi ;;
+                *)
+                    if [ -s "$forge/infra-log-empty" ]; then
+                        left=$(cat "$forge/infra-log-empty")
+                        if [ "$left" -gt 0 ]; then
+                            echo $((left - 1)) > "$forge/infra-log-empty"
+                            exit 0
+                        fi
+                    fi ;;
+            esac
             # A planted marker hangs the job-log read until the supervisor kills it.
             if [ -f "$forge/infra-log-hang" ]; then sleep 30; fi
             # A planted marker makes the diagnosis vanish once the reservation
