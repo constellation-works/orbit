@@ -40,10 +40,7 @@ pub fn unknown_config_keys_present(document: &toml::Value) -> Vec<UnknownConfigK
                 .map(|(key, _)| *key),
         )
         .chain([
-            "task.artifact_store",
             "runtime.backend",
-            "agent",
-            "watch",
             "routines",
             "plugins",
             "plugin_enablement",
@@ -57,12 +54,7 @@ pub fn unknown_config_keys_present(document: &toml::Value) -> Vec<UnknownConfigK
         .collect();
     if let Some(crews) = document.get("crews").and_then(toml::Value::as_table) {
         for name in crews.keys() {
-            for field in CREW_CONFIG_FIELDS.iter().copied().chain([
-                "backend",
-                "planner",
-                "implementer",
-                "reviewer",
-            ]) {
+            for field in CREW_CONFIG_FIELDS.iter().copied().chain(["backend"]) {
                 known.push(vec!["crews".into(), name.clone(), field.into()]);
             }
         }

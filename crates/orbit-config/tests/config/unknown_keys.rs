@@ -37,7 +37,8 @@ fn unknown_config_keys_warn_once_per_file_and_suggest_known_keys() {
     );
     for root in [roots.global(), roots.workspace()] {
         let path = redact_home_dir(&root.join("config.toml").display().to_string());
-        for key in ["workflow.base_branc", "task.approval", "future"] {
+        // `[task]` has no registered keys left, so the unknown table is reported whole.
+        for key in ["workflow.base_branc", "task", "future"] {
             assert_eq!(
                 warnings
                     .iter()

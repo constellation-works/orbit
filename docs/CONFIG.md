@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Orbit Configuration
-last_validated: 2026-11-17
+last_validated: 2026-11-19
 ---
 
 # Orbit Configuration
@@ -1467,7 +1467,7 @@ Final recovery keeps its own rules (no fallback; `[]` turns it off), and automat
 - A crew name may not contain `:` or `@`, which the crew-reference grammar reserves ([repair](#repairing-a-config-that-already-names-a-crew-with-a-colon)).
 - An Antigravity crew needs an `agy models` slug; a bare Gemini CLI ID such as `gemini-3.8-flash` fails with migration guidance.
 
-**Retired crew shapes** fail load with migration guidance: `planner` / `implementer` / `reviewer` sub-tables (use flat `model` and `provider`); `backend` (`cli` is ignored, `http` and `auto` refused, likewise in `ORBIT_BACKEND` and `[runtime] backend`; remove it); `[agent.<role>]` tables (use `[crews.<name>]` plus `workflow.default_crew`).
+**Retired crew shapes** fail load with migration guidance: `backend` (`cli` is ignored, `http` and `auto` refused, likewise in `ORBIT_BACKEND` and `[runtime] backend`; remove it).
 
 ### Human crews
 
@@ -3129,10 +3129,8 @@ Config is parsed at startup, and invalid entries fail loud. Common errors:
 | `[crews.<name>].<field> must not be empty` | Give the crew a `model` and `provider`. |
 | ``crew `<x>`, which is disabled ([crews.<x>] enabled = false)`` | `orbit config set crews.<x>.enabled true`, or select an enabled crew. |
 | `invalid type: string "…", expected a boolean` for `enabled` | Write `enabled = true` or `enabled = false`, unquoted. |
-| `config schema no longer supports [agent.<role>] tables` | Migrate to `[crews.<name>]`. |
 | `execution.codex.sandbox has invalid value '<x>'` | Use `read-only`, `workspace-write` or `danger-full-access`. |
 | `operation.review_policy has invalid value '<x>'` | Use a supported legacy value or migrate to `[review]`. |
-| `[task] artifact_store is no longer supported` | Remove the key. |
 
 **Unknown keys and tables warn and are ignored.** Loading names the file and unknown path, suggests a nearby known key when available, and warns once per process for each file and path. An unknown table is reported once as a whole, including when empty; known section headers such as `[runtime]` stay quiet. This includes unknown `[operation]` and `[review]` fields; known values still undergo validation. Plugin-owned settings (`[plugins.<ns>]`), workspace plugin toggles and registered table-valued settings retain their own validation.
 

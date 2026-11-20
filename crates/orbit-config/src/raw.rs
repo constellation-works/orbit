@@ -13,13 +13,8 @@ pub(crate) struct RawRuntimeConfig {
     // Deliberately no `deny_unknown_fields`: config.toml is also home to
     // forward-compatible extension tables. Runtime admission reads only its
     // owned keys; crate::unknown diagnoses unrecognised paths without failing.
-    // Explicit migration guards below reject retired
-    // runtime keys whose continued acceptance would be unsafe or misleading.
-    pub(crate) task: Option<RawTaskSection>,
-    pub(crate) watch: Option<toml::Value>,
-    /// Removed in ORB-00058. Kept only so config loading can reject stale
-    /// `[agent.<role>]` tables with an explicit migration error.
-    pub(crate) agent: Option<BTreeMap<String, toml::Value>>,
+    // Retired runtime tables with no field here (`[watch]`, `[agent.<role>]`,
+    // `[task]`) take the same path: warned about and ignored.
     /// `[crews.<name>]` registry. Each table supplies one assignment Orbit
     /// resolves for activity dispatch at run start.
     pub(crate) crews: Option<BTreeMap<String, RawCrewEntry>>,
@@ -75,20 +70,4 @@ pub(crate) struct RawCrewEntry {
     /// executor declares `image_input`; `false` opts a text-only model out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) vision: Option<bool>,
-    /// Retired role tables are retained only to reject stale configuration
-    /// with rewrite guidance at load time. They are not part of the crew
-    /// schema and never participate in assignment resolution or serialization.
-    #[serde(default, skip_serializing)]
-    pub(crate) planner: Option<BTreeMap<String, String>>,
-    #[serde(default, skip_serializing)]
-    pub(crate) implementer: Option<BTreeMap<String, String>>,
-    #[serde(default, skip_serializing)]
-    pub(crate) reviewer: Option<BTreeMap<String, String>>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct RawTaskSection {
-    /// Removed pre-release selector. Kept here only so config loading can
-    /// reject stale keys with an explicit task-artifacts cutover message.
-    pub(crate) artifact_store: Option<String>,
 }

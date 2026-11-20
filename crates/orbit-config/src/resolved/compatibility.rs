@@ -1,6 +1,5 @@
 //! Retired configuration keys, migration refusals and compatibility warnings.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use orbit_common::OrbitError;
@@ -11,7 +10,6 @@ use orbit_types::workflow::activity_job::{
 };
 
 use crate::config_document;
-use crate::raw::RawTaskSection;
 use crate::registry;
 
 /// The retired invocation-level agent backend override.
@@ -61,17 +59,6 @@ pub(super) fn reject_retired_crew_provider(
     }
 }
 
-pub(super) fn reject_stale_agent_tables(
-    raw: Option<&BTreeMap<String, toml::Value>>,
-) -> Result<(), OrbitError> {
-    if raw.is_some() {
-        // ORB-00058: source provenance for retiring the old agent-role schema.
-        return Err(OrbitError::InvalidInput(
-            "config schema no longer supports [agent.<role>] tables; migrate to [crews.<name>] with [workflow].default_crew".to_string(),
-        ));
-    }
-    Ok(())
-}
 /// [ORB-10801] `[crews.<name>] backend` selected the agent execution backend.
 /// Only the CLI agent path survives, so `cli` stays accepted and inert while
 /// the removed values are refused: remapping `http` onto the CLI agent would
@@ -82,18 +69,6 @@ pub(super) fn reject_retired_crew_backend(crew: &str, raw: Option<&str>) -> Resu
     };
     check_retired_backend_value(value)
         .map_err(|error| OrbitError::InvalidInput(format!("[crews.{crew}] {error}")))
-}
-
-pub(super) fn validate_task_artifact_store_from_raw(
-    raw: Option<&RawTaskSection>,
-) -> Result<(), OrbitError> {
-    let Some(value) = raw.and_then(|section| section.artifact_store.as_deref()) else {
-        return Ok(());
-    };
-    let trimmed = value.trim();
-    Err(OrbitError::InvalidInput(format!(
-        "[task] artifact_store is no longer supported; remove the key because v2 task artifacts are always enabled (found '{trimmed}')"
-    )))
 }
 
 pub(super) struct CompatibilityKeys {

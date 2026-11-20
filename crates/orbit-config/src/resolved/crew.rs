@@ -215,9 +215,9 @@ pub(crate) fn crews_from_raw(
 
 /// The `[crews.<name>] kind = "human"` tables, admitted. A human crew sets
 /// only `kind`, `description` and `tags`; any agent property (`provider`,
-/// `model`, `effort`, `env`, `vision`, `backend`, `enabled` or a retired role
-/// table) fails the load naming the crew, so a half-converted agent crew is
-/// never silently dropped from dispatch.
+/// `model`, `effort`, `env`, `vision`, `backend` or `enabled`) fails the load
+/// naming the crew, so a half-converted agent crew is never silently dropped
+/// from dispatch.
 pub(crate) fn human_crews_from_raw(
     raw: Option<&BTreeMap<String, RawCrewEntry>>,
     config_path: &Path,
@@ -236,10 +236,6 @@ pub(crate) fn human_crews_from_raw(
             ("vision", entry.vision.is_some()),
             ("enabled", entry.enabled.is_some()),
             ("backend", entry.backend.is_some()),
-            (
-                "planner/implementer/reviewer",
-                entry.planner.is_some() || entry.implementer.is_some() || entry.reviewer.is_some(),
-            ),
         ]
         .into_iter()
         .filter_map(|(property, set)| set.then_some(property))
@@ -380,12 +376,6 @@ fn crew_assignment_from_raw(
     crew_field_path: &dyn Fn(&str, &str) -> PathBuf,
     ignored: &mut Vec<IgnoredCrewProperty>,
 ) -> Result<CrewAssignment, OrbitError> {
-    let has_legacy = raw.planner.is_some() || raw.implementer.is_some() || raw.reviewer.is_some();
-    if has_legacy {
-        return Err(OrbitError::InvalidInput(format!(
-            "[crews.{crew}] uses retired planner/implementer/reviewer role tables; rewrite it with flat `model` and `provider` fields only"
-        )));
-    }
     reject_retired_crew_backend(crew, raw.backend.as_deref())?;
     reject_retired_crew_provider(crew, raw.provider.as_deref())?;
     let model = required_crew_field(crew, "model", raw.model.as_deref())?;
