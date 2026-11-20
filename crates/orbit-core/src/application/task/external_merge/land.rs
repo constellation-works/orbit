@@ -63,8 +63,8 @@ pub struct TaskPullRequestLanding {
 pub(super) enum OpenDelivery {
     /// None of the task's recorded pull requests is open.
     None,
-    /// Exactly one open pull request delivers the task.
-    One(u64),
+    /// Exactly one open pull request delivers the task into its target branch.
+    One { number: u64, target_branch: String },
     /// Several open pull requests deliver the task, ascending. Which one lands
     /// is not Orbit's choice.
     Several(Vec<u64>),
@@ -73,6 +73,26 @@ pub(super) enum OpenDelivery {
 pub(super) fn landing_refused(id: &str, reason: impl std::fmt::Display) -> OrbitError {
     OrbitError::PolicyDenied(format!(
         "{TASK_LANDING_REFUSED}: task '{id}' did not land: {reason}"
+    ))
+}
+
+/// Refuse landing when `observed_base` does not match the `expected_base`
+/// established during candidate selection.
+pub(super) fn ensure_delivery_target_branch(
+    id: &str,
+    number: u64,
+    observed_base: Option<&str>,
+    expected_base: &str,
+) -> Result<(), OrbitError> {
+    if observed_base == Some(expected_base) {
+        return Ok(());
+    }
+    Err(landing_refused(
+        id,
+        format_args!(
+            "pull request #{number} targets {}, not its delivery target branch {expected_base}",
+            observed_base.unwrap_or("no branch")
+        ),
     ))
 }
 
@@ -120,8 +140,11 @@ impl OrbitRuntime {
         self.ensure_mutation_proposals_applied(&candidate.task)
             .map_err(|error| landing_refused(id, error))?;
 
-        let number = match self.open_delivery_pull_request(&candidate)? {
-            OpenDelivery::One(number) => number,
+        let (number, expected_base) = match self.open_delivery_pull_request(&candidate)? {
+            OpenDelivery::One {
+                number,
+                target_branch,
+            } => (number, target_branch),
             OpenDelivery::Several(numbers) => {
                 return Err(landing_refused(
                     id,
@@ -146,7 +169,7 @@ impl OrbitRuntime {
                 });
             }
         };
-        let merge_commit = self.merge_delivery_pull_request(id, number, None)?;
+        let merge_commit = self.merge_delivery_pull_request(id, number, None, &expected_base)?;
         // The work has landed, so a settlement that fails now is not a failed
         // landing: the owner's settlement pass reads the same merge.
         let settlement_pending = self
@@ -244,15 +267,15 @@ impl OrbitRuntime {
             let base = forge
                 .lease_pull_request(&repo_root, &format!("#{}", pull.number))?
                 .map(|bound| bound.base_branch);
-            let delivers = orbit_types::task::names_task_delivery_pull_request(
-                branches,
-                &pull.head_branch,
-                &pull.body,
-                id,
-            ) && base.as_deref().is_some_and(|base| {
-                self.delivers_candidate(candidate, pull.number, &pull.author, base, &authors)
+            let target_branch = base.filter(|base| {
+                orbit_types::task::names_task_delivery_pull_request(
+                    branches,
+                    &pull.head_branch,
+                    &pull.body,
+                    id,
+                ) && self.delivers_candidate(candidate, pull.number, &pull.author, base, &authors)
             });
-            if !delivers {
+            let Some(target_branch) = target_branch else {
                 return Err(landing_refused(
                     id,
                     format_args!(
@@ -260,17 +283,28 @@ impl OrbitRuntime {
                         pull.number
                     ),
                 ));
-            }
-            delivering.push(pull.number);
+            };
+            delivering.push((pull.number, target_branch));
         }
-        delivering.sort_unstable();
-        Ok(match delivering.as_slice() {
-            [number] => OpenDelivery::One(*number),
-            _ => OpenDelivery::Several(delivering),
+        delivering.sort_unstable_by_key(|(number, _)| *number);
+        let mut iter = delivering.into_iter();
+        Ok(match (iter.next(), iter.next()) {
+            (Some((number, target_branch)), None) => OpenDelivery::One {
+                number,
+                target_branch,
+            },
+            (Some((first, _)), Some((second, _))) => OpenDelivery::Several(
+                [first, second]
+                    .into_iter()
+                    .chain(iter.map(|(number, _)| number))
+                    .collect(),
+            ),
+            (None, _) => OpenDelivery::None,
         })
     }
 
-    /// Merge `number` at the head whose required checks were just read.
+    /// Merge `number` at the head whose required checks were just read,
+    /// verifying it still targets `expected_base`.
     /// `expected_head` pins the head a caller already judged (the owner's
     /// automatic landing); a pull request that moved since is refused.
     pub(super) fn merge_delivery_pull_request(
@@ -278,6 +312,7 @@ impl OrbitRuntime {
         id: &str,
         number: u64,
         expected_head: Option<&str>,
+        expected_base: &str,
     ) -> Result<String, OrbitError> {
         let repo_root = self.context.paths().repo_root.clone();
         let forge = self.task_pr_forge();
@@ -308,6 +343,7 @@ impl OrbitRuntime {
         let base = forge
             .lease_pull_request(&repo_root, &format!("#{number}"))?
             .map(|bound| bound.base_branch);
+        ensure_delivery_target_branch(id, number, base.as_deref(), expected_base)?;
         let message = orbit_engine::compose_squash_merge_message(
             &repo_root,
             std::slice::from_ref(&self.get_task(id)?),
