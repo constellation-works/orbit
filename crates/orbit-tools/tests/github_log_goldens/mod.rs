@@ -505,6 +505,7 @@ fn isolated(test: &str) -> bool {
 fixture_dir=${GH_GOLDEN_CASE:?}
 printf '%s\n' "$*" >> "$fixture_dir/calls"
 pwd -P >> "$fixture_dir/cwds"
+[ -f "$fixture_dir/denied" ] && { echo 'HTTP 404: Not Found' >&2; exit 1; }
 case "$*" in
   *actions/jobs/*/logs*)
     for arg in "$@"; do
@@ -516,15 +517,12 @@ case "$*" in
     printf 'gh: Not Found (HTTP 404) token=ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' >&2
     exit 1 ;;
   *actions/jobs/*)
-    [ -f "$fixture_dir/denied" ] && { echo 'HTTP 404: Not Found' >&2; exit 1; }
     [ -f "$fixture_dir/job_metadata" ] && { /bin/cat "$fixture_dir/job_metadata"; exit 0; }
     exit 1 ;;
   *actions/runs/*)
-    [ -f "$fixture_dir/denied" ] && { echo 'HTTP 404: Not Found' >&2; exit 1; }
     [ -f "$fixture_dir/run_metadata" ] && { /bin/cat "$fixture_dir/run_metadata"; exit 0; }
     exit 1 ;;
   *--log*)
-    [ -f "$fixture_dir/denied" ] && { echo 'HTTP 404: Not Found' >&2; exit 1; }
     if [ -f "$fixture_dir/run_error" ]; then /bin/cat "$fixture_dir/run_error" >&2; exit 1; fi
     /bin/cat "$fixture_dir/run_log"; exit 0 ;;
   *--json*) /bin/cat "$fixture_dir/view.json"; exit 0 ;;
@@ -718,9 +716,7 @@ impl CachedLogRead {
     }
 
     fn set_status(&self, status: &str, repository: &str, run_attempt: u64) {
-        let job_url = format!("https://api.github.com/repos/{repository}/actions/jobs/9");
-        let job_body = json!({"id": 9, "run_id": 123, "status": status, "url": job_url});
-        std::fs::write(self.root.path().join("job_metadata"), job_body.to_string()).unwrap();
+        self.set_job(status, repository);
 
         let run_url = format!("https://api.github.com/repos/{repository}/actions/runs/123");
         let run_body = json!({
@@ -730,6 +726,14 @@ impl CachedLogRead {
             "url": run_url,
         });
         std::fs::write(self.root.path().join("run_metadata"), run_body.to_string()).unwrap();
+    }
+
+    /// The job's metadata alone, so a case can change the job without touching
+    /// the run that owns it.
+    fn set_job(&self, status: &str, repository: &str) {
+        let job_url = format!("https://api.github.com/repos/{repository}/actions/jobs/9");
+        let job_body = json!({"id": 9, "run_id": 123, "status": status, "url": job_url});
+        std::fs::write(self.root.path().join("job_metadata"), job_body.to_string()).unwrap();
     }
 
     fn deny(&self) {
@@ -777,7 +781,7 @@ impl CachedLogRead {
     /// Its one job, 9, is a completed failure whose log API serves the log, so
     /// the run-scoped read recovers the excerpt from that job.
     fn fallback(tag: &str) -> (Self, orbit_common::test_env::ScopedEnv) {
-        let (read, env) = Self::new(tag);
+        let (read, env) = Self::new(tag, None);
         std::fs::write(read.root.path().join("run_log"), "").unwrap();
         let view = json!({
             "databaseId": 123,
@@ -957,7 +961,7 @@ fn two_windows_of_a_completed_fallback_job_download_its_log_once() {
     ) {
         return;
     }
-    let (fallback, _env) = CachedJobRead::fallback("fallback");
+    let (fallback, _env) = CachedLogRead::fallback("fallback");
     let windows = [
         json!({"line_start": 5, "line_end": 8}),
         json!({"byte_start": 0, "byte_end": 60}),
@@ -1003,7 +1007,7 @@ fn a_fallback_job_log_that_is_not_complete_or_not_readable_is_never_cached() {
     let window = || json!({"line_start": 2, "line_end": 4});
 
     // The job log API still reports the job as running.
-    let (running, env) = CachedJobRead::fallback("partial");
+    let (running, env) = CachedLogRead::fallback("partial");
     running.set_job("in_progress", "acme/orbit");
     running.run_read(window()).unwrap();
     running.run_read(window()).unwrap();
@@ -1016,7 +1020,7 @@ fn a_fallback_job_log_that_is_not_complete_or_not_readable_is_never_cached() {
     drop(env);
 
     // The caller's access is refused, so the read fails and stores nothing.
-    let (refused, env) = CachedJobRead::fallback("denied");
+    let (refused, env) = CachedLogRead::fallback("denied");
     refused.deny();
     refused.run_read(window()).unwrap_err();
     assert!(
@@ -1027,7 +1031,7 @@ fn a_fallback_job_log_that_is_not_complete_or_not_readable_is_never_cached() {
 
     // The job log API fails, then answers. The failed read leaves nothing that
     // the later read could mistake for the log.
-    let (failed, _env) = CachedJobRead::fallback("later");
+    let (failed, _env) = CachedLogRead::fallback("later");
     let job_log = failed.root.path().join("job_9");
     let log = std::fs::read(&job_log).unwrap();
     std::fs::remove_file(&job_log).unwrap();
