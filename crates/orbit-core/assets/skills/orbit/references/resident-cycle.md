@@ -47,8 +47,10 @@ died without a checkpoint. Its actions are in the ledger under
 `resident:<mandate>:<cycle>:<n>` keys:
 
 - A retried call that the dead cycle recorded `ok` returns
-  `already_done` with the original key and reference. Record it in your
-  checkpoint under that key; do not repeat the action.
+  `resident_action: "already_done"` with the original action key in `key`, its
+  `ref`, and `subject`. Record it in your checkpoint under that key; do not
+  repeat the action. This recovery replay does not return a new
+  `resident_action_key`.
 - A call the dead cycle left `started` is refused as in doubt. Read the
   subject's current state and decide from that evidence; never blindly retry
   a mutating action.
@@ -99,7 +101,12 @@ through its own workspace. The same `dispatch` right re-pilots and requeues:
 call `orbit.task.recover` action `repilot` with the `id` of a `proposed` or
 `backlog` task to repeat its pilot assessment, and action `requeue` with
 the `id` of a `blocked` task and a `reason`, both with the mandate's own
-workspace. Each returns its `resident_action_key`. Every other
+workspace. These actions are permitted to the trusted live resident cycle
+under its `dispatch` grant; other managed runs remain operator-only. A fresh
+successful action returns its `resident_action_key`. If a recovery call matches
+an action the dead cycle already completed, it returns
+`resident_action: "already_done"` with the original key in `key`, plus `ref`
+and `subject`, and does not return `resident_action_key`. Every other
 `orbit.task.recover` action, `orbit.workflow` action `auto`, `orbit.run` action
 `resume` and `orbit.pipeline.invoke` stay operator-only and answer
 `capability_denied` even with the right: record that as a cost and leave them
