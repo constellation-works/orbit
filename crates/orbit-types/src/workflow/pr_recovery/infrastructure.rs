@@ -86,6 +86,25 @@ impl PrInfrastructureEvidence {
             PrInfrastructureFailure::Prerequisite { .. } => None,
         }
     }
+
+    /// Whether `other` re-verifies this evidence. A zero-job failure's
+    /// `provider_message` is best-effort diagnostic text that a later read may
+    /// not reproduce, so it never decides identity; every verified field does.
+    pub fn same_verified_evidence(&self, other: &Self) -> bool {
+        let mut other = other.clone();
+        if let (
+            PrInfrastructureFailure::WorkflowRun {
+                failed_workflow_run,
+            },
+            Some(expected),
+        ) = (&mut other.failure, self.failed_workflow_run())
+        {
+            failed_workflow_run
+                .provider_message
+                .clone_from(&expected.provider_message);
+        }
+        *self == other
+    }
 }
 
 /// A cumulative reservation; execution identity does not reset its budget.
