@@ -271,7 +271,10 @@ pub trait ProviderLimitStoreBackend: Send + Sync {
     /// account's `event` observations of that provider that an older reading
     /// stored and this one no longer reports, so a window the provider stopped
     /// reporting neither shows nor gates. `error` observations keep their own
-    /// expiry. An empty reading changes nothing.
+    /// expiry. An empty reading changes nothing, and neither does a reading
+    /// older than an `event` observation the account already has: the newer
+    /// reading is the authority, and writing the older one would restore a
+    /// window the newer one retired.
     fn record_provider_usage_reading(
         &self,
         observations: &[ProviderLimitObservation],
