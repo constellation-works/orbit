@@ -1,7 +1,7 @@
 ---
 title: Mid-Run Operator Steering — Design
 owner: codex
-last_updated: 2026-11-07
+last_updated: 2026-11-20
 last_validated: 2026-11-06
 status: Implemented
 feature: mid-run-steering
@@ -72,7 +72,7 @@ Two additive keys in the existing `workflow.*` namespace, documented in [CONFIG.
 | `workflow.mid_run_steering.enabled` | `false` | Record watermarks, deliver at safe points, and enforce the promotion gate for runs in this workspace. |
 | `workflow.mid_run_steering.max_rounds` | `2` | Steering rounds a run may consume at the promotion gate before it holds as `steering_unconsumed`. |
 
-`orbit doctor` reports the resolved values beside the workspace's other workflow settings. A new global config seeded by `orbit init` sets `workflow.mid_run_steering.enabled = true`; when the key is absent the built-in default `false` applies, so a workspace that omits the key inherits the seeded global value rather than the built-in default. Reconsidering the built-in default requires a separate reviewed change.
+`orbit doctor` reports the resolved values beside the workspace's other workflow settings. A new global config seeded by `orbit init` sets `workflow.mid_run_steering.enabled = true`; when the key is absent the built-in default `false` applies, so a workspace that omits the key inherits the seeded global value rather than the built-in default ([ORB-22827] corrected the earlier statement that `orbit init` leaves steering off). Reconsidering the built-in default requires a separate reviewed change.
 
 ### Enablement during a run
 
@@ -99,6 +99,7 @@ The isolated runtime [replay suite](../../../crates/orbit-core/tests/runtime/mid
 - [ORB-16715] — made a carried candidate inherit its source run's steering baseline.
 - [ORB-16723] — allowed operator comment-only writes during a live execution claim.
 - [ORB-16606] — added the incident replay through real commit and verified enablement, disablement and default-off behavior in both pipelines.
+- [ORB-22827] — corrected this design's statement that `orbit init` does not enable steering (§5).
 
 - [ORB-16577] — added the Muse executor lane; the missed 02:07Z operator comment during its implement step is the incident sections 1–3 are shaped around.
 - [ORB-10499] — established the terminal-task precheck and the checkpoint re-read contract through `orbit.task.show`.
