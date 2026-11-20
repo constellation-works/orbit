@@ -95,10 +95,15 @@ Use the normal pipeline for leaf work. To dispatch, call `orbit.workflow` action
 with the mandate's own workspace and the `backlog` task ids; it returns the run
 id and stops the delivery at `review`, so landing it still takes `merge`. A
 covered workspace other than the mandate's own is refused: a cycle writes only
-through its own workspace. `orbit.task.recover` action `requeue`, `orbit.task.recover` action `repilot`,
-`orbit.workflow` action `auto`, `orbit.run` action `resume` and `orbit.pipeline.invoke`
-stay operator-only and answer `capability_denied` even with the right: record
-that as a cost and leave them to the operator or the scheduler.
+through its own workspace. The same `dispatch` right re-pilots and requeues:
+call `orbit.task.recover` action `repilot` with the `id` of a `proposed` or
+`backlog` task to repeat its pilot assessment, and action `requeue` with
+the `id` of a `blocked` task and a `reason`, both with the mandate's own
+workspace. Each returns its `resident_action_key`. Every other
+`orbit.task.recover` action, `orbit.workflow` action `auto`, `orbit.run` action
+`resume` and `orbit.pipeline.invoke` stay operator-only and answer
+`capability_denied` even with the right: record that as a cost and leave them
+to the operator or the scheduler.
 To land, call `orbit.workflow` action `land` with the mandate's own workspace and the
 `task_id` of a task in `review`. It
 merges the task's delivery pull request under the forge's branch protection and

@@ -67,12 +67,17 @@ pub(super) fn execute(
         ResidentCallAdmission::Ledgered(ticket) => Some(ticket),
         ResidentCallAdmission::AlreadyDone(answer) => return Ok(answer),
     };
+    // The cycle guard ledgers a right-gated write only for a live cycle that
+    // holds the right, so a ledgered call stands in for the operator check
+    // the handler would otherwise repeat.
+    let resident_cycle_admitted = ticket.is_some();
     let mut result = execute_admitted(
         runtime,
         task_scope,
         caller,
         action,
         input,
+        resident_cycle_admitted,
         &mut redaction_report,
     );
     if let Some(ticket) = ticket {
@@ -87,6 +92,7 @@ fn execute_admitted(
     caller: ToolCaller<'_>,
     action: OrbitBuiltinAction,
     input: Value,
+    resident_cycle_admitted: bool,
     redaction_report: &mut super::artifact_redaction::ArtifactRedactionReport,
 ) -> Result<Value, OrbitError> {
     let ToolCaller {
@@ -211,6 +217,7 @@ fn execute_admitted(
                     reservation_owner,
                 },
                 operator,
+                resident_cycle_admitted,
                 verb,
                 input,
             )?;

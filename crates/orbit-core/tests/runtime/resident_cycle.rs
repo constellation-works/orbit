@@ -14,6 +14,7 @@ mod deadline_expiry;
 mod landing;
 #[cfg(unix)]
 mod launch;
+mod recover;
 mod wake_scope;
 
 use std::path::PathBuf;

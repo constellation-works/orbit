@@ -361,7 +361,7 @@ fn the_attention_read_grants_a_cycle_no_write_capability() {
         assert!(capability_degraded(&read).is_empty(), "{read}");
         for (tool, input) in [
             (
-                "orbit.task.requeue",
+                "orbit.task.recover_claim",
                 json!({"id": watched, "workspace": workspace}),
             ),
             (

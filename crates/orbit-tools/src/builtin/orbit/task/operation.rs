@@ -7,7 +7,8 @@
 //! checks; `add` and `update` have a guarded write mode with its own input
 //! contract and schema conditionals, and `update` refuses an implementation
 //! activity's `blocked` status before any field check. The operator review
-//! verbs refuse a managed run before any field check.
+//! and recovery verbs refuse a managed run before any field check, except a
+//! resident cycle's `repilot` and `requeue`, which its cycle guard decides.
 
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::OperationInput;
@@ -83,6 +84,17 @@ impl GuardedModes for TaskVerb {
             }
             TaskVerb::ReviewReset => {
                 managed_run_refusal(ctx, "managed runs cannot reset review budgets")
+            }
+            // A resident cycle is a managed run whose `dispatch` right covers
+            // re-piloting and requeueing; its grant is checked on the host,
+            // under its cycle guard, as for `orbit.workflow` action `ship`.
+            TaskVerb::Repilot | TaskVerb::Requeue
+                if ctx
+                    .orbit_host
+                    .as_ref()
+                    .is_some_and(|host| host.scope_is_resident_cycle()) =>
+            {
+                None
             }
             TaskVerb::Repilot => {
                 managed_run_refusal(ctx, "managed runs cannot request another task pilot")

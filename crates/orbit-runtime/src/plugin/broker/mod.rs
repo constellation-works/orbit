@@ -72,12 +72,24 @@ pub const BROKERED_RESIDENT_LAND_TOOL: &str = crate::authorization::WORKFLOW_LAN
 /// with the host's `gh` credentials, whether the task's pull request is open.
 pub const BROKERED_RESIDENT_TASK_UPDATE_TOOL: &str = "orbit.task.update";
 
+/// The built-in a sandboxed resident cycle re-pilots a task through. The broker
+/// submits it on the host for the same reason as a ship: the pilot's worker
+/// must start beside the cycle's read-only sandbox, not inside it.
+pub const BROKERED_RESIDENT_REPILOT_TOOL: &str = crate::authorization::TASK_REPILOT_OPERATION_ID;
+
+/// The built-in a sandboxed resident cycle requeues a held delivery through.
+/// The broker runs it on the host beside the cycle's read-only sandbox, where
+/// the held task's preserved candidate and its run state can be written.
+pub const BROKERED_RESIDENT_REQUEUE_TOOL: &str = crate::authorization::TASK_REQUEUE_OPERATION_ID;
+
 /// Whether `tool` is a built-in the broker runs for a resident cycle's run,
 /// whatever its input.
 pub fn is_brokered_resident_tool(tool: &str) -> bool {
     tool == BROKERED_RESIDENT_SHIP_TOOL
         || tool == BROKERED_RESIDENT_RAISE_TOOL
         || tool == BROKERED_RESIDENT_LAND_TOOL
+        || tool == BROKERED_RESIDENT_REPILOT_TOOL
+        || tool == BROKERED_RESIDENT_REQUEUE_TOOL
 }
 
 /// Whether this call is a resident cycle's move of a task to `done`.
