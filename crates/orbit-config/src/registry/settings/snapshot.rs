@@ -229,11 +229,11 @@ impl ConfigSnapshot {
 
     /// The admitted `workflow.auto_effort.bands` policy that resolves
     /// `<crew>@auto` pool entries, at the fixed
-    /// [`crate::AUTO_EFFORT_EXPLORE_SHARE`].
+    /// `AUTO_EFFORT_EXPLORE_SHARE`.
     pub fn auto_effort(&self) -> crate::AutoEffortPolicy {
         crate::AutoEffortPolicy::new(
             self.workflow_auto_effort_bands.clone(),
-            crate::AUTO_EFFORT_EXPLORE_SHARE,
+            crate::crew::auto_effort::AUTO_EFFORT_EXPLORE_SHARE,
         )
     }
 
@@ -378,7 +378,9 @@ impl ConfigSnapshot {
         &self,
     ) -> Result<orbit_common::fs::lock_mode::FootprintLockModes, OrbitError> {
         orbit_common::fs::lock_mode::FootprintLockModes::new(&self.workflow_lock_modes).map_err(
-            |reason| OrbitError::InvalidInput(format!("{} {reason}", crate::LOCK_MODES_KEY)),
+            |reason| {
+                OrbitError::InvalidInput(format!("{} {reason}", crate::lock_modes::LOCK_MODES_KEY))
+            },
         )
     }
 

@@ -186,13 +186,14 @@ mod settings;
 
 pub use allowed::ConfigAllowedValues;
 
+pub(crate) use keys::GLOBAL_ONLY_KEY_PREFIX;
 pub(crate) use keys::{
     DEPRECATED_CONFIG_KEYS, DEPRECATED_VALUE_FORMS, REMOVED_CONFIG_KEYS,
     is_compatibility_config_key, is_machine_identity_key, parse_crew_field_key,
 };
 pub use keys::{
-    GLOBAL_ONLY_KEY_PREFIX, admit_config_key, admit_settable_config_key, config_key_options,
-    describe, immutable_key_note, is_global_only_key,
+    admit_config_key, admit_settable_config_key, config_key_options, describe, immutable_key_note,
+    is_global_only_key,
 };
 pub(crate) use settings::resolve_percent;
 pub use settings::{

@@ -24,7 +24,7 @@ const BARE_WEIGHT: u32 = 1;
 /// Each entry is written `crew[@effort]` or `crew[@effort]:weight`; a pool is
 /// either all bare or all weighted. `opus@medium` and `opus` are distinct
 /// members. `opus@auto` names a member whose effort each draw chooses from
-/// `workflow.auto_effort.bands`; only the pools [`crate::AUTO_EFFORT_POOLS`]
+/// `workflow.auto_effort.bands`; only the pools `AUTO_EFFORT_POOLS`
 /// names accept it. [`canonical_crew_pool`] is the one place that grammar is
 /// admitted, so configuration, `orbit config set` and CLI overrides reject the
 /// same malformed pools.

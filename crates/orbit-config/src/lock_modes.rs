@@ -6,7 +6,7 @@ use orbit_common::fs::lock_mode::{FootprintLockMode, FootprintLockModeEntry, Foo
 use serde::Deserialize;
 
 /// The key as written in `config.toml`.
-pub const LOCK_MODES_KEY: &str = "workflow.lock_modes";
+pub(crate) const LOCK_MODES_KEY: &str = "workflow.lock_modes";
 
 /// One `[[workflow.lock_modes]]` entry as written.
 #[derive(Debug, Clone, Deserialize)]
