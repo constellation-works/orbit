@@ -240,6 +240,67 @@ hard_complexity_crews = ["opus@medium:100", "opus:100"]
 }
 
 #[test]
+fn a_long_lived_runtime_follows_added_and_removed_crew_env_requirements() {
+    if !isolated(
+        "dispatch_admission::crew_env::a_long_lived_runtime_follows_added_and_removed_crew_env_requirements",
+    ) {
+        return;
+    }
+    let _env = orbit_common::test_env::unset([SOURCE]);
+    let config = |env: &str| {
+        format!(
+            r#"
+[workflow]
+default_crew = "sol"
+[crews.sol]
+provider = "codex"
+model = "fixture-shared"
+[crews.credits]
+provider = "codex"
+model = "fixture-credits"
+{env}
+"#
+        )
+    };
+    let (_root, runtime, _) = configured_runtime(&config(""), &["src/fixture.rs"]);
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Refreshed crew env fixture".into(),
+            description: "Crew env requirements change while the runtime stays open".into(),
+            acceptance_criteria: vec!["Exclusions follow the refreshed crew".into()],
+            plan: "Observe admission".into(),
+            complexity: TaskComplexity::Medium,
+            context_files: vec!["file:src/fixture.rs".into()],
+            crew: Some("credits".into()),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap();
+    let config_path = runtime.paths().global_dir.join("config.toml");
+    assert!(admitted(&list_backlog_tasks(&runtime, json!({}))).contains(&task.id));
+
+    // A requirement added after open excludes the crew on the next pass.
+    std::fs::write(
+        &config_path,
+        config(&format!("env = [\"OPENAI_API_KEY={SOURCE}\"]")),
+    )
+    .unwrap();
+    let backlog = list_backlog_tasks(&runtime, json!({}));
+    let excluded = backlog["excluded"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == task.id)
+        .unwrap_or_else(|| panic!("added requirement must exclude: {backlog}"));
+    assert_eq!(excluded["reason"], "crew_env_unset", "{backlog}");
+    assert!(excluded["detail"].as_str().unwrap().contains(SOURCE));
+
+    // Removing it releases the crew on the next pass.
+    std::fs::write(&config_path, config("# requirement removed")).unwrap();
+    assert!(admitted(&list_backlog_tasks(&runtime, json!({}))).contains(&task.id));
+}
+
+#[test]
 fn readiness_preserves_the_live_drains_unset_source_in_a_different_environment() {
     if !isolated(
         "dispatch_admission::crew_env::readiness_preserves_the_live_drains_unset_source_in_a_different_environment",

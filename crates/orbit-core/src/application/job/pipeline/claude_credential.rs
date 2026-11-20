@@ -95,13 +95,16 @@ impl OrbitRuntime {
             .collect()
     }
 
-    /// Every enabled crew whose `[crews.<name>] env` names a source this
-    /// runtime's environment (runtime defaults such as `clock.env` included)
+    /// Every enabled crew (per the current admission crew settings) whose
+    /// `[crews.<name>] env` names a source this runtime's environment (runtime defaults such as `clock.env` included)
     /// holds no value for. Names only, never values.
     pub fn unset_crew_env(&self) -> Vec<CrewEnvUnset> {
-        self.context
-            .settings()
-            .crews()
+        // The crew registry comes from the last-known-good admission policy,
+        // not the open-time settings, so a long-lived worker sees crews whose
+        // `env` requirements were added or removed since it started. Inside
+        // an admission pass this is that pass's pinned snapshot.
+        self.admission_crew_settings()
+            .crews
             .values()
             .filter_map(|crew| match self.crew_unrunnable(crew) {
                 Some(Unrunnable::UnsetEnv(unset)) => Some(unset),
