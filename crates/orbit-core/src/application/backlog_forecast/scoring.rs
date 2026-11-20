@@ -294,10 +294,45 @@ impl VersionHits {
             "usd": adjusted["usd"],
             "adjusted": adjusted,
             "pre_regression_baseline": total_hits(&self.baseline_total),
+            "series": FORECAST_SERIES.iter().map(|(key, scores)| json!({"key": key, "scores": scores})).collect::<Vec<_>>(),
             "settled": self.settled,
             "not_drained": self.not_drained,
         })
     }
+}
+
+/// The whole-forecast series calibration scores, and what each measures.
+/// The baseline series can mature from snapshots whose adjusted totals were
+/// withheld, so forecast accuracy stays measurable while they are.
+const FORECAST_SERIES: [(&str, &str); 2] = [
+    (
+        "adjusted",
+        "regression-adjusted drain hours, tokens and USD; a snapshot that withheld them is unscored here",
+    ),
+    (
+        "pre_regression_baseline",
+        "drain hours, tokens and USD without simulated regression follow-up, stored whenever adjusted totals are withheld; scored against the same observed outcome, filed fixes included",
+    ),
+];
+
+/// The series whose stored quantiles `result` carries for at least one metric.
+fn scorable_forecast_series(result: &Value) -> Vec<&'static str> {
+    let carries = |quantiles: &Value| {
+        TOTALS
+            .iter()
+            .any(|key| quantiles[*key]["p50"].is_number() && quantiles[*key]["p90"].is_number())
+    };
+    FORECAST_SERIES
+        .iter()
+        .map(|(key, _)| *key)
+        .filter(|key| {
+            if *key == "adjusted" {
+                carries(result)
+            } else {
+                carries(&result[*key])
+            }
+        })
+        .collect()
 }
 
 /// Score `stored` (newest first) against the tasks' current records, their
@@ -503,6 +538,12 @@ pub(super) fn score_backlog_forecasts(
                 "tokens": result["tokens"],
                 "usd": result["usd"],
             },
+            "pre_regression_baseline": result.get("pre_regression_baseline").map(|baseline| json!({
+                "time_to_drain_hours": baseline["time_to_drain_hours"],
+                "tokens": baseline["tokens"],
+                "usd": baseline["usd"],
+            })),
+            "scorable_series": scorable_forecast_series(&result),
             "actual": actual,
             "residual": residual,
         }));
