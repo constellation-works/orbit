@@ -30,7 +30,7 @@ pub use auto_effort::{
     AUTO_EFFORT, AutoEffortBasis, AutoEffortChoice, AutoEffortSignal, auto_effort_base,
     auto_effort_reference,
 };
-pub use crew_env::{CrewEnvSource, CrewEnvVar};
+pub use crew_env::{CrewEnvSource, CrewEnvVar, is_env_var_name};
 pub use digest::lower_hex;
 pub use human_crew::{
     AGENT_CREW_KIND, HUMAN_CREW_KIND, HumanCrew, find_human_crew, human_crew_refusal,

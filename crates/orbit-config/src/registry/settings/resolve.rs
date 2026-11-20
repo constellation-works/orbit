@@ -4,7 +4,8 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{
-    Crew, resolve_crew, validate_machine_id, validate_machine_name, validate_stored_task_prefix,
+    Crew, is_env_var_name, resolve_crew, validate_machine_id, validate_machine_name,
+    validate_stored_task_prefix,
 };
 use orbit_types::workflow::automation::members::MaterialField;
 use orbit_types::workflow::{ConventionTemplate, PrBodyTemplateSource, Provider, TemplateSurface};
@@ -447,12 +448,7 @@ pub(super) fn normalize_pass_list(pass: Vec<String>) -> Result<Vec<String>, Orbi
     let mut normalized = BTreeSet::new();
     for entry in pass {
         let value = entry.trim();
-        let mut chars = value.chars();
-        let valid = chars
-            .next()
-            .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
-            && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric());
-        if !valid {
+        if !is_env_var_name(value) {
             return Err(OrbitError::InvalidInput(format!(
                 "execution.env.pass contains invalid variable name '{value}'"
             )));
@@ -526,11 +522,7 @@ pub(super) fn resolve_build_output_env(
     let mut names = BTreeSet::new();
     for raw in raw.unwrap_or_default() {
         let name = raw.trim();
-        let mut chars = name.chars();
-        let valid = chars
-            .next()
-            .is_some_and(|ch| ch == '_' || ch.is_ascii_alphabetic())
-            && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric());
+        let valid = is_env_var_name(name);
         let identity = name.to_ascii_uppercase();
         let reserved = identity.starts_with("ORBIT_")
             || matches!(
