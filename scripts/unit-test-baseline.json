@@ -704,6 +704,8 @@
         "builtin/github/tests/log_cache.rs::an_entry_past_the_age_bound_is_removed_and_missed",
         "builtin/github/tests/log_cache.rs::entries_are_owner_only_and_a_staging_file_is_never_an_entry",
         "builtin/github/tests/log_cache.rs::the_size_bound_removes_the_oldest_entries_first",
+        "builtin/github/tests/logs.rs::a_cached_log_is_not_served_for_another_resolved_repository",
+        "builtin/github/tests/logs.rs::a_cached_log_is_not_served_once_access_is_refused",
         "builtin/github/tests/logs.rs::a_completed_run_downloads_once_per_attempt_and_asks_its_status_each_read",
         "builtin/github/tests/logs.rs::a_job_that_is_not_completed_is_neither_served_from_nor_written_to_the_cache",
         "builtin/github/tests/logs.rs::a_run_put_back_in_progress_is_never_served_from_the_cache",
