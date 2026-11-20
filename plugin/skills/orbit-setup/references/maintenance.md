@@ -255,14 +255,18 @@ task held on pilot warnings from the dashboard's Triage action.
 ### Deprecated keys: translated, ignored or fixed
 
 These keys still load and warn on every load, and `orbit config get` and `set`
-refuse them. `orbit doctor --problems` names each one with the file that sets it,
-and `orbit doctor --fix-retired-config-keys` acts on it as the tables below say.
-A key past its recognized date becomes an unknown setting, which the same check
-reports. Where a row gives no date, the load warning gives none either.
+refuse them (except `machine.worker_containment`, which stays a settable key;
+only its boolean value form is deprecated). `orbit doctor --problems` names each
+one with the file that sets it, and `orbit doctor --fix-retired-config-keys` acts
+on it as the tables below say. A key past its recognized date becomes an unknown
+setting, which the same check reports. Where a row gives no date, the load
+warning gives none either.
 
-**Translated** keys are rewritten by the repair into their replacement in the same
-file, then removed. The repair writes a replacement only when that file does not
-already set it, so an explicit modern value wins and the old key is simply removed.
+**Translated** keys are rewritten by the repair into their replacement in the
+same file, then removed. Except for `machine.worker_containment` (whose boolean
+value form the repair rewrites in place while keeping the key), the repair writes
+a replacement only when that file does not already set it, so an explicit modern
+value wins and the old key is simply removed.
 
 | Key | Becomes | Recognized until |
 |---|---|---|
@@ -272,7 +276,7 @@ already set it, so an explicit modern value wins and the old key is simply remov
 | `workflow.final_recovery_crews` | `workflow.purpose_crews.final_recovery`, the same pool | None stated |
 | `workflow.purpose_crews.ci_failure_sweep`, `dependabot`, `merged_head_repair` | `workflow.purpose_crews.sweep_tasks`, the one pool every sweep-filed task draws from. Load fails while one file sets them to different pools. | None stated |
 | `review.before_pr`, `review.before_landing` | `review.timing`: `before_pr`, `before_landing` or `off`. Both set to `true` fails load. | None stated |
-| `machine.worker_containment` as `true` or `false` | `"warn"` or `"off"` | None stated |
+| `machine.worker_containment` as `true` or `false` | `"warn"` or `"off"` (rewritten in place; key stays settable) | None stated |
 | `machine.worker_containment_strict` | `machine.worker_containment = "strict"` when `true`; refused beside `false` | None stated |
 | `workflow.crew_performance_types` | `workflow.task_types`, the same ordered entries | 2026-12-07 |
 
