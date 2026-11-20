@@ -7,7 +7,7 @@ use orbit_store::contracts::{
 };
 use orbit_types::task::ExecutionLocation;
 use serde_json::Value;
-fn owner_state_with_claims(
+pub(super) fn owner_state_with_claims(
     runtime: &OrbitRuntime,
     claims: impl IntoIterator<Item = (String, String, ExecutionClaimPhase)>,
 ) {
