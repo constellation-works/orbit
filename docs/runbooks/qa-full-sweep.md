@@ -193,10 +193,16 @@ operator-owned post-merge verification.
 Include `--website-build` for a complete sweep. It prepares dependencies and
 builds through the [isolated build-only procedure](website-validation.md#isolated-build-only-sweep)
 in a scratch copy of the candidate website and its imported changelog, using
-the worker's Node/npm toolchain and a private npm cache. Preparation output,
-exit code and build working directory are retained on the website row. A failed
-install or build is `FAIL`; omitting the flag remains `NOT_RUN`. Candidate
-dependencies and generated files are preserved. This flag never deploys.
+the worker's Node/npm toolchain and a private npm cache. The website row's
+`preparation` attributes the `npm ci` step on its own: start time, duration,
+the hard timeout (1800 seconds), `timed_out`, exit code and outcome. It also
+keeps the step's capability notices, the last lines of its stdout and stderr,
+and the last progress of npm's debug log (when that log last changed and how
+long it had been idle when the step ended). URLs, including their userinfo and
+query strings, IP addresses and credential-bearing lines are redacted, and raw
+install output is not retained. The build working directory is also retained on
+the row. A failed install or build is `FAIL`; omitting the flag remains `NOT_RUN`.
+Candidate dependencies and generated files are preserved. This flag never deploys.
 
 Hosted evidence can be combined with `--platform-evidence <report.json>`. A
 schema-version 2 full-sweep report must name the exact candidate ID and exact
