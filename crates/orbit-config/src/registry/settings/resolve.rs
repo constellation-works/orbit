@@ -31,19 +31,34 @@ pub(super) fn resolve_at<T>(
     })
 }
 
-pub(super) fn resolve_reclaim(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
-    // Cargo output, and the build directories and base checkouts agents leave
-    // under run scratch [ORB-15613].
+/// Admit relative path globs, each checked by `RelativePathGlob::new`. Unset
+/// takes `default`; a refused pattern is reported under `key`.
+fn resolve_relative_path_globs(
+    raw: Option<Vec<String>>,
+    key: &str,
+    default: &[&str],
+) -> Result<Vec<String>, OrbitError> {
     let patterns = raw.unwrap_or_else(|| {
-        ["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]
-            .map(String::from)
-            .to_vec()
+        default
+            .iter()
+            .map(|pattern| (*pattern).to_string())
+            .collect()
     });
     for pattern in &patterns {
         orbit_common::fs::path_glob::RelativePathGlob::new(pattern)
-            .map_err(|error| OrbitError::InvalidInput(format!("worktree.reclaim: {error}")))?;
+            .map_err(|error| OrbitError::InvalidInput(format!("{key}: {error}")))?;
     }
     Ok(patterns)
+}
+
+pub(super) fn resolve_reclaim(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
+    // Cargo output, and the build directories and base checkouts agents leave
+    // under run scratch [ORB-15613].
+    resolve_relative_path_globs(
+        raw,
+        "worktree.reclaim",
+        &["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"],
+    )
 }
 
 /// `workflow.unlocked_context_paths`: unset is Markdown anywhere in the
@@ -51,13 +66,7 @@ pub(super) fn resolve_reclaim(raw: Option<Vec<String>>) -> Result<Vec<String>, O
 pub(super) fn resolve_unlocked_context_paths(
     raw: Option<Vec<String>>,
 ) -> Result<Vec<String>, OrbitError> {
-    let patterns = raw.unwrap_or_else(|| vec!["**/*.md".to_string()]);
-    for pattern in &patterns {
-        orbit_common::fs::path_glob::RelativePathGlob::new(pattern).map_err(|error| {
-            OrbitError::InvalidInput(format!("workflow.unlocked_context_paths: {error}"))
-        })?;
-    }
-    Ok(patterns)
+    resolve_relative_path_globs(raw, "workflow.unlocked_context_paths", &["**/*.md"])
 }
 
 /// `workflow.light_delivery_paths`: unset is Orbit's documentation and CI
@@ -65,17 +74,11 @@ pub(super) fn resolve_unlocked_context_paths(
 pub(super) fn resolve_light_delivery_paths(
     raw: Option<Vec<String>>,
 ) -> Result<Vec<String>, OrbitError> {
-    let patterns = raw.unwrap_or_else(|| {
-        orbit_types::task::DEFAULT_LIGHT_DELIVERY_PATHS
-            .iter()
-            .map(|pattern| (*pattern).to_string())
-            .collect()
-    });
-    orbit_common::fs::path_filter::PathFilter::new(
+    resolve_path_filter_default(
         orbit_types::task::LIGHT_DELIVERY_PATHS_KEY,
-        &patterns,
-    )?;
-    Ok(patterns)
+        raw,
+        orbit_types::task::DEFAULT_LIGHT_DELIVERY_PATHS,
+    )
 }
 
 /// `workflow.test_paths` default: test directories and test-file naming
@@ -287,32 +290,41 @@ pub(super) fn resolve_mid_run_steering_max_rounds(raw: Option<u8>) -> Result<u8,
     )
 }
 
-pub(super) fn resolve_machine_id(raw: Option<String>) -> Result<Option<String>, OrbitError> {
-    let Some(value) = resolve_optional_non_empty(raw, "machine.id")? else {
+/// Trim an optional value and refuse a blank one, then run `validate` on the
+/// trimmed value. `validate` owns the refusal wording, so each key keeps its
+/// own message.
+fn resolve_validated_optional<T>(
+    raw: Option<String>,
+    key: &str,
+    validate: impl FnOnce(&str) -> Result<T, OrbitError>,
+) -> Result<Option<String>, OrbitError> {
+    let Some(value) = resolve_optional_non_empty(raw, key)? else {
         return Ok(None);
     };
-    validate_machine_id(&value)
-        .map_err(|error| OrbitError::InvalidInput(format!("machine.id is invalid: {error}")))?;
+    validate(&value)?;
     Ok(Some(value))
+}
+
+pub(super) fn resolve_machine_id(raw: Option<String>) -> Result<Option<String>, OrbitError> {
+    resolve_validated_optional(raw, "machine.id", |value| {
+        validate_machine_id(value)
+            .map_err(|error| OrbitError::InvalidInput(format!("machine.id is invalid: {error}")))
+    })
 }
 
 pub(super) fn resolve_machine_name(raw: Option<String>) -> Result<Option<String>, OrbitError> {
-    let Some(value) = resolve_optional_non_empty(raw, "machine.name")? else {
-        return Ok(None);
-    };
-    validate_machine_name(&value)
-        .map_err(|error| OrbitError::InvalidInput(format!("machine.name is invalid: {error}")))?;
-    Ok(Some(value))
+    resolve_validated_optional(raw, "machine.name", |value| {
+        validate_machine_name(value)
+            .map_err(|error| OrbitError::InvalidInput(format!("machine.name is invalid: {error}")))
+    })
 }
 
 pub(super) fn resolve_task_prefix(raw: Option<String>) -> Result<Option<String>, OrbitError> {
-    let Some(value) = resolve_optional_non_empty(raw, "machine.task_prefix")? else {
-        return Ok(None);
-    };
-    validate_stored_task_prefix(&value).map_err(|error| {
-        OrbitError::InvalidInput(format!("machine.task_prefix is invalid: {error}"))
-    })?;
-    Ok(Some(value))
+    resolve_validated_optional(raw, "machine.task_prefix", |value| {
+        validate_stored_task_prefix(value).map_err(|error| {
+            OrbitError::InvalidInput(format!("machine.task_prefix is invalid: {error}"))
+        })
+    })
 }
 
 /// One of the key's declared [`ConfigAllowedValues::OneOf`] choices,
@@ -367,10 +379,6 @@ pub(super) fn resolve_material_fields(
         )),
         Some(fields) => Ok(fields),
     }
-}
-
-pub(super) fn resolve_distributed_completion(raw: Option<String>) -> Result<String, OrbitError> {
-    resolve_choice(raw, "review", "workflow.distributed_completion")
 }
 
 pub(super) fn resolve_optional_non_empty(
@@ -476,14 +484,10 @@ pub(super) fn normalize_login_auth(raw: Vec<String>) -> Result<Vec<String>, Orbi
     Ok(providers.into_iter().collect())
 }
 
-pub(crate) fn resolve_percent(raw: Option<u8>, default: u8, key: &str) -> Result<u8, OrbitError> {
-    resolve_bounded_range(raw, default, key)
-}
-
 /// A bounded whole-number setting: `default` when unset, else a value within
 /// the key's declared [`ConfigAllowedValues::Integer`] bounds, so what
 /// `orbit config keys` shows is what load accepts [ORB-22809].
-pub(super) fn resolve_bounded_range<T>(
+pub(crate) fn resolve_bounded_range<T>(
     raw: Option<T>,
     default: T,
     key: &str,
@@ -588,11 +592,9 @@ pub(super) fn resolve_commit_subject_template(
     raw: Option<String>,
     key: &str,
 ) -> Result<Option<String>, OrbitError> {
-    let Some(raw) = resolve_optional_non_empty(raw, key)? else {
-        return Ok(None);
-    };
-    ConventionTemplate::parse_commit_subject(key, &raw).map_err(convention_error)?;
-    Ok(Some(raw))
+    resolve_validated_optional(raw, key, |value| {
+        ConventionTemplate::parse_commit_subject(key, value).map_err(convention_error)
+    })
 }
 
 /// Admit `branch.name_template`, which must carry `{{task_id}}` and
@@ -601,11 +603,9 @@ pub(super) fn resolve_branch_template(
     raw: Option<String>,
     key: &str,
 ) -> Result<Option<String>, OrbitError> {
-    let Some(raw) = resolve_optional_non_empty(raw, key)? else {
-        return Ok(None);
-    };
-    ConventionTemplate::parse_branch(key, &raw).map_err(convention_error)?;
-    Ok(Some(raw))
+    resolve_validated_optional(raw, key, |value| {
+        ConventionTemplate::parse_branch(key, value).map_err(convention_error)
+    })
 }
 
 /// Admit `pr.body_template`: `"repo"` or a repository-relative path.
@@ -613,11 +613,9 @@ pub(super) fn resolve_pr_body_template(
     raw: Option<String>,
     key: &str,
 ) -> Result<Option<String>, OrbitError> {
-    let Some(raw) = resolve_optional_non_empty(raw, key)? else {
-        return Ok(None);
-    };
-    PrBodyTemplateSource::parse(key, &raw).map_err(convention_error)?;
-    Ok(Some(raw))
+    resolve_validated_optional(raw, key, |value| {
+        PrBodyTemplateSource::parse(key, value).map_err(convention_error)
+    })
 }
 
 /// Trimmed, non-empty entries in first-seen order without duplicates.

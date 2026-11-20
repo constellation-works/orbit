@@ -195,7 +195,7 @@ pub use keys::{
     admit_config_key, admit_settable_config_key, config_key_options, describe, immutable_key_note,
     is_global_only_key,
 };
-pub(crate) use settings::resolve_percent;
+pub(crate) use settings::resolve_bounded_range;
 pub use settings::{
     AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT, AUTO_CONCURRENCY_HEAD_MAX_WAIT_MINUTES,
     AUTO_CONCURRENCY_HEAD_STUCK_PASSES, AUTO_CONCURRENCY_HORIZON_CAP_MINUTES,
