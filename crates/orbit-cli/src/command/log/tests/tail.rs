@@ -157,18 +157,46 @@ impl FollowWorker {
         self.output_rx.recv_timeout(timeout)
     }
 
-    fn collect_through(&self, needle: &str) -> String {
+    fn collect_through(&mut self, needle: &str) -> String {
         let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
         let mut output = String::new();
         while Instant::now() < deadline {
-            if let Ok(chunk) = self.recv_timeout(Duration::from_millis(50)) {
-                output.push_str(&chunk);
-                if output.lines().any(|line| line.contains(needle)) {
-                    return output;
+            match self.recv_timeout(Duration::from_millis(50)) {
+                Ok(chunk) => {
+                    output.push_str(&chunk);
+                    if output.lines().any(|line| line.contains(needle)) {
+                        return output;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    self.panic_on_disconnected_output(needle, &output);
                 }
             }
         }
         panic!("follow output did not contain {needle}: {output}");
+    }
+
+    fn panic_on_disconnected_output(&mut self, needle: &str, output: &str) -> ! {
+        let Some(handle) = self.handle.take() else {
+            panic!("follower output channel disconnected before emitting {needle}: {output}");
+        };
+        match handle.join() {
+            Ok(Ok(())) => {
+                panic!("follower exited cleanly before emitting {needle}: {output}");
+            }
+            Ok(Err(error)) => {
+                panic!("follower failed before emitting {needle}: {error}: {output}");
+            }
+            Err(payload) => {
+                let message = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("non-string panic");
+                panic!("follower thread panicked before emitting {needle}: {message}: {output}");
+            }
+        }
     }
 
     fn finish(&mut self) {
