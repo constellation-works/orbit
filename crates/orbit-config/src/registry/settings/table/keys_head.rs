@@ -34,6 +34,28 @@ macro_rules! assemble_config_settings {
         allowed: each_of(&["claude", "codex"]),
         resolve: |raw: Option<Vec<String>>| normalize_login_auth(raw.unwrap_or_default()),
     },
+    machine_github_quota_agent_reserve_percent: u8 => u8 {
+        key: "machine.github_quota.agent_reserve_percent", value_type: "integer",
+        description: "Share of the host's GitHub API quota per resource that agent `github.*` reads may not spend; 0 disables their refusal.",
+        section: ConfigSection::Machine, order: 37,
+        allowed: integers(0, 100, "%"),
+        resolve: |raw: Option<u8>| resolve_bounded_range(raw, 20, "machine.github_quota.agent_reserve_percent"),
+    },
+    machine_github_quota_background_reserve_percent: u8 => u8 {
+        key: "machine.github_quota.background_reserve_percent", value_type: "integer",
+        description: "Share of the host's GitHub API quota per resource that background reads (sweeps, sources) may not spend; 0 disables their refusal.",
+        section: ConfigSection::Machine, order: 38,
+        allowed: integers(0, 100, "%"),
+        resolve: |raw: Option<u8>| resolve_bounded_range(raw, 10, "machine.github_quota.background_reserve_percent"),
+    },
+    machine_github_quota_refresh_interval_seconds: u32 => u32 {
+        key: "machine.github_quota.refresh_interval_seconds", value_type: "integer",
+        description: "Shortest interval between two reads of GitHub's rate-limit endpoint on this host.",
+        section: ConfigSection::Machine, order: 39,
+        tier: ConfigKeyTier::Advanced,
+        allowed: integers(10, 3600, "seconds"),
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 60, "machine.github_quota.refresh_interval_seconds"),
+    },
     machine_id: Option<String> => String {
         key: "machine.id", value_type: "string",
         description: "Stable generated identity of this machine, written once by orbit init.",

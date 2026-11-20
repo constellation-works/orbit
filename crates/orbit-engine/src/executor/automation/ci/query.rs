@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
-use orbit_tools::github_cli;
+use orbit_tools::{github_cli, github_quota};
 use serde_json::{Value, json};
 
 use super::super::github_host::{auth_status, clear_gh_environment, run_gh};
@@ -357,7 +357,7 @@ impl CiQueries for HostCiQueries {
             &requests,
             github_cli::LogReadBounds::new(max_bytes),
             cached_view,
-            &|request| Ok(clear_gh_environment(request)),
+            &|request| clear_gh_environment(request, github_quota::GithubCaller::Background),
         )?;
 
         Ok(RunLog {

@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_engine::{CheckState, classify_rollup_context};
-use orbit_exec::{ExecRequest, NoSandbox, run_process};
+use orbit_exec::ExecRequest;
 use orbit_types::workflow::MergeMessage;
 use serde_json::Value;
 
@@ -545,7 +545,7 @@ impl TaskPrForge for GhTaskPrForge {
             number, head_sha, method, message,
         );
         request.current_dir = Some(repo_root.to_string_lossy().into_owned());
-        let result = run_process(&request, &NoSandbox)?;
+        let result = orbit_tools::github_quota::run_gh_request(FORGE_QUOTA_CALLER, &request)?;
         if !result.success {
             // This text is returned to an agent's call.
             let stderr =
@@ -628,19 +628,22 @@ fn has_state(entry: &Value, state: &str) -> bool {
         .is_some_and(|reported| reported.eq_ignore_ascii_case(state))
 }
 
+/// The forge drives a task's own pull request through leasing, landing, merge
+/// and its terminal close, so it spends the host's GitHub quota as delivery.
+const FORGE_QUOTA_CALLER: orbit_tools::github_quota::GithubCaller =
+    orbit_tools::github_quota::GithubCaller::Delivery;
+
+/// Run one forge `gh` request in `repo_root` under the host's GitHub quota
+/// guard. A local refusal or GitHub's authenticated rate limit stays typed,
+/// so a caller can wait for the reset; nothing runs on a local refusal.
 pub(super) fn task_forge_gh_request(
     mut request: ExecRequest,
     repo_root: &Path,
     label: &str,
 ) -> Result<String, OrbitError> {
     request.current_dir = Some(repo_root.to_string_lossy().into_owned());
-    let result = run_process(&request, &NoSandbox)?;
-    if !result.success {
-        return Err(OrbitError::Execution(format!(
-            "{label} failed: {}",
-            result.stderr.trim()
-        )));
-    }
+    let result = orbit_tools::github_quota::run_gh_request(FORGE_QUOTA_CALLER, &request)?;
+    orbit_tools::github_cli::check_gh_read_result(&result, label)?;
     Ok(result.stdout)
 }
 

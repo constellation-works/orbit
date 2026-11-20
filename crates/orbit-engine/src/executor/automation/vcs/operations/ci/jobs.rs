@@ -594,8 +594,10 @@ pub(in crate::executor::automation::vcs::operations) fn ci_job_log(
         github_cli::LogReadBounds::new(MAX_JOB_LOG_BYTES),
         None,
         &|request| {
-            let mut request =
-                crate::executor::automation::github_host::clear_gh_environment(request);
+            let mut request = crate::executor::automation::github_host::clear_gh_environment(
+                request,
+                orbit_tools::github_quota::GithubCaller::Delivery,
+            )?;
             if let Some(deadline) = deadline {
                 let timeout = deadline.remaining()?;
                 last_timeout.set(timeout);

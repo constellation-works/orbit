@@ -161,6 +161,27 @@
       "path": null,
       "shadowed_by": []
     },
+    "machine.github_quota.agent_reserve_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.github_quota.background_reserve_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.github_quota.refresh_interval_seconds": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "machine.id": {
       "scope": "built-in",
       "state": "unset",

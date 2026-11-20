@@ -61,7 +61,8 @@ allowed_internal_deps() {
       echo "orbit-common orbit-types"
       ;;
     orbit-tools)
-      echo "orbit-common orbit-exec orbit-policy orbit-types"
+      # Its dev-only self dependency enables the `test-support` feature.
+      echo "orbit-common orbit-exec orbit-policy orbit-tools orbit-types"
       ;;
     orbit-agent)
       echo "orbit-common orbit-types"

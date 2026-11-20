@@ -1,7 +1,7 @@
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use super::super::logs::{LogReadBounds, RunLogRequests, read_run_log};
+use super::super::logs::{LogReadBounds, RunLogRequests, read_run_log_guarded};
 
 /// Default excerpt size. Small enough that a routine failed-step read costs an
 /// executing agent a few thousand tokens rather than its whole context.
@@ -117,7 +117,9 @@ impl crate::Tool for GithubRunLogsTool {
             super::super::bounded_limit(&input, "max_bytes", DEFAULT_MAX_BYTES, MAX_MAX_BYTES)?
                 as usize;
         let scope = requests.scope;
-        let read = read_run_log(&requests, LogReadBounds::new(max_bytes), None)?;
+        let admission = super::super::quota_admission(ctx);
+        let read =
+            read_run_log_guarded(&requests, LogReadBounds::new(max_bytes), None, &admission)?;
         let log = read.log;
         let selection = log
             .selection

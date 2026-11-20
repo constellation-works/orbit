@@ -76,7 +76,11 @@ fn recording_runner(fixture: &Fixture) -> String {
         ),
         (
             "gh",
-            format!("#!/bin/sh\nprintf '%s\\n' \"$2\" >> {log}\nprintf '[]\\n'\n"),
+            // The host quota guard's rate-limit read is free and is not a
+            // provider lookup.
+            format!(
+                "#!/bin/sh\n[ \"$2\" = rate_limit ] || printf '%s\\n' \"$2\" >> {log}\nprintf '[]\\n'\n"
+            ),
         ),
     ] {
         let path = bin.join(program);

@@ -1,7 +1,7 @@
 [
   {
     "name": "github.auth.status",
-    "description": "Preflight the GitHub CLI surface: whether a GitHub CLI is present on this execution lane (`available`) and whether it holds usable credentials there (`authenticated`). Neither absence nor a missing credential is an error — both are reported so a caller can record a capability-unavailable outcome instead of mistaking it for a clean result.",
+    "description": "Preflight the GitHub CLI surface: whether a GitHub CLI is present on this execution lane (`available`) and whether it holds usable credentials there (`authenticated`). Neither absence nor a missing credential is an error — both are reported so a caller can record a capability-unavailable outcome instead of mistaking it for a clean result. `quota` is the host's GitHub API quota record for this account: per resource (`core`, `graphql`) the limit, remaining count and reset time (`state: unknown` when GitHub's rate-limit answer could not be read), whether agent, background or delivery reads are currently refused, and the calls each caller class made in the current window.",
     "enabled": true,
     "active": true,
     "status": "active",
