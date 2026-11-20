@@ -112,6 +112,13 @@
         }
       ]
     },
+    "execution.env.login_auth": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "execution.env.pass": {
       "scope": "built-in",
       "state": "default",

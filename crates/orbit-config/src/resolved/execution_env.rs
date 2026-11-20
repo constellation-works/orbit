@@ -2,7 +2,8 @@
 
 use orbit_common::security::child_env::{
     allowlisted_child_env, allowlisted_child_env_from, apply_crew_env_from, inherited_child_env,
-    inherited_child_env_from, unset_crew_env_from, unset_pass_names_from,
+    inherited_child_env_from, login_auth_credential_names, unset_crew_env_from,
+    unset_pass_names_from,
 };
 use orbit_types::identity::CrewEnvVar;
 use std::sync::Arc;
@@ -65,6 +66,9 @@ pub struct ExecutionEnvPolicy {
     pub(crate) inherit: bool,
     /// `execution.env.pass`: the names an operator admits by name.
     pub(crate) pass: Vec<String>,
+    /// `execution.env.login_auth`: providers authenticated by the CLI's own
+    /// login. Their credential variables are not reported when unset.
+    pub(crate) login_auth: Vec<String>,
     /// Immutable parent snapshot for a runtime supplied with credential defaults.
     parent: Option<Arc<Vec<(String, String)>>>,
     /// The source variable names the configured crews' `[crews.<name>] env`
@@ -80,6 +84,7 @@ impl std::fmt::Debug for ExecutionEnvPolicy {
             .debug_struct("ExecutionEnvPolicy")
             .field("inherit", &self.inherit)
             .field("pass", &self.pass)
+            .field("login_auth", &self.login_auth)
             .field("has_parent_snapshot", &self.parent.is_some())
             .field("crew_sources", &self.crew_sources)
             .finish()
@@ -91,6 +96,7 @@ impl Default for ExecutionEnvPolicy {
         Self {
             inherit: false,
             pass: default_pass_list(),
+            login_auth: Vec::new(),
             parent: None,
             crew_sources: Vec::new(),
         }
@@ -102,6 +108,7 @@ impl ExecutionEnvPolicy {
         Self {
             inherit: snapshot.execution_env_inherit,
             pass: snapshot.execution_env_pass.clone(),
+            login_auth: snapshot.execution_env_login_auth.clone(),
             parent: None,
             crew_sources: Vec::new(),
         }
@@ -248,7 +255,9 @@ impl ExecutionEnvPolicy {
     /// platform-specific `__CF_USER_TEXT_ENCODING`, …) are not reported: they
     /// can legitimately be absent on a host, and warning on each would fire on
     /// every drain start. A name the operator added is a statement that agents
-    /// need it. Empty when the policy inherits the whole environment.
+    /// need it. Credential variables of a provider named in
+    /// `execution.env.login_auth` are not reported either. Empty when the
+    /// policy inherits the whole environment.
     pub fn unset_pass_names(&self) -> Vec<String> {
         if let Some(parent) = &self.parent {
             return self.unset_pass_names_in(parent);
@@ -267,11 +276,23 @@ impl ExecutionEnvPolicy {
             .iter()
             .filter(|name| {
                 !defaults.contains(name)
+                    && !self.login_auth_covers(name)
                     && !PLATFORM_SPECIFIC_TEMPLATE_PASS_NAMES.contains(&name.as_str())
             })
             .cloned()
             .collect();
         unset_pass_names_from(parent, &added)
+    }
+}
+
+impl ExecutionEnvPolicy {
+    /// Whether `name` is a credential variable of a provider the operator
+    /// declared login-authenticated in `execution.env.login_auth`. Orbit
+    /// reads no credential: the declaration is the only signal.
+    fn login_auth_covers(&self, name: &str) -> bool {
+        self.login_auth
+            .iter()
+            .any(|provider| login_auth_credential_names(provider).contains(&name))
     }
 }
 

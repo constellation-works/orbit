@@ -127,7 +127,11 @@ Choose the intended scope:
   service exports.
 
 A shared `pass` name that is unset or empty produces a warning, but does
-not itself refuse the run; the provider may use its saved login. A missing
+not itself refuse the run; the provider may use its saved login. On a host
+whose Claude (or Codex) crews authenticate through `claude login` (`codex
+login`) rather than a token, set `execution.env.login_auth = ["claude"]` with
+`orbit config set`: doctor, `orbit attention` and drain starts then skip that
+provider's credential names. It is a declaration; Orbit reads no credential. A missing
 per-crew source instead excludes that crew from drains and refuses its
 activities, so it cannot silently use another account.
 

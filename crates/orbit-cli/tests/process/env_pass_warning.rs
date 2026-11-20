@@ -123,6 +123,25 @@ impl Fixture {
         }
     }
 
+    /// Set `execution.env.login_auth` in the global and workspace configs.
+    fn config_login_auth(&self, providers: &[&str]) {
+        for path in [
+            self.home.join(".orbit/config.toml"),
+            self.repo.join(".orbit/config.toml"),
+        ] {
+            let mut config: DocumentMut = fs::read_to_string(&path)
+                .expect("read config")
+                .parse()
+                .expect("parse config");
+            let mut list = Array::new();
+            for provider in providers {
+                list.push(*provider);
+            }
+            config["execution"]["env"]["login_auth"] = value(list);
+            fs::write(&path, config.to_string()).expect("write config");
+        }
+    }
+
     /// Add a global `[crews.<name>]` on the fixture's provider whose `env`
     /// holds `entry`.
     fn crew_env(&self, name: &str, entry: &str) {
@@ -388,6 +407,63 @@ fn doctor_treats_clock_env_supplied_names_as_held() {
     assert!(
         remediation.contains("clock.env") && remediation.contains("evaluating process"),
         "the remediation names the judged environment: {row}"
+    );
+}
+
+/// `execution.env.login_auth` names providers authenticated by their CLI login
+/// [ORB-25799]: doctor skips those providers' pass-listed credential variables
+/// and still warns for every other unset name. Orbit reads no credential.
+#[test]
+fn doctor_skips_login_authenticated_provider_credentials() {
+    const CLAUDE_VARS: [&str; 2] = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
+    let fixture = Fixture::new();
+    fixture.pass_list(&["HOME", "PATH", CLAUDE_VARS[0], CLAUDE_VARS[1]]);
+    let row = |fixture: &Fixture| {
+        let output = fixture
+            .command(&[])
+            .env_remove(MACOS_TEMPLATE_VAR)
+            .env_remove(CLAUDE_VARS[0])
+            .env_remove(CLAUDE_VARS[1])
+            .args(["doctor", "--json"])
+            .output()
+            .expect("doctor");
+        let rows: Value = serde_json::from_slice(&output.stdout).expect("doctor JSON");
+        rows.as_array()
+            .expect("doctor rows")
+            .iter()
+            .find(|row| row["check"] == "env-pass")
+            .cloned()
+            .unwrap_or_else(|| panic!("no env-pass row: {rows}"))
+    };
+
+    let unset = row(&fixture);
+    assert_eq!(
+        unset["status"], "warning",
+        "key unset warns as before: {unset}"
+    );
+    let message = unset["message"].as_str().unwrap_or_default();
+    assert!(
+        CLAUDE_VARS.iter().all(|name| message.contains(name)),
+        "{unset}"
+    );
+
+    fixture.config_login_auth(&["claude"]);
+    let covered = row(&fixture);
+    assert_eq!(
+        covered["status"], "ok",
+        "claude login covers both: {covered}"
+    );
+
+    // A provider the key does not name keeps warning for its variables.
+    fixture.config_login_auth(&["codex"]);
+    let other = row(&fixture);
+    assert_eq!(other["status"], "warning", "{other}");
+    assert!(
+        other["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(CLAUDE_VARS[0]),
+        "{other}"
     );
 }
 

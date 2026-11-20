@@ -234,6 +234,22 @@ pub fn unset_pass_names_from(parent: &[(String, String)], pass: &[String]) -> Ve
 /// agents, so exactly the credential the crew chose is present.
 pub const CLAUDE_CREDENTIAL_ENV: [&str; 2] = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
 
+/// The providers `execution.env.login_auth` may name: those whose CLI keeps
+/// its own login (`claude login`, `codex login`), so an unset token variable
+/// does not stop its agents authenticating.
+pub const LOGIN_AUTH_PROVIDERS: [&str; 2] = ["claude", "codex"];
+
+/// The environment variables that authenticate `provider` instead of its
+/// saved login; empty for a provider outside [`LOGIN_AUTH_PROVIDERS`]. Names
+/// only: no credential is read to decide anything.
+pub fn login_auth_credential_names(provider: &str) -> &'static [&'static str] {
+    match provider {
+        "claude" => &CLAUDE_CREDENTIAL_ENV,
+        "codex" => &["CODEX_API_KEY"],
+        _ => &[],
+    }
+}
+
 /// Overlay one crew's `[crews.<name>] env` entries on a composed child
 /// environment, taking values from `parent` or, for a `file:` source, from the
 /// file itself.
