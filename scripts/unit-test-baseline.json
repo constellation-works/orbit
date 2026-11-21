@@ -621,6 +621,7 @@
         "tests/resolve.rs::location_override_forces_git_authority",
         "tests/resolve.rs::ordinary_checkout_roots_still_spawn_no_git",
         "tests/resolve.rs::submodule_gitfile_still_defers_to_git",
+        "tests/resolve.rs::unreadable_runtime_config_names_home_redacted_path",
         "tests/run_input.rs::managed_workspace_selector_requires_the_full_trust_boundary",
         "tests/scripts.rs::script_grant_round_trips_and_verifies_only_with_its_witness",
         "tests/tool_exec.rs::corrupted_drain_identities_are_detected_in_nested_replies",
