@@ -268,36 +268,56 @@ fn landing_consequence(
 }
 
 /// [ORB-26599] The consequence when the PR merged outside Orbit before the
-/// review settled: whatever the verdict, it gates nothing and no decision is
-/// pending. A reviewer commit was never pushed, so it is named with the
-/// worktree that still holds it.
+/// review settled. A verdict that is not an `accept_with_fixes` with a reviewer
+/// commit gates nothing and leaves no decision pending; a reviewer commit was
+/// never pushed, so it is named with the worktree that still holds it.
+///
+/// An accepted reviewer commit still goes through the push step, which keeps it
+/// when the PR merged at the reviewed head and blocks the task with the recipe
+/// that lands it, so that outcome is deferred to the comment that follows.
 fn merged_consequence(
     certificate: &ReviewCertificate,
     pr_number: Option<&str>,
     merge: &ExternalMerge,
 ) -> String {
     let pull_request = Delivery::pull_request(pr_number);
-    let mut consequence = format!(
+    if certificate.repair_commits.is_empty() {
+        return format!(
+            "{pull_request} already merged outside Orbit as `{}` before this review settled, so \
+             the {} verdict no longer gates anything and no decision is pending; the task settles \
+             from the merge.",
+            merge.merge_commit,
+            certificate.verdict.as_str(),
+        );
+    }
+    let commits = certificate
+        .repair_commits
+        .iter()
+        .map(|commit| format!("`{}`", commit.commit))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if certificate.verdict == ReviewVerdict::AcceptWithFixes {
+        return format!(
+            "{pull_request} already merged outside Orbit as `{}` before this review settled, so \
+             the {} verdict no longer gates the merge. The reviewer's commit {commits} is not \
+             part of the merge. The push step that follows decides what happens to it: when the \
+             PR merged at the reviewed head the commit is preserved on a durable ref and the task \
+             is blocked with the steps that land it as a follow-up; otherwise it stays only in \
+             the review worktree `{}`. The next comment on the task records which.",
+            merge.merge_commit,
+            certificate.verdict.as_str(),
+            merge.worktree,
+        );
+    }
+    format!(
         "{pull_request} already merged outside Orbit as `{}` before this review settled, so \
          the {} verdict no longer gates anything and no decision is pending; the task settles \
-         from the merge.",
+         from the merge. The reviewer's commit {commits} was not pushed and is not part of the \
+         merge; it exists only in the review worktree `{}`.",
         merge.merge_commit,
         certificate.verdict.as_str(),
-    );
-    if !certificate.repair_commits.is_empty() {
-        let commits = certificate
-            .repair_commits
-            .iter()
-            .map(|commit| format!("`{}`", commit.commit))
-            .collect::<Vec<_>>()
-            .join(", ");
-        consequence.push_str(&format!(
-            " The reviewer's commit {commits} was not pushed and is not part of the merge; it \
-             exists only in the review worktree `{}`.",
-            merge.worktree
-        ));
-    }
-    consequence
+        merge.worktree,
+    )
 }
 
 /// Every finding of the attempt with its disposition and, for a fix, what
