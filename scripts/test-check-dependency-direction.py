@@ -1803,6 +1803,32 @@ class RelativeImportTests(unittest.TestCase):
              "});\n"),
         ], rejected=True)
 
+    def test_macro_reemitting_under_different_module_wrappers_keeps_depth(self):
+        # [ORB-26602] Re-emitting an item under two differing wrappers of equal
+        # depth (such as `mod $n { $i } mod other { $i }`) still places `$i`
+        # one module deeper, so `super::super::adapter` stays within
+        # `application` while `super::super::super::adapter` escapes to `crate`.
+        self.check_rows([
+            ("dual_wrap_ok.rs",
+             "macro_rules! dual { (mod $n:ident { $i:item }) => { mod $n { $i } mod other { $i } }; }\n"
+             "dual!(mod inner {\n"
+             "    pub fn check() { let _ = super::super::adapter::Probe; }\n"
+             "});\n"),
+            ("mix_wrap_ok.rs",
+             "macro_rules! mix { ($n:ident, $i:item) => { mod $n { $i } mod other { $i } }; }\n"
+             "mix!(outer, pub fn check() { let _ = super::super::adapter::Probe; });\n"),
+        ], rejected=False)
+        self.check_rows([
+            ("dual_wrap_escape.rs",
+             "macro_rules! dual { (mod $n:ident { $i:item }) => { mod $n { $i } mod other { $i } }; }\n"
+             "dual!(mod inner {\n"
+             "    pub fn check() { let _ = super::super::super::adapter::Probe; }\n"
+             "});\n"),
+            ("mix_wrap_escape.rs",
+             "macro_rules! mix { ($n:ident, $i:item) => { mod $n { $i } mod other { $i } }; }\n"
+             "mix!(outer, pub fn check() { let _ = super::super::super::adapter::Probe; });\n"),
+        ], rejected=True)
+
     def test_large_token_tree_invocation_keeps_inline_module_depth(self):
         # [ORB-26595] A `$($t:tt)*` pass-through over about 2000 tokens nested
         # the arm matcher past Python's recursion limit and crashed the guard
