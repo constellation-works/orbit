@@ -2217,13 +2217,21 @@ deadline. It needs all of these:
   request's head;
 - its one open delivery pull request (several open ones record `ambiguous_delivery_pull_requests` and merge nothing) is mergeable with every required check passed. After a held run at least one required check must have passed on the head: a forge read that reports no required check (checks not started yet, or none readable) is not evidence, so a held delivery never merges before its checks ran.
 
-Every merge Orbit requests writes two `pr_merge` audit rows naming the run and
-the step: `requested` before the forge call, then `merged`,
-`auto_merge_enabled`, `refused`, `ambiguous` or `failed`. When the `requested`
-row cannot be written, the merge is not requested.
-For example, this pass names the held or finished delivery run and step
-`owner_sweep.auto_land`. `orbit audit list --kind pull_request` (or
-`--run <run-id>`) shows them.
+Before calling the forge, Orbit must write a `pr_merge` audit row with phase
+`requested`; if that write fails, Orbit does not request the merge. After the
+forge call, Orbit best-effort writes an outcome row with phase `merged`,
+`auto_merge_enabled`, `refused`, `ambiguous` or `failed`. An outcome-row write
+failure is logged but does not change the forge result, so the audit history
+may contain only the `requested` row.
+
+The rows include the step and pull request, and include a job run ID when one
+is available. For example, an owner sweep row names the held or finished
+delivery run and step `owner_sweep.auto_land`. A direct `orbit.workflow.land`
+call can have no job run ID, so `--run <run-id>` is only a useful filter when
+that ID is known. Inspect all pull request rows with
+`orbit audit list --kind pull_request --json`; match the pull request number
+and step in the row, then use `--run <run-id>` to narrow the listing when run
+attribution is available.
 
 Checks still running, or mergeability GitHub has not computed, are checked again
 on a later tick that reaches the workspace before its deadline. An invocation
