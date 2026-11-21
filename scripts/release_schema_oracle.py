@@ -47,15 +47,44 @@ def schema_instance_equal(left, right):
     return left == right
 
 
-def schema_accepts_instance(schema, instance):
-    """Independently interpret every keyword in the grammar; reject unknowns."""
+_SCHEMA_KEYWORDS = {"type", "enum", "const", "required", "properties",
+                    "additionalProperties", "anyOf", "oneOf", "allOf",
+                    "if", "then", "else", "propertyNames"}
+
+
+def require_schema_in_grammar(schema):
+    """Refuse any keyword the oracle does not implement, anywhere in the schema.
+
+    Instance evaluation skips subtrees (a failed allOf member, an unchosen
+    then/else arm, propertyNames over an empty object), so admission walks every
+    schema position. enum and const values and property names are data, not
+    schemas, and are never inspected.
+    """
     if isinstance(schema, bool):
-        return schema
-    unknown = schema.keys() - {"type", "enum", "const", "required", "properties",
-                               "additionalProperties", "anyOf", "oneOf",
-                               "allOf", "if", "then", "else", "propertyNames"}
+        return
+    if not isinstance(schema, dict):
+        raise ValueError(f"oracle does not implement schema {schema!r}")
+    unknown = schema.keys() - _SCHEMA_KEYWORDS
     if unknown:
         raise ValueError(f"oracle does not implement {unknown}")
+    children = [schema[key] for key in ("additionalProperties", "propertyNames",
+                                        "if", "then", "else") if key in schema]
+    children += schema.get("properties", {}).values()
+    for key in ("anyOf", "oneOf", "allOf"):
+        children += schema.get(key, [])
+    for child in children:
+        require_schema_in_grammar(child)
+
+
+def schema_accepts_instance(schema, instance):
+    """Independently interpret every keyword in the grammar; reject unknowns."""
+    require_schema_in_grammar(schema)
+    return _schema_accepts(schema, instance)
+
+
+def _schema_accepts(schema, instance):
+    if isinstance(schema, bool):
+        return schema
     types = {
         "null": instance is None,
         "boolean": isinstance(instance, bool),
@@ -80,25 +109,25 @@ def schema_accepts_instance(schema, instance):
             return False
         if "propertyNames" in schema:
             name_schema = schema["propertyNames"]
-            if not all(schema_accepts_instance(name_schema, name) for name in instance):
+            if not all(_schema_accepts(name_schema, name) for name in instance):
                 return False
         properties = schema.get("properties", {})
         for name, value in instance.items():
             child = properties.get(name, schema.get("additionalProperties", True))
-            if not schema_accepts_instance(child, value):
+            if not _schema_accepts(child, value):
                 return False
     if "anyOf" in schema and not any(
-            schema_accepts_instance(branch, instance) for branch in schema["anyOf"]):
+            _schema_accepts(branch, instance) for branch in schema["anyOf"]):
         return False
     if "oneOf" in schema and sum(
-            schema_accepts_instance(branch, instance) for branch in schema["oneOf"]) != 1:
+            _schema_accepts(branch, instance) for branch in schema["oneOf"]) != 1:
         return False
     if "allOf" in schema and not all(
-            schema_accepts_instance(branch, instance) for branch in schema["allOf"]):
+            _schema_accepts(branch, instance) for branch in schema["allOf"]):
         return False
     if "if" in schema:
-        branch_key = "then" if schema_accepts_instance(schema["if"], instance) else "else"
-        if branch_key in schema and not schema_accepts_instance(schema[branch_key], instance):
+        branch_key = "then" if _schema_accepts(schema["if"], instance) else "else"
+        if branch_key in schema and not _schema_accepts(schema[branch_key], instance):
             return False
     return True
 
