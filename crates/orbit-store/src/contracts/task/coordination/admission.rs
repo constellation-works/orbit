@@ -55,6 +55,18 @@ pub struct AdmissionOrdering {
     /// neutral. Owner-side facts, like `executor_host_os`, so they do not
     /// change the request fingerprint.
     pub crew_pools: BTreeMap<String, Vec<String>>,
+    /// Count owner-local perf work as holding this host's perf lane: an
+    /// owner-wave task still in `backlog`, an in-flight perf task with no
+    /// protecting claim, and [`Self::owner_local_carriers`]. Set when the
+    /// requester is the owner host. A protecting claim on the requester's
+    /// machine counts either way. Owner-side, so it does not change the
+    /// request fingerprint.
+    pub honor_owner_local_perf_lane: bool,
+    /// Tasks a live local delivery run on the owner is carrying. Honoured
+    /// only with [`Self::honor_owner_local_perf_lane`], and only when the
+    /// task needs the perf lane. Owner-side facts, so they do not change
+    /// the request fingerprint.
+    pub owner_local_carriers: std::collections::BTreeSet<String>,
 }
 
 /// Authority supplied by the embedding runtime, never deserialized from tool input.
@@ -746,8 +758,14 @@ pub struct OwnerWaveAdmission {
     pub task_id: String,
     /// The live execution claim that holds the task or an overlapping
     /// footprint, or `None` once the candidate is admitted and its footprint
-    /// is visible to every later pull grant.
+    /// is visible to every later pull grant. Also set when that claim is the
+    /// perf-lane holder, so a caller that only reads this still withholds.
     pub blocked_by: Option<Box<ExecutionClaim>>,
+    /// The other perf task that holds this host's lane, when this candidate
+    /// was withheld for the lane. Callers record that wait and do not treat
+    /// it as a footprint conflict. `None` when the candidate is admitted or
+    /// refused only for a footprint.
+    pub perf_lane_held_by: Option<String>,
 }
 
 /// A stopped landing's repair awaiting its one automatic repair leaf, as the
@@ -768,6 +786,7 @@ impl OwnerWaveAdmission {
         Self {
             task_id: task_id.to_string(),
             blocked_by: None,
+            perf_lane_held_by: None,
         }
     }
 }

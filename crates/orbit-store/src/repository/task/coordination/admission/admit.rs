@@ -241,6 +241,14 @@ impl TaskCommitBoundary {
             Some(&self.workspace_id),
         )?;
         let owner_wave = self.owner_wave_footprints_locked()?;
+        let perf_lane_holders = self.perf_lane_holders_locked(
+            &identity.location().machine_id,
+            ordering.honor_owner_local_perf_lane,
+            &claims,
+            &in_flight.tasks,
+            &owner_wave,
+            &ordering.owner_local_carriers,
+        )?;
         let screen = Screen {
             identity,
             request,
@@ -252,6 +260,7 @@ impl TaskCommitBoundary {
             in_flight: &in_flight.footprints,
             reservations: &reservations,
             owner_wave: &owner_wave,
+            perf_lane_holders: &perf_lane_holders,
             lock_modes: self.store.footprint_lock_modes(),
             executor_host_os,
             tag_label_requirements: &ordering.tag_label_requirements,

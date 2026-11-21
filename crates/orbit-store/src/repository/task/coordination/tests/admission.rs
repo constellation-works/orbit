@@ -541,7 +541,7 @@ fn a_grant_never_takes_a_footprint_the_owner_wave_admitted_before_its_section() 
     let admitted = Rc::new(std::cell::RefCell::new(None));
     let recorded = Rc::clone(&admitted);
     after_selection::set(move || {
-        *recorded.borrow_mut() = Some(boundary.admit_owner_wave(&wave).expect("owner wave"));
+        *recorded.borrow_mut() = Some(boundary.admit_owner_wave(&wave, None).expect("owner wave"));
     });
     // The wave's own section, then the grant's.
     let (receipt, sections) = owner.admit_sections("pull-1", NO_HOLD);
@@ -593,10 +593,13 @@ fn an_owner_wave_after_a_grant_refuses_the_claimed_footprint() {
     let free = owner.create(Spec::new("free", TaskStatus::Backlog, "src/free.rs"));
     let admissions = owner
         .boundary
-        .admit_owner_wave(&[
-            owner.wave_candidate(&overlapping),
-            owner.wave_candidate(&free),
-        ])
+        .admit_owner_wave(
+            &[
+                owner.wave_candidate(&overlapping),
+                owner.wave_candidate(&free),
+            ],
+            None,
+        )
         .expect("owner wave");
 
     assert_eq!(admissions.len(), 2);

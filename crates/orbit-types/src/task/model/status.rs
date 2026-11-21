@@ -18,6 +18,35 @@ pub const NO_AUTO_APPROVE_TAG: &str = "no-auto-approve";
 /// interactive claim still run it; removing the tag makes it eligible again.
 pub const NO_DRAIN_TAG: &str = "no-drain";
 
+/// Tags that mark a task whose acceptance runs the paired timing protocol.
+/// Those tasks share one host-wide lock, so admission admits one of them at
+/// a time on a host.
+pub const PERF_LANE_TAGS: [&str; 2] = ["performance", "perf-review"];
+
+/// Whether `tags` mark a task that needs the host-wide perf lane.
+pub fn needs_perf_lane(tags: &[String]) -> bool {
+    tags.iter()
+        .any(|tag| PERF_LANE_TAGS.contains(&tag.as_str()))
+}
+
+/// Prefix of a pull-admission deferral that waits on the host-wide perf lane.
+/// A pull drain reads this before treating a named holder as a footprint conflict.
+pub const PERF_LANE_BUSY_PREFIX: &str = "perf_lane_busy: ";
+
+/// What an operator reads for a task waiting on the lane.
+pub fn perf_lane_detail(holder: &str) -> String {
+    format!(
+        "Waits for the host-wide perf lane, held by {holder}. Tasks that run the paired timing \
+         protocol (tagged `performance` or `perf-review`) are admitted one at a time, so this \
+         one starts when {holder} leaves `in-progress`."
+    )
+}
+
+/// The pull-admission reason a drain classifies as `perf_lane_busy`.
+pub fn perf_lane_hold_reason(holder: &str) -> String {
+    format!("{PERF_LANE_BUSY_PREFIX}{}", perf_lane_detail(holder))
+}
+
 /// Task history event an operator records to discard the candidate the task's
 /// last failed run preserved; the next run implements fresh [ORB-13985].
 pub const CANDIDATE_DISCARDED_EVENT: &str = "candidate_discarded";

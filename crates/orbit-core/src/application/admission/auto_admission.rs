@@ -236,6 +236,25 @@ impl AdmissionSelection {
             detail: Some(claim_detail(claim)),
         });
     }
+
+    /// Take `task` back out of the wave because another perf task holds this
+    /// host's lane. The admission section found `holder`; this wave's snapshot
+    /// predates it, or the wave itself selected it earlier and the section
+    /// refused the second one.
+    pub(crate) fn refuse_perf_lane(&mut self, task: &Task, holder: &str) {
+        self.selected.retain(|selected| *selected != task.id);
+        self.deferred.push(DeferredAdmission {
+            task_id: task.id.clone(),
+            reason: DeferralReason::PerfLaneBusy,
+            conflicts: vec![AdmissionConflict {
+                requested_selector: PERF_LANE_SELECTOR.to_string(),
+                blocking_selector: PERF_LANE_SELECTOR.to_string(),
+                blocking_task_id: holder.to_string(),
+                provenance: ConflictProvenance::PerfLane,
+            }],
+            detail: Some(perf_lane_detail(holder)),
+        });
+    }
 }
 
 /// Every lock footprint a wave must respect, keyed by selector.

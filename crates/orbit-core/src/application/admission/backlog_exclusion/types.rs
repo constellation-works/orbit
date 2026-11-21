@@ -171,6 +171,11 @@ pub(crate) enum BacklogTaskExclusionReason {
     /// work is in flight or ranked ahead, so a multi-slot ship leaves it for a
     /// run where it goes alone [ORB-15191]. `detail` names the fix.
     AwaitingExclusiveSlot,
+    /// The task needs the host-wide perf lane and another perf task on this
+    /// host holds it: a claim, an in-progress run, or a task an owner wave
+    /// admitted that has not started. It waits until that holder leaves the
+    /// lane; `detail` names the holder.
+    PerfLaneBusy,
 }
 
 /// The overlap `orbit task eligible` reports, so a conflict means the same

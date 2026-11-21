@@ -92,10 +92,13 @@ pub(super) fn admit_through_section(
             },
         })
         .collect::<Vec<_>>();
+    let owner_machine = runtime
+        .automation_machine_identity()
+        .or(runtime.workspace_owner_machine_id());
     let admissions = runtime
         .stores()
         .tasks()
-        .admit_owner_wave(&candidates)
+        .admit_owner_wave(&candidates, owner_machine)
         .map_err(|error| {
             PassError::store(
                 action,
@@ -104,9 +107,14 @@ pub(super) fn admit_through_section(
             )
         })?;
     for admission in admissions {
-        if let (Some(claim), Some(task)) =
-            (admission.blocked_by, task_lookup.get(&admission.task_id))
-        {
+        let Some(task) = task_lookup.get(&admission.task_id) else {
+            continue;
+        };
+        if let Some(holder) = admission.perf_lane_held_by.as_deref() {
+            selection.refuse_perf_lane(task, holder);
+            continue;
+        }
+        if let Some(claim) = admission.blocked_by {
             selection.refuse_claimed(
                 task,
                 &claim,
