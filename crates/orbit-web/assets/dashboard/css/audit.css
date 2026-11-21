@@ -284,13 +284,7 @@ td.codebase-empty { padding: var(--space-16) var(--space-14); }
 .codebase-file-name { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
 .codebase-file-dir { font-family: var(--font-mono); font-size: var(--text-md); overflow-wrap: anywhere; }
 .codebase-file-base { margin: 0; font-family: var(--font-mono); font-size: var(--text-2xl); overflow-wrap: anywhere; }
-.codebase-file-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-12); }
-.codebase-file-tile { display: flex; flex-direction: column; gap: var(--space-6); padding: var(--space-16); border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--bg-elev); }
-.codebase-file-tile.absent .codebase-dot { background: #3a424d; }
-.codebase-tile-label { display: flex; align-items: center; gap: var(--space-8); font-size: var(--text-md); color: var(--fg-dim); }
-.codebase-tile-big { font-size: var(--text-4xl); font-weight: 600; line-height: 1.15; color: var(--fg); font-variant-numeric: tabular-nums; }
-.codebase-file-tile.absent .codebase-tile-big { color: var(--fg-mute); }
-.codebase-tile-sub { font-size: var(--text-md); color: var(--fg-mute); }
+.stat-tile[data-state="unknown"] .codebase-dot { background: var(--fg-mute); }
 .codebase-tile-rank { color: var(--fg); }
 .codebase-body > .codebase-file-tasks { flex: 999 1 520px; }
 .codebase-body > .codebase-file-related { flex: 1 1 320px; }

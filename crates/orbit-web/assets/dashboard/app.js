@@ -511,10 +511,18 @@ function frictionTagNodes(tags = []) {
   return values.map((tag) => el("span", { class: "knowledge-tag", text: tag, title: tag }));
 }
 
+function paintFrictionStat(id, value) {
+  const node = $(id);
+  if (!node) return;
+  node.textContent = formatBigInt(value);
+  // Zero is a real count. The unknown state is only the unpainted placeholder.
+  if (node.parentElement) delete node.parentElement.dataset.state;
+}
+
 function renderFrictionStats(stats = {}) {
-  $("friction-open-value").textContent = formatBigInt(stats.open || 0);
-  $("friction-triaged-value").textContent = formatBigInt(stats.triaged || 0);
-  $("friction-resolved-month-value").textContent = formatBigInt(stats.resolved_this_month || 0);
+  paintFrictionStat("friction-open-value", stats.open || 0);
+  paintFrictionStat("friction-triaged-value", stats.triaged || 0);
+  paintFrictionStat("friction-resolved-month-value", stats.resolved_this_month || 0);
 }
 
 function frictionFilterLabel() {

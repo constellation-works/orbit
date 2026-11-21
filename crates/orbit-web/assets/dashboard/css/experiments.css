@@ -112,11 +112,9 @@
 .ex-warn-text { color: var(--warn-fg); }
 
 /* Arm cards: read-outs, not toggles. */
-.ex-arms { grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); }
-.mx-sc.ex-arm { cursor: default; }
-.mx-sc.ex-arm:hover { border-color: var(--hair); }
-.mx-sc.ex-arm.ex-arm-winner, .mx-sc.ex-arm.ex-arm-winner:hover { border-color: rgba(99, 210, 151, 0.4); }
-.ex-arm .mx-sc-label { flex-wrap: wrap; }
+.stat-tile.ex-arm-winner,
+.stat-tile.ex-arm-winner:hover { border-color: var(--state-success); }
+.ex-arm .stat-tile-label { flex-wrap: wrap; }
 .ex-arm-figure { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-10); }
 .ex-arm-diff { color: var(--mx-c); font: var(--text-sm) var(--font-mono); font-variant-numeric: tabular-nums; }
 .ex-arm-title { color: var(--fg); font-weight: 600; overflow-wrap: anywhere; }

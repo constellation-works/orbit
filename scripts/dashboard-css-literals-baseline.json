@@ -5,7 +5,7 @@
       "raw_font_sizes": 0
     },
     "crates/orbit-web/assets/dashboard/css/audit.css": {
-      "colour_literals": 27,
+      "colour_literals": 26,
       "raw_font_sizes": 0
     },
     "crates/orbit-web/assets/dashboard/css/automation.css": {
@@ -21,11 +21,11 @@
       "raw_font_sizes": 0
     },
     "crates/orbit-web/assets/dashboard/css/experiments.css": {
-      "colour_literals": 10,
+      "colour_literals": 9,
       "raw_font_sizes": 0
     },
     "crates/orbit-web/assets/dashboard/css/health.css": {
-      "colour_literals": 50,
+      "colour_literals": 49,
       "raw_font_sizes": 0
     },
     "crates/orbit-web/assets/dashboard/css/knowledge.css": {

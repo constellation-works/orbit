@@ -72,22 +72,8 @@
   }
 }
 
-.friction-stats {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  border-bottom: 1px solid var(--border);
-}
-.friction-stats .tile {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-8);
-  padding: var(--space-12) var(--space-16);
-}
-.friction-stats .tile + .tile { border-left: 1px solid var(--hair); }
-.friction-stats .value { font-size: var(--text-2xl); font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
-.friction-stats .label { font-size: var(--text-md); color: var(--fg-dim); }
+.friction-stats { border-bottom: 1px solid var(--border); }
 @media (max-width: 800px) {
-  .friction-stats { grid-template-columns: 1fr; }
   .friction-row { grid-template-columns: 120px minmax(0, 1fr) 76px; }
   .friction-row .tags,
   .friction-row .reported { display: none; }

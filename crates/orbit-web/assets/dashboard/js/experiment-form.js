@@ -762,7 +762,7 @@ function armView(state, arm, index) {
   }, "exf-remove");
   const card = el("section", { class: "exf-arm", "aria-label": `Arm ${index + 1}` }, [
     el("div", { class: "exf-arm-head" }, [
-      el("span", { class: "mx-sc-tag", text: arm.control ? "control" : "treatment" }),
+      el("span", { class: "stat-tile-tag", text: arm.control ? "control" : "treatment" }),
       remove,
     ]),
     el("div", { class: "exf-grid" }, [

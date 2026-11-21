@@ -510,7 +510,9 @@
             <span class="scoreboard-controls-meta" id="reliability-meta">-</span>
           </div>
           <div id="reliability-status"></div>
-          <div class="rel-summary" id="reliability-summary"></div>
+          <div class="rel-summary stat-tiles">
+            <div class="stat-tiles-row" id="reliability-summary"></div>
+          </div>
           <p class="rel-note rel-note-warn" id="reliability-truncation-note" style="display: none;"></p>
           <div class="rel-chart-wrap">
             <div class="rel-chart-title section-title">Job-run failure rate over time</div>
@@ -798,18 +800,20 @@
             <button class="subtab active" data-subtab="frictions" type="button">Frictions</button>
             <button class="subtab" data-subtab="memory" type="button">Memory</button>
           </nav>
-          <div class="friction-stats" id="friction-stats">
-            <div class="tile">
-              <span class="value" id="friction-open-value">-</span>
-              <span class="label">open</span>
-            </div>
-            <div class="tile">
-              <span class="value" id="friction-triaged-value">-</span>
-              <span class="label">triaged</span>
-            </div>
-            <div class="tile">
-              <span class="value" id="friction-resolved-month-value">-</span>
-              <span class="label">resolved this month</span>
+          <div class="friction-stats stat-tiles" id="friction-stats">
+            <div class="stat-tiles-row">
+              <div class="stat-tile" data-state="unknown">
+                <span class="stat-tile-label">open</span>
+                <span class="stat-tile-figure" id="friction-open-value">-</span>
+              </div>
+              <div class="stat-tile" data-state="unknown">
+                <span class="stat-tile-label">triaged</span>
+                <span class="stat-tile-figure" id="friction-triaged-value">-</span>
+              </div>
+              <div class="stat-tile" data-state="unknown">
+                <span class="stat-tile-label">resolved this month</span>
+                <span class="stat-tile-figure" id="friction-resolved-month-value">-</span>
+              </div>
             </div>
           </div>
           <div class="controls" id="friction-controls">

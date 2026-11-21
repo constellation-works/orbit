@@ -96,10 +96,14 @@ export function fmtWindowRange(window) {
 }
 
 function statTile(label, value, hint) {
-  return el("div", { class: "rel-tile" }, [
-    el("span", { class: "rel-tile-label", text: label }),
-    typeof value === "string" ? el("span", { class: "rel-tile-value", text: value }) : value,
-    hint ? el("span", { class: "rel-tile-hint", text: hint }) : null,
+  const unknown = typeof value !== "string" && value?.classList?.contains("rel-rate-empty");
+  const figure = typeof value === "string"
+    ? el("span", { class: "stat-tile-figure", text: value })
+    : el("span", { class: "stat-tile-figure" }, [value]);
+  return el("div", { class: "stat-tile", "data-state": unknown ? "unknown" : null }, [
+    el("span", { class: "stat-tile-label", text: label }),
+    figure,
+    hint ? el("span", { class: "stat-tile-compare", text: hint }) : null,
   ]);
 }
 
