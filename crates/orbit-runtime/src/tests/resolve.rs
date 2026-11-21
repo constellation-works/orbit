@@ -263,8 +263,8 @@ mod git_spawns {
     }
 }
 
-/// An invalid `config.toml` names its path with the home directory redacted
-/// (ORB-26548): the resolver shows `~/…`, never the absolute home path.
+/// Config read and parse failures name their path with the home directory
+/// redacted: the resolver shows `~/…`, never the absolute home path.
 mod invalid_config_path {
     use std::path::PathBuf;
 
@@ -296,6 +296,40 @@ mod invalid_config_path {
         };
         assert!(
             message.starts_with("invalid runtime config '~/project/.orbit/config.toml': "),
+            "the config path must be home-redacted: {message}"
+        );
+        assert!(
+            !message.contains(&home.display().to_string()),
+            "the absolute home directory must not leak into the message: {message}"
+        );
+    }
+
+    #[test]
+    fn unreadable_runtime_config_names_home_redacted_path() {
+        if crate::tests::run_isolated_test(std::any::type_name_of_val(
+            &unreadable_runtime_config_names_home_redacted_path,
+        )) {
+            return;
+        }
+        // The isolated child runs with HOME set to a disposable directory.
+        let home = PathBuf::from(
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .expect("isolated home"),
+        );
+        let workspace = home.join("project");
+        let orbit_dir = workspace.join(".orbit");
+        std::fs::create_dir_all(&orbit_dir).expect("orbit dir");
+        // A directory at the config path deterministically makes read_to_string fail.
+        std::fs::create_dir(orbit_dir.join("config.toml")).expect("config directory");
+
+        let message = match crate::resolve_bootstrap_roots(&workspace, None) {
+            Err(OrbitError::Io(message)) => message,
+            Err(other) => panic!("expected Io, got {other:?}"),
+            Ok(_) => panic!("an unreadable config.toml must be refused"),
+        };
+        assert!(
+            message.starts_with("failed to read runtime config '~/project/.orbit/config.toml': "),
             "the config path must be home-redacted: {message}"
         );
         assert!(
