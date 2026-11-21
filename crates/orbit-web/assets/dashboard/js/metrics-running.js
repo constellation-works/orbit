@@ -2,12 +2,13 @@
 // changed, Tasks completed, Defects and Tokens): Per bucket, Cumulative and
 // Per day.
 //
-// Cumulative is a running total from the start of the window, so its last
-// point is the card total; empty buckets stay flat. Per day is the sum of the
-// 24 hours ending at each bucket's close, filled from the endpoint's lead
-// buckets (history before the window) so the first points are complete; a
-// host that sends none draws those leading points hollow. The views are
-// derived here from the bucket series; chart drawing stays in metrics.js.
+// Cumulative is a running total from the start of the window, so each series'
+// last point is that series' sum since the window started; empty buckets stay
+// flat. Per day is the sum of the 24 hours ending at each bucket's close,
+// filled from the endpoint's lead buckets (history before the window) so the
+// first points are complete; a host that sends none draws those leading points
+// hollow. The views are derived here from the bucket series; chart drawing
+// stays in metrics.js.
 
 import { el, fetchJson, getWorkspaceRevision } from './common.js';
 
@@ -149,7 +150,7 @@ export function runningModel({ mode, kind, windowKey, seconds, starts, series, f
   const anyIncomplete = visible.some((entry) => entry.incomplete.some(Boolean));
   const modeNotes = [`${bucketWidthLabel(seconds)}, aligned to the clock`];
   if (mode === "cumulative") {
-    modeNotes.push(`running total from the start of the window; last point = card total`, "empty buckets stay flat");
+    modeNotes.push(`running total from the start of the window; each line's last point is that series' sum since the window started`, "empty buckets stay flat");
   } else if (mode === "day") {
     modeNotes.push(perDay === 1
       ? "each point is one day, the same as per bucket; the last day is still in progress"
