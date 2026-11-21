@@ -397,15 +397,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if disconnect:
             self.close_connection = True
             return
-        redirect = self.path == "/redirect"
-        if self.path == "/redirect-after-parity":
+        redirect = self.path in ("/redirect", "/redirect-malformed")
+        if self.path in ("/redirect-after-parity", "/redirect-after-parity-malformed"):
             counter = marks / "requests"
             count = int(counter.read_text()) if counter.exists() else 0
             counter.write_text(str(count + 1))
             redirect = count >= 3
         if redirect:
             self.send_response(302)
-            self.send_header("Location", "/destination")
+            location = "http://[" if "malformed" in self.path else "/destination"
+            self.send_header("Location", location)
             self.end_headers()
             self.wfile.write(b"original redirect body")
             return
@@ -639,8 +640,27 @@ class PairedCliParityTest(PairedCliTestCase):
             self.assertEqual(report["observation_failures"][arm], "http status 302")
         self.assertFalse((self.marks / "destination-visited").exists())
 
+    def test_malformed_redirect_is_recorded_as_original_response_and_refused(self) -> None:
+        result, out = self.run_paired(surface=("--http", "/redirect-malformed"))
+        report = self.assert_no_passing_verdict(result, out)
+        for arm in ("base", "candidate", "control"):
+            self.assertEqual(report["arms"][arm]["http"], {
+                "status": 302,
+                "body": {"format": "text", "value": "original redirect body"},
+            })
+            self.assertEqual(report["observation_failures"][arm], "http status 302")
+        self.assertFalse((self.marks / "destination-visited").exists())
+
     def test_redirect_during_sampling_is_refused(self) -> None:
         result, out = self.run_paired(surface=("--http", "/redirect-after-parity"))
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("sample 0 exited 302", result.stderr)
+        self.assertTrue(json.loads((out / "parity.json").read_text())["match"])
+        self.assertFalse((out / "paired-summary.json").exists())
+        self.assertFalse((self.marks / "destination-visited").exists())
+
+    def test_malformed_redirect_during_sampling_is_refused(self) -> None:
+        result, out = self.run_paired(surface=("--http", "/redirect-after-parity-malformed"))
         self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
         self.assertIn("sample 0 exited 302", result.stderr)
         self.assertTrue(json.loads((out / "parity.json").read_text())["match"])
