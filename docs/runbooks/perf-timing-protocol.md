@@ -316,6 +316,8 @@ Tasks land in `proposed`. Do not approve them.
 |---|---|---|
 | `refusing to restore into … live Orbit root …` | Target is, resolves under or contains `~/.orbit` or a registered `.orbit/` | Restore under the run's scratch dir |
 | `… failed digest verification, refusing to restore: …` | A snapshot file was changed, removed or added after the snapshot | Take a fresh snapshot |
+| `workspace … has no initialized identity: …` (snapshot) | The registered checkout's `.orbit/config.yaml` is missing or names no `workspace_id` | Initialize that checkout with `orbit workspace init`, then snapshot again |
+| `snapshot … records no workspace identity …` (restore) | The snapshot was taken from an identity-less source | Take a fresh snapshot of an initialized workspace |
 | `… built identical binaries …` | The two revisions differ only in metadata | Pick revisions whose content differs |
 | `base and candidate resolve to the same commit …` | Same commit given twice | Check the revision selectors |
 | `parity mismatch between arms …` | Outputs differ after masking | Read `parity.json`; fix the behaviour change, or mask only a timing field |

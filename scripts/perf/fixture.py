@@ -306,7 +306,8 @@ def read_storage_id(orbit_dir: Path) -> str:
         text = (orbit_dir / "config.yaml").read_text()
     except OSError:
         return ""
-    match = re.search(r"^workspace_id:\s*(\S+)", text, re.MULTILINE)
+    # Same-line value only: `\s` would let a blank `workspace_id:` line capture the next key.
+    match = re.search(r"^workspace_id:[ \t]*(\S+)", text, re.MULTILINE)
     return match.group(1) if match else ""
 
 
@@ -332,13 +333,20 @@ def resolve_workspace(global_root: Path, selector: str) -> dict:
             raise common.PerfRefusal(f"workspace {entry['id']} has no local checkout")
         checkout = owned[0]
     orbit_dir = Path(checkout["orbit_dir"])
+    storage_id = read_storage_id(orbit_dir)
+    if not storage_id:
+        # An empty identity equals any other empty identity, so refuse it here
+        # rather than let restore match it.
+        raise common.PerfRefusal(
+            f"workspace {entry['id']} has no initialized identity: "
+            f"{orbit_dir / 'config.yaml'} names no workspace_id")
     return {
         "registry": registry,
         "entry": entry,
         "checkout": checkout,
         "registry_id": entry["id"],
         "name": entry.get("name", ""),
-        "storage_id": read_storage_id(orbit_dir),
+        "storage_id": storage_id,
         "repo_root": checkout.get("repo_root", str(orbit_dir.parent)),
         "orbit_dir": str(orbit_dir),
     }
@@ -617,6 +625,14 @@ def restore_root(snapshot: Path, into: Path, manifest: dict | None = None) -> di
 
 
 def _populate_root(snapshot: Path, into: Path, manifest: dict) -> dict:
+    source = manifest["source"]
+    if not source["storage_id"]:
+        # A snapshot of an identity-less source records an empty id. The restored
+        # root would also have an empty id, and the equality check below would
+        # accept the two.
+        raise common.PerfRefusal(
+            f"snapshot {snapshot} records no workspace identity for "
+            f"{source['name'] or source['registry_id']}; take it from an initialized workspace")
     shutil.copytree(snapshot / "home", into / "home")
     shutil.copytree(snapshot / "checkout", into / "checkout")
     pairs = _path_rewrites(manifest, into)
@@ -627,7 +643,6 @@ def _populate_root(snapshot: Path, into: Path, manifest: dict) -> dict:
                 rewrite_database(path, pairs)
             elif ".git" not in path.relative_to(into).parts:
                 rewrite_text_file(path, pairs)
-    source = manifest["source"]
     if fixture_storage_id(into) != source["storage_id"]:
         # Without an initialized `.orbit/` in the working directory, root
         # resolution would fall through to the enclosing checkout.
