@@ -191,15 +191,37 @@ repository root of the checkout that holds these scripts.
      otherwise, which means rerun with more `--rounds`. Without a bound the verdict is
      `informational`. The exit status is 0 for any verdict; refusals exit 2.
 
-4. Attach the five artifacts under `performance/<slug>/` and cite those paths in the
-   execution summary:
+4. Attach the evidence under `performance/<slug>/` and cite the paths in the
+   execution summary. The snapshot manifest can exceed the 1,048,576-byte per-artifact
+   limit. Keep the original intact for restore; split its bytes into numbered parts and
+   attach the checksum as well. Split each of the five files so every attachment fits,
+   including large raw sample files. Use a fresh evidence directory so old parts cannot
+   be mixed into the handoff.
 
    ```sh
+   set -e
+   cd <scratch>/perf-<slug>
+   mkdir evidence
    for f in snapshot/snapshot-manifest.json builds/provenance.json results/parity.json \
             results/raw.json results/paired-summary.json; do
+     name=$(basename "$f")
+     (cd "$(dirname "$f")" && sha256sum "$name") > "evidence/$name.sha256"
+     split -b 1048576 -d -a 6 "$f" "evidence/$name.part-"
+   done
+   for f in evidence/*; do
      orbit tool run orbit.task.artifact --input "{\"action\":\"put\",\"id\":\"<task-id>\",
        \"source_path\":\"<scratch>/perf-<slug>/$f\",\"path\":\"performance/<slug>/$(basename "$f")\"}"
    done
+   ```
+
+   To verify the handoff, download all parts and checksums into an empty directory,
+   then reconstruct and check each file as below (shown for the manifest). The checksum
+   detects missing, reordered or altered bytes; the reconstructed manifest contains the
+   complete file list and digests.
+
+   ```sh
+   cat snapshot-manifest.json.part-* > snapshot-manifest.json
+   sha256sum -c snapshot-manifest.json.sha256
    ```
 
 5. Clean up. The snapshot and builds dirs are plain directories the run created; remove
@@ -300,8 +322,9 @@ Paste this into the brief and fill the five slots:
 > interleaved rounds, per-round nearest-rank p95, per-arm median of round p95s, control
 > spread = max(control range, |control − base|). The criterion passes only on verdict
 > `pass` (candidate median ≤ bound − control spread); `inconclusive` means rerun with more
-> rounds, never pass. Attach `snapshot-manifest.json`, `provenance.json`, `parity.json`,
-> `raw.json` and `paired-summary.json` under `performance/<SLUG>/` and cite those paths in
+> rounds, never pass. Attach the parts and checksums for `snapshot-manifest.json`,
+> `provenance.json`, `parity.json`, `raw.json` and `paired-summary.json` under
+> `performance/<SLUG>/` and cite those paths in
 > the execution summary.
 
 ## Replacement Filing text for the `perf-review` auto-task
