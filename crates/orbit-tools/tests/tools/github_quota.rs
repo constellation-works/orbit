@@ -1621,6 +1621,100 @@ fn malformed_clipped_release_is_preserved_while_healthy_admission_proceeds() {
     assert_eq!(core.calls.agent, 1);
 }
 
+/// Regression [ORB-26135]: a same-generation clipped release marker that omits
+/// `previous_claim` is ambiguous, not an explicit `null`. It must not release
+/// the fresh active claim: the bytes stay on disk for diagnosis, the healthy
+/// account still admits the read, and no same-instant refresh probes.
+#[test]
+fn clipped_release_missing_previous_claim_keeps_fresh_claim_and_marker() {
+    let records = TempDir::new().unwrap();
+    let policy = GithubQuotaPolicy::default();
+    let now = now();
+    let reset = now + 1800;
+    store(records.path()).refresh_if_due(&policy, ACCOUNT, now - 120, &|| known(3500, reset));
+    run_contended_clipped_probe(records.path(), policy, ACCOUNT, now);
+
+    let marker = records.path().join(format!(".{ACCOUNT}.clipped.2.json"));
+    let ambiguous_bytes = b"{\"generation\":2}";
+    std::fs::write(&marker, ambiguous_bytes).unwrap();
+
+    let probes = AtomicUsize::new(0);
+    store(records.path())
+        .admit(
+            &policy,
+            ACCOUNT,
+            GithubCaller::Agent,
+            RESOURCE_CORE,
+            now,
+            &|| {
+                probes.fetch_add(1, Ordering::SeqCst);
+                known(3500, reset)
+            },
+        )
+        .expect("healthy account should admit the read despite an ambiguous marker");
+
+    assert_eq!(
+        probes.load(Ordering::SeqCst),
+        0,
+        "a fresh active claim must keep its refresh interval"
+    );
+    assert_eq!(
+        std::fs::read(&marker).unwrap(),
+        ambiguous_bytes,
+        "a marker without previous_claim must stay on disk for diagnosis"
+    );
+    let status = store(records.path()).status(&policy, ACCOUNT, now);
+    let core = status
+        .resources
+        .iter()
+        .find(|resource| resource.resource == RESOURCE_CORE)
+        .unwrap();
+    assert_eq!(core.remaining, Some(3499));
+    assert_eq!(core.calls.agent, 1);
+}
+
+/// Regression [ORB-26135]: a same-generation clipped release marker whose
+/// `previous_claim` is an explicit `null` still reconciles. The claim is given
+/// back, so the next caller refreshes at once, and the marker is removed with
+/// the record commit.
+#[test]
+fn clipped_release_with_explicit_null_previous_claim_still_reconciles() {
+    let records = TempDir::new().unwrap();
+    let policy = GithubQuotaPolicy::default();
+    let now = now();
+    let reset = now + 1800;
+    store(records.path()).refresh_if_due(&policy, ACCOUNT, now - 120, &|| known(3500, reset));
+    run_contended_clipped_probe(records.path(), policy, ACCOUNT, now);
+
+    let marker = records.path().join(format!(".{ACCOUNT}.clipped.2.json"));
+    std::fs::write(&marker, b"{\"generation\":2,\"previous_claim\":null}").unwrap();
+
+    let probes = AtomicUsize::new(0);
+    store(records.path())
+        .admit(
+            &policy,
+            ACCOUNT,
+            GithubCaller::Agent,
+            RESOURCE_CORE,
+            now,
+            &|| {
+                probes.fetch_add(1, Ordering::SeqCst);
+                known(3500, reset)
+            },
+        )
+        .expect("fresh observation above reserve must admit agent read");
+
+    assert_eq!(
+        probes.load(Ordering::SeqCst),
+        1,
+        "an explicit null releases the claim, so the next caller must refresh at once"
+    );
+    assert!(
+        !marker.exists(),
+        "a reconciled release marker must be removed with the record commit"
+    );
+}
+
 /// Regression [ORB-26114]: a writable/searchable quota directory that denies
 /// listing (`0o300`) must still reconcile a staged clipped release by name,
 /// refresh once at the same logical instant, admit an agent once the new

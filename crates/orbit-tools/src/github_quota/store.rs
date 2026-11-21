@@ -192,7 +192,19 @@ struct QuotaRecord {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct ClippedClaimRelease {
     generation: u64,
+    /// Always written: a claim timestamp, or an explicit `null` for a first
+    /// claim. An absent key is ambiguous and must not decode as `null`.
+    #[serde(deserialize_with = "deserialize_required_previous_claim")]
     previous_claim: Option<u64>,
+}
+
+/// Decodes `previous_claim` only from a present key, so a marker without the
+/// field is a decode error rather than Serde's implicit `None`.
+fn deserialize_required_previous_claim<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<u64>::deserialize(deserializer)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
