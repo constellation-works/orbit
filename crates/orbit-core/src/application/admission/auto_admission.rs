@@ -284,6 +284,7 @@ impl AdmissionHolders {
         lock_holders: &BTreeMap<String, Vec<String>>,
         live_claims: &BTreeSet<String>,
         task_lookup: &BTreeMap<String, Task>,
+        remote_claims: &BTreeSet<String>,
         workspace_root: &Path,
         unlocked: &UnlockedContextPaths,
         lock_modes: &FootprintLockModes,
@@ -309,7 +310,7 @@ impl AdmissionHolders {
             held: index_holders(lock_holders),
             claimed: index_holders(&claimed),
             lock_modes: lock_modes.clone(),
-            perf_lane_holder: perf_lane_holder(live_claims, task_lookup),
+            perf_lane_holder: perf_lane_holder(live_claims, task_lookup, remote_claims),
         }
     }
 
