@@ -1,5 +1,6 @@
-/* Fonts, colour tokens, the status/state dot colours, and element defaults.
-   Loaded first: every other file builds on the tokens defined here. */
+/* Fonts, colour, spacing, type-size and radius tokens, the status/state dot
+   colours, and element defaults. Loaded first: every other file builds on the
+   tokens defined here. */
 
 @font-face {
   font-family: "Geist";
@@ -118,9 +119,40 @@
   --danger-wash: #150f0f;
   --danger-line: #3a2321;
   --danger-fg: #ff9c90;
-  --radius-panel: 10px;
-  --radius: 8px;
+
+  /* Spacing scale (docs/design/user-interface/specs/theme.md). */
+  --space-2: 2px;
+  --space-4: 4px;
+  --space-6: 6px;
+  --space-8: 8px;
+  --space-10: 10px;
+  --space-12: 12px;
+  --space-14: 14px;
+  --space-16: 16px;
+  --space-20: 20px;
+  --space-24: 24px;
+  --space-32: 32px;
+  --space-48: 48px;
+
+  /* Type-size scale (docs/design/user-interface/specs/theme.md). */
+  --text-2xs: 10px;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 18px;
+  --text-2xl: 20px;
+  --text-3xl: 24px;
+  --text-4xl: 28px;
+
+  /* Radius scale (docs/design/user-interface/specs/theme.md). */
+  --radius-2xs: 2px;
+  --radius-xs: 4px;
   --radius-sm: 6px;
+  --radius: 8px;
+  --radius-panel: 10px;
+  --radius-pill: 999px;
 
   /* Chrome surfaces from the 2026-10 redesign: the header and rail share
      one surface, a raised control reads one step above a card, and a well
