@@ -118,7 +118,8 @@ snapshot_worktree() {
     "GIT_OBJECT_DIRECTORY=$objects"
     "GIT_ALTERNATE_OBJECT_DIRECTORIES=$real_objects"
   )
-  env "${snap_env[@]}" git -C "$wt" read-tree HEAD \
+  git -C "$wt" ls-files --stage -z \
+    | env "${snap_env[@]}" git -C "$wt" update-index -z --index-info \
     || refuse "failed to snapshot the working tree at $wt"
   env "${snap_env[@]}" git -C "$wt" add --all -- . \
     || refuse "failed to snapshot the working tree at $wt"
