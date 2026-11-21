@@ -308,10 +308,18 @@ def run_supervised(argv: list[str], *, cwd, env, timeout: float, output_limit: i
                       timeout, output_limit)
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Keep the timed route's response instead of requesting its destination."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 class Server:
     """One arm's `orbit web serve` on its restored root (after ORB-25672)."""
 
     def __init__(self, binary: Path, info: dict, env: dict):
+        self.opener = urllib.request.build_opener(NoRedirect())
         self.process = subprocess.Popen(
             [str(binary), "web", "serve", "--no-open", "--port", "0",
              "--workspace", info["workspace"]],
@@ -365,10 +373,11 @@ class Server:
 
     def get(self, path: str) -> tuple[int, bytes]:
         try:
-            with urllib.request.urlopen(self.base + path, timeout=HTTP_TIMEOUT_SECONDS) as response:
+            with self.opener.open(self.base + path, timeout=HTTP_TIMEOUT_SECONDS) as response:
                 return response.status, response.read()
         except urllib.error.HTTPError as error:
-            return error.code, error.read()
+            with error:
+                return error.code, error.read()
 
     def _leader_exited(self) -> bool:
         return leader_exited(self.process.pid)
