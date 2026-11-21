@@ -17,7 +17,12 @@ impl OrbitRuntime {
         task: &str,
     ) -> Result<bool, OrbitError> {
         Ok(
-            matches!(source.state, JobRunState::Cancelled | JobRunState::Success)
+            // A hold is terminal too. Explicit repair still has to prove the
+            // run stopped and authenticate its publication.
+            matches!(
+                source.state,
+                JobRunState::Cancelled | JobRunState::Held | JobRunState::Success
+            )
                 || (source.state == JobRunState::Failed
                     && matches!(
                         self.recorded_final_recovery(task, &source.run_id)?,
