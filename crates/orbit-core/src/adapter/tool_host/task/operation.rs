@@ -127,6 +127,17 @@ pub(in crate::adapter::tool_host) fn dispatch(
                     "managed agents cannot requeue blocked tasks".into(),
                 ));
             }
+            if resident_cycle_admitted
+                && input
+                    .as_value()
+                    .get("discard_candidate")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+            {
+                return Err(OrbitError::CapabilityDenied(
+                    "resident requeues cannot set `discard_candidate`".into(),
+                ));
+            }
             let id = input.required_string("id")?;
             let reason = input.required_string("reason")?;
             let discard = input
