@@ -314,7 +314,6 @@ fn expired_readout_requires_a_primary_comparison_interval() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Creates a backlog task of `complexity` and enrolls it in `arm_name`.
 /// No job applies an arm's overlay to a task worked in an interactive
 /// session, so an assignment that reached review without a job run is not
 /// treated: the readout leaves it out of every estimate and counts it, while
@@ -386,6 +385,7 @@ fn readout_leaves_interactive_assignments_out_of_the_treated_population() {
     );
 }
 
+/// Creates a backlog task of `complexity` and enrolls it in `arm_name`.
 fn enroll_arm_task(
     runtime: &OrbitRuntime,
     experiment_id: &str,

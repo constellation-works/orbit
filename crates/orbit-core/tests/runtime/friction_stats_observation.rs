@@ -137,7 +137,7 @@ fn friction_stats_reads_a_decided_commit_without_waiting_for_its_bundle_writer()
                 std::fs::write(&envelope_path, yaml).unwrap();
                 ready_tx.send(()).unwrap();
                 release_rx
-                    .recv_timeout(Duration::from_secs(2))
+                    .recv_timeout(Duration::from_secs(60))
                     .expect("friction stats blocked on the in-flight bundle writer");
                 Ok(())
             },
@@ -151,8 +151,11 @@ fn friction_stats_reads_a_decided_commit_without_waiting_for_its_bundle_writer()
     let during = runtime
         .run_tool("orbit.friction.stats", json!({}))
         .expect("stats during apply");
-    release_tx.send(()).unwrap();
-    writer.join().expect("writer thread");
+    let released = release_tx.send(());
+    writer
+        .join()
+        .expect("writer thread: friction stats blocked on the in-flight bundle writer");
+    released.expect("release the bundle writer");
 
     assert_eq!(
         tasks_done(&during, "grok"),

@@ -308,8 +308,8 @@ fn operator_posts_updates_and_closes_any_notice() {
     let shown = call(&runtime, "orbit.notice.show", json!({"id": id}), &operator).unwrap();
     assert_eq!(shown["history"].as_array().map(Vec::len), Some(4));
 
-    // created, updated, corroborated and two closes succeeded; the cap and
-    // the orchestrator's close were refused.
+    // Created, updated, corroborated and closed each produced a success row;
+    // repeat close produces no row, and the cap and orchestrator close were refused.
     assert_eq!(notice_audit(&runtime, AuditEventStatus::Success), 4);
     assert_eq!(notice_audit(&runtime, AuditEventStatus::Denied), 2);
 }
@@ -1055,8 +1055,7 @@ fn agent_posting_baseline_governs_managed_runs() {
     let task = add_task(&runtime, "Posting agent's bound task");
     let agent = agent_session(&runtime, &task);
 
-    // The three agent activities carry exactly the notice write tools in
-    // their baselines; no other notice tool is granted by this slice.
+    // The three agent activities permit the notice tools checked below.
     for activity in ["agent_implement", "agent_review_repair", "final_recovery"] {
         let resolved = activity_resolved_tools(&runtime, activity);
         assert!(

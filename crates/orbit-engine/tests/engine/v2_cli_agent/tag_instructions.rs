@@ -17,9 +17,14 @@ struct TagHost {
     cli: ScriptHost,
     instructions: Result<Vec<TagInstruction>, String>,
     asked: Mutex<Vec<(String, Value)>>,
+    steering: bool,
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for TagHost {
+    fn mid_run_steering_enabled(&self) -> bool {
+        self.steering
+    }
+
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
         RuntimeHost::agent_subprocess_environment(&self.cli, required_env_vars)
     }
@@ -94,6 +99,7 @@ fn dispatch(
         cli: ScriptHost::new(fake.cli_path()),
         instructions,
         asked: Mutex::new(Vec::new()),
+        steering: false,
     };
     let outcome = dispatch_v2_activity(V2DispatchInput {
         activity_name: "agent_implement",
@@ -196,4 +202,51 @@ fn a_refused_tag_instruction_stops_the_dispatch_before_the_provider_runs() {
     );
     assert!(prompt.is_none(), "the provider never ran");
     assert!(applied(&events).is_empty());
+}
+
+#[test]
+fn provider_receives_byte_inert_instruction_when_steering_is_disabled() {
+    for enabled in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let prompt = temp.path().join("prompt");
+        let fake = fake_cli("claude", &format!(
+            "#!/bin/sh\ncat > '{}'\necho '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n", prompt.display()
+        )).unwrap();
+        let (writer, _) = build_writer(temp.path(), "steering-prompt").unwrap();
+        let host = TagHost {
+            cli: ScriptHost::new(fake.cli_path()),
+            instructions: Ok(Vec::new()),
+            asked: Mutex::new(Vec::new()),
+            steering: enabled,
+        };
+        let mut spec = cli_agent_loop_spec(None);
+        spec.steering_guidance = true;
+        spec.steering_instruction = Some("checkpoint fixture".into());
+        let base = spec.instruction.clone();
+        let outcome = dispatch_v2_activity(V2DispatchInput {
+            activity_name: "agent_implement",
+            spec: &ActivityV2Spec::AgentLoop(spec),
+            fs_profile: None,
+            input: json!({"task_id": "fixture-task", "prompt": "hello"}),
+            audit: writer,
+            run_id: "steering-prompt",
+            host: Some(&host),
+        });
+        assert!(outcome.unwrap().success);
+        let instruction = instruction_of(fs::read_to_string(prompt).ok());
+        if enabled {
+            assert!(instruction.starts_with(&base));
+            assert!(instruction.ends_with("checkpoint fixture"));
+            assert_ne!(
+                instruction,
+                format!("{base}\n\ncheckpoint fixture"),
+                "shared steering guidance reaches the provider"
+            );
+        } else {
+            assert_eq!(
+                instruction, base,
+                "disabled steering must leave provider instruction byte-identical"
+            );
+        }
+    }
 }
