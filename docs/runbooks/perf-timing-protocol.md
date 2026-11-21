@@ -84,8 +84,8 @@ directory too when it fails. A refused parity check keeps `parity.json` for diag
 - **Candidate during `implement_bundle`** is the uncommitted working tree. HEAD is still
   the pinned base, so pass `--candidate-worktree <checkout>` instead of a candidate
   commit. The script snapshots tracked and untracked files, excluding ignored ones,
-  into a temporary commit (`GIT_INDEX_FILE`, `read-tree HEAD`, `git add --all`,
-  `write-tree`, `commit-tree -p HEAD`). The snapshot's objects and index live in a
+  into a temporary commit (`GIT_INDEX_FILE`, `ls-files --stage` into `update-index --index-info`,
+  `git add --all`, `write-tree`, `commit-tree -p HEAD`). The snapshot's objects and index live in a
   throwaway directory, so the checkout's HEAD, index, files and git metadata stay
   untouched, including when that git dir is read-only. `provenance.json` names that
   commit and tree and sets `revisions.candidate.working_tree_snapshot` to true.

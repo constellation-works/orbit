@@ -37,7 +37,7 @@ def _init_repo(repo: Path) -> None:
     _git(repo, "init", "-b", "main")
     _git(repo, "config", "user.email", "t@example.com")
     _git(repo, "config", "user.name", "Test")
-    (repo / ".gitignore").write_text("ignored.txt\n")
+    (repo / ".gitignore").write_text("ignored.txt\n*.ign\n")
     (repo / "tracked.txt").write_text("v1\n")
     (repo / "gone.txt").write_text("here\n")
     (repo / "Cargo.lock").write_text("# fixture lock\n")
@@ -216,6 +216,40 @@ class BuildPairWorktreeTest(unittest.TestCase):
         )
         self.assertEqual(seen.returncode, 0, seen.stderr)
         self.assertEqual(seen.stdout.strip(), "commit")
+
+    def test_newly_tracked_ignored_file_uses_working_tree_and_excludes_untracked_sibling(self) -> None:
+        (self.repo / "tracked.ign").write_text("staged\n")
+        _git(self.repo, "add", "-f", "--", "tracked.ign")
+        (self.repo / "tracked.ign").write_text("working\n")
+        (self.repo / "untracked.ign").write_text("secret\n")
+        (self.repo / "ignored.txt").write_text("also-secret\n")
+        before = _fingerprint(self.repo)
+        head = str(before["head"])
+        _freeze_git(self.repo)
+        result = self.run_pair(
+            "--base", "HEAD",
+            "--candidate-worktree", str(self.repo),
+            "--out", str(self.out),
+            "--keep",
+        )
+        _thaw_git(self.repo)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(_fingerprint(self.repo), before)
+
+        exported = self.out / ".work" / "src-candidate"
+        self.assertEqual((exported / "tracked.ign").read_text(), "working\n")
+        self.assertFalse((exported / "untracked.ign").exists())
+        self.assertFalse((exported / "ignored.txt").exists())
+
+        provenance = json.loads((self.out / "provenance.json").read_text())
+        candidate = provenance["revisions"]["candidate"]
+        base = provenance["revisions"]["base"]
+        self.assertIs(candidate["working_tree_snapshot"], True)
+        self.assertNotEqual(candidate["commit"], head)
+        self.assertNotEqual(candidate["binary_sha256"], base["binary_sha256"])
+
+        leaked = _git(self.repo, "cat-file", "-t", candidate["commit"], check=False)
+        self.assertNotEqual(leaked.returncode, 0, leaked.stderr)
 
     def test_both_candidate_forms_are_refused(self) -> None:
         result = self.run_pair(
