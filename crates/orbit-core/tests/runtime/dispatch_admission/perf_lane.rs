@@ -95,3 +95,47 @@ fn one_wave_admits_a_single_perf_task() {
     assert_eq!(entry["reason"], "perf_lane_busy", "{entry}");
     assert_eq!(entry["blocking_task_ids"], json!([first]), "{entry}");
 }
+
+/// A perf task waiting on a held lane names the lane even when every drain
+/// slot is full [ORB-26479]: the lane is what it waits on, not the slot count.
+/// The holder is a live leaf, so the single slot is taken.
+#[test]
+fn a_perf_task_waiting_on_the_lane_reports_it_when_no_slot_is_free() {
+    if !isolated(
+        "dispatch_admission::perf_lane::a_perf_task_waiting_on_the_lane_reports_it_when_no_slot_is_free",
+    ) {
+        return;
+    }
+    let (_root, runtime, _repo) = runtime();
+    let holder = seed(
+        &runtime,
+        Seed::named("measured change")
+            .status(TaskStatus::InProgress)
+            .tags(&["performance"]),
+    )
+    .id;
+    running_run(
+        &runtime,
+        "task_auto_pipeline",
+        json!({"task_ids": [holder]}),
+    );
+    let waiting = seed(
+        &runtime,
+        Seed::named("second measured").tags(&["perf-review"]),
+    )
+    .id;
+
+    let readiness = runtime
+        .workspace_auto_readiness(&[], Some(1), 50, &[])
+        .unwrap();
+    let entry = readiness_task(&readiness, &waiting);
+    assert_eq!(entry["reason"], "perf_lane_busy", "{entry}");
+    assert_ne!(entry["eligible"], true, "{entry}");
+    assert_eq!(entry["blocking_task_ids"], json!([holder]), "{entry}");
+    assert_eq!(entry["conflicts"][0]["provenance"], "perf_lane", "{entry}");
+    let detail = entry["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("perf lane") && detail.contains(&holder),
+        "{detail}"
+    );
+}

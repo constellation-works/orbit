@@ -129,7 +129,7 @@ impl DeferralReason {
 }
 
 /// A candidate that was examined and could not take a slot: a free slot was
-/// available, or it waits for a footprint regardless.
+/// available, or it waits for a footprint or the perf lane regardless.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DeferredAdmission {
     pub(crate) task_id: String,
@@ -175,8 +175,9 @@ impl DeferredAdmission {
 pub(crate) struct AdmissionSelection {
     /// Mutually compatible tasks, in the candidate order they were offered in.
     pub(crate) selected: Vec<String>,
-    /// Examined against a free slot and blocked. A candidate gap fit refused
-    /// is recorded by the gap fit instead.
+    /// Examined and blocked. A perf task waiting on a held lane lands here even
+    /// with no slot free, because the lane is its wait. A candidate gap fit
+    /// refused is recorded by the gap fit instead.
     pub(crate) deferred: Vec<DeferredAdmission>,
     /// Never examined: the wave was already full when they came up. These are
     /// saturated, not conflicted, and saying so keeps the two diagnoses apart.
@@ -377,7 +378,17 @@ pub(crate) fn select_admissions(
             continue;
         }
         if selection.selected.len() >= free_slots {
-            selection.queued_behind_capacity.push(candidate_id.clone());
+            // [ORB-26479] A perf task whose lane is held waits on the lane
+            // whether or not a slot is free, so it is named as such rather
+            // than as saturated. A full wave selects nothing either way.
+            match (task, &perf_lane) {
+                (Some(task), Some(holder)) if needs_perf_lane(task) => {
+                    selection
+                        .deferred
+                        .push(perf_lane_deferral(candidate_id, holder));
+                }
+                _ => selection.queued_behind_capacity.push(candidate_id.clone()),
+            }
             continue;
         }
         let Some(task) = task else {
@@ -395,17 +406,9 @@ pub(crate) fn select_admissions(
         }
         let needs_lane = needs_perf_lane(task);
         if needs_lane && let Some(holder) = &perf_lane {
-            selection.deferred.push(DeferredAdmission {
-                task_id: candidate_id.clone(),
-                reason: DeferralReason::PerfLaneBusy,
-                conflicts: vec![AdmissionConflict {
-                    requested_selector: PERF_LANE_SELECTOR.to_string(),
-                    blocking_selector: PERF_LANE_SELECTOR.to_string(),
-                    blocking_task_id: holder.clone(),
-                    provenance: ConflictProvenance::PerfLane,
-                }],
-                detail: Some(perf_lane_detail(holder)),
-            });
+            selection
+                .deferred
+                .push(perf_lane_deferral(candidate_id, holder));
             continue;
         }
         let mut conflicts = Vec::new();
@@ -447,6 +450,21 @@ pub(crate) fn select_admissions(
     }
 
     selection
+}
+
+/// The deferral of perf task `task_id`, which waits on the lane `holder` holds.
+fn perf_lane_deferral(task_id: &str, holder: &str) -> DeferredAdmission {
+    DeferredAdmission {
+        task_id: task_id.to_string(),
+        reason: DeferralReason::PerfLaneBusy,
+        conflicts: vec![AdmissionConflict {
+            requested_selector: PERF_LANE_SELECTOR.to_string(),
+            blocking_selector: PERF_LANE_SELECTOR.to_string(),
+            blocking_task_id: holder.to_string(),
+            provenance: ConflictProvenance::PerfLane,
+        }],
+        detail: Some(perf_lane_detail(holder)),
+    }
 }
 
 fn wave_conflicts(

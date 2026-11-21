@@ -20,7 +20,11 @@ pub(super) fn footprint_exclusion(deferred: DeferredAdmission) -> BacklogTaskExc
         DeferralReason::Conflict => BacklogTaskExclusionReason::ContextLockConflict,
         DeferralReason::AwaitingFootprint => BacklogTaskExclusionReason::AwaitingFootprint,
         DeferralReason::AwaitingExclusiveSlot => BacklogTaskExclusionReason::AwaitingExclusiveSlot,
-        DeferralReason::PerfLaneBusy => BacklogTaskExclusionReason::PerfLaneBusy,
+        // [ORB-26479] `FootprintWave` never defers on the perf lane; only
+        // `select_admissions` does, so no ship exclusion carries it.
+        DeferralReason::PerfLaneBusy => {
+            unreachable!("the footprint wave never defers on the perf lane")
+        }
     };
     BacklogTaskExclusion {
         id: deferred.task_id,
