@@ -779,6 +779,66 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["signals"], [])
         self.assertEqual(report["bump"], "patch")
 
+    def _write_sibling_conditional_baseline(self, first_then):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {
+            "type": "object",
+            "allOf": [
+                {"if": {"required": ["a"]}, "then": first_then},
+                {"if": {"required": ["b"]}, "then": {}},
+            ],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add sibling conditionals [ORB-53] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+        return tools
+
+    def test_sibling_selector_does_not_guarantee_edited_then_requirement(self):
+        # `{"b": 0}` was valid; the second arm is selected by `b` alone, so
+        # the first arm's selector on `a` guarantees nothing there.
+        tools = self._write_sibling_conditional_baseline({})
+        tools[0]["inputSchema"]["allOf"][1]["then"] = {"required": ["a"]}
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Require a in the b arm [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(self.signals(report), {
+            ("ORB-54", "mcp-schema",
+             "`orbit_task_show` property `inputSchema[then].a` newly required")})
+        self.assertEqual(report["bump"], "minor")
+
+    def test_false_sibling_then_does_not_mask_edited_then_requirement(self):
+        # The first arm's `false` only rejects requests carrying `a`; `{"b": 0}`
+        # was valid and now lacks `c`.
+        tools = self._write_sibling_conditional_baseline(False)
+        tools[0]["inputSchema"]["allOf"][1]["then"] = {"required": ["c"]}
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Require c in the b arm [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(self.signals(report), {
+            ("ORB-54", "mcp-schema",
+             "`orbit_task_show` property `inputSchema[then].c` newly required")})
+        self.assertEqual(report["bump"], "minor")
+
+    def test_reordering_arms_around_a_false_then_stays_patch(self):
+        tools = self._write_sibling_conditional_baseline(False)
+        tools[0]["inputSchema"]["allOf"].reverse()
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Reorder arms around a false then [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
+    def test_reordered_siblings_with_own_selector_requirement_stay_patch(self):
+        tools = self._write_sibling_conditional_baseline({})
+        arms = tools[0]["inputSchema"]["allOf"]
+        arms[1]["then"] = {"required": ["b"]}
+        arms.reverse()
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Reorder arms and require b under b [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
     def test_help_removal_is_found_when_repo_is_a_subdirectory(self):
         self.repo.write("tools/note.txt", "x\n")
         self.repo.remove(f"{GOLDENS}/task/show.txt")

@@ -886,10 +886,29 @@ def detect_mcp_changes(git, parent, commit, changed):
 
         before_locs = {location(p) for p in before.get("schema_nodes", set())}
         after_locs = {location(p) for p in after_nodes}
-        before_false_locs = {
-            location(p) for p, value in before.get("boolean", {}).items()
+        before_false_raws = {
+            p for p, value in before.get("boolean", {}).items()
             if value is False and not p.endswith("[additionalProperties]")
         }
+        before_false_locs = {location(p) for p in before_false_raws}
+
+        def guarded_arm(raw):
+            """Whether `raw` is a then/else arm that only some instances meet.
+
+            An arm rejects just the instances its own `if` selects it for, so
+            a sibling arm that merges into the same instance location keeps
+            judging the rest. An always-true `if` (for `then`) or an `if` of
+            false (for `else`) selects every instance, so that arm is not
+            guarded.
+            """
+            for arm, selects_all in (("[then]", is_always_true), ("[else]", lambda c: c is False)):
+                if raw.endswith(arm):
+                    cond = before.get("conditionals", {}).get(raw[:-len(arm)])
+                    return cond is not None and not selects_all(cond.get("if"))
+            return False
+
+        unguarded_false_locs = {
+            location(p) for p in before_false_raws if not guarded_arm(p)}
         after_false_locs = {
             location(p) for p, value in after_boolean.items()
             if value is False and not p.endswith("[additionalProperties]")
@@ -969,12 +988,18 @@ def detect_mcp_changes(git, parent, commit, changed):
             """
             if prop in unconditionally_required_in_conditionals(loc):
                 return True
-            if loc.endswith("[then]"):
-                parent_loc = loc[:-len("[then]")]
-                for _, cond in after_conditionals_loc.get(parent_loc, []):
-                    req = selector_required(cond.get("if"))
-                    if req is not None and prop in req:
-                        return True
+            # Each `then` arm is guarded by its own `if` only: a sibling
+            # conditional that selects `prop` says nothing about requests this
+            # arm judges. Every arm that newly demands `prop` must carry it.
+            demanding = [raw for raw, names in after_required_raw.items()
+                         if location(raw) == loc and prop in names]
+            if demanding and all(
+                    raw.endswith("[then]")
+                    and prop in (selector_required(
+                        after_conditionals_raw.get(raw[:-len("[then]")], {}).get("if"))
+                        or set())
+                    for raw in demanding):
+                return True
             for outer, names in before_required.items():
                 if prop not in names or not loc.startswith(outer) or loc == outer:
                     continue
@@ -991,7 +1016,10 @@ def detect_mcp_changes(git, parent, commit, changed):
                     dpath = display_path_for(loc, before.get("boolean", {}))
                     report(f"`{name}` `{dpath}` boolean schema relaxed "
                            "inside oneOf alternative")
-                continue
+                # A sibling arm that shares the location with a guarded false
+                # arm still has its own contract to compare.
+                if loc in unguarded_false_locs or loc not in before_locs:
+                    continue
             if loc not in after_locs and loc not in after_false_locs:
                 if inside_oneof(loc):
                     if loc in before_pn_loc and any(
@@ -1000,7 +1028,10 @@ def detect_mcp_changes(git, parent, commit, changed):
                         report(f"`{name}` `{dpath}[propertyNames]` propertyNames "
                                "constraint removed inside oneOf alternative")
                 continue
-            if loc in after_false_locs:
+            if loc in after_false_locs and (
+                    loc not in before_false_locs
+                    or any(location(raw) == loc and raw not in before_false_raws
+                           for raw, value in after_boolean.items() if value is False)):
                 dpath = display_path_for(loc, before.get("schema_nodes", {}), after_boolean)
                 report(f"`{name}` `{dpath}` schema tightened to false")
                 continue
@@ -1215,10 +1246,11 @@ def detect_mcp_changes(git, parent, commit, changed):
 
         translated_after = dict(after)
         translated_after["required"] = translated_facts(after.get("required", {}), path_map, unmatched)
+        after_required_raw = translated_after["required"]
         after_required = required_by_location(translated_after)
 
         for loc in sorted(set(before_conditionals_loc) | set(after_conditionals_loc)):
-            if loc in before_false_locs:
+            if loc in unguarded_false_locs:
                 continue
             old_list = list(before_conditionals_loc.get(loc, []))
             new_list = list(after_conditionals_loc.get(loc, []))
@@ -1306,7 +1338,7 @@ def detect_mcp_changes(git, parent, commit, changed):
             if path in after_properties:
                 removed_properties.append((path, names - after_properties[path]))
         for loc, required in sorted(after_required.items()):
-            if loc in before_false_locs or loc not in before_locs or loc not in after_locs:
+            if loc in unguarded_false_locs or loc not in before_locs or loc not in after_locs:
                 continue
             for prop in sorted(required - before_required.get(loc, set())):
                 if required_by_enclosing_location(loc, prop):
