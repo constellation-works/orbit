@@ -154,6 +154,12 @@ function validateManifest(manifest) {
       fail(source, `app ${app.name}: tokens must be a string array`);
     }
     if (
+      app.widths !== undefined &&
+      (!Array.isArray(app.widths) || app.widths.length === 0 || !app.widths.every((w) => Number.isInteger(w) && w > 0))
+    ) {
+      fail(source, `app ${app.name}: widths must be a non-empty positive integer array`);
+    }
+    if (
       app.setup_timeout_s !== undefined &&
       (!Number.isInteger(app.setup_timeout_s) || app.setup_timeout_s <= 0)
     ) {

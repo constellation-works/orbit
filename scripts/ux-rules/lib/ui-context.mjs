@@ -18,6 +18,7 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 export const FROZEN_INSTANT = "2026-01-01T12:00:00.000Z";
+export const DEFAULT_UI_WIDTHS = [1440, 1000, 768, 375];
 const ANIMATION_OFF =
   "*,*::before,*::after{animation:none !important;transition:none !important;caret-color:transparent !important}";
 
@@ -58,16 +59,23 @@ export function uiResultOf(rule, target, status, fields = {}) {
   };
 }
 
+function resolveTargetWidths(ruleWidths, appWidths) {
+  if (ruleWidths === undefined) return appWidths ?? DEFAULT_UI_WIDTHS;
+  if (ruleWidths.length <= 1 || !Array.isArray(appWidths)) return ruleWidths;
+  const merged = [...new Set([...appWidths, ...ruleWidths])];
+  return merged.sort((left, right) => right - left);
+}
+
 export function expandTargets(rule, manifests) {
   const wanted = rule.targets ?? {};
   const viewsWanted = wanted.views ?? "*";
-  const widths = wanted.widths ?? [1440];
   const states = wanted.states ?? ["default"];
   const targets = [];
   for (const manifest of manifests) {
     for (const view of manifest.views) {
       if (viewsWanted !== "*" && !viewsWanted.includes(view.id)) continue;
       const app = manifest.apps[view.app];
+      const widths = resolveTargetWidths(wanted.widths, app.widths);
       const viewWidths = view.responsive === false ? widths.slice(0, 1) : widths;
       for (const width of viewWidths) {
         for (const theme of app.themes) {

@@ -216,13 +216,18 @@
   .rail .tabs {
     flex: 0 1 auto;
     min-height: 0;
+    gap: 1px;
     overflow-x: hidden;
     overflow-y: auto;
     scroll-padding-block: 4px;
     scrollbar-width: thin;
   }
-  .rail-group { flex: 0 0 auto; min-height: 0; }
-  .rail-group:has(> .rail-subtabs:not(.dimmed)) { flex: 0 1 auto; }
+  /* Flatten groups into `.tabs` so fixed labels and tabs never crush or
+     overlap sibling groups: only the open `.rail-subtabs` shrinks, down to
+     its min-height, and `.tabs` scrolls vertically once all fixed items
+     exceed the viewport height (such as 800x600). */
+  .rail-group { display: contents; }
+  .rail-group + .rail-group > .rail-group-label { margin-top: 11px; }
   .rail-group > .rail-group-label, .rail-group > .tab { flex: 0 0 auto; }
   .rail-subtabs:not(.dimmed) {
     flex: 0 1 auto;
@@ -258,7 +263,8 @@
    windows keep the spacing above. */
 @media (min-width: 761px) and (max-height: 800px) {
   .shell > .rail { padding: 8px 12px 6px; }
-  .shell > .rail .tabs { gap: 6px; margin-top: 6px; margin-bottom: 4px; }
+  .shell > .rail .tabs { gap: 1px; margin-top: 6px; margin-bottom: 4px; }
+  .shell > .rail .rail-group + .rail-group > .rail-group-label { margin-top: 5px; }
   .shell > .rail .rail-group-label { padding-bottom: 2px; }
   .shell > .rail .rail-foot { gap: 4px; padding-top: 4px; padding-bottom: 4px; }
   .shell > .rail .rail-subtabs:not(.dimmed) { min-height: 64px; }

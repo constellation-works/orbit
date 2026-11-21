@@ -61,7 +61,8 @@
 
 .settings-icon-btn {
   display: inline-flex; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0;
-  border: 1px solid var(--border-strong); border-radius: 7px; background: var(--bg-control); color: var(--fg-soft); cursor: pointer;
+  border: 1px solid var(--border-strong); border-radius: 7px; background: var(--bg-control); color: var(--fg-soft);
+  font: 12.5px/1 var(--font-sans); cursor: pointer;
 }
 .settings-icon-btn:hover { color: var(--fg-strong); border-color: var(--fg-disabled); }
 .settings-reload { margin-left: 6px; }
