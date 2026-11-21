@@ -90,7 +90,7 @@ The design rule is that every `border-radius` declaration uses one of the six st
 | `--radius-xs` | `4px` | Badges, tags, skeleton rows, compact inline markers (covers `3px`–`5px`) |
 | `--radius-sm` | `6px` | Buttons, text inputs, segments, small nested wells (covers `5px`–`7px`, snapping `7px` controls) |
 | `--radius` | `8px` | Stat tiles, segmented-control tracks, selects, inner cards/boxes, top corners of attached tabs (`var(--radius) var(--radius) 0 0`) |
-| `--radius-panel` | `10px` | Panels, top-level cards, dialogs and drawers (covers `10px`–`14px`) |
+| `--radius-panel` | `10px` | Panels, raised content cards, dialogs and drawers (covers `10px`–`14px`) |
 | `--radius-pill` | `999px` | Filter chips, status pills and toggle switches (covers `999px` and `13px`–`16px` capsules) |
 
 ### Text conventions
@@ -128,7 +128,7 @@ A backlog task's readiness dot, the Backlog card's readiness bar and its legend 
 
 ### Structural Rules
 - **Keyboard focus:** Every focusable control uses a `2px solid var(--accent)` outline under `:focus-visible`, including filters and task-action textareas. Outline offsets may move the ring inside a clipped row or outside a control.
-- **Radii:** Defined by the [Radius Scale](#radius-scale): `--radius-panel` (`10px`) for panels, cards and dialogs; `--radius` (`8px`) for stat tiles, segmented-control tracks and selects; `--radius-sm` (`6px`) for buttons, inputs and segments; `--radius-xs` (`4px`) for badges and tags; `--radius-2xs` (`2px`) for bars and swatches; and `--radius-pill` (`999px`) for filter chips and pills (`50%` for 1:1 status dots).
+- **Radii:** Defined by the [Radius Scale](#radius-scale): `--radius-panel` (`10px`) for panels, raised cards and dialogs; `--radius` (`8px`) for content cards, stat tiles, segmented-control tracks and selects; `--radius-sm` (`6px`) for buttons, inputs and segments; `--radius-xs` (`4px`) for badges and tags; `--radius-2xs` (`2px`) for bars and swatches; and `--radius-pill` (`999px`) for filter chips and pills (`50%` for 1:1 status dots).
 - **Density:** Tight and uniform via the [Spacing Scale](#spacing-scale) (e.g., `--space-14` `--space-16` or `--space-12` `--space-16` for panel headers, `--space-8` gaps between controls), while text breathes at `--text-base` / `1.5` line height.
 - **Animation:** Minimal, purposeful motion. Used primarily for loading indicators (e.g., `pulse-skeleton 1.5s infinite ease-in-out`).
 

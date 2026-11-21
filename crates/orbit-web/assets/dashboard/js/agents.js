@@ -1365,7 +1365,7 @@ function ownUnitText() {
 }
 
 function rolePanelNode(panel) {
-  const node = el("section", { class: `agents-role-panel agents-role-panel-${role}`, "aria-label": panel.title }, [
+  const node = el("section", { class: `card card-dense agents-role-panel agents-role-panel-${role}`, "aria-label": panel.title }, [
     el("header", { class: "agents-role-panel-head" }, [
       el("h3", { text: panel.title }),
       ...(panel.hint ? [common.pinnedInfoHint(panel.hint({ scorecard }))] : []),

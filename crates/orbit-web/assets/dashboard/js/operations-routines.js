@@ -486,7 +486,7 @@ function routineRow(payload, routine, workspaceId) {
   const breaker = trippedBreaker(routine);
   const detailsKey = `routine:${routine.name}`;
   const nextAt = routineNextAt(routine);
-  const card = el("article", { class: `operation-card operation-row routine-card ${state}` });
+  const card = el("article", { class: `operation-row routine-card ${state}` });
   const identity = el("div", { class: "operation-identity" }, [
     el("strong", { text: routine.name }),
     state === "blocked" ? el("span", { class: "operation-state blocked", text: "blocked" }) : null,

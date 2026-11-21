@@ -10,10 +10,7 @@
   margin: 0; padding: var(--space-10) var(--space-16); border-bottom: 1px solid var(--hair);
   color: var(--fg-dim); font-size: var(--text-sm); background: var(--bg);
 }
-.plugin-card {
-  border: 1px solid var(--border); border-radius: var(--radius-2xs); background: var(--bg-elev);
-  padding: var(--space-12); display: flex; flex-direction: column; gap: var(--space-10); min-width: 0;
-}
+.plugin-card { display: flex; flex-direction: column; gap: var(--space-10); }
 
 /* Disabled and missing state is conveyed by its status and diagnostic; keep
    the card text at full contrast so the state remains readable. */
@@ -66,7 +63,6 @@
   color: var(--accent); font-size: var(--text-sm); text-decoration: none;
 }
 .plugin-link-tile:hover { border-color: var(--accent); color: var(--accent-hover); }
-.plugin-panel { border: 1px solid var(--hair); border-radius: var(--radius-2xs); background: var(--bg); min-width: 0; }
 .plugin-panel-head {
   display: flex; gap: var(--space-8); align-items: baseline; justify-content: space-between;
   padding: var(--space-6) var(--space-10); border-bottom: 1px solid var(--hair);

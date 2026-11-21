@@ -277,7 +277,7 @@ function ladderNode(payload, ladder) {
     toggle.addEventListener("click", () => { rankedOpen = !rankedOpen; updateToggle(); });
   }
   const empty = ladder.bands.length ? null : el("p", { class: "agents-rank-note", text: "No model has passed the evidence gate yet." });
-  const node = el("section", { class: "agents-rank-board", "aria-label": "Model ranking" }, [
+  const node = el("section", { class: "card card-flush agents-rank-board", "aria-label": "Model ranking" }, [
     empty || wrap,
     toggle,
     legendNode(payload),
@@ -508,7 +508,7 @@ function pendingNode(payload, pending) {
   };
   updateToggle();
   toggle.addEventListener("click", () => { pendingOpen = !pendingOpen; updateToggle(); });
-  const node = el("section", { class: "agents-rank-box agents-rank-notranked", "aria-label": "Not ranked" }, [toggle, content]);
+  const node = el("section", { class: "card agents-rank-box agents-rank-notranked", "aria-label": "Not ranked" }, [toggle, content]);
   node.dataset.key = "notranked";
   node.dataset.hash = JSON.stringify([pending, rules, disclosureScope, pendingOpen]);
   return node;
@@ -528,7 +528,7 @@ function notScoredNode(payload) {
       el("span", { class: "agents-num", text: rankFormat.num(count, 0) }),
     ])))
     : el("p", { class: "agents-rank-note", text: "Every problem in this window was charged to a model." });
-  const node = el("section", { class: "agents-rank-box agents-rank-unscored", "aria-label": "Not scored" }, [
+  const node = el("section", { class: "card agents-rank-box agents-rank-unscored", "aria-label": "Not scored" }, [
     el("div", { class: "agents-rank-box-head" }, [
       el("h3", {}, ["Not scored ", el("span", { class: "agents-rank-box-count", text: rankFormat.plural(notScored.count || 0, "problem") })]),
       el("span", {

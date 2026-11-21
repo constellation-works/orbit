@@ -832,7 +832,7 @@ function recoverTargets(claim) {
 function buildClaimActions(claim, capabilities, handlers) {
   const handoff = claim.handoff;
   const authority = (handoff && handoff.authority) || {};
-  const row = el("section", { class: "claim-actions" });
+  const row = el("section", { class: "card claim-actions" });
   row.setAttribute("aria-label", "Owner actions");
 
   // Every control in this card, so one in-flight decision can lock them all

@@ -111,12 +111,12 @@ function emptyFieldView(text) {
 }
 
 export function taskMarkdownPanel(content) {
-  return el("div", { class: "task-markdown-panel" }, [content]);
+  return el("div", { class: "card card-raised task-markdown-panel" }, [content]);
 }
 
 // Numbered, because criteria are cited by number ("criterion 3 is met").
 function buildCriteriaList(criteria) {
-  const ul = el("ol", { class: "ac-list" });
+  const ul = el("ol", { class: "card card-raised card-flush ac-list" });
   for (const ac of criteria) {
     const rendered = renderMarkdownInline(ac);
     if (rendered !== null) {

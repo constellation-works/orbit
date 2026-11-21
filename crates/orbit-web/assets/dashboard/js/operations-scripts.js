@@ -120,7 +120,7 @@ function scriptCard(payload, script) {
         el("span", { class: "script-fact-value", text: `${request.id} on ${request.task_id}: ${request.summary || request.question || ""}` }),
       ])
     : null;
-  return el("article", { class: "script-card", "aria-label": `Script ${script.name}` }, [
+  return el("article", { class: "card card-dense script-card", "aria-label": `Script ${script.name}` }, [
     el("header", { class: "script-card-head" }, [
       el("span", { class: "script-name", text: script.name }),
       state,

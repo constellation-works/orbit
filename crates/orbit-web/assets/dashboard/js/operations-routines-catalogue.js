@@ -70,7 +70,7 @@ export function createRoutineCatalogue({ payload, routines, workspaceId, renderR
       }));
       let container = group;
       if (kind === "paused") {
-        container = el("details", { class: "operation-group routine-paused" });
+        container = el("details", { class: "card card-flush operation-group routine-paused" });
         container.open = routineList.pausedOpen;
         const summary = el("summary", { class: "operation-group-head" });
         summary.dataset.routineFocus = "paused";

@@ -194,7 +194,7 @@ function buildArtifactPreview(artifact, response) {
 const ARTIFACTS_PAGE_SIZE = 25;
 
 export function buildArtifacts(task) {
-  const wrap = el("div", { class: "artifacts" });
+  const wrap = el("div", { class: "card card-raised card-flush artifacts" });
   const units = [];
   for (const [index, artifact] of task.artifacts.entries()) {
     const path = String(artifact.path || "");

@@ -189,8 +189,6 @@ tr.audit-detail-row td {
 
 /* Hotspots: one table, a shaded cell per signal. The table scrolls sideways
    inside its box on a narrow screen. */
-.codebase-hot,
-.codebase-box { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-panel); }
 .codebase-hot { overflow: hidden; }
 .codebase-hot-scroll { overflow-x: auto; }
 .codebase-hot-table { width: 100%; border-collapse: collapse; }
@@ -415,21 +413,11 @@ td.codebase-empty { padding: var(--space-16) var(--space-14); }
 }
 
 /* Audit & Diagnostics Summary Cards */
-.audit-summary-card {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  overflow: hidden;
-  container-type: inline-size;
-  flex-shrink: 0;
-}
+.audit-summary-card { overflow: hidden; container-type: inline-size; flex-shrink: 0; }
 .audit-summary-card .card-title {
   padding: var(--space-10) var(--space-12);
   border-bottom: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.02);
-}
-.audit-summary-card .card-body {
-  padding: 0;
 }
 .audit-summary-card.lifecycle-failure-card .card-body {
   padding: var(--space-10) var(--space-12);
@@ -513,20 +501,10 @@ td.codebase-empty { padding: var(--space-16) var(--space-14); }
   flex-wrap: wrap;
   gap: var(--space-12);
 }
-.health-card {
-  flex: 1 1 240px;
-  min-width: 0;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  padding: var(--space-12) var(--space-14);
-  transition: border-color 120ms ease, background 120ms ease;
-}
-.health-card.critical { border-top: 3px solid #f44336; }
-.health-card.warning  { border-top: 3px solid #ff9800; }
-.health-card.normal   { border-top: 3px solid var(--border); }
-.health-card.clickable { cursor: pointer; }
-.health-card.clickable:hover { border-color: var(--accent); background: rgba(110, 159, 255, 0.04); }
+.health-card { flex: 1 1 240px; }
+.health-card.critical { border-top: 3px solid var(--state-failed); }
+.health-card.warning  { border-top: 3px solid var(--warn-fg); }
+.health-card.normal   { border-top-width: 3px; }
 .health-card .card-header {
   display: flex;
   justify-content: space-between;
@@ -554,8 +532,8 @@ td.codebase-empty { padding: var(--space-16) var(--space-14); }
   background: rgba(255, 255, 255, 0.04);
   white-space: nowrap;
 }
-.health-card.critical .status-badge { color: #ef5350; }
-.health-card.warning  .status-badge { color: #ffb74d; }
+.health-card.critical .status-badge { color: var(--state-failed); }
+.health-card.warning  .status-badge { color: var(--warn-fg); }
 .health-card.normal   .status-badge { color: var(--fg-dim); }
 .health-card .metric-trend {
   font-family: var(--font-sans);

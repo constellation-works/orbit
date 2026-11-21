@@ -87,7 +87,7 @@ function bindLivePanelBodies(root) {
 }
 
 function pluginCard(plugin) {
-  const card = el('div', { class: `plugin-card plugin-${plugin.status}` });
+  const card = el('div', { class: `card card-dense plugin-card plugin-${plugin.status}` });
   card.dataset.key = plugin.name;
   // A card renders the listing's metadata, not just version and enablement.
   // Pins, sandbox status, tool activation and manifest labels may change while
@@ -281,7 +281,7 @@ async function changePlugin(plugin, scope, action, section) {
 
 function panelNode(plugin, panel) {
   const key = panelKey(plugin, panel);
-  const node = el('section', { class: `plugin-panel plugin-panel-${panel.group}` });
+  const node = el('section', { class: `card card-flush plugin-panel plugin-panel-${panel.group}` });
   node.dataset.panel = key;
   node.appendChild(el('header', { class: 'plugin-panel-head' }, [
     el('span', { class: 'plugin-panel-title', text: panel.title || panel.id }),

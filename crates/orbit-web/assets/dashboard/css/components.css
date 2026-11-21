@@ -37,13 +37,40 @@ th,
 }
 .section-title::first-letter { text-transform: uppercase; }
 
-.panel {
+/* A distinct item inside a view. Flush cards let headers, rows and tables
+   own their insets. Keep overflow local to the content that needs it. */
+.panel, .card, :where(.card-groups) > [data-group] {
+  min-width: 0;
   background: var(--bg-elev);
   border: 1px solid var(--border);
-  border-radius: var(--radius-panel);
-  overflow: hidden;
-  min-width: 0;
 }
+.card { padding: var(--space-16); border-radius: var(--radius); }
+@media (max-width: 600px) {
+  .card { padding: var(--space-12); }
+}
+.card-dense { padding: var(--space-10) var(--space-12); }
+.card-flush { padding: 0; }
+.card-raised { background: var(--bg-control); border-radius: var(--radius-panel); }
+
+.card:is(button, [role="button"]) { cursor: pointer; }
+.card:is(button, [role="button"]):hover { border-color: var(--accent); }
+.card:is(button, [role="button"]):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Grouped lists keep rows as siblings for keyboard navigation and sticky
+   headings. Draw one frame around the group without changing row heights. */
+:where(.card-groups) > [data-group] { border-block-width: 0; }
+.card-groups > .group-header {
+  border-top-width: 1px;
+  border-top-left-radius: var(--radius);
+  border-top-right-radius: var(--radius);
+}
+.card-groups > .group-end {
+  box-shadow: inset 0 -1px 0 var(--border);
+  border-bottom-left-radius: var(--radius);
+  border-bottom-right-radius: var(--radius);
+}
+
+.panel { border-radius: var(--radius-panel); overflow: hidden; }
 
 .panel > header {
   padding: var(--space-14) var(--space-16);

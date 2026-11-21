@@ -43,7 +43,7 @@ export function disclosedDecisions(task) {
 // is rebuilt, until it is dismissed or it expires. The option id stays the
 // submitted key.
 export function buildDecisionCard(task, request, detail, context) {
-  const card = el("div", { class: "decision-card" });
+  const card = el("div", { class: "decision-fields" });
   card.dataset.key = `decision-${task.id}-${request.id}`;
   card.dataset.requestId = request.id;
   if (request.summary) card.appendChild(el("p", { class: "decision-summary", text: request.summary }));
@@ -105,13 +105,13 @@ export function buildDecisionCard(task, request, detail, context) {
 // without losing evidence or freezing its task data. A removed/answered card
 // or a navigation away has no counterpart and naturally retires the draft.
 export function retainDecisionNotes(container) {
-  const drafts = new Map(Array.from(container.querySelectorAll(".decision-card"))
+  const drafts = new Map(Array.from(container.querySelectorAll(".decision-fields"))
     .map(card => {
       const note = card.querySelector(".decision-note");
       return [card.dataset.key, note ? { value: note.value, selection: document.activeElement === note ? [note.selectionStart, note.selectionEnd] : null } : null];
     }));
   return () => {
-    for (const card of container.querySelectorAll(".decision-card")) {
+    for (const card of container.querySelectorAll(".decision-fields")) {
       const note = card.querySelector(".decision-note");
       const draft = drafts.get(card.dataset.key);
       if (note && draft) {
@@ -126,7 +126,7 @@ export function retainDecisionNotes(container) {
 // retire their answer controls and notes inside that retained node.
 export function retireClosedDecisionCards(container, task) {
   const open = new Set(openDecisions(task).map(request => request.id));
-  for (const card of container.querySelectorAll(".decision-card")) {
+  for (const card of container.querySelectorAll(".decision-fields")) {
     if (!open.has(card.dataset.requestId)) card.remove();
   }
 }
@@ -179,7 +179,7 @@ export function buildAnsweredDecisions(task) {
 export function buildOpenDecisions(task, detail, context) {
   const wrap = el("div", { class: "decision-requests" });
   for (const request of disclosedDecisions(task)) {
-    const row = el("div", { class: "decision-request" });
+    const row = el("div", { class: "card card-dense decision-request" });
     row.appendChild(el("div", {
       text: `${request.gate} decision needed (${request.id}), expires ${request.expires_at}`,
     }));
@@ -296,7 +296,7 @@ async function answerDecision(task, detail, requestId, answer, note, btnNode, co
   taskShared.taskState.decisionAnswerRefusals.delete(flightKey);
   // Disable every option on this card (and its note), not just the clicked
   // one, for the whole flight — the pattern the detail's other actions use.
-  const card = btnNode.closest(".decision-card");
+  const card = btnNode.closest(".decision-fields");
   const prior = card ? card.querySelector(".decision-answer-refusal") : detail.querySelector(".decision-answer-refusal");
   if (prior) prior.remove();
   const controls = card

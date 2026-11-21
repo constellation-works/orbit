@@ -146,30 +146,8 @@ main.tasks-layout > .controls {
 #task-filter .chip-quiet { border-style: dashed; }
 #task-filter .chip-quiet.active { border-style: solid; }
 
-/* Each status group is a card. The list's nodes stay siblings (rows, the
-   readiness strip, notes), so the card is drawn per node: the head has the
-   top edge, every node inside has the sides, and the node marked `group-end`
-   closes it. The closing edge is an inset shadow, not a border, so the last
-   row is as tall as the others. */
-#tasks-body > .group-header,
-#tasks-body > .group-readiness,
-#tasks-body > .row,
-#tasks-body > .group-empty,
-#tasks-body > .group-more {
-  background: var(--bg-elev);
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
-}
-#tasks-body > .group-header {
-  margin-top: var(--space-16);
-  border-top: 1px solid var(--border);
-  border-radius: var(--radius-panel) var(--radius-panel) 0 0;
-}
+#tasks-body > .group-header { margin-top: var(--space-16); }
 #tasks-body > :first-child { margin-top: 0; }
-#tasks-body > .group-end {
-  box-shadow: inset 0 -1px 0 var(--border);
-  border-radius: 0 0 var(--radius-panel) var(--radius-panel);
-}
 
 /* The card head: status dot, title and count, the hint on the right. */
 .group-header {

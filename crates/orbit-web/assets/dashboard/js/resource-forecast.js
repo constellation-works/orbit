@@ -208,7 +208,7 @@ function headerLine() {
 }
 
 function settingCard(label, value, note, extra = null) {
-  return el("div", { class: "rf-setting" }, [
+  return el("div", { class: "card rf-setting" }, [
     el("div", { class: "rf-setting-label", text: label }),
     value,
     extra,
@@ -240,7 +240,7 @@ function settingsCards() {
     settingCard("Mode", modeValue, modeNote, pills),
     settingCard("Host capacity", el("div", { class: "rf-setting-value mono", text: measured ? `${cpu} cores · ${(memory / GIB).toFixed(0)} GiB` : "Not measured" }), "This host, where admission runs"),
     settingCard("Admit thresholds", el("div", { class: "rf-setting-value mono", text: `CPU ${admitCpu}% · Mem ${admitMemory}%` }), limits),
-    el("div", { class: "rf-setting rf-live" }, [el("div", { class: "rf-setting-label", text: "Live baseline" }), live]),
+    el("div", { class: "card rf-setting rf-live" }, [el("div", { class: "rf-setting-label", text: "Live baseline" }), live]),
   ]);
 }
 
@@ -406,7 +406,7 @@ function worstMiss(offsets, resource) {
 function missLine(label, worst, format) {
   if (!worst) return null;
   const { miss, offset } = worst;
-  return el("div", { class: "rf-miss" }, [
+  return el("div", { class: "card card-dense rf-miss" }, [
     el("div", { class: "rf-setting-label", text: `${label} at +${offset}m` }),
     el("div", { class: "mono rf-miss-text" }, [
       `${format(miss.error, true)} · forecast ${format(miss.forecast)}, measured ${format(miss.measured)} · ${formatDateTime(miss.minute_at)} · `,

@@ -550,7 +550,7 @@ export function buildTaskDetail(task, context, drain = null) {
   // Criteria the delivery owes until the deployed build is measured; an
   // operator records each with a `post-deploy: met|failed <N>` comment.
   // The folded sections read as one group of disclosure rows.
-  const disclosures = el("div", { class: "detail-disclosures" });
+  const disclosures = el("div", { class: "card card-raised card-flush detail-disclosures" });
   // ORB-23322: the `completion.hold` rule that kept a `--complete` run's task
   // in review, with what it matched and the run it held.
   if (task.completion_hold && typeof task.completion_hold === "object") {
@@ -853,7 +853,7 @@ function renderTaskRuns(node, task, context) {
     if (load.items && load.items.length === 0) {
       children.push(el("p", { class: "field-empty", text: "No runs recorded for this task." }));
     } else if (load.items) {
-      const list = el("ul", { class: "task-run-list" });
+      const list = el("ul", { class: "card card-raised card-flush task-run-list" });
       for (const run of load.items) list.appendChild(buildTaskRun(run, task));
       children.push(list);
       if (load.total > load.items.length) {

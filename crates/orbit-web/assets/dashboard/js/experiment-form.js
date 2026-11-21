@@ -675,7 +675,7 @@ function rolePicker(roles, label) {
 function formView(state) {
   const fields = state.fields;
   const title = state.mode === "create" ? "New experiment" : `Edit draft ${state.original?.name || state.id}`;
-  const root = el("form", { class: "mx-card exf", "aria-label": title });
+  const root = el("form", { class: "card mx-card exf", "aria-label": title });
   root.dataset.key = "experiment-form";
   root.noValidate = true;
   root.setAttribute("aria-busy", String(state.pending));
@@ -760,7 +760,7 @@ function armView(state, arm, index) {
     state.errors = {};
     rerender();
   }, "exf-remove");
-  const card = el("section", { class: "exf-arm", "aria-label": `Arm ${index + 1}` }, [
+  const card = el("section", { class: "card card-dense exf-arm", "aria-label": `Arm ${index + 1}` }, [
     el("div", { class: "exf-arm-head" }, [
       el("span", { class: "stat-tile-tag", text: arm.control ? "control" : "treatment" }),
       remove,

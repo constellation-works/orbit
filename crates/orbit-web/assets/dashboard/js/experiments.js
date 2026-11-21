@@ -311,7 +311,7 @@ function listItem(experiment, authoring) {
   if (experiment.forced) extras.push(`${pluralCount(experiment.forced, "forced assignment")} left out`);
   if (experiment.excluded) extras.push(`${experiment.excluded} excluded for a surface conflict`);
   if (experiment.concluded_arm) extras.push(`concluded with ${experiment.concluded_arm}`);
-  return el("article", { class: "mx-card ex-item", role: "listitem" }, [
+  return el("article", { class: "card mx-card ex-item", role: "listitem" }, [
     el("div", { class: "ex-item-head" }, [
       experimentLink(experiment.id, [experiment.name || experiment.id], "ex-item-name"),
       el("span", { class: "ex-badges" }, [
@@ -328,7 +328,7 @@ function listItem(experiment, authoring) {
 }
 
 function missingView(payload) {
-  return el("section", { class: "mx-card ex-card ex-missing", role: "alert" }, [
+  return el("section", { class: "card mx-card ex-card ex-missing", role: "alert" }, [
     el("div", { class: "mx-empty ex-empty" }, [
       el("div", { class: "mx-empty-title", text: "Experiment not found" }),
       el("div", { class: "mx-empty-detail", text: payload.message || `No experiment ${payload.id} in this workspace.` }),
@@ -384,7 +384,7 @@ function retryButton(view) {
 // A tab that needs the readout, before it has one.
 function readoutPlaceholder(title, view) {
   if (view.error) {
-    return el("section", { class: "mx-card ex-card ex-readout-state ex-readout-error", role: "alert", "aria-label": title }, [
+    return el("section", { class: "card mx-card ex-card ex-readout-state ex-readout-error", role: "alert", "aria-label": title }, [
       el("div", { class: "mx-empty ex-empty" }, [
         el("div", { class: "mx-empty-title", text: "The readout could not be loaded" }),
         el("div", { class: "mx-empty-detail", text: view.error }),
@@ -392,7 +392,7 @@ function readoutPlaceholder(title, view) {
       ]),
     ]);
   }
-  return el("section", { class: "mx-card ex-card ex-readout-state ex-readout-loading", role: "status", "aria-label": title, "aria-busy": "true" }, [
+  return el("section", { class: "card mx-card ex-card ex-readout-state ex-readout-loading", role: "status", "aria-label": title, "aria-busy": "true" }, [
     experimentEmpty("Reading results…", "The readout covers every enrolled task, so it can take a while on a large workspace."),
   ]);
 }
@@ -522,7 +522,7 @@ function headerCard(experiment, view, primary) {
     readout ? `As of ${formatDateTime(readout.as_of)}.` : null,
   ].filter(Boolean);
   const promotion = concluded?.detail?.promotion_task;
-  return el("section", { class: "mx-card ex-card ex-head", "aria-label": "Experiment" }, [
+  return el("section", { class: "card mx-card ex-card ex-head", "aria-label": "Experiment" }, [
     experimentLink(null, ["All experiments"], "ex-back"),
     el("div", { class: "ex-item-head" }, [
       el("h2", { class: "ex-title" }, [

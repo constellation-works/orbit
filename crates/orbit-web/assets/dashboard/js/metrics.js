@@ -448,7 +448,7 @@ function trendSection() {
     seriesCards(model.cards),
     model.empty ? emptyTrend(model.empty) : (view.mode === "table" ? trendTable(model.table) : trendChart(model.chart)),
   ]);
-  return el("section", { class: "mx-card mx-trends", "aria-label": "Trends" }, [
+  return el("section", { class: "card mx-card mx-trends", "aria-label": "Trends" }, [
     el("div", { class: "mx-trend-head" }, [trendTabs(), tools]),
     panel,
   ]);

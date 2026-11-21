@@ -825,7 +825,7 @@ function renderFrictionDetail(friction, detail = $("friction-detail")) {
 
   const body = el("div", { class: "knowledge-detail-body" }, [
     el("aside", { class: "knowledge-side" }, [
-      el("div", { class: "task-delivery-card knowledge-meta-card" }, rows),
+      el("div", { class: "card card-flush card-raised task-delivery-card knowledge-meta-card" }, rows),
     ]),
     el("div", { class: "knowledge-body" }, [
       markdownPanel(friction.body || friction.title, "friction-detail-body"),

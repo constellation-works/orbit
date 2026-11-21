@@ -57,7 +57,7 @@ td .rel-rate { font-size: var(--text-sm); }
   display: flex; justify-content: space-between;
 }
 .rel-table { width: 100%; }
-.rel-card .card-body { padding: 0; overflow-x: auto; }
+.rel-card .card-body { overflow-x: auto; }
 /* ORB-19694 — bounded attribution tables. The footer states how many of the
    ordered rows are visible and holds the Show all / Show top toggle, so the
    initial card stays short while every row remains one gesture away. */
@@ -580,11 +580,7 @@ td .rel-rate { font-size: var(--text-sm); }
 .mx-s-c7 { --mx-c: #9085e9; }
 .mx-s-crew-other { --mx-c: #4a525d; }
 .mx-muted { color: var(--fg-mute); }
-.mx-card {
-  display: flex; flex-direction: column; gap: var(--space-12); min-width: 0;
-  background: var(--bg-elev); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: var(--space-16) var(--space-16);
-}
+.mx-card { display: flex; flex-direction: column; gap: var(--space-12); }
 .mx-row { display: flex; flex-wrap: wrap; gap: var(--space-16); align-items: stretch; }
 .mx-row > .mx-wide { flex: 2 1 520px; }
 .mx-row > .mx-narrow { flex: 1 1 300px; }
@@ -603,7 +599,7 @@ td .rel-rate { font-size: var(--text-sm); }
 .mx-table-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* Trend tabs, statistic and view toggles. */
-.mx-trends { gap: var(--space-16); padding-top: var(--space-4); }
+.mx-trends { gap: var(--space-16); }
 .mx-trend-head {
   display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end;
   gap: var(--space-8) var(--space-12); border-bottom: 1px solid var(--border);
@@ -831,7 +827,6 @@ td .rel-rate { font-size: var(--text-sm); }
 
 @media (max-width: 600px) {
   .panel > .body.metrics-body { padding: var(--space-10); gap: var(--space-12); }
-  .mx-card { padding: var(--space-12); }
   .mx-chart-body { gap: var(--space-6); }
   .mx-y-wrap { flex-basis: 32px; }
   .mx-notes { padding-left: 0; }

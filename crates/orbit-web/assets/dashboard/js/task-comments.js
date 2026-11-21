@@ -312,7 +312,7 @@ function buildCommentCard(task, comment, index) {
   const titles = pilotLine || resident ? [] : commentSections(message);
   const long = !pilotLine && !resident && commentIsLong(message);
 
-  const card = el("article", { class: "comment-card" });
+  const card = el("article", { class: "card card-dense card-raised comment-card" });
   card.id = commentAnchorId(task.id, index);
   card.dataset.commentKey = key;
 
@@ -387,13 +387,10 @@ function buildCommentCard(task, comment, index) {
   const apply = () => {
     const expanded = !long || taskState.expandedComments.has(key);
     const showsRaw = rawComments.has(key);
-    card.className = [
-      "comment-card",
-      long ? "long" : "",
-      long && !expanded ? "collapsed" : "",
-      long && expanded ? "expanded" : "",
-      showsRaw ? "raw" : "",
-    ].filter(Boolean).join(" ");
+    card.classList.toggle("long", long);
+    card.classList.toggle("collapsed", long && !expanded);
+    card.classList.toggle("expanded", long && expanded);
+    card.classList.toggle("raw", showsRaw);
     view.style.display = showsRaw ? "none" : "";
     raw.style.display = showsRaw ? "" : "none";
     if (outline) outline.style.display = showsRaw || !expanded ? "none" : "";
