@@ -173,7 +173,9 @@ repository root of the checkout that holds these scripts.
      observation from every arm. When `--parity` is set, that command must exit 0 on
      every arm. When `--http` is set, that probe must return a 2xx status. At least one
      of those observations has to be present, so omitting `--parity` in CLI mode is a
-     missing observation, not an agreement. Identical non-zero exits are a failed probe,
+     missing observation, not an agreement. An explicit `--parity` with no command words
+     (an empty value, or only spaces) is a usage error, so it cannot stand in for an
+     omitted one. Identical non-zero exits are a failed probe,
      not a match, even when stdout is empty on every arm. JSON outputs are compared after
      the `--parity-mask` fields (key names at any depth, or dotted paths) are removed and
      the root path is replaced by `<root>`. A missing observation, a failed probe or a
@@ -372,6 +374,7 @@ Tasks land in `proposed`. Do not approve them.
 | `… built identical binaries …` | The two revisions differ only in metadata | Pick revisions whose content differs |
 | `base and candidate resolve to the same commit …` | Same commit given twice | Check the revision selectors |
 | `parity mismatch between arms …` | An arm has no successful observation (missing `--parity` in CLI mode, or a probe that did not exit 0 / return 2xx), or outputs differ after masking | Read `parity.json` (`observation_failures` and `differing_arms`); fix the probe or the behaviour change, or mask only a timing field |
+| `paired.py: error: --parity takes an orbit command …` | `--parity` given with no command words (an empty variable, say) | Pass the command, or leave `--parity` out |
 | `<arm> parity command timed out after <n> s …` / `<arm> round <r> sample <i> timed out …` | An arm command stalled past `--command-timeout` | Find why it hangs on the fixture, or raise `--command-timeout` for a genuinely slow surface |
 | `<arm> … wrote more than <n> bytes of stdout …` | An arm command's output passed `--output-limit-bytes` | Pick a smaller probe, or raise `--output-limit-bytes` |
 | `perf lane busy: <holder>` | Another perf run holds the lane | Wait for it, or raise `--lane-wait` |
