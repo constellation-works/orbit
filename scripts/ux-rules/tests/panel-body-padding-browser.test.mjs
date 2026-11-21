@@ -1,6 +1,7 @@
 // Real-browser checks for ui.panel-body-padding. Each case loads the shipped
-// dashboard stylesheet, so the clipped live region is the production rule
-// (components.css `.panel-placeholder.quiet`), not a copy of it. Needs the
+// base and component stylesheets in served order, so the clipped live region is
+// the production rule (components.css `.panel-placeholder.quiet`), not a copy of
+// it, and the `--space-*` tokens it uses resolve from base.css. Needs the
 // browser kit: source its env.sh so PLAYWRIGHT_MODULE is set.
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
@@ -8,8 +9,10 @@ import { fileURLToPath } from "node:url";
 
 import { check } from "../ui/panel-body-padding.mjs";
 
-const COMPONENTS_CSS = fileURLToPath(
-  new URL("../../../crates/orbit-web/assets/dashboard/css/components.css", import.meta.url),
+// Injected in the order `/static/dashboard.css` serves them (base before
+// components), so `--space-*` tokens defined in base.css resolve.
+const DASHBOARD_CSS = ["base.css", "components.css"].map((name) =>
+  fileURLToPath(new URL(`../../../crates/orbit-web/assets/dashboard/css/${name}`, import.meta.url)),
 );
 const ENABLED = Boolean(process.env.PLAYWRIGHT_MODULE);
 const target = {
@@ -40,7 +43,7 @@ async function measure(markup) {
     await page.setContent(
       `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0}p{margin:0}</style></head><body>${markup}</body></html>`,
     );
-    await page.addStyleTag({ path: COMPONENTS_CSS });
+    for (const path of DASHBOARD_CSS) await page.addStyleTag({ path });
     return await check({ page, target });
   } finally {
     await page.close();
