@@ -351,7 +351,7 @@ token = re.compile(
     r'|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")'
     r'|(?P<literal>(?:b|c)?"(?:\\[\s\S]|[^"\\])*"'
     r"|b?'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F_]+\}|[^\n])|[^'\\\n])')"
-    r"|::|[a-zA-Z_][a-zA-Z_0-9]*|\S"
+    r"|::|[^\W\d]\w*|\S"
 )
 block_delimiter = re.compile(r"/\*|\*/")
 
@@ -431,7 +431,7 @@ def inline_module_suffixes(tokens):
     impl and use-tree braces add none, and `mod name;` adds none. This
     tokenizer spells a raw identifier as `r`, `#`, then the name.
     """
-    ident = re.compile(r"[A-Za-z_][A-Za-z0-9_]*$")
+    ident = re.compile(r"[^\W\d]\w*$")
 
     def opened_module(mod_index):
         cursor = mod_index + 1
@@ -730,7 +730,7 @@ token = re.compile(
     r'|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")'
     r'|(?P<literal>(?:b|c)?"(?:\\[\s\S]|[^"\\])*"'
     r"|b?'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F_]+\}|[^\n])|[^'\\\n])')"
-    r"|::|[a-zA-Z_][a-zA-Z_0-9]*|\S"
+    r"|::|[^\W\d]\w*|\S"
 )
 block_delimiter = re.compile(r"/\*|\*/")
 def code_tokens(source):
@@ -822,7 +822,7 @@ for top in upper:
                         k += 1
                     i = k
             i += 1
-identifier = re.compile(r"[a-zA-Z_][a-zA-Z_0-9]*")
+identifier = re.compile(r"[^\W\d]\w*")
 def qualified_type(toks, end):
     """The type that the `::` after `toks[end]` qualifies, or None.
 
@@ -1391,7 +1391,7 @@ token = re.compile(
     r'|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")'
     r'|(?P<literal>(?:b|c)?"(?:\\[\s\S]|[^"\\])*"'
     r"|b?'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F_]+\}|[^\n])|[^'\\\n])')"
-    r"|::|r\#[a-zA-Z_][a-zA-Z_0-9]*|[a-zA-Z_][a-zA-Z_0-9]*|\S"
+    r"|::|r\#[^\W\d]\w*|[^\W\d]\w*|\S"
 )
 block_delimiter = re.compile(r"/\*|\*/")
 
