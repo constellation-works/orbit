@@ -4394,6 +4394,31 @@
         "## 6. Corpus proposal, report and cursor",
         "## Rules and command surfaces"
       ],
+      "digest": "22ec2be900baa47e69c9a811a0188c0e12ce6a6f4dd793711f5103d93a65e655",
+      "revision": "e69d1cb248c6d70d5ff08b82eabfb16065a364a2",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 6 * * *"
+        },
+        "tags": [
+          "pilot-block-patterns"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Collect",
+        "## 3. Group by cause and route to the source",
+        "## 4. Dedupe and file",
+        "## 5. Check earlier fixes",
+        "## 6. Corpus proposal, report and cursor",
+        "## Rules and command surfaces"
+      ],
       "digest": "3612b4950b769818598b2cebcd57b02cadde1ec20aac67abd02aeefffda5a427",
       "revision": "804385f4a48253eeb0269670e6bd4d01d857a8ea",
       "settings": {
