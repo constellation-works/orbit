@@ -206,26 +206,26 @@ export async function check(ctx) {
       if (isOpaque(style)) return true;
       return ["IMG", "VIDEO", "CANVAS", "IFRAME"].includes(el.tagName);
     };
-    const candidates = [];
-    for (const el of H.all("*")) {
-      if (el.tagName === "svg" || el.closest("svg")) continue;
-      if (el.closest("details:not([open]), [hidden]")) continue;
-      if (!ownText(el)) continue;
-      if (H.px(getComputedStyle(el).fontSize) <= 0) continue;
-      candidates.push(el);
-      if (candidates.length >= 150) break;
-    }
-    const failures = []; const rows = [];
-    let samples = 0;
-    // Paint order is stacking order, but elementsFromPoint only returns
-    // hit-testable elements: an opaque `pointer-events: none` overlay
-    // paints over text while never appearing in the stack. Force pointer
-    // events on for the stack reads (paint and layout are unaffected),
-    // then restore the page before returning.
-    const hitStyle = document.createElement("style");
-    hitStyle.textContent = "*,*::before,*::after{pointer-events:auto !important}";
-    (document.head ?? document.documentElement).appendChild(hitStyle);
-    try {
+    // The shell chrome (.topbar and .rail) sits beside the tab panes, not
+    // inside them, so the active pane alone never reaches its text. Each
+    // scope has its own candidate and sample budget, so a dense pane cannot
+    // starve the chrome. Chrome is measured first; an element that falls in
+    // two scopes (the body fallback when no pane is active) is measured once.
+    const seen = new Set();
+    const measureScope = (scope) => {
+      const candidates = [];
+      for (const el of H.all("*", scope)) {
+        if (seen.has(el)) continue;
+        if (el.tagName === "svg" || el.closest("svg")) continue;
+        if (el.closest("details:not([open]), [hidden]")) continue;
+        if (!ownText(el)) continue;
+        if (H.px(getComputedStyle(el).fontSize) <= 0) continue;
+        seen.add(el);
+        candidates.push(el);
+        if (candidates.length >= 150) break;
+      }
+      const failures = []; const rows = [];
+      let samples = 0;
       for (const el of candidates) {
         let evaluated = false;
         const boxes = textBoxes(el).slice(0, 3);
@@ -270,10 +270,30 @@ export async function check(ctx) {
         if (evaluated && (samples < 400 || failures.some((failure) => failure.element?.key === H.elementFacts(el).element?.key))) rows.push(H.elementFacts(el));
         if (failures.length >= 20 || samples >= 400) break;
       }
+      return { matched: candidates.length, rows, failures };
+    };
+    const scopes = [...document.querySelectorAll(".topbar, .rail")].filter((el) => H.visible(el));
+    scopes.push(H.activeRoot());
+    // Paint order is stacking order, but elementsFromPoint only returns
+    // hit-testable elements: an opaque `pointer-events: none` overlay
+    // paints over text while never appearing in the stack. Force pointer
+    // events on for the stack reads (paint and layout are unaffected),
+    // then restore the page before returning.
+    const hitStyle = document.createElement("style");
+    hitStyle.textContent = "*,*::before,*::after{pointer-events:auto !important}";
+    (document.head ?? document.documentElement).appendChild(hitStyle);
+    const result = { matched: 0, rows: [], failures: [] };
+    try {
+      for (const scope of scopes) {
+        const measured = measureScope(scope);
+        result.matched += measured.matched;
+        result.rows.push(...measured.rows);
+        result.failures.push(...measured.failures);
+      }
     } finally {
       hitStyle.remove();
     }
-    return { matched: candidates.length, rows, failures };
+    return result;
   });
   return verdict(ctx, rule, found.matched, found.failures, {}, found.rows);
 }
