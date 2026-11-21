@@ -490,8 +490,8 @@ first. Select a mandate to answer its requests and steer it:
 ## Runs and errors
 
 **Jobs › History** lists job runs for the selected workspace. It opens on
-**Running**, the runs pending or running now, grouped by task with each run's
-crew and a count of tasks and runs in flight. Switch to **All** or **Failed**,
+**Running**, the runs pending or running now, grouped by task (a run shared by several
+tasks appears under each) with each run's crew and a count of tasks and runs in flight. Switch to **All** or **Failed**,
 narrow the list with a task ID or job ID, and pick a time window (**Running**
 ignores the window).
 
