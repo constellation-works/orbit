@@ -171,7 +171,12 @@ class LinuxGatedTestItemTests(unittest.TestCase):
     def test_inline_format_arguments_and_attribute_arguments_are_uses(self):
         live = '#[test]\nfn portable() { println!("{LIMIT}"); }\n'
         self.check_tree({SUITE: "const LIMIT: u32 = 7;\n" + linux_test("") + live}, 0)
-        self.check_tree({SUITE: "const LIMIT: u32 = 7;\n" + linux_test('println!("{LIMIT:?}");')}, 1)
+        self.check_tree(
+            {SUITE: "const LIMIT: u32 = 7;\n" + linux_test('println!("{LIMIT:?}");')},
+            1,
+            "crates/example/tests/suite.rs:1: test helper const `LIMIT` is not gated, "
+            "but every use is compiled out on macOS",
+        )
         self.check_tree({SUITE: "use serde::Serialize;\n#[derive(Serialize)]\nstruct Row;\n"
                          "use std::fs;\n" + linux_test("fs::read(\"x\");")}, 1, "import `fs`")
 

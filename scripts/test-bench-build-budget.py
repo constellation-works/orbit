@@ -944,7 +944,13 @@ def probe_expired_flag_clear_hook(hook_text, root):
 
 
 def scenario_cancellation_identity(root, script):
-    """Run both real cancellation teardowns against intercepted identities.
+    """Harness self-check of this file's cancellation teardown helpers.
+
+    This scenario does not execute bench-build-budget.sh. subprocess.Popen is
+    replaced by an in-process benchmark, so a regression in the real script
+    cannot fail it. The script is covered by scenario_cancellation,
+    scenario_cancellation_spawn_window, and scenario_cancellation_flag_clear.
+    `script` is checked only so this harness still receives that path.
 
     Reaping retires the arm group and permits a replacement in this model.
     A signal is unsafe when it targets a numeric PID/PGID or a pidfd whose
@@ -954,6 +960,8 @@ def scenario_cancellation_identity(root, script):
     the original arm retired before capture, and replacement pidfds are live.
     Parent liveness alone must not adopt that group.
     """
+    if Path(script).name != "bench-build-budget.sh":
+        return [f"harness self-check expected bench-build-budget.sh, not {script}"]
     import errno
     from unittest import mock
 
@@ -1237,7 +1245,8 @@ def main():
         ("cancellation", scenario_cancellation),
         ("cancellation-spawn-window", scenario_cancellation_spawn_window),
         ("cancellation-flag-clear", scenario_cancellation_flag_clear),
-        ("cancellation-identity", scenario_cancellation_identity),
+        # Harness self-check of the teardown helpers. It does not run the script.
+        ("cancellation-identity-harness-self-check", scenario_cancellation_identity),
     )
     failures = 0
     with tempfile.TemporaryDirectory(prefix="bench-build-budget-", dir=scratch) as directory:

@@ -440,6 +440,29 @@ for label, stray in (
     if run_sync(case, "--check").returncode != 0:
         errors.append(f"{label}: --check still fails after regeneration")
 
+# An empty or missing canonical source must say so. The literal unmatched glob
+# used to report a missing SKILL.md instead, so a crash and an empty tree
+# shared one diagnostic.
+for label, make_source in (
+    ("empty-source", True),
+    ("missing-source", False),
+):
+    case = fixture_root / f"sync-{label}"
+    (case / "scripts").mkdir(parents=True)
+    shutil.copy2(repo_root / "scripts" / "sync-plugin-skills.sh", case / "scripts" / "sync-plugin-skills.sh")
+    if make_source:
+        (case / "crates/orbit-core/assets/skills").mkdir(parents=True)
+    for args in ((), ("--check",)):
+        result = run_sync(case, *args)
+        rendered = " ".join(args) or "regenerate"
+        if result.returncode == 0 or "no skills found" not in result.stderr:
+            errors.append(
+                f"{label} ({rendered}): expected 'no skills found', "
+                f"exit {result.returncode}\n{result.stderr}"
+            )
+        elif "canonical skill is missing" in result.stderr:
+            errors.append(f"{label} ({rendered}): reported a missing skill for an empty source\n{result.stderr}")
+
 if errors:
     print("test-validate-agent-plugin: failed", file=sys.stderr)
     for error in errors:
