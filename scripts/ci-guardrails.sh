@@ -691,6 +691,7 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/check-embedded-asset-portability.py"
   run_guard "$repo_root/scripts/check-desktop-ui.sh"
   run_guard "$repo_root/scripts/check-dashboard-vendor.py"
+  run_guard "$repo_root/scripts/check-dashboard-css-literals.py"
   run_guard "$repo_root/scripts/sync-plugin-skills.sh" --check
   run_guard "$repo_root/scripts/smoke-plugin-install.sh"
 

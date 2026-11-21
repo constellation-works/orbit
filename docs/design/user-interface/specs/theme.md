@@ -84,6 +84,9 @@ Detail panes and side panels list facts as label/value pairs (for example a "Sho
 - **Label column width:** The label column keeps a readable minimum width of about `12ch`, and a label that needs more room takes it from the value column.
 - **Numbers:** Numeric values stay right-aligned when they sit beside their label, so digits line up down the list.
 
+### Token enforcement
+Colour values and font sizes are defined once in `crates/orbit-web/assets/dashboard/css/base.css`; every other stylesheet uses `var(--…)`. `scripts/check-dashboard-css-literals.py` runs in CI and counts colour literals and raw font sizes per stylesheet against `scripts/dashboard-css-literals-baseline.json`. A new literal fails and names the base.css token with the same value when one exists. A removed literal must lower the baseline in the same change, so the counts only go down.
+
 ## Mechanism-specific sections
 
 ### Expandable Rows
