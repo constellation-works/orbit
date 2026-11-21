@@ -57,8 +57,15 @@
 .runs-row.runs-group:hover { background: var(--bg-hover); }
 .runs-row .run-group-toggle { font-family: var(--font-sans); text-align: left; cursor: pointer; }
 .runs-row .run-group-count { color: var(--fg-mute); font-size: var(--text-sm); }
-.runs-row.runs-group-child { box-shadow: inset 3px 0 0 var(--hair); }
+.runs-row.runs-group-child {
+  background: var(--accent-wash);
+  box-shadow: inset 4px 0 0 var(--accent);
+}
+.runs-row.runs-group-child > .state,
 .runs-row.runs-group-child > .id { padding-left: var(--space-14); }
+.runs-row.runs-group-child + .runs-row:not(.runs-group-child) {
+  border-top: 1px solid var(--border-strong);
+}
 .runs-toolbar {
   display: flex;
   flex-wrap: wrap;
