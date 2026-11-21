@@ -640,6 +640,10 @@ class Harness:
         template = self.work / "pristine"
         if self.reset_info is None:
             self.reset_info = fixture.restore_root(self.snapshot, root, self.manifest)
+            # The populated root can carry the filesystem to the gate threshold.
+            # restore_root gates only the root it creates, so gate the pristine
+            # copy before its full tree is written.
+            common.disk_gate(template)
             shutil.copytree(root, template, symlinks=True)
         else:
             # Checksums detect equal-size, equal-mtime changes made by an arm.

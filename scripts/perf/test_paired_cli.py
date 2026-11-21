@@ -789,6 +789,33 @@ class PairedCliParityTest(PairedCliTestCase):
         self.assertNotIn('"verdict": "pass"', result.stdout)
         self.assertFalse((out / "paired-summary.json").exists())
 
+    def test_disk_gate_refuses_pristine_copy_once_first_restore_fills_filesystem(self) -> None:
+        # ORB-26572: the first restore populates the root and can carry the
+        # filesystem to the 80% gate. The second full copy (the pristine template)
+        # must be refused by the disk gate before it starts, not run to exit 0.
+        bindir = Path(self.temp.name) / "bin"
+        bindir.mkdir()
+        df = bindir / "df"
+        df.write_text('''#!/bin/sh
+# Stands in for `df --output=pcent PARENT`: 79% until the first restore has
+# populated PARENT/root, then 80%, the disk gate's threshold.
+for parent in "$@"; do :; done
+if [ -e "$parent/root" ]; then
+  printf 'Use%%\\n 80%%\\n'
+else
+  printf 'Use%%\\n 79%%\\n'
+fi
+''')
+        df.chmod(0o755)
+        with mock.patch.dict(os.environ, {"PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}"}):
+            result, out = self.run_paired("--parity", "probe-same")
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("disk gate", result.stderr)
+        self.assertIn("at or above 80%", result.stderr)
+        self.assertIn("pristine", result.stderr)
+        self.assertNotIn('"verdict": "pass"', result.stdout)
+        self.assertFalse(out.exists(), "a refused run keeps no output")
+
     def test_explicit_empty_parity_command_is_refused_in_http_mode(self) -> None:
         # ORB-26398: an explicit empty `--parity` names no command, so it must not
         # stand in for an omitted one and let HTTP-only observations match.
