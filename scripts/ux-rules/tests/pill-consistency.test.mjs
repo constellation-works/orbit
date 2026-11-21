@@ -209,7 +209,7 @@ describe("ui.pill-consistency", { concurrency: false }, () => {
   test("shipped CSS: two active triages on one task row are two pills, not one", { skip: !ENABLED && "needs the browser kit (PLAYWRIGHT_MODULE)" }, async () => {
     // buildActiveTriageBadges emits one triaging link per active triage; both
     // share selector, top and width, so they must still count separately.
-    const markup = `<ul class="rows"><li class="row" style="display:flex;gap:8px"><span class="title-tags"><a class="live-state-pill active-triage-chip" href="#r1">triaging</a><a class="live-state-pill active-triage-chip" href="#r2">triaging</a><span class="live-state-pill delivery-attention-badge repairing" role="img">review · repairing 1/3</span></span></li></ul>`;
+    const markup = `<ul class="rows"><li class="row" style="display:flex;gap:8px"><span class="title-tags"><a class="pill triage-run-link" data-state="running" href="#r1">triaging</a><a class="pill triage-run-link" data-state="running" href="#r2">triaging</a><span class="pill" data-state="running" data-live role="img">review · repairing 1/3</span></span></li></ul>`;
     const { page, result } = await measure(1440, markup, { css: CSS, style: "" });
     try {
       assert.equal(result.measurements.matched, 3, `expected three pills measured: ${JSON.stringify(result.measurements)}`);
@@ -221,8 +221,8 @@ describe("ui.pill-consistency", { concurrency: false }, () => {
   test("shipped CSS: records the triaging and repairing pills of one task list", { skip: !ENABLED && "needs the browser kit (PLAYWRIGHT_MODULE)" }, async () => {
     const task = (inner) => `<li class="row" style="display:flex;gap:8px">${inner}</li>`;
     const markup = `<ul class="rows">
-      ${task(`<span class="title-tags"><a class="live-state-pill active-triage-chip" href="#r1">triaging</a><span class="live-state-pill delivery-attention-badge repairing" role="img">review · repairing 1/3</span></span>`)}
-      ${task(`<span class="title-tags"><a class="live-state-pill active-triage-chip" href="#r2">triaging</a><span class="live-state-pill delivery-attention-badge repairing" role="img">review · repairing 2/3</span></span>`)}
+      ${task(`<span class="title-tags"><a class="pill triage-run-link" data-state="running" href="#r1">triaging</a><span class="pill" data-state="running" data-live role="img">review · repairing 1/3</span></span>`)}
+      ${task(`<span class="title-tags"><a class="pill triage-run-link" data-state="running" href="#r2">triaging</a><span class="pill" data-state="running" data-live role="img">review · repairing 2/3</span></span>`)}
     </ul>`;
     const { page, result } = await measure(1440, markup, { css: CSS, style: "" });
     try {
