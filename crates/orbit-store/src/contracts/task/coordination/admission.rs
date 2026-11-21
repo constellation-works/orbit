@@ -56,7 +56,7 @@ pub struct AdmissionOrdering {
     /// change the request fingerprint.
     pub crew_pools: BTreeMap<String, Vec<String>>,
     /// Count owner-local perf work as holding this host's perf lane: an
-    /// owner-wave task still in `backlog`, an in-flight perf task with no
+    /// owner-wave task still in `backlog`, an in-progress perf task with no
     /// protecting claim, and [`Self::owner_local_carriers`]. Set when the
     /// requester is the owner host. A protecting claim on the requester's
     /// machine counts either way. Owner-side, so it does not change the
