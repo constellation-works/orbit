@@ -1380,6 +1380,48 @@ fn deadline_clipped_probe_leaves_known_quota_and_reserve_refusal_in_place() {
     );
 }
 
+/// Regression [ORB-26220]: a clipped probe inside `with_probe_timeout_when`
+/// must not leave this thread's admission clock advanced once it returns. A
+/// 60 ms read that follows on the same thread still runs its `gh api
+/// rate_limit` probe instead of timing out before spawn.
+#[test]
+fn clipped_probe_does_not_leak_its_deadline_into_a_later_short_read() {
+    let records = TempDir::new().unwrap();
+    let policy = GithubQuotaPolicy::default();
+    let gh = FakeGh::new("hang", "ok");
+    let mut long = gh.request(&["run", "view", "123"]);
+    long.timeout_ms = Some(200);
+    let account = github_quota::request_account_key(&long);
+    let now = now();
+    // Observed long enough ago that every read below finds the refresh due.
+    store(records.path()).refresh_if_due(&policy, &account, now - 120, &|| known(4000, now + 1800));
+
+    // The probe's clipped read finishes about 100 ms into a 200 ms budget.
+    let result = github_quota::with_probe_timeout_when(gh.probe_logged(), || {
+        github_quota::with_scoped_guard(store(records.path()), policy, || {
+            github_quota::run_gh_request(GithubCaller::Delivery, &long)
+        })
+    })
+    .unwrap();
+    assert!(result.timed_out, "{result:?}");
+    assert_eq!(gh.calls(), vec!["api rate_limit".to_string()]);
+
+    let mut short = gh.request(&["run", "view", "123"]);
+    short.timeout_ms = Some(60);
+    let result = github_quota::with_probe_timeout_when(gh.probe_logged(), || {
+        github_quota::with_scoped_guard(store(records.path()), policy, || {
+            github_quota::run_gh_request(GithubCaller::Delivery, &short)
+        })
+    })
+    .unwrap();
+    assert!(result.timed_out, "{result:?}");
+    assert_eq!(
+        gh.calls(),
+        vec!["api rate_limit".to_string(), "api rate_limit".to_string()],
+        "a 60 ms read after a clipped probe must still run its rate-limit probe"
+    );
+}
+
 /// A run-scoped log admitted with one call left above the agent reserve comes
 /// back empty and spends that call, so the fallback's metadata read is refused
 /// locally. Both the unscoped and the scoped read must report that refusal as

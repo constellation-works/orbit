@@ -38,4 +38,4 @@ pub use types::{
 };
 
 #[cfg(any(test, feature = "test-support"))]
-pub(in crate::github_quota) use clock::with_fixed_clock;
+pub(in crate::github_quota) use clock::{with_fixed_clock, with_restored_clock_offset};
