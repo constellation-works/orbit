@@ -275,10 +275,42 @@ guard decide, never by widening the row itself.
   (re-pilot) without a human in the loop; the grant is the only gate, so `dispatch` is a wider right
   than it was, and the change takes the security review the chief's ruling asked for.
 
+## Residents cannot discard a candidate on requeue
+
+**Recorded:** 2026-11-21 · [ORB-26184] · Approved by Daniel in the chief's chat
+(2026-11-21), answering “Approve all three as the captain recommends?” with
+“Yes, all three.”
+
+### Context
+
+The [dispatch requeue decision](#residents-re-pilot-and-requeue-under-dispatch)
+lets a live resident cycle requeue a blocked task so its next run can resume a
+held delivery. The same action also accepted `discard_candidate: true`, which
+skips publication authentication and discards the candidate and its undelivered
+Orbit pull requests. The approval to let residents requeue did not include that
+discard behavior.
+
+### Decision
+
+A live resident cycle may requeue only when `discard_candidate` is omitted or
+false. A requeue with `discard_candidate: true` is refused with
+`capability_denied` and names the parameter. Non-resident operator callers keep
+the ability to discard a candidate through requeue.
+
+### Consequences
+
+- A resident requeue preserves the held candidate and its pull requests for the
+  next run to resume.
+- When a resident determines that a held candidate should be discarded, it
+  leaves that decision to an operator.
+- Cost: discarding a held candidate needs an operator action rather than being
+  completed by the resident cycle.
+
 ## Task References
 
 - [ORB-21229] — rewrote the resident-orchestrator design and recorded these decisions
 - [ORB-25959] — let resident cycles with `dispatch` re-pilot and requeue
+- [ORB-26184] — refuse resident cycles' candidate discards during requeue
 - [ORB-25951] — on-call whose chief ruling delegated and conditioned that change
 - [ORB-12488] — removed the epic pipeline and the earlier resident-orchestrator folder
 - [ORB-10815] — revised the earlier design to v2: epic-owned worktree and windowed drain

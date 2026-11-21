@@ -102,7 +102,10 @@ call `orbit.task.recover` action `repilot` with the `id` of a `proposed` or
 `backlog` task to repeat its pilot assessment, and action `requeue` with
 the `id` of a `blocked` task and a `reason`, both with the mandate's own
 workspace. These actions are permitted to the trusted live resident cycle
-under its `dispatch` grant; other managed runs remain operator-only. A fresh
+under its `dispatch` grant; other managed runs remain operator-only. A resident
+requeue must omit `discard_candidate` or set it to `false`; setting it to
+`true` is refused with `capability_denied` because residents cannot discard a
+held candidate. An operator can decide to discard it. A fresh
 successful action returns its `resident_action_key`. If a recovery call matches
 an action the dead cycle already completed, it returns
 `resident_action: "already_done"` with the original key in `key`, plus `ref`

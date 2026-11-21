@@ -80,6 +80,18 @@ fn requeue(fx: &Fixture, task: &str, workspace: &str) -> Result<Value, String> {
     )
 }
 
+fn requeue_discarding_candidate(
+    fx: &Fixture,
+    task: &str,
+    workspace: &str,
+) -> Result<Value, String> {
+    fx.agent_call(
+        "orbit.task.requeue",
+        json!({"id": task, "reason": "the outage that blocked it cleared",
+               "workspace": workspace, "discard_candidate": true, "model": "codex"}),
+    )
+}
+
 fn pilot_runs(fx: &Fixture) -> usize {
     fx.runtime
         .list_job_runs(orbit_core::application::job::JobRunListParams::default())
@@ -140,6 +152,25 @@ fn a_cycle_with_dispatch_repilots_and_requeues_and_nothing_else_is_widened() {
         assert_eq!(
             fx.runtime.get_task(&held).unwrap().status,
             TaskStatus::Blocked
+        );
+
+        let task_before = fx.runtime.get_task(&held).unwrap();
+        let history_before = fx.runtime.get_task_history(&held).unwrap();
+        let error = requeue_discarding_candidate(&fx, &held, &workspace)
+            .expect_err("resident requeues cannot discard a candidate");
+        assert!(
+            error.starts_with("capability denied:") && error.contains("discard_candidate"),
+            "the typed refusal names the rejected parameter: {error}"
+        );
+        assert_eq!(
+            fx.runtime.get_task(&held).unwrap(),
+            task_before,
+            "a refused discard does not change the task"
+        );
+        assert_eq!(
+            fx.runtime.get_task_history(&held).unwrap(),
+            history_before,
+            "a refused discard leaves no requeue history"
         );
 
         let repiloted = repilot(&fx, &proposed, &workspace).expect("dispatch re-pilots");
