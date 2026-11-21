@@ -48,6 +48,45 @@ GLOBAL_COPY = ("config.toml", "hosts.toml", "resources", "skills",
 # Workspace `.orbit` entries never copied: linked run worktrees, run scratch
 # and disposable worker logs.
 WORKSPACE_EXCLUDES = ("state/worktrees", "tmp", "state/logs")
+# Per-worktree entries under `$GIT_DIR` that belong to a single checkout rather
+# than the shared repository. When `--git-metadata` names a linked worktree,
+# these are excluded from `common_dir` so the primary checkout's state cannot
+# leak if the linked checkout lacks an entry (e.g. an orphan worktree's index).
+GIT_PER_WORKTREE_PATHS = (
+    "HEAD",
+    "index",
+    "ORIG_HEAD",
+    "MERGE_HEAD",
+    "MERGE_MODE",
+    "MERGE_MSG",
+    "SQUASH_MSG",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    "FETCH_HEAD",
+    "COMMIT_EDITMSG",
+    "AUTO_MERGE",
+    "BISECT_LOG",
+    "BISECT_NAMES",
+    "BISECT_START",
+    "BISECT_TERMS",
+    "BISECT_RUN",
+    "BISECT_EXPECTED_REV",
+    "BISECT_ANCESTORS_OK",
+    "BISECT_FIRST_PARENT",
+    "config.worktree",
+    "info/sparse-checkout",
+    "logs/HEAD",
+    "modules",
+    "rebase-apply",
+    "rebase-merge",
+    "refs/bisect",
+    "refs/rewritten",
+    "refs/worktree",
+    "sequencer",
+)
+# Administrative entries in a linked worktree's `$GIT_DIR` that bind it to a
+# shared repository or back to the source working tree.
+GIT_LINKED_WORKTREE_EXCLUDES = ("commondir", "gitdir", "locked", "worktrees")
 # Credential and env files are never copied, whatever directory holds them.
 CREDENTIAL_NAMES = (
     ".zprofile", ".zshrc", ".zshenv", ".bashrc", ".bash_profile", ".profile",
@@ -373,17 +412,90 @@ def filtered_registry(ws: dict, keep: set[str]) -> dict:
     return registry
 
 
-def scrub_git_config(text: str) -> str:
-    """Drop userinfo (tokens) from remote URLs in a copied `.git/config`."""
-    return re.sub(r"(://)[^/@\s]+@", r"\1", text)
+def scrub_git_config(text: str, *, non_bare: bool = False) -> str:
+    """Drop remote URL userinfo and detach source worktree bindings in Git config."""
+    scrubbed = re.sub(r"(://)[^/@\s]+@", r"\1", text)
+    lines: list[str] = []
+    in_core = False
+    for line in scrubbed.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("["):
+            section = stripped.split("]", 1)[0][1:].strip().lower()
+            in_core = section == "core"
+            lines.append(line)
+            continue
+        if in_core:
+            key = stripped.split("=", 1)[0].strip().lower() if "=" in stripped else ""
+            if key == "worktree":
+                # Drop core.worktree so the restored `.git` never binds to a source path.
+                continue
+            if non_bare and key == "bare":
+                line = re.sub(
+                    r"^(\s*bare\s*=\s*)(?:true|yes|on|1)\b",
+                    r"\1false",
+                    line,
+                    flags=re.IGNORECASE,
+                )
+        lines.append(line)
+    return "".join(lines)
 
 
-def git_common_dir(checkout: Path) -> Path:
+def _git_rev_parse_path(checkout: Path, flag: str) -> Path:
     out = subprocess.run(
-        ["git", "-C", str(checkout), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        ["git", "-C", str(checkout), "rev-parse", "--path-format=absolute", flag],
         check=True, capture_output=True, text=True,
     ).stdout.strip()
     return Path(out)
+
+
+def git_dir(checkout: Path) -> Path:
+    return _git_rev_parse_path(checkout, "--git-dir")
+
+
+def git_common_dir(checkout: Path) -> Path:
+    return _git_rev_parse_path(checkout, "--git-common-dir")
+
+
+def copy_git_metadata(snap: Snapshotter, out: Path, checkout: Path) -> dict:
+    """Copy `checkout`'s Git metadata into a self-contained `checkout/.git`."""
+    selected_git_dir = git_dir(checkout)
+    common_dir = git_common_dir(checkout)
+    linked = selected_git_dir.resolve() != common_dir.resolve()
+    dest_root = Path("checkout/.git")
+
+    def make_transform(root: Path, *, skip_shared_index: bool):
+        def transform(src: Path, dest_rel: Path) -> bool:
+            if src.name in ("config", "config.worktree") and src.parent == root:
+                if src.is_symlink() or not src.is_file():
+                    return True
+                dest = out / dest_rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(scrub_git_config(src.read_text(), non_bare=linked))
+                return True
+            if skip_shared_index and src.parent == root and src.name.startswith("sharedindex."):
+                return True
+            return src.name.endswith(".lock")
+        return transform
+
+    common_excludes = ("worktrees",) + (GIT_PER_WORKTREE_PATHS if linked else ())
+    snap.copy_tree(
+        common_dir,
+        dest_root,
+        excludes=common_excludes,
+        transform=make_transform(common_dir, skip_shared_index=linked),
+    )
+    if linked:
+        snap.copy_tree(
+            selected_git_dir,
+            dest_root,
+            excludes=GIT_LINKED_WORKTREE_EXCLUDES,
+            transform=make_transform(selected_git_dir, skip_shared_index=False),
+        )
+    return {
+        "checkout": str(checkout.resolve()),
+        "git_dir": str(selected_git_dir),
+        "common_dir": str(common_dir),
+    }
 
 
 # ── commands ─────────────────────────────────────────────────────────────────
@@ -421,20 +533,7 @@ def cmd_snapshot(args) -> int:
                        excludes=excludes, databases=True)
         git_info = None
         if args.git_metadata:
-            common_dir = git_common_dir(Path(args.git_metadata))
-
-            def scrub(src: Path, dest_rel: Path) -> bool:
-                if src.name == "config" and src.parent == common_dir:
-                    dest = out / dest_rel
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    dest.write_text(scrub_git_config(src.read_text()))
-                    return True
-                return src.name.endswith(".lock")
-
-            snap.copy_tree(common_dir, Path("checkout/.git"),
-                           excludes=("worktrees",), transform=scrub)
-            git_info = {"checkout": str(Path(args.git_metadata).resolve()),
-                        "common_dir": str(common_dir)}
+            git_info = copy_git_metadata(snap, out, Path(args.git_metadata))
         snap.count_rows()
         snap.list_files()
         manifest = {

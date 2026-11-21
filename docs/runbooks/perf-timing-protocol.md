@@ -251,7 +251,7 @@ All five are JSON objects with `"schemaVersion": 1` and a `kind`.
 | `workspace_keys` | Workspace identifiers rows were kept for |
 | `databases` | Per copied database: `method` (`filtered-copy-single-read-transaction` or `online-backup-api`), `filtered`, `scope_columns`, `kept_whole`, and `tables` (row count per table) |
 | `state_distributions` | `job_runs_by_state`, `job_run_steps_by_state`, `routine_fires_by_state`, `routine_fires_by_routine`, `routine_cursors`, `routine_pauses` |
-| `git_metadata` | `null`, or the checkout and Git common dir copied |
+| `git_metadata` | `null`, or the checkout, per-worktree Git dir and Git common dir copied |
 | `excluded` | Counts of credential-like and non-regular files skipped, and the excluded workspace paths |
 | `files` | Every copied file: `path`, `size`, `sha256` |
 
