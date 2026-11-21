@@ -1,11 +1,12 @@
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path as UrlPath, Query, State};
+use axum::extract::{FromRequest, Path as UrlPath, Query, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::DASHBOARD_HOST_EDIT;
 use orbit_common::{HostRegistryCode, OrbitError};
 use orbit_registry::hosts::validated_host_root;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use super::blocking;
@@ -92,6 +93,28 @@ pub(super) struct HostRenameBody {
     name: String,
 }
 
+/// A typed host-edit body that authorizes the caller before reading its body.
+pub(super) struct AuthorizedHostJson<T>(pub(super) T);
+
+impl<T> FromRequest<DashboardState> for AuthorizedHostJson<T>
+where
+    T: DeserializeOwned + Send,
+{
+    type Rejection = Response;
+
+    async fn from_request(
+        request: Request,
+        state: &DashboardState,
+    ) -> Result<Self, Self::Rejection> {
+        if let Err(denial) = authorized_caller(&DASHBOARD_HOST_EDIT, state.operator_session()) {
+            return Err(authorization_denied(denial));
+        }
+
+        let body = Json::<T>::from_request(request, state).await;
+        parse_body(body).map(Self).map_err(|response| *response)
+    }
+}
+
 /// `GET /api/hosts[?probe=false]`: `orbit host list --json`, read from the
 /// last valid host file, plus the error of a newer file that failed to load
 /// and whether this session may edit it.
@@ -145,15 +168,8 @@ pub(super) async fn show_host(
 /// any process starts and then only ever passed after `--`.
 pub(super) async fn add_host(
     State(state): State<DashboardState>,
-    body: Result<Json<HostAddBody>, JsonRejection>,
+    AuthorizedHostJson(body): AuthorizedHostJson<HostAddBody>,
 ) -> Response {
-    if let Err(denial) = authorized_caller(&DASHBOARD_HOST_EDIT, state.operator_session()) {
-        return authorization_denied(denial);
-    }
-    let body = match parse_body(body) {
-        Ok(body) => body,
-        Err(response) => return *response,
-    };
     let root = state.global_root().to_path_buf();
     host_blocking("host add", move || {
         let root = validated_host_root(&root)?;
@@ -172,15 +188,8 @@ pub(super) async fn add_host(
 pub(super) async fn rename_host(
     State(state): State<DashboardState>,
     UrlPath(host): UrlPath<String>,
-    body: Result<Json<HostRenameBody>, JsonRejection>,
+    AuthorizedHostJson(body): AuthorizedHostJson<HostRenameBody>,
 ) -> Response {
-    if let Err(denial) = authorized_caller(&DASHBOARD_HOST_EDIT, state.operator_session()) {
-        return authorization_denied(denial);
-    }
-    let body = match parse_body(body) {
-        Ok(body) => body,
-        Err(response) => return *response,
-    };
     let root = state.global_root().to_path_buf();
     host_blocking("host rename", move || {
         let root = validated_host_root(&root)?;
