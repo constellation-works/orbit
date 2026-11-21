@@ -762,9 +762,11 @@ function totalsNodes(scenario) {
   const inputs = view.payload.inputs || {};
   if (!(source.tasks ?? view.payload.forecast?.tasks)) return [emptyState("Nothing to forecast", "No backlog or in-progress tasks in this workspace.")];
   if (inputs.history_deliveries === 0) {
-    return [emptyState("No delivery history to sample", inputs.history_tasks != null
+    const state = emptyState("No delivery history to sample", inputs.history_tasks != null
       ? `None of the newest ${inputs.history_tasks} completed tasks has recorded agent runs.`
-      : `No task finished with recorded agent runs in the last ${inputs.lookback_days} days or among the newest ${inputs.min_history_tasks ?? 50} completions. Widen the history.`)];
+      : `No task finished with recorded agent runs in the last ${inputs.lookback_days} days or among the newest ${inputs.min_history_tasks ?? 50} completions. Widen the history.`);
+    if (info) state.dataset.forecastReason = info.kind;
+    return [state];
   }
   if (!info) {
     const boundedGap = forecastBoundedGap(source);
