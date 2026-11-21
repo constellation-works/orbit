@@ -58,9 +58,9 @@ pickup. Do not confuse a task description with a design document or a transcript
   a measurement task first that establishes the fixture, spread and margin.
   Before promotion, put the evidence route for each hard timing criterion in
   the brief. For an Orbit CLI command or HTTP route, the default route is the
-  checked-in [paired timing protocol](https://github.com/constellation-works/orbit/blob/ea734f986359ea9bb43448e01026ecd9f52ae84e/docs/runbooks/perf-timing-protocol.md)
+  checked-in [paired timing protocol](https://github.com/constellation-works/orbit/blob/agent-main/docs/runbooks/perf-timing-protocol.md)
   (`docs/runbooks/perf-timing-protocol.md` with `scripts/perf/fixture.py`,
-  `build-pair.sh` and `paired.py` at the linked revision): paste its
+  `build-pair.sh` and `paired.py` from the linked `agent-main` branch): paste its
   "Measurement protocol" paragraph and fill its slots (surface, command or
   path, parity mask, bound, artifact slug). It supplies everything listed
   below. Otherwise, name the fixture artifact or exact seed and reset commands
