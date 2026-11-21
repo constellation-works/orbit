@@ -15,7 +15,9 @@ observation from every arm (parity command exit 0, and HTTP 2xx when that
 probe runs). A missing or failed observation refuses the run before sampling.
 Every arm command runs in its own process group with a deadline and a stdout
 cap; a stalled or flooding command is killed with its group and refuses the
-run. SIGTERM, SIGHUP or SIGINT stops every child, `web serve` included.
+run. A parity command that hits a bound is that arm's failed observation, so
+parity.json still names the arm and bound. SIGTERM, SIGHUP or SIGINT stops
+every child, `web serve` included.
 See docs/runbooks/perf-timing-protocol.md.
 """
 
@@ -556,8 +558,12 @@ def arm_observation_failure(record: dict) -> str | None:
     if "command" not in record and "http" not in record:
         return "missing observation"
     reasons: list[str] = []
-    if "command" in record and record["command"].get("exit") != 0:
-        reasons.append(f"command exited {record['command'].get('exit')}")
+    if "command" in record:
+        command = record["command"]
+        if "stopped" in command:
+            reasons.append(command["stopped"])
+        elif command.get("exit") != 0:
+            reasons.append(f"command exited {command.get('exit')}")
     if "http" in record:
         if "error" in record["http"]:
             reasons.append(f"http error: {record['http']['error']}")
@@ -635,19 +641,42 @@ class Harness:
         return {"command_timeout_seconds": self.args.command_timeout,
                 "output_limit_bytes": self.args.output_limit_bytes}
 
-    def cli_once(self, arm: str, info: dict, env: dict, argv: list[str],
-                 what: str) -> tuple[float, int, bytes]:
-        """One supervised arm command; a timeout or output overflow refuses the run."""
-        result = run_supervised(
+    def supervised_arm(self, arm: str, info: dict, env: dict, argv: list[str]) -> SupervisedResult:
+        return run_supervised(
             [*self.net_prefix, str(self.binaries[arm]), *argv],
             cwd=info["cwd"], env=env,
             timeout=self.args.command_timeout, output_limit=self.args.output_limit_bytes,
         )
+
+    @staticmethod
+    def bound_reason(result: SupervisedResult) -> str:
+        """How a bounded command ended, naming the flag that set the bound it hit."""
+        flag = "--command-timeout" if result.ended == "timeout" else "--output-limit-bytes"
+        return f"{result.describe()} ({flag})"
+
+    def cli_once(self, arm: str, info: dict, env: dict, argv: list[str],
+                 what: str) -> tuple[float, int, bytes]:
+        """One supervised sample; a timeout or output overflow refuses the run."""
+        result = self.supervised_arm(arm, info, env, argv)
         if result.ended != "exit":
-            flag = "--command-timeout" if result.ended == "timeout" else "--output-limit-bytes"
-            raise common.PerfRefusal(
-                f"{arm} {what} {result.describe()} ({flag}); failing the run")
+            raise common.PerfRefusal(f"{arm} {what} {self.bound_reason(result)}; failing the run")
         return result.elapsed_ms, result.returncode, result.stdout
+
+    def parity_command(self, arm: str, info: dict, env: dict) -> dict:
+        """The parity command's record for one arm.
+
+        A bound hit is that arm's failed observation, not an abort: parity() still
+        writes parity.json, which names the arm, the bound and match false (ORB-26413).
+        """
+        result = self.supervised_arm(arm, info, env, shlex.split(self.args.parity))
+        if result.ended != "exit":
+            if result.ended == "timeout":
+                bound = {"name": "command_timeout_seconds", "value": self.args.command_timeout}
+            else:
+                bound = {"name": "output_limit_bytes", "value": self.args.output_limit_bytes}
+            return {"exit": None, "stopped": self.bound_reason(result), "bound": bound}
+        return {"exit": result.returncode,
+                "output": normalize_output(result.stdout, self.masks, info["root"])}
 
     def parity(self) -> dict:
         arms = {}
@@ -657,10 +686,7 @@ class Harness:
             record: dict = {}
             try:
                 if self.args.parity is not None:
-                    _ms, code, stdout = self.cli_once(arm, info, env, shlex.split(self.args.parity),
-                                                      "parity command")
-                    record["command"] = {"exit": code,
-                                         "output": normalize_output(stdout, self.masks, info["root"])}
+                    record["command"] = self.parity_command(arm, info, env)
                 if self.http_path:
                     server = Server(self.binaries[arm], info, env)
                     try:
