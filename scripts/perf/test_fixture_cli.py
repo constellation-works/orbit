@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
 from pathlib import Path
@@ -18,8 +19,8 @@ ROOT = PERF_DIR.parent.parent
 FIXTURE_PY = PERF_DIR / "fixture.py"
 
 sys.path.insert(0, str(PERF_DIR))
-import fixture  # noqa: E402
-import perf_common  # noqa: E402
+fixture = importlib.import_module("fixture")
+perf_common = importlib.import_module("perf_common")
 
 
 def _scratch_parent() -> Path | None:

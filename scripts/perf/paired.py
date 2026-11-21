@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import http.client
+import importlib
 import json
 import math
 import os
@@ -42,9 +43,10 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# Loaded by name after the insert: `python3 -I` keeps this directory off sys.path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import fixture  # noqa: E402
-import perf_common as common  # noqa: E402
+fixture = importlib.import_module("fixture")
+common = importlib.import_module("perf_common")
 
 SCHEMA_VERSION = 1
 ARMS = ("base", "candidate", "control")

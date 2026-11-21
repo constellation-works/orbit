@@ -1,7 +1,10 @@
 //! A substitute `gh` for the quota guard's execution-point tests in other
 //! crates. Test fixtures only (`test-support`).
 
-#![allow(clippy::disallowed_methods)]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "compiled under test-support outside cfg(test), where the crate-root deny applies; this fixture writes a new gh script into a caller-owned temporary directory, where atomic replacement guards nothing, and its --warm-up probe runs only that script, which exits at once, so no deadline or process group is needed"
+)]
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
