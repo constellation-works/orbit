@@ -226,11 +226,11 @@ def stop_group(process: subprocess.Popen, grace: float = TERM_GRACE_SECONDS) -> 
         deadline = time.monotonic() + grace
         while not leader_exited(process.pid) and time.monotonic() < deadline:
             time.sleep(0.02)
+    finally:
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-    finally:
         process.wait(timeout=10)
 
 

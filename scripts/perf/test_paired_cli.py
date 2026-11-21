@@ -45,6 +45,9 @@ case "$mode" in
     head -c 200000 /dev/zero
     exit 0
     ;;
+  ignore-term)
+    exec {python} -c 'import os, pathlib, signal, sys, time; marker=pathlib.Path(sys.argv[1]); marker.write_text(str(os.getpid())); signal.signal(signal.SIGTERM, lambda signum, frame: marker.with_suffix(".term").write_text(str(signum))); time.sleep(600)' "$marks/ignore-$role.pid"
+    ;;
   web)
     exec {python} -I {web_server} "$marks/web-$role.pid"
     ;;
@@ -81,14 +84,27 @@ esac
 # Stands in for `orbit web serve`: announces its address, answers `/`, and
 # stalls on `/slow` so the harness can be cancelled while it is serving.
 WEB_SERVER = """
-import http.server, os, sys, time
+import http.server, os, signal, subprocess, sys, time
 from pathlib import Path
 pid_file = Path(sys.argv[1])
 marks = pid_file.parent
 role = pid_file.stem.removeprefix("web-")
+if (marks / "ignore-web-term").exists():
+    def record_term(signum, _frame):
+        (marks / f"web-{role}.term").write_text(str(signum))
+    signal.signal(signal.SIGTERM, record_term)
+    child = subprocess.Popen([
+        sys.executable, "-c",
+        "import pathlib, signal, sys, time; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "pathlib.Path(sys.argv[1]).write_text('ready'); time.sleep(600)",
+        str(marks / f"web-{role}.descendant.ready"),
+    ])
+    (marks / f"web-{role}.descendant.pid").write_text(str(child.pid))
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/slow":
+            (marks / f"web-{role}.slow").touch()
             time.sleep(600)
         if self.path == "/destination":
             (marks / "destination-visited").write_text("yes")
@@ -525,7 +541,8 @@ runpy.run_path(script, run_name="__main__")
                     if not process_gone(pid):
                         os.killpg(pid, signal.SIGKILL)
 
-    def test_cancelled_harness_stops_its_http_server(self) -> None:
+    def test_interrupt_during_server_stop_kills_group_and_preserves_cancellation(self) -> None:
+        (self.marks / "ignore-web-term").touch()
         out = Path(self.temp.name) / "out-cancel"
         harness = subprocess.Popen(
             self.paired_argv(out, ("--http", "/slow")),
@@ -546,24 +563,104 @@ runpy.run_path(script, run_name="__main__")
             self.assertLess(time.monotonic(), deadline, "server never started")
             time.sleep(0.05)
         server_pid = int(pid_file.read_text())
+        descendant_file = self.marks / "web-base.descendant.pid"
+        deadline = time.monotonic() + 10
+        while not descendant_file.exists():
+            self.assertIsNone(harness.poll(), "server exited before recording its descendant")
+            self.assertLess(time.monotonic(), deadline, "server descendant was not started")
+            time.sleep(0.01)
+        descendant_pid = int(descendant_file.read_text())
+        descendant_ready = self.marks / "web-base.descendant.ready"
+        deadline = time.monotonic() + 10
+        while not descendant_ready.exists():
+            self.assertIsNone(harness.poll(), "server descendant exited before becoming ready")
+            self.assertLess(time.monotonic(), deadline, "server descendant did not become ready")
+            time.sleep(0.01)
 
         def stop_leaked_server() -> None:
-            # Only a server this test started: its cmdline names our pid file.
+            # Only this test's group: its leader cmdline names our pid file.
             try:
                 cmdline = Path(f"/proc/{server_pid}/cmdline").read_bytes()
             except FileNotFoundError:
-                return
-            if str(pid_file).encode() in cmdline:
-                os.kill(server_pid, signal.SIGKILL)
+                cmdline = b""
+            if str(pid_file).encode() in cmdline or not process_gone(descendant_pid):
+                try:
+                    os.killpg(server_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
         self.addCleanup(stop_leaked_server)
-        time.sleep(0.5)  # let the harness reach its stalled GET
+        slow_file = self.marks / "web-base.slow"
+        deadline = time.monotonic() + 10
+        while not slow_file.exists():
+            self.assertIsNone(harness.poll(), "harness exited before starting its stalled GET")
+            self.assertLess(time.monotonic(), deadline, "server did not start its stalled GET")
+            time.sleep(0.01)
         harness.send_signal(signal.SIGTERM)
+
+        term_file = self.marks / "web-base.term"
+        deadline = time.monotonic() + 10
+        while not term_file.exists():
+            self.assertIsNone(harness.poll(), "harness exited before server cleanup started")
+            self.assertLess(time.monotonic(), deadline, "server did not receive SIGTERM")
+            time.sleep(0.01)
+        self.assertEqual(term_file.read_text(), str(signal.SIGTERM))
+        harness.send_signal(signal.SIGINT)
         _stdout, stderr = harness.communicate(timeout=60)
-        self.assertEqual(harness.returncode, 128 + signal.SIGTERM, stderr)
-        self.assertIn("cancelled by SIGTERM", stderr)
-        self.assert_reaped([server_pid])
+        self.assertEqual(harness.returncode, 128 + signal.SIGINT, stderr)
+        self.assertIn("cancelled by SIGINT", stderr)
+        self.assert_reaped([server_pid, descendant_pid])
         self.assert_lane_released()
         self.assertFalse(out.exists(), "a cancelled run leaves no partial output")
+
+    def test_interrupt_during_supervised_stop_kills_group_and_preserves_cancellation(self) -> None:
+        out = Path(self.temp.name) / "out-supervised-cancel"
+        harness = subprocess.Popen(
+            self.paired_argv(out, ("--cli", "ignore-term"),
+                             "--parity", "probe-same", "--command-timeout", "1"),
+            cwd=REPO, env=self.paired_env(),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+
+        def cleanup() -> None:
+            if harness.poll() is None:
+                harness.kill()
+            harness.communicate(timeout=30)
+        self.addCleanup(cleanup)
+
+        pid_file = self.marks / "ignore-base.pid"
+        deadline = time.monotonic() + 60
+        while not pid_file.exists():
+            self.assertIsNone(harness.poll(), "harness exited before starting the supervised child")
+            self.assertLess(time.monotonic(), deadline, "supervised child never started")
+            time.sleep(0.01)
+        leader_pid = int(pid_file.read_text())
+
+        def stop_leaked_child() -> None:
+            try:
+                cmdline = Path(f"/proc/{leader_pid}/cmdline").read_bytes()
+            except FileNotFoundError:
+                return
+            if str(pid_file).encode() in cmdline:
+                try:
+                    os.killpg(leader_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        self.addCleanup(stop_leaked_child)
+
+        term_file = self.marks / "ignore-base.term"
+        deadline = time.monotonic() + 60
+        while not term_file.exists():
+            self.assertIsNone(harness.poll(), "harness exited before supervised cleanup started")
+            self.assertLess(time.monotonic(), deadline, "supervised child did not receive SIGTERM")
+            time.sleep(0.01)
+        self.assertEqual(term_file.read_text(), str(signal.SIGTERM))
+        harness.send_signal(signal.SIGINT)
+        _stdout, stderr = harness.communicate(timeout=60)
+        self.assertEqual(harness.returncode, 128 + signal.SIGINT, stderr)
+        self.assertIn("cancelled by SIGINT", stderr)
+        self.assert_reaped([leader_pid])
+        self.assert_lane_released()
+        self.assertFalse((out / "paired-summary.json").exists())
 
 
 if __name__ == "__main__":
