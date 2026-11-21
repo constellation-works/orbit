@@ -511,13 +511,43 @@ TERMINATORS = ("/", '"', "'", "\n")
 TEXT_REWRITE_MAX_BYTES = 4 << 20
 
 
+def _compile_path_rewriter(pairs: list[tuple[str, str]]):
+    """Compile a single-pass path-prefix rewriter shared by text and SQLite paths.
+
+    Matches each stored path at most once (longest prefix first) so a
+    replacement destination nested under a source root is never re-scanned.
+    """
+    ordered: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for old, new in sorted(pairs, key=lambda pair: len(pair[0]), reverse=True):
+        if old and old not in seen:
+            seen.add(old)
+            ordered.append((old, new))
+    if not ordered:
+        return None
+    branches = []
+    for old, _new in ordered:
+        escaped = re.escape(old)
+        if old.startswith("/"):
+            branches.append(rf"(?:^|(?<=[\s\"'=:,;(\[{{<`])|(?<=://)){escaped}")
+        else:
+            branches.append(escaped)
+    end_chars = "".join(re.escape(end) for end in TERMINATORS)
+    pattern = re.compile(rf"(?P<path>{'|'.join(branches)})(?=[{end_chars}]|\Z)")
+    mapping = dict(ordered)
+
+    def apply_rewrite(text: str) -> str:
+        return pattern.sub(lambda match: mapping[match.group("path")], text)
+
+    return apply_rewrite, [old for old, _new in ordered]
+
+
 def rewrite_text(text: str, pairs: list[tuple[str, str]]) -> str:
-    for old, new in pairs:
-        for end in TERMINATORS:
-            text = text.replace(old + end, new + end)
-        if text.endswith(old):
-            text = text[: -len(old)] + new
-    return text
+    compiled = _compile_path_rewriter(pairs)
+    if compiled is None:
+        return text
+    apply_rewrite, _olds = compiled
+    return apply_rewrite(text)
 
 
 def rewrite_text_file(path: Path, pairs: list[tuple[str, str]]) -> None:
@@ -538,8 +568,13 @@ def rewrite_text_file(path: Path, pairs: list[tuple[str, str]]) -> None:
 
 
 def rewrite_database(path: Path, pairs: list[tuple[str, str]]) -> None:
+    compiled = _compile_path_rewriter(pairs)
+    if compiled is None:
+        return
+    apply_rewrite, olds = compiled
     conn = sqlite3.connect(path)
     try:
+        conn.create_function("perf_rewrite_path", 1, apply_rewrite, deterministic=True)
         triggers = conn.execute(
             "SELECT name, sql FROM sqlite_master WHERE type='trigger'").fetchall()
         for name, _sql in triggers:
@@ -548,19 +583,16 @@ def rewrite_database(path: Path, pairs: list[tuple[str, str]]) -> None:
             "SELECT name FROM sqlite_master WHERE type='table' AND sql NOT LIKE 'CREATE VIRTUAL%'"
             " AND name NOT LIKE 'sqlite_%'")]
         for table in tables:
-            for column in [r[1] for r in conn.execute(f"PRAGMA table_info({quote_ident(table)})")]:
+            tbl = quote_ident(table)
+            for column in [r[1] for r in conn.execute(f"PRAGMA table_info({tbl})")]:
                 col = quote_ident(column)
-                for old, new in pairs:
-                    expr = f"CASE WHEN {col} = ? THEN ? ELSE {col} END"
-                    args: list = [old, new]
-                    for end in TERMINATORS[:3]:
-                        expr = f"replace({expr}, ?, ?)"
-                        args.extend([old + end, new + end])
-                    conn.execute(
-                        f"UPDATE {quote_ident(table)} SET {col} = {expr} "
-                        f"WHERE typeof({col}) = 'text' AND instr({col}, ?) > 0",
-                        (*args, old),
-                    )
+                where_instr = " OR ".join(f"instr({col}, ?) > 0" for _ in olds)
+                conn.execute(
+                    f"UPDATE {tbl} SET {col} = perf_rewrite_path({col}) "
+                    f"WHERE typeof({col}) = 'text' AND ({where_instr}) "
+                    f"AND perf_rewrite_path({col}) != {col}",
+                    tuple(olds),
+                )
         for _name, sql in triggers:
             conn.execute(sql)
         conn.commit()
