@@ -1398,39 +1398,68 @@ fn deadline_clipped_probe_leaves_known_quota_and_reserve_refusal_in_place() {
 /// must not leave this thread's admission clock advanced once it returns. A
 /// 60 ms read that follows on the same thread still runs its `gh api
 /// rate_limit` probe instead of timing out before spawn.
+///
+/// Regression [ORB-26468]: the 60 ms reads run inside one enclosing scope, not
+/// in scopes of their own. A scope installs a fresh fixed clock, which would
+/// replace a clock the clipped probe left advanced and hide the leak. The
+/// shared read takes its deadline from the real clock, so a leaked advance
+/// puts that deadline in the past: its probe is skipped, and the enclosing
+/// counter sees it.
 #[test]
 fn clipped_probe_does_not_leak_its_deadline_into_a_later_short_read() {
+    const LONG_MS: u64 = 5_000;
     let records = TempDir::new().unwrap();
     let policy = GithubQuotaPolicy::default();
     let gh = FakeGh::new("hang", "ok");
     let mut long = gh.request(&["run", "view", "123"]);
-    long.timeout_ms = Some(200);
+    // Far above the 60 ms reads, so a clock left at this probe's deadline
+    // lies well past the real-clock deadline of the shared read.
+    long.timeout_ms = Some(LONG_MS);
     let account = github_quota::request_account_key(&long);
     let now = now();
     // Observed long enough ago that every read below finds the refresh due.
     store(records.path()).refresh_if_due(&policy, &account, now - 120, &|| known(4000, now + 1800));
 
-    let (probes, result) = run_with_simulated_clipped_probe(200, || {
-        github_quota::with_scoped_guard(store(records.path()), policy, || {
-            github_quota::run_gh_request(GithubCaller::Delivery, &long)
-        })
-    });
-    let result = result.unwrap();
-    assert!(result.timed_out, "{result:?}");
-    assert_eq!(probes, 1);
-
     let mut short = gh.request(&["run", "view", "123"]);
     short.timeout_ms = Some(60);
-    let (probes, result) = run_with_simulated_clipped_probe(60, || {
-        github_quota::with_scoped_guard(store(records.path()), policy, || {
-            github_quota::run_gh_request(GithubCaller::Delivery, &short)
-        })
-    });
-    let result = result.unwrap();
-    assert!(result.timed_out, "{result:?}");
-    assert_eq!(
-        probes, 1,
-        "a 60 ms read after a clipped probe must still run its rate-limit probe"
+    let enclosing = std::rc::Rc::new(std::cell::Cell::new(0_usize));
+    let counted = std::rc::Rc::clone(&enclosing);
+    github_quota::with_simulated_clipped_probe(
+        move |_| counted.set(counted.get() + 1),
+        || {
+            let (probes, result) = run_with_simulated_clipped_probe(LONG_MS, || {
+                github_quota::with_scoped_guard(store(records.path()), policy, || {
+                    github_quota::run_gh_request(GithubCaller::Delivery, &long)
+                })
+            });
+            let result = result.unwrap();
+            assert!(result.timed_out, "{result:?}");
+            assert_eq!(probes, 1);
+
+            // The long probe's scope has returned, so the enclosing clock must
+            // be back in force. Only then does this shared read's real-clock
+            // deadline, 60 ms away, leave its probe room to run.
+            let reset = github_quota::with_scoped_guard(store(records.path()), policy, || {
+                github_quota::shared_exhausted_reset(&short, &[RESOURCE_CORE])
+            });
+            assert_eq!(reset, github_quota::SharedReset::Guarded(None), "{reset:?}");
+            assert_eq!(
+                enclosing.get(),
+                1,
+                "a clipped probe must restore the enclosing clock: a 60 ms shared read after it must still run its rate-limit probe"
+            );
+
+            let result = github_quota::with_scoped_guard(store(records.path()), policy, || {
+                github_quota::run_gh_request(GithubCaller::Delivery, &short)
+            })
+            .unwrap();
+            assert!(result.timed_out, "{result:?}");
+            assert_eq!(
+                enclosing.get(),
+                2,
+                "a 60 ms read after a clipped probe must still run its rate-limit probe"
+            );
+        },
     );
     assert!(gh.calls().is_empty(), "{:?}", gh.calls());
 }
