@@ -262,3 +262,45 @@ mod git_spawns {
         );
     }
 }
+
+/// An invalid `config.toml` names its path with the home directory redacted
+/// (ORB-26548): the resolver shows `~/…`, never the absolute home path.
+mod invalid_config_path {
+    use std::path::PathBuf;
+
+    use orbit_common::OrbitError;
+
+    #[test]
+    fn invalid_runtime_config_names_home_redacted_path() {
+        if crate::tests::run_isolated_test(std::any::type_name_of_val(
+            &invalid_runtime_config_names_home_redacted_path,
+        )) {
+            return;
+        }
+        // The isolated child runs with HOME set to a disposable directory.
+        let home = PathBuf::from(
+            std::env::var_os("HOME")
+                .or_else(|| std::env::var_os("USERPROFILE"))
+                .expect("isolated home"),
+        );
+        let workspace = home.join("project");
+        let orbit_dir = workspace.join(".orbit");
+        std::fs::create_dir_all(&orbit_dir).expect("orbit dir");
+        std::fs::write(orbit_dir.join("config.toml"), "root = = invalid\n")
+            .expect("invalid config");
+
+        let message = match crate::resolve_bootstrap_roots(&workspace, None) {
+            Err(OrbitError::InvalidInput(message)) => message,
+            Err(other) => panic!("expected InvalidInput, got {other:?}"),
+            Ok(_) => panic!("an unparseable config.toml must be refused"),
+        };
+        assert!(
+            message.starts_with("invalid runtime config '~/project/.orbit/config.toml': "),
+            "the config path must be home-redacted: {message}"
+        );
+        assert!(
+            !message.contains(&home.display().to_string()),
+            "the absolute home directory must not leak into the message: {message}"
+        );
+    }
+}

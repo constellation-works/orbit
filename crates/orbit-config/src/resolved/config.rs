@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{Crew, HumanCrew};
 
 use super::compatibility::{
@@ -17,6 +16,7 @@ use super::crew::{
 };
 use super::execution_env::{CodexExecutionPolicy, ExecutionEnvPolicy};
 use crate::ConfigRoots;
+use crate::config_document;
 use crate::crew_defaults::builtin_default_crews;
 use crate::layering::load_layered_resolved;
 use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
@@ -198,12 +198,8 @@ impl ResolvedConfig {
         persistence: PersistenceConfig,
         operation_layer_source: OperationLayerSource,
     ) -> Result<Self, OrbitError> {
-        let mut document = toml::from_str::<toml::Value>(raw).map_err(|err| {
-            OrbitError::InvalidInput(format!(
-                "invalid runtime config '{}': {err}",
-                redact_home_dir(&config_path.display().to_string())
-            ))
-        })?;
+        let mut document = toml::from_str::<toml::Value>(raw)
+            .map_err(|err| config_document::invalid_runtime_config(config_path, err))?;
         crate::aliases::translate_deprecated_keys(&mut document, None, config_path)?;
         let resolved = Self::from_document_with_warnings(
             document,
@@ -288,12 +284,7 @@ impl ResolvedConfig {
         let parsed = document
             .clone()
             .try_into::<RawRuntimeConfig>()
-            .map_err(|err| {
-                OrbitError::InvalidInput(format!(
-                    "invalid runtime config '{}': {err}",
-                    redact_home_dir(&config_path.display().to_string())
-                ))
-            })?;
+            .map_err(|err| config_document::invalid_runtime_config(config_path, err))?;
 
         reject_retired_backend_overrides(
             &document,
@@ -416,25 +407,28 @@ fn plugin_sections_from_raw(
     let mut sections = BTreeMap::new();
     for (namespace, value) in raw {
         if !orbit_types::plugin::is_valid_namespace(namespace) {
-            return Err(OrbitError::InvalidInput(format!(
-                "invalid runtime config '{}': '[plugins.{namespace}]' is not a plugin namespace: \
-                 use lowercase letters, digits, '_' or '-', starting with a letter",
-                redact_home_dir(&config_path.display().to_string())
-            )));
+            return Err(config_document::invalid_runtime_config(
+                config_path,
+                format!(
+                    "'[plugins.{namespace}]' is not a plugin namespace: \
+                     use lowercase letters, digits, '_' or '-', starting with a letter"
+                ),
+            ));
         }
         let json = serde_json::to_value(value).map_err(|error| {
-            OrbitError::InvalidInput(format!(
-                "invalid runtime config '{}': '[plugins.{namespace}]' is not representable: \
-                 {error}",
-                redact_home_dir(&config_path.display().to_string())
-            ))
+            config_document::invalid_runtime_config(
+                config_path,
+                format!("'[plugins.{namespace}]' is not representable: {error}"),
+            )
         })?;
         if !json.is_object() {
-            return Err(OrbitError::InvalidInput(format!(
-                "invalid runtime config '{}': 'plugins.{namespace}' must be a table of that \
-                 plugin's settings",
-                redact_home_dir(&config_path.display().to_string())
-            )));
+            return Err(config_document::invalid_runtime_config(
+                config_path,
+                format!(
+                    "'plugins.{namespace}' must be a table of that \
+                     plugin's settings"
+                ),
+            ));
         }
         sections.insert(namespace.clone(), json);
     }

@@ -53,8 +53,9 @@
 //!   It sits above the domain admission modules (`aliases`, `crew`,
 //!   `operation`, `provider_limit`, `seeding`) whose admitters its key
 //!   table calls; none of them names it.
-//! - `config_document` — pure TOML path access and the typed dotted-path read
-//!   shared below admission.
+//! - `config_document` — pure TOML path access, the typed dotted-path read
+//!   shared below admission, and the one constructor for
+//!   `invalid runtime config '<path>'` errors.
 //! - `config_io` — no-follow `config.toml` reads and path admission, below
 //!   loading, diagnostics and the store.
 //! - `config_toml` — the shared read-and-parse of one admitted file into a
@@ -129,6 +130,7 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 
 pub use aliases::deprecated_key_rewrites;
+pub use config_document::invalid_runtime_config;
 pub use crew_auto_effort::{AUTO_EFFORT_BANDS_KEY, AutoEffortBand, AutoEffortPolicy};
 pub use crew_pools::{
     ComplexityCrewPools, CrewPoolEntry, PurposeCrewPools, TYPE_COMPLEXITY_CREWS_KEY,
