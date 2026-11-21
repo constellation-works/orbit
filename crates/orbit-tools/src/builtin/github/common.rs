@@ -1,20 +1,6 @@
 use super::*;
 
-pub fn gh_exec_request(
-    args: Vec<String>,
-    current_dir: Option<String>,
-    timeout_ms: u64,
-) -> ExecRequest {
-    ExecRequest {
-        program: "gh".to_string(),
-        args,
-        current_dir,
-        timeout_ms: Some(timeout_ms),
-        stdin_mode: StdinMode::Null,
-        environment_mode: EnvironmentMode::Inherit,
-        debug: false,
-    }
-}
+pub use crate::gh_request::gh_exec_request;
 
 /// The checkout a repository-scoped `gh` call made through a registered tool
 /// runs in: the caller's selected workspace, else its cwd.
@@ -35,6 +21,26 @@ pub(super) fn in_tool_workspace(mut request: ExecRequest, ctx: &ToolContext) -> 
         request.current_dir = Some(dir);
     }
     request
+}
+
+/// The quota class a `github.*` tool call spends as: an agent's, unless the
+/// host dispatched it as a deterministic job step.
+pub(crate) fn quota_caller(ctx: &ToolContext) -> crate::github_quota::GithubCaller {
+    match ctx.caller {
+        crate::ToolCaller::Agent => crate::github_quota::GithubCaller::Agent,
+        crate::ToolCaller::DeterministicStep(_) => crate::github_quota::GithubCaller::Background,
+    }
+}
+
+/// The `read_run_log_guarded` guard that admits each `gh` subprocess of a
+/// `github.*` tool call against the host's quota. It returns the request with
+/// only the timeout budget left after admission, or the typed timeout when
+/// admission spent it all.
+pub(crate) fn quota_admission(
+    ctx: &ToolContext,
+) -> impl Fn(&ExecRequest) -> Result<ExecRequest, OrbitError> {
+    let caller = quota_caller(ctx);
+    move |request| crate::github_quota::admit_gh_request_within_budget(caller, request)
 }
 
 pub(super) fn gh_schema(name: &str, description: &str, parameters: Vec<ToolParam>) -> ToolSchema {
@@ -83,7 +89,10 @@ macro_rules! gh_tool {
                 input: serde_json::Value,
             ) -> Result<serde_json::Value, orbit_common::OrbitError> {
                 let req = self.exec_request(ctx, &input)?;
-                let exec_result = orbit_exec::run_process(&req, &orbit_exec::NoSandbox)?;
+                let exec_result = crate::github_quota::run_gh_request(
+                    crate::builtin::github::quota_caller(ctx),
+                    &req,
+                )?;
                 let $response_ctx = ctx;
                 let $response_input = &input;
                 let $result = &exec_result;

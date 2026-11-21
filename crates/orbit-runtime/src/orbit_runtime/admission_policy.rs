@@ -1,16 +1,35 @@
 //! Last-known-good workflow settings: admission snapshots at pass boundaries,
 //! and steering refreshed at prompt and promotion checkpoints.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
 
 use orbit_config::{
-    AutoConcurrencySettings, MidRunSteeringSettings, ProviderLimitPolicy, ResolvedConfig,
+    AutoConcurrencySettings, AutoEffortPolicy, ComplexityCrewPools, MidRunSteeringSettings,
+    ProviderLimitPolicy, PurposeCrewPools, ResolvedConfig, StandingDrainSettings,
+    TaskTypeDefinition, TypeComplexityCrewPools,
 };
+use orbit_types::identity::{Crew, HumanCrew};
 
 use super::RuntimeKernel;
 use crate::config_path::{CONFIG_TOML_FILE, validated_existing_config_root};
+
+/// Last-known-good crew registry, routing pools and auto-effort policy for
+/// admission and crew resolution.
+#[derive(Clone)]
+pub struct AdmissionCrewSettings {
+    pub complexity_crews: ComplexityCrewPools,
+    pub crews: BTreeMap<String, Crew>,
+    pub human_crews: BTreeMap<String, HumanCrew>,
+    pub default_crew: Option<String>,
+    pub auto_effort: AutoEffortPolicy,
+    pub purpose_crews: PurposeCrewPools,
+    pub type_complexity_crews: TypeComplexityCrewPools,
+    pub task_types: Vec<TaskTypeDefinition>,
+    pub final_recovery_crews: Vec<String>,
+}
 
 #[derive(Clone)]
 pub(super) struct AdmissionPolicy {
@@ -21,16 +40,41 @@ pub(super) struct AdmissionPolicy {
     experiments_enabled: bool,
     /// `crew_memory.enabled`.
     crew_memory_enabled: bool,
+    /// `workflow.standing_drain.*`.
+    standing_drain: StandingDrainSettings,
+    crew_settings: Arc<AdmissionCrewSettings>,
 }
 
 impl AdmissionPolicy {
     fn from_resolved(config: ResolvedConfig) -> Self {
+        let provider_limit = config.snapshot.provider_limit_policy();
+        let mid_run_steering = config.snapshot.mid_run_steering();
+        let experiments_enabled = config.snapshot.experiments().enabled;
+        let crew_memory_enabled = config.snapshot.crew_memory_enabled();
+        let standing_drain = config.snapshot.standing_drain();
+        let auto_effort = config.snapshot.auto_effort();
+        let purpose_crews = config.snapshot.purpose_crews();
+        let type_complexity_crews = config.snapshot.type_complexity_crews();
+        let task_types = config.snapshot.task_types().to_vec();
+        let final_recovery_crews = config.snapshot.final_recovery_crews().to_vec();
         Self {
-            provider_limit: config.snapshot.provider_limit_policy(),
-            mid_run_steering: config.snapshot.mid_run_steering(),
-            experiments_enabled: config.snapshot.experiments().enabled,
-            crew_memory_enabled: config.snapshot.crew_memory_enabled(),
+            provider_limit,
+            mid_run_steering,
+            experiments_enabled,
+            crew_memory_enabled,
+            standing_drain,
             auto_concurrency: config.auto_concurrency,
+            crew_settings: Arc::new(AdmissionCrewSettings {
+                complexity_crews: config.complexity_crews,
+                crews: config.crews,
+                human_crews: config.human_crews,
+                default_crew: config.default_crew,
+                auto_effort,
+                purpose_crews,
+                type_complexity_crews,
+                task_types,
+                final_recovery_crews,
+            }),
         }
     }
 }
@@ -65,14 +109,29 @@ impl RuntimeKernel {
 
     fn refresh_workflow_policy(&self) -> Arc<AdmissionPolicy> {
         let initial = || {
+            let settings = self.context.settings();
             Arc::new(AdmissionPolicy {
-                auto_concurrency: self.context.settings().auto_concurrency().clone(),
-                provider_limit: self.context.settings().provider_limit().clone(),
-                mid_run_steering: self.context.settings().mid_run_steering(),
-                experiments_enabled: self.context.settings().experiments().enabled,
+                auto_concurrency: settings.auto_concurrency().clone(),
+                provider_limit: settings.provider_limit().clone(),
+                mid_run_steering: settings.mid_run_steering(),
+                experiments_enabled: settings.experiments().enabled,
                 // Fail closed: until a config load succeeds, crew memory
                 // writes stay refused, the feature's default.
                 crew_memory_enabled: false,
+                // Fail closed the same way: the keeper stays off until a
+                // config load says otherwise.
+                standing_drain: StandingDrainSettings::default(),
+                crew_settings: Arc::new(AdmissionCrewSettings {
+                    complexity_crews: settings.complexity_crews().clone(),
+                    crews: settings.crews().clone(),
+                    human_crews: settings.human_crews().clone(),
+                    default_crew: settings.default_crew().map(ToOwned::to_owned),
+                    auto_effort: settings.auto_effort().clone(),
+                    purpose_crews: settings.purpose_crews().clone(),
+                    type_complexity_crews: settings.type_complexity_crews().clone(),
+                    task_types: settings.task_types().to_vec(),
+                    final_recovery_crews: settings.final_recovery_crews().to_vec(),
+                }),
             })
         };
         let mut cache = self
@@ -130,6 +189,13 @@ impl RuntimeKernel {
         self.refresh_workflow_policy().crew_memory_enabled
     }
 
+    /// `workflow.standing_drain.*` from the current config, like
+    /// [`Self::current_crew_memory_enabled`]: an operator's disable stops the
+    /// keeper at its next tick. Off until a config load succeeds.
+    pub fn current_standing_drain(&self) -> StandingDrainSettings {
+        self.refresh_workflow_policy().standing_drain
+    }
+
     /// Pin both policies for this pass so all decisions use one config version.
     pub fn admission_policy_snapshot(&self) -> Self {
         let mut runtime = self.clone();
@@ -144,5 +210,11 @@ impl RuntimeKernel {
     /// Current last-known-good host settings, or this admission pass's snapshot.
     pub fn auto_concurrency_settings(&self) -> AutoConcurrencySettings {
         self.current_admission_policy().auto_concurrency.clone()
+    }
+
+    /// Current last-known-good crew registry, pools and auto-effort policy, or
+    /// this admission pass's snapshot.
+    pub fn admission_crew_settings(&self) -> Arc<AdmissionCrewSettings> {
+        self.current_admission_policy().crew_settings.clone()
     }
 }

@@ -48,6 +48,7 @@ mod cfg_gate;
 mod consequential;
 mod drain_promotion;
 mod freshness;
+mod guide_gate;
 pub(crate) mod input;
 mod no_diff;
 mod persist;
@@ -85,9 +86,9 @@ use post_deploy::post_deploy;
 pub(crate) use prepare::prepare;
 pub use promotion::task_pilot_warnings;
 pub(crate) use promotion::{
-    FOOTPRINT_UNRESOLVED, HeldPilotWarnings, PromotionFindings, auto_approval_hold_classification,
-    auto_approval_opted_out, held_pilot_warnings, promotion_findings, recommendation_has_evidence,
-    warning_hold_findings,
+    FOOTPRINT_UNRESOLVED, HeldPilotWarnings, PILOT_HOLD_CLEARANCE_SUMMARY, PromotionFindings,
+    auto_approval_hold_classification, auto_approval_opted_out, held_pilot_warnings,
+    promotion_findings, recommendation_has_evidence, warning_hold_findings,
 };
 pub(crate) use source::requested_base_branch;
 

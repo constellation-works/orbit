@@ -111,7 +111,7 @@ The reading text is appended only when the host delivers a notice brief. The pos
 
 | Field | Default | Meaning |
 |---|---|---|
-| `require_completion_envelope` | `true` | The invocation must end with a well-formed Orbit response envelope, or the step fails. An envelope that reports `status: "failed"` still satisfies the check. |
+| `require_completion_envelope` | `true` | The invocation must end with a well-formed Orbit response envelope, or the step fails. Explicit `failed` or `timeout` status fails a required completion contract even if the provider exits 0, while `result` and `error` payloads remain advisory. Use `require_response_envelope` when downstream templates consume response content. |
 | `require_response_envelope` | `false` | The step succeeds only on a fully valid success envelope. Use it when downstream templates read the result fields. It implies the completion check. |
 
 ### Bounded continuation

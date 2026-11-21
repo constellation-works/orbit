@@ -8,7 +8,7 @@
 use std::fs;
 use std::io::Write as _;
 
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use orbit_core::application::automation::{consumer_key, evaluate_auto_task};
 use orbit_types::workflow::automation::BatchState;
 use serde_json::{Value, json};
@@ -86,7 +86,7 @@ fn linux_tagged_consumer() -> Fixture {
 
 /// Put the consumer's batch back in the shape a failed mint leaves: claimed
 /// under `action_key`, with no action.
-fn reclaim(runtime: &orbit_core::OrbitRuntime, action_key: &str) {
+pub(super) fn reclaim(runtime: &orbit_core::OrbitRuntime, action_key: &str) {
     let consumer = consumer_key(runtime, "auto-task", CONSUMER).unwrap();
     let store = runtime.automation_store().unwrap();
     let before = store.automation_state(&consumer).unwrap().unwrap();
@@ -101,7 +101,7 @@ fn reclaim(runtime: &orbit_core::OrbitRuntime, action_key: &str) {
 
 /// Evaluate once, which must not fail, and return the crew of the review
 /// task the resumed claim minted.
-fn minted_crew(fixture: &Fixture, runtime: &orbit_core::OrbitRuntime) -> String {
+pub(super) fn minted_crew(fixture: &Fixture, runtime: &orbit_core::OrbitRuntime) -> String {
     let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
     let diagnostic = evaluate_auto_task(runtime, &definition, false, Utc::now())
         .expect("a resumed claim evaluates without an error");
@@ -113,6 +113,30 @@ fn minted_crew(fixture: &Fixture, runtime: &orbit_core::OrbitRuntime) -> String 
     let task = fixture.json(&["task", "show", &task_id, "--json"]);
     assert_eq!(task["crew_source"], POOL_KEY, "{task}");
     task["crew"].as_str().unwrap().to_string()
+}
+
+/// Evaluate the consumer one hour after its last held tick, so the stall it has
+/// held since then escalates, and return the body of the friction filed for it.
+pub(super) fn escalated_hold_body(fixture: &Fixture, runtime: &orbit_core::OrbitRuntime) -> String {
+    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let later = Utc::now() + Duration::minutes(61);
+    let held = evaluate_auto_task(runtime, &definition, false, later)
+        .expect("a held batch does not fail the tick");
+    assert_eq!(held.reason, "stalled: crew_os_ineligible");
+    let frictions = fixture.json(&["friction", "list", "--status", "all", "--json"]);
+    let filed = frictions
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|friction| {
+            friction["title"]
+                .as_str()
+                .is_some_and(|title| title.contains("is stalled on delivery-code-review"))
+        })
+        .unwrap_or_else(|| panic!("the escalated hold is filed as a friction: {frictions}"));
+    let id = filed["id"].as_str().unwrap().to_string();
+    let shown = fixture.json(&["friction", "show", &id, "--json"]);
+    shown["body"].as_str().unwrap().to_string()
 }
 
 /// [ORB-17104] The owner's pool drew `muse-wonder` for a batch whose review
@@ -276,6 +300,19 @@ fn a_pool_no_host_can_run_holds_the_batch_until_configuration_admits_a_crew() {
                 .iter()
                 .any(|problem| problem.as_str().unwrap().contains("muse-calm"))),
         "{config}"
+    );
+
+    // Past the escalation window the same hold is filed with the way out an OS
+    // exclusion needs, and names no refused model.
+    let body = escalated_hold_body(&fixture, &runtime);
+    assert!(
+        body.contains("change the definition's `os:` tags"),
+        "{body}"
+    );
+    assert!(body.contains("os:linux"), "{body}");
+    assert!(
+        !body.contains("refused until"),
+        "an OS-only hold names no refused model: {body}"
     );
 
     // Adding a crew a linux host can run to the pool mints the held batch on

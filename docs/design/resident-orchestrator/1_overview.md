@@ -2,7 +2,7 @@
 title: Resident Orchestrator — Overview
 owner: claude
 last_updated: 2026-11-08
-last_validated: 2026-11-08
+last_validated: 2026-11-20
 status: Draft
 stage: building
 next: "Re-file the slice 10 pilot (ORB-21251 archived 2026-11-03, not done) once a bounded mandate with an operator authority grant and a manager session is ready"
@@ -81,8 +81,8 @@ resident that quietly works around a gap hides it. The evolution loop
   over its covered workspaces. Only the human widens it; anyone may narrow it.
 - **Resident** — the mandate's loop, run by Orbit as cycles. It has state (`active`, `paused`,
   `taken_over`, `ended`) but no process between cycles.
-- **Fire** — the clock tick at which a mandate is due: its wake digest changed or its heartbeat
-  elapsed, never faster than its cadence floor.
+- **Fire** — the clock tick at which a mandate is due: something it acts on changed, its planned
+  next wake came or its heartbeat elapsed, never faster than its cadence floor.
 - **Cycle** — one bounded run of the `resident_cycle_pipeline` job: observe, one agent loop,
   finalize ([2_design.md §5](./2_design.md#5-the-cycle)).
 - **Checkpoint** — the structured `resident.checkpoint` comment a cycle leaves on the assignment

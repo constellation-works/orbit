@@ -46,9 +46,36 @@ export function isOwnedWorkspace(workspace) {
   return !!workspace && workspace.checkout_role !== "replica";
 }
 
-/// The owned rows of a `/api/workspaces` list, in list order.
+// Alphabetical order for names a picker shows: case-insensitive, so `alpha`
+// sorts with `Alpha`, and `beta` after both. Every picker sorts through this.
+const displayNameCollator = new Intl.Collator(undefined, { sensitivity: "base" });
+
+export function compareDisplayNames(left, right) {
+  return displayNameCollator.compare(String(left), String(right));
+}
+
+/// Deterministic tie-break for ids: code-unit order, so ids that differ
+/// only by case still sort deterministically.
+export function compareIds(left, right) {
+  const l = String(left);
+  const r = String(right);
+  return l < r ? -1 : l > r ? 1 : 0;
+}
+
+/// Picker order for workspaces: alphabetical by the name the picker shows,
+/// case-insensitive, with ties broken by workspace id.
+export function compareWorkspacePickerOrder(left, right) {
+  return compareDisplayNames(left.name || left.id, right.name || right.id)
+    || compareIds(left.id, right.id);
+}
+
+/// The owned rows of a `/api/workspaces` list in picker order. This is the one
+/// list the rail, Propose a task, the task filter, the Drain target and the
+/// All workspaces grouping are all built from. The server keeps registry order.
 export function ownedWorkspaces(workspaces) {
-  return (Array.isArray(workspaces) ? workspaces : []).filter(isOwnedWorkspace);
+  return (Array.isArray(workspaces) ? workspaces : [])
+    .filter(isOwnedWorkspace)
+    .sort(compareWorkspacePickerOrder);
 }
 
 // Replica checkouts of the selected host when that host owns no workspace.
@@ -273,9 +300,9 @@ export function setWorkspace(id) {
 // listeners re-render labels when the list arrives.
 let workspaceNames = new Map();
 const workspaceNameListeners = new Set();
-// Owned rows last given to `setWorkspaceNames`, in that list's order. The
-// Tasks filter and the All workspaces drain select both read this catalog;
-// the task filter does not narrow the drain select.
+// Owned rows last given to `setWorkspaceNames`, in that list's order (picker
+// order, from `ownedWorkspaces`). The Tasks filter and the All workspaces drain
+// select both read this catalog; the task filter does not narrow the drain select.
 let workspaceCatalog = [];
 
 export function setWorkspaceNames(workspaces) {
@@ -287,14 +314,14 @@ export function setWorkspaceNames(workspaces) {
   for (const listener of workspaceNameListeners) listener();
 }
 
-/// Owned workspaces last published by `setWorkspaceNames`, in list order.
+/// Owned workspaces last published by `setWorkspaceNames`, in picker order.
 export function workspaceCatalogEntries() {
   return workspaceCatalog;
 }
 
-// Where a workspace sits in the picker (`/api/workspaces` order); the All
-// workspaces task list groups each status section in this order. An id the
-// list does not hold sorts after every listed one.
+// Where a workspace sits in the picker (picker order, alphabetical by name);
+// the All workspaces task list groups each status section in this order. An
+// id the list does not hold sorts after every listed one.
 let workspaceOrder = new Map();
 
 export function workspacePickerIndex(id) {
@@ -956,7 +983,18 @@ export function el(tag, opts = {}, children = []) {
   if (opts.id) node.id = opts.id;
   if (opts.class) node.className = opts.class;
   if (opts.text != null) node.textContent = opts.text;
-  if (opts.title != null) node.title = opts.title;
+  // STD-07 R41: a button shows no native tooltip. A title given for one
+  // becomes its accessible description instead, unless it only repeats the
+  // button's label or accessible name.
+  if (opts.title != null) {
+    if (tag === "button") {
+      if (opts["aria-description"] == null && opts.title !== opts.text && opts.title !== opts["aria-label"]) {
+        node.setAttribute("aria-description", String(opts.title));
+      }
+    } else {
+      node.title = opts.title;
+    }
+  }
   if (opts.style) Object.assign(node.style, opts.style);
   for (const [name, value] of Object.entries(opts)) {
     if (
@@ -975,6 +1013,49 @@ export function el(tag, opts = {}, children = []) {
     if (child != null) node.append(child);
   }
   return node;
+}
+
+// STD-07 R44: a dialog, panel, drawer, popover or floating bar that Esc closes
+// labels that control "esc". The visible word stays lowercase. `name` is the
+// accessible name and says what the control closes, for example
+// "Close task details (Esc)". There is no title and no hover bubble (R41).
+// Width follows the word (R42); the stylesheet matches the height of the
+// header buttons beside it.
+export function labelEscClose(button, name, { description = null } = {}) {
+  button.type = "button";
+  button.textContent = "esc";
+  button.classList.add("esc-close");
+  button.setAttribute("aria-label", name);
+  button.removeAttribute("title");
+  if (description) button.setAttribute("aria-description", description);
+  else button.removeAttribute("aria-description");
+  return button;
+}
+
+export function escCloseButton(name, { className = "", description = null, onClick = null } = {}) {
+  const button = el("button", {
+    type: "button",
+    class: className ? `esc-close ${className}` : "esc-close",
+  });
+  labelEscClose(button, name, { description });
+  if (onClick) button.addEventListener("click", onClick);
+  return button;
+}
+
+// STD-07 R41: a count badge inside a tab button carries its detail in the
+// button's accessible description, never in a native tooltip on the badge.
+// Several badges in one button join their details.
+export function setBadgeDescription(node, text) {
+  if (!node) return;
+  node.removeAttribute("title");
+  if (text) node.dataset.badgeDescription = text;
+  else delete node.dataset.badgeDescription;
+  const host = node.closest ? node.closest("button, a") : null;
+  if (!host) return;
+  const parts = [...host.querySelectorAll("[data-badge-description]")]
+    .map((badge) => badge.dataset.badgeDescription).filter(Boolean);
+  if (parts.length) host.setAttribute("aria-description", parts.join(" · "));
+  else host.removeAttribute("aria-description");
 }
 
 // A focusable "i" that shows an explanation on hover or keyboard focus, so a
@@ -997,6 +1078,7 @@ export function infoHint(text, { id = null } = {}) {
 // The bubble flips above the icon when it would run off the bottom. The
 // stylesheet shows it on hover and focus; this only says where it goes. A
 // supplied trigger keeps its own appearance and link navigation, if any.
+// preserveAction leaves button activation and dialog Escape handling untouched.
 let pinnedHintFollowsScroll = false;
 
 function placePinnedInfoHint(hint) {
@@ -1023,7 +1105,13 @@ function placePinnedInfoHint(hint) {
   hint.style.setProperty("--hint-tip-top", `${top}px`);
 }
 
-export function pinnedInfoHint(text, { trigger = null } = {}) {
+export function pinnedInfoHint(text, { trigger = null, preserveAction = false } = {}) {
+  // STD-07 R41: a button trigger gets no bubble; the text is its accessible
+  // description. Non-button triggers (links, truncated labels) keep theirs.
+  if (trigger && (trigger.tagName === "BUTTON" || trigger.getAttribute?.("role") === "button")) {
+    if (text && !trigger.getAttribute("aria-description")) trigger.setAttribute("aria-description", text);
+    return trigger;
+  }
   const hint = trigger || infoHint(text);
   if (trigger) hint.appendChild(el("span", { class: "info-hint-text", text }));
   hint.classList.add("pinned-hint-trigger");
@@ -1032,13 +1120,13 @@ export function pinnedInfoHint(text, { trigger = null } = {}) {
   hint.addEventListener("mouseenter", place);
   hint.addEventListener("focus", place);
   hint.addEventListener("pinned-hint-refresh", place);
-  hint.addEventListener("click", (event) => {
+  if (!preserveAction) hint.addEventListener("click", (event) => {
     if (hint.tagName !== "A") event.preventDefault();
     event.stopPropagation();
     hint.focus();
     place();
   });
-  hint.addEventListener("keydown", (event) => {
+  if (!preserveAction) hint.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       event.stopPropagation();
       hint.blur();
@@ -1201,6 +1289,16 @@ export function auditActorLabel(role) {
   return role === "unverified" ? "Unconfirmed caller" : role || "-";
 }
 
+// The five failure classes as Health › Incidents names its tiles. Shared, so the
+// Analytics failure-categories card and the tiles cannot disagree on a name.
+export const INCIDENT_CLASS_TITLES = {
+  unexpected: "Unexpected failures",
+  expected: "Expected refusals",
+  denied: "Policy denials",
+  diagnostic: "Lifecycle diagnostics",
+  deferred: "Deferred, not failed",
+};
+
 export function incidentClassLabel(key, label) {
   return key === "expected" ? "Expected refusal" : label || key || "failure";
 }
@@ -1273,8 +1371,8 @@ export async function copyWithFeedback(node, text) {
 /// `copyWithFeedback` writes into it is announced through its polite live
 /// region. The click is kept from reaching a row that toggles on click, and a
 /// key press already stays with the button (see `makeToggleRow`).
-export function makeCopyButton(value, { class: className = "", text = value, title = "Copy to clipboard" } = {}) {
-  const button = el("button", { class: `copy-id ${className}`.trim(), text, title });
+export function makeCopyButton(value, { class: className = "", text = value, description = "Copy to clipboard" } = {}) {
+  const button = el("button", { class: `copy-id ${className}`.trim(), text, "aria-description": description });
   button.type = "button";
   button.setAttribute("aria-live", "polite");
   button.addEventListener("click", (event) => {

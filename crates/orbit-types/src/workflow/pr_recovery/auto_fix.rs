@@ -55,8 +55,9 @@ pub const PR_AUTO_FIX_BASE_RED_EVENT: &str = "pr_auto_fix_base_red";
 /// A failed head whose repair is held until the base proves it fixed.
 ///
 /// Only `failed_head` supplies hold authority. The optional fields retain the
-/// rich base-tip evidence or the minimal poll reason without changing the
-/// historical note. New history entries also carry this record in a decision.
+/// rich base-tip evidence or the minimal poll reason. New history entries
+/// carry this record in their decision and a one-line [`Self::history_note`];
+/// entries written before the decision hold it as their JSON note.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrAutoFixBaseRed {
     pub failed_head: String,
@@ -97,6 +98,65 @@ impl PrAutoFixBaseRed {
         (record.path.as_deref() == Some("known_red_base")).then_some(record)
     }
 
+    /// Names of the failing checks the base-tip evidence retained, sorted and
+    /// without repeats. Empty for a minimal poll hold.
+    #[must_use]
+    pub fn failing_check_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self
+            .checks
+            .iter()
+            .flatten()
+            .filter_map(|check| check["failed_job"]["name"].as_str())
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names
+    }
+
+    /// Whether `other` records the same hold: the same failed head, landed
+    /// base and failing checks. A hold with no named checks is told apart by
+    /// its reason. Evidence payloads (job objects, log excerpts) do not
+    /// count, so a re-read of the same red base is a repeat.
+    #[must_use]
+    pub fn same_hold(&self, other: &Self) -> bool {
+        let names = self.failing_check_names();
+        self.failed_head == other.failed_head
+            && self.landed_base == other.landed_base
+            && names == other.failing_check_names()
+            && (!names.is_empty() || self.reason == other.reason)
+    }
+
+    /// The one-line history note: what is held, why and what releases it.
+    /// The full record lives in the entry's decision.
+    #[must_use]
+    pub fn history_note(&self) -> String {
+        const RELEASE: &str = "; waits for a green base";
+        let names = self.failing_check_names();
+        let body = if let Some(base) = &self.landed_base
+            && !names.is_empty()
+        {
+            let quoted = names
+                .iter()
+                .map(|name| format!("'{name}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "{} also red on base {}",
+                clip_chars(&quoted, 120),
+                short_sha(base)
+            )
+        } else if let Some(reason) = &self.reason {
+            let reason = reason.lines().next().unwrap_or_default();
+            clip_chars(reason.strip_prefix("base_red: ").unwrap_or(reason), 120)
+        } else {
+            format!(
+                "head {} fails as its base does",
+                short_sha(&self.failed_head)
+            )
+        };
+        format!("auto-fix held: {body}{RELEASE}")
+    }
+
     /// Read a hold once at the task-history boundary. A typed decision wins
     /// over diagnostic text; only an absent decision permits legacy decoding.
     #[must_use]
@@ -115,6 +175,73 @@ impl PrAutoFixBaseRed {
     /// and a minimal failed-head/reason pair. Neither requires a rewrite.
     fn from_legacy_note(note: &str) -> Option<Self> {
         serde_json::from_str(note).ok()
+    }
+}
+
+/// History event recording the failed checks an admitted check repair was
+/// handed, with their normalized signatures, on the exact head [ORB-25510].
+pub const PR_AUTO_FIX_HEAD_FAILURE_EVENT: &str = "pr_auto_fix_head_failure";
+
+/// One required check that failed on a pull request head, as an admitted
+/// check repair read it from the job log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrAutoFixFailedCheck {
+    /// The job label (`workflow / job`).
+    pub check: String,
+    /// The failed step the signature was read from.
+    pub step: String,
+    /// The normalized error signature, the identity CI failure filing keys
+    /// its sweep repairs on. Never a step fallback.
+    pub signature: String,
+}
+
+/// The failure of a pull request head that auto-fix handed to a check
+/// repair, kept on the task so it outlives the run that read it.
+///
+/// A run whose repair did not repair the head holds in run state only, and
+/// the task stays in `review` holding its locks. This record is what
+/// admission reads to prove that a CI-failure sweep repair of the base fixes
+/// the same failure the held head waits on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrAutoFixHeadFailure {
+    pub pr_number: String,
+    pub failed_head: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+    /// The auto-fix run that admitted the repair.
+    pub run_id: String,
+    pub checks: Vec<PrAutoFixFailedCheck>,
+}
+
+impl PrAutoFixHeadFailure {
+    /// The one-line history note; the full record lives in the decision.
+    #[must_use]
+    pub fn history_note(&self) -> String {
+        let mut names: Vec<&str> = self.checks.iter().map(|c| c.check.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        let quoted = names
+            .iter()
+            .map(|name| format!("'{name}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "auto-fix repair handed {} failing on head {}",
+            clip_chars(&quoted, 120),
+            short_sha(&self.failed_head)
+        )
+    }
+
+    /// Read the record from its history entry's typed decision.
+    #[must_use]
+    pub fn from_entry(entry: &TaskHistoryEntry) -> Option<Self> {
+        if entry.event != PR_AUTO_FIX_HEAD_FAILURE_EVENT {
+            return None;
+        }
+        match &entry.decision {
+            Some(TaskDecision::PrAutoFixHeadFailure(record)) => Some(record.clone()),
+            _ => None,
+        }
     }
 }
 
@@ -284,9 +411,10 @@ pub enum PrAutoFixReadReset {
 
 /// One bounded wait for a throttled pull-request log read.
 ///
-/// The history note stays this record's JSON. New entries also store it as
-/// [`TaskDecision::PrAutoFixReadDeferred`]. A note written before that
-/// decision still parses through [`Self::from_entry`].
+/// New entries store this record as [`TaskDecision::PrAutoFixReadDeferred`]
+/// beside a one-line [`Self::history_note`]. A note written before that
+/// decision, holding the record's JSON, still parses through
+/// [`Self::from_entry`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrAutoFixReadDeferral {
     pub execution: String,
@@ -341,6 +469,20 @@ impl PrAutoFixReadDeferral {
         self.diagnostic.as_deref().unwrap_or("a throttled log read")
     }
 
+    /// The one-line history note: what waits, and until when. The full
+    /// record lives in the entry's decision.
+    #[must_use]
+    pub fn history_note(&self) -> String {
+        let until = match self.not_before_ms {
+            Some(ms) => format!("retries at {ms} ms"),
+            None => "retries when the throttle lifts".to_owned(),
+        };
+        format!(
+            "auto-fix waiting: log read for job {} throttled (attempt {}); {until}",
+            self.job_id, self.attempt
+        )
+    }
+
     /// The deferral a `pr_auto_fix_read_deferred` entry records.
     ///
     /// A matching decision is authoritative, including when its note
@@ -363,6 +505,19 @@ impl PrAutoFixReadDeferral {
     fn from_legacy_note(note: &str) -> Option<Self> {
         serde_json::from_str(note).ok()
     }
+}
+
+fn short_sha(sha: &str) -> &str {
+    sha.get(..7).unwrap_or(sha)
+}
+
+/// `text` cut to at most `max` characters, ending in `...` when cut.
+fn clip_chars(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let kept: String = text.chars().take(max.saturating_sub(3)).collect();
+    format!("{kept}...")
 }
 
 /// Whether a step failure is the watcher's handoff of an admitted check

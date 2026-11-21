@@ -1,7 +1,7 @@
 ---
 title: Agent Scorecards — Decisions
 owner: claude
-last_updated: 2026-11-10
+last_updated: 2026-11-15
 last_validated: 2026-11-08
 status: Draft
 feature: agent-scorecards
@@ -9,7 +9,7 @@ doc_role: decisions
 type: design
 summary: Standing rules for agent scorecards; one owner per problem, cost shown but never scored, reviewers scored on accuracy, escaped regressions scored against expected size.
 tags: [agent-scorecards, dashboard, analytics]
-paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-core/src/application/codebase/pilot.rs"]
+paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-core/src/application/codebase/pilot/**"]
 related_features: [user-interface, review-gate]
 related_artifacts: []
 ---
@@ -254,13 +254,13 @@ A row, by-type or tier cell, or ranked model with fewer than `review_min_support
 
 ## Task References
 
-- ORB-23838 — minimum support for the implementer review terms and the model ranking's review outcome.
-- ORB-23066 — optional `until` window end on the agent scorecard CLI, MCP tools and API.
-
-- ORB-17118 — the unit-landed orchestrator principle this decision extends.
-- ORB-17779 — replaced complexity-weighted implementer credit with unit landings and same-task-mix fleet expectations.
-- ORB-19629 — left escaped regressions unscored pending a larger linked sample and another backtest.
-- ORB-21789 — reran the backtest on 662 links with sites and scored escaped regressions against expected change size, counting a defect once across review layers.
-- ORB-23582 — removed the orchestrators role and its surfaces; spec problems became Not scored.
+- [ORB-23297] — proposed the model-ranking amendment cited in the cost decision.
+- [ORB-23838] — required minimum support for the implementer review terms and the model ranking's review outcome.
+- [ORB-23066] — added an optional `until` window end on the agent scorecard CLI, MCP tools and API.
+- [ORB-17118] — introduced the unit-landed orchestrator principle extended here.
+- [ORB-17779] — replaced complexity-weighted implementer credit with unit landings and same-task-mix fleet expectations.
+- [ORB-19629] — left escaped regressions unscored pending a larger linked sample and another backtest.
+- [ORB-21789] — reran the backtest on 662 links with sites and scored escaped regressions against expected change size, counting a defect once across review layers.
+- [ORB-23582] — removed the orchestrators role and its surfaces; spec problems became Not scored.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -88,7 +88,7 @@ function buildReplayRunButton(run, host) {
   const button = hasCtx("buildReplayRunButton") ? _runDetailCtx.buildReplayRunButton(run, host) : null;
   if (button && !TERMINAL_RUN_STATES.has(run.state)) {
     button.disabled = true;
-    button.title = "Replay is available after this run finishes.";
+    button.setAttribute("aria-description", "Replay is available after this run finishes.");
   }
   return button;
 }
@@ -379,11 +379,12 @@ export function renderRunDetailMeta() {
   // confirmation reads it off the run it is handed.
   if (!recorded && runIsCancellable(run)) actions.appendChild(buildCancelRunButton({ ...run, pull_claim: detail.pull_claim }, feedback));
   wrap.appendChild(actions);
-  const failure = buildRunFailure(run, Array.isArray(detail.steps) ? detail.steps : []);
+  const steps = Array.isArray(detail.steps) ? detail.steps : [];
+  const failure = buildRunFailure(run, steps);
   if (failure) wrap.appendChild(failure);
   const cancelled = buildRunCancellation(run);
   if (cancelled) wrap.appendChild(cancelled);
-  if (run.state === "held") wrap.appendChild(buildRunHold(run));
+  if (run.state === "held") wrap.appendChild(buildRunHold(run, steps));
   wrap.appendChild(grid);
   const leaves = buildClaimedLeaves(run, Array.isArray(detail.claimed_leaves) ? detail.claimed_leaves : []);
   if (leaves) wrap.appendChild(leaves);
@@ -813,7 +814,7 @@ function buildFailureRoot(root, workspaceId) {
 // failed step's own message stands in when the run carries none.
 function buildRunFailure(run, steps) {
   if (!FAILED_RUN_STATES.has(run.state)) return null;
-  const step = steps.find((candidate) => FAILED_STEP_STATES.has(candidate.state)) || null;
+  const step = steps.slice().reverse().find((candidate) => FAILED_STEP_STATES.has(candidate.state)) || null;
   const pass = run.drain_last_pass || {};
   const code = run.error_code || (step && step.error_code) || pass.last_pass_error_code;
   const message = run.error_message || (step && step.error_message) || pass.last_pass_error || "";
@@ -830,9 +831,17 @@ function buildRunFailure(run, steps) {
   box.setAttribute("aria-label", "Why this run failed");
   const workspaceId = run.workspace_id || getWorkspace();
   if (message) {
-    const pre = el("pre", { class: "run-failure-message mono" });
+    const pre = el("div", { class: "run-failure-message" });
     appendLinkified(pre, message, workspaceId);
     box.appendChild(pre);
+  }
+  const diagnostic = run.error_diagnostic || (step && step.error_diagnostic);
+  if (diagnostic) {
+    const raw = el("details", { class: "run-failure-diagnostic" }, [
+      el("summary", { text: "Diagnostic", "aria-description": "Show the structured failure details" }),
+      el("pre", { class: "mono", text: JSON.stringify(diagnostic, null, 2) }),
+    ]);
+    box.appendChild(raw);
   }
   const root = buildFailureRoot(run.failure_root, workspaceId);
   if (root) box.appendChild(root);
@@ -864,11 +873,19 @@ function buildRunCancellation(run) {
   return box;
 }
 
-function buildRunHold(run) {
+function buildRunHold(run, steps) {
+  const heldStep = steps.findLast(step => step.state === "held" && step.error_code);
+  const cause = heldStep?.error_code || run.error_code;
+  const guidance = cause === "forge_unavailable"
+    ? "The scheduler retries the push with the reviewed candidate. If the retry window expires, resume the held run when the forge is available."
+    : cause === "review_awaiting_evidence"
+      ? "Record the required external evidence for this task. Its receipt queues a fresh review."
+      : "";
+  const message = heldStep?.error_message || run.error_message || (guidance ? "" : "No hold reason was recorded.");
   const box = el("section", { class: "run-hold" }, [
     el("strong", { text: "Delivery held" }),
-    el("pre", { class: "run-hold-message mono", text: run.error_message || "Delivery is awaiting required external evidence." }),
-    el("p", { text: "Record the required external evidence for this task. Its receipt queues a fresh review; delivery resumes when that review clears the hold." }),
+    message ? el("pre", { class: "run-hold-message mono", text: message }) : null,
+    guidance ? el("p", { text: guidance }) : null,
   ]);
   box.setAttribute("aria-label", "Why this run is held");
   return box;
@@ -1295,7 +1312,7 @@ function buildLogBlock(record, stream) {
     record.timed_out ? "timeout" : null,
     record[`${stream}_truncated`] ? "truncated" : null,
   ].filter(Boolean).join(" · ");
-  const toggle = el("button", { class: "back-action log-wrap-toggle", text: "Wrap lines", title: "Toggle line wrapping" });
+  const toggle = el("button", { class: "back-action log-wrap-toggle", text: "Wrap lines", "aria-description": "Toggle line wrapping" });
   toggle.setAttribute("aria-pressed", "true");
   block.appendChild(el("div", { class: "step-log-head" }, [
     el("span", { class: "label", text: stream }),

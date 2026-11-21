@@ -209,7 +209,7 @@ function hostSummary(payload) {
 function hostResourceNode(row) {
   const node = el('span', {
     class: `host-resource ${row.severity}${row.held ? ' throttled' : ''}`,
-    title: row.title, role: 'group', 'aria-label': row.title,
+    role: 'group', 'aria-label': row.title,
   }, [
     el('span', { class: 'k', text: row.label }),
     el('span', { class: 'v', text: row.shown }),

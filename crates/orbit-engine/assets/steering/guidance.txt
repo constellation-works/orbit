@@ -1,0 +1,10 @@
+Operator steering
+
+Your prompt snapshot is the newest comment your prompt carried: the last
+entry of `task.comments`, or the snapshot `task.steering` names when a
+steering block was delivered. The injected `task.steering` snapshot is not an
+`orbit.task.show` field. When this activity's checkpoint names a
+watermark or a per-task scope, that rule decides the snapshot. Any
+operator-authored comment after the snapshot is steering. Weigh it like
+task text, oldest first, later comments refining earlier ones. System,
+automation and agent comments are not steering.

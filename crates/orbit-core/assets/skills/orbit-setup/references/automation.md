@@ -84,7 +84,7 @@ audited verbs rather than by editing the file:
 orbit routine list                          # rendered names, enabled and paused state
 orbit routine enable <routine-name>         # operator only: sets enabled: true
 orbit routine show <routine-name>           # confirm enabled and the effective state
-orbit clock tick --dry-run                  # what would fire on this host; writes nothing
+orbit clock tick --dry-run                  # what would fire on this host; dispatches nothing
 ```
 
 `enable` and `disable` (`orbit routine disable <routine-name>`) need operator
@@ -116,8 +116,8 @@ deleted.
 to change that selection and reconcile an existing workspace. Every routine default starts disabled
 except `worktree-gc`, `task-pilot` and `crew-memory-dream`, which gates itself on
 `crew_memory.enabled`. A workspace seeded while `worktree-gc` or `task-pilot`
-shipped disabled keeps its `enabled` value. The `host-health` auto-task is the one shipped
-auto-task seeded enabled ([Auto-tasks](auto-tasks.md)). Each of these starts enabled only when
+shipped disabled keeps its `enabled` value. The `host-health` auto-task is seeded disabled,
+like every other shipped auto-task ([Auto-tasks](auto-tasks.md)). Each of these starts enabled only when
 the seeding policy selects it. The cron routines
 resolve nothing else per machine, so two hosts seed identical bytes.
 `task-pilot` and `resident-cycle`
@@ -131,7 +131,7 @@ on this host.
 |---|---|---|---|
 | `worktree-gc` | hourly | `worktree_gc_pipeline` | Reclaims worktrees whose task settled to done, rejected, or archived, or has been parked in someday for 336 hours (14 days), and prunes `.orbit/tmp` entries untouched for 24 hours (`scratch_older_than_hours`). |
 | `task-pilot` | state trigger (`preparation_eligible`) | `task_pilot_pipeline` | Fingerprints eligible proposed/backlog tasks each tick and preflights a batch whose material has no fresh assessment (seeded `batch_size` 5, mixed crews included); quiet while the backlog is unchanged. |
-| `resident-cycle` | state trigger (`resident_due`) | `resident_cycle_pipeline` | Disabled by default; starts one bounded cycle for each active resident mandate whose wake digest changed (a watched task, an answered decision request, an operator comment, a notice) or whose heartbeat expired, never inside its cadence floor and never beside a live cycle. Core scopes the cycle's tool calls to the mandate's granted rights and workspaces, and an open maintenance notice makes it observe-only. Lint without restoration only reads; `orbit task lint --restore-pruned` (one task or a sweep) is refused inside a resident cycle because no right grants context maintenance. Use an operator outside the cycle for restoration. |
+| `resident-cycle` | state trigger (`resident_due`) | `resident_cycle_pipeline` | Disabled by default; starts one bounded cycle for each active resident mandate when something it acts on changed (any change to a task in its `watch`, a state change of a task its cycles acted on, an answered decision request, an operator comment, a warn, incident or maintenance notice opening or clearing, except resident-keyed notices and notices authored by the mandate's assignment task), its checkpoint's planned next wake came or its heartbeat expired, never inside its cadence floor and never beside a live cycle. Core scopes the cycle's tool calls to the mandate's granted rights and workspaces, and an open maintenance notice makes it observe-only. Lint without restoration only reads; `orbit task lint --restore-pruned` (one task or a sweep) is refused inside a resident cycle because no right grants context maintenance. Use an operator outside the cycle for restoration. |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
 | `store-gc` | daily at 04:17 | `store_gc_pipeline` | Applies `orbit gc audit` and `orbit gc runs`: prunes audit rows older than `retention.audit_days` (this workspace and workspace ids that are no longer registered) and the audit blobs nothing names, and drops the pipeline state of terminal runs older than `retention.runs_days` and the per-minute resource history and admission forecasts older than 30 days, except the newest counted rows that stay at any age. Another registered workspace keeps its own window. Review both plans before enabling it — [maintenance.md](maintenance.md#store-retention). On a large store, consider `retention.runs_days = 30` first; smaller windows are refused to preserve 30-day reliability and forecast-accuracy evidence. |
@@ -697,10 +697,14 @@ the sync, or edit it to the state form above by hand.
 ```bash
 orbit routine list                 # every routine: enabled / paused, next due
 orbit routine show <name>          # definition, effective state, recent fires
-orbit clock tick --dry-run         # what would fire; writes nothing
+orbit clock tick --dry-run         # what would fire; dispatches nothing
 orbit clock tick --dry-run --verbose  # include not-due rows
 orbit --workspace <name> clock tick --dry-run  # restrict to one workspace
 ```
+
+A dry tick dispatches no routine and mints no auto-task, but it is not
+write-free: it can still persist the validation status of registered checkouts
+and open or migrate the host's scheduler store.
 
 The global `--workspace` selector narrows a sweep — dry-run or live — to one
 registered workspace's routines; without it the pass covers every registered
@@ -735,12 +739,19 @@ auto-task uses its own kill-switch, `orbit auto-task toggle <name> on|off`
 
 ## "Why didn't it fire?"
 
-Resolve the toggles in this order — `orbit routine list` shows both at once:
+Resolve the toggles in this order — `orbit routine list` shows all three at once:
 
 1. `enabled: false` in this checkout's definition (`orbit routine enable` sets
    it; per-user, gitignored).
 2. A local pause (`orbit routine pause`: this host only, unversioned, durable
    across reboots).
+3. A tripped circuit breaker. After three fires in a row fail with the same
+   error class the sweep stops firing the routine; `orbit routine list` shows
+   it as `tripped` and `orbit routine show <name>` names the error class, last
+   run and next trial time. The sweep retries once after a backoff (15 minutes,
+   doubling to at most 4 hours) and after the host's Orbit build changes; a
+   successful trial closes it. Fix the cause, then `orbit routine breaker reset
+   <name>`, or `orbit routine breaker bypass <name>` to let one fire through.
 
 If neither explains it, check further out: is this checkout registered as an
 owner (`orbit workspace list`), is the clock unit running and not paused
@@ -784,6 +795,11 @@ exposes per-source collection caps. The file step records the effective
 before the fixed floor may name `workspace` or `global`), and `excluded_below_min_severity`. `orbit run show <RUN_ID>`
 summarizes the filed count, floor and source, and excluded alert count and
 numbers, including for a successful sweep.
+A CodeQL alert whose rule the owner host's installed CodeQL bundle does not
+offer (or any CodeQL alert when no `codeql` answers on the validation PATH) is
+filed depending on one proposed `CodeQL bundle <version> needed on <host>`
+prerequisite, with an open drift friction record that attention lists; install
+the bundle on that host and mark the prerequisite done to release the repairs.
 Secret values must not be copied into task prose or logs.
 
 A missing GitHub client, authentication, or API permission is a capability gap,

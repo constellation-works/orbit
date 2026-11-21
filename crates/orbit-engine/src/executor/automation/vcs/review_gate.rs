@@ -17,7 +17,7 @@ pub use super::base::claim::{
 };
 pub use super::claim::implementer_summary;
 use super::commit::{
-    commit_reviewer_repairs_in, reviewer_repair_identity, stage_everything, staged_paths,
+    commit_reviewer_repairs_in, reviewer_repair_identities, stage_everything, staged_paths,
 };
 use super::git::{
     BaseSyncMode, git_failure_error, git_output, git_output_raw, git_run_bytes, git_success,
@@ -33,17 +33,10 @@ pub use super::scratch_target::{
     ScratchHostTarget, ScratchHostTargetLease, lease_scratch_host_target,
 };
 
+pub use super::commit::reviewer_repair_message;
+
 /// Commit-message trailer naming the review attempt a repair commit belongs to.
 pub const REVIEW_ATTEMPT_TRAILER: &str = "Orbit-Review-Attempt";
-
-/// Subject of the commit that preserves a stopped reviewer's uncommitted
-/// edits.
-pub(in crate::executor::automation::vcs) const PARTIAL_REPAIR_SUBJECT: &str =
-    "review: partial reviewer repairs preserved";
-
-/// Trailer that marks a partial-repair commit as the gate's own.
-pub(in crate::executor::automation::vcs) const PARTIAL_REPAIR_RUN_TRAILER: &str =
-    "Orbit-Review-Run:";
 
 /// The catalog activity a before-PR reviewer runs as.
 pub const REVIEWER_ACTIVITY: &str = "agent_review_repair";
@@ -252,8 +245,9 @@ pub fn review_repair_at_head(
     else {
         return Ok(None);
     };
-    let (author, committer) = reviewer_repair_identity(reviewer_model);
-    let owned = commit.author == author && commit.committer == committer;
+    let owned = reviewer_repair_identities(reviewer_model)
+        .into_iter()
+        .any(|(author, committer)| commit.author == author && commit.committer == committer);
     Ok(owned.then_some(commit))
 }
 
@@ -349,6 +343,38 @@ pub fn path_blob_at(
         let (_, kind, object) = (fields.next()?, fields.next()?, fields.next()?);
         (entry_path == path && kind == "blob").then(|| object.to_string())
     }))
+}
+
+/// [ORB-25096] The content of the repository-relative `path` in `commit`,
+/// decoded lossily as UTF-8, or `None` when `commit` holds no file there.
+/// `path` is a literal pathspec, never a pattern.
+pub fn path_text_at(
+    workspace_path: &Path,
+    commit: &str,
+    path: &str,
+) -> Result<Option<String>, OrbitError> {
+    let Some(blob) = path_blob_at(workspace_path, commit, path)? else {
+        return Ok(None);
+    };
+    let args = ["cat-file", "blob", blob.as_str()];
+    let outcome = git_run_bytes(workspace_path, &args, None)?;
+    if outcome.timed_out {
+        return Err(git_timeout_error(
+            workspace_path,
+            &args,
+            outcome.timeout_ms,
+            &outcome.stderr,
+        ));
+    }
+    if !outcome.success {
+        return Err(git_failure_error(
+            workspace_path,
+            &args,
+            outcome.exit_code,
+            &outcome.stderr,
+        ));
+    }
+    Ok(Some(String::from_utf8_lossy(&outcome.stdout).into_owned()))
 }
 
 /// What a managed landing looks like against the reviewed candidate.

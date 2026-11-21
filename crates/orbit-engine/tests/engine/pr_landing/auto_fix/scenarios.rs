@@ -2,7 +2,8 @@
 
 use super::*;
 use orbit_types::workflow::{
-    PR_AUTO_FIX_BASE_RED_EVENT, PrAutoFixBaseRed, PrAutoFixReadDeferral, PrAutoFixReadReset,
+    PR_AUTO_FIX_BASE_RED_EVENT, PrAutoFixBaseRed, PrAutoFixHeadFailure, PrAutoFixReadDeferral,
+    PrAutoFixReadReset,
 };
 use std::io::Write as _;
 
@@ -1037,6 +1038,14 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
     let aggregate = host.scripted.lock().unwrap()["test_ci_repair"]["aggregate"]
         .as_str()
         .map(ToOwned::to_owned);
+    if aggregate.as_deref() == Some("missing_owning_run") {
+        host.tasks
+            .lock()
+            .unwrap()
+            .get_mut(TASK_ID)
+            .unwrap()
+            .job_run_id = None;
+    }
     let repair_mode = host.scripted.lock().unwrap()["test_ci_repair"]["mode"]
         .as_str()
         .unwrap_or_default()
@@ -2322,6 +2331,51 @@ fn auto_fix_repairs_required_aggregate_from_authenticated_source_annotations() {
     );
 }
 
+/// [ORB-25027] Auto-fix stop messages must name the pull request number where
+/// available and must not render an empty "pull request #" clause.
+#[test]
+fn auto_fix_stop_error_names_pull_request_number() {
+    isolated(
+        "auto_fix::auto_fix_stop_error_names_pull_request_number",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let (fx, host) = docs_only_pr(row);
+                host.script(
+                    "test_ci_repair",
+                    json!({"mode":"repair","aggregate":"missing_owning_run"}),
+                );
+                host.script(
+                    "test_checkpoint",
+                    json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+                );
+                host.require_commands(&["test \"$(cat src/contract)\" = fixed"]);
+                fx.script_checks(&["source_aggregate"]);
+                let input = auto_fix_input(&fx);
+                let outcome = run_repair_job(&host, input);
+                let error = match outcome {
+                    Ok(result) => {
+                        assert!(!result.success, "expected auto-fix failure: {result:?}");
+                        result.message.unwrap_or_default()
+                    }
+                    Err(error) => error.to_string(),
+                };
+                assert!(
+                    error.contains(&format!("pull request #{PR_NUMBER}")),
+                    "expected pull request #{PR_NUMBER} in stop error: {error}"
+                );
+                assert!(
+                    !error.contains("pull request # cannot"),
+                    "stop error must not render empty PR number: {error}"
+                );
+                assert!(
+                    error.contains("missing owning run"),
+                    "expected missing owning run reason: {error}"
+                );
+            });
+        },
+    );
+}
+
 /// One commit's workflow run, as `gh api` serves `ci.commit_jobs` and
 /// `gh run view --log-failed` serves `ci.job_log`. Absent unless this test
 /// plants it, so other rows keep the substitute's ordinary refusal.
@@ -2857,6 +2911,49 @@ fn auto_fix_repairs_untouched_failure_on_green_base_first_poll() {
                     .history(TASK_ID)
                     .iter()
                     .any(|entry| entry.event == "pr_auto_fix_base_red")
+            );
+        },
+    );
+}
+
+/// [ORB-25510] An admitted check repair leaves the failure it was handed on
+/// the task, typed, with the same signature its handoff names: a repair that
+/// cannot clear the head holds the run in run state only, and admission
+/// reads this record to prove a sweep repair of the base shares the failure.
+#[test]
+fn admitted_check_repair_records_the_head_failure_it_was_handed() {
+    auto_fix_table(
+        "auto_fix::admitted_check_repair_records_the_head_failure_it_was_handed",
+        "green_base",
+        |case, row| {
+            let (fx, host) = docs_only_pr(row);
+            let log = "error: source failure\n --> src/contract:1:1\n";
+            plant_commit_ci(&fx, &fx.candidate, 11, "failure", log);
+            plant_commit_ci(&fx, &fx.base_sha, 21, "success", log);
+            fx.script_checks(&["failure"]);
+            let error = action(
+                &host,
+                "pr_complete",
+                &waited_auto_fix_input(&fx, 15, Some(5)),
+            )
+            .expect_err(case)
+            .to_string();
+            assert!(is_check_repair(&error), "{error}");
+            let records = host
+                .history(TASK_ID)
+                .iter()
+                .filter_map(PrAutoFixHeadFailure::from_entry)
+                .collect::<Vec<_>>();
+            assert_eq!(records.len(), 1, "{case}: one typed record: {records:?}");
+            let record = &records[0];
+            assert_eq!(record.failed_head, fx.candidate, "{case}");
+            assert_eq!(record.pr_number, PR_NUMBER, "{case}");
+            assert_eq!(record.checks.len(), 1, "{case}: {record:?}");
+            let check = &record.checks[0];
+            assert!(!check.signature.is_empty(), "{case}: {record:?}");
+            assert!(
+                error.contains(&format!("with signature `{}`", check.signature)),
+                "{case}: the record keeps the signature the repair was handed: {error}"
             );
         },
     );
@@ -3400,16 +3497,19 @@ fn inherited_failure_case(row: &std::path::Path, case: &str) {
                         Some(TaskDecision::PrAutoFixBaseRed(_))
                     ));
                     assert_eq!(
-                        serde_json::from_str::<Value>(entry.note.as_deref().unwrap()).unwrap(),
-                        serde_json::to_value(&record).unwrap(),
-                        "new notes retain the historical payload"
+                        entry.note.as_deref(),
+                        Some(record.history_note().as_str()),
+                        "new notes are the one-line summary of the decision"
                     );
                     match storage_on_wait.as_str() {
                         "legacy_rich" => {
                             entry.note = Some(legacy_rich.clone());
                             entry.decision = None;
                         }
-                        "legacy_minimal" => entry.decision = None,
+                        "legacy_minimal" => {
+                            entry.note = Some(serde_json::to_string(&record).unwrap());
+                            entry.decision = None;
+                        }
                         "typed_conflicting_note" => {
                             entry.note = Some(
                                 json!({"failed_head": "other-head", "reason": "diagnostic only"})
@@ -3451,23 +3551,20 @@ fn inherited_failure_case(row: &std::path::Path, case: &str) {
             "{storage}: only the recorded head is held"
         );
         if storage == "typed" {
-            assert!(matches!(
-                entry.decision,
-                Some(TaskDecision::PrAutoFixBaseRed(_))
-            ));
-            // These are the original json! layouts, including insertion
-            // order: serde_json uses preserve_order in this workspace.
-            let legacy_note = if let Some(reason) = &record.reason {
-                json!({"failed_head": record.failed_head, "reason": reason})
-            } else {
-                json!({"failed_head": record.failed_head, "landed_base": record.landed_base,
-                    "base_branch": record.base_branch, "source": record.source,
-                    "checks": record.checks, "path": record.path})
-            };
             assert_eq!(
-                entry.note.as_deref().unwrap(),
-                legacy_note.to_string(),
-                "the additive decision leaves note bytes and dedupe unchanged"
+                entry.decision,
+                Some(TaskDecision::PrAutoFixBaseRed(record.clone())),
+                "the decision is the full record"
+            );
+            let note = entry.note.as_deref().unwrap();
+            assert_eq!(note, record.history_note());
+            assert!(
+                !note.contains('\n') && note.chars().count() <= 200,
+                "the note is one short line, not the evidence: {note}"
+            );
+            assert!(
+                serde_json::from_str::<Value>(note).is_err(),
+                "the note does not restate the record as JSON: {note}"
             );
         }
     }
@@ -4373,6 +4470,18 @@ fn auto_fix_waits_out_a_throttled_failed_log_read_within_the_completion_deadline
     );
 }
 
+/// A legacy deferral without a not-before is a hold, even beside a newer
+/// deferral whose not-before has already passed: the legacy record governs,
+/// so the poll holds instead of reading the log again [ORB-25026].
+#[test]
+fn auto_fix_legacy_read_deferral_beside_an_expired_one_still_holds() {
+    auto_fix_table(
+        "auto_fix::auto_fix_legacy_read_deferral_beside_an_expired_one_still_holds",
+        "legacy_beside_expired",
+        throttled_log_case,
+    );
+}
+
 /// The first rerun diagnosis uses the remaining original completion
 /// deadline for its real adapter read, before any repair can be admitted.
 #[test]
@@ -4437,39 +4546,17 @@ fn nested_base_log_throttle_defers_the_bound_prerequisite_read() {
     );
 }
 
-/// A wait this run recorded carries the typed decision, and its note is
-/// still the pre-decision JSON of that same record.
+/// A wait this run recorded carries the typed decision, and its note is the
+/// one-line summary of that record, not its JSON.
 fn assert_produced_deferral(entry: &TaskHistoryEntry) {
     let Some(TaskDecision::PrAutoFixReadDeferred(typed)) = &entry.decision else {
         panic!("a new read deferral is a typed decision: {entry:?}");
     };
-    let legacy_shape = json!({
-        "execution": typed.execution,
-        "pr": typed.pr,
-        "head_sha": typed.head_sha,
-        "repository": typed.repository,
-        "run_id": typed.run_id,
-        "job_id": typed.job_id,
-        "run_attempt": typed.run_attempt,
-        "attempt": typed.attempt,
-        "observed_at_ms": typed.observed_at_ms,
-        "not_before_ms": typed.not_before_ms,
-        "deadline_ms": typed.deadline_ms,
-        "reset": match typed.reset {
-            PrAutoFixReadReset::Provider => "provider",
-            PrAutoFixReadReset::Unknown => "unknown",
-        },
-        "retry_after_seconds": typed.retry_after_seconds,
-        "reset_epoch_seconds": typed.reset_epoch_seconds,
-        "resource": typed.resource,
-        "principal": typed.principal,
-        "request_id": typed.request_id,
-        "diagnostic": typed.diagnostic,
-    });
-    assert_eq!(
-        entry.note.as_deref(),
-        Some(serde_json::to_string(&legacy_shape).unwrap().as_str()),
-        "the note stays the pre-decision JSON shape"
+    let note = entry.note.as_deref().expect("note");
+    assert_eq!(note, typed.history_note());
+    assert!(
+        !note.contains('\n') && note.chars().count() <= 200,
+        "the note is one short line: {note}"
     );
     assert!(
         typed.run_attempt.is_none(),
@@ -4517,6 +4604,7 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
             (RATE_LIMITED_LOG.to_string(), Some(START_MS + 60_000))
         }
         "resumed" | "typed_resume" => (RATE_LIMITED_LOG.to_string(), Some(START_MS + 200_000)),
+        "legacy_beside_expired" => (RATE_LIMITED_LOG.to_string(), Some(START_MS + 60_000)),
         "persistent" => (RATE_LIMITED_LOG.to_string(), None),
         "beyond_deadline" => (format!("{RATE_LIMITED_LOG}\nRetry-After: 900"), None),
         "forbidden" => (
@@ -4549,6 +4637,33 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
     fs::write(ci.join("log-fault"), stderr).unwrap();
     if let Some(until) = until {
         fs::write(ci.join("log-fault-until"), until.to_string()).unwrap();
+    }
+    if case == "legacy_beside_expired" {
+        // A legacy note with no not-before beside a newer note whose
+        // not-before has already passed, for the same head.
+        seed_auto_fix_history_decision(
+            &host,
+            "pr_auto_fix_read_deferred",
+            &json!({
+                "execution": RUN_ID, "pr": PR_NUMBER, "head_sha": fx.candidate,
+                "repository": null, "run_id": 11, "job_id": 12, "run_attempt": null,
+                "attempt": 1, "observed_at_ms": START_MS - 120_000,
+                "reset": "unknown", "diagnostic": "legacy throttled log read",
+            }),
+            None,
+        );
+        seed_auto_fix_history_decision(
+            &host,
+            "pr_auto_fix_read_deferred",
+            &json!({
+                "execution": RUN_ID, "pr": PR_NUMBER, "head_sha": fx.candidate,
+                "repository": null, "run_id": 11, "job_id": 12, "run_attempt": null,
+                "attempt": 2, "observed_at_ms": START_MS - 60_000,
+                "not_before_ms": START_MS - 60_000, "reset": "unknown",
+                "diagnostic": "expired throttled log read",
+            }),
+            None,
+        );
     }
     if case == "resumed" || case == "typed_resume" || case == "unrelated_decision" {
         // An earlier process of this run recorded the wait and was
@@ -4682,10 +4797,41 @@ fn throttled_log_case(case: &str, row: &std::path::Path) {
         .collect();
     let deferrals: Vec<Value> = deferral_entries
         .iter()
-        .map(|entry| serde_json::from_str(entry.note.as_deref().unwrap()).unwrap())
+        .map(|entry| match PrAutoFixReadDeferral::from_entry(entry) {
+            Some(record) if entry.decision.is_some() => serde_json::to_value(record).unwrap(),
+            _ => serde_json::from_str(entry.note.as_deref().unwrap()).unwrap(),
+        })
         .collect();
     let polls = fx.status_reads() - reads_before;
     match case {
+        "legacy_beside_expired" => {
+            let error = result.expect_err(case);
+            assert!(
+                matches!(&error, orbit_common::OrbitError::DeliveryRefused { refusal, .. } if *refusal == orbit_types::workflow::DeliveryRefusal::CheckEvidenceInconclusive),
+                "{case}: the legacy deferral holds, not a failure: {error}"
+            );
+            let error = error.to_string();
+            assert!(
+                error.contains("legacy throttled log read")
+                    && error.contains("the recorded read wait does not end before"),
+                "{case}: the legacy record governs the hold: {error}"
+            );
+            assert!(!is_check_repair(&error), "{case}: no repair: {error}");
+            assert!(waits.is_empty(), "{case}: no wait is taken: {calls:?}");
+            assert!(
+                !calls.iter().any(|call| call == "run view"),
+                "{case}: the log is not read again past the legacy hold: {calls:?}"
+            );
+            assert_eq!(
+                deferral_entries.len(),
+                2,
+                "{case}: no new deferral is recorded"
+            );
+            assert!(
+                repair_attempts(&host).is_empty(),
+                "{case}: no attempt is spent"
+            );
+        }
         "nested_base" => {
             assert!(result.is_err(), "an inherited red base remains held");
             assert_eq!(
@@ -4996,7 +5142,9 @@ fn moved_base_log_throttle_retains_its_deadline_and_exact_read_identity() {
                 .collect();
             let deferrals: Vec<Value> = deferral_entries
                 .iter()
-                .map(|entry| serde_json::from_str(entry.note.as_deref().unwrap()).unwrap())
+                .map(|entry| {
+                    serde_json::to_value(PrAutoFixReadDeferral::from_entry(entry).unwrap()).unwrap()
+                })
                 .collect();
             if case == "deadline" {
                 assert!(

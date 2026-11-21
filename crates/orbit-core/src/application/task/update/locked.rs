@@ -4,9 +4,9 @@ use orbit_common::security::redaction::redact_all;
 use orbit_types::identity::normalize_attribution_label;
 use orbit_types::task::{
     ArtifactWriter, CANDIDATE_DISCARDED_EVENT, CREW_ASSIGNED_EVENT, CrewAssignmentState,
-    CrewSource, FINAL_RECOVERY_DECIDED_EVENT, GRANTED_TOOLS_CHANGED_EVENT, RecordedCrewAssignment,
-    RecordedFinalRecovery, Task, TaskDecision, TaskHistoryEntry, TaskStatus,
-    canonical_artifact_path, granted_tools_change_note,
+    CrewSource, FINAL_RECOVERY_DECIDED_EVENT, FINDING_ACCEPTANCE_EVENT,
+    GRANTED_TOOLS_CHANGED_EVENT, RecordedCrewAssignment, RecordedFinalRecovery, Task, TaskDecision,
+    TaskHistoryEntry, TaskStatus, canonical_artifact_path, granted_tools_change_note,
 };
 use orbit_types::workflow::{SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED};
 use serde_json::Value;
@@ -426,12 +426,39 @@ impl OrbitRuntime {
             })?;
             append_history.push(settlement.history_entry(comment.at, &comment.by));
         }
+        if let Some(note) = params.finding_acceptance.clone() {
+            // Outside the specification, so the preserved candidate still
+            // implements the task the next run resumes.
+            append_history.push(TaskHistoryEntry {
+                at: chrono::Utc::now(),
+                by: effective_label.clone(),
+                event: FINDING_ACCEPTANCE_EVENT.to_string(),
+                note: Some(note),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            });
+        }
         if let Some(edit) = self.pilot_requirement_edit_history(&task, &params, &effective_label)? {
+            append_history.push(edit);
+        }
+        if let Some(edit) =
+            self.pilot_context_files_edit_history(&task, &params, &effective_label)?
+        {
             append_history.push(edit);
         }
         // Field validation admitted only an operator's skip [ORB-21238].
         if let Some(skip) = self.pilot_skip_history(&task, &params, &effective_label)? {
             append_history.push(skip);
+        }
+        // Field validation admitted only an operator's waiver [ORB-25084].
+        if let Some(waiver) = super::super::readiness_waiver::readiness_waiver_history(
+            &task,
+            &params,
+            &effective_label,
+        ) {
+            append_history.push(waiver);
         }
         if let Some(preserved) = backlog_preservation {
             // The `requeued` decision is written only with its preservation

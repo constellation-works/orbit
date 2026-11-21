@@ -49,6 +49,7 @@ mod application_authority;
 mod artifact_tools;
 mod attention_observation;
 mod attention_provider;
+mod attention_wait;
 mod audit_commit_report;
 mod auto_task_job_steps;
 mod auto_task_update;
@@ -62,6 +63,8 @@ mod bundle_validation;
 mod cascade_outcomes;
 mod child_wait_audit;
 mod ci_retry_journal_wait;
+#[cfg(unix)]
+mod claimed_model_access;
 #[cfg(target_os = "macos")]
 mod claude_worker_credential;
 mod config_settings;
@@ -78,6 +81,7 @@ mod dispatch_admission;
 mod distributed_drain;
 mod drain_approval;
 mod drain_cancel;
+mod drain_crew_pools;
 mod drain_extend;
 mod drain_live_agents;
 mod escalation_triage_crews;
@@ -88,6 +92,8 @@ mod final_recovery_cards;
 mod final_recovery_mechanical;
 mod fixture_template;
 mod flaky_validation;
+#[cfg(unix)]
+mod footprint_hold;
 mod forecast_accuracy;
 mod forge_hold_resume;
 mod friction_stats_observation;
@@ -100,6 +106,7 @@ mod held_child_guard;
 mod local_provider_holds;
 #[cfg(target_os = "linux")]
 mod muse_state_grant;
+mod operator_ship_override;
 #[cfg(unix)]
 mod origin_fetch_hold;
 mod pilot_warning_cards;
@@ -113,11 +120,13 @@ mod retired_stubs;
 mod review_admission_shape;
 mod review_baseline_hold;
 mod review_before_landing;
+mod review_budget_hold;
 mod review_continuation;
 #[cfg(target_os = "linux")]
 mod review_evidence_fulfilment;
 mod review_evidence_paths;
 mod review_evidence_writers;
+mod review_failed_reviewer_hold;
 mod review_gate_audit;
 mod review_held_resume;
 #[cfg(target_os = "linux")]
@@ -135,9 +144,12 @@ mod script_file_inputs;
 mod script_grant_request;
 mod script_roots;
 mod search_hydration;
+// The installed-CodeQL fixture is a POSIX shell script.
+#[cfg(unix)]
 mod security_alert_sweep;
 mod session_events;
 mod shared_root_identity;
+mod standing_drain_keeper;
 mod step_recovery;
 mod system_work_crews;
 mod workspace_seed;
@@ -169,6 +181,7 @@ mod provider_limit_admission;
 mod provider_limit_budget;
 mod provider_limit_hold;
 mod purpose_crews;
+#[path = "readiness/population.rs"]
 mod readiness_population;
 #[cfg(unix)]
 mod recovery_provider_auth;
@@ -199,3 +212,5 @@ mod worker_fixture;
 mod worktree_reclaim;
 
 mod admission_audit;
+
+mod run_failure_diagnostic;

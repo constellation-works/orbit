@@ -35,6 +35,11 @@ pub struct HostResourceMonitor {
     sampling: AtomicBool,
     /// The last reported admission, so each transition is logged once.
     reported: Mutex<ResourceAdmission>,
+    /// The sample (identity and path set) last synced through the shared
+    /// history file. A later snapshot presenting that same cached sample
+    /// evaluates locally instead of repeating the lock/read/write cycle;
+    /// only a distinct sample can change the shared hysteresis.
+    shared_synced: Mutex<Option<(chrono::DateTime<Utc>, Vec<PathBuf>)>>,
 }
 
 impl HostResourceMonitor {
@@ -48,6 +53,7 @@ impl HostResourceMonitor {
             demand: Mutex::new(None),
             sampling: AtomicBool::new(false),
             reported: Mutex::new(ResourceAdmission::default()),
+            shared_synced: Mutex::new(None),
         }
     }
 
@@ -156,6 +162,26 @@ impl HostResourceMonitor {
         if self.settings.enabled
             && let Some(path) = &self.history_path
         {
+            // A snapshot presenting the sample already synced through the
+            // shared file (the probe's cache TTL makes this the common poll
+            // between renewals) evaluates locally: repeating the file lock,
+            // history read and atomic write per poll is what lets a slow or
+            // contended host filesystem tax every dashboard read. Age and
+            // stale are still recomputed from `sampled_at` by `evaluate`.
+            if let Some(cached_at) = self.probe.cached_sample_at(paths) {
+                let already_synced = self
+                    .shared_synced
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .as_ref()
+                    .is_some_and(|(at, synced_paths)| *at == cached_at && synced_paths == paths);
+                if already_synced {
+                    let sample = self.probe.sample(paths);
+                    if sample.sampled_at == cached_at {
+                        return evaluator.evaluate(sample, &self.settings, Utc::now());
+                    }
+                }
+            }
             // Serialize read/sample/evaluate/write across processes too. The bounded
             // lock prevents resource telemetry from stalling a dispatch indefinitely.
             let result = with_exclusive_file_lock_options(
@@ -196,7 +222,14 @@ impl HostResourceMonitor {
                 },
             );
             match result {
-                Ok(status) => return status,
+                Ok(status) => {
+                    *self
+                        .shared_synced
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner) =
+                        Some((status.sampled_at, paths.to_vec()));
+                    return status;
+                }
                 Err(error) => {
                     tracing::debug!(%error, "using local resource history");
                 }

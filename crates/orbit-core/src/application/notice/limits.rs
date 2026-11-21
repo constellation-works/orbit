@@ -3,12 +3,20 @@
 //! of the brief quoted into agent prompts. Each was a `notice.*` key until
 //! the keys were removed [ORB-22808]; managed agents always may post and
 //! close their own notices, and opted-in activities always receive the brief.
+//!
+//! A resident mandate posts as the managed agent of its assignment task, so
+//! the per-task agent limits would stop it after five cycles a day. It is
+//! held to the resident limits below instead: one status line and a handful
+//! of warns, re-posted as often as its cadence floor allows.
 
 use orbit_types::record::NoticeKind;
 
 /// The former `notice.default_expiry_hours.incident` default, fixed when the key was removed
 /// [ORB-22808].
 pub(crate) const DEFAULT_EXPIRY_HOURS_INCIDENT: u32 = 72;
+/// A warn stays in force as long as an incident unless its poster says
+/// otherwise: the operator ask it names is still open.
+pub(crate) const DEFAULT_EXPIRY_HOURS_WARN: u32 = 72;
 /// The former `notice.default_expiry_hours.maintenance` default, fixed when the key was removed
 /// [ORB-22808].
 pub(crate) const DEFAULT_EXPIRY_HOURS_MAINTENANCE: u32 = 12;
@@ -21,6 +29,8 @@ pub(crate) const MAX_EXPIRY_HOURS_OPERATOR: u32 = 720;
 /// The former `notice.max_expiry_hours.orchestrator.incident` default, fixed when the key was
 /// removed [ORB-22808].
 pub(crate) const MAX_EXPIRY_HOURS_ORCHESTRATOR_INCIDENT: u32 = 168;
+/// The longest an orchestrator's or a resident's warn may stay in force.
+pub(crate) const MAX_EXPIRY_HOURS_ORCHESTRATOR_WARN: u32 = 168;
 /// The former `notice.max_expiry_hours.orchestrator.maintenance` default, fixed when the key was
 /// removed [ORB-22808].
 pub(crate) const MAX_EXPIRY_HOURS_ORCHESTRATOR_MAINTENANCE: u32 = 72;
@@ -49,6 +59,18 @@ pub const AGENT_POSTS_PER_TASK_PER_DAY: u32 = 5;
 /// The former `notice.orchestrator_posts_per_hour` default, fixed when the key was removed
 /// [ORB-22808].
 pub(crate) const ORCHESTRATOR_POSTS_PER_HOUR: u32 = 30;
+/// The most notices one resident mandate may hold open: its status line
+/// plus one warn per blocker.
+pub(crate) const MAX_OPEN_PER_RESIDENT: u32 = 10;
+/// The most posts one resident mandate may make in an hour, the status line
+/// and warn re-posts of every cycle included. It matches the orchestrator
+/// rate: at the five-minute cadence floor that is twelve status lines and
+/// eighteen warn posts.
+pub(crate) const RESIDENT_POSTS_PER_HOUR: u32 = 30;
+/// How long the line Orbit writes for a paused, taken-over or stopped
+/// mandate stays in force. No cycle refreshes it, so it outlives the
+/// heartbeat-based expiry of a cycle's own line.
+pub(crate) const RESIDENT_CONTROL_LINE_EXPIRY_HOURS: u32 = 168;
 /// The former `notice.retention_days` default, fixed when the key was removed [ORB-22808].
 pub(crate) const RETENTION_DAYS: u32 = 30;
 /// The former `notice.brief_max_items` default, fixed when the key was removed [ORB-22808].
@@ -62,6 +84,7 @@ pub(crate) const BRIEF_READ_TIMEOUT_MS: u32 = 2000;
 /// when it names none.
 pub(crate) fn default_expiry_hours(kind: NoticeKind) -> u32 {
     match kind {
+        NoticeKind::Warn => DEFAULT_EXPIRY_HOURS_WARN,
         NoticeKind::Incident => DEFAULT_EXPIRY_HOURS_INCIDENT,
         NoticeKind::Maintenance => DEFAULT_EXPIRY_HOURS_MAINTENANCE,
         NoticeKind::Info => DEFAULT_EXPIRY_HOURS_INFO,
@@ -71,6 +94,7 @@ pub(crate) fn default_expiry_hours(kind: NoticeKind) -> u32 {
 /// The longest expiry, in hours, an orchestrator may give a notice of `kind`.
 pub(crate) fn max_expiry_hours_orchestrator(kind: NoticeKind) -> u32 {
     match kind {
+        NoticeKind::Warn => MAX_EXPIRY_HOURS_ORCHESTRATOR_WARN,
         NoticeKind::Incident => MAX_EXPIRY_HOURS_ORCHESTRATOR_INCIDENT,
         NoticeKind::Maintenance => MAX_EXPIRY_HOURS_ORCHESTRATOR_MAINTENANCE,
         NoticeKind::Info => MAX_EXPIRY_HOURS_ORCHESTRATOR_INFO,

@@ -26,11 +26,9 @@ use crate::context::RuntimeHost;
 
 use super::claim::push_candidate_ref;
 use super::commit::commit_worktree_detached;
+use super::commit::{is_partial_repair_message, partial_repair_message};
 use super::git::{git_command_success, git_output, git_output_raw, git_output_with_env, git_run};
 use super::operations::{CANDIDATE_REF_PREFIX, valid_candidate_ref};
-use super::review_gate::{
-    PARTIAL_REPAIR_RUN_TRAILER, PARTIAL_REPAIR_SUBJECT, REVIEW_ATTEMPT_TRAILER,
-};
 
 /// The pipeline-state key under which the host that stopped a run records
 /// what [`preserve_interrupted_review`] kept: `run_id`, `step_id`, `attempt_id`,
@@ -239,6 +237,7 @@ pub fn interrupted_review_ref(task_id: &str, run_id: &str) -> String {
 pub fn preserve_interrupted_review(
     workspace_path: &Path,
     task_id: &str,
+    commit_type: orbit_types::workflow::CommitType,
     run_id: &str,
     review: &ReviewInFlight,
 ) -> Result<PreservedReviewRepair, OrbitError> {
@@ -248,10 +247,12 @@ pub fn preserve_interrupted_review(
             "interrupted review: task '{task_id}' and run '{run_id}' do not name a plain ref"
         )));
     }
-    let message = format!(
-        "{PARTIAL_REPAIR_SUBJECT} [{task_id}]\n\n{PARTIAL_REPAIR_RUN_TRAILER} {run_id}\n\
-         Orbit-Review-Step: {}\n{REVIEW_ATTEMPT_TRAILER}: {}",
-        review.step_id, review.attempt_id
+    let message = partial_repair_message(
+        commit_type,
+        task_id,
+        run_id,
+        &review.step_id,
+        Some(&review.attempt_id),
     );
     let commit =
         commit_worktree_detached(workspace_path, review.reviewer_model.as_deref(), &message)?;
@@ -336,12 +337,7 @@ pub(in crate::executor::automation::vcs) fn locate_review_repair(
         workspace_path,
         &["log", "-1", "--format=%B", "--end-of-options", &commit],
     )?;
-    let run_trailer = format!("{PARTIAL_REPAIR_RUN_TRAILER} {source_run_id}");
-    let ours = message
-        .lines()
-        .next()
-        .is_some_and(|subject| subject.starts_with(PARTIAL_REPAIR_SUBJECT))
-        && message.lines().any(|line| line.trim() == run_trailer);
+    let ours = is_partial_repair_message(&message, Some(source_run_id));
     if !ours {
         return Ok(Err(format!(
             "repair {commit} at '{repair_ref}' is not the partial repair of run '{source_run_id}'"

@@ -66,8 +66,10 @@ mod conventions;
 mod draft_handoff;
 mod flaky;
 mod infrastructure;
+#[path = "pr_landing/pull_request/transport.rs"]
 mod landing_transport;
 mod mentions;
+mod merge_in_progress;
 mod review_watch;
 #[cfg(target_os = "linux")]
 mod stable_build_mount;
@@ -201,6 +203,19 @@ fn squash(head: &str) -> Vec<String> {
 }
 fn assert_landed_exactly(fx: &Fixture, host: &DeliveryHost, head: &str, case: &str) {
     assert_eq!(fx.merge_requests(), squash(head), "{case}");
+    // [ORB-25009] The squash carries Orbit's composed message, never the
+    // forge default.
+    let titles = fx.forge_lines("merge-titles");
+    assert!(
+        titles.len() == 1 && titles[0].ends_with(" (#42)"),
+        "{case}: composed squash title {titles:?}"
+    );
+    orbit_types::workflow::validate(&format!(
+        "{}\n\n{}",
+        titles[0],
+        fx.forge_state("merge-message").unwrap_or_default()
+    ))
+    .unwrap_or_else(|violation| panic!("{case}: squash message {violation}"));
     assert_eq!(host.status(TASK_ID), TaskStatus::Done, "{case}");
 }
 /// One table row per line: expands to an array of `(name, fields...)` tuples.
@@ -731,6 +746,8 @@ fn pr_lookup_retry_classification_preserves_refusals_and_nonmatching_tokens(sand
             "pr": "42",
             "workspace_path": path_str(&fx.repo),
             "reviewed_head_sha": fx.candidate,
+            "commit_title": "fix: land the candidate [T1] (#42)",
+            "commit_message": "Orbit-Task: T1",
         }),
     )
     .unwrap_err();
@@ -1617,6 +1634,8 @@ fn assert_refresh_refuses(sandbox: &Path, cases: &[(&str, bool, &str, &str, &str
         let error = complete_with_logical_clock(&host, &input).unwrap_err();
         assert!(error.to_string().contains(refusal), "{case}: {error}");
         assert_eq!(fx.merge_requests().len(), 1, "{case}: no second mutation");
+        // One open read, then one fresh read. A second merged `pr view`
+        // increments `merged-reads` and fails this exact total.
         assert_eq!(fx.status_reads(), 2, "{case}: one fresh read");
         assert_eq!(fx.head(), fx.candidate, "{case}: no local rewrite");
         assert!(host.landings().is_empty(), "{case}");
@@ -1674,6 +1693,8 @@ fn an_already_merged_refresh_reconciles_without_another_merge_request(sandbox: &
             squash(&fx.candidate),
             "{outcome}: no second mutation"
         );
+        // One open read plus exactly one merged `pr view`. A second merged
+        // read increments `merged-reads` and fails this exact total.
         assert_eq!(fx.status_reads(), 2, "{outcome}: exactly one fresh read");
         assert_eq!(fx.forge_calls().last().unwrap(), "pr view");
         let mutations = host
@@ -3890,9 +3911,6 @@ fn claimed_known_red_rows(test: &str, selected: &[&str]) {
                     candidate_tests,
                     false,
                 );
-                if base.is_empty() || candidate_tests.is_some_and(|tests| tests.is_empty()) {
-                    continue;
-                }
                 let claimed = named_tests(candidate_tests.unwrap()).into_iter().collect();
                 let refusal = owner_check(&fx.base_sha, &claimed)
                     .expect_err(&format!("{case}: the owner refuses the report"));
@@ -5655,10 +5673,14 @@ impl Fixture {
         self.forge_lines("merge-requests")
     }
     fn status_reads(&self) -> usize {
-        self.forge_state("reads")
-            .map(|value| value.parse().unwrap())
-            .unwrap_or(0)
-            + usize::from(self.forge_state("merged-reads").is_some())
+        let count = |name| {
+            self.forge_state(name)
+                .map(|value| value.parse().unwrap())
+                .unwrap_or(0)
+        };
+        // `reads` counts open `pr view`s. `merged-reads` counts each merged
+        // `pr view` on its own, so a second reconciliation read is visible.
+        count("reads") + count("merged-reads")
     }
 }
 fn action(host: &DeliveryHost, name: &str, input: &Value) -> Res<Value> {
@@ -6561,8 +6583,16 @@ status() {
         cat "$forge/reconcile-status"
         return
     fi
+    if [ -f "$forge/merge-in-progress" ]; then
+        polls=$(( $(cat "$forge/merge-polls" 2>/dev/null || echo 0) + 1 ))
+        printf '%s\n' "$polls" > "$forge/merge-polls"
+        if [ -f "$forge/merge-after-polls" ] && [ "$polls" = "$(cat "$forge/merge-after-polls")" ]; then
+            land "$(cat "$forge/merge-in-progress")"
+        fi
+    fi
     if [ -f "$forge/merged" ]; then
-        touch "$forge/merged-reads"
+        merged_reads=$(( $(cat "$forge/merged-reads" 2>/dev/null || echo 0) + 1 ))
+        printf '%s\n' "$merged_reads" > "$forge/merged-reads"
         # GitHub keeps headRefOid after the head branch is deleted. `land`
         # records it; a forge that merged before this substitute did falls
         # back to the live branch.
@@ -6854,13 +6884,20 @@ land() {
 merge() {
     sha=""
     method=""
+    title=""
+    message=""
     for arg in "$@"; do
         case "$arg" in
             sha=*) sha=${arg#sha=} ;;
             merge_method=*) method=${arg#merge_method=} ;;
+            commit_title=*) title=${arg#commit_title=} ;;
+            commit_message=*) message=${arg#commit_message=} ;;
         esac
     done
     printf 'sha=%s merge_method=%s\n' "$sha" "$method" >> "$forge/merge-requests"
+    # The composed squash message Orbit sent with the request [ORB-25009].
+    printf '%s\n' "${title:-}" >> "$forge/merge-titles"
+    printf '%s\n' "${message:-}" > "$forge/merge-message"
     # `merge-outcomes` scripts the answer to each merge request in turn; an
     # unscripted request is an ordinary conditional merge.
     attempt=$(( $(wc -l < "$forge/merge-requests") ))
@@ -6884,6 +6921,20 @@ merge() {
                 *+policy_disallowed) touch "$forge/merge-methods-disallowed" ;;
             esac
             refuse 405 "$base_modified" ;;
+        in_progress_error)
+            cat "$forge/in-progress-body"
+            cat "$forge/in-progress-stderr" >&2
+            exit 1 ;;
+        in_progress|in_progress_empty|in_progress_numeric)
+            printf '%s\n' "$sha" > "$forge/merge-in-progress"
+            if [ "$outcome" = in_progress_empty ]; then
+                echo 'gh: Merge already in progress (HTTP 405)' >&2; exit 1
+            fi
+            if [ "$outcome" = in_progress_numeric ]; then
+                echo '{"message":"Merge already in progress","status":405}'
+                echo 'gh: Merge already in progress (HTTP 405)' >&2; exit 1
+            fi
+            refuse 405 "Merge already in progress" ;;
         policy) refuse 405 "Merge commits are not allowed on this repository." ;;
         queue) refuse 405 "Changes must be made through the merge queue" ;;
         protection) refuse 405 "At least 1 approving review is required by reviewers with write access." ;;
@@ -6968,6 +7019,43 @@ if [ -f "$forge/infrastructure" ]; then
     if [ -f "$forge/infra-auth403" ] && [ "$1" = api ]; then
         echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1
     fi
+    # [ORB-25864] The account's REST quota: the next N repository reads are
+    # rate-limited, and `rate_limit` (which spends no quota) names the reset.
+    if [ "$*" = "api rate_limit" ]; then
+        if [ -f "$forge/infra-rate-limit-hang" ]; then sleep 30; fi
+        cat "$forge/infra-rate-limit"; exit
+    fi
+    if [ "$*" = "api repos/{owner}/{repo}" ] && [ -s "$forge/infra-rate-limited" ]; then
+        left=$(cat "$forge/infra-rate-limited")
+        if [ "$left" -gt 0 ]; then
+            echo $((left - 1)) > "$forge/infra-rate-limited"
+            echo 'gh: API rate limit exceeded for user ID 270255973. If you reach out to GitHub Support for help, please include the request ID DE78:121DB1:92BAD8:9B7940:6AFFAFC1 (HTTP 403)' >&2
+            exit 1
+        fi
+    fi
+    # [ORB-25898] The same quota running out after the snapshot: the next N
+    # workflow-file reads are rate-limited.
+    if [ "$1" = api ] && [ -s "$forge/infra-contents-rate-limited" ]; then
+        case "${2:-}" in
+            */contents/*)
+                left=$(cat "$forge/infra-contents-rate-limited")
+                if [ "$left" -gt 0 ]; then
+                    echo $((left - 1)) > "$forge/infra-contents-rate-limited"
+                    echo 'gh: API rate limit exceeded for user ID 270255973. If you reach out to GitHub Support for help, please include the request ID DE78:121DB1:92BAD8:9B7940:6AFFAFC1 (HTTP 403)' >&2
+                    exit 1
+                fi ;;
+        esac
+    fi
+    # [ORB-25917] A snapshot read that stays throttled: the next N reads of the
+    # pull request are rate-limited, uncached, in every snapshot.
+    if [ "$*" = "api repos/{owner}/{repo}/pulls/42" ] && [ -s "$forge/infra-pulls-rate-limited" ]; then
+        left=$(cat "$forge/infra-pulls-rate-limited")
+        if [ "$left" -gt 0 ]; then
+            echo $((left - 1)) > "$forge/infra-pulls-rate-limited"
+            echo 'gh: API rate limit exceeded for user ID 270255973. If you reach out to GitHub Support for help, please include the request ID DE78:121DB1:92BAD8:9B7940:6AFFAFC1 (HTTP 403)' >&2
+            exit 1
+        fi
+    fi
     case "$1 ${2:-}" in
         "api graphql")
             case "$*" in
@@ -6982,14 +7070,42 @@ if [ -f "$forge/infrastructure" ]; then
         "api repos/{owner}/{repo}/actions/workflows/600") cat "$forge/infra-workflow"; exit ;;
         "api repos/{owner}/{repo}/check-suites/800") cat "$forge/infra-suite"; exit ;;
         "run view")
+            # [ORB-25918] The primary log read may come back empty, and the
+            # fallback's run-metadata read (`--json`) may be throttled. Each
+            # counter names how many of its reads still answer that way.
+            case "$*" in
+                *' --json '*)
+                    if [ -s "$forge/infra-run-rate-limited" ]; then
+                        left=$(cat "$forge/infra-run-rate-limited")
+                        if [ "$left" -gt 0 ]; then
+                            echo $((left - 1)) > "$forge/infra-run-rate-limited"
+                            echo 'gh: API rate limit exceeded for user ID 270255973. If you reach out to GitHub Support for help, please include the request ID DE78:121DB1:92BAD8:9B7940:6AFFAFC1 (HTTP 403)' >&2
+                            exit 1
+                        fi
+                    fi ;;
+                *)
+                    if [ -s "$forge/infra-log-empty" ]; then
+                        left=$(cat "$forge/infra-log-empty")
+                        if [ "$left" -gt 0 ]; then
+                            echo $((left - 1)) > "$forge/infra-log-empty"
+                            exit 0
+                        fi
+                    fi ;;
+            esac
             # A planted marker hangs the job-log read until the supervisor kills it.
             if [ -f "$forge/infra-log-hang" ]; then sleep 30; fi
+            # A planted marker makes the diagnosis vanish once the reservation
+            # is durable, as an empty or throttled view would.
+            if [ -f "$forge/infra-log-vanishes" ] && [ -f "$forge/infra-reserved" ]; then exit; fi
             cat "$forge/infra-log"; exit ;;
         "run rerun")
             [ -f "$forge/infra-reserved" ] || { echo 'rerun without durable reservation' >&2; exit 2; }
             mode=$(cat "$forge/infrastructure")
             if [ "$mode" = auth ]; then echo 'gh: Resource not accessible by integration (HTTP 403)' >&2; exit 1; fi
             if [ "$mode" != no_apply ]; then touch "$forge/rerun-applied"; fi
+            # [ORB-25917] Throttle the pull-request read from the rerun on, so the
+            # observation of the reserved attempt is the pass that is throttled.
+            if [ -s "$forge/infra-pulls-rate-limited-after-rerun" ]; then cp "$forge/infra-pulls-rate-limited-after-rerun" "$forge/infra-pulls-rate-limited"; fi
             if [ "$mode" = moved ]; then advance "$(cat "$forge/pr-head")" foreign; fi
             if [ "$mode" = deleted ]; then git --git-dir="$remote" update-ref -d "refs/heads/$(cat "$forge/pr-head")"; fi
             if [ "$mode" = lost ] || [ "$mode" = no_apply ]; then echo 'HTTP 503: lost mutation reply' >&2; exit 1; fi
@@ -7408,5 +7524,13 @@ fn known_red_validation_and_subset() {
             )],
         );
         claimed_known_red_equal_and_subset(sandbox);
+    });
+}
+
+#[test]
+fn merge_in_progress_contracts() {
+    isolated("merge_in_progress_contracts", |sandbox| {
+        merge_in_progress::merge_in_progress_completion_scenarios(sandbox);
+        merge_in_progress::merge_in_progress_refusal_scenarios(sandbox);
     });
 }

@@ -67,9 +67,13 @@
 .task-attention-slot:empty,
 .delivery-progress-slot:empty { display: none; }
 .task-attention {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  /* The icon belongs to the title row only: the title sits beside it while
+     every row under it spans the full width, so body rows share the same
+     left and right inset (STD-07 R1). */
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: start;
   padding: 14px 16px;
   border: 1px solid var(--danger-line);
   border-radius: var(--radius);
@@ -82,7 +86,8 @@
   --attention-fg: var(--warn-fg);
 }
 .task-attention-icon {
-  flex: none;
+  grid-column: 1;
+  grid-row: 1;
   width: 18px;
   height: 18px;
   margin-top: 1px;
@@ -90,14 +95,19 @@
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3.5l9 16H3z'/%3E%3Cpath d='M12 10v4M12 17h.01'/%3E%3C/svg%3E") center / contain no-repeat;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3.5l9 16H3z'/%3E%3Cpath d='M12 10v4M12 17h.01'/%3E%3C/svg%3E") center / contain no-repeat;
 }
-.task-attention-content { min-width: 0; }
+.task-attention-content { display: contents; }
+.task-attention-content > * { min-width: 0; }
 .task-attention-title {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: start;
   margin: 0;
   font-size: 14px;
   font-weight: 600;
   line-height: 1.4;
   color: var(--attention-fg);
 }
+.task-attention-content > :not(.task-attention-title) { grid-column: 1 / -1; }
 .task-attention-body {
   margin: 4px 0 0;
   font-size: 13px;
@@ -277,6 +287,34 @@
 .detail-tab-count:empty { display: none; }
 .detail-tabpanel { min-width: 0; }
 .detail-tabpanel[hidden] { display: none; }
+/* ORB-25102: on the comments tab the panel fills the detail to the pinned
+   Comment action, so a short thread meets the composer with no dead band;
+   the thread itself is uncapped (below) and the detail scrolls as a whole. */
+.task-detail-pane .task-detail > .detail-tabpanel[data-tab-panel="comments"]:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.comments-tab-content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.comments-tab-content > .comments-panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.comments-panel:not(.collapsed) .comment-thread {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.comments-panel:not(.collapsed) .comment-thread > .comment-card:last-child {
+  flex-grow: 1;
+}
 
 .history-list { min-width: 0; }
 
@@ -362,9 +400,11 @@
   color: var(--fg-dim);
   font-size: 11px;
 }
-/* An operator's skip of a pilot-held task, under the hold it lifts, and the
-   host-operational remedy that skip cannot release. */
+/* An operator's skip of a pilot-held task, under the hold it lifts, the
+   operator's readiness waiver, and the host-operational remedy that skip
+   cannot release. */
 .readiness-skip-pilot,
+.readiness-waiver,
 .readiness-host-operational {
   --attention-fg: var(--warn-fg);
   display: flex;
@@ -643,10 +683,21 @@
 .task-delivery-relations.regression { display: block; width: 100%; }
 .regression-list { display: block; }
 .regression-entry { display: inline-flex; align-items: center; vertical-align: top; min-height: 44px; max-width: 100%; }
-.regression-entry:not(:last-of-type)::after { content: ",\00a0"; }
 .regression-entry[hidden] { display: none; }
-.regression-entry:has(+ .regression-entry[hidden])::after { content: ""; }
-.regression-entry .info-hint.info-hint-pinned { margin: 0; }
+/* The ⓘ keeps its 44px target around a 14px circle. The left margin puts the
+   circle 6px after its id (the .info-hint gap). Before a comma, the right margin
+   pulls the comma back onto the circle's edge. Where the target overlaps the
+   next ID's hit area, let the hint receive the pointer; raise it above the top
+   bar while its fixed bubble is open. */
+.regression-entry .info-hint.info-hint-pinned { margin: 0 0 0 -9px; z-index: 1; }
+.regression-entry .info-hint.info-hint-pinned:is(:hover, :focus) { z-index: 31; }
+.regression-entry:not(:last-of-type) .info-hint.info-hint-pinned { margin-right: -15px; }
+.regression-entry:has(+ .regression-entry[hidden]) .info-hint.info-hint-pinned { margin-right: 0; }
+/* Every relation row separates its ids the same way: a comma right after the
+   id (or its ⓘ), then a gap of about one monospace space before the next id. */
+.regression-entry:not(:last-of-type)::after { content: ","; margin-right: 0.5em; }
+.regression-entry:has(+ .regression-entry[hidden])::after { content: ""; margin-right: 0; }
+.relation-sep { margin-right: 0.5em; }
 .regression-entry .info-hint-text .mono { overflow-wrap: anywhere; }
 /* Other relation rows retain their count-based disclosure. */
 .relation-overflow { display: contents; }
@@ -777,8 +828,8 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-/* The Artifacts container holds the rows directly up to one page, and the
-   toolbar, paged list and pagination beyond it, so the card wraps all of them. */
+/* The Artifacts container holds the list at every count, plus the toolbar and
+   pagination when paged, so the card wraps all of them. */
 .artifacts {
   min-width: 0;
   border: 1px solid var(--border);
@@ -1492,16 +1543,15 @@ input.field-editor-input {
   .history-kv dd { margin-bottom: 6px; }
 }
 
-/* ORB-12645/ORB-12651: the comment thread. It sits in the left/main
-   detail column, capped to keep actions visible, with per-card collapse,
-   Markdown bodies at ~72ch measure, and a sticky header inside the thread. */
+/* ORB-25102 (replaces the ORB-12645 cap): the comment thread grows with
+   the detail so no band sits between the last comment and the Comment
+   action; the detail scrolls as a whole and the sticky footer keeps the
+   Comment action visible. Per-card collapse and the ~72ch body measure
+   stay on the cards themselves. */
 .comments-panel .comment-thread {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: min(60vh, 640px);
-  overflow-y: auto;
-  padding-right: 4px;
   position: relative;
 }
 .comment-pref {
@@ -1622,19 +1672,12 @@ input.field-editor-input {
   max-width: 72ch;
 }
 .comment-body h2 { scroll-margin-top: 48px; }
-.pilot-assessment-fields {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 4px 16px;
-  margin: 0;
-}
-.pilot-assessment-fields dt, .pilot-assessment-label { color: var(--fg-dim); }
-.pilot-assessment-fields dd { margin: 0; overflow-wrap: anywhere; }
-.pilot-assessment-label { margin-top: 12px; }
-@media (max-width: 600px) {
-  .pilot-assessment-fields { grid-template-columns: minmax(0, 1fr); gap: 2px; }
-  .pilot-assessment-fields dd { margin-bottom: 6px; }
-}
+.resident-comment { overflow-wrap: anywhere; }
+.resident-comment-title { color: var(--fg); }
+.resident-comment-meta { color: var(--fg-dim); }
+.resident-comment-notes { white-space: pre-wrap; margin: 8px 0; }
+.resident-comment-label { color: var(--fg-dim); margin-top: 8px; }
+.resident-comment ul { margin: 0; padding-left: 20px; }
 .comment-raw {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -1775,6 +1818,18 @@ input.field-editor-input {
 .task-action-footer:has(> .field-actions:empty) { display: none; }
 .task-detail-pane .row-detail .task-action-footer .actions { padding-top: 0; border-top: 0; }
 .task-action-footer .reject-form { animation: none; }
+/* ORB-25102: let the comments region meet its pinned composer across the
+   task-detail gap. */
+.task-action-footer[data-footer-tab="comments"] { margin-top: -16px; }
+/* ORB-25102 (dr-98658c01d0227394 option 2): on the comments tab only, let
+   the pane head scroll away instead of staying pinned, so an expanded long
+   comment's sticky header and outline stay visible under it. The head is
+   sticky in tasks.css; this override wins by specificity and load order
+   (task-detail.css follows tasks.css). Scoped to the visible comments panel
+   via :has, so other tabs keep the pinned head. */
+.task-detail-body:has(.detail-tabpanel[data-tab-panel="comments"]:not([hidden])) .task-pane-head {
+  position: static;
+}
 @container task-pane (max-width: 440px) {
   .task-action-footer { margin: auto -16px -16px; padding-inline: 16px; }
 }
@@ -1870,11 +1925,14 @@ input.field-editor-input {
   padding: 4px 8px; font-size: 12px; width: 100%; box-sizing: border-box;
 }
 .decision-note::placeholder { color: var(--fg-mute); opacity: 1; }
-.decision-card .decision-note { max-width: 640px; }
+.decision-card .decision-note { max-width: none; }
 .decision-answers { display: grid; gap: 8px; }
 .decision-consequence { flex: 1 1 200px; min-width: 0; color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
 .decision-pending { color: var(--fg-mute); font-size: 12px; }
 .decision-card { display: grid; gap: 10px; margin-top: 6px; min-width: 0; }
+.decision-answer-refusal { display: grid; gap: 8px; justify-items: start; margin: 0; }
+.decision-answer-refusal-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.decision-answer-refusal .action { font-family: var(--font-sans); }
 .decision-summary { margin: 0; font-size: 13px; line-height: 1.5; color: var(--fg-strong); overflow-wrap: anywhere; }
 .decision-human-action { margin: 6px 0 0; font-size: 13px; line-height: 1.5; color: var(--fg-soft); overflow-wrap: anywhere; white-space: pre-line; }
 .decision-human-action strong { color: var(--attention-fg, var(--fg-strong)); }
@@ -1900,7 +1958,10 @@ input.field-editor-input {
   white-space: normal; overflow-wrap: anywhere; text-align: left; line-height: 1.35;
 }
 .decision-recommended { color: var(--attention-fg, var(--warn-fg)); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
-.decision-option .decision-consequence { flex: none; grid-column: 2; }
+/* The answer label sits inside the bordered `.action` button (12px inline
+   padding plus its 1px border), so the consequence text carries the same
+   13px inset from the card's right border (STD-07 R1). */
+.decision-option .decision-consequence { flex: none; grid-column: 2; padding-right: 13px; }
 .task-block-details { margin-top: 12px; font-size: 12px; color: var(--fg-mute); }
 .task-block-details > summary { cursor: pointer; color: var(--fg-dim); }
 .task-block-diagnosis { margin: 6px 0 0; color: var(--fg-soft); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow: auto; }

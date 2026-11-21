@@ -1,6 +1,6 @@
 # orbit-mcp
 
-Speak MCP: stdio framing, advertised-name translation, structured responses, tool discovery, TCP listener, SSH stdio proxy, federated mux. A protocol crate, not a runtime — workspace resolution, validation, auditing, and authorization stay behind the `McpHost` trait in `orbit-core`.
+Speak MCP: stdio framing, advertised-name translation, structured responses, tool discovery, TCP listener, SSH stdio proxy, federated mux. A protocol crate, not a runtime — workspace resolution, validation, auditing, and authorization stay behind the `McpHost` trait, defined in this crate (`src/lib.rs`). Its hosts sit in the layer that implements them: `ServerMcpHost` in `orbit-cli` dispatches through `orbit-core`; `FederatedMcpHost` (`src/federated/host.rs`) routes to other machines.
 
 - Internal deps are pinned by `tests/boundary/dep_boundary.rs` (`orbit-common`, `orbit-registry`, `orbit-tools`, `orbit-types`). Need more? Add a host method, not a manifest edge.
 - `rmcp` appears only in this crate; translate its types at the adapter edge, never re-export.

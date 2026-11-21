@@ -12,10 +12,8 @@ use std::path::Path;
 use orbit_exec::spawn_owned_supervised_cancellable;
 use orbit_types::workflow::{DeferralProbe, NamespaceProbe};
 
-use crate::activity_job::cli_runner::spawn::{
-    prepare_sandbox_for_dispatch, spawn_child_with_optional_sandbox,
-};
 use crate::context::RuntimeHost;
+use crate::sandbox_spawn::{prepare_sandbox_for_dispatch, spawn_child_with_optional_sandbox};
 
 /// Wall clock for one probe. Both probes exit at once when the kernel
 /// answers; this only bounds a wedged spawn.

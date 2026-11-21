@@ -7,7 +7,7 @@ The dashboard self-hosts two third-party libraries as checked-in files
 
 | Record | Role |
 | --- | --- |
-| [`vendor-manifest.json`](vendor-manifest.json) | Library name, exact version, upstream URL, npm tarball, SHA-256 of the checked-in bytes, refresh command |
+| [`vendor-manifest.json`](vendor-manifest.json) | Library name, exact version, upstream URL, npm tarball, any local patch, SHA-256 of the checked-in bytes, refresh command |
 | [`package.json`](../package.json) / [`package-lock.json`](../package-lock.json) (dashboard root) | npm identity so GitHub's dependency graph, Dependabot, and security alerts can see the pins |
 
 Do not edit the minified blobs by hand.
@@ -28,6 +28,21 @@ Do not edit the minified blobs by hand.
 `make ci-fast` runs the same digest, `package.json`, and lockfile check. A
 swapped blob, a missing or drifted `package-lock.json`, or a Dependabot
 version bump that does not refresh the copies fails CI.
+
+### Marked list patches
+
+The refresh script applies `marked-list-setext-tabs` to the pinned Marked 18.2.0
+bundle before computing its digest. The list continuation guard recognizes
+the same trailing spaces and tabs as the Setext heading rule, so an
+outdented underline stays literal and an indented underline forms a heading.
+The same patch also lets a zero-padded ordered marker whose numeric start
+is 1 (such as `01.` or `001)`) interrupt a paragraph, as CommonMark allows
+leading zeroes in its 1–9 digit marker, while a marker starting at 2 still
+stays continuation text. This applies to both the dashboard and the embedded
+MCP task panel.
+When upgrading Marked, check both forms with real tabs and check the
+zero-padded forms, and remove the manifest patch entry and its refresh code
+once the upstream release handles all of them.
 
 ## Advisories and new releases
 

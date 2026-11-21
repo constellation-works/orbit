@@ -1,11 +1,11 @@
 ---
 title: "Context Index — Overview"
 owner: claude
-last_updated: 2026-11-14
-last_validated: 2026-11-14
+last_updated: 2026-11-15
+last_validated: 2026-11-15
 status: Draft
 stage: designing
-next: "File 2_design.md §13 tasks 1–5 in ws_orbit-graph (retired-tool fix, word_index variant, baselines and gates, options); Daniel answers the questions still open in §14.2"
+next: "Decide from the [ORB-24866] measurement whether to file 2_design.md §13 tasks 1–5 in ws_orbit-graph"
 feature: context-index
 doc_role: overview
 type: design
@@ -17,7 +17,7 @@ related_artifacts: [ORB-24844, ORB-24851, ORB-24861, ORB-24864]
 
 # Context Index — Overview
 
-The context index is a proposed inverted index built from task history alone. Each word that appeared in a landed task's title, description or acceptance criteria points at the symbols that task's merged diff changed, and through them at their files, with a count of how many tasks made that link. Given the wording of a new task, the index returns a ranked list of files and symbols the work will probably touch, so a `context_files` footprint can be proposed before any agent explores the code. Nothing here is built. [2_design.md](./2_design.md) is the design, written for [ORB-24844], revised by [ORB-24851] and [ORB-24861] and corrected by [ORB-24864]; it ends with the build order, the decisions Daniel has made, the questions still open and one deferred idea.
+The context index is a proposed inverted index built from task history alone. Each word that appeared in a landed task's title, description or acceptance criteria points at the symbols that task's merged diff changed, and through them at their files, with a count of how many tasks made that link. Given the wording of a new task, the index returns a ranked list of files and symbols the work will probably touch, so a `context_files` footprint can be proposed before any agent explores the code. Nothing here is built. [2_design.md](./2_design.md) is the design, written for [ORB-24844], revised by [ORB-24851] and [ORB-24861] and corrected by [ORB-24864] and [ORB-24867]; it ends with the build order, the decisions Daniel has made, the questions still open and one deferred idea. A throwaway offline measurement ordered by Daniel, [ORB-24866], found the word index alone weak (best variant recall@10 0.217; paths written in the task text 0.415), and [ORB-24898] measured an LLM reranker recovering part of the candidate-pool headroom; neither built the plugin index of §13.
 
 Daniel has decided (2026-11-14) that the index is built in the orbit-graph plugin, as its `word_index` ranking variant, and that the dataset and the offline evaluation are built inside that plugin's `recommend` and `evaluate`. Two ideas of his are specified as options of the variant, and the offline evaluation chooses between their settings: how much a task counts for each symbol it changed, and whether symbols a task *added* count like symbols it modified.
 
@@ -79,7 +79,10 @@ Nothing is implemented. The table maps each concern to where the design settles 
 - [ORB-24844] — wrote this overview and the design
 - [ORB-24851] — recorded the orbit-graph decision and added the posting-weight and added-versus-modified options
 - [ORB-24864] — found that the history index holds byte spans, not line lengths, and corrected the design's line-length claims and build scope
+- [ORB-24867] — corrected the remainder length so it can be derived from the extended history index (`named_symbol_covered_lines`)
 - [ORB-24861] — recorded the decision to leave tags and task type out of the first version
+- [ORB-24866] — measured the word index offline in throwaway scripts, finding it weak against paths written in the task text
+- [ORB-24898] — trialled an LLM reranker over the [ORB-24866] candidate pool
 - [ORB-24839] — designed the eval-harness plugin whose replay job the downstream evaluation uses
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

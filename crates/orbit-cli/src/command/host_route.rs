@@ -222,7 +222,11 @@ fn attention_preflight(
     attention: &super::attention::AttentionCommand,
     global_root: &Path,
 ) -> Result<Preflight, OrbitError> {
-    if explicit_root(cli) || orbit_mcp::federated::load_destinations(global_root)?.is_empty() {
+    // A wait is always a local read bounded by its session grant.
+    if attention.wait.is_some()
+        || explicit_root(cli)
+        || orbit_mcp::federated::load_destinations(global_root)?.is_empty()
+    {
         return Ok(Preflight::Local);
     }
     let input = &attention.query.input;
@@ -231,6 +235,22 @@ fn attention_preflight(
         || input.contains_key("workspace");
     if !scoped && !workspace_less(cli)? {
         return Ok(Preflight::Local);
+    }
+    // A caller holding no capability gets no federated read, and no selector
+    // is a way around that: it is refused here as the local read refuses a
+    // bare call. A shell waits only through a grant its session minted.
+    let caller = CallerCapabilities::resolve(&CallerEnvelope::from_process_env(
+        &ToolSessionContext::default(),
+    ));
+    if !caller.grants().contains(&McpCapability::Agent)
+        && !caller.grants().contains(&McpCapability::Operator)
+    {
+        return Err(OrbitError::CapabilityDenied(
+            "operation 'orbit.attention' requires the `agent or operator` capability; this \
+             caller holds none. A shell reads attention only with `orbit attention wait` \
+             and a grant its session minted"
+                .into(),
+        ));
     }
     if matches!(
         inspect_machine_identity(global_root)?,

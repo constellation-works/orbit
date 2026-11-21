@@ -383,6 +383,839 @@ fn exercise_stalled_peer(name: &str, sse: bool, prefix: &'static [u8]) {
     );
 }
 
+/// The scripted dashboard QA recipe in `docs/DEVELOPMENT.md` must not abandon
+/// its server when SIGTERM lands between the spawn, the PID capture and the
+/// token capture (ORB-25593), nor terminate a background job its caller
+/// started when it runs in the documented `( )` subshell and the signal lands
+/// before the spawn (ORB-25606: the subshell inherits the caller's `$!`). A
+/// Bash `DEBUG` hook fires the signal deterministically just before the spawn
+/// and each assignment. The two post-spawn boundaries hold the stub on a FIFO
+/// before it can publish its PID; the hook records `$!`, and a Linux
+/// subreaper parent proves that exact child was reaped. `unreaped` and
+/// `timeout` leave that child and a SIGTERM-ignoring descendant alive, and
+/// the parent must notice and sweep the process group it owns. The descendant
+/// inherits that ignore disposition before the stub publishes readiness, and
+/// both cases require the disposition to be set before teardown, SIGTERM to be
+/// sent to the descendant, the descendant to survive it, and SIGKILL to reap it.
+/// `wrapper_stall`
+/// stops the outer wrapper just after it starts the caller's job, before the
+/// recipe runs: the runner times out, and the sweep must reap the wrapper and
+/// that job so output collection reaches EOF (ORB-25620).
+#[cfg(target_os = "linux")]
+#[test]
+fn dashboard_qa_recipe_reaps_child_when_interrupted_at_identity_boundaries() {
+    for boundary in [
+        "before_spawn",
+        "spawn_pid",
+        "pid_token",
+        "none",
+        "unreaped",
+        "timeout",
+        "wrapper_stall",
+    ] {
+        exercise_qa_recipe_boundary(boundary);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn exercise_qa_recipe_boundary(boundary: &str) {
+    use std::path::Path;
+
+    let temp = tempdir().expect("tempdir");
+    let qa_base = temp.path().join("qa");
+    let shots = qa_base.join("shots");
+    std::fs::create_dir_all(&shots).expect("create shots");
+    std::fs::write(shots.join("sentinel.txt"), "keep").expect("write sentinel");
+    let qa_repo = temp.path().join("repo");
+    std::fs::create_dir_all(&qa_repo).expect("create qa repo");
+
+    let docs = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/DEVELOPMENT.md"),
+    )
+    .expect("read DEVELOPMENT.md");
+    let section = docs
+        .find("#### Scripted dashboard QA")
+        .expect("scripted QA section");
+    let fence = docs[section..]
+        .find("```bash\n")
+        .map(|index| section + index + "```bash\n".len())
+        .expect("scripted QA bash fence");
+    let end = docs[fence..]
+        .find("\n```")
+        .map(|index| fence + index)
+        .expect("scripted QA fence end");
+    let mut recipe = docs[fence..end].to_string();
+
+    let serve_start = recipe.find("SERVE_CMD=(").expect("SERVE_CMD line");
+    let serve_end = recipe[serve_start..]
+        .find('\n')
+        .map(|index| serve_start + index)
+        .expect("SERVE_CMD line end");
+    recipe.replace_range(
+        serve_start..serve_end,
+        // Hold `spawn_pid` and `pid_token` before `$$` is published, so the
+        // runner cannot learn the PID from the child. `unreaped` and `timeout`
+        // ignore SIGTERM in this shell, then fork. The descendant inherits
+        // that disposition — an ignored signal is kept across fork and exec —
+        // and this shell restores the default before writing the ready FIFO.
+        // The DEBUG hook waits on that FIFO, so teardown cannot start until
+        // the descendant already ignores SIGTERM.
+        r#"SERVE_CMD=(/bin/sh -c 'case "$QA_BOUNDARY" in unreaped|timeout) trap "" TERM; (exec sleep 300) & printf "%s\n" "$!" >"$QA_BASE/descendant.pid"; trap - TERM; printf ready >"$QA_BASE/ready.fifo"; read -r _ <"$QA_BASE/hold.fifo" ;; spawn_pid|pid_token) read -r _ <"$QA_BASE/hold.fifo" ;; esac; echo $$ >"$QA_BASE/child.pid"; exec /usr/bin/python3 "$QA_BASE/listener.py"')"#,
+    );
+    // The stub owns its loopback listener: it binds an ephemeral port, announces
+    // that port and keeps it open until it exits. A fixed announced port would
+    // let an unrelated local service decide the recipe's "still listening"
+    // teardown probe (STD-04 §R7).
+    std::fs::write(
+        qa_base.join("listener.py"),
+        r#"import os, socket, time
+listener = socket.socket()
+listener.bind(("127.0.0.1", 0))
+listener.listen(8)
+port = listener.getsockname()[1]
+with open(os.path.join(os.environ["QA_BASE"], "port"), "w") as handle:
+    handle.write(str(port))
+print(f"Dashboard listening on http://127.0.0.1:{port}", flush=True)
+time.sleep(300)
+"#,
+    )
+    .expect("write listener stub");
+    // Patterns are single-quoted: `$!` inside double quotes would expand in
+    // the DEBUG trap and miss the assignment command.
+    let hook = r#"
+browser_start() { :; }
+browser_shoot() { qa_listening "${1##*:}" || return 1; echo shot > "$SHOTS/dashboard-dark-1280.png"; }
+browser_close() { :; }
+__boundary_fired=
+__record_child() {
+  [ -n "${!:-}" ] || return 0
+  [ "${!:-}" = "${QA_SPAWN_PRIOR:-}" ] && return 0
+  printf '%s\n' "$!" > "$QA_BASE/observed.pid"
+}
+__hook() {
+  case "$BASH_COMMAND" in
+    'qa_serve_start 30') [ "$QA_BOUNDARY" = before_spawn ] || return 0 ;;
+    'SERVER_PID=$!')
+      if [ "$QA_BOUNDARY" = unreaped ] || [ "$QA_BOUNDARY" = timeout ]; then
+        read -r _ < "$QA_BASE/ready.fifo"
+      fi
+      __record_child
+      case "$QA_BOUNDARY" in spawn_pid|unreaped) ;; *) return 0 ;; esac
+      ;;
+    'SERVER_TOKEN="$(qa_token "$SERVER_PID")"')
+      __record_child
+      [ "$QA_BOUNDARY" = pid_token ] || return 0
+      ;;
+    *) return 0 ;;
+  esac
+  [ -n "$__boundary_fired" ] && return 0
+  __boundary_fired=1
+  trap - DEBUG
+  if [ "$QA_BOUNDARY" = unreaped ]; then kill -KILL "$BASHPID"; else kill -TERM "$BASHPID"; fi
+}
+trap __hook DEBUG
+set -T
+"#;
+    let capture = recipe
+        .find("# Capture.")
+        .expect("capture marker in QA recipe");
+    recipe.insert_str(capture, hook);
+    // The documented form: the recipe runs in a `( )` subshell, after the
+    // caller started a background job whose PID the subshell inherits in `$!`.
+    let recipe = format!(
+        r#"sleep 300 &
+caller_job=$!
+echo "caller_job_pid=$caller_job"
+[ "$QA_BOUNDARY" = wrapper_stall ] && kill -STOP "$$"
+(
+{recipe}
+)
+sub_rc=$?
+sleep 0.3
+if kill -0 "$caller_job" 2>/dev/null; then echo caller_job=alive; kill -KILL "$caller_job"; else echo caller_job=terminated; fi
+exit "$sub_rc"
+"#
+    );
+    let script_path = temp.path().join("script.sh");
+    std::fs::write(&script_path, recipe).expect("write QA harness");
+
+    const RUNNER: &str = r#"
+import ctypes, os, signal, subprocess, sys, time
+script, child_pid_file, observed_pid_file, descendant_pid_file = sys.argv[1:5]
+libc = ctypes.CDLL(None)
+if libc.prctl(36, 1, 0, 0, 0) != 0:
+    raise SystemExit("prctl(PR_SET_CHILD_SUBREAPER) failed")
+
+def proc_state(pid):
+    try:
+        with open(f"/proc/{pid}/stat") as handle:
+            stat = handle.read()
+    except OSError:
+        return None
+    try:
+        return stat.rsplit(")", 1)[1].split()[0]
+    except (IndexError, ValueError):
+        return None
+
+def read_pid(path):
+    try:
+        pid = int(open(path).read().strip())
+    except (OSError, ValueError):
+        return 0
+    return pid if pid > 1 else 0
+
+def classify(pid):
+    if not pid:
+        return "missing"
+    state = proc_state(pid)
+    if state == "Z":
+        return "zombie_left_by_harness"
+    if state is not None:
+        return "alive"
+    try:
+        waited, status = os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        return "reaped"
+    if waited == pid:
+        note_reap(pid, status)
+        return "zombie_left_by_harness"
+    return "reaped"
+
+def proc_identity(pid):
+    # (process group, start time) from one read of /proc/<pid>/stat, so the
+    # group and the incarnation come from the same observation. None once the
+    # process is gone; any other read failure propagates as an OSError.
+    try:
+        with open(f"/proc/{pid}/stat") as handle:
+            stat = handle.read()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    fields = stat.rsplit(")", 1)[1].split()
+    return int(fields[2]), int(fields[19])
+
+def group_members(pgid):
+    # Members of the group as (pid, starttime), or None when the table cannot
+    # be read, which callers count as unverified rather than empty.
+    try:
+        names = os.listdir("/proc")
+    except OSError:
+        return None
+    members = []
+    for name in names:
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        if pid <= 1:
+            continue
+        try:
+            identity = proc_identity(pid)
+        except (OSError, IndexError, ValueError):
+            return None
+        if identity is not None and identity[0] == pgid:
+            members.append((pid, identity[1]))
+    return members
+
+def others_alive():
+    members = group_members(os.getpgrp())
+    if members is None:
+        return True
+    me = os.getpid()
+    return any(pid != me for pid, _ in members)
+
+reaped_status = {}
+term_watch = {"after_term": "missing", "reaped_by": "", "unverified": 0, "descendant_term": "missing"}
+
+def note_reap(pid, status):
+    if pid > 0:
+        reaped_status[pid] = status
+
+def reap_zombies():
+    while True:
+        try:
+            pid, status = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if pid == 0:
+            return
+        note_reap(pid, status)
+
+def ignores_term(pid):
+    # Linux SigIgn uses bit (signum - 1). SIGTERM is 15, so the bit is 0x4000.
+    if not pid:
+        return ""
+    term_bit = 1 << (signal.SIGTERM - 1)
+    try:
+        with open(f"/proc/{pid}/status") as handle:
+            for line in handle:
+                if line.startswith("SigIgn:"):
+                    mask = int(line.split()[1], 16)
+                    return "1" if mask & term_bit else "0"
+    except (OSError, ValueError, IndexError):
+        return "0"
+    return "0"
+
+def descendant_liveness(pid):
+    if not pid:
+        return "missing"
+    state = proc_state(pid)
+    if state is None:
+        return "gone"
+    if state == "Z":
+        return "zombie"
+    return "alive"
+
+def observe_after_term(pid):
+    # Wait out delivery. A default disposition dies in this window; SIG_IGN stays.
+    if not pid:
+        return "missing"
+    deadline = time.monotonic() + 0.2
+    while True:
+        state = descendant_liveness(pid)
+        if state != "alive" or time.monotonic() >= deadline:
+            return state
+        reap_zombies()
+        time.sleep(0.02)
+
+def reaped_signal(pid):
+    status = reaped_status.get(pid)
+    if not pid or status is None:
+        return ""
+    if os.WIFSIGNALED(status):
+        return str(os.WTERMSIG(status))
+    if os.WIFEXITED(status):
+        return "exit:%d" % os.WEXITSTATUS(status)
+    return "unknown"
+
+def signal_confirmed(pid, starttime, pgid, sig):
+    # Signal only through a pidfd bound to the observed incarnation, as
+    # scripts/test-qa-full-sweep.py _signal_confirmed does: a bare kill(pid)
+    # can reach an unrelated process when a member exits and its PID is
+    # reused between observation and delivery. Returns "sent", "gone" (the
+    # observed incarnation is no longer a member, nothing was signalled) or
+    # "unverified" (no identity-bound handle: nothing is sent).
+    if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+        return "unverified"
+    try:
+        pidfd = os.pidfd_open(pid, 0)
+    except ProcessLookupError:
+        return "gone"
+    except OSError:
+        return "unverified"
+    try:
+        try:
+            identity = proc_identity(pid)
+        except (OSError, IndexError, ValueError):
+            return "unverified"
+        if identity != (pgid, starttime):
+            return "gone"
+        try:
+            signal.pidfd_send_signal(pidfd, sig)
+        except ProcessLookupError:
+            return "gone"
+        except OSError:
+            return "unverified"
+        return "sent"
+    finally:
+        os.close(pidfd)
+
+def signal_others(sig):
+    # Every refused or unobservable delivery is counted as unverified cleanup.
+    # Returns {pid: result} for the observed members (excluding this process),
+    # so callers can require delivery to a watched PID instead of assuming a
+    # later KILL proves the earlier TERM was sent.
+    pgid = os.getpgrp()
+    members = group_members(pgid)
+    if members is None:
+        term_watch["unverified"] += 1
+        return {}
+    me = os.getpid()
+    results = {}
+    for pid, starttime in members:
+        if pid == me:
+            continue
+        result = signal_confirmed(pid, starttime, pgid, sig)
+        results[pid] = result
+        if result == "unverified":
+            term_watch["unverified"] += 1
+    return results
+
+def finish(proc, rc, descendant_pid):
+    # Polite signal, bounded grace, then SIGKILL. A membership probe that
+    # cannot answer counts as survival. Skip this process: it is the reaper.
+    # Sample the descendant after SIGTERM and before any SIGKILL, so a child
+    # that died from the first signal cannot be reported as escalated.
+    # Record whether TERM reached the watched descendant: a later KILL must
+    # not stand in for a missed TERM.
+    term_results = signal_others(signal.SIGTERM)
+    if not descendant_pid:
+        term_watch["descendant_term"] = "missing"
+    elif descendant_pid in term_results:
+        term_watch["descendant_term"] = term_results[descendant_pid]
+    elif descendant_liveness(descendant_pid) == "gone":
+        term_watch["descendant_term"] = "gone"
+    else:
+        term_watch["descendant_term"] = "unverified"
+        term_watch["unverified"] += 1
+    if rc is None:
+        try:
+            rc = proc.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            rc = None
+    term_watch["after_term"] = observe_after_term(descendant_pid)
+    if rc is None:
+        signal_others(signal.SIGKILL)
+        rc = proc.wait(timeout=1)
+    deadline = time.monotonic() + 0.5
+    while time.monotonic() < deadline and others_alive():
+        reap_zombies()
+        time.sleep(0.02)
+    if others_alive():
+        signal_others(signal.SIGKILL)
+        deadline = time.monotonic() + 0.5
+        while time.monotonic() < deadline and others_alive():
+            reap_zombies()
+            time.sleep(0.02)
+    reap_zombies()
+    term_watch["reaped_by"] = reaped_signal(descendant_pid)
+    return rc
+
+def handle_term(_signum, _frame):
+    # The Rust guard already sent SIGTERM to the group. Reap what died, then
+    # SIGKILL any descendant that ignored it, before this process exits.
+    deadline = time.monotonic() + 0.4
+    while time.monotonic() < deadline and others_alive():
+        reap_zombies()
+        time.sleep(0.02)
+    signal_others(signal.SIGKILL)
+    deadline = time.monotonic() + 0.4
+    while time.monotonic() < deadline and others_alive():
+        reap_zombies()
+        time.sleep(0.02)
+    reap_zombies()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(143)
+
+signal.signal(signal.SIGTERM, handle_term)
+boundary = os.environ.get("QA_BOUNDARY", "")
+start = time.monotonic()
+proc = subprocess.Popen(["bash", script])
+rc = None
+timed_out = 0
+while True:
+    try:
+        rc = proc.wait(timeout=0.05)
+        break
+    except subprocess.TimeoutExpired:
+        # Once the parent has recorded the held child, do not wait out the
+        # recipe's readiness loop. That is the timeout under test.
+        if boundary == "timeout" and os.path.isfile(observed_pid_file) and os.path.getsize(observed_pid_file) > 0:
+            timed_out = 1
+            break
+        if time.monotonic() - start > float(os.environ.get("QA_RUNNER_TIMEOUT", "10")):
+            timed_out = 1
+            break
+observed = read_pid(observed_pid_file)
+published = read_pid(child_pid_file)
+descendant = read_pid(descendant_pid_file)
+# The stub writes the ready FIFO only after the descendant inherits SIG_IGN,
+# and the hook waits on that FIFO, so this read is before teardown.
+descendant_ignores_term = ignores_term(descendant)
+child = observed or published
+child_state = classify(child)
+descendant_state = classify(descendant)
+rc = finish(proc, rc, descendant)
+reap_zombies()
+
+def after(pid):
+    if not pid:
+        return "missing"
+    return "gone" if proc_state(pid) is None else "present"
+
+print(f"harness_timeout={timed_out}")
+print(f"harness_rc={rc}")
+print(f"elapsed_ms={int((time.monotonic() - start) * 1000)}")
+print(f"observed_pid={observed or ''}")
+print(f"published_pid={published or ''}")
+print(f"child_pid={child or ''}")
+print(f"child_state={child_state}")
+print(f"descendant_pid={descendant or ''}")
+print(f"descendant_state={descendant_state}")
+print(f"descendant_ignores_term={descendant_ignores_term}")
+print(f"descendant_term={term_watch['descendant_term']}")
+print(f"descendant_after_term={term_watch['after_term']}")
+print(f"descendant_reaped_by={term_watch['reaped_by']}")
+print(f"child_after={after(child)}")
+print(f"descendant_after={after(descendant)}")
+print(f"group_survived={1 if others_alive() else 0}")
+print(f"cleanup_unverified={term_watch['unverified']}")
+sys.stdout.flush()
+"#;
+    let child_pid_file = qa_base.join("child.pid");
+    let observed_pid_file = qa_base.join("observed.pid");
+    let descendant_pid_file = qa_base.join("descendant.pid");
+    make_fifo(&qa_base.join("hold.fifo"));
+    make_fifo(&qa_base.join("ready.fifo"));
+    let mut command = Command::new("/usr/bin/python3");
+    command
+        .arg("-c")
+        .arg(RUNNER)
+        .arg(&script_path)
+        .arg(&child_pid_file)
+        .arg(&observed_pid_file)
+        .arg(&descendant_pid_file)
+        .env("QA_BASE", &qa_base)
+        .env("QA_HOME", temp.path().join("home"))
+        .env("QA_REPO", &qa_repo)
+        .env("QA_BOUNDARY", boundary)
+        .env("QA_TERM_GRACE", "5")
+        // The stalled wrapper never reaches the recipe, so only the runner
+        // timeout ends it; keep that wait short.
+        .env(
+            "QA_RUNNER_TIMEOUT",
+            if boundary == "wrapper_stall" {
+                "2"
+            } else {
+                "10"
+            },
+        )
+        .env("ORBIT_BIN", "/bin/true")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut runner = OwnedRunner::spawn(&mut command);
+    let started = Instant::now();
+    let status = runner
+        .wait_finished(Duration::from_secs(25))
+        .unwrap_or_else(|| panic!("{boundary}: subreaper runner did not finish"));
+    let (stdout, stderr) = runner.output_text();
+    let field = |name: &str| {
+        stdout
+            .lines()
+            .find_map(|line| line.strip_prefix(name))
+            .unwrap_or("")
+            .to_string()
+    };
+    assert!(
+        status.success(),
+        "{boundary}: runner failed: {stdout} {stderr}"
+    );
+    let expect_timeout = if matches!(boundary, "timeout" | "wrapper_stall") {
+        "1"
+    } else {
+        "0"
+    };
+    assert_eq!(
+        field("harness_timeout="),
+        expect_timeout,
+        "{boundary}: unexpected timeout flag: {stdout} {stderr}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "{boundary}: harness took too long: {stdout}"
+    );
+    // The timeout sweep stops the recipe before its epilogue can report the
+    // caller's job. Every path that returns to the outer script must leave it.
+    if !matches!(boundary, "timeout" | "wrapper_stall") {
+        assert_eq!(
+            field("caller_job="),
+            "alive",
+            "{boundary}: the caller's own background job must be left untouched: {stdout} {stderr}"
+        );
+    }
+    let expected_rc = match boundary {
+        "none" => Some("0"),
+        "unreaped" => Some("137"),
+        "timeout" | "wrapper_stall" => None,
+        _ => Some("143"),
+    };
+    if let Some(expected_rc) = expected_rc {
+        assert_eq!(
+            field("harness_rc="),
+            expected_rc,
+            "{boundary}: unexpected harness exit: {stdout} {stderr}"
+        );
+    }
+    let expected_child = match boundary {
+        "before_spawn" | "wrapper_stall" => "missing",
+        "unreaped" | "timeout" => "alive",
+        _ => "reaped",
+    };
+    assert_eq!(
+        field("child_state="),
+        expected_child,
+        "{boundary}: unexpected child state: {stdout} {stderr}"
+    );
+    let expected_after = if matches!(boundary, "before_spawn" | "wrapper_stall") {
+        "missing"
+    } else {
+        "gone"
+    };
+    assert_eq!(
+        field("child_after="),
+        expected_after,
+        "{boundary}: child was not reaped: {stdout} {stderr}"
+    );
+    let expected_descendant = if matches!(boundary, "unreaped" | "timeout") {
+        "alive"
+    } else {
+        "missing"
+    };
+    assert_eq!(
+        field("descendant_state="),
+        expected_descendant,
+        "{boundary}: unexpected descendant state: {stdout} {stderr}"
+    );
+    let expected_descendant_after = if matches!(boundary, "unreaped" | "timeout") {
+        "gone"
+    } else {
+        "missing"
+    };
+    assert_eq!(
+        field("descendant_after="),
+        expected_descendant_after,
+        "{boundary}: descendant was not reaped: {stdout} {stderr}"
+    );
+    // Checked before cleanup_unverified: an unverified TERM also counts as
+    // unverified cleanup, which would otherwise be the only failure reported.
+    if matches!(boundary, "unreaped" | "timeout") {
+        assert_eq!(
+            field("descendant_term="),
+            "sent",
+            "{boundary}: SIGTERM was not sent to the recorded descendant: {stdout} {stderr}"
+        );
+    }
+    assert_eq!(
+        field("group_survived="),
+        "0",
+        "{boundary}: owned process group still has a member: {stdout} {stderr}"
+    );
+    assert_eq!(
+        field("cleanup_unverified="),
+        "0",
+        "{boundary}: a group member was signalled without a confirmed identity or could not be observed: {stdout} {stderr}"
+    );
+    // The held stub must not publish. The normal run publishes the same PID
+    // the parent recorded.
+    let published_on_disk = std::fs::read_to_string(&child_pid_file)
+        .ok()
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty());
+    if boundary == "none" {
+        assert_eq!(
+            field("published_pid="),
+            field("observed_pid="),
+            "{boundary}: parent and child disagree on the server pid: {stdout} {stderr}"
+        );
+        assert!(
+            published_on_disk.is_some(),
+            "{boundary}: normal stub did not publish its pid: {stdout}"
+        );
+    } else {
+        assert_eq!(
+            field("published_pid="),
+            "",
+            "{boundary}: stub published a pid the fixture must not need: {stdout} {stderr}"
+        );
+        assert!(
+            published_on_disk.is_none(),
+            "{boundary}: pid file exists: {published_on_disk:?}"
+        );
+    }
+    if boundary == "wrapper_stall" {
+        // The wrapper stopped before the recipe, so the caller's job is the
+        // fixture-owned process the sweep must have reaped.
+        let caller_pid: libc::pid_t = field("caller_job_pid=").parse().expect("caller job pid");
+        assert_pid_gone(caller_pid, "wrapper_stall caller job");
+    }
+    if !matches!(boundary, "before_spawn" | "wrapper_stall") {
+        let child_pid = field("child_pid=");
+        let caller_pid = field("caller_job_pid=");
+        assert!(
+            !child_pid.is_empty() && child_pid != caller_pid,
+            "{boundary}: expected the spawned server pid, distinct from the caller job {caller_pid}: {stdout} {stderr}"
+        );
+        let child_pid: libc::pid_t = child_pid.parse().expect("server pid");
+        assert_pid_gone(child_pid, &format!("{boundary} server"));
+    }
+    if matches!(boundary, "unreaped" | "timeout") {
+        assert_eq!(
+            field("descendant_ignores_term="),
+            "1",
+            "{boundary}: descendant must ignore SIGTERM before teardown: {stdout} {stderr}"
+        );
+        assert_eq!(
+            field("descendant_after_term="),
+            "alive",
+            "{boundary}: SIGTERM must leave the ignoring descendant alive: {stdout} {stderr}"
+        );
+        assert_eq!(
+            field("descendant_reaped_by="),
+            "9",
+            "{boundary}: escalation must reap the descendant with SIGKILL: {stdout} {stderr}"
+        );
+        let descendant_pid: libc::pid_t = field("descendant_pid=").parse().expect("descendant pid");
+        assert_pid_gone(descendant_pid, &format!("{boundary} descendant"));
+    }
+    // The log is created by the start itself, so it exists only after the spawn.
+    assert!(
+        shots.join("sentinel.txt").exists()
+            && (matches!(boundary, "before_spawn" | "wrapper_stall")
+                || qa_base.join("serve.log").exists()),
+        "{boundary}: teardown must leave artifacts in place: {stdout}"
+    );
+    if boundary == "none" {
+        // The capture stub only writes after connecting to the announced port,
+        // so the capture proves the fixture's own listener was open. The
+        // recipe's teardown probe then found it closed (exit 0 above) after the
+        // child was reaped.
+        assert!(
+            shots.join("dashboard-dark-1280.png").exists(),
+            "normal recipe run must keep its capture: {stdout}"
+        );
+        let port: u16 = std::fs::read_to_string(qa_base.join("port"))
+            .expect("listener stub must record the port it owns")
+            .trim()
+            .parse()
+            .expect("listener port");
+        assert!(
+            port > 1024 && port != 9,
+            "the stub must own an ephemeral port, not a fixed one: {port}"
+        );
+    }
+}
+
+/// Own the QA runner and every descendant in its process group.
+///
+/// Drop and the deadline path send SIGTERM while this child is still unreaped,
+/// so the group id cannot have been reused, then SIGKILL only if it is still
+/// the live leader. The runner reaps descendants before it exits on SIGTERM.
+#[cfg(target_os = "linux")]
+struct OwnedRunner {
+    child: Child,
+}
+
+#[cfg(target_os = "linux")]
+impl OwnedRunner {
+    fn spawn(command: &mut Command) -> Self {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+        let child = command.spawn().expect("spawn subreaper runner");
+        Self { child }
+    }
+
+    fn terminate(&mut self) {
+        if matches!(self.child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        let pgid = self.child.id() as libc::pid_t;
+        if pgid <= 1 {
+            return;
+        }
+        // SAFETY: `pgid` is the pid of this unreaped child, which leads the
+        // group created at spawn. `kill(-pgid)` signals only that group.
+        unsafe { libc::kill(-pgid, libc::SIGTERM) };
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                _ => break,
+            }
+        }
+        if matches!(self.child.try_wait(), Ok(None)) {
+            // SAFETY: the leader is still unreaped, so the group id is still
+            // the one this fixture created.
+            unsafe { libc::kill(-pgid, libc::SIGKILL) };
+            let _ = self.child.wait();
+        }
+    }
+
+    fn wait_finished(&mut self, deadline: Duration) -> Option<std::process::ExitStatus> {
+        let start = Instant::now();
+        loop {
+            if let Ok(Some(status)) = self.child.try_wait() {
+                return Some(status);
+            }
+            if start.elapsed() >= deadline {
+                self.terminate();
+                return self.child.try_wait().ok().flatten();
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn output_text(&mut self) -> (String, String) {
+        fn read_capped(pipe: impl Read) -> String {
+            let mut text = String::new();
+            let _ = pipe.take(256 * 1024).read_to_string(&mut text);
+            text
+        }
+        let stdout = self
+            .child
+            .stdout
+            .take()
+            .map(read_capped)
+            .unwrap_or_default();
+        let stderr = self
+            .child
+            .stderr
+            .take()
+            .map(read_capped)
+            .unwrap_or_default();
+        (stdout, stderr)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for OwnedRunner {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn make_fifo(path: &std::path::Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let mut bytes = path.as_os_str().as_bytes().to_vec();
+    bytes.push(0);
+    // SAFETY: `bytes` is a NUL-terminated path this fixture owns, with no
+    // interior NUL. `mkfifo` creates that FIFO and nothing else.
+    let rc = unsafe { libc::mkfifo(bytes.as_ptr().cast(), 0o600) };
+    assert_eq!(
+        rc,
+        0,
+        "mkfifo {}: {}",
+        path.display(),
+        std::io::Error::last_os_error()
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn assert_pid_gone(pid: libc::pid_t, context: &str) {
+    assert!(pid > 1, "{context}: pid {pid} is not a fixture child");
+    // SAFETY: signal 0 only probes this fixture's recorded pid.
+    let kill_rc = unsafe { libc::kill(pid, 0) };
+    let kill_err = std::io::Error::last_os_error().raw_os_error();
+    assert_eq!(kill_rc, -1, "{context}: pid {pid} still exists");
+    assert_eq!(
+        kill_err,
+        Some(libc::ESRCH),
+        "{context}: pid {pid} probe returned {kill_err:?}"
+    );
+    // SAFETY: WNOHANG wait of a pid this fixture spawned. It does not block,
+    // and ECHILD means this process does not still have it as a zombie.
+    let wait_rc = unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) };
+    let wait_err = std::io::Error::last_os_error().raw_os_error();
+    assert_eq!(wait_rc, -1, "{context}: pid {pid} was left unreaped");
+    assert_eq!(
+        wait_err,
+        Some(libc::ECHILD),
+        "{context}: pid {pid} reap probe returned {wait_err:?}"
+    );
+}
+
 fn spawn_dashboard(home: &std::path::Path) -> BoundServer {
     let mut command = Command::new(env!("CARGO_BIN_EXE_orbit"));
     // ORB-11300: the dashboard serves whichever workspace it resolves. Without

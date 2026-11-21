@@ -231,7 +231,7 @@ impl OrbitRuntime {
         run: &JobRun,
         definitions: &DeliveryDefinitions,
     ) -> Result<Option<DeliveryJobShape>, OrbitError> {
-        let Some(mut job) = self.run_definition(&run.run_id, &run.job_id, definitions) else {
+        let Some(mut job) = self.run_definition(&run.run_id, &run.job_id, definitions)? else {
             return Ok(None);
         };
         if !job.holds_task_delivery() {
@@ -250,18 +250,22 @@ impl OrbitRuntime {
     }
 
     /// The definition [`Self::resolve_run_definition`] resolves for a run:
-    /// its pinned snapshot, else the catalog job it names. `None` when
-    /// neither can be read.
+    /// its pinned snapshot, else the catalog job it names. `Ok(None)` when
+    /// the run has no snapshot and the catalog does not name the job.
+    ///
+    /// A present snapshot that cannot be read or parsed is that error, not
+    /// `Ok(None)`. Dropping it would make the run look like it had no
+    /// definition, and a task whose only delivery is that run would then
+    /// look like a task with no recorded delivery.
     pub(super) fn run_definition(
         &self,
         run_id: &str,
         job_id: &str,
         definitions: &DeliveryDefinitions,
-    ) -> Option<JobV2> {
-        match self.read_run_definition_snapshot(run_id) {
-            Ok(Some((job, _))) => Some(job),
-            Ok(None) => self.v2_job_by_name_cached(&definitions.jobs, job_id),
-            Err(_) => None,
+    ) -> Result<Option<JobV2>, OrbitError> {
+        match self.read_run_definition_snapshot(run_id)? {
+            Some((job, _)) => Ok(Some(job)),
+            None => Ok(self.v2_job_by_name_cached(&definitions.jobs, job_id)),
         }
     }
 
@@ -502,6 +506,10 @@ impl OrbitRuntime {
     /// job_id)`, whose definition holds task delivery. A direct-path run
     /// judges its own pinned snapshot; catalog-backed runs of one job share
     /// the catalog's verdict.
+    ///
+    /// A pinned snapshot that cannot be read or parsed fails this lookup.
+    /// Skipping that run would report no delivery, which is the answer for
+    /// a task that was never submitted by one.
     pub(super) fn latest_delivery_run_id<'a>(
         &self,
         runs: impl Iterator<Item = (&'a str, &'a str)>,
@@ -509,7 +517,7 @@ impl OrbitRuntime {
     ) -> Result<Option<String>, OrbitError> {
         for (run_id, job_id) in runs {
             if self
-                .run_definition(run_id, job_id, definitions)
+                .run_definition(run_id, job_id, definitions)?
                 .is_some_and(|job| job.holds_task_delivery())
             {
                 return Ok(Some(run_id.to_string()));
@@ -520,7 +528,5 @@ impl OrbitRuntime {
 }
 
 fn no_task_delivery_run(task_id: &str) -> OrbitError {
-    OrbitError::InvalidInput(format!(
-        "no task delivery run in this workspace was submitted with task '{task_id}'; delivery evidence exists only for tasks submitted by a delivery run in this workspace — call orbit.task.show without field \"delivery\" instead"
-    ))
+    OrbitError::TaskDeliveryUnavailable(task_id.to_string())
 }

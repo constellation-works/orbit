@@ -36,6 +36,20 @@ impl PluginBackendSpec {
         }
     }
 
+    /// The manifest's `fs.write_files` entries rendered for a call made from
+    /// `workspace_root`, before any operator scoping or file admission. The
+    /// conformance run uses it to create the files its scratch workspace
+    /// lacks, so an exact-file grant can be exercised there.
+    pub fn rendered_manifest_write_files(
+        &self,
+        workspace_root: Option<&Path>,
+    ) -> Result<Vec<PathBuf>, OrbitError> {
+        let vars = self.template_vars(workspace_root);
+        Ok(render_fs_roots(self, &vars)
+            .map_err(plugin_refusal)?
+            .write_files)
+    }
+
     /// The filesystem and network boundary for a call made from
     /// `workspace_root`: the manifest's fs paths rendered, plus the plugin
     /// root itself, which holds the backend the child must execute.
@@ -157,12 +171,25 @@ impl PluginBackendSpec {
             }
         }
         let mut write: Vec<PathBuf> = scoped_write.into_iter().map(|root| root.path).collect();
-        let manifest_write_files: Vec<PathBuf> =
-            scoped_files.into_iter().map(|root| root.path).collect();
+        // Each manifest file resolves to the physical file the kernel will
+        // check: itself, or the in-workspace target of a final symlink.
+        let manifest_write_files = scoped_files
+            .into_iter()
+            .map(|root| {
+                let granted = super::write_file::resolve(&root.path, workspace_root)?;
+                Ok(super::write_file::ManifestWriteFile {
+                    requested: root.path,
+                    granted,
+                    workspace_root: workspace_root.map(Path::to_path_buf),
+                })
+            })
+            .collect::<Result<Vec<_>, OrbitError>>()?;
+        let mut write_files: Vec<PathBuf> = Vec::new();
         for file in &manifest_write_files {
-            super::write_file::validate(file)?;
+            if !write_files.contains(&file.granted) {
+                write_files.push(file.granted.clone());
+            }
         }
-        let mut write_files = manifest_write_files.clone();
         // The write directories the *host itself* adds for a grant, as opposed
         // to the ones the manifest asked for above. They are also exactly the
         // `orbit_tools` half of the materialization roots below: one list

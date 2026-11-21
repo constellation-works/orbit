@@ -229,7 +229,7 @@ fn glob_candidate_names_stage_and_commit_only_themselves() {
     assert_eq!(output["committed_task_ids"], json!(["T-GLOB", "T-OTHER"]));
     assert_eq!(
         git_output(workspace, &["log", "-1", "--format=%s", "HEAD~1"]).unwrap(),
-        "[T-GLOB] Glob names"
+        "chore: Glob names [T-GLOB]"
     );
     assert_eq!(
         commit_names(workspace, "HEAD~1"),
@@ -395,4 +395,43 @@ fn git_commit_neutralizes_forge_mentions_in_subjects_and_bodies() {
             "{scope}: {subject}"
         );
     }
+}
+
+/// [ORB-25009] Mention neutralization put a zero-width joiner inside the
+/// review crew trailer (`Orbit-Review-Crew: haiku@‍xhigh`). The registered
+/// trailer block is data and stays byte-identical; prose is still protected.
+#[test]
+fn reviewer_repair_commit_keeps_trailer_values_byte_identical() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::reviewer_repair_commit_keeps_trailer_values_byte_identical"
+    )) {
+        return;
+    }
+    let temp = initialized_git_repo();
+    let repo = temp.path();
+    fs::write(repo.join("README.md"), "repaired\n").unwrap();
+    let task = task_with_file("ORB-7", "Tighten the guard", "README.md", "codex");
+    let message = orbit_engine::review_gate::reviewer_repair_message(
+        std::slice::from_ref(&task),
+        "ask @auto about the guard",
+        &["F1".to_string()],
+        &["README.md".to_string()],
+        "attempt-1",
+        "haiku@xhigh",
+    );
+    orbit_engine::review_gate::commit_reviewer_repairs(repo, "anthropic / haiku", &message)
+        .unwrap()
+        .expect("a repair commit");
+    let committed = git_output(repo, &["log", "-1", "--format=%B"]).unwrap();
+    assert!(
+        committed.contains("\nOrbit-Review-Crew: haiku@xhigh"),
+        "{committed}"
+    );
+    assert!(
+        committed.contains("ask @\u{200d}auto about the guard"),
+        "{committed}"
+    );
+    let author = git_output(repo, &["log", "-1", "--format=%an <%ae>"]).unwrap();
+    assert_eq!(author, "orbit[haiku] <reviewer@orbit.invalid>");
 }

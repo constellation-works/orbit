@@ -37,7 +37,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::watch;
 
-use crate::DEFAULT_DASHBOARD_PORT;
+use crate::connect::DEFAULT_DASHBOARD_PORT;
 use crate::ssh_tunnel::{self, SshTunnel, TunnelOrigin, TunnelSpec, Unattended};
 
 /// `ssh -o ConnectTimeout`: how long the TCP connect to a host may take.
@@ -348,9 +348,12 @@ impl HostTunnels {
 
     fn establish(&self, target: &HostTarget, operator: bool) -> Result<LiveTunnel, ForwardError> {
         // F363: selection cannot reserve an SSH listener. Only a proven
-        // initial bind collision gets another allocation, never a connection
-        // failure or a replay of a remote command. All allocations share the
-        // original connect/authentication deadline and single-flight lock.
+        // local bind collision gets another allocation, never a connection
+        // failure or a replay of a remote command: a bind collision is
+        // proven only by a child that exited before binding, and with
+        // `ExitOnForwardFailure=yes` that exit precedes any remote command.
+        // All allocations share the original connect/authentication
+        // deadline and single-flight lock.
         let bind_deadline = Instant::now() + self.config.bind_timeout;
         let mut allocations = 0;
         let (spec, mut tunnel, origin) = loop {

@@ -51,7 +51,6 @@ The crew must be a name from your `[crews]` table in
   },
   "crew": "sol",
   "cadence": {
-    "floor_minutes": 15,
     "heartbeat_minutes": 60
   },
   "continuity": "prefer"
@@ -65,15 +64,41 @@ The crew must be a name from your `[crews]` table in
 | `exit_criteria` | Yes | 1 to 8 entries, each one line of at most 240 characters. |
 | `workspaces` | Yes | At least one, unique. The authority's scope stays inside this list. |
 | `crew` | Yes | The name of a configured crew. |
-| `cadence.floor_minutes` | Yes | An integer of at least 5: the fewest minutes between two cycles. |
-| `cadence.heartbeat_minutes` | Yes | An integer of at least `floor_minutes`: the most minutes without a cycle. |
+| `cadence.heartbeat_minutes` | Yes | An integer of at least 5 and at least `floor_minutes`: the most minutes without a cycle. |
+| `cadence.floor_minutes` | No | An integer of at least 5: the fewest minutes between two cycles. Defaults to `heartbeat_minutes`. Set it lower only when the mandate must react to a change faster than its heartbeat. |
 | `deadline` | No | An RFC 3339 instant. When it passes, the mandate ends with reason `deadline` and the assignment moves to review, whether or not the cycle routine runs. |
-| `watch` | No | `tasks` (task IDs) and `tags` whose changes wake the resident. Both default to empty. |
+| `watch` | No | `tasks` (task IDs) and `tags` whose changes wake the resident: any change to these tasks counts. Both default to empty. |
 | `continuity` | No | `prefer` (default) resumes the provider conversation when the adapter can. `off` starts every cycle fresh. |
 | `probe` | No | Boolean, default `false`: whether the mandate runs interactively as a probe. |
 
 Unknown keys are refused, also inside `cadence` and `watch`. A mandate that
 fails these rules shows as `invalid` and cannot be widened.
+
+### When a resident wakes
+
+Besides the tasks in `watch`, a resident watches the tasks its cycles acted
+on until they are done, archived or rejected. For one already in that set, a
+wake is a change of state class, a pull-request status change, or a decision
+request leaving open (answered, superseded or expired). Proposed, backlog and
+in-progress are one class, so moves among them, edits and retried runs do not
+wake it. Joining the set wakes it only when the task is blocked or in review.
+Moving to someday wakes it, and the task stays watched. Any non-info notice
+(`warn`, `incident` or `maintenance`) opening or clearing, an answered request
+on the assignment, a comment on the assignment and a mandate or authority
+change also wake it. Info notices do not wake it.
+Notices under a `resident:` key (such as status lines) and notices authored by
+the mandate's own assignment task are excluded from wake evaluation so a cycle's
+own reports do not trigger immediate re-wakes.
+
+A live cycle may read runtime attention for its own workspace and the
+workspaces its grant covers. That read does not widen what it can write.
+
+Each cycle's checkpoint plans the next wake in `next_wake.not_before`. Without
+a change that wakes it sooner, the next cycle starts then, but never sooner
+than `floor_minutes` and never later than `heartbeat_minutes` after the last
+cycle started. A cycle that ended `incomplete` waits for the heartbeat. With
+a 20-minute heartbeat and nothing to react to, a resident runs at most three
+cycles an hour.
 
 ## Inspect a mandate
 
@@ -313,9 +338,15 @@ comment, for a cycle that is already live. It does not start a cycle.
   checkpoint for the same cycle is refused.
 - The record's `authority` field reports what the cycle observed. It grants
   nothing.
-- A record holds at most 64 KiB, 50 actions, 20 decisions, 20 costs and 2000
-  characters of notes. Action keys have the form
+- A record holds at most 64 KiB, 50 actions, 20 decisions, 20 costs and 600
+  characters of notes. Notes describe only what changed this cycle and what is
+  next. Keep standing state in `requests[]` and `decisions[]`, and operator asks
+  in `requests[]`/notices. Action keys have the form
   `resident:<mandate>:<cycle>:<n>`, with `<n>` a positive integer.
+
+Each cycle reads the latest checkpoint in full and up to four earlier summaries
+(cycle, outcome and at most 600 characters of notes), with no older-notes tail.
+Historical checkpoints with longer notes remain readable.
 
 ## Evolution ledger
 
@@ -370,7 +401,7 @@ orbit resident metrics --baseline <task id>
 
 | Flag | Effect |
 |---|---|
-| `--mandate <task id>` | Reports one mandate. Without it, the report covers every mandate in the workspace and adds `totals`. |
+| `--mandate <task id>` | Reports one mandate: the named task, tagged or not, if it carries the mandate artifact. Without it, the report covers the workspace's `resident`-tagged mandates whose active span overlaps the window. |
 | `--since <window>` | The window start: a span such as `7d`, `24h` or `2w` (units `m`, `h`, `d`, `w`), an RFC 3339 instant or a `YYYY-MM-DD` date. Default 30 days. |
 | `--baseline <task id>` | Adds the same measures for an assignment a person worked interactively, for comparison. Alone, it reports only the baseline. |
 
@@ -379,24 +410,37 @@ Each mandate, `totals` and `baseline` get the same four measures:
 | Measure | What it counts in the window |
 |---|---|
 | Interventions | Times a person changed the course of the work: unprompted relays, plus comments, status changes and requeue, cancel, stop or takeover events a person wrote, on the assignment and the tasks it watches. Answers to escalations and grants do not count. |
-| Escalation load | Decision requests the resident raised, with the median seconds to an answer, the share answered with the recommended option, and the number that expired unanswered. |
+| Escalation load | Decision requests the resident raised, with the median seconds to an answer, the share answered with the recommended option, and the count in each state: answered, open, expired unanswered, or superseded (the binding stopped matching before an answer arrived). The four counts sum to the total. |
 | Reversal rate | The share of the resident's decisions and successful actions, from checkpoints in the window, that a person undid within 7 days: by a relay with `--reverses`, by moving the action's subject to `proposed` or `rejected`, or by recording a revert. |
 | Recovery cost | For cycles that ended without a complete checkpoint: the crashed cycles, the actions that ran a second time, and the slot minutes of the recovery cycles. `--json` adds the median and maximum time to the next complete checkpoint. |
 
 Reading the numbers:
 
 - An author is a person when it is `human` or `operator`, or starts with
-  `human:` or `human-`.
-- Interventions and escalations also show a rate per active mandate-day. Active
-  days run from the later of the mandate's creation and the window start to
-  now, rounded up, at least one.
+  `human:` or `human-`. A `stop` or `takeover` control also counts when Orbit
+  recorded it from a human actor, whatever the actor's label. Other writes
+  under a label that is not a person label do not count, and agent, system and
+  automation writers never count.
+- Active days are the mandate's active span inside the window, rounded up, at
+  least one. The span starts at the later of the window start and the
+  mandate's activation, its earliest resident event (such as attaching the
+  mandate, its first cycle or its first checkpoint). It ends at the earliest of
+  a stop, a passed deadline, the assignment closing (done, archived or
+  rejected) or moving to `review`, and now. An unfiltered report omits a
+  mandate whose span does not overlap the window; `--mandate` always reports
+  its mandate.
+- Interventions show a rate per active mandate-day, and totals divide by the
+  sum of the mandates' active days. Escalations also show a rate per human-day.
+  That rate divides by the calendar days of the window, from `--since` to now,
+  rounded up, at least one, because one person handles escalations across the
+  whole window.
 - A rate is blank when there is nothing to judge. A baseline with no
   checkpoints reports `not_derivable` for reversal rate and recovery cost.
 - A watched task in another registered workspace on this machine contributes
   its history and decision requests, not its comments. A reference no
   registered workspace holds is listed under `references.unreachable`.
 
-`--json` returns `window` and `mandates`, plus `totals` and `baseline` when
-they apply. Each measure appears under two keys: `interventions` and
+`--json` returns `window` and `mandates`, plus `totals` (except for a
+`--baseline` run alone) and `baseline` when they apply. Each measure appears under two keys: `interventions` and
 `manual_interventions`, `escalations` and `escalation_load`, `reversals` and
 `reversal_rate`, `recovery` and `recovery_cost`.

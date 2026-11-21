@@ -373,8 +373,8 @@ impl Worker {
         }
         let response = match parse_request(&body) {
             Ok(request) => match self.call(&stream, request, peer.pid) {
-                Ok(output) => output_response(output),
-                Err(error) => call_error_response(&error),
+                (Ok(output), _) => output_response(output),
+                (Err(error), action_key) => call_error_response(&error, action_key.as_deref()),
             },
             Err(message) => error_response(INVALID_REQUEST, &message, false),
         };
@@ -386,7 +386,10 @@ impl Worker {
         stream: &UnixStream,
         request: super::BrokerRequest,
         peer_pid: u32,
-    ) -> Result<serde_json::Value, orbit_common::OrbitError> {
+    ) -> (
+        Result<serde_json::Value, orbit_common::OrbitError>,
+        Option<String>,
+    ) {
         let cancelled = Arc::new(AtomicBool::new(false));
         let finished = AtomicBool::new(false);
         thread::scope(|scope| {
@@ -421,7 +424,7 @@ impl Worker {
             }
             let _finish = Finish(&finished);
             self.dispatch
-                .call(request, peer_pid, Arc::clone(&cancelled))
+                .call_with_action_key(request, peer_pid, Arc::clone(&cancelled))
         })
     }
 }

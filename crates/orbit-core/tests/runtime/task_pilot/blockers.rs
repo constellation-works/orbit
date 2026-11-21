@@ -125,7 +125,10 @@ fn terminal_missing_foreign_and_free_text_blockers_remain_warnings() {
     let done = target(&workspace, TaskStatus::Done);
     let rejected = target(&workspace, TaskStatus::Rejected);
     let archived = target(&workspace, TaskStatus::Proposed);
-    workspace.runtime.archive_task(&archived.id).unwrap();
+    workspace
+        .runtime
+        .archive_task_as_operator(&archived.id, false)
+        .unwrap();
     let foreign = workspace
         .linked_workspace()
         .add_task(TaskAddParams {

@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use orbit_core::application::contracts::{ClaimedLeafStage, DrainClaimedLeaf};
 use orbit_core::application::job::{
     RunFailureCause, RunFailureContextProfile, RunFailureRead, agent_invoke_result,
-    display_steps_with_agent_execution_to_json,
+    display_steps_with_agent_execution_to_json, pull_drain_detail,
 };
 use orbit_core::runtime::audit::run::{RunProviderProcess, RunScriptExecution};
 use orbit_core::{CatalogReferenceLayer, JobRun, OrbitError, OrbitRuntime};
@@ -159,35 +159,15 @@ pub(crate) fn run_show_payload(
     let catalog_layers = runtime
         .catalog_reference_layers(&run.job_id)
         .unwrap_or_default();
-    // A claimed follower leaf names the owner task and claim it works for and
-    // whether its outcome reached the owner; every other run has none.
-    let pull_claim = runtime.pull_leaf_claim(&run.run_id).unwrap_or_else(|error| {
-        tracing::warn!(target: "orbit.cli.run", run_id = %run.run_id, %error, "pull admission unreadable; run shown without its claim");
-        None
-    });
-    // A pull drain's live claimed leaves: what a graceful cancel waits for.
-    let claimed_leaves = runtime
-        .pull_drain_claimed_leaves(&run.run_id)
-        .unwrap_or_else(|error| {
-            tracing::warn!(target: "orbit.cli.run", run_id = %run.run_id, %error, "pull admissions unreadable; drain shown without its leaves");
-            Vec::new()
-        });
-    // Outcomes a pull drain's owner refused while holding their claims: why,
-    // and what the operator does about it [ORB-13979].
-    let refused_settlements = runtime
-        .pull_drain_refused_settlements(&run.run_id)
-        .unwrap_or_else(|error| {
-            tracing::warn!(target: "orbit.cli.run", run_id = %run.run_id, %error, "pull admissions unreadable; drain shown without its refused settlements");
-            Vec::new()
-        });
-    // A pull drain's crew window: which crews it runs and which it excluded,
-    // and why [ORB-13941]; null for every other run.
-    let crew_window = runtime
-        .pull_drain_crew_window(&run.run_id)
-        .unwrap_or_else(|error| {
-            tracing::warn!(target: "orbit.cli.run", run_id = %run.run_id, %error, "pull drain crew window unreadable; drain shown without it");
-            None
-        });
+    let pull = pull_drain_detail::read_run_pull_drain_evidence(
+        pull_drain_detail::RunPullDrainSource::Registered(runtime),
+        &run.run_id,
+        state.as_ref(),
+    );
+    for warning in &pull.warnings {
+        tracing::warn!(target: "orbit.cli.run", run_id = %run.run_id,
+            section = warning.section, error = %warning.error, "run detail omitted a section");
+    }
     let effort_evidence = runtime
         .activity_invocation_evidence(&run.run_id)
         .unwrap_or_default();
@@ -195,10 +175,6 @@ pub(crate) fn run_show_payload(
         "run": run_projection,
         "recovery_attempts": recovery.to_json(),
         "tag_instructions": tag_instructions.to_json(),
-        "pull_claim": pull_claim,
-        "claimed_leaves": claimed_leaves,
-        "refused_settlements": refused_settlements,
-        "crew_window": crew_window,
         "catalog_layers": catalog_layers
             .iter()
             .map(CatalogReferenceLayer::to_json)
@@ -233,6 +209,8 @@ pub(crate) fn run_show_payload(
             .map(RunScriptExecution::to_json)
             .collect::<Vec<_>>(),
     });
+
+    pull.append_pull_drain_sections(&mut doc);
 
     let mut header = run_header_text_with_lock_holders(&run, state.as_ref(), &lock_holders);
     if checkpoint_unreadable {
@@ -418,7 +396,7 @@ pub(crate) fn run_show_payload(
             state.updated_at.to_rfc3339(),
         ));
     }
-    if let Some(claim) = &pull_claim {
+    if let Some(claim) = &pull.pull_claim {
         header.push_str(&format!(
             "\n{} {}",
             crate::output::color::bold("Claim:"),
@@ -520,25 +498,26 @@ pub(crate) fn run_show_payload(
     }
     // [ORB-15639] An open or half-open pull breaker: its failures, their
     // classes and when it next admits a probe claim. Absent while closed.
-    if let Some(breaker) = state
-        .as_ref()
-        .and_then(|state| state.pull_drain.pull_breaker.as_ref())
-    {
+    if let Some(breaker) = &pull.pull_breaker {
         header.push_str(&format!(
             "\n{} {}",
             crate::output::color::bold("Breaker:"),
             breaker.describe(chrono::Utc::now())
         ));
     }
-    header.push_str(&claimed_leaf_lines(&run, state.as_ref(), &claimed_leaves));
-    for refused in &refused_settlements {
+    header.push_str(&claimed_leaf_lines(
+        &run,
+        state.as_ref(),
+        &pull.claimed_leaves,
+    ));
+    for refused in &pull.refused_settlements {
         header.push_str(&format!(
             "\n{} {}",
             crate::output::color::bold("Settlement refused:"),
             refused.describe()
         ));
     }
-    if let Some(window) = &crew_window {
+    if let Some(window) = &pull.crew_window {
         for line in window.describe() {
             header.push_str(&format!(
                 "\n{} {line}",

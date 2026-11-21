@@ -153,7 +153,7 @@ pub(crate) fn summarize_audit_event(event: &RunAuditEvent) -> String {
             ("collected", raw_u64(raw, "collected")),
             ("failed", raw_u64(raw, "failed")),
         ]),
-        _ => event.body_kind.clone().unwrap_or_else(|| "-".to_string()),
+        _ => field_summary(raw, "body_kind"),
     }
 }
 

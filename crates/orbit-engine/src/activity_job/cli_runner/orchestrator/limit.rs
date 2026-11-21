@@ -6,8 +6,8 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Offset, Utc};
 use orbit_agent::{
-    antigravity_terminal_error_diagnostic, provider_usage_limit, provider_usage_limit_details,
-    provider_usage_windows,
+    antigravity_terminal_error_diagnostic, muse_terminal_failure_diagnostic, provider_usage_limit,
+    provider_usage_limit_details, provider_usage_snapshot,
 };
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::ProviderLimitFailure;
@@ -46,6 +46,8 @@ pub(super) fn structured_provider_limit(provider: Provider, stdout: &[u8]) -> Op
             .last(),
         Provider::Antigravity => antigravity_terminal_error_diagnostic(provider, stdout)
             .filter(|text| provider_usage_limit(text)),
+        Provider::Muse => muse_terminal_failure_diagnostic(provider, stdout)
+            .filter(|text| provider_usage_limit(text)),
         Provider::Codex
         | Provider::Gemini
         | Provider::Grok
@@ -54,8 +56,7 @@ pub(super) fn structured_provider_limit(provider: Provider, stdout: &[u8]) -> Op
         | Provider::OpenaiCompat
         | Provider::Cursor
         | Provider::Pi
-        | Provider::Opencode
-        | Provider::Muse => None,
+        | Provider::Opencode => None,
     }
 }
 
@@ -192,13 +193,31 @@ pub(super) fn record_usage_windows(
     } else {
         stdout
     };
-    for mut observation in
-        provider_usage_windows(provider, source, context.codex_home.as_deref(), Utc::now())
-    {
+    let snapshot =
+        provider_usage_snapshot(provider, source, context.codex_home.as_deref(), Utc::now());
+    let complete = snapshot.complete;
+    let mut observations = snapshot.observations;
+    for observation in &mut observations {
         observation.run_id = (!run_id.is_empty()).then(|| run_id.to_string());
         observation.crew = crew.map(str::to_string);
         observation.account = account.map(str::to_string);
-        record(host, &observation);
+    }
+    // [ORB-25967] agy's `/usage` reports every window of the account, so a
+    // window or scope it no longer reports is gone, not merely unchanged.
+    // [ORB-26000] Only when every known bucket was readable: a still-present
+    // bucket with an unreadable field keeps its previous reading.
+    if provider == Provider::Antigravity && complete {
+        if let Err(error) = host.record_provider_usage_reading(&observations) {
+            tracing::warn!(
+                provider = provider.as_str(),
+                run_id,
+                "could not record the provider usage reading on this host: {error}"
+            );
+        }
+        return;
+    }
+    for observation in &observations {
+        record(host, observation);
     }
 }
 

@@ -1,5 +1,6 @@
 use orbit_common::OrbitError;
 use orbit_store::contracts::{ClaimInvocation, ClaimMutation};
+use orbit_types::plugin::is_sha1_commit_id;
 use orbit_types::task::{ExternalRef, Task, TaskStatus, push_external_ref_if_missing};
 
 use crate::OrbitRuntime;
@@ -12,12 +13,17 @@ use super::candidate::{Candidate, RevokedHandoff};
 use super::model::ExternalMergeSettlement;
 use super::{refusal, rescued};
 
-/// How the task landed (`pull request #N, merged into B as C outside Orbit`),
+/// How the task landed (`pull request #N, merged into B at T as C outside Orbit`),
 /// and the landing note its settlement records.
 fn landing_note(landing: &MergedPullRequest) -> (String, String) {
     let landed = format!(
-        "pull request #{}, merged into {} as {} outside Orbit",
-        landing.pull.number, landing.base_branch, landing.merge_commit
+        "pull request #{}, merged into {} at {} as {} outside Orbit",
+        landing.pull.number,
+        landing.base_branch,
+        landing
+            .merged_at
+            .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
+        landing.merge_commit
     );
     let note = format!("settled from {landed}");
     (landed, note)
@@ -32,7 +38,7 @@ pub(crate) fn settled_merge_commit(note: &str) -> Option<&str> {
         .strip_suffix(" outside Orbit")
         .or_else(|| merged.strip_suffix(" by owner decision"))?;
     let (_, commit) = merged.rsplit_once(" as ")?;
-    (commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(commit)
+    is_sha1_commit_id(commit).then_some(commit)
 }
 
 impl OrbitRuntime {
@@ -167,6 +173,9 @@ impl OrbitRuntime {
                         task.status
                     ),
                 ));
+            }
+            if task.status != TaskStatus::Backlog && task.updated_at != observed.updated_at {
+                return Err(refusal::refused(id, "the task changed after the merge was matched"));
             }
             if let Some(live) = self.live_task_delivery(&task) {
                 return Err(refusal::refused(id, &live));

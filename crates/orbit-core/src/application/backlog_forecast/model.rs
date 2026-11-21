@@ -51,7 +51,16 @@ use super::review_modes::ReviewMode;
 /// version counts each task once on that same population.
 /// 19: time to drain excludes future-scheduled and no-drain work; their
 /// standalone work, token and cost estimates remain in spending totals.
-pub(super) const MODEL_VERSION: u32 = 19;
+/// 20: that correction shifts a draw by its fitted p50 adjustment only,
+/// with no spread stretch around the cohort's median base p50, and a
+/// cohort whose leave-one-out p50 error is worse than the base's is
+/// withheld alongside the p90 holdout [ORB-25278].
+/// 21: regression rework revision 3. A defect-record fix repaired inside
+/// its origin's measured delivery is recovered there instead of counting as
+/// a gap, and a pool whose gaps are at most `MAX_BOUNDED_GAP_SHARE` of its
+/// fix observations reports adjusted totals under a `bounded_gap` qualifier
+/// instead of withholding them [ORB-25806].
+pub(super) const MODEL_VERSION: u32 = 21;
 /// The revision of each backlog-forecast-v2 factor this model applies;
 /// `None` for one not yet modelled.
 pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [
@@ -59,7 +68,7 @@ pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [
     ("review_modes", Some(1)),
     ("outcomes", Some(1)),
     ("resource_fit", Some(1)),
-    ("regression_rework", Some(2)),
+    ("regression_rework", Some(3)),
 ];
 /// Simulated drains per forecast.
 pub(super) const ITERATIONS: usize = 1_000;

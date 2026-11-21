@@ -34,11 +34,19 @@ fn selector_matches_path(selector: &str, query: &str) -> bool {
 }
 
 fn normalize_path_for_match(raw: &str) -> String {
-    raw.trim()
-        .trim_start_matches("./")
-        .trim_start_matches('/')
-        .trim_end_matches('/')
-        .replace('\\', "/")
+    // Convert separators first: stripping `./`, `/` or a trailing `/` before
+    // the conversion strands Windows-style leading/trailing forms such as
+    // `.\src\a.rs`, `\src\a.rs` and `src\`.
+    let converted = raw.trim().replace('\\', "/");
+    let mut normalized = converted.as_str();
+    loop {
+        let stripped = normalized.trim_start_matches("./").trim_start_matches('/');
+        if stripped == normalized {
+            break;
+        }
+        normalized = stripped;
+    }
+    normalized.trim_end_matches('/').to_string()
 }
 
 fn paths_overlap(a: &str, b: &str) -> bool {

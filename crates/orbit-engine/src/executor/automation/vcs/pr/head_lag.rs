@@ -14,7 +14,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_types::workflow::DeliveryRefusal;
 
-use super::super::remote_probe::remote_ref_output;
+use super::super::remote_probe::{exact_remote_ref_sha, remote_ref_output};
 use super::answers::PullRequestStatus;
 use super::delivery::DeliveryPin;
 
@@ -189,10 +189,7 @@ fn remote_ref_sha(
             ),
         )
     })?;
-    Ok(probe.stdout.lines().find_map(|line| {
-        let (sha, remote_ref) = line.split_once('\t')?;
-        (remote_ref == reference).then(|| sha.to_string())
-    }))
+    Ok(exact_remote_ref_sha(&probe.stdout, reference))
 }
 
 fn head_lag_error(code: &str, message: String) -> OrbitError {

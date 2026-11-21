@@ -48,6 +48,29 @@ pub(crate) const WORKFLOW_SHIP_OPERATION_ID: &str = "orbit.workflow.ship";
 /// Canonical tool name of a delivery pull request's landing.
 pub(crate) const WORKFLOW_LAND_OPERATION_ID: &str = "orbit.workflow.land";
 
+/// Canonical tool name of `orbit.task.recover` action `repilot`.
+pub(crate) const TASK_REPILOT_OPERATION_ID: &str = "orbit.task.repilot";
+
+/// Canonical tool name of `orbit.task.recover` action `requeue`.
+pub(crate) const TASK_REQUEUE_OPERATION_ID: &str = "orbit.task.requeue";
+
+/// The operator-row tools a resident cycle reaches through its mandate's
+/// rights instead: ship, re-pilot and requeue under `dispatch`, land under
+/// `merge`. Every other operator row, the other recover actions included,
+/// holds a cycle to the operator capability.
+const RESIDENT_CYCLE_RIGHT_GATED_OPERATIONS: [&str; 4] = [
+    WORKFLOW_SHIP_OPERATION_ID,
+    WORKFLOW_LAND_OPERATION_ID,
+    TASK_REPILOT_OPERATION_ID,
+    TASK_REQUEUE_OPERATION_ID,
+];
+
+/// Whether `tool` is an operator-row tool a resident cycle reaches through
+/// its mandate's rights rather than the operator capability.
+pub fn is_resident_cycle_right_gated_operation(tool: &str) -> bool {
+    RESIDENT_CYCLE_RIGHT_GATED_OPERATIONS.contains(&tool)
+}
+
 /// Identity facts retained after operator admission.
 #[derive(Debug)]
 pub struct OperatorAuthorizer {
@@ -86,18 +109,8 @@ impl RuntimeKernel {
                 None => return Ok(()),
             },
         };
-        // A resident cycle holds no operator grant; its authority to dispatch
-        // and land is the `dispatch` and `merge` right a human granted on its
-        // mandate. Core's cycle guard decides that on the tool host, for the
-        // same trusted run binding, before the call runs: a live cycle, the
-        // right and the workspace. A run this lookup cannot show to be a cycle
-        // stays held to the row.
-        if (tool_name == WORKFLOW_SHIP_OPERATION_ID || tool_name == WORKFLOW_LAND_OPERATION_ID)
-            && session_context.worker_invocation.is_none()
-            && self.caller_is_resident_cycle()
-        {
-            return Ok(());
-        }
+        // The broker executes an authenticated resident's right-gated operations
+        // directly on the tool host. Every caller here must satisfy the row.
         // The decision channel's submission and digest (design
         // `docs/design/human-decision-channel/2_design.md` §3.3, §7):
         // their governed rows are operator-only, but the caller the rows
@@ -130,9 +143,8 @@ impl RuntimeKernel {
         self.decide_with_envelope(operation, envelope)
     }
 
-    /// Whether this process's trusted managed-run binding names a resident
-    /// cycle's run in this workspace.
-    pub fn caller_is_resident_cycle(&self) -> bool {
+    /// Routing hint for the nested client. Only the broker authenticates the run.
+    pub fn env_names_resident_cycle(&self) -> bool {
         crate::run_input::managed_run_context_run_id_from_env()
             .is_some_and(|run_id| self.is_resident_cycle_run(&run_id))
     }
@@ -248,7 +260,13 @@ impl RuntimeKernel {
                     caller_machine_id = denial.remote_caller_machine_id.as_deref(),
                     "governed operation denied"
                 );
-                let message = denial.to_string();
+                let message = if operation.id == TASK_REQUEUE_OPERATION_ID
+                    && orbit_common::governance::authorization::agent_context_declared()
+                {
+                    format!("{denial}: managed agents cannot requeue blocked tasks")
+                } else {
+                    denial.to_string()
+                };
                 self.record_authorization_event(
                     operation.id,
                     operation.surface,

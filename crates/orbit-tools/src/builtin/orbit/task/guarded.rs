@@ -1,4 +1,5 @@
 //! Optional guarded modes of existing task verbs, sharing the transactional write path.
+use crate::task_guarded_selectors::GUARDED_SELECTOR_KEYS;
 use crate::{OrbitBuiltinAction, ToolContext};
 use orbit_common::governance::operation::{OperationVerb, ParamType};
 use orbit_common::governance::task::TaskVerb;
@@ -102,9 +103,6 @@ fn validate_guarded_write_fields(
     spec.parse_input_fields(Value::Object(fields))?;
     Ok(())
 }
-
-pub(crate) const GUARDED_SELECTOR_KEYS: &[&str] =
-    &["request_id", "expected_revision", "verdict", "complete"];
 
 const CREATE_ENVELOPE_KEYS: &[&str] = &["workspace", "request_id", "model"];
 const UPDATE_ENVELOPE_KEYS: &[&str] = &[

@@ -8,7 +8,7 @@ use orbit_types::task::{
     CrewSource, DecisionRequest, ExecutorOsLimit, Task, TaskComplexity, TaskHistoryEntry,
 };
 use orbit_types::workflow::{
-    self, CrewPurpose, HostValidationGates, JobRun, JobRunTrigger, PipelineState,
+    self, CrewPurpose, DeliveryRefusal, HostValidationGates, JobRun, JobRunTrigger, PipelineState,
     RunDeliveryObservation, ShipMode, SourceRepairBinding,
 };
 use serde_json::{Value, json};
@@ -22,9 +22,49 @@ use crate::application::contracts::{
     AutoEffortSubject, CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool,
     OwnerSourceIdentityRefusal, RetryKey,
 };
-use crate::application::task::{NativePublicationIdentity, TaskJobPort, TaskRow};
+use crate::application::task::{
+    DeliveryCompletion, NativePublicationIdentity, TaskJobPort, TaskRow,
+};
 
 impl TaskJobPort for OrbitRuntime {
+    fn delivery_completion(&self, task_id: &str) -> Result<DeliveryCompletion, OrbitError> {
+        let Some(run) = self.newest_single_task_delivery_run(task_id)? else {
+            return Ok(DeliveryCompletion::NotAuthorized);
+        };
+        let authorized = run
+            .input
+            .as_ref()
+            .and_then(|input| input.get("completion"))
+            .and_then(Value::as_str)
+            == Some("done");
+        let mut needs_passed_check = false;
+        let eligible = match run.state {
+            workflow::JobRunState::Pending
+            | workflow::JobRunState::Running
+            | workflow::JobRunState::Retrying => return Ok(DeliveryCompletion::Live),
+            workflow::JobRunState::Success => true,
+            workflow::JobRunState::Held => {
+                let refusal = self
+                    .stores()
+                    .jobs()
+                    .get_job_run(&run.run_id)?
+                    .as_ref()
+                    .and_then(super::pr_repair::held_refusal);
+                needs_passed_check = refusal == Some(DeliveryRefusal::CheckRunsAbsent);
+                refusal.is_some_and(super::pr_repair::handed_back_hold)
+            }
+            _ => false,
+        };
+        Ok(match (authorized, eligible) {
+            (true, true) => DeliveryCompletion::Authorized {
+                run_id: run.run_id,
+                needs_passed_check,
+            },
+            (true, false) => DeliveryCompletion::Stopped,
+            (false, _) => DeliveryCompletion::NotAuthorized,
+        })
+    }
+
     fn is_forecast_delivery_run(&self, run: &JobRun) -> bool {
         !matches!(
             run.job_id.as_str(),
@@ -305,14 +345,14 @@ impl TaskJobPort for OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<NativePublicationIdentity, OrbitError> {
-        let proof = self.desktop_native_publication_proof(task)?;
-        Ok(NativePublicationIdentity {
-            branch: proof.branch,
-            head: proof.head,
-            base_branch: proof.base_branch,
-            number: proof.number,
-            url: proof.url,
-        })
+        self.desktop_native_publication_proof(task).map(Into::into)
+    }
+
+    fn stopped_publication_identity(
+        &self,
+        task: &Task,
+    ) -> Result<Option<NativePublicationIdentity>, OrbitError> {
+        Ok(self.stopped_native_settlement_proof(task)?.map(Into::into))
     }
 
     fn purpose_pool_members(

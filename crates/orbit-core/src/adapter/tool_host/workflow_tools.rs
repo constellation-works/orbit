@@ -11,8 +11,9 @@ use serde_json::{Value, json};
 
 use crate::application::job::{
     ActivityInvocationEvidence, JobRunListParams, JobRunProjectionEvidence,
-    JobRunProjectionProfile, ShipModeResolutionProfile, SubmissionKind, project_job_run,
-    run_display_steps, run_execution_progress_to_json, trim_full_show_agent_invocation_answer,
+    JobRunProjectionProfile, ShipModeResolutionProfile, ShipSubmissionProfile, project_job_run,
+    pull_drain_detail, run_display_steps, run_execution_progress_to_json,
+    trim_full_show_agent_invocation_answer,
 };
 use crate::runtime::audit::run::{
     MAX_RECOVERY_ATTEMPTS, RECOVERY_FETCH_PER_RUN, RunExecutionProgress, RunRecoveryAttempts,
@@ -107,22 +108,13 @@ fn ship(
         // Strict worker containment is a CLI-only flag.
         strict_containment: false,
         review,
-        // The schedule override is a CLI-only operator flag.
-        ignore_schedule: false,
+        // Agents ship through this tool; only an operator's CLI or dashboard
+        // ship overrides the drain's readiness gates.
+        operator_override: false,
     })?;
-    let mut shipped = json!({
-        "workflow": "ship",
-        "job_id": invoke.job_name,
-        "run_id": invoke.run_id,
-        "state": if invoke.queued { "queued" } else { "submitted" },
-        "submitted_at": invoke.submitted_at,
-    });
-    runtime
-        .submission_notices(SubmissionKind::Ship {
-            explicit: !task_ids.is_empty(),
-        })
-        .insert_into(&mut shipped);
-    Ok(shipped)
+    Ok(runtime
+        .ship_submission_receipt(&invoke, !task_ids.is_empty(), ShipSubmissionProfile::Tool)?
+        .to_json())
 }
 
 /// The optional `review` layer a ship or drain start adds [ORB-16572].
@@ -187,6 +179,16 @@ fn show(runtime: &OrbitRuntime, input: Value, observed: bool) -> Result<Value, O
         .collect_run_tag_instructions(&run.run_id)
         .unwrap_or_else(|_| RunTagInstructions::unavailable())
         .to_json();
+    let pull = pull_drain_detail::read_run_pull_drain_evidence(
+        pull_drain_detail::RunPullDrainSource::Registered(runtime),
+        &run.run_id,
+        state.as_ref(),
+    );
+    for warning in &pull.warnings {
+        tracing::warn!(run_id = %run.run_id, section = warning.section,
+            error = %warning.error, "run detail omitted a section");
+    }
+    pull.append_pull_drain_sections(&mut value);
     Ok(value)
 }
 

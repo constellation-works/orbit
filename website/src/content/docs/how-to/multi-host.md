@@ -107,7 +107,7 @@ and leaves them without a route.
 
 This machine is always listed and cannot be removed. Rename it with
 `orbit config set --global machine.name <value>`. You can also manage hosts
-in the dashboard under [Settings › Hosts](/how-to/dashboard/#hosts).
+in the dashboard's [Observe › Fleet](/how-to/dashboard/#fleet) page.
 
 ## Troubleshoot by error code
 

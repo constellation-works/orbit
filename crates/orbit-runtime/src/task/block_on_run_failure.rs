@@ -76,8 +76,8 @@ use orbit_engine::{
 use orbit_types::task::{Task, TaskDecision, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     AgentBlocker, BaselineRedHold, HeldFailure, JobRun, JobRunState, ProviderFailureClass,
-    ReviewGateHistoryNote, UPGRADE_PENDING_REQUEUED_EVENT, is_baseline_red_failure,
-    is_operator_stopped, is_upgrade_pending,
+    ReviewGateHistoryEvent, ReviewGateHistoryNote, UPGRADE_PENDING_REQUEUED_EVENT,
+    is_baseline_red_failure, is_footprint_unavailable, is_operator_stopped, is_upgrade_pending,
 };
 
 use crate::RuntimeKernel;
@@ -86,6 +86,11 @@ use super::FINAL_RECOVERY_REQUEUED_EVENT;
 use super::provider_hold::{held_by_run, provider_failure_hold_update};
 
 pub(crate) const WORKFLOW_RUN_CANCELLED_EVENT: &str = "workflow_run_cancelled";
+
+/// A resumed published delivery whose deferred footprint stayed held past
+/// its wait returns to the backlog under this event; a later admission
+/// retries the footprint once the holders release it.
+pub(crate) const FOOTPRINT_UNAVAILABLE_REQUEUED_EVENT: &str = "footprint_unavailable_requeued";
 
 /// A blocked task whose block was caused by host configuration — its run
 /// failed because dispatch could not find the provider launcher — rather than
@@ -361,6 +366,13 @@ impl RuntimeKernel {
         // Nor does a run whose agent an Orbit upgrade refused mid-step.
         let upgrade_pending = state == JobRunState::Failed
             && is_upgrade_pending(error_code.as_deref(), error_message.as_deref());
+        // Nor does a resumed published delivery whose deferred footprint
+        // stayed held past its wait: no editor started, so its task returns
+        // to the backlog and a later admission retries once locks clear.
+        // Keyed on the typed code the held run's diagnostic recorded; the
+        // run-stopped refusal carries none and keeps the failure path.
+        let footprint_unavailable = state == JobRunState::Failed
+            && is_footprint_unavailable(error_code.as_deref(), error_message.as_deref());
         let task_cancellation_policy = if state == JobRunState::Cancelled {
             self.stores()
                 .jobs()
@@ -449,28 +461,55 @@ impl RuntimeKernel {
                         .rev()
                         .find(|entry| {
                             entry.to_status.is_some()
-                                || matches!(
-                                    entry.event.as_str(),
-                                    "review_timeout_incomplete"
-                                        | "review_awaiting_evidence"
-                                        | "review_evidence_received"
-                                        | "review_evidence_findings"
-                                )
+                                || ReviewGateHistoryEvent::from_event(&entry.event).is_some()
                         })
                         .is_some_and(|entry| {
-                            matches!(
-                                entry.event.as_str(),
-                                "review_timeout_incomplete"
-                                    | "review_awaiting_evidence"
-                                    | "review_evidence_received"
-                                    | "review_evidence_findings"
-                            ) && entry.note.as_deref().is_some_and(|note| {
+                            ReviewGateHistoryEvent::from_event(&entry.event).is_some()
+                                && entry.note.as_deref().is_some_and(|note| {
                                 ReviewGateHistoryNote::from_text(note)
                                     .is_some_and(|parsed| parsed.run_id == run_id)
                             })
                         })
                     {
                         return Ok(());
+                    }
+                    // A replayed finalization finds this run's footprint
+                    // requeue already recorded.
+                    if footprint_unavailable
+                        && current.status == TaskStatus::Backlog
+                        && history
+                            .iter()
+                            .rev()
+                            .find(|entry| entry.to_status.is_some())
+                            .is_some_and(|entry| {
+                                entry.event == FOOTPRINT_UNAVAILABLE_REQUEUED_EVENT
+                                    && entry.transition_run_id() == Some(run_id)
+                            })
+                    {
+                        return Ok(());
+                    }
+                    if footprint_unavailable && hold.is_none() && provider_failure.is_none() {
+                        return self.apply_task_automation_update(
+                            &task.id,
+                            TaskAutomationUpdate {
+                                status: Some(TaskStatus::Backlog),
+                                status_event: Some(
+                                    FOOTPRINT_UNAVAILABLE_REQUEUED_EVENT.to_string(),
+                                ),
+                                status_note: Some(format!(
+                                    "workflow run held on its deferred footprint: job={}, \
+                                     run_id={run_id}; another task still held the resumed \
+                                     published delivery's context locks when its wait \
+                                     expired, so no editor started and the published \
+                                     candidate is unchanged; the task is back in the \
+                                     backlog and a later admission retries once the locks \
+                                     clear. Holders: {}",
+                                    run.job_id,
+                                    error_message.as_deref().unwrap_or("not recorded")
+                                )),
+                                ..TaskAutomationUpdate::default()
+                            },
+                        );
                     }
                     if upgrade_pending && hold.is_none() && provider_failure.is_none() {
                         return self.apply_task_automation_update(

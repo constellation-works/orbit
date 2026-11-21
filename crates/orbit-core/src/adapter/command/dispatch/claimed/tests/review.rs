@@ -452,6 +452,18 @@ fn the_running_reviewer_reads_its_manifest_and_attaches_its_report_through_the_b
 fn the_broker_refuses_what_its_records_do_not_admit_without_reaching_the_owner() {
     let fixture = Fixture::new();
     let broker = fixture.serve("agent_review_repair");
+    let alias = fixture
+        .forwarded(
+            &broker,
+            GET,
+            json!({"task_id": TASK, "path": REVIEW_MANIFEST_ARTIFACT}),
+        )
+        .unwrap_err();
+    assert!(
+        alias.contains("does not accept `task_id`") && alias.contains("pass the task as `id`"),
+        "{alias}"
+    );
+
     let (_, report) = fixture.report("report.json", &fixture.attempt_id);
     let (stale_source, _) = fixture.report("stale.json", "attempt-of-another-run");
     let encoded = {

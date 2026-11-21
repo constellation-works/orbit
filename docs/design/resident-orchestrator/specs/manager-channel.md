@@ -17,9 +17,10 @@ last_updated: 2026-11-02
 The manager reaches residents only through Orbit records. It composes existing tools (task writes,
 `orbit.decision.*`, `orbit.notice.*`, `orbit attention`) with resident operations for granting
 authority, relaying words, controlling cycles, inspecting mandates (`show`, `list`, `digest`,
-`metrics`) and writing checkpoints. They are advertised on MCP only with the opt-in
-`--toolset resident`. Residents answer through checkpoints and decision requests, with attention
-items surfacing open work; there is no mailbox in either direction.
+`metrics`) and writing checkpoints. The `resident` MCP toolset is not in the default tier: select it
+with `--toolset resident` or use the `manager` or `resident` role, both of which include it. Residents
+answer through checkpoints and decision requests, with attention items surfacing open work; there is
+no mailbox in either direction.
 
 ## Why This Exists
 

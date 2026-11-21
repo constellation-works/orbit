@@ -1,15 +1,20 @@
-use axum::extract::{Path as UrlPath, Query, State};
+use axum::extract::rejection::JsonRejection;
+use axum::extract::{FromRequest, Path as UrlPath, Query, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::DASHBOARD_HOST_EDIT;
-use orbit_common::{HostRegistryCode, OrbitError, StorageLayer};
+use orbit_common::{HostRegistryCode, OrbitError};
 use orbit_registry::hosts::validated_host_root;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use super::blocking;
 use super::routines::{action_capability, authorization_denied, authorized_caller};
 use crate::state::DashboardState;
+
+// Compatibility shim. Retirement: callers import `crate::state::host_error_code`.
+pub(crate) use crate::state::host_error_code;
 
 /// Always reports the serving host, without a workspace extractor or remote
 /// routing. Beside the resource sample it carries `provider_limits`: the host's
@@ -30,10 +35,13 @@ pub(super) async fn resources(State(state): State<DashboardState>) -> Response {
 /// The `/host/resources` body, which the change stream's `host.resources`
 /// notice also carries. Samples the host, so call it off the request worker.
 pub(super) fn host_resources_json(state: &DashboardState) -> Result<Value, OrbitError> {
-    let status = state.host_resource_status()?;
+    // One pin for both reads: each pin re-stats the registry file and every
+    // registered checkout, so pinning twice taxed the poll per workspace.
+    let pinned = state.pin();
+    let status = state.host_resource_status_pinned(&pinned)?;
     let mut body = to_json(&status)?;
     if let Some(object) = body.as_object_mut() {
-        if let Some(Value::Object(limits)) = state.host_provider_limits() {
+        if let Some(Value::Object(limits)) = state.host_provider_limits_pinned(&pinned) {
             object.extend(limits);
         } else {
             for key in ["provider_limits", "provider_pressures", "crew_pressures"] {
@@ -83,6 +91,28 @@ pub(super) struct HostAddBody {
 #[serde(deny_unknown_fields)]
 pub(super) struct HostRenameBody {
     name: String,
+}
+
+/// A typed host-edit body that authorizes the caller before reading its body.
+pub(super) struct AuthorizedHostJson<T>(pub(super) T);
+
+impl<T> FromRequest<DashboardState> for AuthorizedHostJson<T>
+where
+    T: DeserializeOwned + Send,
+{
+    type Rejection = Response;
+
+    async fn from_request(
+        request: Request,
+        state: &DashboardState,
+    ) -> Result<Self, Self::Rejection> {
+        if let Err(denial) = authorized_caller(&DASHBOARD_HOST_EDIT, state.operator_session()) {
+            return Err(authorization_denied(denial));
+        }
+
+        let body = Json::<T>::from_request(request, state).await;
+        parse_body(body).map(Self).map_err(|response| *response)
+    }
 }
 
 /// `GET /api/hosts[?probe=false]`: `orbit host list --json`, read from the
@@ -138,15 +168,8 @@ pub(super) async fn show_host(
 /// any process starts and then only ever passed after `--`.
 pub(super) async fn add_host(
     State(state): State<DashboardState>,
-    Json(body): Json<Value>,
+    AuthorizedHostJson(body): AuthorizedHostJson<HostAddBody>,
 ) -> Response {
-    if let Err(denial) = authorized_caller(&DASHBOARD_HOST_EDIT, state.operator_session()) {
-        return authorization_denied(denial);
-    }
-    let body: HostAddBody = match parse_body(body) {
-        Ok(body) => body,
-        Err(response) => return *response,
-    };
     let root = state.global_root().to_path_buf();
     host_blocking("host add", move || {
         let root = validated_host_root(&root)?;
@@ -165,15 +188,8 @@ pub(super) async fn add_host(
 pub(super) async fn rename_host(
     State(state): State<DashboardState>,
     UrlPath(host): UrlPath<String>,
-    Json(body): Json<Value>,
+    AuthorizedHostJson(body): AuthorizedHostJson<HostRenameBody>,
 ) -> Response {
-    if let Err(denial) = authorized_caller(&DASHBOARD_HOST_EDIT, state.operator_session()) {
-        return authorization_denied(denial);
-    }
-    let body: HostRenameBody = match parse_body(body) {
-        Ok(body) => body,
-        Err(response) => return *response,
-    };
     let root = state.global_root().to_path_buf();
     host_blocking("host rename", move || {
         let root = validated_host_root(&root)?;
@@ -217,39 +233,6 @@ pub(super) async fn remove_host(
     .await
 }
 
-/// The CLI's error code for every error a host operation returns, so the
-/// dashboard reports `orbit host --json`'s typed refusals verbatim.
-pub(crate) fn host_error_code(error: &OrbitError) -> &str {
-    match error {
-        OrbitError::HostRegistry { code, .. } => code.as_str(),
-        OrbitError::HostConfiguration { .. } => "host_configuration",
-        OrbitError::InvalidInput(_)
-        | OrbitError::InvalidInputDiagnostic { .. }
-        | OrbitError::ClaimRefused { .. } => "invalid_input",
-        OrbitError::UnreachableDestination(_) => "unreachable_destination",
-        OrbitError::AmbiguousDestination(_) => "ambiguous_destination",
-        OrbitError::OutcomeUnknown { .. } => "outcome_unknown",
-        OrbitError::RemoteTool { code, .. } => code.as_str(),
-        OrbitError::ProcessTimeout { .. } => "process_timeout",
-        OrbitError::Execution(_)
-        | OrbitError::PrivateVcs(_)
-        | OrbitError::ForgeUnavailable(_)
-        | OrbitError::WorkflowEvidenceUnavailable(_)
-        | OrbitError::ExecutionTimeout { .. } => "execution_failed",
-        OrbitError::WorkspaceError(_) => "workspace_error",
-        OrbitError::Io(_)
-        | OrbitError::StorageAccessDenied {
-            layer: StorageLayer::Io,
-            ..
-        }
-        | OrbitError::StorageLockBusy {
-            layer: StorageLayer::Io,
-            ..
-        } => "io_error",
-        _ => "internal_error",
-    }
-}
-
 pub(super) fn status_for(code: &str) -> StatusCode {
     match code {
         "invalid_input" => StatusCode::BAD_REQUEST,
@@ -279,16 +262,20 @@ fn failure(code: &str, message: String, extra: Option<(&str, Value)>) -> Respons
     (status_for(code), Json(body)).into_response()
 }
 
-/// A body with a missing, mistyped or unknown field is the CLI's
-/// `invalid_input`, not the framework's bare 422.
-fn parse_body<T: serde::de::DeserializeOwned>(body: Value) -> Result<T, Box<Response>> {
-    serde_json::from_value(body).map_err(|error| {
-        Box::new(failure(
+/// The body is deserialized by the extractor straight into the handler's
+/// closed request type. A missing, mistyped or unknown field is the CLI's
+/// `invalid_input`, not the framework's bare 422; any other rejection (bad
+/// syntax, wrong content type, oversized body) keeps the framework's answer.
+fn parse_body<T>(body: Result<Json<T>, JsonRejection>) -> Result<T, Box<Response>> {
+    match body {
+        Ok(Json(body)) => Ok(body),
+        Err(rejection @ JsonRejection::JsonDataError(_)) => Err(Box::new(failure(
             "invalid_input",
-            format!("invalid request body: {error}"),
+            format!("invalid request body: {}", rejection.body_text()),
             None,
-        ))
-    })
+        ))),
+        Err(rejection) => Err(Box::new(rejection.into_response())),
+    }
 }
 
 fn to_json(value: &impl serde::Serialize) -> Result<Value, OrbitError> {

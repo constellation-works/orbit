@@ -10,7 +10,7 @@ use super::super::super::spawn_diagnostics::{
 };
 use super::super::super::supervisor::CapturedOutput;
 use super::super::limit::reported_limit;
-use super::frames::provider_reported;
+use super::frames;
 use crate::activity_job::dispatcher::ResolvedSandbox;
 use orbit_agent::{
     DeclaredResponseFailure, antigravity_background_task_diagnostic,
@@ -21,8 +21,9 @@ use orbit_agent::{
 use orbit_common::security::redaction::PatternRedactor;
 use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider};
 use orbit_types::workflow::{
-    CLI_STDERR_TAIL_SEPARATOR, ProviderFailureClass, ProviderLimitFailure, STALLED_MARKER,
-    TRANSIENT_FAILURE_MARKER, provider_failure_text, with_failed_account,
+    CLI_PROVIDER_ERROR_SEPARATOR, CLI_STDERR_TAIL_SEPARATOR, ProviderFailureClass,
+    ProviderLimitFailure, STALLED_MARKER, StepFailureCode, TRANSIENT_FAILURE_MARKER,
+    provider_failure_text, with_failed_account,
 };
 use serde_json::Value;
 use std::time::Duration;
@@ -49,6 +50,7 @@ pub(super) struct CompletionFailureInput<'a> {
     pub(super) provider_limit: Option<String>,
     pub(super) structured_output_exhaustion: Option<String>,
     pub(super) muse_terminal_failure: Option<String>,
+    pub(super) muse_model_refused: bool,
     pub(super) provider_result_terminal_error: Option<String>,
     pub(super) sandbox_write_diagnostic: &'a Option<String>,
     pub(super) print_timeout: Option<Duration>,
@@ -63,7 +65,8 @@ pub(super) struct CompletionFailureInput<'a> {
 pub(super) struct CompletionFailure {
     pub(super) message: Option<String>,
     pub(super) failure_class: Option<ProviderFailureClass>,
-    pub(super) failure_code: Option<orbit_types::workflow::StepFailureCode>,
+    pub(super) failure_code: Option<StepFailureCode>,
+    pub(super) declared_failure_evidence: Option<String>,
     pub(super) observed_limit: Option<(ProviderLimitFailure, String)>,
 }
 
@@ -90,6 +93,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
         provider_limit,
         structured_output_exhaustion,
         muse_terminal_failure,
+        muse_model_refused,
         provider_result_terminal_error,
         sandbox_write_diagnostic,
         print_timeout,
@@ -103,6 +107,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
     // [ORB-14695] The usage limit the failure reports, with the provider's
     // own words, for the host's provider-limit store.
     let mut failure_class = None;
+    let mut declared_failure_evidence = None;
     let mut observed_limit: Option<(ProviderLimitFailure, String)> = None;
     let mut limit_failure = |text: &str, prefix: &str| {
         let reported = bounded_diagnostic(text, redaction);
@@ -146,6 +151,15 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
             "cli subprocess exceeded {}s wall-clock timeout",
             timeout_seconds
         ))
+    } else if muse_model_refused && let Some(diagnostic) = &muse_terminal_failure {
+        // Muse can report HTTP 403 for model access. The failed terminal
+        // identifies this model's refusal even when the shared auth reader
+        // sees that status.
+        let reason = bounded_diagnostic(diagnostic, redaction);
+        Some(match exit_code.filter(|code| *code != 0) {
+            Some(code) => format!("cli subprocess exited with code {code} {reason}"),
+            None => reason,
+        })
     } else if let Some(diagnostic) = provider_auth_error {
         failure_class = Some(ProviderFailureClass::Unavailable);
         Some(provider_failure_text(
@@ -311,7 +325,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
                 provider.as_str(),
                 &diagnostic,
             ))
-        } else if let Some(limit) = provider_reported(
+        } else if let Some(limit) = frames::provider_reported(
             provider.as_str(),
             stdout.protocol_bytes(),
             stderr_text.as_ref(),
@@ -321,7 +335,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
             // A usage limit keeps its reported reset even when another
             // stderr line or provider frame also carries a billing error.
             Some(limit_failure(&limit, &format!("{diagnostic}: ")))
-        } else if let Some(quota) = provider_reported(
+        } else if let Some(quota) = frames::provider_reported(
             provider.as_str(),
             stdout.protocol_bytes(),
             stderr_text.as_ref(),
@@ -339,7 +353,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
                     bounded_diagnostic(&quota, redaction)
                 ),
             ))
-        } else if let Some(capacity) = provider_reported(
+        } else if let Some(capacity) = frames::provider_reported(
             provider.as_str(),
             stdout.protocol_bytes(),
             stderr_text.as_ref(),
@@ -359,7 +373,7 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
                     bounded_diagnostic(&capacity, redaction)
                 ),
             ))
-        } else if let Some(refusal) = provider_reported(
+        } else if let Some(refusal) = frames::provider_reported(
             provider.as_str(),
             stdout.protocol_bytes(),
             stderr_text.as_ref(),
@@ -379,6 +393,21 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
                 ),
             ))
         } else if generic_diagnostic || result_terminal_diagnostic {
+            // Unknown provider-owned errors are evidence, not a new failure
+            // class. Keep their prose ahead of startup-only stderr without
+            // allowing quoted markers to change existing accounting.
+            let diagnostic = if generic_diagnostic {
+                frames::provider_failure_diagnostic(provider.as_str(), stdout.protocol_bytes())
+                    .map(|cause| {
+                        format!(
+                            "{diagnostic}{CLI_PROVIDER_ERROR_SEPARATOR}{}",
+                            bounded_diagnostic(&cause, redaction)
+                        )
+                    })
+                    .unwrap_or(diagnostic)
+            } else {
+                diagnostic
+            };
             // Context only: classify the unchanged exit message, never words,
             // typed markers or check-repair phrases a provider happens to
             // quote on stderr (`failure_classification_text`).
@@ -426,6 +455,14 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
     } else if (spec.require_completion_envelope || spec.require_response_envelope)
         && matches!(envelope_status.as_deref(), Some("failed") | Some("timeout"))
     {
+        // Reaching this branch means the envelope itself supplied the failure.
+        // Keep its evidence separate from provider errors and timeout envelopes.
+        if let Some(failure) = declared_failure.as_ref()
+            && failure.status == "failed"
+            && let Some(error) = &failure.error
+        {
+            declared_failure_evidence = Some(bounded_diagnostic(&error.message, redaction));
+        }
         Some(with_sandbox_write_attribution(
             declared_failure_diagnostic(
                 envelope_status.as_deref().unwrap_or("unknown"),
@@ -468,7 +505,13 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
     CompletionFailure {
         message,
         failure_class,
-        failure_code: declared_failure_code(declared_failure.as_ref()),
+        failure_code: if muse_model_refused {
+            Some(StepFailureCode::MuseModelAccessRefused)
+        } else {
+            declared_failure_code(declared_failure.as_ref())
+                .filter(|code| *code != StepFailureCode::MuseModelAccessRefused)
+        },
+        declared_failure_evidence,
         observed_limit,
     }
 }

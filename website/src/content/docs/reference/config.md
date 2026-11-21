@@ -67,7 +67,8 @@ the built-in defaults listed under [Settable keys](#settable-keys).
   | Claude only | `haiku` | `sonnet` | `opus` | `fable` |
 
   Other providers add to these pools. Grok appends `grok` to `medium`.
-  Antigravity (`agy`) appends `gemini-flash` to `low` and `argon` to `hard`.
+  Antigravity (`agy`) appends `gemini-flash` to `low`, `hydrogen` to
+  `medium`, `argon` and `neon` to `hard`, and `carbon` to `xhard`.
   Muse appends `muse-spark` to `low`, `muse-wonder` to `medium` and
   `muse-wonder-full` to `hard`. Copilot adds nothing.
 - **Purpose pools.** Init keeps only the members whose crew it seeds enabled
@@ -151,9 +152,12 @@ orbit doctor --check env-pass --json
 ```
 
 **If a variable is missing.** A `pass` name the launching shell does not set
-reaches no agent. The run still starts, with a warning, and the provider may
-fall back to a saved login. A missing per-crew source, or an unusable `file:`
-source, excludes that crew from drains and refuses its activities.
+reaches no agent, unless a timer-started run reads it from
+[clock.env](#scheduled-credentials-clockenv). A manual start whose launching
+environment lacks the name still proceeds with a warning, and the provider
+may fall back to a saved login.
+A missing per-crew source, or an unusable `file:` source, excludes that crew
+from drains and refuses its activities.
 
 **Where the value comes from.** Terminal runs read your shell, so start drains
 from a login shell. Dashboard runs inherit the web service's environment:
@@ -206,9 +210,14 @@ GITHUB_TOKEN=<github-token>
   read the file, and `orbit clock tick --dry-run` loads nothing.
 
 To confirm what loaded, `orbit clock tick --json` lists the names as
-`clock_env_loaded`. `orbit doctor` names `pass` variables unset in its own
-environment in the `env-pass` row and, on macOS, a missing Claude credential
-or crew source in the `claude-worker-token` row.
+`clock_env_loaded`. The `env-pass` row of `orbit doctor` counts a `pass` name as
+held when its own environment or a non-empty `clock.env` value supplies it, so
+it reports `ok` for a name only `clock.env` holds. A manual drain, ship or job
+start judges only its launching shell and still warns for that name. Crew `env`
+sources have their own checks: the shell check reads only doctor's environment,
+and the managed-service check counts `clock.env` for the sweep service alone.
+On macOS, the `claude-worker-token` row reports a missing Claude credential or
+crew source.
 
 ## Unknown settings
 
@@ -222,7 +231,9 @@ A retired key still loads, with a deprecation warning that names its
 replacement or the value now fixed. `orbit config get` and `set` refuse it.
 Delete it, or run `orbit doctor --fix-retired-config-keys`, which backs up
 each affected file, writes renamed values under their replacement and removes
-the rest. Most ignored keys stop being recognised on 2026-12-07 or
+the rest. A deprecated boolean `machine.worker_containment` is not a retired key:
+the repair rewrites its value in place and keeps the key, which stays settable.
+Most ignored keys stop being recognised on 2026-12-07 or
 2026-12-08, as their warning says, and then count as unknown settings.
 
 | Retired | Now |
@@ -231,7 +242,8 @@ the rest. Most ignored keys stop being recognised on 2026-12-07 or
 | `operation.review_minutes`, `operation.review_crew` | `review.minutes`, `workflow.purpose_crews.review` |
 | `workflow.final_recovery_crews` | `workflow.purpose_crews.final_recovery` |
 | The `ci_failure_sweep`, `dependabot` and `merged_head_repair` purpose pools | `workflow.purpose_crews.sweep_tasks`. A file whose old pools differ fails to load until you merge them. |
-| `machine.worker_containment_strict`, a boolean `machine.worker_containment` | `machine.worker_containment` set to `off`, `warn` or `strict` |
+| `machine.worker_containment_strict` | `machine.worker_containment` set to `strict` when `true`; `false` keeps the boolean's mode |
+| A boolean `machine.worker_containment` (a deprecated value, not a retired key) | Rewritten in place, and the key stays settable: `true` becomes `warn`, `false` becomes `off`, or `strict` when `worker_containment_strict = true` is also set |
 | `workflow.crew_performance_types` | `workflow.task_types` |
 | `workflow.system_crew`, `crew: system` in a template or job | Ignored. System work routes through the [pools](#system-work). |
 | `[visual_review]`, `[ux_rules]`, `[lease]`, `[assistance]`, `[workflow.crew_ladder]`, `[workflow.regression_risk]`, `[workflow.explore_brief]`, `[review.selective_before_landing]`, `[machine.web_terminal]`, `[machine.web_session]`, `workflow.explore.*`, `workflow.crew_performance*`, `workflow.auto_ship`, `review.verify_findings`, `publication.routine_*`, the `explorer` and `visual_review` purpose pools | Ignored. The feature was removed. |
@@ -241,7 +253,7 @@ the rest. Most ignored keys stop being recognised on 2026-12-07 or
 
 `~/.orbit/hosts.toml` lists the remote Orbit installations this machine
 reaches over SSH. Manage it with `orbit host add`, `rename` and `remove`, or
-the dashboard's [Settings › Hosts](/how-to/dashboard/#hosts). For setup and
+the dashboard's [Observe › Fleet](/how-to/dashboard/#fleet) page. For setup and
 prefix routing, see [Run Orbit across hosts](/how-to/multi-host/).
 
 `orbit host add` reads the remote's identity and writes an entry like this
@@ -286,7 +298,7 @@ A **crew** is a named provider and model. A task runs on its own `crew`, or on
 ```toml
 [crews.sol]
 provider = "codex"
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 effort = "high"
 description = "Systems implementation"
 tags = ["implementation", "review"]
@@ -586,6 +598,14 @@ and `machine.task_prefix`. `orbit config keys` prints the same list.
 | `workflow.task_pilot_freshness.source_sensitivity` | **Advanced.** string · **Default:** `ignore`<br>Whether a branch-head change counts as that drift: `ignore`, `context_files` (only when a path the task's selectors name changed) or `any`. |
 | `workflow.mid_run_steering.enabled` | bool · **Default:** `false`<br>Lead a run's later prompts with the operator comments written on its task since the run last read them. The shipped pipelines do not commit while one is undelivered. |
 | `workflow.mid_run_steering.max_rounds` | **Advanced.** integer · **Default:** `2`<br>Steering rounds a run may spend at the promotion gate before it holds as `steering_unconsumed` (1–10). |
+| `workflow.standing_drain.enabled` | bool · **Default:** `false`<br>Let the owner host's clock submit one bounded drain, as `orbit run auto` does, when none is live, `backlog` or `proposed` work waits and the drain intent is `on` (a hand start set it and no hand stop paused it since). Setting it is the operator's decision, like creating a routine. |
+| `workflow.standing_drain.window` | **Advanced.** string · **Default:** `"24h"`<br>Window of each keeper drain, `1m` to `24h`. |
+| `workflow.standing_drain.concurrency` | **Advanced.** integer · **Default:** unset<br>Worker ceiling of each keeper drain (1–64). Unset uses the drain job's default, as `orbit run auto` without `--concurrency` does. |
+| `workflow.standing_drain.complete` | **Advanced.** bool · **Default:** `false`<br>Keeper drains land shipped tasks and mark them `done`, like `orbit run auto --complete`. |
+| `workflow.standing_drain.approve_proposed` | **Advanced.** bool · **Default:** `false`<br>Keeper drains approve `proposed` tasks that pass the task pilot, like `orbit run auto --approve-proposed`. Setting it is the operator's decision. |
+| `workflow.standing_drain.auto_fix` | **Advanced.** bool · **Default:** `false`<br>Keeper drains repair failing checks and conflicts on their pull requests, like `orbit run auto --auto-fix`. |
+| `workflow.standing_drain.min_resubmit_interval` | **Advanced.** string · **Default:** `"10m"`<br>Least time from the newest drain's end to the keeper's next submission, `1m` to `24h`. |
+| `workflow.standing_drain.max_failed_resubmits` | **Advanced.** integer · **Default:** `3`<br>Keeper drains that may end failed or interrupted within an hour before the keeper stops submitting (1–100). A drain started by hand closes the breaker. |
 | `workflow.ci_infrastructure_signatures` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Log-line prefixes a failed CI job prints when infrastructure, not the change, failed. A match reruns the failed jobs under the retry keys below, with no repair agent and no CI sweep task. |
 | `workflow.ci_infrastructure_retry.max_attempts` | **Advanced.** integer · **Default:** `3`<br>Total failed-job reruns on one PR head for infrastructure failures (0–10; `0` disables). Exhaustion records `ci_infrastructure_retry_exhausted` in task history. |
 | `workflow.ci_infrastructure_retry.backoff_seconds` | **Advanced.** integer · **Default:** `60`<br>Initial delay between infrastructure reruns (1–3600), doubled after each. The first rerun is immediate. |
@@ -604,7 +624,7 @@ and `machine.task_prefix`. `orbit config keys` prints the same list.
 | `machine.labels` | array of strings · **Default:** `[]`<br>Global only. Capability labels, such as `["gpu", "xcode"]`. A host starts a task only when it carries every label in the task's `requires_labels`. Its OS (`linux`, `macos` or `windows`) is an implicit label. |
 | `machine.id` | string · **Default:** Set by `orbit init`<br>Global only, read-only. This machine's generated identity (`hm_…`), written once by `orbit init`. |
 | `machine.task_prefix` | string · **Default:** Set by `orbit init`<br>Global only, read-only. Namespace for task IDs minted on this machine (2–5 uppercase ASCII letters), chosen once at `orbit init`. |
-| `machine.worker_containment` | string · **Default:** `warn`<br>Global only. How detached pipeline workers are bounded. `warn`: on Linux each runs in a systemd user scope under the `machine.worker_*` limits (uncontained, with a warning, without a user manager); on macOS a watchdog stops a run past `worker_memory_max` or `worker_tasks_max`. `strict` refuses a launch without kernel containment, including every macOS launch. `off` uses neither. |
+| `machine.worker_containment` | string · **Default:** `warn`<br>Global only. How detached pipeline workers are bounded. `warn`: on Linux each runs in a systemd user scope under the `machine.worker_*` limits (uncontained, with a warning, without a user manager); on macOS a watchdog stops a run past `worker_memory_max` or `worker_tasks_max`. `strict` refuses a launch without kernel containment, including every macOS launch. `off` uses neither. A boolean is deprecated: `true` reads as `warn` (or `strict` beside `worker_containment_strict = true`) and `false` as `off`. |
 | `machine.worker_memory_high` | **Advanced.** string · **Default:** `40%`<br>Global only. Linux worker scope `MemoryHigh=` (throttle point): a size such as `6G`, a percentage of RAM, or `infinity`. Not applied on macOS. |
 | `machine.worker_memory_max` | **Advanced.** string · **Default:** `50%`<br>Global only. Worker scope `MemoryMax=` (OOM point), same format. The macOS watchdog uses it as its memory ceiling. |
 | `machine.worker_tasks_max` | **Advanced.** integer · **Default:** `4096`<br>Global only. Worker scope `TasksMax=` (processes plus threads). The macOS watchdog counts processes only. |
@@ -614,6 +634,9 @@ and `machine.task_prefix`. `orbit config keys` prints the same list.
 | `machine.auto_concurrency.mode` | string · **Default:** `off`<br>Global only. Forecast admission: `off`; `shadow` records what it would admit and admits as `off`; `enforce` admits the candidates whose profile fits under the forecast. |
 | `machine.auto_concurrency.admit_cpu_percent` | integer · **Default:** `90`<br>Global only. Maximum forecast CPU utilization as a percentage of host cores (1–100). Distinct from the throttle's `cpu_high_percent`. |
 | `machine.auto_concurrency.min_profile_deliveries` | integer · **Default:** `10`<br>Global only. Completed deliveries needed before a profile is used without fallback. |
+| `machine.github_quota.agent_reserve_percent` | integer · **Default:** `20`<br>Global only. Share of the host's GitHub API quota, per resource (`core`, `graphql`), that agents' `github.*` reads may not spend; once the remaining count is at or below it they are refused locally until the reset. `0` disables the refusal (0–100). |
+| `machine.github_quota.background_reserve_percent` | integer · **Default:** `10`<br>Global only. The same for background reads (sweeps, auto-task sources, deterministic job steps). Delivery keeps no reserve. `0` disables the refusal (0–100). |
+| `machine.github_quota.refresh_interval_seconds` | **Advanced.** integer · **Default:** `60`<br>Global only. Shortest interval between two reads of GitHub's rate-limit endpoint on the host that a command's own timeout did not cut short (10–3600). A cut-short read records nothing and does not start the interval. `orbit tool run github.auth.status` shows the quota record under `quota`. |
 | `tasks.id_start` | integer · **Default:** Unset<br>Floor for this machine's task-ID allocator. Moves only forward, so machines can hold disjoint ID ranges. |
 | `decision_channel.enabled` | bool · **Default:** `false`<br>Raise decision requests for work held on a human decision. |
 | `experiments.enabled` | bool · **Default:** `false`<br>Allow experiments to start in this workspace. While false, `orbit experiment start` is refused; drafts can still be defined and edited. |
@@ -636,6 +659,7 @@ and `machine.task_prefix`. `orbit config keys` prints the same list.
 | `branch.name_template` | **Advanced.** string · **Default:** `{{prefix}}/{{task_id}}-{{hash}}`<br>Template for single-task delivery branch names; must contain `{{task_id}}` and `{{hash}}`. |
 | `pr.task_url_template` | **Advanced.** string · **Default:** Unset<br>URL template that links a task ID in pull request descriptions. |
 | `execution.env.pass` | array&lt;string&gt; · **Default:** `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER`<br>Environment variables passed to agent subprocesses. Your list replaces the default. macOS also passes `__CF_USER_TEXT_ENCODING` by default. See [Provider credentials](#provider-credentials). |
+| `execution.env.login_auth` | array&lt;string&gt; · **Default:** `[]`<br>Providers (`claude`, `codex`) whose agents sign in through the CLI's own login. Their credential variables in `execution.env.pass` are not reported when unset. Orbit reads no credential; this is your declaration. |
 | `execution.codex.sandbox` | string · **Default:** `workspace-write`<br>Codex sandbox mode: `read-only`, `workspace-write` or `danger-full-access`. |
 | `execution.codex.approval_policy` | **Advanced.** string · **Default:** Unset<br>Codex approval policy: `untrusted`, `on-request` or `never`. |
 | `completion.hold` | array&lt;table&gt; · **Default:** `[]`<br>Ordered `[[completion.hold]]` rules that keep a `--complete` run's task in `review`, with its pull request open. A rule sets at least one of `paths` (globs on the changed files), `complexity_at_least`, `types` and `tags`, and holds when any field matches. Approve a held task with `orbit task update <id> --approve` once its pull request is merged. |
@@ -663,6 +687,94 @@ Notes:
   `orbit auto-task toggle delivery-code-review on`.
 - An installed plugin's declared settings are settable as
   `plugins.<ns>.<key>`, and crew fields as `crews.<name>.<field>`.
+
+## Host evidence
+
+A claimed leaf runs on a follower host whose OS can differ from the owner's.
+Some checks can only run on one OS: a Linux CodeQL run needs Linux
+extraction, and a sandbox test needs its own host's sandbox. Add
+`[[review.host_evidence]]` tables to `config.toml` to declare those checks,
+so a leaf on the wrong host owes them instead of failing, and the owner's
+host fulfils them. A layer that states the list replaces the earlier layer's
+list whole.
+
+Each rule has a `kind` (`codeql` or `host_sandbox_test`), a `name`, one or
+more workspace-relative `paths` globs, an `os` (`linux` or `macos`), the
+exact `command`, and a result `artifact` (a relative `.json` path, unique
+across rules). Two fields are optional: `tags`, a list of task tags added in
+Orbit 0.51.0, and `hosted_check`, which only a Linux `codeql` rule may set.
+
+```toml
+[[review.host_evidence]]
+kind = "codeql"
+name = "Linux CodeQL (rust)"
+paths = ["**/*.rs"]
+tags = ["security", "security-review"]
+os = "linux"
+command = "scripts/codeql-rust-local.sh --ram 16384 codeql/rust-queries:codeql-suites/rust-security-extended.qls"
+artifact = "evidence/codeql-rust-linux.json"
+```
+
+- **Paths.** `*` stays within one path component and `**` spans components.
+  A rule needs at least one glob, and a glob that does not compile fails the
+  config load.
+- **Tags.** A rule with `tags` is also owed when the claimed task carries any
+  listed tag, whatever paths the candidate changed. Tags compare
+  case-insensitively after trimming, so `Security` matches `security`. A
+  rule without `tags` matches paths only. Because tags change the
+  distributed-drain protocol fingerprint, a follower on an older build
+  refuses a tagged rule with `protocol_skew` before it can claim: keep rules
+  path-only or upgrade every reader to 0.51.0 or later.
+- **Which host owes.** A `codeql` rule is owed on a host of another OS than
+  the rule's `os`, and fulfilled by the owner on `os`. A `host_sandbox_test`
+  rule is owed on a host of its own `os`, which runs it outside the agent
+  sandbox at settlement. So the example above is owed by a macOS follower
+  that changes a `.rs` file, or by a macOS follower on a `security`-tagged
+  task even when the change touches no Rust file; a Linux follower owes
+  nothing for it.
+- **Commands and artifacts.** `name` and `command` must both be set.
+  `artifact` must be a relative `.json` path (never `./`-prefixed) and must
+  not repeat another rule's artifact. A configured `host_sandbox_test`
+  command must be a focused cargo form — `cargo test -p <crate> --test
+  <target> [<filter>]` or `cargo test -p <crate> --lib [<filter>]` — or the
+  config fails to load. An owner required-validation command is admitted
+  only at settlement, against the owner's captured
+  `workflow.required_validation_commands`, so a rule naming one still fails
+  load. A rule Orbit could never fulfil fails load the same way, instead of
+  holding every matching review forever.
+- **`hosted_check`.** A Linux `codeql` rule may name the pull request check
+  that runs exactly its `command` on every candidate, as the forge reports
+  it (`hosted_check = "CodeQL / Analyze (rust)"`). Any other kind or OS, or
+  an empty value, fails load. Declare it only for a check that really runs
+  the rule's command: Orbit compares the name, not the queries the job runs.
+  Without it — a custom query, or a workspace with no equivalent hosted
+  check — the requirement holds the review for the owner's run.
+
+When a rule is owed, each side records that instead of running what its host
+cannot:
+
+1. The implementer records the command `not_run` with the reason (for
+   example the platform refusal) and hands off; the missing run is not a
+   failure.
+2. The reviewer names the requirement in its owed evidence, records it
+   `not_run`, and never attempts it. A verdict whose only gaps are owed
+   checks settles into a hold for that evidence instead of blocking.
+3. The owner captured the rules when the claim was admitted, and the
+   follower runs that captured contract, never its own settings. The owner's
+   host then fulfils the hold: it runs the admitted command fresh — CodeQL
+   through Bubblewrap namespaces in a standalone checkout of the held
+   commit, sandbox tests outside the agent sandbox in a fresh detached
+   worktree — and attaches the result at the rule's `artifact` path plus a
+   log. Receipt moves the task back for a fresh review, which verifies the
+   evidence. A complete CodeQL run whose SARIF has findings is a verdict on
+   the candidate, not evidence, and does not wait under the hold.
+
+The one exception is a before-landing review on another-OS host for a Linux
+`codeql` rule with `hosted_check`: the requirement is then owed to the owner
+and that check (`owner_owed_evidence`) instead of holding the review, and the
+owner's landing merges only after the named check reports an explicit
+success on the reviewed head. It waits while the check is absent, still
+running, or completed without success (`SKIPPED` or `NEUTRAL`).
 
 ## Tag instructions
 

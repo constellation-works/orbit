@@ -16,8 +16,8 @@ last_updated: 2026-11-02
 
 Every resident cycle ends with exactly one `resident.checkpoint` record on its mandate's
 assignment task, written by the agent through `orbit.resident.checkpoint` or, failing that,
-synthesized by the cycle's finalize step. The next cycle builds its brief from the last *K*
-checkpoints and Orbit state; it never reads the previous agent's final message. Questions the
+synthesized by the cycle's finalize step. The next cycle builds its brief from the latest full checkpoint, bounded earlier summaries
+and Orbit state; it never reads the previous agent's final message. Questions the
 resident escalates and words the manager relays use two more shapes, `resident.request` and
 `resident.answer`. All three are task comments whose message is one JSON object, validated by core
 on write.
@@ -31,6 +31,29 @@ mechanical and the evolution and metrics passes possible. The keys here are the 
 `resident:<mandate>:<cycle>:<n>` keys. Core assigns them ([ORB-21244]): the cycle's tool guard
 numbers each admitted write under the assignment's write lock and returns the key as
 `resident_action_key`. No tool takes a caller-supplied resident key.
+
+Successful object replies carry `resident_action_key` at the top level. An admitted write
+that fails as `OrbitError::RemoteTool` carries the same stored key in
+`payload.detail.resident_action_key`; the broker forwards that detail as
+`error.detail.resident_action_key`. The error's code, message and retryability stay unchanged.
+Existing object detail fields are retained, with `resident_action_key` reserved for the local
+ledger key. Absent or null detail becomes an object containing the key; other detail values
+are retained as `remote_detail` inside that object.
+
+Every other post-admission failure or refusal of a ledgered write carries the same stored
+key in the broker error envelope's optional top-level `action_key` field (mirrored inside
+`error`), set for `PolicyDenied` refusals (`plugin_broker_refused`), `Execution` and other
+non-`RemoteTool` failures (`plugin_broker_call_failed`) alike (ORB-25284). Daniel chose this
+field, option (a), on 2026-11-16 ("Yes, field (a)"): a top-level envelope field is additive —
+omitted when there is no key, so clients that ignore unknown fields keep working — and needs
+no new `OrbitError` variant, detail reshaping or ledger change, while leaving error code,
+status and retryability unchanged. `RemoteTool` replies may carry the key in both places.
+The broker client keeps the key on the reconstructed error's payload as `action_key`.
+Pre-admission denials have no ledger key and carry no `action_key`; no key is minted for
+them. A production `gh` merge failure with HTTP 502 is `Execution` when the resident action
+closes, so the envelope now carries its key as `plugin_broker_call_failed` with `action_key`.
+A failed reply does not prove a merge was refused or completed: read the forge before
+deciding what happened.
 
 ### Action ledger
 
@@ -84,7 +107,7 @@ refused as `resident_action_in_doubt`, and the agent checks the subject's state 
 | `decisions[]` | Choices the resident made itself. `class` is one of the escalation classes or `routine`/`reversible`; a non-escalating class with `reversible: true` is listed in the digest for veto |
 | `requests[]` | Escalations raised this cycle or still open |
 | `costs[]` | Cost events ([evolution-ledger](./evolution-ledger.md)); an empty list when none |
-| `notes` | ≤ 2,000 characters, for the next cycle and the human |
+| `notes` | ≤ 600 characters on new writes: only what changed this cycle and what is next. Standing state stays in structured fields such as `requests[]` and `decisions[]`; operator asks go in `requests[]`/notices, not notes |
 | `continuity` | `resumed`, `rebuilt` (conversation expired or absent) or `off` |
 | `conversation_ref` | Optional provider conversation reference for the next cycle. The cycle copies `brief.conversation_ref` verbatim (`null`/omitted when the brief carries none); core forces `continuity` to `rebuilt` when a claimed `resumed` has no live prior reference |
 | `outcome` | `progress`, `idle` (woke, nothing to do), `waiting` (only open requests), `incomplete` (synthesized), `handoff`, `ended` |
@@ -92,6 +115,10 @@ refused as `resident_action_in_doubt`, and the agent checks the subject's state 
 Limits: 64 KiB per record, 50 actions, 20 decisions, 20 costs. A cycle that reaches a limit does
 not write a second checkpoint; it stops and leaves the rest to the next cycle. Bounded cycles are
 the point.
+
+Historical checkpoints retain the former 2,000-character read limit. Their notes
+remain intact in the latest full checkpoint and are shortened only in earlier brief
+summaries; lowering the write cap does not invalidate stored memory.
 
 ### Implemented write and read boundary
 
@@ -178,7 +205,7 @@ tool refuses any field naming rights or workspaces. A `resident.answer` is a wak
 The brief `resident_observe` builds, in order:
 
 1. the mandate artifact and the effective authority, including `observe_only` and why;
-2. the last *K* checkpoints (default 5), newest first; older ones only as their `notes`;
+2. `checkpoints`: the latest checkpoint in full; `earlier_checkpoint_summaries`: up to four earlier records, newest first, each with only `cycle`, `outcome` and the first 600 characters of `notes`. There is no older-notes tail;
 3. open `resident.request` entries with their decision state and answers;
 4. `resident.answer` and other non-resident comments since the last checkpoint;
 5. the wake reasons with the facts behind them (task status, run outcome, PR/CI state);
@@ -205,5 +232,7 @@ Designed by claude (claude-opus-5-5) for [ORB-21229]; built by [ORB-21243] and [
 - [ORB-21243] — implements the checkpoint tool and the request/answer shapes
 - [ORB-21244] — core-assigned action keys and the action ledger (slice 3)
 - [ORB-21246] — implements brief reconstruction and the continuity adapter
+- ORB-25279 — retains action keys in post-admission `RemoteTool` failure detail
+- ORB-25284 — carries action keys on failed and refused broker replies in the envelope `action_key`
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

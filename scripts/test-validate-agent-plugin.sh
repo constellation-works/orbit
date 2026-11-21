@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Exercise the repository-owned Agent Plugin validator and the Cursor local
-# plugins-directory discovery shape.
+# Exercise the repository-owned Agent Plugin validator, and check that a copy
+# laid out at Cursor's local plugins-directory path keeps its manifest, MCP
+# launch and skill at the paths that layout requires. Cursor's own discovery
+# is not run here.
 set -euo pipefail
 
 repo_root="${1:-${ORBIT_REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}"
@@ -122,7 +124,7 @@ def set_orbit_cwd(root: Path, cwd: str | None) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-# Cursor discovers Agent Plugins from ~/.cursor/plugins/local/<name>.
+# Cursor's local plugins directory is ~/.cursor/plugins/local/<name>.
 home = base_fixture / "fake-home"
 cursor_plugin = home / ".cursor" / "plugins" / "local" / "orbit"
 if cursor_plugin.exists():
@@ -150,8 +152,11 @@ if plugin_manifest.get("author", {}).get("name") != "constellation-works":
 
 plugin_blob = (cursor_plugin / "plugin.json").read_text(encoding="utf-8")
 mcp_blob = (cursor_plugin / "mcp.json").read_text(encoding="utf-8")
+# HOME=/ is the filesystem root, not a user home: a substring match would flag
+# every slash-containing value. Mirror the guard in validate-agent-plugin.sh.
+user_home = str(Path.home())
 for blob, label in ((plugin_blob, "plugin.json"), (mcp_blob, "mcp.json")):
-    if str(repo_root) in blob or str(Path.home()) in blob:
+    if str(repo_root) in blob or (user_home not in {"", "/"} and user_home in blob):
         errors.append(f"{label} embeds a repository- or user-specific absolute path")
 
 # Negative: missing official schema.
@@ -379,6 +384,61 @@ mcp_path.write_text(json.dumps(mcp_payload), encoding="utf-8")
 home_env = dict(os.environ)
 home_env["HOME"] = embedded_home
 expect_failure(embedded, "user-specific absolute home path", "embedded home in launch arg", home_env)
+
+
+# Mirror entries are matched by their exact bytes (ORB-26165). A top-level entry
+# whose name differs from a canonical skill only by a trailing newline must fail
+# --check, and regeneration must remove exactly that child while keeping the
+# mirror root and every canonical skill. Each case runs a disposable copy of the
+# sync script and its inputs, so the script's repo root is the fixture itself.
+def sync_mirror_fixture(name: str) -> Path:
+    root = fixture_root / name
+    (root / "scripts").mkdir(parents=True)
+    shutil.copy2(repo_root / "scripts" / "sync-plugin-skills.sh", root / "scripts" / "sync-plugin-skills.sh")
+    shutil.copytree(
+        repo_root / "crates" / "orbit-core" / "assets" / "skills",
+        root / "crates" / "orbit-core" / "assets" / "skills",
+        symlinks=True,
+    )
+    shutil.copytree(repo_root / "plugin" / "skills", root / "plugin" / "skills", symlinks=True)
+    return root
+
+
+def run_sync(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(root / "scripts" / "sync-plugin-skills.sh"), *args],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+canonical_names = sorted(
+    entry.name
+    for entry in (repo_root / "crates" / "orbit-core" / "assets" / "skills").iterdir()
+    if entry.is_dir() and not entry.name.startswith("_")
+)
+for label, stray in (
+    ("newline-suffixed-canonical-name", canonical_names[0] + "\n"),
+    ("newline-only-name", "\n"),
+):
+    case = sync_mirror_fixture(f"sync-{label}")
+    mirror = case / "plugin" / "skills"
+    (mirror / stray).write_text("stray\n", encoding="utf-8")
+    check = run_sync(case, "--check")
+    if check.returncode == 0:
+        errors.append(f"{label}: --check accepted a noncanonical top-level entry")
+    elif "no matching canonical skill" not in check.stderr:
+        errors.append(f"{label}: --check failed without naming the noncanonical entry\n{check.stderr}")
+    regen = run_sync(case)
+    if regen.returncode != 0:
+        errors.append(f"{label}: regeneration exited {regen.returncode}\n{regen.stdout + regen.stderr}")
+        continue
+    remaining = sorted(os.listdir(mirror))
+    if remaining != canonical_names:
+        errors.append(f"{label}: regeneration left {remaining!r}, expected {canonical_names!r}")
+    if run_sync(case, "--check").returncode != 0:
+        errors.append(f"{label}: --check still fails after regeneration")
 
 if errors:
     print("test-validate-agent-plugin: failed", file=sys.stderr)

@@ -29,12 +29,17 @@ impl OrbitRuntime {
     }
 
     /// Crews whose executor declares `host_os`, keyed by crew name.
+    ///
+    /// Enumerates the same last-known-good registry crew selection resolves
+    /// from (`admission_crew_settings`), not the startup settings, so a crew
+    /// added by a live config edit is limited exactly as in a fresh runtime.
     pub(crate) fn executor_host_os_limits(
         &self,
     ) -> Result<BTreeMap<String, ExecutorOsLimit>, OrbitError> {
         let declared = self.declared_executor_host_os()?;
         let mut limits = BTreeMap::new();
-        for (name, crew) in self.context.settings().crews() {
+        let crew_settings = self.admission_crew_settings();
+        for (name, crew) in &crew_settings.crews {
             if let Some(limit) = limit_for_crew(crew, &declared) {
                 limits.insert(name.clone(), limit);
             }

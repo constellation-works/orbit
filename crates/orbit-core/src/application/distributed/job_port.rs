@@ -3,12 +3,13 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::TaskCommitBoundary;
-use orbit_store::contracts::{AdmissionReceipt, LocalPullAdmission};
+use orbit_store::contracts::{AdmissionReceipt, DrainLeafOccupancy, LocalPullAdmission};
 use orbit_types::workflow::ResourceThrottle;
 
 use crate::OrbitRuntime;
 use crate::application::contracts::{
-    ClaimedLeafStage, DrainClaimedLeaf, DrainEntryPoint, HostProviderHold,
+    ClaimedLeafStage, DrainClaimedLeaf, DrainEntryPoint, HostProviderHold, PullCrewWindow,
+    PullLeafClaim, RefusedPullSettlement,
 };
 use crate::application::job::JobDrainPort;
 
@@ -40,6 +41,25 @@ impl JobDrainPort for OrbitRuntime {
         drain_run_id: &str,
     ) -> Result<Vec<DrainClaimedLeaf>, OrbitError> {
         self.pull_drain_claimed_leaves(drain_run_id)
+    }
+
+    fn run_pull_claim(&self, run_id: &str) -> Result<Option<PullLeafClaim>, OrbitError> {
+        self.pull_leaf_claim(run_id)
+    }
+
+    fn drain_refused_settlements(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<RefusedPullSettlement>, OrbitError> {
+        self.pull_drain_refused_settlements(run_id)
+    }
+
+    fn drain_crew_window(&self, run_id: &str) -> Result<Option<PullCrewWindow>, OrbitError> {
+        self.pull_drain_crew_window(run_id)
+    }
+
+    fn drain_pull_occupancy(&self, run_id: &str) -> Result<Option<DrainLeafOccupancy>, OrbitError> {
+        self.pull_drain_occupancy(run_id)
     }
 
     fn drain_carried_admissions(

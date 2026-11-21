@@ -25,6 +25,7 @@ Every subcommand accepts these options, before or after it.
 | `orbit init` | Set up the global Orbit root (`~/.orbit`), this machine's identity and task-ID prefix, and a [human crew](/reference/config/#human-crews). `--non-interactive` skips prompts; `--force` resets the root to shipped defaults. |
 | `orbit workspace init` | Register the current repository as a workspace. Common options: `--name`, `--base-branch`, `--ship-mode pr\|local`, `--role owner\|replica`, `--mcp`, `--preset <file>` ([presets](/reference/config/#workspace-presets)). |
 | `orbit workspace list\|show` | List registered workspaces, or show the current one. |
+| `orbit workspace rebind --path <dir> [--dry-run]` | [Rebind this host to an already moved checkout](/how-to/workspace-maintenance/#rebind-a-moved-checkout) (distinct from [source-remote rebind](/how-to/workspace-maintenance/#rebind-a-moved-source-git-remote)). `--dry-run` leaves the checkout binding, pending rebind record and audit log unchanged; generation admission and registry lock bookkeeping can still write when the store exists. A missing host store is refused before generation admission and writes nothing. |
 | `orbit workspace sync [--check] [--all]` | [Converge managed artifacts](/how-to/workspace-maintenance/#synchronize-shipped-defaults) on the defaults this binary ships. `--check` writes nothing; `--all` covers every workspace on this host. |
 | `orbit workspace role <workspace> <owner\|replica>` | Validate or reassert this checkout's role. |
 | `orbit workspace ship-mode [pr\|local]` | Print the workspace's ship mode, or change it. |
@@ -32,7 +33,7 @@ Every subcommand accepts these options, before or after it.
 | `orbit workspace publication bind\|show\|rebind\|remove` | Manage the binding to a [task-publication repository](/how-to/task-publication/). |
 | `orbit workspace remove\|teardown <workspace>` | `remove` deregisters a workspace and keeps its `.orbit`; `teardown --confirm` removes all Orbit artifacts from it. |
 | `orbit config show\|keys\|path` \| `get <key>` \| `set <key> <value>` | Read and write [configuration](/reference/config/). `set --global` targets `~/.orbit/config.toml`. |
-| `orbit config browser-kit status\|install\|verify\|remove` | Manage the headless browser kit that workers use to check UIs. |
+| `orbit config browser-kit status\|install\|verify\|remove` | [Manage the headless browser kit](/getting-started/install/#prepare-a-browser-kit-for-ui-tasks) that workers use to check UIs. |
 | `orbit host add <ssh-target>` \| `list` \| `show <host>` \| `rename <host> <new-name>` \| `remove <host>` | Register and inspect the [remote Orbit hosts](/how-to/multi-host/) this machine reaches over SSH. |
 | `orbit plugin add <source>` \| `upgrade\|enable\|disable\|remove\|show <name>` \| `list\|doctor\|sync` | [Install, grant and manage plugins](/how-to/plugins/). |
 | `orbit plugin secret set\|rm <plugin> <name>` \| `list <plugin>` | Manage a plugin's [declared secrets](/how-to/plugins/#set-secrets); values are never shown. |
@@ -56,7 +57,7 @@ with `--host <host>` when it is on another host. An unknown prefix fails with
 | `orbit task add --title <title> --complexity <low\|medium\|hard\|xhard>` | Create a task. Common options: `--description`, `--acceptance-criteria`, `--context`, `--crew`. |
 | `orbit task update <id>` | Update fields or append a `--comment`. `--approve` takes the next approval step; `--status` follows the [transition rules](/concepts/tasks/#transition-rules) unless you add `--force`. |
 | `orbit task repilot <id>` | Request one new pilot assessment. `--full` runs a full assessment instead of a re-check. |
-| `orbit task archive <id>` | Archive a task in any status. Restore it with `orbit task update <id> --status <status> --force`. |
+| `orbit task archive <id> [--force]` | Archive a task in any status. If a live local run owns it, archiving requires `--force`. Restore it with `orbit task update <id> --status <status> --force`. |
 | `orbit task list` | List tasks, 50 by default. Filter with `--status`, `--tag`, `--type`, `--path`, `--ready` or `--scheduled`. |
 | `orbit task eligible` | List `backlog` and `proposed` tasks whose files overlap no `in-progress` or `review` task. `--explain` shows what holds the rest. |
 | `orbit task show <id>` | Show one task. `--fields <a,b>` prints only those fields. |
@@ -99,7 +100,7 @@ an exact time.
 |---|---|
 | `orbit task update <id> --not-before <time>` | Set the earliest start: an RFC 3339 instant or a local `YYYY-MM-DDTHH:MM`. `--clear-not-before` clears it. |
 | `orbit task list --scheduled` | List future schedules, soonest first. |
-| `orbit run ship <id> --ignore-schedule` | Start the named tasks before their scheduled time. Records a `schedule_overridden` history event. |
+| `orbit run ship <id>` | Start the named tasks now, even before their scheduled time. Records `schedule_overridden` and `readiness_overridden` history events. |
 
 ### Friction and search
 
@@ -115,7 +116,7 @@ an exact time.
 
 | Command | Purpose |
 |---|---|
-| `orbit run ship [task_id ...]` | [Ship](/getting-started/workflows/) the named tasks, or the ready backlog, through the gated pipeline. `--mode pr\|local` chooses a pull request or in-place delivery. |
+| `orbit run ship [task_id ...]` | [Ship](/getting-started/workflows/) the named tasks, or the ready backlog, through the gated pipeline. Named tasks ship even when a drain would wait on them (scheduled start, unassessed complexity, no context files, context locks another in-flight task holds); their history records the overridden gates and lock holders. Other holds, including an active pilot, still apply. A wholly held request reports known holds immediately; a mixed request starts eligible tasks and records undispatched IDs and reasons in `orbit run show`. Check that run for holds that arise after submission, and retry held tasks when ready. `--mode pr\|local` chooses a pull request or in-place delivery. |
 | `orbit run auto [--for <duration>] [--concurrency <n>]` | [Drain the backlog](/how-to/continuous-delivery/) for a time window; one pass without `--for`. |
 | `orbit run auto --approve-proposed` | Also [approve `proposed` tasks](/how-to/continuous-delivery/#2-authorize-the-backlog) that pass task-pilot verification. |
 | `orbit run auto --auto-fix` | Also [repair failing checks and conflicts](/how-to/continuous-delivery/#repair-blocked-pull-requests) on the pull requests the drain opens. |
@@ -204,10 +205,11 @@ The [dashboard](/how-to/dashboard/) shows the same rankings.
 
 | Command | Purpose |
 |---|---|
-| `orbit clock tick` | Run one scheduler pass: fire due routines and mint due auto-tasks. `--dry-run` only reports. Alias: `orbit sweep`. |
+| `orbit clock tick` | Run one scheduler pass: fire due routines and mint due auto-tasks. `--dry-run` fires and mints nothing, but still persists checkout validation and opens the scheduler store. Alias: `orbit sweep`. |
 | `orbit clock status\|pause\|enable\|repair` \| `set --cadence-seconds <n>` | Inspect and control the host scheduler clock. `repair` rewrites a clock unit that names a missing, moved or stale program. |
 | `orbit routine list` \| `show <name>` | List routines with their next-due time and last fire, or show one. |
 | `orbit routine enable\|disable\|pause\|resume <name>` | `enable` and `disable` change the routine's versioned definition (operator only); `pause` and `resume` act on this host only. |
+| `orbit routine breaker reset\|bypass <name>` | [Reset or bypass a routine's host-local circuit breaker](/how-to/recurring-work/#recover-a-tripped-routine). |
 | `orbit routine init [--install-clock]` | Read this machine's identity; `--install-clock` also installs the OS clock unit. |
 | `orbit auto-task add --name <name> --title <title>` \| `list` \| `show\|update <name>` | Define and inspect auto-task templates. |
 | `orbit auto-task toggle <name> <on\|off>` | Enable or disable a definition. |

@@ -238,7 +238,7 @@ impl ApplicationPort for CoreApplicationPort {
         crew: Option<&str>,
         crew_source: Option<&CrewSource>,
         complexity: Option<TaskComplexity>,
-    ) -> Option<String> {
+    ) -> Result<Option<String>, OrbitError> {
         OrbitRuntime::claimed_leaf_redrawn_crew(
             OrbitRuntime::from_kernel_ref(kernel),
             input,

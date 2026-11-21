@@ -27,7 +27,7 @@ use orbit_automation::delivery::stall::StallReport;
 use orbit_common::OrbitError;
 use orbit_store::contracts::{FrictionAddParams, FrictionListFilter};
 use orbit_types::record::FrictionStatus;
-use orbit_types::workflow::automation::recovery::AutomationStall;
+use orbit_types::workflow::automation::recovery::{AutomationStall, CrewOsHold};
 use std::fmt::Write as _;
 use std::ops::ControlFlow;
 
@@ -282,9 +282,9 @@ fn body(report: &StallReport<'_>, key: &str) -> String {
         let _ = writeln!(
             body,
             "Delivery automation cannot mint the next `{definition}` action: {}. Every \
-             obligation it holds is retained, and nothing new is observed while it waits. It \
-             resumes on its own at the first evaluation after the configuration admits a crew.",
-            hold.summary()
+             obligation it holds is retained, and nothing new is observed while it waits. {}",
+            hold.summary(),
+            hold_resumption(hold)
         );
     } else {
         let _ = writeln!(
@@ -324,15 +324,7 @@ fn body(report: &StallReport<'_>, key: &str) -> String {
 
     if let Some(hold) = report.crew_hold.filter(|_| !report.repaired) {
         let _ = writeln!(body);
-        let _ = writeln!(
-            body,
-            "Resolve it with one of:\n\
-             - add a crew whose executor can run on one of {} to `{}`;\n\
-             - change the definition's `os:` tags with `orbit auto-task update {definition} \
-             --tag <tag> ...`.",
-            hold.os_tags.join(", "),
-            hold.pool_key
-        );
+        let _ = writeln!(body, "{}", hold_remediation(hold, definition));
     } else if !report.repaired {
         let _ = writeln!(body);
         let _ = writeln!(
@@ -357,6 +349,71 @@ fn body(report: &StallReport<'_>, key: &str) -> String {
     let _ = writeln!(body, "dedupe-key: {key}");
 
     body
+}
+
+/// When a `crew_os_ineligible` hold clears by itself. An OS exclusion alone
+/// clears once the configuration admits a crew. A refused model also clears as
+/// its refusal lapses or a verified success of that model lands. The pool
+/// admitting a crew clears it only when that crew can run under the task's
+/// effective `os:` tags and its model is not refused on this host and account.
+fn hold_resumption(hold: &CrewOsHold) -> String {
+    if hold.model_refused.is_empty() {
+        return "It resumes on its own at the first evaluation after the configuration admits a crew."
+            .to_string();
+    }
+    let replacement = if hold.os_tags.is_empty() {
+        "whose model is not refused".to_string()
+    } else {
+        os_and_model_replacement(&hold.os_tags)
+    };
+    format!(
+        "It resumes on its own once a refusal above lapses, once a verified success of its model \
+         lands on this host and account, or once the pool admits a crew {replacement}."
+    )
+}
+
+/// The ways out of a `crew_os_ineligible` hold. A replacement crew has to pass
+/// every filter the hold still applies: the task's effective `os:` tags, when
+/// it has any, and provider-model access on this host and account, when a
+/// model is refused. Editing `os:` tags cannot clear a refusal, so that option
+/// and an OS-only crew add are offered only when no model is refused.
+fn hold_remediation(hold: &CrewOsHold, definition: &str) -> String {
+    let mut options = Vec::new();
+    if !hold.model_refused.is_empty() {
+        options.push(
+            "wait for a refusal above to lapse, or for a verified success of its model on this \
+             host and account"
+                .to_string(),
+        );
+        let replacement = if hold.os_tags.is_empty() {
+            "whose model is not refused on this host and account".to_string()
+        } else {
+            os_and_model_replacement(&hold.os_tags)
+        };
+        options.push(format!("add a crew to `{}` {replacement}", hold.pool_key));
+    }
+    if !hold.excluded.is_empty() && hold.model_refused.is_empty() {
+        options.push(format!(
+            "add a crew whose executor can run on one of {} to `{}`",
+            hold.os_tags.join(", "),
+            hold.pool_key
+        ));
+        options.push(format!(
+            "change the definition's `os:` tags with `orbit auto-task update {definition} \
+             --tag <tag> ...`"
+        ));
+    }
+    format!("Resolve it with one of:\n- {}.", options.join(";\n- "))
+}
+
+/// A replacement crew that passes both filters the evaluator applies: the
+/// task's effective `os:` tags, then provider-model access on this host and
+/// account.
+fn os_and_model_replacement(os_tags: &[String]) -> String {
+    format!(
+        "whose executor can run on one of {} and whose model is not refused on this host and account",
+        os_tags.join(", ")
+    )
 }
 
 fn body_marks_dedupe(body: &str, key: &str) -> bool {

@@ -382,16 +382,109 @@ neither step recovery nor final recovery runs. The run settles like a step-bound
 interrupt:
 
 - **Claimed leaf:** the claim is released as `failure=transient` with the candidate
-  on the release. The task returns to the owner's backlog, and its next claim resumes
-  the candidate. As with any transient release, the leaf's crew sits out the rest of
-  that drain's window.
-- **Owner `task_pr_pipeline` run:** the failure handoff commits what the agent left,
-  carries the candidate to its durable ref and opens no PR. Run finalization returns
-  the task to the backlog (`upgrade_pending_requeued`), and the next run resumes the
-  candidate once the upgrade settles.
+  on the release. A claimed PR leaf that already published its head reuses it: an
+  unchanged published head needs no extra ref and the release names it as
+  published. A tip past that head, or an unpublished tip, is pushed to a durable
+  ref first (`refs/orbit/candidates/<task-id>/<run-id>`). An ordinary
+  `upgrade_pending` refusal carries neither `provider_limit` nor `owner_busy`, so
+  the owner counts the release against the task's per-task release budget (**2
+  budgeted releases within 24 hours**, resetting after an operator unblocks a
+  budget-exhausted task):
+  - *Within budget* (fewer than 2 prior budgeted releases in 24 hours): the claim
+    ends in phase `revoked` (`last_event` `claim_released`), the task returns to
+    the owner's `backlog`, any committed candidate is kept (`claim_candidate_kept`),
+    and its next claim resumes the candidate under the placement rule below. As
+    with any transient release, the leaf's crew sits out the rest of that drain's
+    window.
+  - *Budget exhausted* (the 3rd or later budgeted release within 24 hours): the
+    owner does **not** return the task to `backlog`; instead it fails the claim
+    and moves the task to `blocked`, so no next claim can start until an operator
+    returns it to `backlog` after the upgrade settles (any committed candidate is
+    still kept in `claim_candidate_kept`). Identify this blocked state on the owner
+    (`orbit task show <task-id>` or `orbit.task.show`, and `orbit run settlements --json`):
+    - task `status` `blocked` with a `claim_release_budget_exhausted` history
+      event whose `note` starts `release budget exhausted (2 in 24h): …`;
+    - a system comment starting `Blocked: follower drains released this claim …
+      times within 24h for failures that were not the candidate's, and it failed
+      again.` listing every counted release's timestamp, failure class and reason;
+      and
+    - on the settlement/claim record, `phase` `failed` and `last_event`
+      `claim_release_budget_exhausted` (`release.budget_exhausted: true` in the
+      stored claim inspection).
+- **Owner `task_pr_pipeline` run:** the failure handoff commits what the agent left and
+  pushes it to its durable ref, `refs/orbit/candidates/<task-id>/<run-id>`, on `origin`.
+  It opens no PR. An owner run spends no claim release budget and never blocks the
+  task: run finalization returns the task to the backlog
+  (`upgrade_pending_requeued`), and the next run resumes the candidate once the upgrade
+  settles.
 
-The task is never `blocked`. To avoid stopping a step at all, let long steps finish
-before installing, or install while no drain is live.
+**Which host resumes a refused candidate.** The push can be refused. The hold still
+succeeds, and the candidate then exists only on the host that held it. The history
+entry that records it depends on who held the candidate:
+
+- **Owner run:** the task's `candidate_held` entry, plus the `## Orbit upgrade`
+  comment. Only an owner `task_pr_pipeline` run writes them.
+- **Claimed leaf:** the owner's task history carries a `claim_candidate_kept` entry,
+  written when the claim's release settles, and no `candidate_held` entry or
+  `## Orbit upgrade` comment. Its note tells the cases apart:
+  `durable at <ref>` (pushed); neither `durable at` nor `only on` (the leaf's own
+  published head, reused without a new ref; it names the pull request); or
+  `only on <machine> (pushing it failed: <diagnostic>)` (carry rejected, kept on
+  that host).
+
+  A claimed PR leaf that the upgrade stopped before its normal commit step (the
+  pipeline commits before it prepares or synchronizes the branch) gives one of three
+  outcomes. The `claim_candidate_carry` failure-hook output on the leaf run tells them
+  apart; the owner's task history does not, because only the first writes an entry:
+  - *Preservable edits* (uncommitted changes in the leaf's worktree): the failure hook
+    commits them as one partial commit titled `Partial implementation candidate
+    [<task-id>]`, with an `Orbit-Partial-Candidate-Run` trailer, and reports `carry:
+    durable` (or `failed` when pushing it was rejected) with `partial: true`. The commit
+    moves no branch, index or file. The entry names that commit's head. Its note reads
+    `durable at` or `only on` as above (the placement), then `stopped at <step>`.
+  - *Refused edits* (a protected or non-regular path, or unmerged changes): the hook
+    stops before writing anything, so the edits are not preserved. It reports `carry:
+    failed` with a `reason` and no branch or head. Three refusals apply, and the
+    `reason` names which one stopped it. Unmerged edits give `task worktree '<path>' has
+    unresolved merge conflicts` and that check runs before the path checks. An untracked
+    protected path (`??` in `git status`) is refused first, whatever its file type, while
+    the candidate paths are listed: the reason contains `task delivery refused protected
+    untracked paths: [...]`. Staging that path removes it from that listing, so the next
+    refusal applies instead. Other protected or non-regular paths (staged or modified, or
+    irregular) give `partial candidate refused protected or non-regular paths: [...]`.
+    All three refusals report no branch or head and write no `claim_candidate_kept`
+    entry. The reason also reaches the owner in the claim's release failure.
+  - *No edits*: the hook makes no commit and reports `carry: none` with the reason
+    `the leaf left no uncommitted candidate`, and no branch or head.
+
+  Refused and empty snapshots leave the owner no head to keep. The hook names neither
+  branch nor SHA, and no synchronized or prepared head exists yet, so the release
+  writes no `claim_candidate_kept` entry for either. Their absence is not a missing
+  record: read the carry `carry`/`reason` instead. A kept entry from a pre-commit stop
+  therefore always names a `Partial implementation candidate` head. A head that is
+  not one belongs to a leaf that stopped after its commit step, which is outside this
+  case. A claimed-local leaf (`task_claimed_local_pipeline`) runs no pre-commit hook and
+  keeps a candidate only from its own commit, so an upgrade that stops it before that
+  commit records no entry.
+
+Placement:
+
+- A durable candidate resumes on any host once the upgrade settles. An owner hold's
+  `candidate_held` entry carries its `durable_ref`; a claimed leaf's note names it
+  after `durable at`.
+- A host-local candidate resumes only on the holding host, and only while that
+  host's repository still has the commit. A run or claim on any other host starts
+  the task afresh. An owner hold's note reads `host-local: <diagnostic>`, and its
+  `machine_id` names the holding machine when the host has an identity. A claimed
+  leaf's note reads `only on <machine>`. Pushing the commit to `origin` by hand does
+  not make it resumable elsewhere, because placement reads the recorded durable ref.
+
+An owner `task_pr_pipeline` run never sets the task to `blocked`, and a claimed leaf
+returns it to `backlog` while its 2-in-24h release budget holds; only a claimed
+release that exhausts that budget moves the task to `blocked`
+(`claim_release_budget_exhausted`) until an operator returns it to `backlog`. To
+avoid stopping a step at all, let long steps finish before installing, or install
+while no drain is live.
 
 Ordinary startups whose identities the recorded envelope already admits join under
 **shared** admission, so any number of
@@ -648,6 +741,19 @@ when that exit evidence is available before finalization. If reconciliation
 finalizes first, it keeps the interruption even if the supervisor later
 records the `systemd` sender. Unknown senders, signals from other commands,
 and memory or task-limit breaches remain failures.
+
+Workers also write bounded, redacted lifecycle receipts to their existing
+`.worker.log`: entry time, process and parent start identities, entry scope,
+and application return or unwind (including a returned error). The supervisor
+writes its reaped status there before attempting the exit audit. Reconciliation
+reads bounded head and tail windows of that log and appends matching receipts
+and captured signal-sender evidence under `worker provenance:`. This keeps
+diagnostics available when the submitting process has exited or the audit write
+failed. Log evidence is diagnostic only; it does not change settlement state,
+failure accounting, or the finish-time rule. An application return is not a
+process exit. With neither a reap nor a caught signal, an abrupt kill or host
+loss still has no observed exit status; the entry receipt identifies the worker
+and its parent without inventing a cause.
 
 #### Rollout beside executable-generation-v1 processes
 

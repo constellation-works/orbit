@@ -14,6 +14,8 @@ import tempfile
 import time
 import unittest
 
+import dependency_guard_fixture
+
 
 SCRIPTS = Path(__file__).resolve().parent
 
@@ -275,9 +277,10 @@ jobs:
     # of the fixture stubs so a dropped run_guard line cannot shrink the
     # expected set together with the actual set.
     NON_GUARD_TEST_FILES = {
-        "test-bench-compiler-cache.py", "test-check-npm-package.py",
+        "test-bench-compiler-cache.py",
         "test-codeql-path-barriers.py", "test-desktop-advisories.py",
-        "test-shell-waits-allowlist.json", "test-state-backup.py",
+        "test-shell-waits-allowlist.json", "test-child-runner-allowlist.json",
+        "test-state-backup.py",
         "test-visual-fixture-server.py",
     }
 
@@ -376,6 +379,8 @@ exec {shlex.quote(sys.executable)} "$@"
         self.prepare_ci()
         self.init_ci_git()
         for path in ("scripts/new-guard.sh", ".github/new.yml", "Makefile",
+                     ".config/nextest.toml",
+                     "crates/orbit-engine/tests/engine/pr_landing/infrastructure/fixtures/legacy-codeql.yml",
                      "install.sh", "RELEASING.md", "docs/dev/qa/path-leases-listener-sudo.md",
                      "plugin/new.json", ".cargo/config.toml"):
             with self.subTest(path=path):
@@ -702,30 +707,41 @@ log("end {name}")
         self.assertRegex(result.stderr, r"ci-guardrails: test-build-budget\.sh [0-9.]+ s")
 
     def test_exclusive_self_tests_run_one_at_a_time_beside_a_lowered_pool(self):
+        """Local and hosted modes keep the slow installer guard exclusive."""
         self.prepare_ci()
         events = self.root / "events"
         priorities = self.root / "priorities"
         # Pool members hold, so the exclusive lane overlaps them. Each records its
         # own priority, so a pool member at normal priority beside the lane shows.
-        pool = ("test-installer-security.sh", "check-orphan-modules.sh", "test-cross-revision-check.sh")
+        pool = ("check-orphan-modules.sh", "test-cross-revision-check.sh",
+                "test-release-workflow.py")
         for name in pool:
             self.write_priority_stub(name, priorities, hold=0.5)
         # The first exclusive suite holds, so a second one started beside it
         # would show its start before the first one's end; the correct order never does.
-        exclusive = ("test-build-budget.sh", "test-compiler-cache.sh")
+        exclusive = ("test-build-budget.sh", "test-installer-security.sh",
+                     "test-compiler-cache.sh")
         self.write_priority_stub(exclusive[0], priorities, events, hold=0.5)
         self.write_priority_stub(exclusive[1], priorities, events)
-        result = self.run_guard("ci-guardrails.sh", "--fast",
-                                env_overrides={"CI_TEST_BASE": "missing-delivery-base"})
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(events.read_text().splitlines(),
-                         [f"{edge} {name}" for name in exclusive for edge in ("start", "end")])
-        observed = dict(json.loads(line) for line in priorities.read_text().splitlines())
-        # Exclusive suites keep the caller's priority; everything in the pool,
-        # which shares the host with them, runs lowered.
-        self.assertEqual(observed, {**{name: True for name in pool},
-                                    **{name: False for name in exclusive}})
-        self.assertRegex(result.stderr, r"ci-guardrails-phase: exclusive-self-tests wall_seconds=\d+ exit=0")
+        self.write_priority_stub(exclusive[2], priorities, events)
+        for mode, env_overrides in (("--fast", {"CI_TEST_BASE": "missing-delivery-base"}),
+                                    ("--guards-core", {"CI_SELF_TESTS": "all"})):
+            with self.subTest(mode=mode):
+                events.write_text("")
+                priorities.write_text("")
+                result = self.run_guard("ci-guardrails.sh", mode,
+                                        env_overrides=env_overrides)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(events.read_text().splitlines(),
+                                 [f"{edge} {name}" for name in exclusive
+                                  for edge in ("start", "end")])
+                observed = dict(json.loads(line) for line in priorities.read_text().splitlines())
+                # Exclusive suites keep the caller's priority; everything in the pool,
+                # which shares the host with them, runs lowered.
+                self.assertEqual(observed, {**{name: True for name in pool},
+                                            **{name: False for name in exclusive}})
+                self.assertRegex(result.stderr,
+                                 r"ci-guardrails-phase: exclusive-self-tests wall_seconds=\d+ exit=0")
 
     def test_pool_width_is_the_build_budget_cargo_jobs(self):
         self.prepare_ci()
@@ -733,12 +749,12 @@ log("end {name}")
         left, right = self.root / "left.fifo", self.root / "right.fifo"
         os.mkfifo(left)
         os.mkfifo(right)
-        installer, mcp = "test-installer-security.sh", "test-mcp-registry-publish-workflow.sh"
+        orphan, mcp = "check-orphan-modules.sh", "test-mcp-registry-publish-workflow.sh"
         third = "test-check-unused-dependencies.py"
         # Two cargo jobs admit two members at once. The pair rendezvous and
         # hold, so the third starts only after one of them has ended, and
         # never while both still hold the two slots.
-        self.write_overlapping_member(installer, events, outgoing=left, incoming=right, hold=0.5)
+        self.write_overlapping_member(orphan, events, outgoing=left, incoming=right, hold=0.5)
         self.write_overlapping_member(mcp, events, outgoing=right, incoming=left, hold=0.5)
         self.write_event_stub(third, events)
         result = self.run_guard("ci-guardrails.sh", "--fast",
@@ -746,10 +762,10 @@ log("end {name}")
                                                "ORBIT_CARGO_JOBS": "2"})
         self.assertEqual(result.returncode, 0, result.stderr)
         log = events.read_text().splitlines()
-        self.assertLess(log.index(f"start {installer}"), log.index(f"start {third}"), log)
+        self.assertLess(log.index(f"start {orphan}"), log.index(f"start {third}"), log)
         self.assertLess(log.index(f"start {mcp}"), log.index(f"start {third}"), log)
         self.assertTrue(
-            log.index(f"end {installer}") < log.index(f"start {third}")
+            log.index(f"end {orphan}") < log.index(f"start {third}")
             or log.index(f"end {mcp}") < log.index(f"start {third}"),
             log)
         running = 0
@@ -1026,6 +1042,128 @@ qa.main()
         result = self.run_guard("check-test-shell-waits.py")
         self.assertEqual(result.returncode, 1, result.stderr)
 
+    def test_static_rejects_raw_child_reexec(self):
+        """A hand-rolled test-binary re-exec fails the static guard by file:line."""
+        self.prepare_ci()
+        shutil.copy2(SCRIPTS / "check-test-child-runners.py", self.scripts)
+        allowlist = self.scripts / "test-child-runner-allowlist.json"
+        allowlist.write_text("[]")
+        fixture = self.root / "crates/example/tests/fixture.rs"
+        fixture.parent.mkdir(parents=True)
+        raw = (
+            "fn reexec() {\n"
+            "    let mut command = std::process::Command::new(std::env::current_exe().unwrap());\n"
+            "    command.output().unwrap();\n"
+            "}\n"
+        )
+        fixture.write_text(raw)
+        result = self.run_guard("ci-guardrails.sh", "--static")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("crates/example/tests/fixture.rs:", result.stderr)
+        self.assertIn("orbit_common::test_env::run_child_test", result.stderr)
+        cases = [
+            "    command.status().unwrap();\n",
+            "    command.spawn().unwrap();\n",
+            "    command.wait().unwrap();\n",
+            "    std::process::Command::new(env!(\"CARGO_BIN_EXE_orbit\")).output().unwrap();\n",
+        ]
+        for body in cases:
+            with self.subTest(body=body):
+                if "CARGO_BIN_EXE" in body:
+                    fixture.write_text("fn reexec() {\n" + body + "}\n")
+                else:
+                    fixture.write_text(raw.replace("    command.output().unwrap();\n", body))
+                result = self.run_guard("check-test-child-runners.py")
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("fixture.rs:", result.stderr)
+                self.assertIn("orbit_common::test_env::run_child_test", result.stderr)
+        sibling = self.root / "crates/example/src/process/tests/wait.rs"
+        sibling.parent.mkdir(parents=True)
+        fixture.write_text("")
+        sibling.write_text(raw)
+        result = self.run_guard("check-test-child-runners.py")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("wait.rs:", result.stderr)
+
+    def test_child_runner_delimiter_literals_do_not_hide_reexec(self):
+        shutil.copy2(SCRIPTS / "check-test-child-runners.py", self.scripts)
+        (self.scripts / "test-child-runner-allowlist.json").write_text("[]")
+        fixture = self.root / "crates/example/tests/fixture.rs"
+        fixture.parent.mkdir(parents=True)
+        for delimiter in ("{", "}", "(", ")", "[", "]", ";", ",", "<", ">"):
+            for literal in (f'"{delimiter}"', f'r#"{delimiter}"#'):
+                with self.subTest(literal=literal):
+                    prefix = f"fn reexec() {{\n    let note = {literal}; // }} {{\n"
+                    fixture.write_text(prefix + "}\n")
+                    clean = self.run_guard("check-test-child-runners.py")
+                    self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
+                    fixture.write_text(prefix +
+                        "    std::process::Command::new(std::env::current_exe().unwrap()).output().unwrap();\n}\n")
+                    result = self.run_guard("check-test-child-runners.py")
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn("crates/example/tests/fixture.rs:3:", result.stderr)
+
+    def test_child_runner_multiline_string_does_not_hide_reexec(self):
+        """A string literal spanning lines is one string, so its `}` line cannot close the function."""
+        shutil.copy2(SCRIPTS / "check-test-child-runners.py", self.scripts)
+        (self.scripts / "test-child-runner-allowlist.json").write_text("[]")
+        fixture = self.root / "crates/example/tests/fixture.rs"
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text(
+            "fn reexec() {\n"
+            "    let note = \"{\n"
+            "}\n"
+            "\";\n"
+            "    std::process::Command::new(std::env::current_exe().unwrap()).output().unwrap();\n"
+            "}\n"
+        )
+        result = self.run_guard("check-test-child-runners.py")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("crates/example/tests/fixture.rs:5:", result.stderr)
+
+    def test_static_allows_run_child_test_and_rejects_stale_exception(self):
+        """The same re-exec passes through run_child_test; a leftover exception fails."""
+        self.prepare_ci()
+        shutil.copy2(SCRIPTS / "check-test-child-runners.py", self.scripts)
+        allowlist = self.scripts / "test-child-runner-allowlist.json"
+        allowlist.write_text("[]")
+        fixture = self.root / "crates/example/tests/fixture.rs"
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text(
+            "fn reexec() {\n"
+            "    let mut command = std::process::Command::new(std::env::current_exe().unwrap());\n"
+            "    orbit_common::test_env::run_child_test(&mut command);\n"
+            "}\n"
+            "fn within() {\n"
+            "    let mut command = std::process::Command::new(env!(\"CARGO_BIN_EXE_orbit\"));\n"
+            "    orbit_common::test_env::run_child_test_within(&mut command);\n"
+            "}\n"
+            "fn prose() {\n"
+            "    let note = \"Command::new(std::env::current_exe()).output()\";\n"
+            "    // Command::new(std::env::current_exe()).spawn()\n"
+            "    let _ = note;\n"
+            "    std::process::Command::new(\"git\").output().unwrap();\n"
+            "}\n"
+        )
+        result = self.run_guard("ci-guardrails.sh", "--static")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        fixture.write_text("")
+        exception = dict(path="crates/example/tests/fixture.rs", function="reexec",
+                         call=".output()", ordinal=0, reason="bounded fixture")
+        allowlist.write_text(json.dumps([exception]))
+        result = self.run_guard("check-test-child-runners.py")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("stale test-child-runner exception", result.stderr)
+        exception["reason"] = ""
+        fixture.write_text(
+            "fn reexec() {\n"
+            "    std::process::Command::new(std::env::current_exe().unwrap()).output().unwrap();\n"
+            "}\n"
+        )
+        allowlist.write_text(json.dumps([exception]))
+        result = self.run_guard("check-test-child-runners.py")
+        self.assertEqual(result.returncode, 1, result.stderr)
+
     def test_fast_propagates_desktop_ui_failure(self):
         self.prepare_ci()
         self.write_executable(self.scripts / "check-desktop-ui.sh", "#!/bin/bash\nexit 17\n")
@@ -1108,13 +1246,12 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual([{key: row[key] for key in ("argv", *lint)} for row in builds],
                          [dict(argv=folded, **lint)])
         # The workspace test listing runs in the main shell; nextest keeps its priority.
-        listed = [row for row in observed if row["argv"][:2] == ["nextest", "list"]]
-        foreground = {key: listed[0][key] for key in ("idle", "nice", "nice_attempted")}
         # Cargo fingerprints this environment. The nextest listing must see
         # exactly the folded build's values, or it recompiles every workspace
         # member before it can run.
         listing = [row for row in observed if row["argv"][:2] == ["nextest", "list"]]
         self.assertEqual(len(listing), 1, observed)
+        foreground = {key: listing[0][key] for key in ("idle", "nice", "nice_attempted")}
         self.assertFalse(any("--doc" in row["argv"] for row in observed), observed)
         for row in listing:
             self.assertEqual({key: row[key] for key in lint}, lint, row)
@@ -1122,17 +1259,10 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         # reuses that pass's check of the workspace instead of repeating it.
         # Production code denies clippy::disallowed_methods through the
         # crate-root attributes, which override this `-A`.
-        production_lint = {
-            "RUSTC_WORKSPACE_WRAPPER": "clippy-driver",
-            "CLIPPY_ARGS": (
-                "-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__"
-                "-A__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__"
-            ),
-        }
         production = [row for row in observed if row["argv"][:1] in (["check"], ["doc"])]
         self.assertEqual([row["argv"][0] for row in production], ["check", "doc"], observed)
         for row in production:
-            self.assertEqual({key: row[key] for key in production_lint}, production_lint, row)
+            self.assertEqual({key: row[key] for key in lint}, lint, row)
         # The production clippy and documentation chain overlaps the
         # tests only at lowered priority, so it cannot take CPU time from their
         # deadline assertions; the tests themselves keep normal priority. The
@@ -1494,19 +1624,10 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertIn(["cargo-deny.sh", "check"], calls)
 
     def dependency_result(self, owner, dependency, kind=None):
-        # The guard scans this single-file module and fails closed when it is
-        # absent [ORB-23019]; the stubbed rg finds no matches in the empty file.
-        app = self.root / "crates/orbit-core/src/application"
-        app.mkdir(parents=True, exist_ok=True)
-        (app / "tag_instructions.rs").write_text("")
-        config = self.root / "crates/orbit-config/src"
-        for relative in ("aliases.rs", "seeding.rs", "config_document.rs", "plugin_enablement.rs",
-                         "unknown.rs", "resolved/compatibility.rs", "config_io.rs", "crew_defaults.rs"):
-            path = config / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.touch()
-        for relative in ("crew", "operation", "provider_limit", "layering", "registry"):
-            (config / relative).mkdir(exist_ok=True)
+        # The guard fails closed on an absent scan path; the empty layout is
+        # shared with test-check-dependency-direction.py, each suite keeping its
+        # own temporary root.
+        dependency_guard_fixture.create_scan_layout(self.root)
         (self.root / "Cargo.toml").write_text(
             '[workspace]\n[workspace.dependencies]\ntempfile = "3"\n'
         )
@@ -1624,6 +1745,13 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                     "-p",
                     "orbit-exec",
                     "-p",
+                    "orbit-cli",
+                    "--test",
+                    "sandbox_profile_goldens",
+                ],
+                [
+                    "test",
+                    "-p",
                     "orbit-core",
                     "-p",
                     "orbit-cli",
@@ -1660,7 +1788,7 @@ print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered ou
         result = self.run_guard("check-goldens.sh", "--update")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertEqual(len(calls), 9)
+        self.assertEqual(len(calls), 10)
         for call in calls:
             self.assertEqual(call["help"], "1")
             self.assertEqual(call["output"], "1")
@@ -1678,7 +1806,7 @@ print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered ou
         # A successful cargo with no harness summary is missing evidence,
         # not a pass. check-goldens.sh runs under `set -euo pipefail`, so
         # the first summary-less leg's refusal exits the script: only that
-        # first refusal is exercised here, not all nine legs.
+        # first refusal is exercised here, not all ten legs.
         self.write_executable(
             self.bin / "cargo",
             '#!/usr/bin/env python3\nimport json, os, sys\n'
@@ -1750,6 +1878,52 @@ print(f"test result: ok. {len(matched)} passed; 0 failed; 0 ignored; "
             calls,
             "the dead filter must run in its own invocation to be judged alone",
         )
+
+    def test_goldens_missing_sandbox_target_fails(self):
+        """A deleted sandbox golden target must fail even if the other package still has one.
+
+        Cargo exits 0 when any selected package has the named --test target, so
+        one invocation of both packages would pass after either file was removed.
+        The stub below reproduces that: a combined orbit-exec and orbit-core
+        invocation still reports a pass, and an invocation whose only non-anchor
+        package is the missing one exits the way Cargo does.
+        """
+        self.write_executable(
+            self.bin / "cargo",
+            '''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["GUARD_TEST_LOG"], "a") as log:
+    log.write(json.dumps(sys.argv[1:]) + "\\n")
+args = sys.argv[1:]
+packages = []
+index = 0
+while index < len(args):
+    if args[index] == "-p" and index + 1 < len(args):
+        packages.append(args[index + 1])
+        index += 2
+        continue
+    index += 1
+missing = os.environ["MISSING_SANDBOX_PACKAGE"]
+owners = {"orbit-exec", "orbit-core"}
+if ("sandbox_profile_goldens" in args and missing in packages
+        and not owners <= set(packages)):
+    print(f"error: no test target named `sandbox_profile_goldens` in `{missing}`", file=sys.stderr)
+    raise SystemExit(101)
+print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s")
+''',
+        )
+        for missing in ("orbit-exec", "orbit-core"):
+            with self.subTest(missing=missing):
+                self.log.write_text("")
+                result = self.run_guard(
+                    "check-goldens.sh",
+                    env_overrides={"MISSING_SANDBOX_PACKAGE": missing},
+                )
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(
+                    "no test target named `sandbox_profile_goldens`",
+                    result.stdout + result.stderr,
+                )
 
     def use_real_ripgrep(self):
         real_rg = shutil.which("rg")
@@ -1847,6 +2021,17 @@ print(f"test result: ok. {len(matched)} passed; 0 failed; 0 ignored; "
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("terminal state queried outside the output sink",
                       result.stdout + result.stderr)
+        for source in ('fn f() { let _ = std::env::var("TERM"); }\n',
+                       'fn f() { let _ = unsafe { libc::isatty(1) }; }\n'):
+            with self.subTest(source=source):
+                (cli_src / "bad.rs").write_text(source)
+                result = self.run_guard("check-terminal-state-guard.sh")
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("terminal state queried outside the output sink",
+                              result.stdout + result.stderr)
+        (cli_src / "bad.rs").write_text('fn f() { let _ = Column::new("TERM"); }\n')
+        result = self.run_guard("check-terminal-state-guard.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 class DocLinkGuardrailTests(unittest.TestCase):
@@ -2346,14 +2531,39 @@ sys.exit(int(os.environ.get("FAKE_DENY_EXIT", "0")))
         result = self.run_script("check", env_overrides={"FAKE_DENY_EXIT": "42"})
         self.assertEqual(result.returncode, 42)
 
-    def test_real_cargo_deny_with_writable_fixture(self):
+    def _require_real_cargo_deny(self):
         if not shutil.which("cargo-deny"):
+            if os.environ.get("GITHUB_ACTIONS") == "true":
+                self.fail("cargo-deny must be installed in CI")
             self.skipTest("cargo-deny not installed")
-        system_advisory = Path.home() / ".cargo/advisory-dbs"
-        if not system_advisory.exists():
-            self.skipTest("system advisory-dbs snapshot not found")
+
+    def _write_minimal_advisory_db(self, fixture):
+        db = fixture / "advisory-db-3157b0e258782691"
+        advisory_dir = db / "crates" / "fixture-unused-crate"
+        advisory_dir.mkdir(parents=True)
+        (advisory_dir / "RUSTSEC-2099-0001.md").write_text(
+            '```toml\n[advisory]\nid = "RUSTSEC-2099-0001"\npackage = "fixture-unused-crate"\n'
+            'date = "2099-01-01"\nurl = "https://example.invalid/advisory"\n```\n\n'
+            "# Fixture\n\nUnused offline fixture advisory.\n"
+        )
+        for args in (
+            ("init", "-q"),
+            ("config", "user.name", "Guard fixture"),
+            ("config", "user.email", "guard@example.invalid"),
+            ("remote", "add", "origin", "https://github.com/RustSec/advisory-db"),
+            ("add", "."),
+            ("commit", "-qm", "fixture advisory db"),
+        ):
+            subprocess.run(["git", "-C", str(db), *args], check=True, capture_output=True, text=True)
+
+    def test_real_cargo_deny_with_writable_fixture(self):
+        self._require_real_cargo_deny()
         fixture = self.root / "fixture-advisory-dbs"
-        shutil.copytree(str(system_advisory), str(fixture))
+        system_advisory = Path.home() / ".cargo/advisory-dbs"
+        if system_advisory.exists():
+            shutil.copytree(str(system_advisory), str(fixture))
+        else:
+            self._write_minimal_advisory_db(fixture)
         env = dict(os.environ, CARGO_DENY_DB_PATH=str(fixture), CARGO_DENY_DISABLE_FETCH="1")
         res = subprocess.run(
             ["/bin/bash", str(SCRIPTS / "cargo-deny.sh"), "check", "advisories"],
@@ -2365,8 +2575,7 @@ sys.exit(int(os.environ.get("FAKE_DENY_EXIT", "0")))
         self.assertTrue((fixture / "db.lock").exists())
 
     def test_real_cargo_deny_missing_data_fails_without_skip(self):
-        if not shutil.which("cargo-deny"):
-            self.skipTest("cargo-deny not installed")
+        self._require_real_cargo_deny()
         empty_fixture = self.root / "empty-dbs"
         empty_fixture.mkdir()
         env = dict(os.environ, CARGO_DENY_DB_PATH=str(empty_fixture), CARGO_DENY_DISABLE_FETCH="1")
@@ -3075,6 +3284,83 @@ class ScriptFailClosedTests(unittest.TestCase):
         self.assertNotIn("ORB-999", result.stderr)
         self.assertIn("crates/example/src/lib.rs", result.stderr)
 
+    def test_public_ids_after_multiline_test_module_text_are_rejected(self):
+        guard = self.root / "scripts/check-public-artifact-ids.py"
+        shutil.copy2(SCRIPTS / guard.name, guard)
+        source = self.root / "crates/fixture/src/lib.rs"
+        source.parent.mkdir(parents=True)
+        source.write_text('''#[cfg(test)]
+mod actual_tests {
+    const _LABEL: &str = "ORB-123456";
+}
+
+pub fn production() {
+    {
+        let _example = "
+#[cfg(test)]
+mod fixtures {
+";
+    }
+    println!("ORB-999999");
+}
+''')
+        result = subprocess.run([sys.executable, str(guard)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("crates/fixture/src/lib.rs:13:", result.stderr)
+        self.assertIn("ORB-999999", result.stderr)
+        self.assertNotIn("ORB-123456", result.stderr)
+
+    def test_public_ids_after_restricted_visibility_test_module_only_flag_production(self):
+        guard = self.root / "scripts/check-public-artifact-ids.py"
+        shutil.copy2(SCRIPTS / guard.name, guard)
+        source = self.root / "crates/fixture/src/lib.rs"
+        source.parent.mkdir(parents=True)
+        test_module = '#[cfg(test)]\npub(crate)mod tests { const LABEL: &str = "ORB-999"; }\n'
+        source.write_text(test_module)
+        ignored_test_id = subprocess.run([sys.executable, str(guard)], capture_output=True, text=True)
+        self.assertEqual(ignored_test_id.returncode, 0,
+                         ignored_test_id.stdout + ignored_test_id.stderr)
+
+        source.write_text(test_module + 'pub const LABEL: &str = "ORB-999";\n')
+        binary = self.root / "fixture-tests"
+        compiled = subprocess.run(["rustc", "--test", str(source), "-o", str(binary)],
+                                 capture_output=True, text=True)
+        self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+
+        production_id = subprocess.run([sys.executable, str(guard)], capture_output=True, text=True)
+        self.assertEqual(production_id.returncode, 1, production_id.stdout + production_id.stderr)
+        self.assertIn("crates/fixture/src/lib.rs:3:", production_id.stderr)
+        self.assertIn("ORB-999", production_id.stderr)
+        self.assertNotIn("crates/fixture/src/lib.rs:2:", production_id.stderr)
+
+    def test_public_ids_inside_multiline_strings_are_rejected(self):
+        guard = self.root / "scripts/check-public-artifact-ids.py"
+        shutil.copy2(SCRIPTS / guard.name, guard)
+        source = self.root / "crates/fixture/src/lib.rs"
+        source.parent.mkdir(parents=True)
+        rejected = {
+            "raw": 'fn schema() {\n    let _sql = r#"\n        -- note ORB-10021\n    "#;\n}\n',
+            "normal": 'fn note() {\n    let _text = "\n        ADR-004\n    ";\n}\n',
+            "raw hashes": 'fn note() {\n    let _text = r##"\n        F2026-01-001\n    "##;\n}\n',
+        }
+        for name, text in rejected.items():
+            with self.subTest(name=name):
+                source.write_text(text)
+                result = subprocess.run([sys.executable, str(guard)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("concrete artifact ID", result.stderr)
+        accepted = {
+            "comment": 'fn note() {\n    // ORB-10021\n    let _text = r#"\n        fine\n    "#;\n}\n',
+            "block": 'fn note() {\n    /*\n    ORB-10021\n    */\n    let _text = r#"fine"#;\n}\n',
+            "block comment beside a string": 'fn note() { /* " ORB-10021 */ let _text = "fine"; }\n',
+            "char": "fn note() {\n    let _quote = '\"';\n    // ORB-1\n    let _text = r#\"fine\"#;\n}\n",
+        }
+        for name, text in accepted.items():
+            with self.subTest(name=name):
+                source.write_text(text)
+                result = subprocess.run([sys.executable, str(guard)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_crate_guides_require_ripgrep(self):
         guard = self.root / "scripts/check-crate-agent-guides.sh"
         shutil.copy2(SCRIPTS / guard.name, guard)
@@ -3119,6 +3405,40 @@ class ScriptFailClosedTests(unittest.TestCase):
                     self.assertIn("HOME is unset", result.stderr)
                     self.assertEqual(result.stdout, "")
                     self.assertFalse(marker.exists(), "derived a path before rejecting HOME")
+
+    def test_smoke_npm_registry_isolation_rejects_scratch_allocation_failure(self):
+        script = SCRIPTS / "smoke-npm-install.sh"
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        real_mktemp = shutil.which("mktemp")
+        self.assertIsNotNone(real_mktemp)
+        mktemp_stub = bin_dir / "mktemp"
+        mktemp_stub.write_text(f"""#!/bin/sh
+for arg in "$@"; do
+    case "$arg" in
+        *registry-check*)
+            exit 1
+            ;;
+    esac
+done
+exec {shlex.quote(real_mktemp)} "$@"
+""")
+        mktemp_stub.chmod(0o755)
+
+        env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
+        result = subprocess.run(
+            ["/bin/bash", str(script), "--dry-run-registry-isolation"],
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("FAIL:", result.stderr)
+        self.assertIn("diagnostic scratch allocation failed", result.stderr)
+        self.assertNotIn("refused workspace init still registered a workspace", result.stderr)
+        self.assertNotIn("empty registry was reported as registered", result.stderr)
+        self.assertFalse(Path("/out").exists(), "opened /out on the host")
+        self.assertFalse(Path("/err").exists(), "opened /err on the host")
 
 
 class DoctestFenceGuardTests(unittest.TestCase):
@@ -3212,6 +3532,32 @@ class DoctestFenceGuardTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assert_clean(source)
 
+    def test_unterminated_fence_does_not_hide_a_later_items_runnable_fence(self):
+        # Each item has its own docs: item A's unclosed text fence cannot
+        # swallow item B's runnable fence.
+        source = (
+            "/// ```text\n"
+            "/// unclosed\n"
+            "pub fn first() {}\n"
+            "\n"
+            "/// ```rust\n"
+            "/// assert_eq!(1, 2);\n"
+            "/// ```\n"
+            "pub fn second() {}\n"
+        )
+        self.assert_fence_at(source, 5)
+        block = "/// ```text\npub fn first() {}\n/**\n```rust\nassert_eq!(1, 2);\n```\n*/\npub fn second() {}\n"
+        self.assert_fence_at(block, 4)
+
+    def test_fence_spans_attributes_and_plain_comments_within_one_item(self):
+        self.assert_clean(
+            "/// ```rust,ignore\n"
+            "#[cfg(\n    test\n)]\n"
+            "// a plain comment\n"
+            "/// assert_eq!(1, 2);\n"
+            "/// ```\n"
+        )
+
     def test_ignored_and_non_rust_fences_pass(self):
         cases = {
             "line-ignore": "/// ```rust,ignore\n/// assert_eq!(1, 2);\n/// ```\n",
@@ -3244,11 +3590,28 @@ class PythonPreflightTests(unittest.TestCase):
         scratch.mkdir(parents=True, exist_ok=True)
         self.temporary = tempfile.TemporaryDirectory(prefix="python-preflight-", dir=scratch)
         self.addCleanup(self.temporary.cleanup)
-        self.bin = Path(self.temporary.name)
-        self.log = self.bin / "cargo.log"
+        self.root = Path(self.temporary.name)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.scripts = self.root / "scripts"
+        self.scripts.mkdir()
+        (self.root / ".github/workflows").mkdir(parents=True)
+        shutil.copy2(SCRIPTS.parent / "Makefile", self.root / "Makefile")
+        shutil.copy2(SCRIPTS / "require-python.sh", self.scripts / "require-python.sh")
+        shutil.copy2(SCRIPTS / "ci-guardrails.sh", self.scripts / "ci-guardrails.sh")
+        self.stub_script("check-dependency-direction.sh",
+                         '#!/bin/sh\necho "check-dependency-direction.sh $*" >> "$GUARD_TEST_LOG"\n')
+        self.stub_script("build-budget.py",
+                         '#!/bin/sh\necho "build-budget.py $*" >> "$GUARD_TEST_LOG"\n')
+        self.log = self.root / "gate.log"
 
     def stub(self, name, text):
         path = self.bin / name
+        path.write_text(text)
+        path.chmod(0o755)
+
+    def stub_script(self, name, text):
+        path = self.scripts / name
         path.write_text(text)
         path.chmod(0o755)
 
@@ -3261,11 +3624,11 @@ class PythonPreflightTests(unittest.TestCase):
 
     def run_command(self, *command):
         return subprocess.run(list(command), env=self.env(), text=True, capture_output=True,
-                              cwd=SCRIPTS.parent)
+                              cwd=self.root)
 
     def test_python_39_fails_naming_minimum_and_interpreter(self):
         self.stub_python("3.9.6")
-        result = self.run_command("/bin/bash", str(SCRIPTS / "require-python.sh"))
+        result = self.run_command("/bin/bash", str(self.scripts / "require-python.sh"))
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "")
         self.assertEqual(len(result.stderr.strip().splitlines()), 1, result.stderr)
@@ -3276,25 +3639,26 @@ class PythonPreflightTests(unittest.TestCase):
         for version in ("3.11.0", "3.12.4", "3.14.4", "4.0.0"):
             with self.subTest(version=version):
                 self.stub_python(version)
-                result = self.run_command("/bin/bash", str(SCRIPTS / "require-python.sh"))
+                result = self.run_command("/bin/bash", str(self.scripts / "require-python.sh"))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout + result.stderr, "")
 
     def test_unreadable_version_and_missing_python_fail(self):
         self.stub("python3", "#!/bin/sh\nexit 1\n")
-        result = self.run_command("/bin/bash", str(SCRIPTS / "require-python.sh"))
+        result = self.run_command("/bin/bash", str(self.scripts / "require-python.sh"))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unknown version", result.stderr)
         (self.bin / "python3").unlink()
-        result = subprocess.run(["/bin/bash", str(SCRIPTS / "require-python.sh")],
+        result = subprocess.run(["/bin/bash", str(self.scripts / "require-python.sh")],
                                 env=dict(self.env(), PATH=str(self.bin)),
-                                text=True, capture_output=True)
+                                text=True, capture_output=True, cwd=self.root)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("no python3 is on PATH", result.stderr)
 
     def test_make_gates_stop_before_running_anything_else(self):
         self.stub_python("3.9.6")
         self.stub("cargo", '#!/bin/sh\necho "$@" >> "$GUARD_TEST_LOG"\n')
+        self.stub("rg", "#!/bin/sh\nexit 0\n")
         for target in ("ci-fast", "ci-lint"):
             with self.subTest(target=target):
                 result = self.run_command("make", target, f"CARGO={self.bin}/cargo")
@@ -3307,10 +3671,140 @@ class PythonPreflightTests(unittest.TestCase):
         self.stub_python("3.9.6")
         self.stub("rg", "#!/bin/sh\nexit 1\n")
         self.stub("cargo", '#!/bin/sh\necho "$@" >> "$GUARD_TEST_LOG"\n')
-        result = self.run_command("/bin/bash", str(SCRIPTS / "ci-guardrails.sh"), "--fast")
+        result = self.run_command("/bin/bash", str(self.scripts / "ci-guardrails.sh"), "--fast")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Python >= 3.11", result.stderr)
         self.assertFalse(self.log.exists(), "a gate ran before the Python preflight")
+
+
+class RemovedDashboardLabelTests(unittest.TestCase):
+    """Drive scripts/check-removed-dashboard-labels.py in a miniature repo."""
+
+    LABEL = "Old Panel Title"
+    PANEL = "crates/orbit-web/assets/dashboard/js/panel.js"
+    DOC = "docs/design/user-interface/1_overview.md"
+
+    def setUp(self):
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(prefix="removed-labels-", dir=scratch)
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        scripts = self.root / "scripts"
+        scripts.mkdir(parents=True)
+        shutil.copy2(SCRIPTS / "check-removed-dashboard-labels.py", scripts)
+        (scripts / "removed-dashboard-labels-allowlist.json").write_text("[]\n")
+        self.panel = self.root / self.PANEL
+        self.panel.parent.mkdir(parents=True)
+        self.panel.write_text(f'export const title = "{self.LABEL}";\n')
+        self.doc = self.root / self.DOC
+        self.doc.parent.mkdir(parents=True)
+        self.doc.write_text(f"# Overview\n\nThe {self.LABEL} panel lists things.\n")
+        self.env = dict(os.environ, GIT_CEILING_DIRECTORIES=str(self.root.parent))
+        for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "CI_TEST_BASE"):
+            self.env.pop(key, None)
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.name", "Guard fixture")
+        self.git("config", "user.email", "guard@example.invalid")
+        self.git("add", ".")
+        self.git("commit", "-qm", "fixture base")
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+
+    def git(self, *arguments):
+        result = subprocess.run(["git", "-C", str(self.root), *arguments],
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result
+
+    def run_check(self):
+        return subprocess.run(
+            [sys.executable, str(self.root / "scripts/check-removed-dashboard-labels.py")],
+            env=self.env, text=True, capture_output=True)
+
+    def write_allowlist(self, entries):
+        (self.root / "scripts/removed-dashboard-labels-allowlist.json").write_text(
+            json.dumps(entries))
+
+    def test_removed_label_still_named_in_doc_fails(self):
+        self.panel.write_text("export const title = 'New Panel';\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(f'"{self.LABEL}"', result.stderr)
+        self.assertIn(self.PANEL, result.stderr)
+        self.assertIn(f"{self.DOC}:3", result.stderr)
+
+    def test_removed_label_with_doc_updated_passes(self):
+        self.panel.write_text("export const title = 'New Panel';\n")
+        self.doc.write_text("# Overview\n\nThe New Panel lists things.\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_readded_label_passes(self):
+        self.panel.write_text(f"export const heading = \"{self.LABEL}\";\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_allowlisted_label_passes_and_bad_entries_fail(self):
+        self.panel.write_text("export const title = 'New Panel';\n")
+        self.write_allowlist([{"label": self.LABEL, "doc": self.DOC,
+                                "reason": "Historical note keeps the old name."}])
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.write_allowlist([{"label": self.LABEL, "doc": self.DOC, "reason": " "}])
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("needs a reason", result.stderr)
+        self.write_allowlist([
+            {"label": self.LABEL, "doc": self.DOC,
+             "reason": "Historical note keeps the old name."},
+            {"label": "Never Removed Label", "doc": self.DOC,
+             "reason": "Kept for history."},
+        ])
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("stale allowlist entry", result.stderr)
+        self.doc.write_text("# Overview\n\nThe New Panel lists things.\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("stale allowlist entry", result.stderr)
+        self.assertIn(self.LABEL, result.stderr)
+        self.assertNotIn("Never Removed Label", result.stderr)
+
+    def test_earlier_allowlist_entry_survives_an_unrelated_removal(self):
+        self.panel.write_text(
+            'export const title = "New Panel";\n'
+            'export const drawer = "Side Drawer Title";\n')
+        self.doc.write_text(f"# Overview\n\nThe {self.LABEL} panel lists things.\n")
+        self.write_allowlist([{"label": self.LABEL, "doc": self.DOC,
+                                "reason": "Delivery A kept the historical name."}])
+        self.git("add", ".")
+        self.git("commit", "-qm", "delivery A merged")
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+        self.panel.write_text('export const title = "New Panel";\n')
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("stale", result.stderr)
+        self.assertNotIn(self.LABEL, result.stderr)
+
+    def test_removed_lowercase_visible_label_still_named_in_doc_fails(self):
+        # Lowercase copy such as `text: "hide unconfirmed successes"` is a
+        # visible label, not a class list. The class list beside it must not
+        # be reported.
+        label = "hide unconfirmed successes"
+        self.panel.write_text(
+            f'el("button", {{ class: "action approve", text: "{label}" }});\n')
+        self.doc.write_text(
+            f"# Overview\n\nThe {label} control lists things.\n\nThe action approve class styles it.\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "lowercase label base")
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+        self.panel.write_text("export const title = 'New Panel';\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(f'"{label}"', result.stderr)
+        self.assertIn(self.PANEL, result.stderr)
+        self.assertIn(f"{self.DOC}:3", result.stderr)
+        self.assertNotIn("action approve", result.stderr)
 
 
 # These cases assert rendezvous, relative completion times or lane ordering.

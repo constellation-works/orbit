@@ -1,43 +1,16 @@
-//! The untrusted half of audit attribution: what a caller says it is.
-//!
-//! Orbit's trusted identity (`audit_events.role`, and the canonical actor
-//! projection derived from it) is only populated when the caller arrived
-//! through a path Orbit can authenticate — a managed run envelope or the local
-//! CLI. An MCP server started from a client's own config has no such envelope,
-//! so its `role` is `unverified` and its canonical actor is `unattributed`.
-//!
-//! That is the correct label, and this module does not widen it. It adds a
-//! *second, separate* field for the identity the caller claimed about itself,
-//! so unauthenticated traffic is attributable-but-labelled instead of
-//! anonymous [ORB-10890].
-//!
-//! ## The one rule
-//!
-//! A self-reported value is evidence, never a credential. It is stored in its
-//! own column, never merged into `role` or the `actor_*` projection, never
-//! consulted by an authentication or authorization decision, and never
-//! rendered without being marked unverified. Anyone who can reach the MCP
-//! server can supply any string here; a surface that forgets the marking turns
-//! a published per-agent number into a forgeable one.
-//!
-//! ## Absent is not a default
-//!
-//! [`normalize_self_reported_actor`] returns `None` for a missing, blank, or
-//! malformed claim. `None` means anonymous. It must never be filled in from a
-//! neighbouring session, a previous call, or the trusted label — inheriting
-//! another actor's identity is exactly the failure this field exists to make
-//! visible.
+//! Keeps caller claims separate from trusted attribution to prevent impersonation.
+//! Display them as unverified and leave absent claims anonymous; they grant no authority.
 
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-/// Longest self-reported actor Orbit will record.
+/// Maximum UTF-8 byte length accepted for a trimmed self-reported actor claim
+/// before [`normalize_self_reported_actor`] runs.
 ///
-/// Generous for a client name or model string (`claude-code`, `claude-opus-5`)
-/// and far short of anything that could be used to smuggle a payload through
-/// the audit log.
+/// Unicode lowercasing can expand the claim, so the recorded value may be
+/// longer than this limit.
 pub const SELF_REPORTED_ACTOR_MAX_LEN: usize = 128;
 
 /// The label an aggregate reports for traffic that claimed no identity at all.
@@ -97,14 +70,19 @@ impl FromStr for AuditAttribution {
     }
 }
 
-/// Reduce a caller-supplied identity claim to the bounded form Orbit records,
-/// or `None` when there is nothing usable to record.
+/// Normalize a caller-supplied identity claim for an audit record, or `None`
+/// when there is nothing usable to record.
+///
+/// The length limit applies to the trimmed claim before normalization. Unicode
+/// lowercasing can expand the claim, so the returned value may be longer than
+/// [`SELF_REPORTED_ACTOR_MAX_LEN`].
 ///
 /// Rejects (as anonymous, never as an error the caller can act on):
 /// - a claim that is empty or only whitespace,
 /// - a claim containing a control character — newlines and tabs would let a
 ///   claim forge extra fields in any line-oriented rendering of the audit log,
-/// - a claim longer than [`SELF_REPORTED_ACTOR_MAX_LEN`] after trimming.
+/// - a claim whose trimmed UTF-8 byte length exceeds
+///   [`SELF_REPORTED_ACTOR_MAX_LEN`] (checked before normalization).
 ///
 /// Accepted claims are lowercased and have internal whitespace runs collapsed
 /// to a single space, so `Claude  Code` and `claude code` aggregate as one

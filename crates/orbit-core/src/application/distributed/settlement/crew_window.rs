@@ -1,85 +1,13 @@
 //! The crews a pull drain's window can run [ORB-13941], and what a claimed
 //! leaf's settlement phase means for the operator.
 
+pub use crate::application::contracts::{OwnerBusyBackoff, PullCrewWindow};
 use chrono::{DateTime, Duration, Utc};
-use orbit_store::contracts::{AdmissionCrewCapability, AdmissionCrewPressure, LocalPullPhase};
+use orbit_store::contracts::{AdmissionCrewCapability, LocalPullPhase};
 use orbit_types::identity::same_crew_family;
 use orbit_types::workflow::{CrewExclusion, CrewExclusionSource, PullAuthExclusion};
-use serde::Serialize;
 
 use super::entries::RefusedPullSettlement;
-
-/// The crews a pull drain's window can run, and those it will not [ORB-13941].
-///
-/// The window's provider preflight, taken once when it opened, minus every
-/// crew a claimed leaf of this drain found unusable since — an authentication
-/// failure excludes every configured crew of that provider account for the
-/// window (a crew that sets `env` is an account of its own [ORB-17288]), a
-/// capacity failure only the leaf's crew and only for a bounded backoff
-/// [ORB-15791] — and, when the drain was submitted with `--allow-crew`,
-/// outside that restriction [ORB-14174]. Derived from the drain's run input
-/// and its own admission records, so it survives a follower restart and a
-/// resume, and ends with the drain.
-///
-/// [ORB-20400] Every name match counts a crew's family: an exclusion of
-/// `opus` keeps `opus@medium` off the window too, and a capacity backoff of
-/// `opus@medium` backs off `opus` and its other effort references, which
-/// share the model and account.
-///
-/// [ORB-14697] Each pass also excludes the crews this host's provider-limit
-/// store finds at their usage limit, until the reading lapses. The reason
-/// names the host whose local store supplied the reading; an owner's reading
-/// does not gate a follower. A timed
-/// exclusion — a provider limit or a capacity backoff — carries its `until`,
-/// and the crew is runnable again within the same window once it passes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PullCrewWindow {
-    /// When the preflight ran; `None` while the drain has not taken one.
-    pub checked_at: Option<DateTime<Utc>>,
-    /// Crews the window can run claimed work as. `None` without a preflight
-    /// or restriction: then every crew not excluded is offered to the owner.
-    pub runnable: Option<Vec<String>>,
-    /// The drain's `--allow-crew` restriction, by canonical registry name;
-    /// `None` when it runs every crew the window can.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub allowed: Option<Vec<String>>,
-    /// The crew a task naming none runs as on this host.
-    pub default_crew: Option<String>,
-    /// Currently excluded crews and reasons; auth exclusions may recover.
-    pub excluded: Vec<CrewExclusion>,
-    /// Active provider auth failures and their delayed recovery schedule.
-    pub auth_exclusions: Vec<PullAuthExclusion>,
-    /// Why this host claims nothing more for the rest of the window: a
-    /// claimed leaf of this drain was released for a failure of the host
-    /// itself, whatever its crew [ORB-14257]. `None` while the host runs.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub host_suppressed: Option<String>,
-    /// Whether `host_suppressed` came from repeated busy-owner episodes
-    /// rather than a failure of this host: the remedy is on the owner.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub host_suppressed_by_busy_owner: bool,
-    /// While set, this drain requests no claim until `until`: a claimed leaf
-    /// was released because the owner's store stayed locked, which blames
-    /// neither this host nor its crew. It lifts by itself in the same window;
-    /// repeated episodes suppress the host instead.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub owner_busy_backoff: Option<OwnerBusyBackoff>,
-    /// Crews the window can run once its timed exclusions lift, before
-    /// `allowed` narrows them. The owner's reviewer runs as one of these:
-    /// the restriction selects the implementation crews a claim may carry,
-    /// not the review it owes.
-    #[serde(skip)]
-    pub(super) reviewable: Option<Vec<String>>,
-    /// Preflight crews permitted by the effective allowlist, before timed holds.
-    #[serde(skip)]
-    pub(super) permitted: Option<Vec<String>>,
-    /// Per-crew weekly usage pressure from this host's own readings
-    /// [ORB-17773], recomputed each pass like the limit gate. Empty under
-    /// `workflow.crew_selection = "static"`: then the capability reports
-    /// none and the owner orders this follower's offers as before.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub usage_pressure: Vec<AdmissionCrewPressure>,
-}
 
 impl PullCrewWindow {
     /// What the drain declares to the owner on each request.
@@ -215,19 +143,6 @@ const OWNER_BUSY_BACKOFF_MINUTES: i64 = 5;
 /// one backoff covers — so only an owner that stays busy across backoffs
 /// reaches the bound.
 pub(crate) const OWNER_BUSY_EPISODE_LIMIT: u32 = 3;
-
-/// A drain's bounded backoff from an owner whose store stayed locked.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct OwnerBusyBackoff {
-    /// When requests resume by themselves.
-    pub until: DateTime<Utc>,
-    /// Busy-owner episodes in this window so far, this one included.
-    pub episodes: u32,
-    /// Releases for the owner's busy store in this window so far.
-    pub releases: u32,
-    /// The latest such release.
-    pub reason: String,
-}
 
 /// Whether a drain's busy-owner releases hold it briefly or suppress its
 /// host for the rest of the window.

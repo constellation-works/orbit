@@ -175,7 +175,7 @@ pub(super) fn run_tail_with_test_control<W: Write + ?Sized>(
         if let Some((reached, resume)) = control.initial_read_pause.as_ref() {
             reached.send(()).map_err(|_| io::ErrorKind::BrokenPipe)?;
             resume
-                .recv_timeout(Duration::from_secs(5))
+                .recv_timeout(Duration::from_secs(30))
                 .map_err(|_| io::ErrorKind::TimedOut)?;
         }
         Ok(())

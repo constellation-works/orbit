@@ -24,11 +24,15 @@
 //! A commit on the base branch is not yet a fix: the commit that introduced
 //! the finding is on the base branch by construction. The commits the finding
 //! itself names (any commit in its description, and the landed commit of each
-//! `regression_from` target) never count as covering. When such a commit is
-//! known, a covering commit must also be a strict descendant of every one of
-//! them, and when the task declares path selectors it must touch one of those
-//! paths. A finding that names no commit and declares no path has nothing to
-//! relate a citation to, so it is never proven; anything less is not proof.
+//! `regression_from` target) never count as covering. A target with no
+//! recorded delivery names no commit. A pinned delivery definition that
+//! cannot be read or parsed is not that case: the observation fails and the
+//! proof is refused, so a citation of the culprit itself cannot close the
+//! finding. When a culprit commit is known, a covering commit must also be a
+//! strict descendant of every one of them, and when the task declares path
+//! selectors it must touch one of those paths. A finding that names no commit
+//! and declares no path has nothing to relate a citation to, so it is never
+//! proven; anything less is not proof.
 
 use orbit_common::OrbitError;
 use orbit_types::task::{
@@ -203,17 +207,18 @@ impl VerifiedNoDiff {
         let on_base = cited
             .into_iter()
             .filter(|(_, full)| {
-                pinned_revision.is_none_or(|revision| is_ancestor(source, full, revision))
+                pinned_revision
+                    .is_none_or(|revision| matches!(source.is_ancestor(full, revision), Ok(true)))
                     && base_refs
                         .iter()
-                        .any(|reference| is_ancestor(source, full, reference))
+                        .any(|reference| matches!(source.is_ancestor(full, reference), Ok(true)))
             })
             .collect::<Vec<_>>();
         if on_base.is_empty() {
             return Err(format!("no cited commit is on {base}"));
         }
 
-        let named = named_commits(runtime, source, task);
+        let named = named_commits(runtime, source, task)?;
         if named.is_empty() && paths.is_empty() {
             return Err(
                 "the finding names no commit and no path to relate a cited commit to".into(),
@@ -225,7 +230,7 @@ impl VerifiedNoDiff {
                 !named.contains(full)
                     && named
                         .iter()
-                        .all(|culprit| is_ancestor(source, culprit, full))
+                        .all(|culprit| matches!(source.is_ancestor(culprit, full), Ok(true)))
                     && (paths.is_empty() || touches_paths(source, full, paths))
             })
             .collect::<Vec<_>>();
@@ -426,8 +431,16 @@ fn hex_tokens<'a>(
 
 /// The full SHAs of the commits the finding itself names: every commit that
 /// resolves from its description, and the landed commit of each
-/// `regression_from` target that delivery observed as merged.
-fn named_commits(runtime: &OrbitRuntime, source: &dyn SourceGit, task: &Task) -> Vec<String> {
+/// `regression_from` target that delivery observed as merged. A target never
+/// delivered names no commit. An unreadable or unparseable pinned definition
+/// is an observation failure, not a missing delivery; any such failure
+/// refuses the proof, since a missed culprit would let a proof citing it
+/// close the finding.
+fn named_commits(
+    runtime: &OrbitRuntime,
+    source: &dyn SourceGit,
+    task: &Task,
+) -> Result<Vec<String>, String> {
     let mut named = hex_tokens([task.description.as_str()], abbreviated_sha)
         .iter()
         .filter_map(|sha| resolve_commit(source, sha))
@@ -436,9 +449,17 @@ fn named_commits(runtime: &OrbitRuntime, source: &dyn SourceGit, task: &Task) ->
         if relation.relation_type != TaskRelationType::RegressionFrom {
             continue;
         }
-        let landed = runtime
-            .delivery_observation(relation.target.as_str(), None)
-            .ok()
+        let observation = match runtime.delivery_observation(relation.target.as_str(), None) {
+            Ok(observation) => Some(observation),
+            Err(OrbitError::TaskDeliveryUnavailable(_)) => None,
+            Err(error) => {
+                return Err(format!(
+                    "the delivery of regression culprit {} could not be read: {error}",
+                    relation.target
+                ));
+            }
+        };
+        let landed = observation
             .filter(|observation| observation.landing.status == LandingObservationStatus::Merged)
             .and_then(|observation| observation.landing.landed_commit)
             .and_then(|sha| resolve_commit(source, &sha));
@@ -446,7 +467,7 @@ fn named_commits(runtime: &OrbitRuntime, source: &dyn SourceGit, task: &Task) ->
     }
     named.sort();
     named.dedup();
-    named
+    Ok(named)
 }
 
 fn resolve_commit(source: &dyn SourceGit, revision: &str) -> Option<String> {
@@ -459,12 +480,6 @@ fn resolve_commit(source: &dyn SourceGit, revision: &str) -> Option<String> {
         ])
         .ok()
         .filter(|sha| !sha.is_empty())
-}
-
-fn is_ancestor(source: &dyn SourceGit, ancestor: &str, descendant: &str) -> bool {
-    source
-        .git(&["merge-base", "--is-ancestor", ancestor, descendant])
-        .is_ok()
 }
 
 /// Whether `commit` changes a path any of the task's selectors cover. A merge

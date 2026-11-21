@@ -65,6 +65,32 @@ pub(super) fn complete<H: RuntimeHost + ?Sized>(
     }))
 }
 
+/// [`complete`] for a delivery whose completion write rechecks its pinned
+/// evidence on the owner. Evidence a task edit made stale is a typed
+/// [`DeliveryRefusal::EvidenceStale`]: record the stop, with the candidate left
+/// in review, and hold the run instead of failing it.
+pub(super) fn complete_or_hold_stale_evidence<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &LandingPass,
+    observed: HandoffCandidate,
+    evidence: &Value,
+) -> Result<Value, OrbitError> {
+    match complete(host, context, observed, evidence) {
+        Err(OrbitError::DeliveryRefused {
+            refusal: refusal @ DeliveryRefusal::EvidenceStale,
+            message,
+        }) => Err(hold_pr(
+            host,
+            context,
+            &json!({"evidence": "stale_at_completion"}),
+            false,
+            refusal,
+            &format!("{message}; the candidate stays in review"),
+        )?),
+        other => other,
+    }
+}
+
 /// Keep diagnostics in the existing opaque evidence string. The enclosing
 /// durable attempt supplies its attempt number/run; `observed` stays empty.
 pub(super) fn stop_pr<H: RuntimeHost + ?Sized>(

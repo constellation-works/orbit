@@ -338,6 +338,11 @@ pub fn execute_job_with_resume(
             // A parked delivery already recorded its stop. Neither repair nor
             // failure handoff may change its task or candidate on this run.
             Err((error @ DispatchError::DeliveryRefused { .. }, _, _)) => return Err(error),
+            // The deferred footprint stayed held past its wait and no editor
+            // started: the published candidate is exactly as adopted, so
+            // neither final recovery nor the failure handoff may touch it.
+            // Finalization holds the run for a later admission.
+            Err((error @ DispatchError::FootprintUnavailable(_), _, _)) => return Err(error),
             Err((error, unsuccessful, failure_code)) => {
                 let verdict = attempt_final_recovery(
                     job,
@@ -357,8 +362,12 @@ pub fn execute_job_with_resume(
                 // [ORB-19430] A read-only completion observation whose bounded
                 // retry is spent, or that has none, holds: nothing changed on
                 // the forge, so the held run resumes completion once it answers.
+                // [ORB-25661] The same hold follows a park or current-policy
+                // requeue final recovery successfully applied for the verified
+                // unchanged candidate: its recorded disposition stands, and no
+                // failure handoff runs over it.
                 if let (
-                    FinalRecoveryVerdict::Skipped,
+                    FinalRecoveryVerdict::Skipped | FinalRecoveryVerdict::CompletionObservationHeld,
                     DispatchError::CompletionObservationUnavailable { action, message },
                 ) = (&verdict, &error)
                 {

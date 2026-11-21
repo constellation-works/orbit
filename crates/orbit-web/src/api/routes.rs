@@ -5,9 +5,17 @@ use axum::routing::{get, post, put};
 use super::*;
 
 /// Tell long-lived streaming handlers (`/api/log/stream`, `/api/events/stream`
-/// and lease notice streams) to close cooperatively. Called once from [`crate::serve::shutdown_signal`] so the bounded
-/// graceful-drain deadline in `crate::serve::run_server` rarely has to be relied on
-/// (ORB-11246).
+/// and lease notice streams) to close cooperatively, so the bounded
+/// graceful-drain deadline in `crate::serve::run_server` rarely has to be relied
+/// on (ORB-11246).
+///
+/// The dashboard server's shutdown sequence in `run_server` calls this once. Its
+/// graceful-shutdown future first waits for either the shutdown signal from
+/// [`crate::shutdown::shutdown_signal`] or a lifecycle boundary such as an
+/// Orbit upgrade, and records any handover target for the lifecycle case. It
+/// then calls this function, and only then notifies the grace-period timer.
+/// The standalone lease listener (`serve_lease_listener`) also awaits the
+/// signal future but does not call this function.
 pub(crate) fn request_shutdown() {
     log::request_shutdown();
     events::request_shutdown();
@@ -66,6 +74,7 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         )
         .route("/notices/{id}/close", post(notices::close_notice))
         .route("/crews", get(crews::list_crews))
+        .route("/crews/all", get(crews::list_all_crews))
         // Config inspection and editing [ORB-12724]. Workspace-scoped like the
         // rest of the API: `?workspace=` selects which `.orbit/config.toml`
         // layers over the global file.
@@ -205,6 +214,10 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         )
         .route("/routines", get(routines::list_routine_health))
         .route("/routines/toggle", post(routines::toggle_routine))
+        .route(
+            "/routines/breaker",
+            post(routine_breaker::control_routine_breaker),
+        )
         .route(
             "/routines/trigger",
             post(schedule_edits::set_routine_trigger),

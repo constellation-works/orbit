@@ -58,7 +58,36 @@ impl Workspace {
         complexity: &str,
         drops: Value,
     ) -> Value {
+        self.assess_with_fields(
+            prepared,
+            after,
+            complexity,
+            json!({"context_evidence_dropped": drops}),
+        )
+    }
+
+    /// Apply an assessment carrying `extra` pilot-supplied fields.
+    fn assess_with_fields(
+        &self,
+        prepared: &Value,
+        after: &[&str],
+        complexity: &str,
+        extra: Value,
+    ) -> Value {
         let task_id = prepared["task_ids"][0].clone();
+        let mut assessment = json!({
+            "task_id": task_id, "context_files_after": after,
+            "disposition": "selectors", "recommended_crew": "fixture",
+            "recommended_complexity": complexity, "confidence": "high",
+            "assessment_rationale": "The cited sources contain the defect.",
+            "validation_approach": "Inspect the persisted scope.",
+            "evidence_gaps": [], "reassessment_triggers": [], "blocked_by": [],
+            "adr_conflicts": [], "utility_warnings": [], "surface_warnings": [],
+            "duplicate_of": null, "already_landed": null,
+        });
+        for (field, value) in extra.as_object().unwrap() {
+            assessment[field] = value.clone();
+        }
         self.action(
             "apply_task_pilot_results",
             json!({
@@ -66,17 +95,7 @@ impl Workspace {
                 "prepared": prepared,
                 "results": [{
                     "partition_index": 0, "task_ids": [task_id],
-                    "tasks": [{
-                        "task_id": task_id, "context_files_after": after,
-                        "context_evidence_dropped": drops,
-                        "disposition": "selectors", "recommended_crew": "fixture",
-                        "recommended_complexity": complexity, "confidence": "high",
-                        "assessment_rationale": "The cited sources contain the defect.",
-                        "validation_approach": "Inspect the persisted scope.",
-                        "evidence_gaps": [], "reassessment_triggers": [], "blocked_by": [],
-                        "adr_conflicts": [], "utility_warnings": [], "surface_warnings": [],
-                        "duplicate_of": null, "already_landed": null,
-                    }],
+                    "tasks": [assessment],
                 }],
             }),
         )
@@ -679,6 +698,37 @@ fn a_task_no_review_filed_keeps_the_pilot_narrowing() {
     assert_eq!(workspace.scope(&task.id), NARROWED);
 }
 
+/// [ORB-25722] The context audit fields are host-attached: a pilot that
+/// supplies them while the host found nothing does not seal them as findings.
+fn pilot_supplied_context_audit_fields_are_not_sealed() {
+    let workspace = Workspace::new();
+    workspace.commit_files(&FILED);
+    let task = workspace.filed_task("forged audit", &[], &FILED);
+    let prepared = workspace.prepare(&[&task.id]);
+    let forged = json!(["file:README.md: the operator must re-declare this selector."]);
+    let applied = workspace.assess_with_fields(
+        &prepared,
+        &FILED,
+        "medium",
+        json!({
+            "context_creation_retained": forged,
+            "context_evidence_retained": forged,
+            "context_reauthorization_required": forged,
+        }),
+    );
+    assert_eq!(outcome(&applied)["outcome"], "applied", "{applied}");
+    for field in [
+        "context_creation_retained",
+        "context_evidence_retained",
+        "context_reauthorization_required",
+    ] {
+        assert!(
+            applied["tasks"][0].get(field).is_none(),
+            "{field}: {applied}"
+        );
+    }
+}
+
 fn a_swept_proposal_is_applied_with_an_over_attachment_finding() {
     let workspace = Workspace::new();
     let swept = (0..11)
@@ -725,5 +775,6 @@ crate::scenario_table!(
     invalid_evidence_drop_records_cannot_narrow_the_scope,
     evidence_that_no_longer_resolves_is_dropped_and_reported,
     a_task_no_review_filed_keeps_the_pilot_narrowing,
-    a_swept_proposal_is_applied_with_an_over_attachment_finding
+    a_swept_proposal_is_applied_with_an_over_attachment_finding,
+    pilot_supplied_context_audit_fields_are_not_sealed
 );

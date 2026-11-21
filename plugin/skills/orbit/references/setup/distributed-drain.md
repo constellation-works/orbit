@@ -183,10 +183,10 @@ clean-tree report artifact exists, and the leaf hands off `NoDiff` without a PR.
 The claim host then runs the required commands on the base and replays each
 selector outside the agent sandbox before handoff, pinning the passing logs. A
 failing replay fails the claim, as does one that runs no test or prints a skip;
-an empty selector list or a selector outside that grammar is refused before
-anything runs. A candidate that also changes the base is refused for this
-outcome. The owner accepts the checkpoint only when it names this task and its
-pinned base and its selectors still admit.
+an empty selector list, more than 16 selectors, or a selector outside that
+grammar is refused before anything runs. A candidate that also changes the base
+is refused for this outcome. The owner accepts the checkpoint only when it
+names this task and its pinned base and its selectors still admit.
 
 Artifact-backed evidence stays authoritative. A verifier report or already-landed
 report that the implementer supplies is imported and verified first, and a
@@ -200,13 +200,35 @@ not type each one, and otherwise lands the handoff with the task left in
 
 
 A claimed PR leaf that fails before its normal commit preserves unfinished
-implementer changes as one marked partial commit at
-`refs/orbit/candidates/<task>/<run>` on `origin`. Its branch, index and files
-stay unchanged. Settlement records that ref in task history, and the next
-claim on any host fetches and applies it through `resume_candidate` with
-trigger `implementation`, so the implementer finishes the existing work.
+implementer changes as one marked partial commit, titled `Partial implementation
+candidate [<task>]`. Its branch, index and files stay unchanged. The leaf then
+pushes that commit to `refs/orbit/candidates/<task>/<run>` on `origin`. A pushed
+commit is durable: the next claim on any host fetches and applies it through
+`resume_candidate` with trigger `implementation`, so the implementer finishes the
+existing work. Settlement records the durable ref in task history.
+
+If `origin` refuses the push, the leaf keeps the partial commit and the push
+diagnostic, but there is no durable ref. The commit is host-local: only the host
+that holds it can resume it, and only while that host's checkout still has the
+commit. Pushing the commit to `origin` by hand does not make it resumable
+elsewhere, because placement reads the recorded durable ref.
+
+To find where the commit is, run `orbit task show <task-id>` and read the owner's
+latest `claim_candidate_kept` history entry. It names the kept head, and its note
+reads either `durable at <ref>` or `only on <machine> (pushing it failed:
+<diagnostic>)`, followed by `stopped at <step>`. To have the work resumed, run the
+follower's drain on the machine named after `only on`, from its replica checkout
+(see the follower's drain section below). Its claim of this task resumes the
+commit on that host. A claim on any other host implements the task afresh from
+the base. The owner's history then records a `candidate_resume` entry whose note
+starts `fresh:` and reads `reason=not_durable` with the kept head, and the holding
+host is still offered the commit. Route the drain to the holding host when the
+commit's work should continue.
+
 Protected paths, environment files, symlinks and gitlinks refuse the entire
-snapshot with a settlement diagnostic; `.orbit/tmp/` scratch is excluded.
+snapshot with a settlement diagnostic. Nothing is kept in that case, so the owner
+writes no `claim_candidate_kept` entry, and the reason reaches the owner in the
+claim's release failure. `.orbit/tmp/` scratch is excluded.
 
 ## Start a follower's drain
 

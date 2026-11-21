@@ -3,8 +3,8 @@ summary: "MCP Session Context — Design"
 type: design
 title: "MCP Session Context — Design"
 owner: codex
-last_updated: 2026-11-06
-last_validated: 2026-11-06
+last_updated: 2026-11-20
+last_validated: 2026-11-20
 status: Implemented
 feature: mcp-session-context
 doc_role: design
@@ -71,7 +71,7 @@ For Codex, `orbit mcp init` writes `env_vars` on the local `[mcp_servers.orbit]`
 
 Global tools do not require a workspace selector.
 
-orbit.task.show and orbit.task.artifact action get are the ID-resolved exceptions to the precedence above. Task IDs are a machine-global primary key in the coordination task registry, so a call carrying only {id} resolves the owning workspace from that registry and ignores the workspace announced at initialize — the announced workspace is ambient, like cwd, and is the right default for authoring but the wrong one for addressing an ID. A workspace passed in the tool input still wins and still filters: the call binds that workspace, and a task owned elsewhere is not found there. When the registry knows the ID but its owning checkout is unreadable or inactive, the error names that workspace rather than reporting the ID as unknown.
+orbit.task.show and orbit.task.artifact action get [ORB-23280] are the ID-resolved exceptions to the precedence above. Task IDs are a machine-global primary key in the coordination task registry, so a call carrying only {id} resolves the owning workspace from that registry and ignores the workspace announced at initialize — the announced workspace is ambient, like cwd, and is the right default for authoring but the wrong one for addressing an ID. A workspace passed in the tool input still wins and still filters: the call binds that workspace, and a task owned elsewhere is not found there. When the registry knows the ID but its owning checkout is unreadable or inactive, the error names that workspace rather than reporting the ID as unknown.
 
 ## 4. Adapter and tool surface
 
@@ -79,13 +79,13 @@ OrbitToolServer holds one context for its stdio session. Initialize may replace 
 
 tools/list is derived from the authoritative host and its validated result is cached per session/selector. Each definition carries a ToolSchema, one McpToolScope (Global or WorkspaceRequired) and, for a plugin tool that declares one, its own input schema, which is advertised as written instead of the schema derived from the ToolSchema parameters ([plugins §4.2](../plugins/1_scope.md#42-execution-protocol)). Scope controls only workspace-selector injection and server dispatch; it is not authorization metadata.
 
-Workspace-bound schema decoration follows the same session selector. In particular, the `orbit.friction` action `add` and `orbit.friction` action `update` tag schemas enumerate the bound workspace's operator-owned taxonomy with descriptions. Before a workspace is bound, the schema falls back to the shipped taxonomy and explicitly notes that `.orbit/frictions/tags.yaml` may extend it. The tools-list cache key includes the normalized session selector so re-initializing a connection for another workspace cannot retain the previous workspace's vocabulary.
+Workspace-bound schema decoration follows the same session selector. In particular, the `orbit.friction` action `add` and `orbit.friction` action `update` [ORB-23280] tag schemas enumerate the bound workspace's operator-owned taxonomy with descriptions. Before a workspace is bound, the schema falls back to the shipped taxonomy and explicitly notes that `.orbit/frictions/tags.yaml` may extend it. The tools-list cache key includes the normalized session selector so re-initializing a connection for another workspace cannot retain the previous workspace's vocabulary.
 
 Because tools/list is answered per session, the injected selector documents the session the caller is actually in: optional in a bound session, required in an unbound one. The JSON schema also marks `workspace` required for an unbound workspace-scoped call. Federated tools/list requires its host-qualified selector. `orbit.task.show` keeps its v1 ID-only exemption. `orbit.search` additionally advertises that at least one of `query` or `tag` must be supplied; its MCP surface does not expose the CLI `path` filter.
 
 For a plugin tool that does not declare `workspace` in its input schema, the MCP adapter moves that argument into the per-call routing context before dispatch. The plugin receives only its declared input. If the plugin itself declares `workspace`, the adapter preserves it in the plugin input.
 
-The host selects the advertised surface at startup. A role (`--role` or `machine.mcp.role`: `operator`, `manager`, `resident`, `agent` or `reader`) bundles toolsets for one kind of session, and `--toolset` or `machine.mcp.toolsets` adds named toolsets beside it [ORB-21263]. With no role, the default profile advertises tasks, artifacts, friction, search, attention and workspace discovery. `--operator` selects the operator profile and authority. A managed run advertises the default profile plus its admitted required and granted tools. A call outside the selected set is refused as disabled, and a role or toolset trims advertisement only: it grants no authority. Agent invocation and its opt-in toolset were removed [ORB-20383].
+The host selects the advertised surface at startup. A role (`--role` or `machine.mcp.role`: `operator`, `manager`, `resident`, `agent` or `reader`) bundles toolsets for one kind of session, and `--toolset` or `machine.mcp.toolsets` adds named toolsets beside it [ORB-21263]. With no role, the default profile advertises tasks, artifacts, friction, search, attention and workspace discovery [ORB-23279]. `--operator` selects the operator profile and authority. A managed run advertises the default profile plus its admitted required and granted tools. A call outside the selected set is refused as disabled, and a role or toolset trims advertisement only: it grants no authority. Opt-in toolsets arrived in [ORB-20234]; agent invocation was hidden from operator sessions [ORB-20382], moved into the `agent-invoke` toolset [ORB-20414], then removed [ORB-20383].
 
 ## 5. Core dispatch and audit
 
@@ -122,8 +122,12 @@ Capability authorization is no longer deferred: Core's tool chokepoint authorize
 - [ORB-14656] — made malformed federated replies surface an unknown outcome with call identity.
 - [ORB-20234] — added opt-in MCP toolsets.
 - [ORB-20382] — hid agent invocation from operator sessions.
+- [ORB-20383] — removed agent invocation and the opt-in `agent-invoke` toolset.
 - [ORB-20414] — moved agent invocation into the opt-in `agent-invoke` toolset.
 - [ORB-21263] — grouped MCP toolsets into the `--role` surfaces (operator, manager, resident, agent, reader).
+- [ORB-23052] — admitted only a peer whose uid matches the server uid on `orbit mcp listen`, refusing differing, missing, ambiguous or unreadable peer uids before any read.
+- [ORB-23279] — selected the default and operator MCP tool profiles for `orbit mcp serve`.
+- [ORB-23280] — consolidated MCP tool families behind action fields, including `orbit.task.artifact` action `get` and `orbit.friction` actions `add` and `update`.
 - [ORB-20450] — added `ORBIT_ACTIVITY_MCP_TOOLSETS` to the documented Codex `env_vars` list.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -9,6 +9,11 @@ mod vision_probe;
 /// type name. The parent verifies that libtest ran exactly the requested test;
 /// the child keeps the test's existing behavioral assertions.
 pub(crate) fn run_isolated_test(function_name: &str) -> bool {
+    run_isolated_test_with_env(function_name, &[])
+}
+
+/// Re-execute one mutable fixture in a child with additional fixture-only env.
+pub(crate) fn run_isolated_test_with_env(function_name: &str, env: &[(&str, &str)]) -> bool {
     const CHILD: &str = "ORBIT_TEST_ISOLATED_CHILD";
     let test_name = function_name
         .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
@@ -22,20 +27,21 @@ pub(crate) fn run_isolated_test(function_name: &str) -> bool {
     orbit_common::test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
     });
-    let output = command
+    for (name, value) in env {
+        command.env(*name, *value);
+    }
+    command
         .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
         .env(CHILD, test_name)
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
-        .current_dir(home.path())
-        .output()
-        .expect("isolated test child");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "{test_name}: {stdout}\n{stderr}");
-    assert!(
-        stdout.contains("test result: ok. 1 passed; 0 failed; 0 ignored;"),
-        "child did not execute exactly one test ({test_name}): {stdout}\n{stderr}"
+        .current_dir(home.path());
+    let output = orbit_common::test_env::run_child_test(&mut command, test_name, home.path());
+    orbit_common::test_env::assert_child_test_passed(
+        test_name,
+        output.status,
+        output.stdout,
+        output.stderr,
     );
     true
 }

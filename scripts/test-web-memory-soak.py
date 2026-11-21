@@ -155,6 +155,42 @@ class WebMemorySoakCliTests(unittest.TestCase):
                         os.killpg(process.pid, signal.SIGKILL)
                     process.communicate(timeout=5)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "soak startup uses Linux /proc")
+    def test_non_200_dashboard_response_is_a_named_failure(self):
+        # urlopen raises for 4xx/5xx, so a failing route must surface as the
+        # harness's own message with its status, never as a traceback.
+        scratch = ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as tmp:
+            work = Path(tmp)
+            for name in ("home", "repo", "root"):
+                (work / name).mkdir()
+            (work / "fixture.json").write_text(json.dumps({"counts": {}}))
+            backend = work / "failing-backend"
+            backend.write_text(
+                f"#!{sys.executable}\n"
+                "import http.server\n"
+                "class Handler(http.server.BaseHTTPRequestHandler):\n"
+                "    def do_GET(self):\n"
+                "        self.send_error(500)\n"
+                "    def log_message(self, *args):\n"
+                "        pass\n"
+                "server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)\n"
+                "print(f'http://127.0.0.1:{server.server_address[1]}', flush=True)\n"
+                "server.serve_forever()\n"
+            )
+            backend.chmod(0o755)
+            result = subprocess.run(
+                [sys.executable, "-B", str(SOAK), "--bin", str(backend),
+                 "--work-dir", str(work), "--startup-timeout", "10"],
+                cwd=work, env={**os.environ, "HOME": str(work / "home")},
+                text=True, capture_output=True, timeout=120,
+            )
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, combined)
+        self.assertIn("web-memory-soak: GET /api/workspaces returned 500", result.stderr, combined)
+        self.assertNotIn("Traceback", combined)
+
 
 class _RecordingStdout:
     def __init__(self, events):

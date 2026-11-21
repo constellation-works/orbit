@@ -64,6 +64,7 @@ mod load_failure;
 mod lock_busy_pass;
 mod replay_crew;
 mod reservation_grants;
+mod shared_base_repair;
 mod sqlite_busy_pass;
 mod submission_notices;
 mod task_pilot_warning;
@@ -372,8 +373,9 @@ fn empty_context_is_admitted_on_auto_ship_and_readiness_without_locks() {
     }
 }
 
-/// The shipped documentation chore mints with a locking scope, so a drain can
-/// admit it without pilot preparation and withhold overlapping work.
+/// The shipped documentation chore mints with a narrow locking scope, so once
+/// approved a drain admits it from backlog, with a non-empty lock reservation,
+/// without pilot preparation while unrelated work holds other files.
 fn doc_duties_mints_an_admissible_locking_context() {
     let (_root, runtime, repo) = runtime();
     write_files(&repo, &["crates/foo/src/lib.rs"]);
@@ -1065,21 +1067,24 @@ fn a_replica_refuses_foreground_and_detached_replay_before_persisting_a_run() {
     assert_eq!(replica.list_job_runs(Default::default()).unwrap(), before);
 }
 
-/// An expired claim stops gating dispatch with no release.
+/// An expired claim stops gating dispatch with no release. The lease is long
+/// enough that a stalled host cannot let it lapse before the held check, and
+/// the wait for it to lapse is bounded by a far larger deadline.
 fn an_expired_workspace_claim_stops_gating_dispatch() {
+    const LEASE_SECONDS: u64 = 4;
     let (_root, runtime, _repo) = runtime();
     as_operator(
         &runtime,
         "orbit.workspace.claim.acquire",
-        json!({ "model": "claude", "ttl_seconds": 1 }),
+        json!({ "model": "claude", "ttl_seconds": LEASE_SECONDS }),
     );
     assert!(matches!(
         ship(&runtime, None),
         OrbitError::WorkspaceClaimHeld(_)
     ));
 
-    // Bounded wait for the one-second lease to lapse.
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // Bounded wait for the lease to lapse.
+    let deadline = Instant::now() + Duration::from_secs(LEASE_SECONDS + 30);
     let after = loop {
         let error = ship(&runtime, None);
         if !matches!(error, OrbitError::WorkspaceClaimHeld(_)) || Instant::now() > deadline {

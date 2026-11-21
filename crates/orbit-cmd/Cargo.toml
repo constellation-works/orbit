@@ -12,6 +12,9 @@ stability = "internal"
 # The CLI process-test harness enables this only through orbit-cli's
 # dev-dependency. Release builds omit dev-dependencies and debug-only seams.
 test-release-api-base = []
+# Per-thread seams for failure paths that need no host load; enabled only from
+# dev-dependencies.
+test-support = []
 
 [lints]
 workspace = true

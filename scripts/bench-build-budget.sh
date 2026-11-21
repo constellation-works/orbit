@@ -11,6 +11,16 @@ PROCESSES="${ORBIT_BUILD_BUDGET_BENCH_PROCESSES:-4}"
 SLOTS="${ORBIT_BUILD_BUDGET_BENCH_SLOTS:-2}"
 JOBS="${ORBIT_BUILD_BUDGET_BENCH_JOBS:-2}"
 
+# `seq 1 "$PROCESSES"` sits in a `for` word list, where `set -e` ignores its
+# failure: a non-numeric or zero count would run no builds yet exit 0. Leading
+# zeros are decimal padding: `10#` normalizes them so `01` runs like `1`.
+# The 18-digit cap keeps the value inside Bash's signed 64-bit arithmetic.
+if [[ ! "$PROCESSES" =~ ^0*[1-9][0-9]{0,17}$ ]]; then
+  printf 'bench-build-budget: ORBIT_BUILD_BUDGET_BENCH_PROCESSES must be a positive integer, got: %s\n' "$PROCESSES" >&2
+  exit 2
+fi
+PROCESSES=$((10#$PROCESSES))
+
 refuse() {
   printf 'bench-build-budget: refusing paths: %s\n' "$*" >&2
   return 1
@@ -129,7 +139,10 @@ if [[ "${1:-}" == "__arm" ]]; then
     else
       (
         cd "$tree"
-        ORBIT_BUILD_BUDGET_DIR="$WORKDIR/locks" ORBIT_BUILD_SLOTS="$SLOTS" \
+        # A caller already under a budget (HELD=1) or with it disabled (BUDGET=0)
+        # would make the wrapper skip admission, so this arm would run unbudgeted.
+        env -u ORBIT_BUILD_BUDGET_HELD -u ORBIT_BUILD_BUDGET \
+          ORBIT_BUILD_BUDGET_DIR="$WORKDIR/locks" ORBIT_BUILD_SLOTS="$SLOTS" \
           ORBIT_CARGO_JOBS="$JOBS" CARGO_TARGET_DIR="$target" CARGO_INCREMENTAL=0 \
           "$WRAPPER" -- cargo check -p "$PACKAGE" --offline
       ) &

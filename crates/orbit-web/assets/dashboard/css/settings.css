@@ -379,8 +379,6 @@
 }
 .host-drain.active { color: var(--state-pending); }
 .host-drain.throttled { color: var(--state-failed); }
-.host-switch { color: var(--accent); font: 12px/1.4 var(--font-sans); font-weight: 400; }
-.host-showing { color: var(--fg-mute); font: 12px/1.4 var(--font-sans); font-weight: 400; }
 .host-reach, .host-skew { font: 12px/1.5 var(--font-sans); }
 .host-reach.ok { color: var(--state-success); }
 .host-reach.down, .host-reach.warn, .host-skew.warn { color: var(--state-failed); }

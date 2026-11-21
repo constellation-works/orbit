@@ -4,7 +4,7 @@ summary: Cut and verify an Orbit release across agent plugins, Cargo, GitHub art
 tags: [operations, release, plugins, npm, signing]
 paths: [".github/workflows/release.yml", "plugin/**", "npm/**", "scripts/release-check.sh"]
 related_features: [orbit-docs-plugin]
-last_validated: 2026-10-27
+last_validated: 2026-11-16
 ---
 
 # Release Orbit
@@ -151,7 +151,7 @@ object, removing a root type constraint, and inserting a provably disjoint
    Cargo, npm, and `server.json` version bumps, lockfile refresh, and any smoke
    update together.
 
-7. **Tag the merge commit.**
+7. **Tag the release commit on `agent-main`.**
 
    ```bash
    git tag -a vX.Y.Z -m "orbit vX.Y.Z"
@@ -193,10 +193,10 @@ object, removing a root type constraint, and inserting a provably disjoint
    `agent-main`: no job is a merge gate. Failures are queued for asynchronous
    remediation by the `qa-sweep` auto-task. Then
    follow [RELEASING.md §10b](../../RELEASING.md#10b-promote-to-main) to
-   fast-forward `main` to the tagged release commit (not the
-   moving `agent-main` tip), and
+   open a promotion PR for the tagged release commit (not the
+   moving `agent-main` tip) into `main`, and
    [§10c](../../RELEASING.md#10c-confirm-main-and-agent-main-agree) to
-   confirm the branches agree in the same session.
+   confirm `main` holds that commit, in the same session.
 
 9. **Publish npm manually** from the merged commit:
 

@@ -14,7 +14,7 @@ use orbit_types::task::Task;
 use orbit_types::workflow::handoff::{
     AlreadyLandedEvidence as Evidence, already_landed_scope as scope, already_landed_scope_matches,
 };
-use orbit_types::workflow::{ValidationOutcome, ValidationRole};
+use orbit_types::workflow::{DeliveryRefusal, ValidationOutcome, ValidationRole};
 use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
@@ -84,6 +84,64 @@ impl Verifier for AlreadyLanded {
         tested_head: &str,
         supplied_regression_from: &[String],
     ) -> Result<Value, OrbitError> {
+        Self::verify_evidence(
+            host,
+            task,
+            workspace,
+            run_id,
+            tested_head,
+            supplied_regression_from,
+            ScopeChange::Fails,
+        )
+    }
+
+    /// The owner's recheck of a handoff's pinned evidence. A task whose scope
+    /// changed after the evidence was captured is a deliberate, typed
+    /// [`DeliveryRefusal::EvidenceStale`], so the owner's landing holds the
+    /// candidate in review; every other refusal keeps its plain failure.
+    fn verify_handoff_at_revision_with_supplied_regression_from<H: RuntimeHost + ?Sized>(
+        host: &H,
+        task: &Task,
+        workspace: &Path,
+        run_id: &str,
+        checkpoint: &Value,
+        supplied_regression_from: &[String],
+    ) -> Result<(), OrbitError> {
+        let head = checkpoint["base_sha"].as_str().unwrap_or_default();
+        let checked = Self::verify_evidence(
+            host,
+            task,
+            workspace,
+            run_id,
+            head,
+            supplied_regression_from,
+            ScopeChange::StaleEvidence,
+        )?;
+        Self::compare_checkpoint(checkpoint, &checked)
+    }
+}
+
+/// What a task scope that differs from the recorded evidence's scope raises.
+#[derive(Clone, Copy)]
+enum ScopeChange {
+    /// The implement-side commit step: the agent's evidence is wrong, so the
+    /// step fails.
+    Fails,
+    /// The owner's recheck at acceptance or landing: the evidence went stale,
+    /// a refusal that parks the run.
+    StaleEvidence,
+}
+
+impl AlreadyLanded {
+    fn verify_evidence<H: RuntimeHost + ?Sized>(
+        host: &H,
+        task: &Task,
+        workspace: &Path,
+        run_id: &str,
+        tested_head: &str,
+        supplied_regression_from: &[String],
+        scope_change: ScopeChange,
+    ) -> Result<Value, OrbitError> {
         let report = Self::artifact(host, &task.id, ARTIFACT)?;
         let evidence: Evidence = serde_json::from_slice(&report.content).map_err(|error| {
             let diagnostic = error.to_string();
@@ -102,10 +160,16 @@ impl Verifier for AlreadyLanded {
         let expected_scope = scope(task, &comments);
         if !already_landed_scope_matches(&evidence.scope, task, &comments, supplied_regression_from)
         {
-            return Err(Self::refused(scope_changed(
-                &evidence.scope,
-                &expected_scope,
-            )));
+            let refused = Self::refused(scope_changed(&evidence.scope, &expected_scope));
+            return Err(match (scope_change, refused) {
+                (ScopeChange::StaleEvidence, OrbitError::Execution(message)) => {
+                    OrbitError::DeliveryRefused {
+                        refusal: DeliveryRefusal::EvidenceStale,
+                        message,
+                    }
+                }
+                (_, refused) => refused,
+            });
         }
         if !run_in_lineage(host, run_id, &evidence.run_id)? {
             return Err(Self::refused(
@@ -205,7 +269,7 @@ fn shape_hints(diagnostic: &str, content: &[u8]) -> String {
         })
     });
     if unknown_role {
-        hints.push_str("; validation[] role must be one of required, expected_failure, excluded, superseded, diagnostic (use required, with outcome passed, for each required command)");
+        hints.push_str("; validation[] role must be one of required, expected_failure, excluded, superseded, diagnostic (a workspace-required command is covered by a passed, exit-0 entry labelled required or diagnostic)");
     }
     let unknown_outcome = report["validation"].as_array().is_some_and(|checks| {
         checks.iter().any(|check| {
@@ -314,16 +378,20 @@ pub(super) fn run_in_lineage<H: RuntimeHost + ?Sized>(
     Ok(false)
 }
 
+/// Check captured validation against the workspace's required commands.
+///
+/// `evidence.required_commands` is not the requirement. The requirement is
+/// `RuntimeHost::required_validation_commands`: the list final validation
+/// runs (`workflow.required_validation_commands`, or the owner's captured
+/// gates on a claimed leaf). An empty report list is accepted only when that
+/// set is empty. Passing, exit-0 evidence covers a command whichever accepted
+/// role labelled it. A missing command is refused by name.
 fn verify_checks<H: RuntimeHost + ?Sized>(
     host: &H,
     evidence: &Evidence,
     task: &Task,
 ) -> Result<Vec<Value>, OrbitError> {
-    let commands: BTreeSet<_> = evidence.required_commands.iter().collect();
-    if commands.is_empty()
-        || commands.len() != evidence.required_commands.len()
-        || commands.iter().any(|command| command.trim().is_empty())
-        || task.acceptance_criteria.is_empty()
+    if task.acceptance_criteria.is_empty()
         || evidence.criteria_evidence.len() != task.acceptance_criteria.len()
         || evidence
             .criteria_evidence
@@ -334,15 +402,25 @@ fn verify_checks<H: RuntimeHost + ?Sized>(
             "list every required workspace/task check and concrete evidence for every acceptance criterion",
         ));
     }
-    let mut checked = BTreeSet::new();
+    let declared: BTreeSet<_> = evidence.required_commands.iter().collect();
+    if declared.len() != evidence.required_commands.len()
+        || declared.iter().any(|command| command.trim().is_empty())
+    {
+        return Err(AlreadyLanded::refused(
+            "required_commands must list each command once, without blanks",
+        ));
+    }
+    let required = workspace_required_commands(host);
+    let mut covered = BTreeSet::new();
+    let mut required_labels = BTreeSet::new();
     let mut logs = Vec::new();
     for check in &evidence.validation {
         let validation = &check.validation;
         match validation.role {
             ValidationRole::Required => {
                 if validation.outcome != ValidationOutcome::Passed
-                    || !commands.contains(&validation.command)
-                    || !checked.insert(&validation.command)
+                    || validation.command.trim().is_empty()
+                    || !required_labels.insert(validation.command.as_str())
                 {
                     return Err(AlreadyLanded::refused(
                         "required validation is missing, duplicated, failed, denied or not run",
@@ -383,12 +461,51 @@ fn verify_checks<H: RuntimeHost + ?Sized>(
                 "validation log must capture the exact run, tested HEAD, command, integer exit code and output; required checks must exit zero and expected_failure checks must exit nonzero",
             ));
         }
+        if validation.outcome == ValidationOutcome::Passed
+            && exit_code == Some(0)
+            && required
+                .iter()
+                .any(|command| command == &validation.command)
+        {
+            covered.insert(validation.command.as_str());
+        }
         logs.push(provenance);
     }
-    if checked != commands {
-        return Err(AlreadyLanded::refused("required validation is missing"));
+    let missing = required
+        .iter()
+        .filter(|command| !covered.contains(command.as_str()))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(AlreadyLanded::refused(missing_required_commands(&missing)));
     }
     Ok(logs)
+}
+
+/// `host.required_validation_commands`, trimmed, with blanks and repeats dropped.
+fn workspace_required_commands<H: RuntimeHost + ?Sized>(host: &H) -> Vec<String> {
+    let mut commands = Vec::new();
+    for command in host.required_validation_commands() {
+        let command = command.trim();
+        if command.is_empty() || commands.iter().any(|seen| seen == command) {
+            continue;
+        }
+        commands.push(command.to_string());
+    }
+    commands
+}
+
+fn missing_required_commands(missing: &[&str]) -> String {
+    let listed = missing
+        .iter()
+        .map(|command| format!("`{command}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if missing.len() == 1 {
+        format!("missing required command {listed}")
+    } else {
+        format!("missing required commands {listed}")
+    }
 }
 
 /// A captured validation log names the exact run, tested HEAD and command,

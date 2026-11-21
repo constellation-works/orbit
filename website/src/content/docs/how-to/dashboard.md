@@ -23,7 +23,7 @@ and tries to open a browser.
 |---|---|
 | `--no-open` | Do not open a browser. |
 | `--port <N>` | Serve on another port. |
-| `--workspace <SELECTOR>` | Open on this workspace: a registered name, `ws_*` ID, or checkout path. If nothing matches, the dashboard opens on **All workspaces**. |
+| `--workspace <SELECTOR>` | Set the server's workspace hint by registered name, `ws_*` ID, or checkout path. An unmatched selector clears the hint. See [Workspace scope](#workspace-scope) for what the browser opens. |
 | `--operator` | Grant operator capability, which most write controls need. Nothing else grants it. See [Authorization](#authorization). |
 | `orbit --root <DIR> web serve` | Serve the workspaces in `<DIR>/workspaces.json` instead of `~/.orbit/workspaces.json`. |
 
@@ -46,7 +46,7 @@ opens it. Ctrl-C closes the tunnel, and stops the remote server only if
 |---|---|
 | `--port <N>` | Local port. Default `7878`, or a free port if `7878` is busy. An explicit port that is busy fails. |
 | `--remote-port <N>` | Remote dashboard port. Default `7878`. |
-| `--workspace <SELECTOR>` | Open on this remote workspace. `connect` refuses `--root`. |
+| `--workspace <SELECTOR>` | Set the workspace hint when `connect` starts a remote dashboard. An existing server keeps its hint. See [Workspace scope](#workspace-scope). `connect` refuses `--root`. |
 | `--no-operator` | Start the remote server without operator capability. |
 | `--no-open` | Do not open a browser. |
 
@@ -79,15 +79,29 @@ gates.
 | `Read-only on <host>: <reason>` | Writes to another host need an [operator session](#authorization) on the serving dashboard. |
 
 To add, rename, or remove hosts, and to compare their load, use
-[Settings › Hosts](#hosts).
+[Observe › Fleet](#fleet).
 
 ## Workspace scope
 
-With more than one workspace registered, the left rail has a workspace picker.
-A `?workspace=` link wins, then the workspace you last chose in this browser
-for the selected host, then a workspace with a live drain, then the registry
-default. The URL holds the host, workspace, and time window, so a copied link
-opens the same view.
+When the selected host owns more than one workspace, the left rail has a
+workspace picker. The browser tries these in order:
+
+1. A valid `?workspace=` link, including `?workspace=all`.
+2. The choice you last made in this browser for the host, including **All workspaces**.
+3. An active owned workspace with a live drain on that host.
+4. The server's workspace hint, if it names an active owned workspace.
+5. The first active owned workspace in registry order. If every owned workspace
+   is unavailable, the picker selects the first owned entry in registry order
+   and its board is unavailable.
+
+An unmatched `--workspace` selector clears the hint. The server uses the
+current directory to find a hint only when you omit `--workspace`. The browser
+still honors valid links and remembered choices when the hint is absent.
+
+When the host owns exactly one workspace, it opens automatically if active.
+A sole unavailable workspace leaves no board selected, as does a host with
+no owned workspaces. The URL holds the host, workspace, and time window, so a
+copied link can restore that scope.
 
 **All workspaces** is mostly a read view:
 
@@ -107,14 +121,16 @@ Confirm the selected workspace before you act.
 | Rail | Shows |
 |---|---|
 | **[Tasks](#tasks)** | Tasks, with the ones waiting on you first. The right dock holds **Drain**, a live **Log**, **[Notices](#notices)**, and **[Residents](#residents)**. |
-| **Drain** | Only in windows 1000px wide or narrower, where it opens the dock's Drain tab in place of the task list. |
+| **Drain** | Only in windows 1315px wide or narrower, where it opens the dock's Drain tab in place of the task list. |
 | **[Jobs](#runs-and-errors)** | **Live** (runs pending or running now), **History** (every run, with run detail), and **Catalogue** (jobs you can run by hand). |
+| **Leases** | Active and queued path leases by path: who holds each one, who waits, and recent landings that changed a leased path. Read-only. The rail hides it for a workspace where path leases are off. |
 | **Health** | What is broken now: **Incidents** (grouped failures, with **Events** and **Errors** tabs) and **Doctor**. |
 | **[Analytics](#analytics)** | How delivery is trending: **Metrics**, **Reliability**, **Codebase**, **Resources**, **Forecast**, **Cost**, **[Agents](#agents)**, and **Experiments**. |
 | **[Automation](#automation)** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Scripts**. |
 | **Knowledge** | **Frictions** (friction records) and **Memory** (crew memory). |
 | **[Plugins](#plugins)** | Installed plugins and the panels they add. |
-| **[Settings](#settings)** | Workflow, Execution, Review, Crews, Machine, Hosts, and Other. |
+| **[Fleet](#fleet)** | Registered hosts with their health, drains, and provider capacity. |
+| **[Settings](#settings)** | Workflow, Execution, Review, Crews, Machine, and Other. |
 
 The rail also carries counts. **Jobs** counts the job runs pending or running
 now, plus an **N failing** pill for jobs whose recent runs failed in a row.
@@ -188,6 +204,45 @@ With one workspace selected, Tasks updates live; other views refresh every
 `(N failed)` prefix to the page title. Click **Notify** to get a browser
 notification when a drain ends or a task is newly held on a red base.
 
+### Filter the loaded board
+
+Press Shift twice to open a floating filter bar over the task list. It
+narrows only the rows the board already loaded: it never asks the server,
+so it cannot find tasks outside the loaded list. The top-bar search is the
+opposite: it queries the server and jumps to the task, wherever it is.
+
+Type to filter. Every word you type must match something on the row:
+
+- A task ID, run ID, or pull-request number matches from its start.
+- The title, branch, host, or tags match anywhere inside the value.
+- Matching ignores case. A leading `#` before a pull-request number is
+  optional.
+
+The bar counts what it keeps, for example `3 of 40 shown`. Delete the text
+to see the full list again without closing the bar.
+
+Press Esc, or press Shift twice again, to close the bar. Closing clears the
+filter and returns the board to its normal list. Switching workspace or
+leaving Tasks closes it too. The bar opens only while the task board is
+showing and you are not typing in a field or a dialog.
+
+### Collapse the dock and rail
+
+On macOS press `⌘B`, on other systems press `Ctrl+B`, to slide the Tasks
+dock out of view so the list takes the full width; press it again to bring
+the dock back. The hide button in the dock's tab bar and the show button at
+the end of the filter bar do the same. This browser remembers your choice.
+The shortcut works while the task list sits beside the dock; with a task
+open, the dock already shows the task.
+
+In windows 1315px wide or narrower the dock is its own route instead of a
+side panel, so the shortcut does nothing there.
+
+The navigation rail has its own toggle button, which collapses it to a
+narrow strip. The rail has no shortcut, and this browser remembers its state
+separately from the dock. On phones the rail is a top strip instead, so
+collapsing does not apply there.
+
 ### Edit task metadata
 
 In a task's detail you can edit the description, acceptance criteria,
@@ -202,9 +257,11 @@ the target, check **allow missing context** before you save.
 ### Distributed tasks
 
 On the owner of a [distributed drain](/how-to/distributed-drain/), a task
-with an execution claim shows a **distributed execution** panel. **approve**
-on a `review` task with a handed-off claim sends **Approve handoff** for the
-candidate shown. **Revoke authority** and **Recover claim** require a reason;
+with an execution claim has a **Delivery** tab in its detail, with the claim's
+attempt and its **Owner actions** (**Recovery** when there is nothing to
+approve). **approve** on a `review` task with a handed-off claim sends
+**Approve handoff** for the candidate shown. **Revoke authority** and
+**Recover claim** require a reason;
 **Recover claim** moves the task to the status you pick. A replica refuses
 all three actions.
 
@@ -223,7 +280,7 @@ Then choose by what the evidence shows:
 
 | Action | Use when | Effect |
 |---|---|---|
-| **Resume candidate** | The cause is fixed and the candidate is sound. | Returns the task to backlog and keeps the candidate and pull request its stopped run published. The next run validates, reviews, and lands them. |
+| **Resume candidate** | The cause is fixed and the candidate is sound. | Returns the task to backlog and keeps the candidate and pull request its stopped run published. The next delivery validates it and follows the review policy selected for that delivery; when review is off, no fresh independent review runs. |
 | **Discard and re-implement** | The candidate is wrong or stale. | Discards the candidate, closes the task's undelivered pull requests, and returns the task to backlog. The next run implements from scratch. The dashboard cannot undo this. |
 | **Settle merged PR** | You merged the delivery pull request yourself. | Moves the task to `done` with a landing note naming the pull request and merge commit. If the pull request has not merged, nothing changes. |
 
@@ -239,6 +296,27 @@ orbit task requeue "$TASK_ID" --reason "flaky test fixed; rerun the candidate"
 orbit task requeue "$TASK_ID" --reason "candidate is stale" --discard-candidate
 orbit task settle-merged "$TASK_ID"
 ```
+
+### Waive readiness
+
+A backlog task with readiness gaps (no context files, or unassessed
+complexity) shows **Waive readiness** in Readiness. Confirm it to add the
+`readiness-waived` tag: the drain then admits the task like ready work. A task
+with no context files holds no file lock, so it no longer waits for the pilot
+or for an exclusive slot and may run beside other work; a task with declared
+context files keeps its file lock protection while waiving only the complexity
+gate. Only an operator can add the tag, and a new task cannot be filed with it.
+Task history records `readiness_waived` with who waived it and which gaps.
+
+Readiness then shows who waived it and **Remove waiver**, which removes the tag
+and records `readiness_waiver_removed`; the gaps hold the task again. The
+waiver does not lift waits that are not readiness gaps: host OS, required
+labels, the browser kit for `ui` work, a human-crew assignment, dependencies or
+another task's file lock.
+
+A task waiting only on the empty-context rule reads **Waiting, other ·
+awaiting footprint** while the pilot may still prepare it, or **awaiting
+exclusive slot** while it waits to run alone.
 
 ### Skip pilot in Readiness
 
@@ -305,7 +383,9 @@ work** filter, under **More**, shows only your human crew's open tasks.
 An open decision on a task is a card with a note field and one button per
 option, the recommended one first. Clicking an option shows its consequence,
 asks you to confirm, and records the answer with your note, as
-`orbit decision answer` does. A blocked task's
+`orbit decision answer` does. A refused answer changes nothing and leaves
+the decision open. The card shows the refusal's code and message until you
+dismiss it or it expires, including after the task detail refreshes. A blocked task's
 [final-recovery decision](/how-to/continuous-delivery/#7-recover-from-a-failed-delivery)
 sits in its block callout, and a pilot-warning decision in the pilot-hold
 callout. Every other open decision lists under **Decision needed**; see
@@ -377,8 +457,9 @@ Click one to filter the list.
 - When no window is admitting, a replica shows **Send pending results** in
   place of **Stop**. It delivers pull settlements this replica has recorded
   but not yet delivered to its owner.
-- When the fleet lists followers, a **Drain host** select chooses the owner
-  (the default) or a follower to run the pull.
+- When the fleet lists followers, the **Drain target** select lists the workspace
+  on its owner (`(owner)`, the default) and on each follower that holds a replica
+  (`(pull)`), so you choose the host that runs the pull.
 - Stopping a pull drain leaves admitted tasks claimed by their owner. See
   [Stop, cancel, and settle](/how-to/distributed-drain/#stop-cancel-and-settle).
 
@@ -653,6 +734,16 @@ The **Next hour** strip shows each routine due in the next hour: solid if it
 will fire, hollow if it is paused. A paused routine's slot is skipped, not
 queued. An enabled routine that cannot take effect shows a **blocked** pill.
 
+A routine with an open circuit breaker contributes at most its next eligible
+trial to the strip: one amber **breaker trial** mark at the next trial time.
+The strip summary counts trials separately from scheduled fires (for example,
+`2 fires from 1 active routine · 1 breaker trial`). While the breaker is open
+the strip hides that routine's repeated cron projection and plots only the
+single trial; an enabled tripped routine's card reports **Next trial**
+instead of **Next fire**. A trial that succeeds closes the breaker and the
+routine fires as scheduled again; see
+[Recover a tripped routine](/how-to/recurring-work/#recover-a-tripped-routine).
+
 ### Scheduler clock
 
 The bar above the routines shows this host's scheduler clock. **Pause
@@ -769,6 +860,57 @@ state and prints the error on the card:
   `orbit plugin sync` when the checkout pins it, or
   `orbit plugin add <source>` when it does not.
 
+## Fleet
+
+**Observe › Fleet** (`#fleet`) shows the serving machine's registry from
+[`hosts.toml`](/reference/config/#host-registry), with each host's health,
+drains, and provider capacity. Through `orbit web connect`, that is the remote
+machine's registry. The workspace selection does not filter Fleet.
+
+![Fleet: a local demo host and an unreachable remote shown as cards with health readings.](../../../assets/dashboard/dashboard-hosts.png)
+
+The screenshot shows a demo registry. `build-box.invalid` is an intentionally
+unreachable example.
+
+Each host is a card with its machine ID, SSH target, task prefix, and Orbit
+version, and with CPU, memory, disk, and I/O readings. A card shows
+`Reading telemetry…` until its first readings arrive, and an unreachable host
+shows its error instead of readings. A host that has not been probed is never
+read, so its card shows `Telemetry unavailable` without waiting. **Drains** lists the live owner and pull
+drains across the hosts. It omits queued windows and any host whose drain
+reading is unavailable. `Checking drains…` is the section's empty loading copy
+while any host reading is still pending. Once reads settle, `No live drains.`
+appears if no live drain was reported; unavailable readings are omitted, so
+this empty state can appear even when some drain reads failed or a host was
+unreachable.
+**Provider capacity** lists the usage windows each host reports for its
+accounts.
+
+Select a card to open that host's dialog, which shows facts (identity,
+reachability, protocol fingerprint, compatibility, workspaces),
+plain-language probe failure details with cause, and drain diagnostics.
+Health readings (CPU, memory, disk, and I/O) stay on the card; the dialog
+does not repeat them. Opening the page and **Reload** probe
+every host. **Reload** also rereads the registry.
+
+- **Add host** takes an SSH target and an optional name. Saving probes the
+  host and registers its identity, as `orbit host add` does. It writes
+  nothing on the remote.
+- **Rename** and **Remove** appear in the dialog of each remote host. Rename
+  changes only the name in the registry entry. **Remove** asks for
+  confirmation. A `host_in_use` refusal lists the replica checkouts and pull
+  drains that depend on the host and offers a separate force confirmation,
+  which removes their route.
+- **Show** in the dialog switches the dashboard to that host.
+
+Add host, Rename and Remove need an [operator session](#authorization).
+Without one, the page is read-only.
+
+The local host cannot be removed or renamed here. If `hosts.toml` fails
+validation, a banner shows the error and the last valid list stays visible
+until you repair the file. For host setup and error codes, see
+[Run Orbit across hosts](/how-to/multi-host/).
+
 ## Settings
 
 **Settings** groups configuration by topic:
@@ -780,7 +922,6 @@ state and prints the error on the card:
 | **Review** | Review layers, `review.timing`, reviewer pools, and before-landing settings. |
 | **[Crews](#crews)** | The crew table. |
 | **Machine** | Machine identity, auto-concurrency, resource throttle, and `tasks.id_start`. Edits write `~/.orbit/config.toml` only. |
-| **[Hosts](#hosts)** | The serving machine's registered SSH hosts. |
 | **Other** | Keys no other Settings page shows, workspace cleanup, and the raw TOML files. |
 
 Every page starts with one bar that holds its controls and **Reload**. On
@@ -830,34 +971,6 @@ refusals:
   `workflow.default_crew` within itself. Adding the first crew to a file with
   no default crew is refused.
 
-### Hosts
-
-**Settings › Hosts** manages the serving machine's
-[`hosts.toml`](/reference/config/#host-registry). Through
-`orbit web connect`, that is the remote machine's registry.
-
-![Settings › Hosts: Add host, a local demo host with its workspace and health readings, and an unreachable remote with its error status, Rename and Remove controls.](../../../assets/dashboard/dashboard-hosts.png)
-
-The screenshot shows a demo registry. `build-box.invalid` is an intentionally
-unreachable example.
-
-Each remote row shows its SSH target, reachability, Orbit version, and
-current load, memory, disk, and drain state. An unreachable host shows its
-error instead. Opening the view and **Reload** probe every host.
-
-- **Add host** takes an SSH target and an optional name. Saving probes the
-  host and registers its identity, as `orbit host add` does. It writes
-  nothing on the remote.
-- **Remove** asks for confirmation. A `host_in_use` refusal lists the replica
-  checkouts and pull drains that depend on the host and offers a separate
-  force confirmation, which removes their route.
-- **Show** switches the dashboard to that host.
-
-The local host cannot be removed or renamed here. If `hosts.toml` fails
-validation, a banner shows the error and the last valid list stays visible
-until you repair the file. For host setup and error codes, see
-[Run Orbit across hosts](/how-to/multi-host/).
-
 ## Authorization
 
 The dashboard has no login. Anyone who can reach its port, including a
@@ -868,7 +981,8 @@ Two gates apply to writes:
 
 1. **Workspace scope.** **All workspaces** and inactive workspaces are
    read-only, even for an operator. The exceptions are task actions on rows
-   that name their owner, the Drain tab, and **Settings › Hosts**.
+   that name their owner, the Drain tab, and the registry actions on
+   [Observe › Fleet](#fleet).
 2. **Operator capability.** The server has it only when started with
    `orbit web serve --operator`. `orbit web connect` passes `--operator` when
    it starts a remote server, unless you pass `--no-operator`. A local

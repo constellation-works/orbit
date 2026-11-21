@@ -1,7 +1,7 @@
 ---
 title: Crew Memory — Vision
 owner: claude
-last_updated: 2026-11-10
+last_updated: 2026-11-19
 last_validated: 2026-11-08
 status: Accepted
 feature: crew-memory
@@ -27,6 +27,7 @@ This doc looks forward. Everything here is speculation until the first experimen
 5. **Forgetting.** Memory is rewritten whole each week, so a model can drop a note that was still useful. Should a note that a later readout links to better outcomes be pinned?
 6. **Carrying memory to a new model.** When a model is upgraded, is its predecessor's space a useful prior or a source of stale habits? A carried-over space could itself be an experiment arm.
 7. **Memory as a crew-performance signal.** Could revision history tell us anything, for example a model that rewrites the same lesson every week without improving on it?
+8. **Who consolidates, and on what evidence.** The first live readout did not favour memory. Should one larger model write every space as checkable notes, and keep each note only while a ledger against the control arm supports it? Proposed in [specs/consolidation.md](./specs/consolidation.md) ([ORB-25838] wrote the proposal); nothing there is built.
 
 ## 2. Prior Work
 
@@ -59,6 +60,7 @@ Nothing here is proven yet.
 **Orbit-internal**
 
 - [Crew Memory — Design](./2_design.md)
+- [Outcome-checked memory consolidation (proposal)](./specs/consolidation.md)
 - [Experiments scope](../experiments/1_scope.md)
 - [Agent Scorecards — Design](../agent-scorecards/2_design.md)
 - [Project Learnings — Decisions](../project-learnings/4_decisions.md)
@@ -74,5 +76,6 @@ Nothing here is proven yet.
 ## Task References
 
 - [ORB-23105] — designs crew memory (this folder)
+- [ORB-25838] — proposes outcome-checked consolidation after the live readout
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

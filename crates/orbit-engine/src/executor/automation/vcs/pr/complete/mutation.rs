@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use crate::context::RuntimeHost;
 
 use super::super::super::super::input::input_string_field;
+use super::super::super::commit::squash_merge_fields;
 use super::super::super::handoff::load_handoff_context;
 use super::super::super::operations;
 use super::super::answers::ReviewedMergeOutcome;
@@ -187,18 +188,27 @@ pub(super) fn request_merge<H: RuntimeHost + ?Sized>(
     reviewed_head_sha: Option<&str>,
 ) -> Result<ReviewedMergeOutcome, OrbitError> {
     record_completion_mutation(host, input, if auto { "auto_merge" } else { "merge" })?;
-    let response = host.run_private_vcs_operation(
-        operations::PR_MERGE,
-        json!({
-            "pr": pr_number,
-            "strategy": strategy.as_str(),
-            "auto": auto,
-            "reviewed_head_sha": reviewed_head_sha,
-            "report_base_modified": reviewed_head_sha.is_some(),
-            "report_ambiguous": reviewed_head_sha.is_some(),
-            "workspace_path": workspace_path,
-        }),
-    )?;
+    let mut request = json!({
+        "pr": pr_number,
+        "strategy": strategy.as_str(),
+        "auto": auto,
+        "reviewed_head_sha": reviewed_head_sha,
+        "report_base_modified": reviewed_head_sha.is_some(),
+        "report_ambiguous": reviewed_head_sha.is_some(),
+        "workspace_path": workspace_path,
+    });
+    let context = load_handoff_context(host, input, "pr_complete")?;
+    if let Value::Object(request) = &mut request {
+        request.extend(squash_merge_fields(
+            host,
+            &context.workspace_path,
+            &context.tasks,
+            input_string_field(input, "base").as_deref(),
+            reviewed_head_sha.unwrap_or("HEAD"),
+            pr_number,
+        )?);
+    }
+    let response = host.run_private_vcs_operation(operations::PR_MERGE, request)?;
     Ok(ReviewedMergeOutcome::from_response(&response))
 }
 

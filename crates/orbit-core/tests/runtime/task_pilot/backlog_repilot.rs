@@ -20,8 +20,12 @@ fn bundled_routine() -> RoutineDefinition {
 }
 
 fn assessed_backlog(workspace: &Workspace) -> Task {
+    assessed_backlog_with(workspace, false)
+}
+
+fn assessed_backlog_with(workspace: &Workspace, warning: bool) -> Task {
     let task = workspace.task("backlog requirements");
-    freshness::apply_explicit_pilot_assessment(workspace, &task, false);
+    freshness::apply_explicit_pilot_assessment(workspace, &task, warning);
     workspace
         .runtime
         .update_task_as_human(
@@ -347,8 +351,131 @@ fn failed_backlog_repilot_stops_at_the_routine_retry_bound() {
     );
 }
 
+/// Whether the next automatic pilot preparation pass selects `task`.
+fn selected_for_repilot(workspace: &Workspace, task: &Task) -> bool {
+    workspace.action(
+        "prepare_task_pilot",
+        json!({"workspace_path": workspace.repo, "base_branch": "main"}),
+    )["task_ids"]
+        .as_array()
+        .unwrap()
+        .contains(&json!(task.id))
+}
+
+fn update_as(workspace: &Workspace, task: &Task, field: &str, value: Value) {
+    let mut input = json!({"id": task.id, "model": "codex", "allow_missing_context": true});
+    input[field] = value;
+    workspace
+        .runtime
+        .run_tool("orbit.task.update", input)
+        .unwrap();
+}
+
+fn context_files_edit_repilots_a_held_backlog_task() {
+    let workspace = Workspace::new();
+    let task = assessed_backlog_with(&workspace, true);
+    assert!(!selected_for_repilot(&workspace, &task));
+    update_as(
+        &workspace,
+        &task,
+        "context_files",
+        json!(["file:README.md", "file:Cargo.toml"]),
+    );
+    assert!(selected_for_repilot(&workspace, &task));
+}
+
+fn only_non_edit_writes_leave_a_held_backlog_task_unselected() {
+    let workspace = Workspace::new();
+    let task = assessed_backlog_with(&workspace, true);
+    // The pilot's own apply already rewrote the selectors.
+    assert!(!selected_for_repilot(&workspace, &task));
+    update_as(&workspace, &task, "plan", json!("Inspect Cargo.toml."));
+    update_as(&workspace, &task, "execution_summary", json!("Summary."));
+    update_as(&workspace, &task, "comment", json!("Answered the warning."));
+    workspace
+        .runtime
+        .widen_task_context_files(
+            &task.id,
+            "fixture-run",
+            orbit_types::task::ContextWideningStep::Implement,
+            "agent_implement",
+            &["src/widened.rs".into()],
+        )
+        .unwrap();
+    assert!(
+        workspace
+            .runtime
+            .get_task(&task.id)
+            .unwrap()
+            .context_files
+            .contains(&"file:src/widened.rs".to_string())
+    );
+    assert!(!selected_for_repilot(&workspace, &task));
+    // A context edit that changes nothing, and one on a clean assessment,
+    // queue no pilot either.
+    update_as(
+        &workspace,
+        &task,
+        "context_files",
+        json!(workspace.runtime.get_task(&task.id).unwrap().context_files),
+    );
+    assert!(!selected_for_repilot(&workspace, &task));
+    let clean = Workspace::new();
+    let clean_task = assessed_backlog(&clean);
+    update_as(
+        &clean,
+        &clean_task,
+        "context_files",
+        json!(["file:Cargo.toml"]),
+    );
+    assert!(!selected_for_repilot(&clean, &clean_task));
+}
+
+fn pilot_hold_attention_names_the_edits_that_clear_it() {
+    let workspace = Workspace::new();
+    // A held proposed task: the warning item.
+    let warned = workspace.task("warned proposal");
+    freshness::apply_explicit_pilot_assessment(&workspace, &warned, true);
+    // A backlog task whose description changed after its assessment: the
+    // stale-assessment hold item.
+    let stale = assessed_backlog(&workspace);
+    update_as(&workspace, &stale, "description", json!("Changed."));
+    let session = orbit_types::tool::ToolSessionContext {
+        effective_capabilities: [orbit_types::tool::McpCapability::Operator].into(),
+        ..Default::default()
+    };
+    let response = workspace
+        .runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.attention",
+            json!({"kind": ["pilot_warning", "pilot_hold"]}),
+            None,
+            None,
+            orbit_core::adapter::command::ToolEntryPoint::Mcp,
+            session,
+        )
+        .unwrap()
+        .value;
+    let items = response["items"].as_array().unwrap();
+    for (kind, id) in [("pilot_warning", &warned.id), ("pilot_hold", &stale.id)] {
+        let item = items
+            .iter()
+            .find(|item| item["kind"] == kind && item["refs"]["task_id"] == json!(id))
+            .unwrap_or_else(|| panic!("no {kind} item for {id}: {response}"));
+        let summary = item["next"]["summary"].as_str().unwrap();
+        assert_eq!(
+            summary,
+            "Edit the description, acceptance criteria or context_files to re-pilot automatically; a comment does not. Operator route: `task repilot`",
+            "{item}"
+        );
+    }
+}
+
 crate::scenario_table!(
     backlog_repilot_scenarios,
+    pilot_hold_attention_names_the_edits_that_clear_it,
+    context_files_edit_repilots_a_held_backlog_task,
+    only_non_edit_writes_leave_a_held_backlog_task_unselected,
     edited_backlog_is_repiloted_once_by_the_bundled_routine,
     live_execution_claim_keeps_edited_backlog_settled,
     failed_backlog_repilot_stops_at_the_routine_retry_bound

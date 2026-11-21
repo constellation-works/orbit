@@ -71,3 +71,60 @@ fn crews_list_reflects_config_edits_without_restart() {
         },
     );
 }
+
+#[test]
+fn aggregate_crews_keep_workspace_registries_isolated_and_refresh() {
+    isolated(
+        "crews::aggregate_crews_keep_workspace_registries_isolated_and_refresh",
+        || {
+            let fixture = Fixture::new();
+            let _other = super::support::add_workspace(&fixture, "ws_other", "other");
+            append_crew(&fixture.work.join("config.toml"), "firstonly", true);
+            append_crew(
+                &fixture.path("other").join(".orbit/config.toml"),
+                "secondonly",
+                true,
+            );
+            let server = fixture.server(false);
+            let path =
+                "/api/crews/all?workspaces=ws_http_fixture&workspaces=ws_other&workspaces=missing";
+            let before = json_ok(server.get(path));
+            assert!(
+                before["workspaces"]["ws_http_fixture"].is_object(),
+                "first registry: {before}"
+            );
+            assert!(
+                before["workspaces"]["ws_other"].is_object(),
+                "second registry: {before}"
+            );
+            assert!(
+                crew_names(&before["workspaces"]["ws_http_fixture"])
+                    .contains(&"firstonly".to_string())
+            );
+            assert!(
+                !crew_names(&before["workspaces"]["ws_http_fixture"])
+                    .contains(&"secondonly".to_string())
+            );
+            assert!(
+                crew_names(&before["workspaces"]["ws_other"]).contains(&"secondonly".to_string())
+            );
+            assert!(before["workspaces"].get("missing").is_none());
+            append_crew(&fixture.work.join("config.toml"), "addedlater", false);
+            let after = json_ok(server.get(path));
+            assert!(
+                crew_names(&after["workspaces"]["ws_http_fixture"])
+                    .contains(&"addedlater".to_string())
+            );
+            assert!(
+                !crew_names(&after["workspaces"]["ws_other"]).contains(&"addedlater".to_string())
+            );
+            fs::write(fixture.path("other").join(".orbit/config.toml"), "[invalid").unwrap();
+            let unavailable = json_ok(server.get(path));
+            assert!(unavailable["workspaces"].get("ws_other").is_none());
+            assert!(
+                crew_names(&unavailable["workspaces"]["ws_http_fixture"])
+                    .contains(&"addedlater".to_string())
+            );
+        },
+    );
+}

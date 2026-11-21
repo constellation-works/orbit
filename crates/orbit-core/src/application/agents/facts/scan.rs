@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
@@ -8,7 +8,7 @@ use orbit_types::task::TaskRelationType;
 use super::super::attribution;
 use super::super::candidates::Candidates;
 use super::super::roles::pilots::grade_all;
-use super::attempts::implementation_runs;
+use super::attempts::{PulledClaimRunners, implementation_runs};
 use super::implementer::mark_implementer_less_attempts;
 use super::invocations::AgentInvocationFacts;
 use super::launches::AgentLaunchFacts;
@@ -22,12 +22,65 @@ use crate::application::codebase::{
 
 /// Scan the workspace once. A task whose history or comments cannot be read
 /// keeps its envelope facts rather than failing the whole view.
+/// The horizon reads that do not depend on the task list, read together
+/// so a scan can run them beside the task list itself.
+struct HorizonTelemetry {
+    runs: std::collections::BTreeMap<String, Vec<super::model::RunRecord>>,
+    run_costs: std::collections::BTreeMap<String, Option<f64>>,
+    leaves: Vec<crate::application::distributed::LeafSettlement>,
+    late_claims: Vec<crate::application::distributed::LateClaimAttribution>,
+}
+
+/// Read the horizon telemetry: implementation runs, their costs and the
+/// claim settlements. Each degrades to empty on a failed read, as it did
+/// inline.
+fn horizon_telemetry(
+    runtime: &OrbitRuntime,
+    horizon: DateTime<Utc>,
+    computed_at: DateTime<Utc>,
+) -> HorizonTelemetry {
+    let runs = implementation_runs(runtime, horizon);
+    let run_costs = run_costs(runtime, horizon, computed_at);
+    let (leaves, late_claims) = runtime.scorecard_claims().unwrap_or_else(|error| {
+        tracing::warn!(%error, "agent scorecards: claim settlements unreadable");
+        (Vec::new(), Vec::new())
+    });
+    HorizonTelemetry {
+        runs,
+        run_costs,
+        leaves,
+        late_claims,
+    }
+}
+
 pub(in crate::application::agents) fn scan(
     runtime: &OrbitRuntime,
 ) -> Result<AgentFacts, OrbitError> {
     let computed_at = Utc::now();
     let horizon = computed_at - Duration::days(SCAN_DAYS);
-    let tasks = runtime.list_task_metadata()?;
+    // The task list is the scan's longest single read; the horizon
+    // telemetry and the task-pilot run list do not depend on it, so they
+    // read on their own threads through the store's pooled readers while
+    // it lists.
+    let (tasks, telemetry, loaded_pilot_runs) = std::thread::scope(|scope| {
+        let telemetry = scope.spawn(|| horizon_telemetry(runtime, horizon, computed_at));
+        let pilot_load = scope.spawn(|| PilotRuns::load(runtime));
+        let tasks = runtime.list_task_metadata();
+        let telemetry = telemetry
+            .join()
+            .unwrap_or_else(|_| horizon_telemetry(runtime, horizon, computed_at));
+        let pilot_runs = pilot_load
+            .join()
+            .unwrap_or_else(|_| PilotRuns::load(runtime));
+        (tasks, telemetry, pilot_runs)
+    });
+    let tasks = tasks?;
+    let HorizonTelemetry {
+        mut runs,
+        run_costs,
+        leaves,
+        late_claims,
+    } = telemetry;
     let tasks_scanned = tasks.len();
 
     let mut regressions = Vec::new();
@@ -46,14 +99,9 @@ pub(in crate::application::agents) fn scan(
         }
     }
 
-    let mut runs = implementation_runs(runtime, horizon);
-    let run_costs = run_costs(runtime, horizon, computed_at);
-    let (leaves, late_claims) = runtime.scorecard_claims().unwrap_or_else(|error| {
-        tracing::warn!(%error, "agent scorecards: claim settlements unreadable");
-        (Vec::new(), Vec::new())
-    });
     let settlements = failed_claim_settlements_of(&leaves);
-    let pulled: HashMap<&str, Runner> = leaves
+    let mut pulled = PulledClaimRunners::default();
+    for (task_id, claim_id, runner) in leaves
         .iter()
         .map(|leaf| {
             let runner = Runner {
@@ -62,7 +110,7 @@ pub(in crate::application::agents) fn scan(
                 run_id: None,
                 reported_effort: leaf.reasoning_effort.clone(),
             };
-            (leaf.claim_id.as_str(), runner)
+            (leaf.task_id.as_str(), leaf.claim_id.as_str(), runner)
         })
         .chain(late_claims.iter().map(|late| {
             let runner = Runner {
@@ -71,13 +119,21 @@ pub(in crate::application::agents) fn scan(
                 run_id: None,
                 reported_effort: late.reasoning_effort.clone(),
             };
-            (late.claim_id.as_str(), runner)
+            (late.task_id.as_str(), late.claim_id.as_str(), runner)
         }))
-        .collect();
+    {
+        pulled.crew_models.note_recorded_pair(&runner);
+        pulled.by_task.entry(task_id).or_default().push(claim_id);
+        pulled.by_claim.insert(claim_id, runner);
+    }
+    for run in runs.values().flatten() {
+        pulled.crew_models.note_recorded_pair(&run.runner);
+    }
     let candidates = Candidates::open(runtime);
-    let mut stored = StoredFacts::load(runtime, &pulled);
+    let task_ids: Vec<String> = tasks.iter().map(|task| task.id.clone()).collect();
+    let mut stored = StoredFacts::load(runtime, &pulled, &task_ids);
     let mut facts = Vec::new();
-    for task in tasks {
+    for task in &tasks {
         if task.created_at < horizon && task.updated_at < horizon {
             continue;
         }
@@ -91,7 +147,7 @@ pub(in crate::application::agents) fn scan(
         let task_runs = runs.remove(&id).unwrap_or_default();
         let entry = stored.entry(
             runtime,
-            &task,
+            task,
             task_settlements,
             &task_runs,
             &pulled,
@@ -102,6 +158,9 @@ pub(in crate::application::agents) fn scan(
         judge_rejects(&mut task_facts.reviews, &candidates);
         facts.push(task_facts);
     }
+    // The codebase scan below lists the same tasks and stamps the same
+    // logs; hand both over instead of paying for them twice.
+    let history_stamps = stored.take_stamps();
     stored.save(
         runtime,
         facts
@@ -113,11 +172,13 @@ pub(in crate::application::agents) fn scan(
             .map(|task| task.id.as_str()),
     );
 
-    let mut pilot_runs = None;
-    let mut pilots = grade_all(pilot_scan(runtime, &mut pilot_runs));
+    let mut pilot_runs = Some(loaded_pilot_runs);
+    let evidence = pilot_scan(runtime, &mut pilot_runs, tasks, history_stamps);
+    let mut pilots = grade_all(evidence);
     for task in &mut facts {
         for assessment in &mut task.warnings.assessments {
             let runs = pilot_runs.get_or_insert_with(|| PilotRuns::load(runtime));
+            runs.prefetch_attribution_inputs(runtime);
             assessment.run = runs.attribute(
                 runtime,
                 &task.id,
@@ -184,9 +245,16 @@ pub(in crate::application::agents) fn scan(
 /// The pilot evidence of the codebase scan, which keeps each task's landed
 /// diff and receipts between scans. A scan that fails leaves the graded
 /// terms unscored rather than failing every scorecard. `runs` keeps the
-/// task-pilot runs once loaded.
-pub(super) fn pilot_scan(runtime: &OrbitRuntime, runs: &mut Option<PilotRuns>) -> PilotEvidence {
-    match runtime.codebase_scan() {
+/// task-pilot runs once loaded. The caller already listed `tasks` and took
+/// their history `stamps` for its own scan, so the codebase scan reuses
+/// both instead of listing and stamping again.
+pub(super) fn pilot_scan(
+    runtime: &OrbitRuntime,
+    runs: &mut Option<PilotRuns>,
+    tasks: Vec<orbit_types::task::Task>,
+    stamps: std::collections::BTreeMap<String, String>,
+) -> PilotEvidence {
+    match runtime.codebase_scan_with_tasks(tasks, stamps) {
         Ok(codebase) => pilot_evidence(runtime, &codebase, runs),
         Err(error) => {
             tracing::warn!(%error, "agent scorecards: codebase scan failed; pilots unscored");

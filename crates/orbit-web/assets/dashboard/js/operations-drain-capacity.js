@@ -106,7 +106,7 @@ export function updateDrainIndicators(phase, label) {
     tab.dataset.drainLabel = indicatorLabel;
     const name = tab.querySelector?.(".dock-seg-label")?.textContent || "Overview";
     tab.setAttribute("aria-label", `${name}: ${indicatorLabel}`);
-    tab.title = indicatorLabel;
+    tab.removeAttribute("title");
   }
   if (tabState) tabState.textContent = phase === "winding_down" ? label : "";
 }
@@ -126,10 +126,17 @@ export function autoDrainPhase(payload) {
   return { live, capacity, phase, running, label, pulling, pullLabel };
 }
 
-export function autoDrainCapacity(capacity, counts, blocked, { pull = false } = {}) {
-  const busy = autoDrainNumber(capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs);
-  const limit = autoDrainNumber(capacity.max_active_leaf_runs);
+export function autoDrainCapacity(capacity, counts, blocked, { pull = false, approvalSummary = null } = {}) {
+  const workspaceBusy = autoDrainNumber(capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs);
+  const workspaceLimit = autoDrainNumber(capacity.max_active_leaf_runs);
+  const drainBusy = autoDrainNumber(capacity.drain_running_tasks);
+  const drainLimit = autoDrainNumber(capacity.drain_concurrency);
+  const drainRunning = !pull && (capacity.drain_phase === "draining" || capacity.drain_phase === "winding_down")
+    && Number.isFinite(drainBusy) && Number.isFinite(drainLimit) && drainLimit > 0;
+  const busy = drainRunning ? drainBusy : workspaceBusy;
+  const limit = drainRunning ? drainLimit : workspaceLimit;
   const free = autoDrainNumber(capacity.free_slots);
+  const workspaceKnown = Number.isFinite(workspaceBusy) && Number.isFinite(workspaceLimit) && workspaceLimit > 0;
   const known = Number.isFinite(busy) && Number.isFinite(limit) && limit > 0;
   // Each message is short enough for one line at the 336px dock and the 375px
   // phone dock. Detail the short wording drops is `detail`: it shows as focusable
@@ -141,8 +148,8 @@ export function autoDrainCapacity(capacity, counts, blocked, { pull = false } = 
   if (hold) {
     summary = hold.summary;
     detail = hold.detail;
-  } else if (Number.isFinite(free) && free <= 0 && known && busy >= limit) {
-    const toClear = busy - limit + 1;
+  } else if (Number.isFinite(free) && free <= 0 && workspaceKnown && workspaceBusy >= workspaceLimit) {
+    const toClear = workspaceBusy - workspaceLimit + 1;
     summary = `Leaf limit: ${autoDrainPlural(toClear, "slot")} must clear.`;
     detail = `The workspace leaf limit is reached; ${autoDrainPlural(toClear, "occupied slot")} must clear before another task can start.`;
   } else if (Number.isFinite(free) && free <= 0) {
@@ -156,7 +163,11 @@ export function autoDrainCapacity(capacity, counts, blocked, { pull = false } = 
       : "Backlog is empty.";
     }
   }
-  const label = known ? `Workspace: ${busy} of ${limit} leaf slots in use` : "Workspace: capacity unknown";
+  const label = known
+    ? drainRunning
+      ? `Drain: ${busy} of ${limit} task slots in use`
+      : `Workspace: ${busy} of ${limit} leaf slots in use`
+    : drainRunning ? "Drain: task capacity unknown" : "Workspace: capacity unknown";
   const full = Number.isFinite(free) && free <= 0;
   const bar = el("div", { class: "drain-capacity-bar" });
   bar.setAttribute("role", "img");
@@ -183,21 +194,26 @@ export function autoDrainCapacity(capacity, counts, blocked, { pull = false } = 
     .filter(([, count]) => Number(count) > 0);
   const pipelines = pipelineCounts.map(([pipeline, count]) => [pipeline, Number(count)]);
   // Legacy wrappers can occupy slots without appearing in the pipeline map.
-  const other = busy - pipelineCounts.reduce((sum, [, count]) => sum + Number(count), 0);
+  const other = workspaceBusy - pipelineCounts.reduce((sum, [, count]) => sum + Number(count), 0);
   if (pipelines.length && other > 0) pipelines.push(["other", other]);
   const byPipeline = pipelines.map(([pipeline, count]) => `${pipeline}: ${autoDrainPlural(count, "slot")}`);
   // A shortfall the operator should notice reads amber; a stopped window is
   // the operator's own choice and does not.
   const held = full && capacity.admissions_stopped !== true;
   // The slot bar opens the free-slot and per-pipeline breakdown on hover, focus and tap.
-  const breakdown = pinnedInfoHint([label, Number.isFinite(free) ? `${Math.max(0, free)} free` : "", ...byPipeline].filter(Boolean).join("\n"));
+  const workspaceBreakdown = drainRunning && Number.isFinite(workspaceBusy) && Number.isFinite(workspaceLimit)
+    ? `Workspace: ${workspaceBusy} of ${workspaceLimit} leaf slots in use${Number.isFinite(free) ? ` (${Math.max(0, free)} free)` : ""}`
+    : Number.isFinite(free) ? `${Math.max(0, free)} free` : "";
+  const breakdown = pinnedInfoHint([label, workspaceBreakdown, ...byPipeline].filter(Boolean).join("\n"));
   breakdown.classList.add("drain-capacity-hint");
   breakdown.prepend(bar);
   const result = el("div", { class: "drain-capacity" }, [breakdown]);
+  const notices = el("div", { class: "drain-notices" }, approvalSummary ? [approvalSummary] : []);
   if (summary) {
     const message = el("p", { class: `drain-slots${held ? " held" : ""}`, text: summary });
-    result.appendChild(el("div", { class: "drain-slots-row" }, detail ? [message, infoHint(detail)] : [message]));
+    notices.appendChild(el("div", { class: "drain-slots-row" }, detail ? [message, infoHint(detail)] : [message]));
   }
+  if (notices.childElementCount) result.appendChild(notices);
   // One pipeline holding every slot is already in the bar's breakdown; a mix
   // is worth a visible line.
   if (pipelines.length > 1) {
@@ -400,7 +416,7 @@ export function autoDrainProviderLimitNote(readings) {
   ]);
   note.setAttribute("role", "status");
   const dismiss = el("button", {
-    class: "drain-note-dismiss", type: "button", title: "Dismiss until these limits change",
+    class: "drain-note-dismiss", type: "button", "aria-description": "Dismiss until these limits change",
     "aria-label": "Dismiss provider limits until they change",
   });
   dismiss.addEventListener("click", () => {
@@ -435,4 +451,42 @@ export function autoDrainProviderAuth(failures) {
     list.append(row);
   }
   return list;
+}
+
+// [ORB-25965] The workspace's drain intent: a hand Stop records "paused" with
+// who stopped it and when, a hand Start records "on". A pause always shows;
+// "on" and "off" show only while no drain is live, where they explain the
+// idle card. Older payloads without the field show nothing.
+export function autoDrainIntentNote(payload) {
+  const intent = payload?.drain_intent;
+  if (!intent || typeof intent !== "object" || typeof intent.intent !== "string") return null;
+  const { phase, pulling } = autoDrainPhase(payload);
+  const idle = phase === "idle" && !pulling;
+  const who = typeof intent.by === "string" && intent.by ? intent.by : "unknown";
+  const when = intent.at ? time(intent.at) : "";
+  let text = "";
+  let detail = "";
+  if (intent.intent === "paused") {
+    text = `Paused by ${who}${when ? ` · ${when}` : ""}`;
+    detail = [
+      `Drain intent: paused from ${intent.source || "an unknown surface"}.`,
+      typeof intent.reason === "string" && intent.reason ? `Reason: ${intent.reason}` : "",
+      "Starting a drain by hand lifts the pause.",
+    ].filter(Boolean).join("\n");
+  } else if (!idle) {
+    return null;
+  } else if (intent.intent === "on") {
+    text = `Intent on · last started by ${who}${when ? ` · ${when}` : ""}`;
+    detail = "The last hand action started a drain; none is live now.";
+  } else if (intent.intent === "off") {
+    text = "Intent off";
+    detail = "No drain has been started or stopped by hand since the intent was recorded.";
+  } else {
+    text = "Drain intent unreadable";
+    detail = typeof intent.error === "string" ? intent.error : "";
+  }
+  // The line ellipsizes at the phone dock width; the hint repeats it whole.
+  detail = [text, detail].filter(Boolean).join("\n");
+  const message = el("p", { class: "drain-slots", text });
+  return el("div", { class: "drain-slots-row" }, [message, infoHint(detail)]);
 }

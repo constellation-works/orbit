@@ -1,7 +1,7 @@
 ---
 title: Path Leases — Design
 owner: claude
-last_updated: 2026-11-06
+last_updated: 2026-11-20
 last_validated: 2026-11-06
 status: Draft
 feature: path-leases
@@ -18,7 +18,7 @@ related_artifacts: []
 
 This document proposes how path leases work. The lease row of §2, the advisory/hard grant rules
 of §3, the SSH principal of §7 and the phase-1 keys of §8 are implemented as
-runtime operations, CLI, MCP and loopback REST surfaces (see §6). Phase 3 durable notices,
+runtime operations, CLI, MCP and loopback REST surfaces (see §6; the CLI and MCP surfaces were withdrawn in [ORB-22808]). Phase 3 durable notices,
 including poll and SSE replay on Orbit Web and the lease listener, owner-clock lifetime
 handling, the phase-4 hard-lease queue with aging and expansion, and the dashboard Leases view
 are implemented; preemption remains later work. §1 is what exists today and what the proposal reuses. It leaves the pricing of shared paths to
@@ -239,6 +239,8 @@ the same pages, and the listener's pages are read on the owner by the same page 
 
 All surfaces call one runtime operation per verb, so they cannot drift.
 
+> **Withdrawn in [ORB-22808] (2026-11-08).** The `orbit lease` CLI, the `orbit.lease.*` MCP tools and the `lease.*` config keys are gone; the REST routes, notices and listener stay implemented but unreachable. The text below describes these surfaces as shipped before the withdrawal.
+
 **Phase 1 CLI and MCP.** Request, renew, release, show, list and check are
 implemented as the `orbit.lease.*` tools and `orbit lease` commands (ORB-18406),
 over the lease rows (ORB-18404) and runtime operations (ORB-18405). All six are
@@ -305,6 +307,8 @@ landing notices. When leases are disabled the view shows a neutral off-state nam
 read-only ([user-interface design §9b](../user-interface/2_design.md#9b-leases)). `orbit task locks list` and the denial log show leases beside reservations.
 
 ## 7. Authority and authentication
+
+> **Withdrawn in [ORB-22808] (2026-11-08).** The `orbit lease token` and `orbit lease listen` commands described here are no longer registered. The credential crate, the listener and the intake socket remain implemented but unreachable from the CLI.
 
 Two ways in, with different authority models.
 
@@ -668,6 +672,8 @@ no surface reimplements a check.
 
 ## 8. Configuration
 
+> **Withdrawn in [ORB-22808] (2026-11-08).** Every `lease.*` key below now loads with a warning and has no effect, and each runtime holds a fixed, disabled lease policy. The table records the phase-1 design.
+
 | Key | Default | Meaning |
 |---|---|---|
 | `lease.enabled` | `false` | Accept lease requests in this workspace. |
@@ -780,5 +786,6 @@ feature multi-person.
 - [ORB-18555] — delivered the dashboard Leases view.
 - [ORB-18951] — corrected the queue starvation guarantee in §3 (aging caps at `high` and never outranks newer higher-priority requests).
 - [ORB-20477] — gave the dashboard Leases view a neutral off-state when leases are disabled (§6).
+- [ORB-22808] — withdrew the `orbit lease` CLI, the `orbit.lease.*` MCP tools and the `lease.*` config keys; the lease machinery stays unreachable (§6–§8).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

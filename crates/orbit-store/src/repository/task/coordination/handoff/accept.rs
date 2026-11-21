@@ -12,7 +12,9 @@ use orbit_types::workflow::{KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, hand
 
 use super::super::lifecycle::{encode, invalid, row};
 use super::review::review_refused;
-use super::{HANDOFF, TaskCommitBoundary, object_id};
+use orbit_types::plugin::is_full_commit_id;
+
+use super::{HANDOFF, TaskCommitBoundary};
 use crate::contracts::*;
 
 impl TaskCommitBoundary {
@@ -63,7 +65,7 @@ impl TaskCommitBoundary {
                 &candidate.base.tree,
             ]
             .iter()
-            .any(|s| !object_id(s))
+            .any(|s| !is_full_commit_id(s))
         {
             return Err(invalid(
                 "exact repository, branches and object IDs required",
@@ -202,12 +204,8 @@ impl TaskCommitBoundary {
         // light-delivery judgement of the candidate is recorded here.
         for decision in &observation.light_delivery {
             params.append_history.push(
-                orbit_types::task::TaskHistoryEntry::new(
-                    Utc::now(),
-                    params.actor.clone(),
-                    decision.event(),
-                )
-                .with_note(Some(decision.note())),
+                orbit_types::task::RecordedLightDeliveryDecision::from_decision(decision)
+                    .history_entry(Utc::now(), params.actor.clone()),
             );
         }
         // [ORB-15427] The owner established each known-red command against

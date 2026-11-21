@@ -112,7 +112,7 @@ pub fn run_error_step(run: &JobRun) -> Option<&JobRunStep> {
 pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
     let task_ids = job_run_task_ids(run);
     let last = run.steps.last();
-    let error_step = run_error_step(run);
+    let error_step = run_error_step(run).map(RunDisplayStep::from_job_step);
     let child_dispatches = serde_json::to_value(
         state
             .map(|state| state.child_dispatches.as_slice())
@@ -182,8 +182,9 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
         "retry_source_run_id": run.retry_source_run_id,
         "exit_code": last.and_then(|step| step.exit_code),
         "agent_response_json": last.and_then(|step| step.agent_response_json.as_ref()),
-        "error_code": error_step.and_then(|step| step.error_code.as_deref()),
-        "error_message": error_step.and_then(|step| step.error_message.as_deref()),
+        "error_code": error_step.as_ref().and_then(|step| step.error_code.as_deref()),
+        "error_message": error_step.as_ref().and_then(|step| step.error_message.as_deref()),
+        "error_diagnostic": error_step.as_ref().and_then(|step| step.error_diagnostic.as_ref()),
         "knowledge_metrics": run.knowledge_metrics,
         "requested_crew": requested_crew,
         "resolved_crew": run.resolved_crew,

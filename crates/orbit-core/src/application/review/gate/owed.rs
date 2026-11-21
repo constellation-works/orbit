@@ -1,11 +1,12 @@
 //! Evidence a workspace rule owes for a claimed leaf's candidate, derived by
 //! Orbit rather than read from the reviewer's report.
 //!
-//! A `[[review.host_evidence]]` rule names a check, the paths that owe it and
-//! the OS it runs on. When a claimed leaf's candidate changes a matching path
-//! on a host that cannot run the check in its agent lane — a `codeql` rule on
-//! a host of another OS, a `host_sandbox_test` rule on a host of its own OS —
-//! the requirement is owed:
+//! A `[[review.host_evidence]]` rule names a check, the paths (and,
+//! optionally, the task tags) that owe it and the OS it runs on. When a
+//! claimed leaf's candidate changes a matching path, or its task carries a
+//! listed tag, on a host that cannot run the check in its agent lane — a
+//! `codeql` rule on a host of another OS, a `host_sandbox_test` rule on a
+//! host of its own OS — the requirement is owed:
 //!
 //! - admission hands it to the reviewer in the manifest, as owner-fulfilled
 //!   evidence it must record `not_run` and never attempt;
@@ -43,7 +44,9 @@
 //! record still blocks.
 
 use orbit_common::OrbitError;
-use orbit_engine::review_gate::{CandidateIdentity, committed_paths};
+use std::path::Path;
+
+use orbit_engine::review_gate::{CandidateIdentity, committed_paths, path_text_at};
 use orbit_types::task::HostOs;
 use orbit_types::workflow::{
     BUBBLEWRAP_DEFERRAL_PREFIX, CommitIdentity, EvidenceHostOs, HostSandboxCommand,
@@ -60,8 +63,9 @@ use crate::OrbitRuntime;
 use super::context::GateContext;
 use super::judgement::Judgement;
 
-/// What the run's captured host-evidence rules owe for `commits` on this
-/// host. Only a claimed leaf owes evidence: a local run's host is the owner.
+/// What the run's captured host-evidence rules owe for `commits` and the
+/// run's task tags on this host. Only a claimed leaf owes evidence: a local
+/// run's host is the owner.
 pub(super) fn owed_evidence<'a>(
     runtime: &OrbitRuntime,
     context: &GateContext,
@@ -77,9 +81,15 @@ pub(super) fn owed_evidence<'a>(
     for commit in commits {
         changed.extend(committed_paths(&context.workspace_path, &commit.commit)?);
     }
+    let tags: Vec<String> = context
+        .tasks
+        .iter()
+        .flat_map(|task| task.tags.iter().cloned())
+        .collect();
     Ok(owed_requirements(
         rules,
         &changed,
+        &tags,
         EvidenceHostOs::of_host(runtime.host_os()),
     ))
 }
@@ -161,7 +171,100 @@ pub(super) fn owed_hold_received(
     Ok(received.then_some((hold, certificate)))
 }
 
+/// Words that mark a changed test source, or its path, as touching the
+/// sandbox: a sandbox test, its fixture or its support code.
+const SANDBOX_MARKERS: [&str; 3] = ["sandbox", "bwrap", "bubblewrap"];
+
+/// [ORB-25096] Which deferred Bubblewrap tests a candidate's change can
+/// reach. A test the candidate cannot reach is not owed as host evidence:
+/// a host whose kernel refuses user namespaces would never produce it. The
+/// review does not count on a later pull request run executing it, because CI
+/// scope selection may leave the test out of that run.
+///
+/// The rule is conservative. The candidate reaches every deferred test when
+/// it changes any path other than Markdown and Rust sources under a `tests`
+/// directory, or a shared Rust source under `tests/support`: production code,
+/// a manifest, a build script, configuration, a script, an asset or shared
+/// test support. It reaches a test when a changed test source, before or
+/// after the change, names the test or mentions a sandbox, or the source's
+/// path does.
+pub(super) struct BubblewrapReach {
+    beyond_tests: bool,
+    test_sources: Vec<String>,
+}
+
+impl BubblewrapReach {
+    /// The reach that every deferred test is within.
+    pub(super) fn everything() -> Self {
+        Self {
+            beyond_tests: true,
+            test_sources: Vec::new(),
+        }
+    }
+
+    /// The reach of `commits`, the change from `base` to `head`.
+    pub(super) fn of_candidate<'a>(
+        workspace_path: &Path,
+        base: &str,
+        head: &str,
+        commits: impl IntoIterator<Item = &'a CommitIdentity>,
+    ) -> Result<Self, OrbitError> {
+        let mut changed = Vec::new();
+        for commit in commits {
+            changed.extend(committed_paths(workspace_path, &commit.commit)?);
+        }
+        changed.sort();
+        changed.dedup();
+        let mut test_sources = Vec::new();
+        for path in &changed {
+            if path.ends_with(".md") {
+                continue;
+            }
+            let lower = path.to_ascii_lowercase();
+            let test_source =
+                path.ends_with(".rs") && path.split('/').any(|component| component == "tests");
+            let shared_test_support =
+                test_source && path.split('/').any(|component| component == "support");
+            if !test_source
+                || shared_test_support
+                || SANDBOX_MARKERS.iter().any(|marker| lower.contains(marker))
+            {
+                return Ok(Self::everything());
+            }
+            for commit in [base, head] {
+                if let Some(text) = path_text_at(workspace_path, commit, path)? {
+                    test_sources.push(text);
+                }
+            }
+        }
+        Ok(Self {
+            beyond_tests: false,
+            test_sources,
+        })
+    }
+
+    /// Whether the change can reach the deferred `test`.
+    fn reaches(&self, test: &str) -> bool {
+        let name = test.rsplit("::").next().unwrap_or(test);
+        self.beyond_tests
+            || self.test_sources.iter().any(|text| {
+                let lower = text.to_ascii_lowercase();
+                text.contains(name) || SANDBOX_MARKERS.iter().any(|marker| lower.contains(marker))
+            })
+    }
+}
+
 impl Judgement {
+    /// Whether a required record carries a Bubblewrap deferral notice.
+    pub(super) fn has_bubblewrap_deferral(&self) -> bool {
+        self.validation.iter().any(|record| {
+            record
+                .deferred
+                .iter()
+                .any(|notice| notice.trim().starts_with(BUBBLEWRAP_DEFERRAL_PREFIX))
+        })
+    }
+
     /// Add the reviewer's named Linux sandbox tests to `owed` on a claimed
     /// before-landing host of another known OS. Workspace rules take
     /// precedence for the same check, and failed required records stay
@@ -206,9 +309,15 @@ impl Judgement {
     /// record and keeps blocking. Each covered notice is cleared from its
     /// record with a note naming the owed command, so the broader pass is
     /// judged with the requirements [`Self::require_owed_evidence`] adds.
+    ///
+    /// [ORB-25096] A deferred test the candidate cannot `reach` is not owed,
+    /// unless a workspace rule in `owed` owes the same check: its notice is
+    /// cleared with a note saying so, and a reviewer-named requirement that
+    /// covers only that notice leaves the named evidence.
     pub(super) fn synthesized_bubblewrap_requirements(
         &mut self,
         owed: &[ReviewEvidenceRequirement],
+        reach: &BubblewrapReach,
     ) -> Vec<ReviewEvidenceRequirement> {
         if !self.verdict.passed() || self.has_open_findings() {
             return Vec::new();
@@ -216,6 +325,8 @@ impl Judgement {
         let named = self.external_evidence.clone();
         let mut requirements: Vec<ReviewEvidenceRequirement> = Vec::new();
         let mut covered: Vec<(usize, String, String, String)> = Vec::new();
+        let mut released: Vec<(usize, String, String)> = Vec::new();
+        let mut released_named: Vec<ReviewEvidenceRequirement> = Vec::new();
         for (index, record) in self.validation.iter().enumerate() {
             if record.role != ValidationRole::Required
                 || record.outcome != ValidationOutcome::Passed
@@ -271,6 +382,7 @@ impl Judgement {
                     };
                     covers.then(|| candidate.clone())
                 });
+                let reviewer_named = requirement.is_some();
                 if requirement.is_none() {
                     let command = match recorded_cargo_scope(&record.command) {
                         Some(RecordedCargoScope::Integration { package, target }) => {
@@ -338,6 +450,19 @@ impl Judgement {
                 let Some(requirement) = requirement else {
                     continue;
                 };
+                if !reach.reaches(test)
+                    && !owed.iter().any(|known| {
+                        known.artifact == requirement.artifact
+                            || (known.kind == requirement.kind
+                                && known.command == requirement.command)
+                    })
+                {
+                    released.push((index, notice.clone(), test.to_string()));
+                    if reviewer_named {
+                        released_named.push(requirement);
+                    }
+                    continue;
+                }
                 // Settlement drops a requirement whose artifact a rule owes for
                 // another command. Keep the notice blocking rather than clear it
                 // for a requirement that is never owed.
@@ -377,6 +502,44 @@ impl Judgement {
                      evidence: `{command}`"
                 ),
             );
+        }
+        for (index, notice, test) in released {
+            let record = &mut self.validation[index];
+            record.deferred.retain(|kept| kept != &notice);
+            append_note(
+                record,
+                &format!(
+                    "deferred Bubblewrap test `{test}` is not owed as host evidence: the \
+                     candidate changes only tests and docs that neither name it nor touch a \
+                     sandbox, so the candidate does not reach the test"
+                ),
+            );
+        }
+        // A named requirement stays when another notice is still owed by it.
+        released_named.retain(|named| {
+            !requirements
+                .iter()
+                .any(|kept| kept.kind == named.kind && kept.command == named.command)
+        });
+        self.external_evidence.retain(|named| {
+            !released_named
+                .iter()
+                .any(|released| released.kind == named.kind && released.command == named.command)
+        });
+        for record in &mut self.validation {
+            if record.role == ValidationRole::Required
+                && record.outcome == ValidationOutcome::NotRun
+                && released_named
+                    .iter()
+                    .any(|released| released.command.trim() == record.command.trim())
+            {
+                record.role = ValidationRole::Excluded;
+                append_note(
+                    record,
+                    "not owed: it covers only a deferred Bubblewrap test the candidate \
+                     cannot reach",
+                );
+            }
         }
         requirements
     }

@@ -1,8 +1,8 @@
 ---
 title: "Eval Harness — Overview"
 owner: claude
-last_updated: 2026-11-14
-last_validated: 2026-11-14
+last_updated: 2026-11-15
+last_validated: 2026-11-15
 status: Draft
 stage: designing
 next: "Daniel accepted every recommendation in 2_design.md §14; file build-order tasks 1 to 5 once he names the Q7 spend cap and confirms the Q2 box"
@@ -17,7 +17,7 @@ related_artifacts: [ORB-24839]
 
 # Eval Harness — Overview
 
-The eval harness is a proposed Orbit plugin (`eval`) with two jobs. **Replay** takes closed tasks that have a known good merged diff, runs each again at the commit before that merge under several crews, and scores what each crew produced. **Bake-off** takes one new task, has several crews implement it as separate candidate pull requests, and lets a person pick the one to merge. Nothing here is built. [2_design.md](./2_design.md) is the design, written for [ORB-24839]; it ends with the build order and the questions Daniel has to answer first.
+The eval harness is a proposed Orbit plugin (`eval`) with two jobs. **Replay** takes closed tasks that have a known good merged diff, runs each again at the commit before that merge under several crews, and scores what each crew produced. **Bake-off** takes one new task, has several crews implement it as separate candidate pull requests, and lets a person pick the one to merge. Nothing here is built. [2_design.md](./2_design.md) is the design, written for [ORB-24839] and corrected by [ORB-24885], [ORB-24886], [ORB-24896] and [ORB-24887]; it ends with the build order and the questions Daniel has to answer first.
 
 ## 1. Motivation
 
@@ -61,5 +61,9 @@ Nothing is implemented. The table maps each concern to where the design settles 
 ## Task References
 
 - [ORB-24839] — wrote this design; it changes no code or configuration and files no implementation task.
+- [ORB-24885] — corrected the replay job so it does not end with `task_complete` for a candidate never marked review
+- [ORB-24886] — restored the separator in arm and eval-set placeholder syntax in the design
+- [ORB-24896] — corrected completion authorization so a job defaulting `completion: done` cannot grant it to replay runs
+- [ORB-24887] — corrected the OS rule for candidate construction, so a candidate carries exactly `os:linux`
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

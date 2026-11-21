@@ -49,16 +49,16 @@ fn agent_detail_surface(session: &ToolSessionContext) -> AgentDetailSurface {
 pub(super) fn execute(
     runtime: &OrbitRuntime,
     task_scope: &OrbitTaskScope,
+    brokered_resident: bool,
     caller: ToolCaller<'_>,
     action: OrbitBuiltinAction,
     input: Value,
 ) -> Result<Value, OrbitError> {
     let (input, mut redaction_report) =
         super::artifact_redaction::sanitize_tool_input(action, input)?;
-    // A resident cycle's agent reaches tools only within its cycle's grant;
-    // the trusted run binding, never input, says whether this is one.
     let ticket = match runtime.admit_resident_cycle_call(
         task_scope.run_id.as_deref(),
+        brokered_resident,
         super::resident_guard::resident_guard_tool_name(action),
         super::resident_guard::resident_guard_class(action, &input),
         &input,
@@ -67,12 +67,17 @@ pub(super) fn execute(
         ResidentCallAdmission::Ledgered(ticket) => Some(ticket),
         ResidentCallAdmission::AlreadyDone(answer) => return Ok(answer),
     };
+    // The cycle guard ledgers a right-gated write only for a live cycle that
+    // holds the right, so a ledgered call stands in for the operator check
+    // the handler would otherwise repeat.
+    let resident_cycle_admitted = brokered_resident && ticket.is_some();
     let mut result = execute_admitted(
         runtime,
         task_scope,
         caller,
         action,
         input,
+        resident_cycle_admitted,
         &mut redaction_report,
     );
     if let Some(ticket) = ticket {
@@ -87,6 +92,7 @@ fn execute_admitted(
     caller: ToolCaller<'_>,
     action: OrbitBuiltinAction,
     input: Value,
+    resident_cycle_admitted: bool,
     redaction_report: &mut super::artifact_redaction::ArtifactRedactionReport,
 ) -> Result<Value, OrbitError> {
     let ToolCaller {
@@ -96,7 +102,7 @@ fn execute_admitted(
         reservation_owner,
     } = caller;
     if let Some(mut result) =
-        super::worker_tools::execute(runtime, session_context, action, &input, model.as_deref())?
+        super::worker_tools::execute(runtime, session_context, action, &input)?
     {
         super::artifact_redaction::finish_tool_response(
             runtime,
@@ -144,7 +150,22 @@ fn execute_admitted(
             agent_detail_surface(session_context),
         ),
         OrbitBuiltinAction::Attention(_) => {
-            crate::application::attention::attention_query(runtime, input, session_context)
+            let resident_scope =
+                runtime.resident_cycle_attention_scope(task_scope.run_id.as_deref());
+            let mint = input.get("wait_grant").and_then(serde_json::Value::as_bool) == Some(true);
+            crate::application::attention::attention_query(
+                runtime,
+                input,
+                session_context,
+                resident_scope.as_ref(),
+            )
+            .and_then(|response| {
+                if mint {
+                    crate::application::attention::with_wait_grant(runtime, response)
+                } else {
+                    Ok(response)
+                }
+            })
         }
         OrbitBuiltinAction::Codebase(verb) => super::codebase_tools::dispatch(runtime, verb, input),
         OrbitBuiltinAction::Automation(verb) => {
@@ -196,6 +217,7 @@ fn execute_admitted(
                     reservation_owner,
                 },
                 operator,
+                resident_cycle_admitted,
                 verb,
                 input,
             )?;

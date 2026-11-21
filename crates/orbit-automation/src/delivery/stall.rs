@@ -23,7 +23,10 @@
 //! can run under its task's `os:` tags. It stalls like a stuck reason, so the
 //! consumer reports one durable fact instead of an error per tick, and every
 //! later evaluation asks the host again: once the pool or the tags admit a
-//! crew, the stall clears and the held claim is admitted in the same pass.
+//! crew, the stall clears and the held claim is admitted in the same pass,
+//! unless it is a retry whose deadline passed while held. That pass exhausts
+//! the retry with `retry_deadline_expired` instead of minting (see the crew
+//! hold section of `docs/design/automation-triggers/references/operations.md`).
 
 use super::{DeliveryHost, Evaluation, recovery};
 use crate::checkpoint::diagnostic;

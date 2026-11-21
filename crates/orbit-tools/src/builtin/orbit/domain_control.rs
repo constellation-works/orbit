@@ -95,7 +95,13 @@ pub(super) fn bounded_read(
     mut input: Value,
     scope: &str,
     allowed: &[&str],
+    default_view_hint: &str,
 ) -> Result<Value, OrbitError> {
+    if input.get("workspace").is_none() {
+        return Err(OrbitError::InvalidInput(format!(
+            "`view: bounded` requires `workspace`; pass a registered workspace name, a logical workspace ID (`ws_*`), or an absolute local checkout path; {default_view_hint}"
+        )));
+    }
     required_string(&input, &["workspace"], "workspace")?;
     reject_unknown_tool_fields(&input, allowed)?;
     if let Some(object) = input.as_object_mut() {

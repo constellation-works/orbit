@@ -9,10 +9,13 @@ use crate::executor::automation::vcs::absorbed::{ABSORBING_STEP, AbsorbedReason,
 
 use super::super::boundary_guard::is_host_owned_path;
 use super::super::fingerprint::{
-    GitWorktreeFingerprint, changed_paths, git_fingerprint, git_output_raw, git_stdout,
+    GitWorktreeFingerprint, changed_paths, git_fingerprint, git_is_ancestor, git_output_raw,
+    git_stdout,
 };
 use super::super::generated_paths::{conflicted_generated_paths, regenerate};
-use super::super::rebase_repairs::{earlier_companion_paths, unrepaired_conflict_paths};
+use super::super::rebase_repairs::{
+    adopt_resolution_intents, earlier_companion_paths, unrepaired_conflict_paths,
+};
 use super::super::{DispatchError, WorktreeBoundaryGuard};
 use super::checkpoint::{RebaseContinuation, RebaseRecoveryCheckpoint};
 use super::git::{
@@ -104,7 +107,24 @@ impl WorktreeBoundaryGuard {
             .filter(|path| !regenerated_paths.contains(path))
             .cloned()
             .collect::<Vec<_>>();
-        if !unrepaired_conflict_paths(&self.assigned_root, &hand_repaired, &changed)?.is_empty() {
+        // A modify/delete conflict kept unchanged on one side is adopted only
+        // through this invocation's verified resolution intent; any intent
+        // that does not match the index stages and worktree refuses
+        // continuation [F2026-11-277].
+        let intents = match &checkpoint.resolution_intent {
+            Some(slot) => slot
+                .read()
+                .map_err(|reason| invalid(&format!("resolution intent refused: {reason}")))?,
+            None => Vec::new(),
+        };
+        let intended = adopt_resolution_intents(&self.assigned_root, &intents, &hand_repaired)
+            .map_err(|reason| invalid(&format!("resolution intent refused: {reason}")))?;
+        let unintended = hand_repaired
+            .iter()
+            .filter(|path| !intended.contains(path))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unrepaired_conflict_paths(&self.assigned_root, &unintended, &changed)?.is_empty() {
             return Err(invalid(
                 "one or more authorized conflict files were not repaired",
             ));
@@ -378,13 +398,7 @@ impl WorktreeBoundaryGuard {
             &self.assigned_root,
             &["rev-parse", "--verify", &checkpoint.base_ref],
         )?;
-        if live == pinned
-            || !git_output_raw(
-                &self.assigned_root,
-                &["merge-base", "--is-ancestor", pinned, &live],
-            )?
-            .success
-        {
+        if live == pinned || !git_is_ancestor(&self.assigned_root, pinned, &live)? {
             return Ok(LandedOn::Candidate(pinned.to_string()));
         }
         let followed = git_mutation_output(&self.assigned_root, &["rebase", &live])?;
@@ -415,11 +429,7 @@ impl WorktreeBoundaryGuard {
         }
         if !self.completed_authorized_rebase(&followed)?
             || followed.head == live
-            || !git_output_raw(
-                &self.assigned_root,
-                &["merge-base", "--is-ancestor", &live, "HEAD"],
-            )?
-            .success
+            || !git_is_ancestor(&self.assigned_root, &live, "HEAD")?
         {
             return Err(invalid(
                 "rebasing onto the advanced base did not leave the checkpointed branch on that base with a candidate commit",

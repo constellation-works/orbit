@@ -5,13 +5,18 @@
 use chrono::{Duration, SecondsFormat, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
-use orbit_core::application::task::TaskAddParams;
-use orbit_store::contracts::JobRunStepParams;
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_store::contracts::{
+    AdmissionRunContext, ClaimInspection, ClaimRun, ExecutionClaim, ExecutionClaimPhase,
+    ExecutionLocation, JobRunStepParams, LocalPullAdmission, LocalPullPhase, PullDestination,
+};
 use orbit_types::task::TaskStatus;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::PipelineState;
 use orbit_types::workflow::{JobRunState, JobTargetType};
 use serde_json::{Value, json};
+
+const ATTENTION_HOST: &str = "attention-host";
 
 const CONFIG: &str =
     "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n";
@@ -449,10 +454,358 @@ fn run_stuck_respects_declared_windows_and_progress() {
     );
 }
 
+fn attention_runtime() -> (tempfile::TempDir, OrbitRuntime) {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let orbit = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&orbit).unwrap();
+    std::fs::write(orbit.join("config.toml"), CONFIG).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &orbit)
+        .unwrap()
+        .with_automation_machine_identity(Some(ATTENTION_HOST.into()));
+    (root, runtime)
+}
+
+fn add_named_task(runtime: &OrbitRuntime, title: &str, status: TaskStatus) -> String {
+    runtime
+        .add_task(TaskAddParams {
+            title: title.into(),
+            description: "Fixture task.".into(),
+            acceptance_criteria: vec!["Fixture task is observable.".into()],
+            status: Some(status),
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+}
+
+fn settle_task(runtime: &OrbitRuntime, id: &str) {
+    runtime
+        .update_task_with_identity(
+            id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Done),
+                execution_summary: Some("Landed through a later run.".into()),
+                ..Default::default()
+            },
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+}
+
+fn fail_run(runtime: &OrbitRuntime, task_id: Option<&str>) -> String {
+    let jobs = runtime.stores().jobs();
+    let now = Utc::now();
+    let input = task_id.map(|id| json!({"task_id": id}));
+    let run = jobs
+        .insert_job_run("task_pr_pipeline", 1, now, input, None)
+        .unwrap();
+    jobs.mark_job_run_running(&run.run_id, now, std::process::id())
+        .unwrap();
+    jobs.finalize_job_run(&run.run_id, JobRunState::Failed, now, None)
+        .unwrap();
+    run.run_id
+}
+
+fn run_item<'a>(response: &'a Value, run_id: &str) -> &'a Value {
+    response["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["refs"]["run_id"] == run_id)
+        .unwrap_or_else(|| panic!("missing run {run_id} in {response}"))
+}
+
+fn assert_run_failed_claim(item: &Value, held: bool, leaf: bool, severity: &str) {
+    assert_eq!(item["kind"], "run_failed", "{item}");
+    assert_eq!(item["detail"]["held_claim"], json!(held), "{item}");
+    assert_eq!(item["detail"]["claimed_leaf"], json!(leaf), "{item}");
+    assert_eq!(item["severity"], severity, "{item}");
+    if leaf {
+        // Resume advice stays on the claimed-leaf flag, including after settlement.
+        assert_eq!(item["next"]["input"]["action"], "show", "{item}");
+    }
+}
+
+fn run_failed_degraded(response: &Value) -> Vec<&Value> {
+    response["degraded"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["kind"] == "run_failed")
+        .collect()
+}
+
+fn owner_run_failed_skips_a_terminal_task_and_keeps_an_open_one() {
+    let (_root, runtime) = attention_runtime();
+    let operator = session(McpCapability::Operator);
+    let done = add_named_task(&runtime, "Settled owner task", TaskStatus::Review);
+    settle_task(&runtime, &done);
+    let open = add_named_task(&runtime, "Open owner task", TaskStatus::Backlog);
+    let done_run = fail_run(&runtime, Some(&done));
+    let open_run = fail_run(&runtime, Some(&open));
+
+    let response = call(&runtime, json!({"kind": "run_failed"}), &operator);
+    let items = response["items"].as_array().unwrap();
+    assert!(
+        !items.iter().any(|item| item["refs"]["run_id"] == done_run),
+        "a terminal owner task suppresses its failed run: {response}"
+    );
+    assert_eq!(items.len(), 1, "{response}");
+    let item = run_item(&response, &open_run);
+    assert_eq!(item["refs"]["task_id"], open, "{response}");
+    assert_run_failed_claim(item, false, false, "medium");
+    assert!(
+        run_failed_degraded(&response).is_empty(),
+        "the owner can read task status, so run_failed is not degraded: {response}"
+    );
+}
+
+fn follower_run_failed_degrades_when_the_owner_task_status_cannot_be_read() {
+    let (_root, runtime) = attention_runtime();
+    let operator = session(McpCapability::Operator);
+    let done = add_named_task(&runtime, "Done on the shared store", TaskStatus::Review);
+    settle_task(&runtime, &done);
+    let open = add_named_task(&runtime, "Open on the shared store", TaskStatus::Backlog);
+    let done_run = fail_run(&runtime, Some(&done));
+    let open_run = fail_run(&runtime, Some(&open));
+    let replica = runtime
+        .clone()
+        .with_coordination_write_owner(Some("hm_owner".into()));
+
+    let response = call(&replica, json!({"kind": "run_failed"}), &operator);
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "{response}");
+    let settled = run_item(&response, &done_run);
+    assert_eq!(settled["refs"]["task_id"], done, "{response}");
+    assert_run_failed_claim(settled, false, false, "medium");
+    assert_run_failed_claim(run_item(&response, &open_run), false, false, "medium");
+    let degraded = run_failed_degraded(&response);
+    assert_eq!(degraded.len(), 1, "{response}");
+    assert_eq!(degraded[0]["code"], "source_unavailable", "{response}");
+    assert_eq!(
+        degraded[0]["message"],
+        "Task records on a replica are not authoritative; read the workspace owner",
+        "{response}"
+    );
+
+    // A failed run that names no task does not, by itself, degrade the kind.
+    let (_taskless_root, taskless) = attention_runtime();
+    let taskless = taskless.with_coordination_write_owner(Some("hm_owner".into()));
+    let bare = fail_run(&taskless, None);
+    let response = call(&taskless, json!({"kind": "run_failed"}), &operator);
+    let item = run_item(&response, &bare);
+    assert!(!item["refs"]["task_id"].is_string(), "{response}");
+    assert_run_failed_claim(item, false, false, "medium");
+    assert!(
+        run_failed_degraded(&response).is_empty(),
+        "a taskless follower failure is not an owner-status gap: {response}"
+    );
+}
+
+pub(crate) fn seed_bound_claim(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    run_id: &str,
+    phase: ExecutionClaimPhase,
+    machine_id: &str,
+) {
+    let now = Utc::now().to_rfc3339();
+    let claim = ExecutionClaim {
+        claim_id: format!("claim-{run_id}"),
+        task_id: task_id.to_string(),
+        request_id: format!("request-{run_id}"),
+        executed_on: ExecutionLocation {
+            machine_id: machine_id.to_string(),
+            machine_name: None,
+        },
+        run_context: AdmissionRunContext {
+            run_id: format!("parent-{run_id}"),
+            job_name: "workspace_auto_pipeline".into(),
+            machine_name: None,
+        },
+        footprint: Vec::new(),
+        reservation_id: format!("reservation-{run_id}"),
+        reservation_expires_at: (Utc::now() + Duration::minutes(30)).to_rfc3339(),
+        phase,
+        repair: None,
+    };
+    let inspection = ClaimInspection {
+        claim: claim.clone(),
+        bound_run: Some(ClaimRun {
+            machine_id: machine_id.to_string(),
+            run_id: run_id.to_string(),
+        }),
+        created_at: now.clone(),
+        updated_at: now.clone(),
+        last_event: "claim_failed".into(),
+        age_seconds: Some(1),
+        unresolved_merge_intent: None,
+        landing_invalidated: false,
+        release: None,
+        preserved_candidate: None,
+        settlement: None,
+        steering: None,
+        leaf_run_evidence: None,
+        late_leaf_effort: None,
+        late_leaf_model: None,
+    };
+    let connection = rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+    let workspace_id = runtime.workspace_id().unwrap();
+    for (kind, payload) in [
+        (
+            "distributed-execution-claim-v1",
+            serde_json::to_string(&claim).unwrap(),
+        ),
+        (
+            "distributed-claim-lifecycle-v1",
+            serde_json::to_string(&inspection).unwrap(),
+        ),
+    ] {
+        connection
+            .execute(
+                "INSERT INTO task_coordination_rows \
+                     (workspace_id, kind, row_id, payload_json, journal_id, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, 'fixture', ?5)",
+                rusqlite::params![workspace_id, kind, claim.claim_id, payload, now],
+            )
+            .unwrap();
+    }
+}
+
+fn run_failed_settled_claims_are_not_held_and_a_live_claim_is() {
+    let (_root, runtime) = attention_runtime();
+    let operator = session(McpCapability::Operator);
+    let mut seeded = Vec::new();
+    for (title, phase, held, severity) in [
+        ("Failed claim", ExecutionClaimPhase::Failed, false, "medium"),
+        ("Landed claim", ExecutionClaimPhase::Landed, false, "medium"),
+        (
+            "Revoked claim",
+            ExecutionClaimPhase::Revoked,
+            false,
+            "medium",
+        ),
+        ("Running claim", ExecutionClaimPhase::Running, true, "high"),
+    ] {
+        let task = add_named_task(&runtime, title, TaskStatus::Backlog);
+        let run_id = fail_run(&runtime, Some(&task));
+        seed_bound_claim(&runtime, &task, &run_id, phase, ATTENTION_HOST);
+        seeded.push((run_id, held, severity));
+    }
+    let foreign_task = add_named_task(&runtime, "Other host claim", TaskStatus::Backlog);
+    let foreign_run = fail_run(&runtime, Some(&foreign_task));
+    seed_bound_claim(
+        &runtime,
+        &foreign_task,
+        &foreign_run,
+        ExecutionClaimPhase::Running,
+        "other-host",
+    );
+
+    let response = call(&runtime, json!({"kind": "run_failed"}), &operator);
+    assert_eq!(response["items"].as_array().unwrap().len(), 5, "{response}");
+    for (run_id, held, severity) in seeded {
+        assert_run_failed_claim(run_item(&response, &run_id), held, true, severity);
+    }
+    assert_run_failed_claim(run_item(&response, &foreign_run), false, false, "medium");
+    assert!(
+        run_failed_degraded(&response).is_empty(),
+        "owner claim inspection is not a replica status gap: {response}"
+    );
+}
+
+pub(crate) fn seed_local_pull(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    phase: LocalPullPhase,
+    request_id: &str,
+) {
+    let admission = LocalPullAdmission {
+        destination: PullDestination {
+            owner_machine_id: "owner-m".into(),
+            owner_workspace_id: "owner-ws".into(),
+            selector: "owner-m/owner-ws".into(),
+            execution_machine_id: "exec-m".into(),
+        },
+        request: crate::admission_test_support::admission_request(
+            request_id.to_string(),
+            AdmissionRunContext {
+                run_id: format!("parent-{run_id}"),
+                job_name: "workspace_auto_pipeline".into(),
+                machine_name: None,
+            },
+            crate::admission_test_support::admission_ship_contract(),
+        ),
+        receipt: None,
+        leaf_run_id: Some(run_id.to_string()),
+        phase,
+        settlement: None,
+        refusal: None,
+        settlement_refusal: None,
+        build_output_reclaim_complete: false,
+    };
+    let connection = rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+    connection
+        .execute(
+            "INSERT INTO local_pull_admissions (
+                workspace_id, owner_machine, owner_workspace, execution_machine,
+                request_id, claim_id, leaf_run_id, record_json
+             ) VALUES (?1, 'owner-m', 'owner-ws', 'exec-m', ?2, NULL, ?3, ?4)",
+            rusqlite::params![
+                runtime.workspace_id().unwrap(),
+                request_id,
+                run_id,
+                serde_json::to_string(&admission).unwrap()
+            ],
+        )
+        .unwrap();
+}
+
+fn follower_run_failed_settled_local_pull_is_not_a_held_claim() {
+    let (_root, runtime) = attention_runtime();
+    let operator = session(McpCapability::Operator);
+    let settled_task = add_named_task(&runtime, "Settled pull", TaskStatus::Backlog);
+    let live_task = add_named_task(&runtime, "Live pull", TaskStatus::Backlog);
+    let settled_run = fail_run(&runtime, Some(&settled_task));
+    let live_run = fail_run(&runtime, Some(&live_task));
+    seed_local_pull(
+        &runtime,
+        &settled_run,
+        LocalPullPhase::Settled,
+        "pull-settled",
+    );
+    seed_local_pull(
+        &runtime,
+        &live_run,
+        LocalPullPhase::Launched,
+        "pull-launched",
+    );
+    let replica = runtime.with_coordination_write_owner(Some("hm_owner".into()));
+
+    let response = call(&replica, json!({"kind": "run_failed"}), &operator);
+    assert_eq!(response["items"].as_array().unwrap().len(), 2, "{response}");
+    assert_run_failed_claim(run_item(&response, &settled_run), false, true, "medium");
+    assert_run_failed_claim(run_item(&response, &live_run), true, true, "high");
+    let degraded = run_failed_degraded(&response);
+    assert_eq!(
+        degraded.len(),
+        1,
+        "task-naming follower runs still say the owner status was not read: {response}"
+    );
+    assert_eq!(degraded[0]["code"], "source_unavailable", "{response}");
+}
+
 crate::scenario_table!(
     attention_observation,
     attention_does_not_recover_a_pending_task_commit,
     friction_attention_does_not_recover_a_pending_task_commit,
     delivery_hold_attention_next_is_workspace_qualified_with_tool,
     run_stuck_respects_declared_windows_and_progress,
+    owner_run_failed_skips_a_terminal_task_and_keeps_an_open_one,
+    follower_run_failed_degrades_when_the_owner_task_status_cannot_be_read,
+    run_failed_settled_claims_are_not_held_and_a_live_claim_is,
+    follower_run_failed_settled_local_pull_is_not_a_held_claim,
 );

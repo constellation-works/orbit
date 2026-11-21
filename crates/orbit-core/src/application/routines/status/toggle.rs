@@ -5,14 +5,29 @@ use super::super::guarded_edit::guarded_routine_edit;
 
 /// Select routine `name` from `report` for a definition edit.
 ///
-/// The one selection every edit surface runs (toggle and trigger edit): an
-/// owner-only definition is refused with the owner named, an unlisted name is
-/// not found, and `source` (workspace name and `.orbit` directory, when the
-/// report spans more than the caller's checkout) must match the routine's.
+/// The one selection every edit surface runs (toggle, trigger edit and the
+/// breaker controls): an owner-only definition is refused with the owner
+/// named, an unlisted name is not found, and `source` (workspace name and
+/// `.orbit` directory, when the report spans more than the caller's checkout)
+/// must match the routine's.
 pub fn select_listed_routine<'a>(
     report: &'a RoutineStatusReport,
     name: &str,
     source: Option<(&str, &Path)>,
+) -> Result<&'a LoadedRoutine, RoutineEditRefusal> {
+    select_listed_routine_in(
+        report,
+        name,
+        source.map(|(workspace, dir)| (workspace, Some(dir))),
+    )
+}
+
+/// [`select_listed_routine`] where the caller may know only the source
+/// workspace's name: a `None` directory skips the `.orbit` directory check.
+fn select_listed_routine_in<'a>(
+    report: &'a RoutineStatusReport,
+    name: &str,
+    source: Option<(&str, Option<&Path>)>,
 ) -> Result<&'a LoadedRoutine, RoutineEditRefusal> {
     if let Some(owned) = report
         .owner_only
@@ -33,7 +48,8 @@ pub fn select_listed_routine<'a>(
     };
     let routine = &status.routine;
     if source.is_some_and(|(workspace, orbit_dir)| {
-        routine.source_workspace != workspace || routine.source_orbit_dir != orbit_dir
+        routine.source_workspace != workspace
+            || orbit_dir.is_some_and(|dir| routine.source_orbit_dir != dir)
     }) {
         return Err(RoutineEditRefusal::WorkspaceMismatch {
             name: name.into(),
@@ -184,4 +200,96 @@ pub fn pause_routine(global_root: &Path, name: &str, actor: &str) -> Result<bool
 pub fn resume_routine(global_root: &Path, name: &str) -> Result<bool, OrbitError> {
     let store = super::super::open_routine_store(global_root)?;
     store.routine_resume(name)
+}
+
+/// Close a routine's open circuit breaker now, recording the reset under
+/// `actor`. Returns `false` when it was not open.
+fn reset_routine_breaker(global_root: &Path, name: &str, actor: &str) -> Result<bool, OrbitError> {
+    let store = super::super::open_routine_store(global_root)?;
+    store.routine_breaker_reset(name, actor)
+}
+
+/// Let one fire of a routine through its open circuit breaker on the next
+/// sweep, recording the bypass under `actor`. Returns `false` when it was not
+/// open.
+fn bypass_routine_breaker(global_root: &Path, name: &str, actor: &str) -> Result<bool, OrbitError> {
+    let store = super::super::open_routine_store(global_root)?;
+    store.routine_breaker_bypass(name, actor)
+}
+
+/// The two operator actions on a tripped routine's circuit breaker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoutineBreakerAction {
+    /// Close the breaker now.
+    Reset,
+    /// Let one fire through on the next scheduler tick.
+    Bypass,
+}
+
+impl RoutineBreakerAction {
+    /// The stable lowercase name surfaces report: `reset` or `bypass`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Reset => "reset",
+            Self::Bypass => "bypass",
+        }
+    }
+}
+
+/// What a breaker control did on this host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoutineBreakerOutcome {
+    /// The breaker was tripped and the action was recorded.
+    Changed,
+    /// The breaker was not tripped on this host; nothing was recorded.
+    NotTripped,
+}
+
+impl RoutineBreakerOutcome {
+    /// `true` when the control changed the breaker.
+    pub fn changed(self) -> bool {
+        self == Self::Changed
+    }
+}
+
+/// Select routine `name` from `report` and reset or bypass its circuit
+/// breaker, recording the action under `actor`.
+///
+/// Selection is the one every routine edit runs ([`select_listed_routine`]):
+/// an owner-only routine is refused with the owner named and an unlisted name
+/// is not found. `source` is the caller's workspace name, and the `.orbit`
+/// directory when it knows one; a routine of another source is refused. Every
+/// refusal is one [`RoutineEditRefusal`]; the outer error is a failed store
+/// write.
+pub fn control_listed_routine_breaker(
+    global_root: &Path,
+    report: &RoutineStatusReport,
+    name: &str,
+    source: Option<(&str, Option<&Path>)>,
+    action: RoutineBreakerAction,
+    actor: &str,
+) -> Result<Result<RoutineBreakerOutcome, RoutineEditRefusal>, OrbitError> {
+    if let Err(refusal) = select_listed_routine_in(report, name, source) {
+        return Ok(Err(refusal));
+    }
+    let changed = match action {
+        RoutineBreakerAction::Reset => reset_routine_breaker(global_root, name, actor)?,
+        RoutineBreakerAction::Bypass => bypass_routine_breaker(global_root, name, actor)?,
+    };
+    Ok(Ok(if changed {
+        RoutineBreakerOutcome::Changed
+    } else {
+        RoutineBreakerOutcome::NotTripped
+    }))
+}
+
+/// Newest circuit-breaker events of one routine on this host, newest first
+/// (for `routine show`). Read-only, like [`super::recent_fires`].
+pub fn routine_breaker_events(
+    global_root: &Path,
+    name: &str,
+    limit: usize,
+) -> Result<Vec<orbit_store::contracts::RoutineBreakerEvent>, OrbitError> {
+    let store = super::super::open_existing_routine_store(global_root)?;
+    store.routine_breaker_events(name, limit)
 }

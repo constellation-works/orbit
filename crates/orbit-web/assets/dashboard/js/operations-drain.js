@@ -1,12 +1,12 @@
-import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, getHost, getServingHost, getWorkspaceRevision, postJson, isAggregateView, getRegisteredHosts, workspaceCatalogEntries, workspaceDisplayName, findRegisteredHost, hostWriteRefusal } from './common.js';
+import { captureWorkspaceVisit, compareWorkspacePickerOrder, requestPanel, el, fetchJson, formatDateTime, getHost, getServingHost, getWorkspaceRevision, postJson, isAggregateView, workspaceCatalogEntries, workspaceDisplayName, findRegisteredHost, hostWriteRefusal } from './common.js';
 import { drainCrewNote, drainPilotNote, setDrainReadiness, setDrainReadinessFailure } from './drain-waits.js';
 import { drainCheckout } from './drain-start.js';
 import { autoDrainForecast, refreshBacklogForecast } from './operations-forecast.js';
-import { loadFleetSnapshot, paintAggregateFleet, paintRailDrainReading, repaintRailDrainFromFleet } from './operations-fleet.js';
+import { loadFleetSnapshot, paintRailDrainReading, repaintRailDrainFromFleet } from './operations-fleet.js';
 import { $, feedback, operationsState, pendingOperations, registerOperationsReset, runLink, selectedWorkspace, workspaceReadOnlyReason } from './operations-shared.js';
 import { taskList, taskState } from './task-shared.js';
-import { configureOperationsDrainControls, autoDrainConcurrencyValid, autoDrainConcurrencyValue, autoDrainStopButton, autoDrainStopNote, refreshDrainAfterAction, renderAutoDrainStart } from './operations-drain-controls.js';
-import { autoDrainBlocked, autoDrainCapacity, autoDrainCounts, autoDrainPhase, autoDrainPlural, autoDrainProviderAuth, autoDrainProviderLimitNote, autoDrainReasons, autoDrainShortRunId, autoDrainThrottleLine, autoDrainTimeLeft, updateDrainIndicators } from './operations-drain-capacity.js';
+import { configureOperationsDrainControls, autoDrainConcurrencyValue, autoDrainStopButton, autoDrainStopNote, refreshDrainAfterAction, renderAutoDrainStart } from './operations-drain-controls.js';
+import { autoDrainBlocked, autoDrainCapacity, autoDrainCounts, autoDrainIntentNote, autoDrainPhase, autoDrainPlural, autoDrainProviderAuth, autoDrainProviderLimitNote, autoDrainReasons, autoDrainShortRunId, autoDrainThrottleLine, autoDrainTimeLeft, updateDrainIndicators } from './operations-drain-capacity.js';
 
 let announcedDrainState = null;
 // Set while Start or Stop is refreshing the card after reporting its result, so
@@ -31,7 +31,7 @@ const aggregateDrainScopes = new WeakMap();
 const PULL_OWNER_UNAVAILABLE = "The owner's host and workspace are unavailable. Reload the page before starting a pull window.";
 
 // A card selection is a separate visit from the rail's host/workspace. Polls
-// keep that visit; switching either select retires actions and readbacks.
+// keep that visit; switching the drain-target select retires actions and readbacks.
 function resetAggregateDrainSelection() {
   drainScopeGeneration += 1;
   operationsState.lastAutoDrain = null;
@@ -39,6 +39,11 @@ function resetAggregateDrainSelection() {
   clearDrainChrome();
   clearStartCard("auto-drain-quick-start");
   feedback("auto-drain-operation-feedback", "", "");
+}
+
+function retireFailedDrainReadiness() {
+  resetAggregateDrainSelection();
+  for (const button of $("auto-drain-body")?.querySelectorAll("button") || []) button.disabled = true;
 }
 
 function aggregateDrainScope(workspace, hostName, connection, generation, checkoutUnavailable, mode = "aggregate") {
@@ -109,9 +114,9 @@ function chooseBoardHost(workspaceId, host) {
 function boardHostName() {
   return getHost() || getServingHost()?.name || "";
 }
-// The selected host's owned workspaces, in alphabetical order. All workspaces
-// is the whole aggregate board, so the Tasks chip filter does not narrow this
-// select. Replicas are never in the catalog.
+// The selected host's owned workspaces, in picker order (alphabetical by the
+// name shown). All workspaces is the whole aggregate board, so the Tasks chip
+// filter does not narrow this select. Replicas are never in the catalog.
 function aggregateWorkspaceOptions(fleet) {
   const names = new Map();
   for (const row of fleet?.items || []) {
@@ -120,76 +125,206 @@ function aggregateWorkspaceOptions(fleet) {
   return workspaceCatalogEntries()
     .filter(workspace => workspace.status === "active" && workspace.id)
     .map(workspace => ({ id: workspace.id, name: names.get(workspace.id) || workspaceDisplayName(workspace.id) || workspace.id }))
-    .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+    .sort(compareWorkspacePickerOrder);
 }
-// The hosts that can show this workspace's drain: its owner first, then the
-// follower hosts holding a replica of it. A fleet row names its owner only
-// on a replica (`owner_machine_id`); the owner's own row names none. A host
-// whose fleet read failed has one row with no workspace, so it cannot be
-// placed on the workspace; it is kept in the list rather than dropped, since
-// it may hold the workspace and the card must be able to show its error.
-function aggregateWorkspaceHosts(fleet, workspaceId, hosts) {
-  const rows = (fleet?.items || []).filter(row => row.workspace_id === workspaceId && !row.pending);
-  let owner = rows.find(row => !row.owner_machine_id)?.host || null;
+// The hosts that can show this workspace's drain, each with its role: the
+// owner first, then the follower hosts holding a replica of it. A fleet row
+// names its owner only on a replica (`owner_machine_id`); the owner's own row
+// names none. When no healthy row names the owner, the host whose catalog
+// listed the workspace (`ownerFallback`) is the owner, so a failed fleet read
+// still lists it. A replica whose row failed, and a host whose fleet read
+// failed outright (one row with no workspace), are kept with the role
+// "unknown": either may hold the workspace and the card must be able to show
+// its error. A host with no row for the workspace holds no replica and is not
+// listed.
+function aggregateWorkspaceHosts(fleet, workspaceId, ownerFallback) {
+  const items = fleet?.items || [];
+  const rows = items.filter(row => row.workspace_id === workspaceId && !row.pending);
+  let owner = rows.find(row => row.host && !row.error && !row.owner_machine_id)?.host || null;
   if (!owner) {
     for (const row of rows) {
       owner = findRegisteredHost(row.owner_machine_id)?.name || null;
       if (owner) break;
     }
   }
-  const ordered = [];
-  if (owner) ordered.push(owner);
-  for (const row of rows) {
-    if (row.host && !ordered.includes(row.host)) ordered.push(row.host);
+  const entries = [];
+  const add = (host, role) => {
+    if (host && !entries.some(entry => entry.host === host)) entries.push({ host, role });
+  };
+  add(owner || ownerFallback, "owner");
+  for (const row of rows) add(row.host, row.error ? "unknown" : "pull");
+  for (const row of items) {
+    if (hostFleetFailure(row)) add(row.host, "unknown");
   }
-  if (!ordered.length) return hosts.map(host => host.name);
-  for (const row of fleet?.items || []) {
-    if (hostFleetFailure(row) && !ordered.includes(row.host)) ordered.push(row.host);
-  }
-  return ordered;
+  return entries;
 }
 // The host-level error row of a host whose fleet read failed. Workspace rows
 // carry their own `error` and are left to the readiness read.
 function hostFleetFailure(row) {
   return Boolean(row?.host && row.error && !row.workspace_id && !row.pending);
 }
-// The Drain host select shared by All workspaces and an owner's concrete
-// board. One listener covers both: the select is removed when the scope resets.
-function paintDrainHostSelect(ordered, selected) {
+// One option per workspace-host pair, so a pair with no replica cannot be
+// formed. The workspace name is the part shortened (the group label and the
+// title carry it in full), and the select clips the head of its text, so the
+// host and role stay visible.
+const DRAIN_TARGET_SEPARATOR = "\u001f";
+const DRAIN_TARGET_NAME_CHARS = 18;
+function drainTargetValue(workspaceId, host) {
+  return `${workspaceId}${DRAIN_TARGET_SEPARATOR}${host}`;
+}
+function parseDrainTarget(value) {
+  const at = String(value || "").indexOf(DRAIN_TARGET_SEPARATOR);
+  return at < 0 ? null : { workspaceId: value.slice(0, at), host: value.slice(at + 1) };
+}
+// A name that starts with a digit or punctuation needs a leading left-to-right
+// mark, or the bidi algorithm in the right-to-left select moves those characters
+// to the visual end (in the option text and in the group label). A letter already
+// reads correctly, and a leading mark stops type-ahead from matching the first
+// character, so only the names that need it get one.
+function drainTargetName(name) {
+  return /^\p{L}/u.test(name) ? name : "\u200E" + name;
+}
+function drainTargetText(name, host, role) {
+  const short = name.length > DRAIN_TARGET_NAME_CHARS ? `${name.slice(0, DRAIN_TARGET_NAME_CHARS - 1)}…` : name;
+  // The closing mark keeps the right-to-left select from moving the ")" when
+  // the head of the text is clipped.
+  return `${drainTargetName(short)} · ${host} (${role})\u200E`;
+}
+// The header row keeps every member at full size while it fits (STD-07 R39).
+// A fixed breakpoint cannot tell fitting from overflowing rows, so the row's
+// natural width (title, phase with its word, select at its floor) is measured
+// against the header: first the phase reduces to its dot, then the title goes.
+// The select has already given up its spare width by then.
+let drainHeadFitWired = false;
+function drainTargetFloorWidth(select) {
+  let tail = 0;
+  const style = getComputedStyle(select);
+  const canvas = drainTargetFloorWidth.canvas || (drainTargetFloorWidth.canvas = document.createElement("canvas"));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.font = style.font;
+  for (const option of select.options) {
+    const { host, role } = option.dataset;
+    if (host) tail = Math.max(tail, ctx.measureText(`\u2026${host} (${role})`).width);
+  }
+  if (!tail) return null;
+  const chrome = ["paddingLeft", "paddingRight", "borderLeftWidth", "borderRightWidth"]
+    .reduce((sum, key) => sum + (parseFloat(style[key]) || 0), 0);
+  return Math.ceil(tail + chrome);
+}
+function setDrainTargetFloor(select) {
+  const floor = drainTargetFloorWidth(select);
+  if (floor) select.style.setProperty("--drain-target-floor", `${floor}px`);
+  else select.style.removeProperty("--drain-target-floor");
+}
+function drainHeadNaturalWidth(header) {
+  const gap = parseFloat(getComputedStyle(header).columnGap) || 0;
+  const members = [...header.children].filter(node => node.id !== "auto-drain-target" && node.offsetWidth > 1);
+  const select = $("auto-drain-target");
+  let width = members.reduce((sum, node) => sum + node.offsetWidth, 0);
+  let count = members.length;
+  if (select) { width += parseFloat(getComputedStyle(select).minWidth) || 0; count += 1; }
+  return width + gap * Math.max(0, count - 1);
+}
+function fitDrainHeader() {
+  const header = document.querySelector("#auto-drain-panel > header");
+  if (!header || !header.clientWidth) return;
+  const style = getComputedStyle(header);
+  const room = header.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+  header.classList.remove("drain-head-dot", "drain-head-notitle", "drain-head-tight");
+  if (drainHeadNaturalWidth(header) <= room) return;
+  header.classList.add("drain-head-dot");
+  if (drainHeadNaturalWidth(header) <= room) return;
+  header.classList.add("drain-head-notitle");
+  if (drainHeadNaturalWidth(header) > room) header.classList.add("drain-head-tight");
+}
+function wireDrainHeaderFit() {
+  if (drainHeadFitWired) return;
+  const header = document.querySelector("#auto-drain-panel > header");
+  if (!header) return;
+  drainHeadFitWired = true;
+  new ResizeObserver(fitDrainHeader).observe(header);
+  // The floor is measured in the select's font, so it is taken again once the
+  // web font has loaded.
+  document.fonts?.ready.then(() => {
+    const select = $("auto-drain-target");
+    if (select) setDrainTargetFloor(select);
+    fitDrainHeader();
+  });
+}
+// The Drain target select shared by All workspaces (every owned workspace, as
+// groups) and an owner's concrete board (its one workspace). One listener
+// covers both: the select is removed when the scope resets. `groups` are
+// `{id, name, hosts: [{host, role}]}`; `selected` is `{workspaceId, host}`.
+function paintDrainTargetSelect(groups, selected) {
   const phase = $("auto-drain-phase");
   if (!phase) return;
-  let select = $("auto-drain-host");
+  let select = $("auto-drain-target");
   if (!select) {
-    select = el("select", { id: "auto-drain-host", class: "workspace-select", "aria-label": "Drain host" });
-    select.addEventListener("change", () => onDrainHostChanged(select.value));
-    phase.before(select);
+    select = el("select", { id: "auto-drain-target", class: "workspace-select", "aria-label": "Drain target (workspace and host)" });
+    select.addEventListener("change", () => {
+      const option = select.selectedOptions[0];
+      const target = parseDrainTarget(select.value);
+      if (target) onDrainTargetChanged(target, option?.dataset.role);
+    });
+    phase.after(select);
   }
-  const signature = JSON.stringify(ordered);
-  if (select.dataset.hosts !== signature) {
-    select.replaceChildren(...ordered.map(name => {
-      const node = el("option", { text: name });
-      node.value = name;
+  const shown = groups.filter(group => group.hosts.length);
+  const signature = JSON.stringify(shown);
+  if (select.dataset.targets !== signature) {
+    select.replaceChildren(...shown.map(group => {
+      const node = el("optgroup");
+      node.label = drainTargetName(group.name);
+      node.append(...group.hosts.map(({ host, role }) => {
+        const option = el("option", { text: drainTargetText(group.name, host, role) });
+        option.value = drainTargetValue(group.id, host);
+        option.dataset.role = role;
+        option.dataset.host = host;
+        option.title = `${group.name} · ${host} (${role})`;
+        return option;
+      }));
       return node;
     }));
-    select.dataset.hosts = signature;
+    select.dataset.targets = signature;
+    setDrainTargetFloor(select);
   }
-  select.value = selected || "";
-  select.title = selected ? `Drain host: ${selected}` : "Drain host";
+  select.value = selected ? drainTargetValue(selected.workspaceId, selected.host) : "";
+  const option = select.selectedOptions[0];
+  select.dataset.host = selected?.host || "";
+  select.title = option?.value ? `Drain target: ${option.title}` : "Drain target";
+  wireDrainHeaderFit();
+  fitDrainHeader();
 }
-function onDrainHostChanged(value) {
+function onDrainTargetChanged({ workspaceId, host }, role) {
   if (isAggregateView()) {
-    chooseAggregateWorkspace(aggregateDrainWorkspace);
-    chooseAggregateHost(value);
-    aggregateDrainHost = value || null;
+    chooseAggregateWorkspace(workspaceId);
+    // The owner is the default and is not stored, so it keeps following the
+    // fleet; a follower or unknown host is the operator's own pick.
+    chooseAggregateHost(role === "owner" ? null : host);
+    // The panel's scope key reads the shown selection, so the pick is shown
+    // now; the next paint resolves it the same way from storage.
+    aggregateDrainWorkspace = workspaceId;
+    aggregateDrainHost = host;
   } else {
     const workspace = selectedWorkspace();
-    const follower = Boolean(value) && Boolean(boardHostName()) && value !== boardHostName();
-    if (workspace) chooseBoardHost(workspace.id, follower ? value : null);
-    boardDrainHost = follower ? value : null;
+    const follower = Boolean(host) && Boolean(boardHostName()) && host !== boardHostName();
+    if (workspace) chooseBoardHost(workspace.id, follower ? host : null);
+    boardDrainHost = follower ? host : null;
   }
   resetAggregateDrainSelection();
   fetchAndRenderAutoDrain().catch(error => console.error(error));
 }
+function drainReadinessPath(hostName, workspaceId, detailTaskId) {
+  const host = hostName ? (findRegisteredHost(hostName)?.local ? "" : hostName) : getHost() || "";
+  const concurrency = autoDrainConcurrencyValue(host);
+  const params = new URLSearchParams();
+  if (workspaceId) params.set("workspace", workspaceId);
+  if (concurrency) params.set("concurrency", concurrency);
+  if (detailTaskId) params.set("also_task", detailTaskId);
+  const path = hostName ? `/api/on/${encodeURIComponent(hostName)}/workflows/auto/readiness` : "/api/workflows/auto/readiness";
+  return `${path}${params.size ? `?${params}` : ""}`;
+}
+
 // Readiness, connection and refusal for one chosen host. All workspaces and a
 // concrete board's follower use this; the owner's own board does not.
 async function loadScopedDrainReadiness({ fleet, workspace, hostName, generation, mode, stillCurrent }) {
@@ -201,7 +336,7 @@ async function loadScopedDrainReadiness({ fleet, workspace, hostName, generation
     start_options: { checkout: "replica", workspace_id: workspace.id, pull_refusal: PULL_OWNER_UNAVAILABLE } });
   const [connection, readiness] = await Promise.all([
     findRegisteredHost(hostName)?.local ? null : fetchJson(`/api/hosts/${encodeURIComponent(hostName)}/connection`),
-    checkoutUnavailable ? unavailable() : fetchJson(`/api/on/${encodeURIComponent(hostName)}/workflows/auto/readiness?workspace=${encodeURIComponent(workspace.id)}`)
+    checkoutUnavailable ? unavailable() : fetchJson(drainReadinessPath(hostName, workspace.id))
       .catch(error => {
         // Only a replica reads as an unavailable owner; an owner whose
         // workspace is inactive keeps the error its readiness returned.
@@ -217,18 +352,20 @@ async function loadScopedDrainReadiness({ fleet, workspace, hostName, generation
   aggregateDrainScopes.set(readiness, scope);
   return readiness;
 }
-// Hosts for this workspace once a fleet row places it. Before that, the
-// all-hosts fallback would offer machines that do not hold a replica.
+// Hosts for this workspace once a fleet row places it. Before that, only the
+// workspace's own board host is known, so no pair is offered.
 function concreteHostOptions(fleet, workspaceId) {
   const items = fleet?.items || [];
   if (!items.some(row => row.workspace_id === workspaceId && !row.pending)) return null;
-  return aggregateWorkspaceHosts(fleet, workspaceId, getRegisteredHosts());
+  return aggregateWorkspaceHosts(fleet, workspaceId, boardHostName());
 }
 function paintConcreteHostSelect(fleet, workspace) {
   if (!workspace || isAggregateView()) return null;
-  const ordered = concreteHostOptions(fleet, workspace.id);
-  if (!ordered?.length) {
-    $("auto-drain-host")?.remove();
+  const entries = concreteHostOptions(fleet, workspace.id);
+  const ordered = (entries || []).map(entry => entry.host);
+  if (!ordered.length) {
+    $("auto-drain-target")?.remove();
+    fitDrainHeader();
     return null;
   }
   const own = boardHostName();
@@ -236,7 +373,7 @@ function paintConcreteHostSelect(fleet, workspace) {
   // The board's own host stays the default even when the fleet lists it after
   // a failed read. A stored follower applies only while it is still listed.
   const selected = ordered.includes(remembered) ? remembered : ordered.includes(own) ? own : ordered[0];
-  paintDrainHostSelect(ordered, selected);
+  paintDrainTargetSelect([{ id: workspace.id, name: workspaceDisplayName(workspace.id), hosts: entries }], { workspaceId: workspace.id, host: selected });
   return { ordered, selected, follower: Boolean(own) && selected !== own };
 }
 function renderAutoDrainHead(payload) {
@@ -268,24 +405,21 @@ function renderAutoDrainHead(payload) {
     text.textContent = pulling ? pullLabel
       : phase === "idle" ? (!isAggregateView() && workspaceReadOnlyReason() ? "Read-only" : "Idle") : label;
   }
-  // The window's deadline sits beside its phase; the pill already says when
-  // admissions have stopped.
-  const when = $("auto-drain-when");
-  if (when) when.textContent = !pulling && phase === "draining" ? autoDrainTimeLeft(capacity.ends_at) : "";
   // Full header values stay in the row's name/title when members shrink or drop.
   const header = card?.querySelector(":scope > header");
   if (header) {
     const parts = [isAggregateView() ? "Auto-draining" : "Auto-drain"];
-    const hostSelect = $("auto-drain-host");
-    if (hostSelect?.value) parts.push(hostSelect.value);
+    const hostName = $("auto-drain-target")?.dataset.host;
+    if (hostName) parts.push(hostName);
     const phaseText = text?.textContent?.trim();
     if (phaseText) parts.push(phaseText);
-    if (when?.textContent?.trim()) parts.push(when.textContent.trim());
     const summary = parts.join(" · ");
     header.setAttribute("aria-label", summary);
     header.title = summary;
     if (pill && phaseText) { pill.setAttribute("aria-label", phaseText); pill.title = phaseText; }
   }
+  wireDrainHeaderFit();
+  fitDrainHeader();
   const stateKey = `${phase}:${phase === "winding_down" ? running : ""}`;
   if (announcedDrainState !== null && announcedDrainState !== stateKey && !holdDrainAnnouncement
       && !$('auto-drain-operation-feedback')?.matches(".pending, .success, .error")) {
@@ -335,16 +469,28 @@ function liveAgentStats(live) {
   return stats;
 }
 
-// The live window: pilots, recovery and reviewers running now. A payload
-// without those counts shows no figures. The approval line under them stays
-// for holds the figures do not already count. Empty when no auto window is
-// live.
+// Counts and deadline share one row. Older payloads may omit the counts;
+// their deadline still renders, without inventing zero figures.
 function autoDrainWindow(payload) {
-  const { phase, pulling } = autoDrainPhase(payload);
+  const { phase, pulling, capacity } = autoDrainPhase(payload);
   if (pulling || phase === "idle") return null;
   const stats = liveAgentStats(payload && payload.live_agents);
+  const timeLeft = phase === "draining" ? autoDrainTimeLeft(capacity.ends_at) : "";
+  if (!stats && !timeLeft) return null;
+  const row = el("div", { class: "drain-window-summary" }, stats ? [stats] : []);
+  if (timeLeft) row.append(el("span", { class: "drain-when", id: "auto-drain-when", text: timeLeft }));
+  const summary = [stats?.getAttribute("aria-label"), timeLeft].filter(Boolean).join(" · ");
+  row.setAttribute("aria-label", summary);
+  row.title = summary;
+  return row;
+}
+
+// Approval holds belong beside the capacity summary, below the slot bar.
+function autoDrainApprovalSummary(payload) {
+  const { phase, pulling } = autoDrainPhase(payload);
+  if (pulling || phase === "idle") return null;
   const approvals = autoDrainApprovals(payload.approvals);
-  if (!approvals || !approvals.reasons.length) return stats;
+  if (!approvals || !approvals.reasons.length) return null;
   const summary = el("div", { class: "drain-approval-summary" });
   approvals.reasons.forEach(([reason, count], index) => {
     if (index) summary.append(" · ");
@@ -356,7 +502,7 @@ function autoDrainWindow(payload) {
     }
     summary.append(item);
   });
-  return el("div", { class: "drain-window" }, stats ? [stats, summary] : [summary]);
+  return summary;
 }
 
 // The card's last row: the coordinator run (or the replica's pull drain), the
@@ -468,7 +614,7 @@ function autoDrainQueuedCancel(payload, runId) {
   const button = el("button", {
     class: "operation-button drain-queued-cancel",
     text: pending ? "Cancelling…" : "Cancel",
-    title: refusal || `Cancel queued window ${runId} before it starts`,
+    "aria-description": refusal || `Cancel queued window ${runId} before it starts`,
   });
   button.type = "button";
   button.dataset.drainFocus = `cancel-queued:${runId}`;
@@ -553,6 +699,7 @@ function renderAutoDrain(payload, generation = drainScopeGeneration) {
   renderAutoDrainHead(payload);
   const reasons = autoDrainReasons(payload, scope?.refusal);
   const holds = [
+    autoDrainIntentNote(payload),
     autoDrainThrottleLine(payload.capacity),
     autoDrainProviderLimitNote(payload.provider_limits),
     autoDrainProviderAuth(payload.provider_auth_failures),
@@ -562,14 +709,14 @@ function renderAutoDrain(payload, generation = drainScopeGeneration) {
   // A follower scope keeps Start and Stop on the card, disabled, the way All
   // workspaces does. Only the board's own read-only reason replaces the body.
   if (reasons.submit && !isAggregateView() && !scope) {
-    body.append(...[autoDrainForecast(payload), ...holds, autoDrainQueued(payload)].filter(Boolean), el("div", { class: "operations-readonly-note", text: reasons.submit }));
+    body.append(...[autoDrainWindow(payload), autoDrainForecast(payload), ...holds, autoDrainQueued(payload)].filter(Boolean), el("div", { class: "operations-readonly-note", text: reasons.submit }));
     retargetDrainLinks(body, scope);
     renderAutoDrainStart(payload, reasons);
     return;
   }
   body.append(...[
     autoDrainWindow(payload),
-    autoDrainCapacity(payload.capacity || {}, autoDrainCounts(payload), autoDrainBlocked(payload).length, { pull: drainCheckout(payload).replica }),
+    autoDrainCapacity(payload.capacity || {}, autoDrainCounts(payload), autoDrainBlocked(payload).length, { pull: drainCheckout(payload).replica, approvalSummary: autoDrainApprovalSummary(payload) }),
     ...holds,
     autoDrainForecast(payload),
     autoDrainFoot(payload),
@@ -588,8 +735,8 @@ function clearStartCard(id) {
   if (card) card.hidden = true;
 }
 
-// The shared panel reset clears the body and shows Loading. The phase pill,
-// its dot and the window's time left sit outside that body, so clear them
+// The shared panel reset clears the body and shows Loading. The phase pill
+// and its dot sit outside that body, so clear them
 // here or the previous host's drain stays on the card until the next paint.
 function clearDrainChrome() {
   const card = $("auto-drain-panel");
@@ -604,8 +751,6 @@ function clearDrainChrome() {
   if (dot) dot.className = "drain-dot";
   const text = $("auto-drain-phase-label");
   if (text) text.textContent = "—";
-  const when = $("auto-drain-when");
-  if (when) when.textContent = "";
 }
 
 registerOperationsReset(() => {
@@ -618,8 +763,7 @@ registerOperationsReset(() => {
   boardDrainHost = null;
   chosenBoardHost = null;
   chosenBoardWorkspace = null;
-  $("auto-drain-host")?.remove();
-  $("auto-drain-workspace")?.remove();
+  $("auto-drain-target")?.remove();
   clearDrainChrome();
   updateDrainIndicators("idle", "idle");
   repaintRailDrainFromFleet();
@@ -634,49 +778,25 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
     const revision = getWorkspaceRevision();
     const guard = () => generation === drainScopeGeneration && token === operationsState.aggregateFleetToken && revision === getWorkspaceRevision() && !selectedWorkspace();
     return requestPanel("auto-drain-body", `aggregate:${aggregateDrainHost || "owner"}:${aggregateDrainWorkspace || "none"}`, async () => {
-      const fleet = await loadFleetSnapshot({ refreshWhenStale: true, onPartial: payload => { if (guard()) paintAggregateFleet(payload); } });
+      const fleet = await loadFleetSnapshot({ refreshWhenStale: true });
       if (!guard()) return null;
-      paintAggregateFleet(fleet);
-      const hosts = getRegisteredHosts();
       const options = aggregateWorkspaceOptions(fleet);
       const rememberedWorkspace = rememberedAggregateWorkspace();
       const liveDefault = options.find(option => (fleet.items || []).some(row => row.workspace_id === option.id && !row.error && LIVE_DRAIN_PHASES.includes(row.phase)));
       aggregateDrainWorkspace = options.some(option => option.id === rememberedWorkspace)
         ? rememberedWorkspace
         : (liveDefault || options[0])?.id || null;
-      let workspaceSelect = $("auto-drain-workspace");
-      if (!workspaceSelect) {
-        workspaceSelect = el("select", { id: "auto-drain-workspace", class: "workspace-select", "aria-label": "Drain workspace" });
-        workspaceSelect.addEventListener("change", () => {
-          chooseAggregateWorkspace(workspaceSelect.value);
-          // Changing the workspace resets the host to its owner.
-          chooseAggregateHost(null);
-          // The panel's scope key reads the shown selection, so the pick is
-          // shown now; the next paint resolves it the same way from storage.
-          aggregateDrainWorkspace = workspaceSelect.value || null;
-          aggregateDrainHost = null;
-          resetAggregateDrainSelection();
-          fetchAndRenderAutoDrain().catch(error => console.error(error));
-        });
-        $("auto-drain-phase").before(workspaceSelect);
-      }
-      const workspaceSignature = JSON.stringify(options.map(option => [option.id, option.name]));
-      if (workspaceSelect.dataset.workspaces !== workspaceSignature) {
-        workspaceSelect.replaceChildren(...options.map(option => {
-          const node = el("option", { text: option.name });
-          node.value = option.id;
-          return node;
-        }));
-        workspaceSelect.dataset.workspaces = workspaceSignature;
-      }
-      workspaceSelect.value = aggregateDrainWorkspace || "";
-      const ordered = aggregateDrainWorkspace ? aggregateWorkspaceHosts(fleet, aggregateDrainWorkspace, hosts) : hosts.map(host => host.name);
+      // This select lists the selected host's owned workspaces, so that host
+      // is each one's owner whenever no healthy fleet row says otherwise.
+      const catalogHost = boardHostName();
+      const groups = options.map(option => ({ id: option.id, name: option.name, hosts: aggregateWorkspaceHosts(fleet, option.id, catalogHost) }));
+      const ordered = (groups.find(group => group.id === aggregateDrainWorkspace)?.hosts || []).map(entry => entry.host);
       // A remembered host applies only to the workspace it was picked with. One
       // missing from this paint's list (its fleet read is briefly unreachable)
       // shows the owner for now and stays stored.
       const rememberedHost = aggregateDrainWorkspace === rememberedWorkspace ? rememberedAggregateHost() : null;
       aggregateDrainHost = ordered.includes(rememberedHost) ? rememberedHost : ordered[0] || null;
-      paintDrainHostSelect(ordered, aggregateDrainHost);
+      paintDrainTargetSelect(groups, aggregateDrainWorkspace && aggregateDrainHost ? { workspaceId: aggregateDrainWorkspace, host: aggregateDrainHost } : null);
       if (!aggregateDrainWorkspace || !aggregateDrainHost) return { capacity: { drain_phase: "idle" } };
       const chosenWorkspace = options.find(option => option.id === aggregateDrainWorkspace);
       if (!chosenWorkspace) return { capacity: { drain_phase: "idle" } };
@@ -691,8 +811,7 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
       if (guard()) {
         // Retire any retained controls too: a failed connection/readiness
         // refresh cannot leave a write enabled with stale authority.
-        resetAggregateDrainSelection();
-        for (const button of $("auto-drain-body")?.querySelectorAll("button") || []) button.disabled = true;
+        retireFailedDrainReadiness();
       }
       throw error;
     });
@@ -703,14 +822,6 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
   // the card. A remembered follower is a different read and resets on switch.
   const panelScope = remembered ? `board:${workspace.id}:${remembered}` : "/api/workflows/auto/readiness";
   const fleet = loadFleetSnapshot({ refreshWhenStale: false });
-  const ownerPath = () => {
-    const concurrency = autoDrainConcurrencyValid() ? autoDrainConcurrencyValue() : "";
-    const params = new URLSearchParams();
-    if (concurrency) params.set("concurrency", concurrency);
-    if (detailTaskId) params.set("also_task", detailTaskId);
-    const query = params.size ? `?${params.toString()}` : "";
-    return `/api/workflows/auto/readiness${query}`;
-  };
   const readiness = requestPanel("auto-drain-body", panelScope, async () => {
     if (!remembered) {
       if (generation !== drainScopeGeneration) return null;
@@ -719,14 +830,14 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
         if (generation !== drainScopeGeneration || selectedWorkspace()?.id !== workspace.id) return;
         paintConcreteHostSelect(snapshot, workspace);
       }).catch(error => console.error(error));
-      return fetchJson(ownerPath());
+      return fetchJson(drainReadinessPath(null, null, detailTaskId));
     }
     const snapshot = await fleet;
     if (generation !== drainScopeGeneration) return null;
     const resolved = paintConcreteHostSelect(snapshot, workspace);
     if (!resolved?.follower) {
       boardDrainHost = null;
-      return fetchJson(ownerPath());
+      return fetchJson(drainReadinessPath(null, null, detailTaskId));
     }
     boardDrainHost = resolved.selected;
     return loadScopedDrainReadiness({
@@ -743,8 +854,8 @@ function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) 
     if (detailTaskId && visit.isCurrent() && generation === drainScopeGeneration && !boardDrainHost) {
       setDrainReadinessFailure({ id: detailTaskId, workspace_id: workspace.id }, error.message || String(error));
     }
-    if (boardDrainHost && generation === drainScopeGeneration) {
-      for (const button of $("auto-drain-body")?.querySelectorAll("button") || []) button.disabled = true;
+    if (remembered && generation === drainScopeGeneration && visit.isCurrent()) {
+      retireFailedDrainReadiness();
     }
     throw error;
   });

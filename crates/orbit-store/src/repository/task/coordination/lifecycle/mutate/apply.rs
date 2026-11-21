@@ -2,7 +2,7 @@ use chrono::Utc;
 use orbit_common::fs::io::hold_step;
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_types::task::TaskStatus;
-use orbit_types::workflow::{ClaimFailureClass, ReviewGateHistoryNote};
+use orbit_types::workflow::{ClaimFailureClass, ReviewGateHistoryEvent, ReviewGateHistoryNote};
 
 use super::super::super::TaskCommitBoundary;
 use super::super::super::landing::LandingStop;
@@ -468,7 +468,8 @@ impl TaskCommitBoundary {
                                     &hold.candidate.commit,
                                     Some(reason),
                                 ));
-                            state.last_event = "review_awaiting_evidence".into();
+                            state.last_event =
+                                ReviewGateHistoryEvent::AwaitingEvidence.as_str().into();
                         // [ORB-14258] A release for a red base is recorded as the
                         // hold itself, so owner admission withholds the task until
                         // the command passes on a new base tip.
@@ -620,6 +621,7 @@ impl TaskCommitBoundary {
                     handoff_id,
                     event,
                     note,
+                    decision,
                 } => {
                     if !auth.operator
                         || claim.phase != ExecutionClaimPhase::HandedOff
@@ -636,11 +638,23 @@ impl TaskCommitBoundary {
                             | "ci_infrastructure_retry_exhausted"
                             | orbit_types::workflow::CI_FAILURE_RECORDED_EVENT
                             | orbit_types::workflow::CI_FAILURE_RECLASSIFIED_EVENT
+                            | orbit_types::workflow::CI_BASE_SUSPECT_RECLASSIFIED_EVENT
                     ) {
                         return Err(invalid("unsupported handoff landing history event"));
                     }
                     if note.trim().is_empty() {
                         return Err(invalid("handoff landing history requires a note"));
+                    }
+                    if let Some(decision) = decision {
+                        let orbit_types::task::TaskDecision::CiRerunReserved(plan) = decision
+                        else {
+                            return Err(invalid("unsupported handoff landing history decision"));
+                        };
+                        if event != orbit_types::workflow::CI_RERUN_RESERVED_EVENT
+                            || *note != plan.reservation_note()
+                        {
+                            return Err(invalid("handoff landing history decision mismatch"));
+                        }
                     }
                     self.check_live_landing_attempt(auth, handoff_id)?;
                     params.append_history.push(
@@ -649,7 +663,8 @@ impl TaskCommitBoundary {
                             "system",
                             event.clone(),
                         )
-                        .with_note(Some(note.clone())),
+                        .with_note(Some(note.clone()))
+                        .with_decision(decision.clone()),
                     );
                     history_event = false;
                 }

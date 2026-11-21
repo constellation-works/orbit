@@ -1,7 +1,7 @@
 ---
 title: "Scope: Scheduled tasks (not_before)"
 owner: claude
-last_updated: 2026-11-14
+last_updated: 2026-11-15
 last_validated: 2026-11-14
 status: Draft
 stage: shipped
@@ -89,14 +89,17 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
   - explicit `orbit run ship <ids>` / `orbit.workflow` action `ship`
     ([ORB-23280]). Explicit ids skip the backlog listing, so the hold is
     checked on this path ([ORB-19214]). A scheduled id is refused with a
-    typed `task_scheduled` error naming the time. An operator-only
-    `orbit run ship <ids> --ignore-schedule` starts it anyway. Once every
+    typed `task_scheduled` error naming the time. An operator's explicit
+    ship (`orbit run ship <ids>` or the dashboard's Ship) starts it anyway,
+    since an operator's ship overrides the drain's readiness gates
+    ([ORB-25082]; `--ignore-schedule` is a hidden no-op kept for
+    compatibility). Once every
     other ship check passes, and before the run is submitted (its worker
     starts at once), it records a `schedule_overridden` history event naming
     the operator and the scheduled time. Every admission route reads that
     event, so the override holds for that `not_before` value, including
     if the submission then fails; changing `not_before` reinstates the
-    hold. The MCP/tool surface and the dashboard have no override.
+    hold. The MCP/tool surface has no override.
 - **Precision is "at or after", not "at".** The task starts on the next
   admission pass after `not_before`, which depends on the drain or
   dispatcher cadence (orbit-office's dispatch pass runs every 30 seconds). A
@@ -180,7 +183,7 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
     and acknowledged superseded sources (`in-progress`, `blocked`, or
     `backlog`) can be eligible outside review. The hold
     applies to backlog, not blocked tasks. Claim recovery
-    (`recover_claim_as_operator` in `application/review/handoff.rs`) and
+    (`recover_claim_as_operator` in `application/review/handoff/console.rs`) and
     requeue (`application/task/requeue.rs`) only move a task to `blocked`
     or `backlog`; the hold applies only to backlog.
   - **Outside admission.** A human `orbit task update --status in-progress`
@@ -220,8 +223,8 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
 
 - A backlog task with a future `not_before` is not started by an auto drain,
   a pull drain or an explicit ship. The first two report it as waiting
-  `scheduled`. The explicit ship refuses with `task_scheduled` unless an
-  operator passes `--ignore-schedule`.
+  `scheduled`. The tool surface's ship refuses with `task_scheduled`; an
+  operator's CLI or dashboard ship overrides the hold.
 - After `not_before` passes, the next admission pass starts it with no
   operator action.
 - `orbit.task.list` with a `not_before` range returns exactly the tasks in
@@ -234,3 +237,4 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
 - [ORB-19214] — built the field, the `Scheduled` hold and the ship refusal.
 - [ORB-19215] — built the list filter, `--scheduled`, the dashboard field and the forecast placement.
 - [ORB-23280] — renamed the explicit-ship tool to `orbit.workflow` action `ship`.
+- [ORB-25082] — an operator's explicit ship (CLI or dashboard) overrides the hold, the other drain readiness gates and context-lock waits.

@@ -74,7 +74,12 @@
 #   (`pr_auto_fix_pushed`), and refuses a branch moved any other way. Such a
 #   run is admitted without waiting on other tasks' context locks
 #   (`footprint_deferred`), and takes them before its first agent that may
-#   edit; re-applying the unchanged published patch is not an edit.
+#   edit; re-applying the unchanged published patch is not an edit. An
+#   operator's explicit ship (`operator_readiness_override`) un-defers that
+#   footprint at the gate (`footprint_deferred: false`, recording
+#   `readiness_overridden` naming the holders), so the leaf edits beside
+#   them with no footprint wait and no `footprint_unavailable` hold; runs
+#   without that mark still wait.
 #
 schemaVersion: 2
 kind: Job
@@ -320,7 +325,7 @@ spec:
     #
     # ORB-13989: one fresh reviewer per candidate fixes what it finds. The
     # settlement commits its changes as the candidate's reviewer commit
-    # (`review: <summary>`) over the untouched implementation commit and posts
+    # (`<type>: <summary> [<task>]`) over the untouched implementation commit and posts
     # the findings on the task. `reject` or `incomplete` refuses
     # `review_gate_settle` (no retry): substantive failures preserve the
     # candidate and block the task; evidence-only gaps hold it in progress.

@@ -182,8 +182,9 @@ impl OrbitRuntime {
                 "pipeline run input must be a JSON object".to_string(),
             ));
         }
+        let snapshot = self.admission_policy_snapshot();
         let parent_input = parent_run_id
-            .map(|run_id| self.get_job_run_backend(run_id))
+            .map(|run_id| snapshot.get_job_run_backend(run_id))
             .transpose()?
             .flatten()
             .and_then(|run| run.input)
@@ -192,7 +193,10 @@ impl OrbitRuntime {
             // A descendant runs under the policy its coordinator froze,
             // including that run's overrides and crew allowlist.
             Some(parent) => {
-                input[POOLS_KEY] = parent[POOLS_KEY].clone();
+                // Config-sourced pools are read again at each admission, so
+                // this run's input records the pools its admission used.
+                input[POOLS_KEY] =
+                    json!(snapshot.refresh_auto_crew_pools(pools_from_input(&parent)?));
                 // Keep separately explicit constraints authoritative through every child.
                 if let Some(allowed) = parent.get("allowed_crews") {
                     input["allowed_crews"] = allowed.clone();
@@ -208,13 +212,13 @@ impl OrbitRuntime {
                     if let Some(capture) = parent.get("experiment_capture") {
                         input["experiment_capture"] = capture.clone();
                     } else {
-                        self.install_job_experiment_capture(input)?;
+                        snapshot.install_job_experiment_capture(input)?;
                     }
-                    self.install_job_experiment_memory(input)?;
+                    snapshot.install_job_experiment_memory(input)?;
                     return Ok(None);
                 }
-                self.install_job_experiment_capture(input)?;
-                self.capture_auto_task_selection(input, &task_id, random)
+                snapshot.install_job_experiment_capture(input)?;
+                snapshot.capture_auto_task_selection(input, &task_id, random)
             }
             // A top-level submission — a drain, a ship wrapper, or an ordinary
             // `run ship` — captures the effective policy itself. A submission
@@ -222,12 +226,12 @@ impl OrbitRuntime {
             // multi-task or discovery run leaves each leaf to draw at its own
             // admission, so siblings stay independent.
             None => {
-                self.install_job_experiment_capture(input)?;
-                input[POOLS_KEY] = json!(self.capture_auto_crew_pools(input)?);
+                snapshot.install_job_experiment_capture(input)?;
+                input[POOLS_KEY] = json!(snapshot.capture_auto_crew_pools(input)?);
                 let Some(task_id) = auto_task_id(input).map(ToOwned::to_owned) else {
                     return Ok(None);
                 };
-                self.capture_auto_task_selection(input, &task_id, random)
+                snapshot.capture_auto_task_selection(input, &task_id, random)
             }
         }
     }
@@ -269,13 +273,14 @@ impl OrbitRuntime {
         allowlist: &CrewAllowlist,
         origin: &str,
     ) -> Result<(), OrbitError> {
-        let pools = self.auto_crew_pools_for_input(input)?;
+        let snapshot = self.admission_policy_snapshot();
+        let pools = snapshot.auto_crew_pools_for_input(input)?;
         let explicit = input
             .get("crew")
             .and_then(Value::as_str)
             .and_then(non_empty);
         let (candidates, source, _) =
-            self.auto_task_crew_candidates(task, &pools, explicit, Some(allowlist))?;
+            snapshot.auto_task_crew_candidates(task, &pools, explicit, Some(allowlist))?;
         if let [only] = candidates.as_slice()
             && only.weight > 0
         {
@@ -308,7 +313,10 @@ impl OrbitRuntime {
         task: &Task,
         random: &mut impl FnMut() -> Result<u64, OrbitError>,
     ) -> Result<AdmissionTaskWrites, OrbitError> {
-        let pools = pools_from_input(input)?;
+        let pools = self.refresh_auto_crew_pools(pools_from_input(input)?);
+        if !pools.is_empty() {
+            input[POOLS_KEY] = json!(pools);
+        }
         let task_id = &task.id;
         let experiment_pool = if input
             .get("crew")
@@ -339,6 +347,7 @@ impl OrbitRuntime {
                 self.reresolve_auto_candidates(members, &task_auto_effort_subject(task))?;
             weighted_candidates(
                 &mut members,
+                allowlist.as_ref(),
                 &self.provider_limit_policy().usage_pressure,
                 || self.usage_pressure_read(chrono::Utc::now()),
             );
@@ -366,6 +375,7 @@ impl OrbitRuntime {
         let weighting = if explicit.is_none() {
             weighted_candidates(
                 &mut crews,
+                allowlist.as_ref(),
                 &self.provider_limit_policy().usage_pressure,
                 || self.usage_pressure_read(chrono::Utc::now()),
             )

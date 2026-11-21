@@ -11,6 +11,8 @@ use crate::workflow::ResidentCommentError;
 
 /// Maximum encoded size of any resident comment.
 pub const RESIDENT_COMMENT_MAX_BYTES: usize = 64 * 1024;
+/// Maximum cycle-delta notes on newly written checkpoints.
+pub const RESIDENT_CHECKPOINT_NOTES_MAX_CHARS: usize = 600;
 
 type RecordResult = Result<(), ResidentCommentError>;
 
@@ -225,14 +227,32 @@ impl ResidentComment {
             })
     }
 
-    /// Parse a complete JSON object and validate its version, bounds and content.
+    /// Parse stored memory, retaining the historical checkpoint notes bound.
     pub fn parse(message: &str) -> Result<Self, ResidentCommentError> {
+        let record = Self::decode_resident_comment(message)?;
+        record.validate()?;
+        Ok(record)
+    }
+
+    /// Parse new input, enforcing delta-only checkpoint notes before admission.
+    pub fn parse_for_write(message: &str) -> Result<Self, ResidentCommentError> {
+        let record = Self::decode_resident_comment(message)?;
+        if let Self::Checkpoint(checkpoint) = &record
+            && checkpoint.notes.chars().count() > RESIDENT_CHECKPOINT_NOTES_MAX_CHARS
+        {
+            return Err(invalid(format!(
+                "`notes` exceeds {RESIDENT_CHECKPOINT_NOTES_MAX_CHARS} characters; notes are the cycle's delta: what changed this cycle and what is next"
+            )));
+        }
+        record.validate()?;
+        Ok(record)
+    }
+
+    fn decode_resident_comment(message: &str) -> Result<Self, ResidentCommentError> {
         if message.len() > RESIDENT_COMMENT_MAX_BYTES {
             return Err(invalid("record exceeds 64 KiB"));
         }
-        let record: Self = serde_json::from_str(message).map_err(|e| invalid(e.to_string()))?;
-        record.validate()?;
-        Ok(record)
+        serde_json::from_str(message).map_err(|e| invalid(e.to_string()))
     }
 
     pub fn mandate(&self) -> &str {

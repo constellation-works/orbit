@@ -1,4 +1,5 @@
-//! Structured quota buckets from agy 1.4.6's `--print /usage --output-format json`.
+//! Structured quota buckets from agy's `--print /usage --output-format json`
+//! (shape verified with agy 1.4.6 and 1.5.13).
 
 use chrono::{DateTime, Utc};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
@@ -7,21 +8,29 @@ use serde_json::Value;
 use super::super::usage_window::percent;
 
 /// Read provider control data only; the human-readable `response` is ignored.
+/// The second value is whether every known, enabled bucket was readable: only
+/// then does the reading name every window the account still has, so a window
+/// it lacks is gone. A known bucket with an unreadable field is still
+/// present, and its previous reading must stand. [ORB-26000]
 pub(crate) fn antigravity_usage_windows(
     body: &[u8],
     now: DateTime<Utc>,
-) -> Vec<ProviderLimitObservation> {
+) -> (Vec<ProviderLimitObservation>, bool) {
     let Some(buckets) = buckets(body) else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
-    // Pro accounts expose a separate Argon bucket. Never apply the Flash/Pro
-    // quota to Argon there. Ultra includes Argon in the shared Gemini bucket.
+    let mut complete = true;
+    // A reading may carry its own Argon bucket. Then the shared Gemini quota
+    // does not cover Argon, so never apply it there. Without one, the shared
+    // bucket covers every Gemini model. The layout can change between
+    // readings of one account and says nothing about its plan.
     let separate_argon = buckets
         .iter()
         .any(|bucket| bucket.get("id").and_then(Value::as_str) == Some("gemini-argon-wtu-weekly"));
     let mut observations = Vec::new();
     for bucket in buckets {
         let Some((id, scopes, minutes, used, reset)) = reading(&bucket, separate_argon) else {
+            complete &= !unreadable_known_bucket(&bucket);
             continue;
         };
         // The store scopes models by substring. Split shared groups into
@@ -46,7 +55,28 @@ pub(crate) fn antigravity_usage_windows(
             });
         }
     }
-    observations
+    (observations, complete)
+}
+
+/// Bucket ids `reading` knows. One that is enabled yet unreadable is still
+/// reported by agy, so it is not a removed window.
+const KNOWN_BUCKET_IDS: &[&str] = &[
+    "gemini-weekly",
+    "gemini-5h",
+    "3p-weekly",
+    "3p-5h",
+    "gemini-argon-wtu-weekly",
+];
+
+fn unreadable_known_bucket(bucket: &Value) -> bool {
+    let disabled = bucket
+        .get("disabled")
+        .is_some_and(|disabled| disabled != false);
+    !disabled
+        && bucket
+            .get("id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| KNOWN_BUCKET_IDS.contains(&id))
 }
 
 fn buckets(body: &[u8]) -> Option<Vec<Value>> {
@@ -69,6 +99,14 @@ fn buckets(body: &[u8]) -> Option<Vec<Value>> {
     )
 }
 
+/// Model scopes of the shared "Gemini Models" group when the reading gives
+/// Argon its own bucket. agy 1.5.13's `/usage` group description lists Gemini 4
+/// Neon, Carbon, Hydrogen, Orchestrator (Neon) and Gemini 3.8 Flash in it, and
+/// Argon only when no separate Argon bucket exists; `pro` keeps the slugs agy 1.4.6
+/// grouped there. Scopes match model ids by substring, so `gemini` here would
+/// also gate Argon. [ORB-25818] [ORB-25944]
+const SHARED_GEMINI_SCOPES: &[&str] = &["flash", "pro", "neon", "carbon", "hydrogen"];
+
 type Reading<'a> = (&'a str, &'static [&'static str], u32, f64, DateTime<Utc>);
 
 fn reading(bucket: &Value, separate_argon: bool) -> Option<Reading<'_>> {
@@ -83,7 +121,7 @@ fn reading(bucket: &Value, separate_argon: bool) -> Option<Reading<'_>> {
     let (scopes, minutes): (&[&str], u32) = match (id, window) {
         ("gemini-weekly", "weekly") => (
             if separate_argon {
-                &["flash", "pro"]
+                SHARED_GEMINI_SCOPES
             } else {
                 &["gemini"]
             },
@@ -91,7 +129,7 @@ fn reading(bucket: &Value, separate_argon: bool) -> Option<Reading<'_>> {
         ),
         ("gemini-5h", "5h") => (
             if separate_argon {
-                &["flash", "pro"]
+                SHARED_GEMINI_SCOPES
             } else {
                 &["gemini"]
             },

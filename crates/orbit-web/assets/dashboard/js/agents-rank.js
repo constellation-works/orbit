@@ -347,7 +347,7 @@ function breakdownToggle(row) {
     class: "agents-rank-toggle",
     type: "button",
     "aria-expanded": open ? "true" : "false",
-    title: `${row.model || "Model"}: show or hide the breakdown`,
+    "aria-label": `${open ? "Hide" : "Show"} breakdown for ${row.model || "Model"}`,
   }, [el("span", { class: "agents-rank-chevron", "aria-hidden": "true", text: "▸" })]);
   const bind = (detail, mainRow) => {
     detail.id = breakdownId(row.model);
@@ -358,6 +358,7 @@ function breakdownToggle(row) {
       else openModels.delete(row.model);
       detail.hidden = !next;
       button.setAttribute("aria-expanded", next ? "true" : "false");
+      button.setAttribute("aria-label", `${next ? "Hide" : "Show"} breakdown for ${row.model || "Model"}`);
     };
     button.addEventListener("click", (event) => {
       event.stopPropagation();

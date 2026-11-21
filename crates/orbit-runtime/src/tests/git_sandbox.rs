@@ -188,3 +188,46 @@ fn git_scan_revalidation_denies_unsafe_replacements() {
         assert_eq!(std::fs::read_to_string(host_file).unwrap(), "host state");
     }
 }
+
+/// The OS can refuse a scan worker (thread limit). The scan must then do the
+/// same checks on the calling thread: a clean store still passes, and invalid
+/// metadata still returns the typed refusal the unrefused scan returns.
+#[test]
+fn git_scan_survives_worker_spawn_failure_with_the_same_refusals() {
+    use std::fs;
+
+    use super::super::git_sandbox::{GitWorkerSpawnRefusal, append_git_denies};
+    use orbit_types::policy::ResolvedFsProfile;
+
+    let temp = short_socket_dir();
+    let workspace = temp.path().join("workspace");
+    let objects = workspace.join(".git/objects");
+    for fan_out in ["61", "62", "63"] {
+        fs::create_dir_all(objects.join(fan_out)).unwrap();
+        fs::write(objects.join(fan_out).join("object"), "loose object").unwrap();
+    }
+    let scan = || {
+        let mut profile = ResolvedFsProfile {
+            name: "test".to_string(),
+            read: Vec::new(),
+            modify: Vec::new(),
+        };
+        append_git_denies(&workspace, &mut profile)
+    };
+    let refusal = GitWorkerSpawnRefusal::install();
+    scan().expect("a clean store passes when no worker can start");
+    assert!(refusal.refused() > 0, "the spawn failure must be exercised");
+
+    let outside = temp.path().join("outside-object");
+    fs::write(&outside, "host state").unwrap();
+    fs::hard_link(&outside, objects.join("62/escaped")).unwrap();
+    let refused = scan().expect_err("an aliased object stays refused");
+    assert!(
+        matches!(refused, orbit_common::OrbitError::PolicyDenied(_)),
+        "{refused}"
+    );
+    drop(refusal);
+    let threaded = scan().expect_err("the unrefused scan agrees");
+    assert_eq!(refused.to_string(), threaded.to_string());
+    assert_eq!(fs::read_to_string(outside).unwrap(), "host state");
+}

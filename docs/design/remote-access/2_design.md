@@ -1,8 +1,8 @@
 ---
 title: "Remote Access — Design"
 owner: codex
-last_updated: 2026-11-09
-last_validated: 2026-11-14
+last_updated: 2026-11-17
+last_validated: 2026-11-17
 status: Implemented
 feature: remote-access
 doc_role: design
@@ -33,14 +33,20 @@ The Web tunnel is not shared with MCP. MCP remote mode is direct ssh -T stdio ow
 
 ## 2. orbit web serve
 
-orbit web serve always builds registry-backed multi-workspace state and may run from any directory. The accepted --global flag is a compatibility no-op. A top-level --root selects which registry is served, exactly as it does for every other root-aware command: the server enumerates <root>/workspaces.json and never reads the machine-global registry. It does not register a workspace. Which workspace the dashboard opens on is a separate option, --workspace.
+orbit web serve always builds registry-backed multi-workspace state and may run from any directory. The accepted --global flag is a compatibility no-op. A top-level --root selects which registry is served, exactly as it does for every other root-aware command: the server enumerates <root>/workspaces.json and never reads the machine-global registry. It does not register a workspace. Which workspace the browser opens on is a separate option, --workspace, which supplies only a registry default hint (see Browser selection below).
 
 Startup:
 
 1. orbit-registry loads the registry under the resolved Orbit root: <--root>/workspaces.json when the flag is given, the machine-global ~/.orbit/workspaces.json otherwise. orbit-cmd global_root_for owns that resolution for every command, Web included.
 2. Local workspace checkouts become dashboard entries. Invalid paths remain visible as inactive entries and are not opened.
-3. With --workspace, the workspace it names becomes the default; the selector is a registered name or ws_* ID first and a checkout path when it is path-shaped, and an unmatched value opens aggregate mode rather than falling back to cwd. Without --workspace, the workspace containing cwd becomes the default when one matches.
+3. With --workspace, the workspace it names becomes the registry default hint once the selector resolves: an active registered name or ws_* ID first, else a checkout path when the value is path-shaped, matched by longest lexical prefix over eligible roots. An unmatched value sets no hint and does not fall back to cwd. Without --workspace, the eligible workspace whose repo root or path override contains cwd becomes the hint when one matches. `Invalid` checkouts are never eligible, and the hint is dropped when its workspace's runtime binding fails at load. The hint is only a preference; the browser's choice is described below.
 4. Orbit Web accepts only `127.0.0.1` and `::1` binds before opening the listener, matching the IP addresses approved by the request Host gate. Other addresses in `127.0.0.0/8` are refused so the announced dashboard URL can pass that gate.
+
+### Browser selection
+
+The server publishes the hint as `is_default` on one row of `GET /api/workspaces`. An unmatched selector leaves every row unmarked and bypasses the cwd default.
+
+With multiple owned rows, `initWorkspaceSelector` in `crates/orbit-web/assets/dashboard/app.js` tries a valid `?workspace=` link, then the browser's remembered choice for the selected host. Either can select All workspaces. Next it tries a live drain on an active owned workspace, the hint if it names an active owned workspace, and the first active owned row in `/api/workspaces` order. If none are active, it selects the first owned row in that order, even though the board is unavailable. With exactly one owned row, the browser selects it only if active. With zero owned rows, it clears the board selection. See [user-interface design §6](../user-interface/2_design.md#6-top-level-navigation) for host switching and workspace filters.
 
 ### Request state
 
@@ -60,7 +66,7 @@ GET /api/workspaces lists current entries. `GET /api/tasks` and `GET /api/tasks/
 
 Both endpoints return `{ items, total, limit, truncated, offset, next_cursor }`, and `GET /api/tasks/all` also returns `unavailable`. `total` is the count of all matches before the page bound and remains the pre-cursor total on later pages. `truncated` means `total > items.length` against that pre-cursor total; it can therefore remain `true` on a final cursor page. `next_cursor`, not `truncated`, tells a client whether to request another page. `offset` is zero for the first page and records the cursor's position thereafter.
 
-`GET /api/tasks` is scoped to the selected workspace. `GET /api/tasks/all` reads every registered workspace, tags rows with workspace metadata, and applies the same predicates independently in each workspace that answers. It orders rows workspace by workspace, in `/api/workspaces` order (the dashboard's workspace picker order), with `created_at DESC, id ASC` inside each workspace, and cuts the page in that order; it does not merge the workspaces under one global order. A workspace that is inactive, cannot be opened, or whose task read fails is omitted from `items` and named in `unavailable` as `{ workspace_id, workspace_name, error }`, the same object `/api/job-runs/all` uses. One unreadable task row marks that workspace unavailable for the response while the rows that did read stay in `items`. `total` still sums only the workspaces that answered, independent of `limit`. The caller-supplied `limit` bounds the page. When the task index answers every predicate (status and tag only; no `type` or `q`), each available workspace contributes only index keys — id and `created_at` — and only the tasks on the page are read from their bundles; a `type` or `q` filter, or a workspace whose index cannot be trusted, falls back to reading that workspace's candidate tasks. A response with no unavailable workspaces still includes `unavailable` as an empty array. The other envelope fields stay `items`, `total`, `limit`, `truncated`, `offset`, and `next_cursor`.
+`GET /api/tasks` is scoped to the selected workspace. `GET /api/tasks/all` reads every registered workspace, tags rows with workspace metadata, and applies the same predicates independently in each workspace that answers. It orders rows workspace by workspace, in `/api/workspaces` registry order (the dashboard's pickers show the same workspaces alphabetically, but this server order is not changed), with `created_at DESC, id ASC` inside each workspace, and cuts the page in that order; it does not merge the workspaces under one global order. A workspace that is inactive, cannot be opened, or whose task read fails is omitted from `items` and named in `unavailable` as `{ workspace_id, workspace_name, error }`, the same object `/api/job-runs/all` uses. One unreadable task row marks that workspace unavailable for the response while the rows that did read stay in `items`. `total` still sums only the workspaces that answered, independent of `limit`. The caller-supplied `limit` bounds the page. When the task index answers every predicate (status and tag only; no `type` or `q`), each available workspace contributes only index keys — id and `created_at` — and only the tasks on the page are read from their bundles; a `type` or `q` filter, or a workspace whose index cannot be trusted, falls back to reading that workspace's candidate tasks. A response with no unavailable workspaces still includes `unavailable` as an empty array. The other envelope fields stay `items`, `total`, `limit`, `truncated`, `offset`, and `next_cursor`.
 
 The cursor is opaque and bound to its endpoint scope and the active workspace set: a workspace cursor cannot be used for another workspace, and an aggregate cursor becomes invalid if its active workspace scope changes. It is also bound to the active status, tag, type, search, and limit values, so changing any of them requires a fresh request. On `GET /api/tasks` the cursor continues the stable `created_at DESC, id ASC` order. On `GET /api/tasks/all` the cursor names the workspace its last row belongs to: that workspace resumes after the row, workspaces listed before it contribute no rows (they still count toward `total`), and later workspaces start from their newest task. A cursor issued before workspace-ordered pages names no workspace and is refused. Inserts newer than the first page do not disturb an existing continuation, but changes to a task's ordering or filter membership can move it across the boundary; clients that need a new live snapshot must restart without a cursor.
 
@@ -96,7 +102,9 @@ sessions and `orbit web open`; connect always opens the plain local URL.
 [ORB-14679] delivered this surface. [ORB-16130] subsequently allowed at most
 three ephemeral allocations for a proven initial attach bind collision, under
 the original deadline; authentication, readiness and remote-command failures
-remain failures. The [host-forward spec](./specs/host-forward.md#tunnels) records
+remain failures. [ORB-25377] extended that proof to the spawn child that
+reuses the attach port, whose proven bind exit likewise precedes any remote
+command. The [host-forward spec](./specs/host-forward.md#tunnels) records
 the diagnostic and child-reaping conditions.
 
 host_tunnels keeps one tunnel per host, keyed by `machine_id`, using ssh_tunnel's establish in unattended mode: `BatchMode=yes`, a bounded `ConnectTimeout` and a bounded wait for the forward listener, since a server has no terminal to prompt on. Establish is single-flight per host and runs on the blocking pool. Each new tunnel reads the remote's `GET /api/hosts?probe=false` and compares its local row's `machine_id` with the host file's; when the SSH child has exited by the end of that read, the exit is reported instead, since its port may have passed to another listener. A dead child is re-established by the next request, an idle tunnel closes after five minutes, and serve stops every child after its graceful-shutdown future completes, the one path that both a signal and the update handover take before exit or exec.

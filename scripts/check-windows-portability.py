@@ -223,8 +223,13 @@ def attribute_values(values, platform="windows"):
     return {True}
 
 
+# `std::os` submodules that do not exist on Windows. `fd` (`AsRawFd`, `OwnedFd`)
+# is the Unix descriptor API; Windows spells it `std::os::windows::io`.
+UNIX_OS_MODULES = ("unix", "linux", "macos", "fd")
+
+
 def unix_use(values, prefix=()):
-    """Expand grouped use paths just far enough to recognize std::os::unix."""
+    """Expand grouped use paths just far enough to recognize a Unix-only std::os module."""
     for branch in split_arguments(values):
         path = list(prefix)
         index = 0
@@ -238,7 +243,7 @@ def unix_use(values, prefix=()):
                 break
             if re.fullmatch(r"[A-Za-z_]\w*", value):
                 path.append(value)
-                if len(path) >= 3 and path[:2] == ["std", "os"] and path[2] in ("unix", "linux", "macos"):
+                if len(path) >= 3 and path[:2] == ["std", "os"] and path[2] in UNIX_OS_MODULES:
                     return True
             index += 1
     return False
@@ -395,9 +400,8 @@ class Source:
                 end = values.index(";", index)
                 if unix_use(values[index + 1:end]):
                     label = "Unix std import"
-            elif values[index:index + 7] in (["std", ":", ":", "os", ":", ":", "unix"],
-                                             ["std", ":", ":", "os", ":", ":", "linux"],
-                                             ["std", ":", ":", "os", ":", ":", "macos"]):
+            elif any(values[index:index + 7] == ["std", ":", ":", "os", ":", ":", module]
+                     for module in UNIX_OS_MODULES):
                 label = "Unix std path"
             elif value in METHODS and values[index + 1:index + 2] == ["("] and (
                 values[index - 1:index] == ["."] or values[max(0, index - 2):index] == [":", ":"]

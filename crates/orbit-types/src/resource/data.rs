@@ -1,10 +1,10 @@
 use std::collections::{BTreeSet, HashMap};
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::policy::FsProfile;
+use crate::policy::{FsProfile, PolicyTimestamp};
 use crate::resource::ResourceError;
+use crate::timestamp::UtcTimestamp;
 use crate::workflow::{
     AuthProbe, ExecutorSandboxKind, ExecutorType, ModelPairOverride, StdoutFormat,
     deserialize_executor_host_os,
@@ -168,9 +168,9 @@ pub struct PolicyResourceSpec {
     )]
     pub fs_profiles: HashMap<String, FsProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_at: Option<DateTime<Utc>>,
+    pub created_at: Option<PolicyTimestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<PolicyTimestamp>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -211,9 +211,9 @@ pub struct ExecutorResourceSpec {
     )]
     pub host_os: Option<BTreeSet<crate::task::HostOs>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_at: Option<DateTime<Utc>>,
+    pub created_at: Option<UtcTimestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<UtcTimestamp>,
 }
 
 fn is_false(value: &bool) -> bool {

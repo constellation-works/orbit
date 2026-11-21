@@ -1,4 +1,4 @@
-/* Tasks dock: auto-drain status, Start a window and fleet summary. */
+/* Tasks dock: auto-drain status and Start a window. */
 /* Every card header: title left, a muted note or count right. */
 #dock-pane-drain .panel > header {
   align-items: baseline; gap: 4px 12px; padding: 14px 18px; border-bottom: 1px solid var(--hair);
@@ -32,48 +32,48 @@
 
 #auto-drain-body { display: flex; flex-direction: column; gap: 16px; padding: 16px 18px 18px; min-width: 0; }
 
-/* The status card's header: title, phase pill, then the window's deadline. */
-/* One line at every card width (STD-07 R23): never wraps or scrolls; it
-   shrinks then drops members by importance in the container stages below. */
+/* The title and the phase (dot and word) lead; the target select takes the
+   rest of the row. Every member keeps its full size wherever the row fits
+   (STD-07 R39). operations-drain.js measures the row's natural width against
+   the header and adds `drain-head-dot` (the pill reduces to its dot) and then
+   `drain-head-notitle` (the title is dropped) only when the full-size row would
+   not fit; the select gives up width first, down to the floor that still shows
+   the host and role. A fixed width breakpoint would also catch widths where the
+   row fits. The dropped words stay in the header's tooltip and accessible name. */
 #dock-pane-drain #auto-drain-panel > header {
   position: relative; justify-content: flex-start; align-items: center; flex-wrap: nowrap;
-  overflow: hidden; white-space: nowrap; min-height: 51px; box-sizing: border-box;
+  overflow: hidden; white-space: nowrap; min-height: 59px; box-sizing: border-box;
 }
-#auto-drain-panel > header > * { flex: 0 1 auto; min-width: 0; }
-#auto-drain-panel .drain-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#auto-drain-panel #auto-drain-host { flex: 0 1 140px; min-width: 56px; text-overflow: ellipsis; }
-#auto-drain-panel .drain-phase { flex: 0 0 auto; }
-.drain-when { margin-left: auto; color: var(--fg-dim); font: 400 12px var(--font-sans); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.drain-when:empty { display: none; }
-@container drain-card (max-width: 480px) {
-  #auto-drain-panel > header { gap: 4px 8px; }
-  #auto-drain-panel #auto-drain-host { flex-basis: 88px; max-width: 88px; }
-  /* The pill keeps its dot; its word lives in its name and title. */
-  #auto-drain-panel #auto-drain-phase-label {
-    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
-    overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
-  }
-  /* Narrow cards show a bare state dot: no ring, border, background,
-     padding or gap, so the dot sits centred. The word stays in the
-     pill's accessible name and title, and the pill itself clips nothing,
-     so the draining pulse (4px) clears the header's `overflow: hidden`. */
-  #auto-drain-panel .drain-phase {
-    gap: 0; padding: 0; border: 0; background: transparent; overflow: visible;
-  }
+#auto-drain-panel > header > * { flex: 0 0 auto; min-width: 0; }
+#auto-drain-panel .drain-title { white-space: nowrap; }
+/* Width comes from the options: the longest one plus the arrow (STD-07 R42), so
+   changing the selection moves nothing (R5). The row's leftover space is its
+   ceiling. A narrow row clips the workspace name's head, shown with a leading
+   ellipsis: the text runs right to left, the arrow is drawn here so it stays at
+   the right, and the floor (`--drain-target-floor`, set from the longest host
+   and role) keeps them visible. */
+#auto-drain-panel #auto-drain-target {
+  --drain-target-floor: 150px;
+  flex: 0 1 auto; width: auto; min-width: var(--drain-target-floor); max-width: none;
+  margin: 0 0 0 auto; padding: 0 24px 0 8px; text-overflow: ellipsis;
+  direction: rtl; text-align: left; -webkit-appearance: none; appearance: none;
+  background-color: var(--bg-elev);
+  background-image: linear-gradient(45deg, transparent 50%, var(--fg-dim) 50%), linear-gradient(135deg, var(--fg-dim) 50%, transparent 50%);
+  background-position: calc(100% - 13px) 12px, calc(100% - 8px) 12px;
+  background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
 }
-@container drain-card (max-width: 340px) {
-  #auto-drain-panel .drain-title {
-    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
-    overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
-  }
+#auto-drain-panel > header.drain-head-tight #auto-drain-target { min-width: 0; }
+#auto-drain-panel > header.drain-head-dot .drain-phase {
+  gap: 0; padding: 0; border: 0; background: transparent; overflow: visible;
 }
-@container drain-card (max-width: 260px) {
-  #auto-drain-panel .drain-when {
-    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
-    overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
-  }
+#auto-drain-panel > header.drain-head-dot #auto-drain-phase-label,
+#auto-drain-panel > header.drain-head-notitle .drain-title {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
 }
-
+.drain-when { color: var(--fg-dim); font: 400 12px var(--font-sans); font-variant-numeric: tabular-nums; white-space: nowrap; flex: 0 0 auto; }
+.drain-when::before { content: "·"; margin-right: 8px; }
+.drain-when:only-child::before { content: none; }
 /* The panel's "Updated." / "Refreshing…" note stays out of the card;
    only the first load and a failed refresh show. */
 #auto-drain-body > [data-panel-status]:not(.action-error):not(:only-child) { display: none; }
@@ -82,12 +82,22 @@
 /* The live window: one row of figures, number then word. One line at every
    card width: shrinks, then drops pilots, then reviewers. Recovery stays.
    A dropped figure stays in the row's name and title. */
-.drain-window-stats { position: relative; display: flex; flex-wrap: nowrap; align-items: baseline; gap: 4px 18px; margin: 0; overflow: hidden; white-space: nowrap; min-height: 24px; }
+.drain-window-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
+/* The deadline shares the row (ORB-25031) when the figures and deadline fit
+   the available width. Fitting depends on that width and the figures' own
+   width, not a fixed card threshold: at any width where the row does not
+   fit, the deadline wraps to the line under the figures instead of letting
+   the shrinking stats box clip a figure, and the figures themselves wrap
+   rather than clip when even they alone are too wide. A wrapped deadline
+   in the dock's 320-440px range drops its divider dot (the 440px rule
+   below); a deadline on its own still drops it via :only-child above. */
+.drain-window-stats { flex: 0 1 auto; min-width: 0; position: relative; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 0; white-space: nowrap; min-height: 24px; }
 .drain-window-stat { display: flex; align-items: baseline; gap: 5px; min-width: 0; flex: 0 0 auto; }
 .drain-window-stat dd { order: 1; margin: 0; color: var(--fg-strong); font: 600 20px var(--font-sans); line-height: 1.2; font-variant-numeric: tabular-nums; }
 .drain-window-stat dt { order: 2; color: var(--fg-dim); font: 400 12.5px var(--font-sans); white-space: nowrap; }
 @container drain-card (max-width: 440px) {
-  .drain-window-stats { gap: 4px 10px; }
+  .drain-window-summary .drain-when::before { content: none; }
+  .drain-window-stats { gap: 4px 8px; }
   .drain-window-stat { gap: 4px; }
   .drain-window-stat dd { font-size: 16px; }
   .drain-window-stat dt { font-size: 11px; }
@@ -104,7 +114,7 @@
     overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
   }
 }
-.drain-window { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.drain-notices { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 
 /* Workspace leaf slots: a bar of one segment per slot (or one fill past 24),
    then why nothing more starts beside the count, and a mix of pipelines. */
@@ -362,67 +372,10 @@
 /* Settlement report shown on the runs table after cancelling a drain run. */
 .run-cancel-notice { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 
-/* Fleet drains: one group per host (tabbed when there are several), one line per workspace. A second line
-   appears only for eligible work, a top wait or holds. Idle rows stay muted;
-   live drains lead their group in full colour. Wide cards flow into columns. */
 #auto-drain-panel { container: drain-card / inline-size; }
-.fleet-drains { display: grid; gap: 12px; font-size: 12px; }
-.fleet-host { min-width: 0; }
-/* More than one host: a tab per host, one host's section at a time. The
-   section heading keeps the host name for assistive tech and shows its count. */
-.fleet-host-tabs { display: flex; width: 100%; max-width: 480px; margin-left: 0; box-sizing: border-box; border-radius: 6px; font: 500 11px var(--font-sans); letter-spacing: 0; text-transform: none; }
-.fleet-host-tab { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 5px 6px; }
-.fleet-host-tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fleet-host-tab .drain-dot { width: 6px; height: 6px; }
-.drain-dot.fleet-dot-down { background: transparent; box-shadow: inset 0 0 0 1.5px var(--warn-fg); }
-.drain-dot.fleet-dot-loading { opacity: 0.5; }
-.fleet-tabbed .fleet-host-name > span:first-child { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-.fleet-host-name {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 0 4px;
-  padding-bottom: 4px; border-bottom: 1px solid var(--hair); color: var(--fg-soft);
-  font: 600 13px/1.3 var(--font-sans); letter-spacing: 0;
-}
-.fleet-host-name > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.fleet-host-count { flex: 0 0 auto; color: var(--fg-mute); font: 400 11px var(--font-sans); }
-.fleet-rows {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
-  column-gap: 16px; margin: 0; padding: 0; list-style: none;
-}
-.fleet-row { position: relative; min-width: 0; padding: 4px 6px; margin: 0 -6px; border-radius: var(--radius-sm); }
-.fleet-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.fleet-workspace {
-  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--fg-dim); background: none; border: 0; padding: 0; font: inherit; text-align: left; cursor: pointer;
-}
-.fleet-live .fleet-workspace, .fleet-row:hover .fleet-workspace { color: var(--accent); }
-.fleet-live .fleet-workspace { font-weight: 600; }
-.fleet-workspace:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.fleet-selectable { cursor: pointer; }
-.fleet-selectable:hover { background: var(--bg-control); }
-.fleet-phase { flex: 0 0 auto; font-size: 11px; }
-.fleet-row[data-phase="draining"] .fleet-phase { color: var(--state-running); }
-.fleet-row[data-phase="pulling"] .fleet-phase { color: var(--accent); }
-.fleet-row[data-phase="winding_down"] .fleet-phase { color: var(--warn-fg); }
-.fleet-slots { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; color: var(--fg-mute); font: 11px var(--font-mono); font-variant-numeric: tabular-nums; }
-.fleet-meter { width: 28px; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; }
-.fleet-meter > span { display: block; height: 100%; background: var(--state-running); }
-.fleet-slots-busy { color: var(--fg-strong); }
-.fleet-slots-full .fleet-meter > span { background: var(--warn-fg); }
-.fleet-detail { display: flex; flex-wrap: wrap; gap: 2px 10px; padding-left: 15px; color: var(--fg-mute); font-size: 11px; overflow-wrap: anywhere; }
-.fleet-eligible { color: var(--fg-dim); }
-.fleet-holds { color: var(--warn-fg); }
-.fleet-pilot-warning { margin: 2px 0 0; padding-left: 15px; color: var(--warn-fg); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
-.fleet-unavailable { color: var(--fg-mute); grid-column: 1 / -1; }
-.fleet-row.fleet-unavailable .fleet-workspace { color: inherit; }
-.fleet-loading { color: var(--fg-mute); }
-.fleet-row[data-phase="loading"] .fleet-phase { color: var(--fg-mute); font-style: italic; }
-.fleet-host-loading { color: var(--fg-mute); font-style: italic; }
-.fleet-host-down { color: var(--warn-fg); }
-.fleet-empty { margin: 0; color: var(--fg-mute); }
 
 .drain-approval-summary { color: var(--fg-dim); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .drain-approval-summary a { color: var(--warn-fg); text-decoration: underline; }
 
+.drain-backlog-forecast-gap { order: 2; flex: 1 1 100%; color: var(--warn-fg); overflow-wrap: anywhere; }
 .drain-backlog-forecast-scope { order: 2; flex: 1 1 100%; overflow-wrap: anywhere; }
-
-#auto-drain-host { min-width: 0; max-width: 140px; }

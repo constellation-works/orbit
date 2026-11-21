@@ -122,7 +122,11 @@ fn a_repair_hands_the_implementer_the_candidate_trigger() {
     assert_eq!(implement[0]["resume_candidate"], repair);
 
     let fresh = ScriptedHost::new(Settlement::Accept, Revalidation::Passes);
-    run_shipped_pipeline(&fresh).expect("a fresh run delivers");
+    let fresh_result = run_shipped_pipeline(&fresh);
+    assert!(
+        matches!(&fresh_result, Ok(outcome) if outcome.success),
+        "a fresh run delivers: {fresh_result:?}"
+    );
     let implement = fresh.inputs("agent_implement");
     assert_eq!(implement.len(), 1);
     assert_eq!(implement[0]["resume_candidate"], Value::Null);
@@ -171,8 +175,11 @@ fn a_claimed_leaf_hands_its_kept_candidate_to_resume_and_the_repair_to_the_imple
     assert_eq!(implement[0]["resume_candidate"], repair);
 
     let fresh = ScriptedHost::new(Settlement::Accept, Revalidation::Passes);
-    run_shipped_job(&fresh, "task_claimed_pr_pipeline", input(Value::Null))
-        .expect("a fresh claimed leaf delivers");
+    let fresh_result = run_shipped_job(&fresh, "task_claimed_pr_pipeline", input(Value::Null));
+    assert!(
+        matches!(&fresh_result, Ok(outcome) if outcome.success),
+        "a fresh claimed leaf delivers: {fresh_result:?}"
+    );
     assert_eq!(
         fresh.inputs("candidate_resume")[0]["candidate"],
         Value::Null
@@ -236,8 +243,11 @@ fn a_claimed_local_leaf_resumes_its_kept_candidate() {
     position(&actions, "claim_handoff");
 
     let fresh = ScriptedHost::new(Settlement::Accept, Revalidation::Passes);
-    run_shipped_job(&fresh, "task_claimed_local_pipeline", input(Value::Null))
-        .expect("a fresh claimed-local leaf hands off");
+    let fresh_result = run_shipped_job(&fresh, "task_claimed_local_pipeline", input(Value::Null));
+    assert!(
+        matches!(&fresh_result, Ok(outcome) if outcome.success),
+        "a fresh claimed-local leaf hands off: {fresh_result:?}"
+    );
     assert_eq!(
         fresh.inputs("candidate_resume")[0]["candidate"],
         Value::Null

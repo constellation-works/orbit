@@ -1,9 +1,15 @@
-//! Operator context appended to generic CLI failures.
+//! Operator context appended to CLI and orphaned-worker failures.
 
 /// Separates a generic CLI exit failure from its untrusted stderr context.
 pub const CLI_STDERR_TAIL_SEPARATOR: &str = "\nstderr tail:\n";
 
-/// The authoritative failure text, excluding a generic CLI stderr tail.
+/// Separates a generic CLI exit from an unclassified provider error frame.
+pub const CLI_PROVIDER_ERROR_SEPARATOR: &str = "\nprovider error:\n";
+
+/// Diagnostic-only worker log provenance appended to an orphan failure.
+pub const WORKER_PROVENANCE_SEPARATOR: &str = "\nworker provenance:\n";
+
+/// The authoritative failure text, excluding generic CLI diagnostic context.
 ///
 /// Wrappers may prefix a step or run name. Only generic CLI failures can
 /// introduce this suffix: a bare exit or signal termination, or either form
@@ -11,11 +17,23 @@ pub const CLI_STDERR_TAIL_SEPARATOR: &str = "\nstderr tail:\n";
 /// diagnostics retain their existing classification. Stderr can quote denial
 /// words, typed failure markers or the check-repair handoff without acquiring
 /// control-plane meaning.
+/// Orphan diagnostics likewise exclude their log-backed worker provenance:
+/// a returned error there describes evidence, not a new settlement decision.
 #[must_use]
 pub fn failure_classification_text(message: &str) -> &str {
-    let Some((failure, _)) = message.split_once(CLI_STDERR_TAIL_SEPARATOR) else {
+    if let Some((failure, _)) = message.split_once(WORKER_PROVENANCE_SEPARATOR)
+        && failure.contains("worker exit:")
+    {
+        return failure;
+    }
+    let Some(boundary) = [CLI_STDERR_TAIL_SEPARATOR, CLI_PROVIDER_ERROR_SEPARATOR]
+        .into_iter()
+        .filter_map(|separator| message.find(separator))
+        .min()
+    else {
         return message;
     };
+    let failure = &message[..boundary];
     let generic_exit = failure
         .rsplit_once("cli subprocess exited with code ")
         .is_some_and(|(_, code)| {

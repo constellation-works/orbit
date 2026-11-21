@@ -2,7 +2,9 @@ use orbit_core::application::contracts::PullSettlementOutcome;
 use std::fmt::Write as _;
 
 use clap::Args;
-use orbit_core::application::job::{AutoDrainSubmissionReceipt, run_error_step};
+use orbit_core::application::job::{
+    AutoDrainSubmissionReceipt, ShipSubmissionReceipt, run_error_step,
+};
 use orbit_core::{
     JobRunState, OrbitError, OrbitRuntime, PipelineWaitEntry, PipelineWaitStatus, find_workflow,
 };
@@ -161,23 +163,7 @@ pub(crate) fn workflow_dispatch_payload(
     workflow_alias: &'static str,
     runs: &[WorkflowDispatchResult],
 ) -> CommandOut {
-    workflow_dispatch_payload_with_notices(workflow_alias, runs, Vec::new(), Vec::new())
-}
-
-/// [`workflow_dispatch_payload`] with a submission's notices: the admission
-/// warnings it proceeded past, such as a host resource throttle [ORB-13901]
-/// or a validation environment that may not find the user's toolchain
-/// [ORB-13987], and informational notes about how it is configured, such as
-/// running no required validation. Warnings are `.warning` in JSON (one per
-/// line) and one `Warning:` line each in text; notes are `.note` and `Note:`
-/// lines. Neither changes the exit code.
-pub(crate) fn workflow_dispatch_payload_with_notices(
-    workflow_alias: &'static str,
-    runs: &[WorkflowDispatchResult],
-    warnings: Vec<String>,
-    notes: Vec<String>,
-) -> CommandOut {
-    let mut doc = if runs.len() == 1 {
+    let doc = if runs.len() == 1 {
         workflow_dispatch_result_to_json(&runs[0])
     } else {
         json!({
@@ -188,18 +174,10 @@ pub(crate) fn workflow_dispatch_payload_with_notices(
                 .collect::<Vec<_>>(),
         })
     };
-    let mut lines = runs
+    let lines = runs
         .iter()
         .flat_map(workflow_dispatch_result_lines)
         .collect::<Vec<_>>();
-    if !warnings.is_empty() {
-        lines.extend(warnings.iter().map(|warning| format!("Warning: {warning}")));
-        doc["warning"] = json!(warnings.join("\n"));
-    }
-    if !notes.is_empty() {
-        lines.extend(notes.iter().map(|note| format!("Note: {note}")));
-        doc["note"] = json!(notes.join("\n"));
-    }
     let payload = Payload::detail(doc, lines.join("\n"));
     if runs
         .iter()
@@ -208,6 +186,23 @@ pub(crate) fn workflow_dispatch_payload_with_notices(
         return Ok(payload.with_exit_code(1).into());
     }
     Ok(payload.into())
+}
+
+pub(super) fn ship_submission_payload(receipt: &ShipSubmissionReceipt) -> CommandOut {
+    let mut lines = submitted_workflow_lines(
+        receipt.workflow(),
+        &receipt.job_id,
+        &receipt.run_id,
+        receipt.state,
+    );
+    lines.extend(
+        receipt
+            .warnings()
+            .iter()
+            .map(|warning| format!("Warning: {warning}")),
+    );
+    lines.extend(receipt.notes().iter().map(|note| format!("Note: {note}")));
+    Ok(Payload::detail(receipt.to_json(), lines.join("\n")).into())
 }
 
 pub(super) fn auto_drain_submission_payload(receipt: &AutoDrainSubmissionReceipt) -> CommandOut {

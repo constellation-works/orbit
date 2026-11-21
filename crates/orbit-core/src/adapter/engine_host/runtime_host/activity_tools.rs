@@ -9,7 +9,7 @@ use orbit_types::tool::{ToolSessionContext, tool_requirement_name};
 use orbit_types::workflow::{ActivityToolDenyPolicy, tool_allowed, tools_allowed_by_disallow_list};
 
 use crate::OrbitRuntime;
-use crate::adapter::tool_host::build_orbit_tool_host;
+use crate::adapter::tool_host::{ToolHostRun, build_orbit_tool_host};
 use crate::application::job::{
     DisallowGrant, IMPLEMENTING_ACTIVITY, agent_tool_grant_classification, classify_disallow_grant,
     drops_disallowed_requirements, granted_tool_refusal,
@@ -379,7 +379,7 @@ pub(super) fn tool_context_for_activity(
         orbit_host: Some(build_orbit_tool_host(
             runtime,
             None,
-            run_id.map(ToOwned::to_owned),
+            ToolHostRun::InProcess(run_id.map(ToOwned::to_owned)),
             ToolSessionContext::default(),
         )),
         ..Default::default()

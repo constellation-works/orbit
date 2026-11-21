@@ -26,5 +26,5 @@ pub(crate) mod worker_tools;
 mod workflow_tools;
 mod workspace_claim_tools;
 
-pub(crate) use host::build_orbit_tool_host;
+pub(crate) use host::{ToolHostRun, build_orbit_tool_host};
 pub use hub_registry::HubCoordinationExecutor;

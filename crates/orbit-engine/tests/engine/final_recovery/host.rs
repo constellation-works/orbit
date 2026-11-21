@@ -33,6 +33,17 @@ pub(super) enum Reply {
     ChildCancelled,
 }
 
+/// How `apply_final_recovery` answers, beyond the decision-derived default.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ApplyScript {
+    /// Settled for non-escalate decisions, escalated for an escalate.
+    ByDecision,
+    /// A `requeue` decision the host parks for a human instead of settling.
+    ParkRequeue,
+    /// Applying the decision fails.
+    Fail,
+}
+
 pub(super) struct RecoveryHost {
     pub(super) replies: Mutex<HashMap<String, VecDeque<Reply>>>,
     pub(super) calls: Mutex<Vec<(String, Value)>>,
@@ -49,6 +60,10 @@ pub(super) struct RecoveryHost {
     pub(super) primary_root: Option<std::path::PathBuf>,
     pub(super) cli: Option<orbit_engine::ResolvedCliExecutor>,
     pub(super) completion_admission: CompletionObservationAdmission,
+    /// When set, admission classifies these facts instead of
+    /// [`Self::completion_admission`].
+    pub(super) observation: Option<orbit_engine::PublishedCompletionObservation>,
+    pub(super) apply_script: ApplyScript,
 }
 
 impl RecoveryHost {
@@ -72,6 +87,8 @@ impl RecoveryHost {
             primary_root: None,
             cli: None,
             completion_admission: CompletionObservationAdmission::Unavailable,
+            observation: None,
+            apply_script: ApplyScript::ByDecision,
         }
     }
 
@@ -236,6 +253,10 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost {
         _: &str,
         _: &str,
     ) -> Result<CompletionObservationAdmission, OrbitError> {
+        if let Some(facts) = self.observation.clone() {
+            return orbit_engine::admit_published_completion_observation(facts)
+                .map_err(|message| OrbitError::Execution(message.to_string()));
+        }
         Ok(self.completion_admission.clone())
     }
 
@@ -254,6 +275,18 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost {
         application: &FinalRecoveryApplication,
     ) -> Result<FinalRecoveryApplied, OrbitError> {
         self.applications.lock().unwrap().push(application.clone());
+        if self.apply_script == ApplyScript::Fail {
+            return Err(OrbitError::Execution(
+                "scripted final recovery application failed".to_string(),
+            ));
+        }
+        if self.apply_script == ApplyScript::ParkRequeue
+            && matches!(application.decision, FinalRecoveryDecision::Requeue { .. })
+        {
+            return Ok(FinalRecoveryApplied::Escalated {
+                outcome: "blocked for a human: requeue parked by the host".to_string(),
+            });
+        }
         Ok(match &application.decision {
             FinalRecoveryDecision::Resume { .. } => FinalRecoveryApplied::Resume,
             FinalRecoveryDecision::Escalate { .. } => FinalRecoveryApplied::Escalated {

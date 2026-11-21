@@ -16,6 +16,47 @@
 .shell > .rail { grid-area: rail; }
 .shell > .main-col { grid-area: main; }
 
+/* Navigation rail collapse (rail-toggle.js): an icon button at the top of
+   the rail, right-aligned on the same row as the Host label. The toggle stays
+   first in the DOM (and focus order); a negative bottom margin of its own
+   height lets the Host row, which is that tall, share its row, and the
+   stacking order keeps the button clickable above the label.
+   Contents slide before the grid column changes once; reduced motion skips
+   the slide. The column leaves a 45px strip containing only the toggle. */
+.rail-toggle {
+  position: relative;
+  z-index: 1;
+  align-self: flex-end;
+  flex: 0 0 auto;
+  margin-bottom: -28px;
+}
+.rail-toggle > svg { transform: scaleX(-1); }
+.rail .rail-toggle:focus-visible { outline-offset: -2px; }
+@media (min-width: 761px) {
+  /* The Host label's row is as tall as the toggle it shares the row with. */
+  .rail-host .rail-scope-label { display: flex; align-items: center; min-height: 28px; }
+  .rail > :not(.rail-toggle) { transition: transform 180ms ease, opacity 180ms ease; }
+  .shell:is(.rail-leaving, .rail-entering) .rail > :not(.rail-toggle) {
+    transform: translateX(-32px);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .shell.rail-collapsed { grid-template-columns: 45px minmax(0, 1fr); }
+  .shell.rail-collapsed > .rail { padding: 8px; }
+  .shell.rail-collapsed .rail > :not(.rail-toggle) { display: none; }
+  .shell.rail-collapsed .rail-toggle {
+    align-self: center;
+    margin: 0;
+  }
+}
+@media (max-width: 760px) {
+  .rail-toggle,
+  .rail .rail-toggle { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail > :not(.rail-toggle) { transition: none; }
+}
+
 .skip-link {
   position: fixed;
   z-index: 1000;
@@ -100,10 +141,10 @@
 .rail .tab.active .rail-ico { color: var(--accent); }
 
 .rail .rail-drain { text-decoration: none; }
-/* Above the dock breakpoint the Tasks dock sits beside the list and already
-   holds Drain, so the rail item is withdrawn. It stays in the DOM, and its
-   reading still paints while hidden. */
-@media (min-width: 1001px) {
+/* Above the Tasks dock breakpoint (`TASKS_ONE_COLUMN_QUERY` in log-tail.js),
+   the dock sits beside the list and holds Drain, so the rail item is withdrawn.
+   It stays in the DOM, and its reading still paints while hidden. */
+@media (min-width: 1316px) {
   .rail .rail-drain { display: none; }
 }
 /* The live reading: a dot and words, tinted by state. */
@@ -114,7 +155,7 @@
 /* Without room beside the list, the Drain dock route stands in for it, so the
    rail marks Drain and not Tasks. Log and Notices keep Tasks marked: the dock
    is still the Tasks view. Keep these in step with .rail .tab.active above. */
-@media (max-width: 1000px) {
+@media (max-width: 1315px) {
   .shell:has(.tab-pane.active > main.dock-route):has(#side-dock[data-mode="drain"]) .rail .tab.active[data-tab="tasks"] { background: transparent; color: var(--fg-soft); font-weight: 400; }
   .shell:has(.tab-pane.active > main.dock-route):has(#side-dock[data-mode="drain"]) .rail .tab.active[data-tab="tasks"] .rail-ico { color: var(--fg-dim); }
   .shell:has(.tab-pane.active > main.dock-route):has(#side-dock[data-mode="drain"]) .rail .rail-drain { background: var(--bg-selected); color: var(--fg-strong); font-weight: 500; }

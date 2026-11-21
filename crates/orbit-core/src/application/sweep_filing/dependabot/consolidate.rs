@@ -87,7 +87,7 @@ pub(crate) fn consolidate_code_scanning_tasks(
 
     let mut groups = Vec::new();
     for consolidation in consolidations.iter().take(max_groups) {
-        let params = replacement_params(consolidation);
+        let params = replacement_params(consolidation, &runtime.paths().repo_root);
         let mut entry = describe(consolidation, &params);
         if apply {
             apply_one(runtime, consolidation, params, &mut entry)?;
@@ -310,12 +310,13 @@ fn apply_one(
     Ok(())
 }
 
-fn replacement_params(consolidation: &Consolidation) -> TaskAddParams {
+fn replacement_params(consolidation: &Consolidation, repo_root: &std::path::Path) -> TaskAddParams {
     let snapshot = json!({"repository": {"full_name": consolidation.repository}});
     let mut params = code_group_task_params(&CodeGroupTaskRequest {
         snapshot: &snapshot,
         group: &consolidation.group,
         covered_siblings: &[],
+        repo_root,
     });
 
     // The sources' own selectors are kept alongside the ones the alert paths

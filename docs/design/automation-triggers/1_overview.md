@@ -1,15 +1,15 @@
 ---
 title: Automation Triggers — Overview
 owner: codex
-last_updated: 2026-11-05
-last_validated: 2026-11-03
+last_updated: 2026-11-18
+last_validated: 2026-11-18
 status: Draft
 stage: shipped
 next: "—"
 feature: automation-triggers
 doc_role: overview
 type: design
-summary: Proposed bounded state-driven triggers for routines and auto-tasks with durable work identity and honest coverage.
+summary: Bounded delivery and preparation triggers for routines and auto-tasks, with durable work identity and honest coverage.
 tags: [automation-triggers, routines, auto-tasks, scheduling]
 paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-core/src/application/task/pilot/**"]
 related_features: [routines, auto-tasks, review-gate, condition-triggers]
@@ -26,9 +26,11 @@ target is not shipped. Failed runs leave their task blocked with the failure
 attached; re-backlogging remains a deliberate human transition. The shared
 `orbit-automation` domain uses the existing sweep clock, Core action adapters
 and Store checkpoints. See
-[Operations](5_operations.md) for accepted configuration and limits. The broader
-batching and mode design below retains future intent; no live definition is
-automatically migrated or enabled.
+[Operations](references/operations.md) for accepted configuration and limits. Batched pilot
+preparation shipped in [ORB-12746]; [ORB-16839] added mixed-crew
+partitioning. Broader coordination and illustrative schema-v2 examples remain
+future intent, while operation mode was retired. New workspaces seed the
+`task_pilot` routine enabled. Existing workspaces keep their setting.
 
 ## 1. Motivation
 
@@ -76,14 +78,14 @@ review coverage remains uncovered.
 
 ## 3. At a Glance
 
-| Concern | File | Task |
+| Concern | File | Task and disposition |
 | --- | --- | --- |
-| Current seams, proposed contract, YAML, timelines, rollout | [Design](./2_design.md) | ORB-11315 |
-| Alternatives, costs, unresolved decisions | [Vision](./3_vision.md) | ORB-11315 |
-| Existing job scheduling | [Routines](../routines/2_design.md) | ORB-11315 inspection |
-| Existing task minting | [Auto-tasks](../auto-tasks/2_design.md) | ORB-11315 inspection |
-| Review-policy relationship | [Review gate](../review-gate/2_design.md) | ORB-11333 |
-| Condition predicates | [Condition triggers](../condition-triggers/1_scope.md) | ORB-19288 |
+| Shared evaluator, delivery batches and coverage | [Design](./2_design.md) | [ORB-11330] implemented (done) |
+| State preparation and per-member settlement | [Operations](./references/operations.md#state-preparation-orb-11331) | [ORB-11331] implemented (done); failure triage later retired |
+| Batched and mixed-crew pilot preparation | [Operations](./references/operations.md#state-preparation-orb-11331) | [ORB-12746] batched members; [ORB-16839] partitioned crews (done) |
+| Alternatives, proposed YAML and future coordination | [Vision](./3_vision.md), [Design](./2_design.md) | [ORB-11315] authored the proposal (done) |
+| Review-policy relationship | [Review gate](../review-gate/2_design.md) | [ORB-11333] implemented coverage exclusions (done) |
+| Condition predicates | [Condition triggers](../condition-triggers/1_scope.md) | [ORB-19288] scoped the separate feature (done) |
 
 Execution waited until the OpenCode prerequisite [ORB-11295] landed as
 `8da5a925f` (PR 1382), an ancestor of the inspected checkout `c286142bce`.
@@ -106,5 +108,7 @@ state preparation have since shipped in [ORB-11330] and [ORB-11331].
   and delivery; the mode concept was later removed.
 - [ORB-11316] — extended the operation-mode design with review timing and
   repair policy; the mode concept was later removed.
+- [ORB-12746] — batched due preparation members into one task-pilot run.
+- [ORB-16839] — partitioned mixed-crew preparation into bounded pilot groups.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

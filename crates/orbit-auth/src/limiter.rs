@@ -155,7 +155,7 @@ impl KeyedLimiter {
         } else {
             match key {
                 LimitKey::Token(_) | LimitKey::TokenOverflow => LimitKey::TokenOverflow,
-                _ => LimitKey::AnonymousOverflow,
+                LimitKey::Address(_) | LimitKey::AnonymousOverflow => LimitKey::AnonymousOverflow,
             }
         }
     }
@@ -331,7 +331,11 @@ impl KeyedLimiter {
             }
         }
         self.keys.retain(|key, state| {
-            matches!(key, LimitKey::AnonymousOverflow | LimitKey::TokenOverflow)
+            let always_retained = match key {
+                LimitKey::AnonymousOverflow | LimitKey::TokenOverflow => true,
+                LimitKey::Address(_) | LimitKey::Token(_) => false,
+            };
+            always_retained
                 || state.in_flight.load(Ordering::Relaxed) > 0
                 || state
                     .budgets

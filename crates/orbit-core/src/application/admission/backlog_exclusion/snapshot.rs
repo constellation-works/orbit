@@ -4,11 +4,13 @@ use std::collections::BTreeMap;
 use orbit_store::contracts::TaskRow;
 
 use chrono::{DateTime, Utc};
+use orbit_common::OrbitError;
 use orbit_types::identity::same_crew_family;
 use orbit_types::task::{
     EpicHierarchyNode, Task, TaskReferenceIndex, TaskStatus, inherited_only_epic_roots,
     is_no_diff_expected, task_dependencies_ready_with_index,
 };
+use orbit_types::workflow::activity_job::Provider;
 use orbit_types::workflow::{REVIEW_RUN_OPTION_SOURCE, ReviewAdmission, ReviewLayer, ShipMode};
 
 use super::super::claim_holders::{self, ClaimHolders};
@@ -26,6 +28,7 @@ use super::exclusions::{
 use super::listing::active_pilot_preparations;
 use super::ordering::task_root_id;
 use super::population::admission_population;
+use super::shared_base_repair;
 use super::{
     BacklogSnapshot, BacklogTaskConflict, BacklogTaskExclusion, BacklogTaskExclusionReason,
     sort_tasks_for_automatic_dispatch,
@@ -516,11 +519,33 @@ pub(super) fn backlog_snapshot_in_mode(
         }
         | BacklogReadMode::Admission { .. } => runtime.unset_crew_env(),
     };
+    let has_muse = LazyCell::new(|| {
+        runtime
+            .admission_crew_settings()
+            .crews
+            .values()
+            .any(|crew| {
+                crew.enabled
+                    && Provider::parse(&crew.assignment.provider)
+                        .is_ok_and(|provider| provider == Provider::Muse)
+            })
+    });
     backlog.retain(|task| {
-        if allowlist.is_none() && crew_unset.is_empty() {
+        let model_access_applies = task.job_run_id.is_some() && *has_muse;
+        if allowlist.is_none() && crew_unset.is_empty() && !model_access_applies {
             return true;
         }
         let resolution = runtime.auto_task_crew_candidates(task, pools, None, allowlist);
+        if let Err(OrbitError::ProviderModelAccessHold(detail)) = &resolution {
+            excluded.push(BacklogTaskExclusion {
+                id: task.id.clone(),
+                reason: BacklogTaskExclusionReason::ProviderModelAccessHold,
+                conflicts: Vec::new(),
+                crew: None,
+                detail: Some(detail.clone()),
+            });
+            return false;
+        }
         if let Ok((crews, _, _)) = &resolution {
             let candidates = crews
                 .iter()
@@ -734,6 +759,16 @@ pub(super) fn backlog_snapshot_in_mode(
         });
         false
     });
+    // [ORB-25510] A base repair held behind a red PR's recovery-widened lock,
+    // while that PR waits for the same repair, is named as the cycle it is,
+    // and the owner's admission pass raises one owner decision for it.
+    let shared_base_waits = shared_base_repair::annotate_shared_base_repair_waits(
+        runtime,
+        &task_lookup,
+        &mut excluded,
+        lock_modes,
+        matches!(read_mode, BacklogReadMode::Admission { .. }),
+    );
     excluded.sort_by(|a, b| a.id.cmp(&b.id));
     let footprint_waits = footprint_waits(runtime, action, backlog.iter().copied(), Utc::now())?;
     let admissible_leaves = backlog.into_iter().map(|task| task.id.clone()).collect();
@@ -748,6 +783,7 @@ pub(super) fn backlog_snapshot_in_mode(
         dispatch_order,
         footprint_waits,
         published_resumes,
+        shared_base_waits,
     })
 }
 

@@ -1,19 +1,16 @@
-//! The pilot's origin fetch under the shared fetch lock: a remote that never
-//! answers is killed at the fetch deadline, so the lock is released to the
-//! next workspace fetch instead of wedging it (fault injection, STD-03 §R22).
+//! The pilot's origin fetch takes no fetch lock, so the deadline is what
+//! bounds it: a remote that never answers is killed at the fetch deadline and
+//! the fetch fails instead of hanging (fault injection, STD-03 §R22).
 #![cfg(unix)]
 
 use std::fs;
-use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
-use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::git_test_support::run as run_git;
-use orbit_common::fs::git::with_git_fetch_lock;
 use orbit_common::process::shell::quote_posix_arg;
 use orbit_common::test_env::{assert_child_test_passed, run_child_test};
 use tempfile::TempDir;
@@ -24,10 +21,10 @@ use super::super::fetch_origin_branch;
 const STUB_DIR_VAR: &str = "ORBIT_TEST_HUNG_FETCH_DIR";
 
 #[test]
-fn hung_origin_fetch_releases_the_fetch_lock_within_its_deadline() {
+fn hung_origin_fetch_is_killed_at_its_deadline() {
     const TEST: &str = concat!(
         "application::task::pilot::source::tests::source::",
-        "hung_origin_fetch_releases_the_fetch_lock_within_its_deadline"
+        "hung_origin_fetch_is_killed_at_its_deadline"
     );
     if let Some(stub_dir) = std::env::var_os(STUB_DIR_VAR) {
         hung_fetch_child(Path::new(&stub_dir));
@@ -83,34 +80,13 @@ fn hung_fetch_child(stub_dir: &Path) {
     }
 
     let deadline = Duration::from_millis(500);
-    let (fetching, fetch_started) = mpsc::channel();
-    let holder_repo = repo.path().to_path_buf();
     let started = Instant::now();
-    let holder = thread::spawn(move || {
-        with_git_fetch_lock(&holder_repo, || {
-            fetching.send(()).expect("signal fetch start");
-            Ok::<_, io::Error>(fetch_origin_branch(
-                "task_pilot.prepare",
-                &holder_repo,
-                "main",
-                deadline,
-            ))
-        })
-    });
-    fetch_started.recv().expect("holder took the fetch lock");
-
-    // A second workspace fetch waits behind the hung one and then gets in.
-    let acquired_after = with_git_fetch_lock(repo.path(), || Ok::<_, io::Error>(started.elapsed()))
-        .expect("second caller acquires the fetch lock");
+    let fetched = fetch_origin_branch("task_pilot.prepare", repo.path(), "main", deadline);
+    let elapsed = started.elapsed();
     assert!(
-        acquired_after < deadline + Duration::from_secs(5),
-        "second caller waited {acquired_after:?}, far past the {deadline:?} fetch deadline"
+        elapsed < deadline + Duration::from_secs(5),
+        "the hung fetch ran {elapsed:?}, far past the {deadline:?} fetch deadline"
     );
-
-    let fetched = holder
-        .join()
-        .expect("holder thread")
-        .expect("holder took the fetch lock");
     let error = fetched.expect_err("a hung fetch must fail, never read as fetched");
     assert!(
         error.to_string().contains("timed out fetching origin/main"),

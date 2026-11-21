@@ -233,6 +233,27 @@ impl Store {
         })
     }
 
+    /// Whether an unexpired workspace claim exists, without releasing expired rows.
+    pub fn has_active_workspace_claim(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<bool, OrbitError> {
+        self.with_read_connection(|conn| {
+            let sql = format!(
+                "SELECT EXISTS(SELECT 1 FROM task_reservations WHERE {}
+                 AND released_at IS NULL AND expires_at > ?3)",
+                reservation_scope_clause(TaskReservationScope::WorkspaceClaim, workspace_id),
+            );
+            conn.query_row(
+                &sql,
+                params![workspace_id, workspace_orbit_dir, crate::now_string()],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_store_error)
+        })
+    }
+
     /// The active claim after lazy expiry, or `None` when unclaimed.
     pub fn show_workspace_claim(
         &self,

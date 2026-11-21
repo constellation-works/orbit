@@ -1,5 +1,5 @@
 //! One owner-reserved base update for proven absent workflow emission.
-use super::super::pr::{
+use super::super::pr_answers::{
     CheckState, DeliveryPin, PrMergeState, PullRequestStatus, classify_pr_state,
     read_pr_status_before,
 };
@@ -68,7 +68,7 @@ pub(in crate::executor::automation::vcs) fn recover<H: RuntimeHost + ?Sized>(
             }
             return Ok(RefreshStep::Changed);
         }
-        super::super::landing::checks::verify_published_base_update(workspace, candidate, status)?;
+        super::super::checks::verify_published_base_update(workspace, candidate, status)?;
         let parents = super::super::git::git_output(
             workspace,
             &[
@@ -129,12 +129,12 @@ pub(in crate::executor::automation::vcs) fn recover<H: RuntimeHost + ?Sized>(
         return Ok(RefreshStep::None);
     }
     match &status.review_decision {
-        super::super::pr::ReviewDecision::NotApplicable
-        | super::super::pr::ReviewDecision::Approved => {}
-        super::super::pr::ReviewDecision::ReviewRequired
-        | super::super::pr::ReviewDecision::ChangesRequested
-        | super::super::pr::ReviewDecision::Other(_)
-        | super::super::pr::ReviewDecision::Unavailable => {
+        super::super::pr_answers::ReviewDecision::NotApplicable
+        | super::super::pr_answers::ReviewDecision::Approved => {}
+        super::super::pr_answers::ReviewDecision::ReviewRequired
+        | super::super::pr_answers::ReviewDecision::ChangesRequested
+        | super::super::pr_answers::ReviewDecision::Other(_)
+        | super::super::pr_answers::ReviewDecision::Unavailable => {
             return Err(refused("required or unreadable review decision"));
         }
     }
@@ -181,7 +181,7 @@ pub(in crate::executor::automation::vcs) fn recover<H: RuntimeHost + ?Sized>(
         None => host.admit_pr_base_update(tasks, &request)?,
     };
     match admission {
-        PrBaseUpdateAdmission::Refused(why) => Err(refused(&why)),
+        PrBaseUpdateAdmission::Refused(why) => Err(refused(&why.to_string())),
         PrBaseUpdateAdmission::Observe(previous) => {
             Deadline(previous.deadline_ms).remaining()?;
             Ok(RefreshStep::Wait)
@@ -208,7 +208,7 @@ pub(in crate::executor::automation::vcs) fn recover<H: RuntimeHost + ?Sized>(
             // Even an error may be an applied write with a lost response.
             let observed = read_pr_status_before(host, workspace, &number, deadline_ms)?;
             if observed.head_sha.as_deref() != Some(&request.head_sha) {
-                super::super::landing::checks::verify_published_base_update(
+                super::super::checks::verify_published_base_update(
                     workspace, candidate, &observed,
                 )?;
                 return Ok(RefreshStep::Changed);

@@ -5,6 +5,7 @@ mod baseline;
 mod build_output;
 mod candidate_resume;
 mod candidate_validate;
+mod checks;
 pub mod claim;
 mod commit;
 mod completion_deadline;
@@ -26,6 +27,7 @@ mod light_delivery;
 mod operations;
 mod owed_criteria;
 mod pr;
+mod pr_answers;
 mod push;
 mod remote_probe;
 mod required;
@@ -48,13 +50,13 @@ pub(super) use candidate_resume::candidate_resume;
 pub(super) use candidate_validate::candidate_validate;
 pub(super) use claim::{claim_candidate_carry, claim_handoff, claim_validate};
 pub(super) use commit::git_commit;
-pub use commit::validate_claim_new_paths;
 pub(crate) use commit::{
     PUBLISHED_REPLAY_STEPS, published_candidate_matches, require_implementer_no_diff_artifacts,
 };
 pub(crate) use commit::{
     RecoveryCommit, RecoveryCommitRefusal, RecoveryCommitRequest, commit_recovery_repair,
 };
+pub use commit::{compose_squash_merge_message, validate_claim_new_paths};
 pub use deferral_probe::run_deferral_probe;
 pub(crate) use deferred_sandbox::{ImplementerLane, accept_implementer_deferral};
 pub(super) use failure::pr_failure_handoff;
@@ -70,12 +72,12 @@ pub use light_delivery::{
     run_review_skip_guard,
 };
 pub(crate) use owed_criteria::accept_implementer_owed_criteria;
-pub use pr::PullRequestStatus;
 pub(crate) use pr::forge_observation_hold_message;
 pub(crate) use pr::{
     AUTHENTICATED_PUBLISHED_HEAD_SHA, apply_authenticated_published_head,
     provider_authenticated_published_head, recovery_published_head,
 };
+pub use pr::{CheckState, PullRequestStatus, classify_rollup_context};
 pub(crate) use pr::{CompletionRecoveryChecks, completion_recovery_checks};
 pub(super) use pr::{git_merge, pr_complete, pr_open, pr_promote, ship_done_attribution};
 pub(super) use push::push_batch_changes;

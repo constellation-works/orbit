@@ -100,8 +100,31 @@ fn set_status(fixture: &Fixture, id: &str, status: TaskStatus) {
 }
 
 fn drain_run(fixture: &Fixture, state: JobRunState, task: &str) -> JobRun {
-    let mut run = fixture.seed_run("jrun-events-drain", "workspace_auto_pipeline", state);
-    run.input = Some(json!({"task_id": task}));
+    // Save once with the input already set: seeding first and saving again
+    // would let a change-stream scan observe the intermediate run with no
+    // task_id and emit a `run` notice naming no task.
+    let now = chrono::Utc::now();
+    let run = JobRun {
+        build: None,
+        run_id: "jrun-events-drain".into(),
+        job_id: "workspace_auto_pipeline".into(),
+        attempt: 1,
+        state,
+        scheduled_at: now,
+        created_at: now,
+        started_at: (state != JobRunState::Pending).then_some(now),
+        finished_at: state.is_terminal().then_some(now),
+        duration_ms: None,
+        pid: None,
+        pid_start_time: None,
+        input: Some(json!({"task_id": task})),
+        retry_source_run_id: None,
+        knowledge_metrics: None,
+        resolved_crew: None,
+        crew_model: None,
+        steps: Vec::new(),
+        executed_on: None,
+    };
     fixture.save_run(&run);
     run
 }

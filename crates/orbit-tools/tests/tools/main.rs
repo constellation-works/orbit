@@ -9,6 +9,10 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 mod external_tool_lockdown;
+#[cfg(unix)]
+mod github_log_cache;
+#[cfg(unix)]
+mod github_quota;
 mod mcp_definitions;
 #[cfg(unix)]
 mod plugin_environment;

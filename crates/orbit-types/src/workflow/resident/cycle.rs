@@ -19,7 +19,8 @@ pub const RESIDENT_CONTINUITY_REBUILT_EVENT: &str = "resident_continuity_rebuilt
 pub const RESIDENT_ACTION_EVENT: &str = "resident_action";
 /// The job a resident cycle runs as.
 pub const RESIDENT_CYCLE_JOB: &str = "resident_cycle_pipeline";
-/// Checkpoints a cycle's brief carries, newest first.
+/// Maximum checkpoint history entries in a cycle's brief: the latest in full,
+/// followed by summaries of earlier checkpoints, newest first.
 pub const RESIDENT_BRIEF_CHECKPOINTS: usize = 5;
 
 /// What the observer granted one cycle: the effective authority, narrowed to
@@ -46,6 +47,29 @@ pub struct ResidentCycleGrant {
     /// Why the cycle woke.
     #[serde(default)]
     pub reasons: Vec<String>,
+    /// The wake items observe saw: the baseline the next due check compares
+    /// item by item. Absent on grants written before items were recorded,
+    /// where the digest is compared instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wake_items: Option<ResidentWakeItems>,
+}
+
+/// What a resident cycle reacts to: one stable key (`mandate`, `authority`,
+/// `assignment`, `watch`, `comments`, `task:<id>` for a task a cycle acted
+/// on, `notice:<id>` for an open incident or maintenance notice) per state.
+pub type ResidentWakeItems = std::collections::BTreeMap<String, String>;
+
+/// History event finalize appends with the state of the tasks a finished
+/// cycle acted on ([`ResidentWakeSettled`]).
+pub const RESIDENT_WAKE_SETTLED_EVENT: &str = "resident_wake_settled";
+
+/// The wake items of the tasks one finished cycle acted on, as finalize saw
+/// them: they replace the observed items in the next due check's baseline,
+/// so the resident's own actions do not wake it again.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ResidentWakeSettled {
+    pub cycle: String,
+    pub items: ResidentWakeItems,
 }
 
 /// Where one cycle action stands: `started` before the tool runs, then one

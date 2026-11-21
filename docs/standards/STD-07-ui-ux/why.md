@@ -73,6 +73,14 @@ A rule is here only when its correction recurred.
 - **R33 (metadata on its own line).** "meta-data, e.g. "sol, sol@xhigh, sol@high", can be
   placed as a new row" (7995d040, ORB-24113): the Agents rank table ran each model's crews
   inline after its name, so long names and crew lists competed for one line.
+- **R40 (inline list separators and icon spacing).** On the task detail's relation rows:
+  "can you tell me what is wrong with this?", "also less margins around ⓘ", "there should
+  be some right margin after comma", then "ok and add it to standard" (f09993e5, ORB-25033,
+  F2026-11-303). Regression from rendered as `ORB-20629 ⓘ  ,ORB-17603 ⓘ`: the ⓘ's 44px tap
+  target took up layout space, so the comma landed about 15px after the icon and touched
+  the next id. Related to separated monospace ids with a bare sans space, so they read as
+  run together. R1 covered gaps between siblings, but not separators inside one line or the
+  space a tap target may add.
 
 ## Typography
 
@@ -87,6 +95,7 @@ A rule is here only when its correction recurred.
   ORB-20526 and ORB-20536. The owner asked for both to become
   validator rules: "let's add this to the ui ux rule - so that it will be caught by the new
   visual validator job".
+The vertical centring was added from the Fleet host dialog, where labels sat at the top of multi-line values such as Workspaces and Protocol: "the labels in the left column should be vertically center aligned" (2026-11-17, session orbit-0-orc, ORB-25399).
 - **R35 (chart text on the type scale).** "the texts inside this chart are way bigger than
   the rest of the texts around it. should be similar sizes" (7995d040, ORB-24114). The
   frontier chart drew a fixed 760-unit `viewBox` and stretched it to the panel, so its text
@@ -129,11 +138,21 @@ A rule is here only when its correction recurred.
   (1b5897bc); "what do you think about removing this page. seems bit redundant" (ORB-21641).
   Also ORB-19252, ORB-19253, ORB-22598–22601, ORB-22627, ORB-19161, ORB-17276, ORB-20509,
   ORB-20502, ORB-22935, ORB-22755, ORB-22756 and ORB-19697.
+The drill-down half was added because the Fleet host dialog repeated the host card's load, memory, disk and I/O readings: "get rid of "health" - previous page already includes it" (2026-11-17, session orbit-0-orc, ORB-25399).
 - **R32 (tooltips that add something).** "we don't need a hover-over help just to
   additionally display "done" - the green color make that obvious ... We just need those for
   those that gets truncated" and "excess space in the hover-over container" (7995d040,
   ORB-24124). Every progress-strip step had a tooltip, and each bubble was a fixed 280px
   wide.
+v13 replaced the closing sentence, which named a button's hover help (R41) as detail of this kind, when R41 was reversed (ORB-25398).
+- **R41 (no hover help on buttons; effect in the accessible description).** "let's add another ux convention - on
+  every buttons, there should be a short hover-over help message on what it does"
+  (f09993e5, F2026-11-304). The dashboard Residents tab's buttons (Start, Turn off, Wake for
+  status, Pause…, Takeover…, Relay…, Stop…) gave no hint of their effect: whether Wake runs
+  a cycle now, what Takeover hands over, or whether Stop can be undone. R32 limited
+  tooltips to what the screen does not already show, which read as discouraging them on
+  buttons. A button's effect is exactly that kind of off-screen detail.
+Changed in v13: the owner reversed the hover help on buttons. On the Fleet page a button's help bubble stayed on screen after the pointer left: "blatant defect. that help text persists even after not hovering. but let's just get rid of all hover-over help texts on this page, except for the i symbols. I think they are redundant." He then asked for R41 itself to be amended (2026-11-17, session orbit-0-orc, ORB-25398). The effect text stays available to assistive technology, and explanations go behind info icons, as R13 already requires.
 
 ## Data display
 
@@ -211,7 +230,27 @@ A rule is here only when its correction recurred.
   card's header (title, host select, state pill, time left) and its counts row each broke
   onto two lines. R14 covered a status line of text, R27 a lone orphan, R38 a row of controls
   with space beside it, and R23 said narrow widths drop secondary content without giving an
-  order.
+  order. Version 6 said members shrink "when the row does not fit" but not that they keep
+  full size where it does. The Tasks dock tabs then shrank to 12px behind a fixed 440px
+  container query (ORB-24810), which also covered the dock's normal width, where the 13.5px
+  tabs fit. The owner corrected it: "these got smaller than before. can you revert it back to
+  its original size. make them smaller only when there is no more space. and update ux rule"
+  (f09993e5, ORB-25032, F2026-11-302). Version 7 keeps full size wherever the row fits, and
+  names tab strips.
+- **R42 (controls sized by content).** The owner asked for the drain card's target select
+  to be wider (ORB-25031), and the fix gave it a fixed `width: 330px`. Looking at the result
+  he asked: "and yes I asked for wider, but how should we determine an optimal width?"
+  (f09993e5, ORB-25074, F2026-11-310). A fixed width is a guess: it leaves an empty box for
+  short names and clips long ones. R39 said how a row shrinks but not how wide a member
+  starts. The owner approved sizing it from its longest option, capped by the row.
+- **R43 (a collapse keeps the page you are on).** On the Orbit Tasks page, any click on a
+  dock tab (Drain, Notices, Residents, Log) at two-column width marked the dock as the
+  routed page, deliberately (ORB-19732). Narrowing the window then showed the Drain card in
+  place of the task list. The owner: "once task/drain page collapse into separate pages, the
+  resulting page is "Drain". It should be Tasks page, since that was the page that I was on"
+  (f09993e5, ORB-25093, F2026-11-311). R5 kept neighbours from shifting and R23 said narrow
+  widths drop secondary content, but nothing said which region survives a collapse.
+- **R44 (close buttons read "esc").** Daniel, 2026-11-17, on the Orbit dashboard: "All things close-able with 'esc' (and which has a close button), the button should be now labeled 'esc' instead of 'x', 'close', 'back to list'." He had just learned that Esc closes the Tasks detail panel and preferred it to browser Back (ORB-25406, withdrawn). The label teaches the shortcut where the eye already goes to close (ORB-25389).
 
 ## Process
 

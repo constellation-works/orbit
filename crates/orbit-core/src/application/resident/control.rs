@@ -103,6 +103,10 @@ pub(crate) struct ResidentControlEntry {
     pub(crate) state: ResidentControlState,
     pub(crate) reason: String,
     pub(crate) by: String,
+    /// The process actor was explicitly typed as human when this entry was
+    /// written. Older history and system-authored controls default to false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) human_actor: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) status_request: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -242,6 +246,18 @@ fn invalid(message: impl Into<String>) -> OrbitError {
 }
 
 impl OrbitRuntime {
+    /// Read current manager control, rather than the admitted cycle's
+    /// frozen grant. Callers coupling this to a write hold the task lock.
+    pub(crate) fn resident_control_state(
+        &self,
+        task_id: &str,
+    ) -> Result<ResidentControlState, OrbitError> {
+        let history = self.get_task_history(task_id)?;
+        resident_control_from_history(&history)
+            .map(|control| control.state)
+            .map_err(OrbitError::Execution)
+    }
+
     /// `orbit.resident.control`: pause, resume, stop, wake, take over or
     /// release a mandate. Each action is one history entry with the caller.
     pub fn control_resident(
@@ -298,6 +314,8 @@ impl OrbitRuntime {
                     state: to,
                     reason: reason.clone(),
                     by: writer.clone(),
+                    human_actor: self.actor().kind == crate::runtime::context::ActorKind::Human
+                        && !orbit_types::identity::is_automation_actor(&writer),
                     status_request: params.status_request,
                     by_session: params
                         .by_session
@@ -340,6 +358,7 @@ impl OrbitRuntime {
             "effective_at": at,
             "by": entry.by,
         });
+        self.leave_resident_control_line(&task_id, &entry);
         if entry.action == ResidentControlAction::Stop {
             value["handoff"] = json!(self.hand_off_stopped_resident(&task_id)?);
         }
@@ -444,6 +463,7 @@ impl OrbitRuntime {
                         deadline.to_rfc3339()
                     ),
                     by: "system".into(),
+                    human_actor: false,
                     status_request: false,
                     by_session: None,
                 };
@@ -471,9 +491,50 @@ impl OrbitRuntime {
                 Ok(())
             })?;
         if wrote {
+            self.leave_resident_control_line(
+                task_id,
+                &ResidentControlEntry {
+                    action: ResidentControlAction::Stop,
+                    state: ResidentControlState::Ended,
+                    reason: "the mandate deadline has passed".into(),
+                    by: "system".into(),
+                    human_actor: false,
+                    status_request: false,
+                    by_session: None,
+                },
+            );
             self.hand_off_stopped_resident_at(task_id, now)?;
         }
         Ok(wrote)
+    }
+
+    /// Replace the mandate's status line with what a control action left:
+    /// a paused, taken-over or stopped mandate says so instead of keeping
+    /// its last cycle's words, and a resumed one says a cycle is due. `wake`
+    /// changes no state and leaves the line alone. Best effort: the control
+    /// is already recorded, so a refused line is logged, never raised.
+    fn leave_resident_control_line(&self, task_id: &str, entry: &ResidentControlEntry) {
+        use ResidentControlAction as A;
+        let (state, lasting) = match entry.action {
+            A::Pause => ("Paused", true),
+            A::Takeover => ("Taken over", true),
+            A::Stop => ("Stopped", true),
+            A::Resume => ("Resumed", false),
+            A::Release => ("Released", false),
+            A::Wake => return,
+        };
+        let title = format!("{state} by {}", entry.by);
+        let body = if lasting {
+            format!("{}. No cycle runs.", entry.reason.trim_end_matches('.'))
+        } else {
+            format!(
+                "{}. The next cycle is due.",
+                entry.reason.trim_end_matches('.')
+            )
+        };
+        if let Err(error) = self.post_resident_control_line(task_id, &title, &body, lasting) {
+            tracing::warn!(task = task_id, %error, "failed to leave the resident's status line");
+        }
     }
 
     /// Move a stopped mandate's assignment to review with a synthesized

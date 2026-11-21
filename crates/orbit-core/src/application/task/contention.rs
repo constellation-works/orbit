@@ -141,6 +141,9 @@ pub(crate) fn compute_contention(
                 })
                 .map(|surface| surface.task_id.clone())
                 .collect();
+            let mut task_ids = task_ids;
+            task_ids.sort();
+            task_ids.dedup();
             // A selector only one task claims constrains nothing.
             (task_ids.len() > 1).then(|| LockContentionHotspot {
                 selector: selector.clone(),

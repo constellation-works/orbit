@@ -16,7 +16,7 @@ Options:
           [default: 7878]
 
       --workspace <SELECTOR>
-          Remote workspace to preselect — a registered name, logical ID (`ws_*`), or remote checkout path — passed through to `orbit web serve --workspace` on the remote host. Omit to use the remote's default workspace resolution
+          Workspace hint passed to `orbit web serve --workspace` when starting a remote dashboard. An existing server keeps its hint. Accepts a registered name, logical ID (`ws_*`), or remote checkout path
 
       --global
           Deprecated, no-op: remote dashboards always serve every registered workspace. Forwarded when spawning a dashboard for compatibility with older remote binaries

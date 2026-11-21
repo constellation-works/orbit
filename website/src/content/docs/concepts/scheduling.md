@@ -69,16 +69,23 @@ which the seeded task-pilot routine uses), when deliveries land on a branch
 (`condition`). See
 [Condition triggers](/reference/scheduling-yaml/#condition-triggers).
 
-- **Runs on every owner machine.** A cron routine runs on each machine that
-  has the checkout registered and its clock on. `orbit routine pause` keeps
-  it off one machine; `enabled: false` in the file retires it. A `state`
-  trigger runs only on the machine named in `owner_machine`.
+- **Runs on every owner machine.** A cron routine runs on each owner machine
+  that has the checkout registered and its clock on. A replica checkout
+  schedules only a cron routine whose target is the worktree-GC or store-GC
+  job; a delivery, state or condition trigger stays with the owner, even on
+  those jobs. `orbit routine pause` keeps a routine off one machine;
+  `enabled: false` in the file retires it. A `state` trigger runs only on
+  the machine named in `owner_machine`.
 - **Missed slots collapse.** After a sleep, `missed_run: skip` waits for the
   next slot and `catch_up_once` fires one make-up run. `orbit doctor` warns
   when an enabled routine's last success is older than three times its
   interval.
 - **No overlap.** A fire is skipped while the previous one is still running,
   for up to `timeout_minutes`.
+- **A breaker stops a failing routine.** After three fires in a row fail with
+  the same error class, this host stops firing that routine until a
+  successful trial or an operator reset. See
+  [Recover a tripped routine](/how-to/recurring-work/#recover-a-tripped-routine).
 - **Per machine.** Routine files and scheduler state are not shared through
   git.
 
@@ -110,7 +117,7 @@ a task from every enabled definition that is due.
 - **Seeded mostly disabled.** The built-in catalog covers QA sweeps, code and
   security reviews, friction curation, doc duties, run-failure patterns, and
   sweeps for code health, architecture and dependency freshness. All are off
-  until you enable them, except `host-health`.
+  until you enable them, including `host-health`.
 
 ## Scheduled tasks
 
@@ -129,8 +136,8 @@ an earliest start, not an exact time, and it doesn't approve proposed work or
 bypass dependencies. Dispatchers enforce the hold themselves, so it works
 without the scheduler clock.
 
-To start a held task early, run `orbit run ship <id> --ignore-schedule`. The
-override is recorded in the task's history. See the
+To start a held task early, ship it explicitly: `orbit run ship <id>` or the
+dashboard's Ship. The override is recorded in the task's history. See the
 [CLI reference](/reference/cli/#scheduled-tasks) for the schedule filters.
 
 ## Which to use

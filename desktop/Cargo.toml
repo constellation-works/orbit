@@ -4,7 +4,7 @@
 
 [package]
 name = "orbit-desktop"
-version = "0.50.0"
+version = "0.52.0"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
@@ -16,9 +16,9 @@ publish = false
 [features]
 default = ["native"]
 native = [
-    "dep:tauri-build", "dep:chrono", "dep:notify-rust", "dep:rsa", "dep:sha2", "dep:tauri",
+    "dep:tauri-build", "dep:notify-rust", "dep:rsa", "dep:sha2", "dep:tauri",
     "dep:tauri-plugin-autostart", "dep:tauri-plugin-dialog", "dep:tauri-plugin-opener",
-    "dep:tauri-plugin-window-state", "dep:ureq", "dep:signal-hook",
+    "dep:tauri-plugin-window-state", "dep:time", "dep:ureq", "dep:signal-hook",
 ]
 
 [[bin]]
@@ -31,7 +31,7 @@ tauri-build = { version = "2.7", features = [], optional = true }
 
 [dependencies]
 # Update checks compare a key's not_after and revoked_at with today's date.
-chrono = { version = "0.4", default-features = false, features = ["clock"], optional = true }
+time = { version = "0.3", default-features = false, features = ["std"], optional = true }
 notify-rust = { version = "4", optional = true }
 # Release manifest verification, as in orbit-common::security::release.
 rsa = { version = "0.10.0-rc.18", features = ["sha2"], optional = true }

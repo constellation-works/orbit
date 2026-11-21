@@ -1,17 +1,17 @@
 ---
 title: Fleet Notices — Overview
 owner: claude
-last_updated: 2026-11-08
-last_validated: 2026-11-14
+last_updated: 2026-11-15
+last_validated: 2026-11-15
 status: Draft
 stage: shipped
 next: "—"
 feature: fleet-notices
 doc_role: overview
 type: design
-summary: "Fleet notices: short-lived, scoped, authored coordination notes (incident, maintenance, info) held by the owner, reached through an opt-in notice MCP toolset and quoted into agent briefs as untrusted data"
+summary: "Fleet notices: short-lived, scoped, authored coordination notes (warn, incident, maintenance, info) held by the owner, reached through an opt-in notice MCP toolset and quoted into agent briefs as untrusted data"
 tags: [fleet-notices, federated-mcp, operator-attention]
-paths: ["crates/orbit-common/src/governance/**", "crates/orbit-core/src/application/notice/**", "crates/orbit-types/src/record/notice.rs", "crates/orbit-store/src/driver/sqlite/notice_store.rs", "crates/orbit-core/src/adapter/tool_host/notice_tools.rs", "crates/orbit-cli/src/command/notice.rs", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-types/src/tool/mcp_toolset.rs", "crates/orbit-core/src/adapter/engine_host/actions/task_context.rs", "crates/orbit-mcp/src/federated/**", "crates/orbit-cli/src/command/host_route.rs", "crates/orbit-core/src/application/routines/sweep.rs"]
+paths: ["crates/orbit-common/src/governance/**", "crates/orbit-core/src/application/notice/**", "crates/orbit-types/src/record/notice.rs", "crates/orbit-store/src/driver/sqlite/notice_store.rs", "crates/orbit-core/src/adapter/tool_host/notice_tools.rs", "crates/orbit-cli/src/command/notice.rs", "crates/orbit-store/src/driver/sqlite/migration/**", "crates/orbit-types/src/tool/mcp_toolset.rs", "crates/orbit-core/src/adapter/engine_host/actions/task_context.rs", "crates/orbit-mcp/src/federated/**", "crates/orbit-cli/src/command/host_route.rs", "crates/orbit-core/src/application/routines/sweep/tick.rs"]
 related_features: [operator-attention, federated-mcp, mid-run-steering, distributed-drain, path-leases, human-decision-channel]
 related_artifacts: [ORB-21207, ORB-21208, ORB-21164, ORB-21211, ORB-21214, ORB-21215]
 ---
@@ -56,8 +56,12 @@ operator's direction (2026-11-02) was that this belongs in Orbit as an optional 
   including a global notice.
 - **Scope** — `workspace` (applies to the home workspace) or `global` (applies to every workspace
   whose readers reach the home owner).
-- **Kind** — `incident` (something is broken now), `maintenance` (planned work that others should
-  hold off or plan around), `info` (anything else worth knowing).
+- **Kind** — `warn` (the operator is needed: a decision, a credential, a merge), `incident`
+  (something is broken now), `maintenance` (planned work that others should hold off or plan
+  around), `info` (anything else worth knowing).
+- **Status line** — a resident mandate's one live `info` notice, under the key
+  `resident:<mandate>:status`, replaced by each cycle and lapsing at twice the heartbeat
+  ([notice-authority](./specs/notice-authority.md#resident-mandates)).
 - **Effective state** — `open`, `closed` or `expired`, computed on read from the stored state, the
   clock and the linked task's status.
 - **Dedupe key** — the subject identity. Posting a key that is already open updates or
@@ -99,7 +103,7 @@ Notices view and the `notice_open` attention kind ([2_design.md §8](./2_design.
 | Notice tool classes (`control_plane`) | [capability.rs](../../../crates/orbit-mcp/src/federated/capability.rs) | [ORB-21214] |
 | Workspace-less per-owner aggregation | [notice_aggregate.rs](../../../crates/orbit-mcp/src/federated/notice_aggregate.rs) | [ORB-21214] |
 | Follower CLI owner routing | [host_route.rs](../../../crates/orbit-cli/src/command/host_route.rs) | [ORB-21214] |
-| Cross-workspace closure sweep | [sweep.rs](../../../crates/orbit-core/src/application/routines/sweep.rs) | [ORB-21214] |
+| Cross-workspace closure sweep | [sweep/tick.rs](../../../crates/orbit-core/src/application/routines/sweep/tick.rs) | [ORB-21214] |
 | Slices and dependencies | [2_design.md §8](./2_design.md#8-slices) | [ORB-21207] |
 | Proposed client: Orbit Office scribe `#board` routing | — (separate repository) | [ORB-21208] |
 

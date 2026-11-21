@@ -8,8 +8,8 @@ use orbit_common::fs::git::{GIT_CHECKOUT_TIMEOUT, run_git, run_git_within};
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
-    FAULT_JUDGED_BY_FIELD, FinalRecoveryDecision, JobRun, JobRunState, JobRunTrigger,
-    MAX_DECISION_TEXT_CHARS, RecoveryFault,
+    FAULT_JUDGED_BY_FIELD, FailureHandoffDecision, FinalRecoveryDecision, JobRun, JobRunState,
+    JobRunTrigger, MAX_DECISION_TEXT_CHARS, RecoveryFault, TASK_PR_PIPELINE_JOB,
 };
 use serde_json::{Value, json};
 
@@ -360,7 +360,9 @@ impl OrbitRuntime {
                 .and_then(Value::as_str)
                 .map(str::to_string),
         );
-        let decision = match without_resume(decision, input) {
+        let decision = without_resume(decision, input);
+        let decision = self.refuse_unpreservable_backstop_requeue(decision, input, recovery_run_id);
+        let decision = match decision {
             FinalRecoveryDecision::Escalate {
                 diagnosis,
                 human_action,
@@ -385,6 +387,121 @@ impl OrbitRuntime {
             requeue_bound: FinalRecoveryRequeueBound::default(),
         };
         self.apply_final_recovery(&request, Some(&output))
+    }
+
+    /// A backstop `requeue` (or a `rerun_ci` that would requeue) whose failed
+    /// episode still holds a published candidate this recovery run cannot
+    /// preserve: the applier preserves only the run named by its request,
+    /// which here is the recovery run, never the failed publisher, so the
+    /// requeue would admit a successor that fails publication authentication.
+    /// Keep the task blocked and name the operator route instead. Unpublished
+    /// episodes and every other decision keep their existing behaviour.
+    fn refuse_unpreservable_backstop_requeue(
+        &self,
+        decision: FinalRecoveryDecision,
+        input: &BlockedRecoveryInput,
+        recovery_run_id: &str,
+    ) -> FinalRecoveryDecision {
+        if !matches!(
+            decision,
+            FinalRecoveryDecision::Requeue { .. } | FinalRecoveryDecision::RerunCi { .. }
+        ) {
+            return decision;
+        }
+        let kind = decision.kind();
+        let (publisher, detail) =
+            match self.backstop_unpreservable_publisher(input, recovery_run_id) {
+                Ok(Some(found)) => found,
+                Ok(None) => return decision,
+                Err(error) => (
+                    input
+                        .failed_run_id
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    format!("the failed episode's published candidate cannot be checked ({error})"),
+                ),
+            };
+        FinalRecoveryDecision::Escalate {
+            diagnosis: format!(
+                "backstop {kind} refused: publishing run {publisher} published a candidate \
+                 the blocked-task recovery run {recovery_run_id} cannot preserve ({detail}); \
+                 a requeue would admit a successor that fails publication authentication"
+            ),
+            human_action: format!(
+                "Requeue as an operator once publishing run {publisher} has stopped \
+                 (`orbit task requeue {} --reason '<why this candidate can continue>'`), \
+                 which preserves the publication under that run's own binding, or repair \
+                 the published pull request through explicit source repair \
+                 (`orbit run` action `resume` with `source_repair` for run {publisher}); \
+                 discard the candidate (`orbit task update {} --status backlog \
+                 --discard-candidate`) only to implement fresh.",
+                input.task_id, input.task_id
+            ),
+            summary: Some(format!(
+                "The blocked-task backstop cannot requeue the candidate published by \
+                 run {publisher}; an operator requeue or explicit source repair is required."
+            )),
+        }
+    }
+
+    /// The failed episode's publishing run and why this recovery run cannot
+    /// preserve its candidate, when that episode retains a published
+    /// candidate. `None` when nothing was published. Publication is the
+    /// publisher's own `push`/`pr_open` checkpoints, a failure-handoff
+    /// checkpoint that does not record `no_candidate`, or a pull request
+    /// recorded for its pipeline run. A `no_candidate` receipt explicitly
+    /// records that nothing was published, so it is not publication; an
+    /// unknown or missing failure-handoff decision stays fail-closed as a
+    /// possibly published candidate.
+    fn backstop_unpreservable_publisher(
+        &self,
+        input: &BlockedRecoveryInput,
+        recovery_run_id: &str,
+    ) -> Result<Option<(String, String)>, OrbitError> {
+        let task = self.get_task(&input.task_id)?;
+        let publisher = input
+            .failed_run_id
+            .clone()
+            .or_else(|| task.job_run_id.clone());
+        let Some(publisher) = publisher.filter(|id| id != recovery_run_id) else {
+            return Ok(None);
+        };
+        let Some(run) = self.stored_job_run(&publisher)? else {
+            return Ok(task.github_pr_number().map(|number| {
+                (
+                    publisher.clone(),
+                    format!(
+                        "the task records pull request #{number} for that run, which \
+                         this recovery run cannot preserve"
+                    ),
+                )
+            }));
+        };
+        let state = self.stored_run_state(&publisher)?;
+        let published = state.as_ref().is_some_and(|state| {
+            ["push", "pr_open"].iter().any(|key| {
+                state
+                    .pipeline
+                    .get(key)
+                    .is_some_and(|value| !value.is_null())
+            }) || failure_handoff_published(state.failure_activity_checkpoint.as_ref())
+        }) || (run.job_id == TASK_PR_PIPELINE_JOB
+            && task.github_pr_number().is_some());
+        if !published {
+            return Ok(None);
+        }
+        let detail = match self.published_requeue_identity_refusal(&task, &publisher)? {
+            Some(refusal) => format!(
+                "its source fails the owner-source identity the next run authenticates ({})",
+                refusal.code()
+            ),
+            None => format!(
+                "only a requeue bound to publishing run {publisher} itself can preserve \
+                 it; recovery run {recovery_run_id} is a distinct blocked-task recovery \
+                 run and preserves nothing for that publisher"
+            ),
+        };
+        Ok(Some((publisher, detail)))
     }
 
     /// Create the detached checkout of `base_sha` a recovery run's agent
@@ -523,6 +640,23 @@ impl OrbitRuntime {
         self.apply_blocked_task_recovery(&input, &run.run_id, &base_ref, Some(&escalation))?;
         Ok(true)
     }
+}
+
+/// Whether a failure-activity checkpoint records a publication the backstop
+/// must not requeue past. A `no_candidate` receipt explicitly records that
+/// the failed run published nothing, so it is not publication. Any other
+/// checkpoint — a known publishing or preserving decision, or an unknown or
+/// missing decision — stays fail-closed as a possibly published candidate.
+fn failure_handoff_published(
+    checkpoint: Option<&orbit_types::workflow::FailureActivityCheckpoint>,
+) -> bool {
+    let Some(checkpoint) = checkpoint else {
+        return false;
+    };
+    !matches!(
+        FailureHandoffDecision::from_output(&checkpoint.output),
+        Some(FailureHandoffDecision::NoCandidate)
+    )
 }
 
 /// `decision` with `resume` replaced by an escalation naming the failed run.

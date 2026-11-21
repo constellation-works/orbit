@@ -5,15 +5,19 @@
 //! dashboard operation, compare-and-set on the value the browser observed,
 //! and audited like the toggles. No other definition field is editable here.
 
+use std::sync::Arc;
 use std::time::Instant;
 
-use axum::extract::{Query, State};
+use axum::body::{Body, Bytes};
+use axum::extract::rejection::JsonRejection;
+use axum::extract::{FromRequest, Query, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_cmd::registry_routines::routine_statuses;
 use orbit_common::governance::authorization::{
-    DASHBOARD_AUTO_TASK_SCHEDULE, DASHBOARD_ROUTINE_TRIGGER,
+    AuthorizationDenial, DASHBOARD_AUTO_TASK_SCHEDULE, DASHBOARD_ROUTINE_TRIGGER, GovernedOperation,
 };
+use orbit_core::OrbitRuntime;
 use orbit_core::application::auto_tasks::{
     AutoTaskScheduleError, AutoTaskScheduleOutcome, AutoTaskScheduleProfile,
 };
@@ -38,32 +42,187 @@ pub(super) struct RoutineTriggerRequest {
     target: String,
     /// The machine the browser acted from; recorded in the audit event only.
     machine_name: String,
-    expected_trigger: Value,
-    trigger: Value,
+    expected_trigger: RoutineTrigger,
+    trigger: RoutineTrigger,
 }
 
 #[derive(Debug, Deserialize)]
 pub(super) struct AutoTaskScheduleRequest {
     name: String,
-    expected_schedule: Value,
+    expected_schedule: AutoTaskSchedule,
+    schedule: AutoTaskSchedule,
+}
+
+/// Typed JSON body that keeps the raw bytes when decoding fails.
+///
+/// The success path is Axum's typed decoder. A data error still has the
+/// bytes, so a denial can name the operation. Those bytes are not decoded
+/// into [`RoutineTrigger`] or [`AutoTaskSchedule`].
+pub(super) struct BufferedJson<T> {
+    bytes: Bytes,
+    parsed: Result<T, JsonRejection>,
+}
+
+impl<T, S> FromRequest<S> for BufferedJson<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = JsonRejection;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let (parts, body) = req.into_parts();
+        let bytes = Bytes::from_request(Request::from_parts(parts.clone(), body), state)
+            .await
+            .map_err(JsonRejection::from)?;
+        let parsed =
+            Json::<T>::from_request(Request::from_parts(parts, Body::from(bytes.clone())), state)
+                .await
+                .map(|Json(value)| value);
+        Ok(Self { bytes, parsed })
+    }
+}
+
+/// Identity of a routine edit. Nested JSON stays an audit argument and is
+/// never decoded as [`RoutineTrigger`]. `expected_trigger` is required so a
+/// missing nested value is not an auditable envelope.
+#[derive(Debug, Deserialize)]
+struct RoutineDenialIdentity {
+    name: String,
+    source: String,
+    target: String,
+    machine_name: String,
+    #[serde(rename = "expected_trigger")]
+    _expected_trigger: Value,
+    trigger: Value,
+}
+
+/// Identity of an auto-task schedule edit. See [`RoutineDenialIdentity`].
+#[derive(Debug, Deserialize)]
+struct ScheduleDenialIdentity {
+    name: String,
+    #[serde(rename = "expected_schedule")]
+    _expected_schedule: Value,
     schedule: Value,
 }
 
-/// Parse one typed field of a request body, refusing a malformed value with
-/// the parser's own explanation as a 400 the editor shows verbatim.
-fn typed<T: DeserializeOwned>(value: &Value, field: &str, what: &str) -> Result<T, Box<Response>> {
-    serde_json::from_value(value.clone()).map_err(|error| {
-        Box::new(
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "error": format!("{field} is not a valid {what}: {error}"),
-                    "code": "invalid_schedule",
-                })),
-            )
-                .into_response(),
+struct PreparedDenial {
+    name: String,
+    machine_name: String,
+    arguments: Value,
+}
+
+enum ScheduleDenialRoute<'a> {
+    Routine { runtime: &'a Arc<OrbitRuntime> },
+    AutoTask,
+}
+
+/// A rejection that never reached a decoded body: authorize first, and map a
+/// typed data error to `invalid_schedule`. The editor shows the parser's own
+/// explanation; any other rejection (bad syntax, wrong content type, oversized
+/// body) keeps the framework's answer.
+fn refused_body(
+    rejection: JsonRejection,
+    operation: &'static GovernedOperation,
+    state: &DashboardState,
+) -> Response {
+    if let Err(denial) = authorized_caller(operation, state.operator_session()) {
+        return authorization_denied(denial);
+    }
+    schedule_rejection(rejection)
+}
+
+/// Typed decoding failed. A non-operator with a readable operation identity
+/// and a workspace this route can audit gets one denied row, then the same
+/// 403. An operator gets `invalid_schedule` and no audit.
+async fn refused_decoded_schedule(
+    rejection: JsonRejection,
+    bytes: &[u8],
+    operation: &'static GovernedOperation,
+    state: &DashboardState,
+    query: &OperationsQuery,
+    route: ScheduleDenialRoute<'_>,
+) -> Response {
+    if let Err(denial) = authorized_caller(operation, state.operator_session()) {
+        if matches!(rejection, JsonRejection::JsonDataError(_)) {
+            audit_denied_schedule_identity(state, query, operation, &denial, bytes, route).await;
+        }
+        return authorization_denied(denial);
+    }
+    schedule_rejection(rejection)
+}
+
+fn schedule_rejection(rejection: JsonRejection) -> Response {
+    match rejection {
+        rejection @ JsonRejection::JsonDataError(_) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!("invalid request body: {}", rejection.body_text()),
+                "code": "invalid_schedule",
+            })),
         )
-    })
+            .into_response(),
+        other => other.into_response(),
+    }
+}
+
+fn denial_audit_parts(bytes: &[u8], routine: bool) -> Option<PreparedDenial> {
+    if routine {
+        let Json(identity) = Json::<RoutineDenialIdentity>::from_bytes(bytes).ok()?;
+        Some(PreparedDenial {
+            name: identity.name,
+            machine_name: identity.machine_name,
+            arguments: json!({
+                "source": identity.source,
+                "target": identity.target,
+                "trigger": identity.trigger,
+            }),
+        })
+    } else {
+        let Json(identity) = Json::<ScheduleDenialIdentity>::from_bytes(bytes).ok()?;
+        Some(PreparedDenial {
+            name: identity.name,
+            machine_name: String::new(),
+            arguments: json!({"schedule": identity.schedule}),
+        })
+    }
+}
+
+async fn audit_denied_schedule_identity(
+    state: &DashboardState,
+    query: &OperationsQuery,
+    operation: &'static GovernedOperation,
+    denial: &AuthorizationDenial,
+    bytes: &[u8],
+    route: ScheduleDenialRoute<'_>,
+) {
+    let Ok(workspace) = explicit_workspace(query) else {
+        return;
+    };
+    let routine = matches!(route, ScheduleDenialRoute::Routine { .. });
+    let Some(prepared) = denial_audit_parts(bytes, routine) else {
+        return;
+    };
+    let resolved;
+    let runtime = match route {
+        ScheduleDenialRoute::Routine { runtime } => runtime,
+        ScheduleDenialRoute::AutoTask => match resolve_workspace_blocking(state, workspace).await {
+            Ok(runtime) => {
+                resolved = runtime;
+                &resolved
+            }
+            Err(_) => return,
+        },
+    };
+    let audit = OperationAudit::new(
+        runtime,
+        workspace,
+        operation.id,
+        prepared.name.as_str(),
+        prepared.arguments,
+    )
+    .with_machine_name(&prepared.machine_name);
+    audit.denied(denial, Instant::now()).await;
 }
 
 fn conflict(refusal: Value) -> Response {
@@ -75,8 +234,26 @@ pub(super) async fn set_routine_trigger(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
     Ws(runtime): Ws,
-    Json(body): Json<RoutineTriggerRequest>,
+    body: Result<BufferedJson<RoutineTriggerRequest>, JsonRejection>,
 ) -> Response {
+    let buffered = match body {
+        Ok(buffered) => buffered,
+        Err(rejection) => return refused_body(rejection, &DASHBOARD_ROUTINE_TRIGGER, &state),
+    };
+    let body = match buffered.parsed {
+        Ok(body) => body,
+        Err(rejection) => {
+            return refused_decoded_schedule(
+                rejection,
+                &buffered.bytes,
+                &DASHBOARD_ROUTINE_TRIGGER,
+                &state,
+                &query,
+                ScheduleDenialRoute::Routine { runtime: &runtime },
+            )
+            .await;
+        }
+    };
     let workspace = match explicit_workspace(&query) {
         Ok(workspace) => workspace.to_string(),
         Err(rejection) => return rejection.into_response(),
@@ -96,23 +273,12 @@ pub(super) async fn set_routine_trigger(
             return authorization_denied(denial);
         }
     };
-    let expected = match typed::<RoutineTrigger>(
-        &body.expected_trigger,
-        "expected_trigger",
-        "routine trigger",
-    ) {
-        Ok(trigger) => trigger,
-        Err(response) => return *response,
-    };
-    let trigger = match typed::<RoutineTrigger>(&body.trigger, "trigger", "routine trigger") {
-        Ok(trigger) => trigger,
-        Err(response) => return *response,
-    };
     let started = Instant::now();
     let selected = match blocking("routine trigger edit", {
         let global_root = state.global_root().to_path_buf();
         let shared_root = runtime.shared_root();
         let (name, source, target) = (body.name.clone(), body.source.clone(), body.target.clone());
+        let (expected, trigger) = (body.expected_trigger.clone(), body.trigger.clone());
         move || {
             let report = routine_statuses(&global_root)?;
             Ok(edit_listed_routine_trigger(
@@ -161,8 +327,26 @@ pub(super) async fn set_routine_trigger(
 pub(super) async fn set_auto_task_schedule(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
-    Json(body): Json<AutoTaskScheduleRequest>,
+    body: Result<BufferedJson<AutoTaskScheduleRequest>, JsonRejection>,
 ) -> Response {
+    let buffered = match body {
+        Ok(buffered) => buffered,
+        Err(rejection) => return refused_body(rejection, &DASHBOARD_AUTO_TASK_SCHEDULE, &state),
+    };
+    let body = match buffered.parsed {
+        Ok(body) => body,
+        Err(rejection) => {
+            return refused_decoded_schedule(
+                rejection,
+                &buffered.bytes,
+                &DASHBOARD_AUTO_TASK_SCHEDULE,
+                &state,
+                &query,
+                ScheduleDenialRoute::AutoTask,
+            )
+            .await;
+        }
+    };
     let workspace = match explicit_workspace(&query) {
         Ok(workspace) => workspace.to_string(),
         Err(rejection) => return rejection.into_response(),
@@ -185,25 +369,13 @@ pub(super) async fn set_auto_task_schedule(
             return authorization_denied(denial);
         }
     };
-    let expected = match typed::<AutoTaskSchedule>(
-        &body.expected_schedule,
-        "expected_schedule",
-        "auto-task schedule",
-    ) {
-        Ok(schedule) => schedule,
-        Err(response) => return *response,
-    };
-    let schedule = match typed::<AutoTaskSchedule>(&body.schedule, "schedule", "auto-task schedule")
-    {
-        Ok(schedule) => schedule,
-        Err(response) => return *response,
-    };
     let started = Instant::now();
     let outcome = match blocking("auto-task schedule", {
         let runtime = runtime.clone();
         let name = body.name.clone();
+        let schedule = body.schedule.clone();
         let profile = AutoTaskScheduleProfile::Observed {
-            expected_schedule: Box::new(expected),
+            expected_schedule: Box::new(body.expected_schedule.clone()),
         };
         move || Ok(runtime.auto_task_schedule_command(&name, schedule, profile))
     })

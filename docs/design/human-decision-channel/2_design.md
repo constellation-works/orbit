@@ -123,6 +123,30 @@ per request:
   still refuses unknown tags: a build predating `land` cannot deserialize a stored option
   carrying it and cannot silently interpret it as requeue. Existing stored options retain
   their original shape and behavior.
+- **Accept open findings and resume the reviewed candidate:** derived when a block
+  request is read, for a failure-handoff receipt and for a pipeline-published
+  escalation whose failure handoff kept the pull request. It is offered only
+  while that candidate still implements the current description and acceptance
+  criteria, the latest review leaves at least one finding open, the run has
+  stopped, and the candidate can return to the backlog (a pipeline publication
+  also needs its required checks green). The answer id is `accept-findings`.
+  It requeues with no field rewrite. The acceptance is a `finding_acceptance`
+  history event and the answer comment; the description and acceptance criteria
+  are unchanged, so the same candidate stays resumable. The next run carries it
+  through validation, then landing; any fresh independent review follows that
+  run's selected review policy, which may be off. Agents cannot propose this
+  answer, and automatic corpus rules cannot choose it.
+- **A rewrite that strands a preserved candidate:** when a block option's rewrite
+  changes the description or acceptance criteria a preserved candidate implements,
+  the offer's label and consequence say the candidate is discarded, on every
+  publication path and whether or not required checks are green. Answering
+  discards the candidate and closes its pull request instead of refusing because
+  of that rewrite. A live run is not discarded; the answer is refused because the
+  run has not stopped, and that refusal is judged on the unchanged task. The
+  dashboard shows a refused answer on that decision's card and keeps it when
+  the task detail is rebuilt, until the operator dismisses it or it expires.
+  An option that does not change the specification keeps the existing refusal
+  when the candidate cannot be resumed.
 - **Block triage `report` / final-recovery escalation:** answers are `done` (the
   `human_action:` the readout carries,
   `crates/orbit-core/src/application/task/blocked_recovery/readout.rs`, has been
@@ -132,7 +156,9 @@ per request:
   criteria, which is a free-form edit). A duplicate or already-landed hold
   offers and accepts only `approve_anyway` and `clear`: `evaluated` does not
   override those findings, and an answer that cannot resolve the hold is
-  refused before the request is consumed. The answer records the same
+  refused before the request is consumed. A stale assessment raises no
+  request: only a new pilot resolves it, so it is surfaced for a repilot
+  instead, and an older request still open for it refuses every answer. The answer records the same
   `TaskDecision::PilotAdmission` history entry a verdict comment records, against
   the hold's `operation_id`, so `operator_resolution`
   (`crates/orbit-core/src/application/task/pilot/admission/backlog.rs`) accepts it

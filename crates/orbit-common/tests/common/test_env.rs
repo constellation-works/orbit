@@ -517,16 +517,18 @@ mod orphaned_fixture_children {
 
     /// ORB-15293: a child that keeps reporting progress is slow, not hung, so
     /// the quiet deadline must not kill it however long it runs in total.
-    /// ORB-16411: that deadline opens at the first byte, so these 300 ms are
+    /// ORB-16411: that deadline opens at the first byte, so the quiet window is
     /// the gap between lines, not an allowance for exec and libtest startup.
     #[test]
     fn a_child_that_keeps_printing_outlives_its_quiet_deadline() {
         let dir = tempfile::tempdir().unwrap();
         let mut command = reexec("chatty_child_entry", dir.path());
-        // Twenty times the print gap, so a host that wakes the child late
-        // still counts as progress. The run itself is longer than `quiet`.
-        let quiet = Duration::from_millis(300);
-        command.env(CHATTY_MILLIS_ENV, "600");
+        // ORB-25251: macOS CI killed this progressing child at the old
+        // 300 ms window. Allow seconds between progress lines, while keeping
+        // the child alive for twice the quiet window to require resets.
+        let quiet = Duration::from_secs(2);
+        let run_for = quiet * 2;
+        command.env(CHATTY_MILLIS_ENV, run_for.as_millis().to_string());
         let started = Instant::now();
         let output = run_child_test_within(
             &mut command,
@@ -544,6 +546,14 @@ mod orphaned_fixture_children {
             output.status,
             &output.stdout,
             &output.stderr,
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .lines()
+                .filter(|line| *line == "chatty progress")
+                .count()
+                >= 2,
+            "child must report repeated progress while outliving its quiet window"
         );
     }
 

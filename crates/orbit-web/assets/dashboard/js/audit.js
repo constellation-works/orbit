@@ -2,7 +2,7 @@
 // Incidents › Events) and the tool-call summary (Analytics › Reliability › Tools).
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { auditActorLabel, incidentClassLabel, el, fetchJson, fetchJsonPage, fmtDuration, formatAge, formatDateTime, syncNodes, makeToggleRow, pinnedInfoHint, positiveIntParam, isAggregateView, isMultiWorkspace, isWorkspaceListReady, renderPanelPlaceholder, requestPanel, onWorkspaceChange, onWorkspaceNamesChange, workspaceDisplayName, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, runHref, DEFAULT_DASHBOARD_WINDOW } from './common.js';
+import { auditActorLabel, INCIDENT_CLASS_TITLES, el, fetchJson, fetchJsonPage, fmtDuration, formatAge, formatDateTime, syncNodes, makeToggleRow, pinnedInfoHint, positiveIntParam, isAggregateView, isMultiWorkspace, isWorkspaceListReady, renderPanelPlaceholder, requestPanel, onWorkspaceChange, onWorkspaceNamesChange, workspaceDisplayName, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, runHref, DEFAULT_DASHBOARD_WINDOW } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -106,7 +106,9 @@ function syncAuditControls() {
 function scopeChip(label, value, onRemove) {
   const chip = el(onRemove ? "button" : "span", {
     class: "scope-chip",
-    title: onRemove ? `Remove ${label} filter` : `${label}: ${value}`,
+    ...(onRemove
+      ? { "aria-description": `Remove ${label} filter` }
+      : { title: `${label}: ${value}` }),
   });
   if (onRemove) chip.type = "button";
   chip.dataset.chip = label;
@@ -155,7 +157,7 @@ function renderScopeChips() {
       auditFilter.tool = null;
       window.location.hash = buildAuditHash();
     });
-    chip.title = `Remove tool filter: ${auditFilter.tool}`;
+    chip.setAttribute("aria-description", `Remove tool filter: ${auditFilter.tool}`);
     host.appendChild(chip);
   }
   if (auditFilter.role) {
@@ -163,7 +165,7 @@ function renderScopeChips() {
       auditFilter.role = null;
       window.location.hash = buildAuditHash();
     });
-    chip.title = `Recorded role: ${auditFilter.role}`;
+    chip.setAttribute("aria-description", `Recorded role: ${auditFilter.role}`);
     host.appendChild(chip);
   }
   if (auditFilter.agent_family) {
@@ -177,7 +179,7 @@ function renderScopeChips() {
       auditFilter.execution_id = null;
       window.location.hash = buildAuditHash();
     });
-    chip.title = `Remove execution filter: ${auditFilter.execution_id}`;
+    chip.setAttribute("aria-description", `Remove execution filter: ${auditFilter.execution_id}`);
     host.appendChild(chip);
   }
   if (auditFilter.profile) {
@@ -185,7 +187,7 @@ function renderScopeChips() {
       auditFilter.profile = null;
       window.location.hash = buildAuditHash();
     });
-    chip.title = `Remove profile filter: ${auditFilter.profile}`;
+    chip.setAttribute("aria-description", `Remove profile filter: ${auditFilter.profile}`);
     host.appendChild(chip);
   }
   if (auditFilter.status) {
@@ -774,8 +776,9 @@ function renderAuditSummary(data, ctx) {
       `Failure categories · window ${data.window || "24h"}${capped ? " · capped counts" : ""}`,
       renderTable(categoryRows, [
         { key: "label", label: "class", title: "Failure classification", render: (value, row, td) => {
-          td.title = value;
-          return incidentClassLabel(row.key, value);
+          // The full name is visible now, so a tooltip would only repeat it (STD-07 R32).
+          td.removeAttribute("title");
+          return INCIDENT_CLASS_TITLES[row.key] || value;
         } },
         { key: "incidents", label: "inc.", num: true, title: "Incidents" },
         { key: "raw_events", label: "events", num: true, title: "Raw events" },
@@ -944,7 +947,7 @@ function buildAuditChips(ctx) {
     class: "chip",
     type: "button",
     text: "hide unconfirmed successes",
-    title: "Hide successful calls from the unconfirmed caller (probe and federated reads). Their failures and denials stay listed.",
+    "aria-description": "Hide successful calls from the unconfirmed caller (probe and federated reads). Their failures and denials stay listed.",
   });
   hideChip.dataset.toggle = "hide_unverified";
   hideChip.addEventListener("click", () => {

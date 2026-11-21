@@ -26,7 +26,7 @@ repo = Path(sys.argv[2])
 qa.__file__ = str(repo / "scripts/test-qa-full-sweep.py")
 qa.validate_inventory = lambda *_: ([], {"cli": []})
 qa.candidate_source = lambda *_: {"candidate_id": "fixture-candidate", "head": "a" * 40,
-                                "status": [], "diff_sha256": "fixture"}
+                                "status": [], "changed_paths": [], "diff_sha256": "fixture"}
 _mode = json.loads((repo / "mode.json").read_text())
 if not _mode.startswith("builtin-"):
     qa.run_builtins = lambda *_: ([], None)
@@ -231,7 +231,7 @@ qa.__file__ = str(repo / "scripts/test-qa-full-sweep.py")
 qa.validate_inventory = lambda *_: ([], {"cli": []})
 qa.cargo_inventory_errors = lambda *_, **__: []
 qa.candidate_source = lambda *_: {"candidate_id": "fixture-candidate", "head": "a" * 40,
-                                "status": [], "diff_sha256": "fixture"}
+                                "status": [], "changed_paths": [], "diff_sha256": "fixture"}
 _mode = json.loads((repo / "mode.json").read_text())
 if _mode["target"] != "builtin-setup":
     qa.run_builtins = lambda *_: ([], None)
@@ -312,16 +312,10 @@ def auxiliary_cleanup_self_test(harness, scratch):
                     raise AssertionError(f"report omits the unverified {target} command: {state}")
 
 
-def report_output_self_test(harness, scratch):
-    """Both public entrypoints keep default reports in ignored scratch storage."""
-    with tempfile.TemporaryDirectory(prefix="qa-report-output-", dir=scratch) as tmp:
-        repo = Path(tmp)
-        (repo / "scripts").mkdir()
-        (repo / "scripts/qa-full-sweep-inventory.json").write_text('{"scenarios": []}')
-        wrapper = repo / "scripts/qa-full-sweep.sh"
-        wrapper.write_bytes(harness.with_name("qa-full-sweep.sh").read_bytes())
-        entrypoint = repo / "scripts/test-qa-full-sweep.py"
-        entrypoint.write_text(f'''
+def sweep_entrypoint(repo, harness):
+    """Write a fixture copy of the public sweep entrypoint that substitutes only repository adapters."""
+    entrypoint = repo / "scripts/test-qa-full-sweep.py"
+    entrypoint.write_text(f'''
 import importlib.util
 from pathlib import Path
 spec = importlib.util.spec_from_file_location("qa", {str(harness)!r})
@@ -331,9 +325,21 @@ qa.__file__ = __file__
 qa.validate_inventory = lambda *_: ([], {{"cli": []}})
 qa.cargo_inventory_errors = lambda *_, **__: []
 qa.candidate_source = lambda *_: {{"candidate_id": "fixture", "head": "a" * 40,
-                                  "status": [], "diff_sha256": "fixture"}}
+                                  "status": [], "changed_paths": [], "diff_sha256": "fixture"}}
 qa.main()
 ''')
+    return entrypoint
+
+
+def report_output_self_test(harness, scratch):
+    """Both public entrypoints keep default reports in ignored scratch storage."""
+    with tempfile.TemporaryDirectory(prefix="qa-report-output-", dir=scratch) as tmp:
+        repo = Path(tmp)
+        (repo / "scripts").mkdir()
+        (repo / "scripts/qa-full-sweep-inventory.json").write_text('{"scenarios": []}')
+        wrapper = repo / "scripts/qa-full-sweep.sh"
+        wrapper.write_bytes(harness.with_name("qa-full-sweep.sh").read_bytes())
+        entrypoint = sweep_entrypoint(repo, harness)
         binary = repo / "orbit"
         binary.write_text("#!/bin/sh\necho 'fixture orbit'\n")
         binary.chmod(0o755)
@@ -351,6 +357,50 @@ qa.main()
                 assert report["schema_version"] == 2, report
                 assert not (repo / "qa-full-sweep-report.json").exists(), child.stdout
                 output.unlink()
+
+
+def managed_asset_manifest_self_test(harness, scratch):
+    """A report names the searched manifest root when none resolves, and digests each manifest it finds."""
+    with tempfile.TemporaryDirectory(prefix="qa-managed-assets-", dir=scratch) as tmp:
+        repo = Path(tmp)
+        (repo / "scripts").mkdir()
+        (repo / "scripts/qa-full-sweep-inventory.json").write_text('{"scenarios": []}')
+        entrypoint = sweep_entrypoint(repo, harness)
+        binary = repo / "orbit"
+        binary.write_text("#!/bin/sh\necho 'fixture orbit'\n")
+        binary.chmod(0o755)
+
+        def managed_assets_for(name):
+            output = repo / ".orbit/tmp" / f"{name}.json"
+            child = subprocess.run(
+                [sys.executable, str(entrypoint), "--orbit-bin", str(binary), "--output", str(output)],
+                cwd=repo, capture_output=True, text=True, timeout=60)
+            assert child.returncode == 0 and output.is_file(), (
+                name, child.returncode, child.stdout, child.stderr)
+            managed = json.loads(output.read_text())["managed_assets"]
+            output.unlink()
+            return managed
+
+        # A managed worktree or candidate clone has no owner-managed manifests, so an empty
+        # map would hide that the search happened at all.
+        unavailable = managed_assets_for("unavailable")
+        assert unavailable.get("status") == "unavailable" and unavailable.get("manifests") == {}, unavailable
+        assert unavailable.get("searched_root") == str((repo / ".orbit").resolve()), unavailable
+
+        # An owner checkout records every manifest path and its digest, but never the copies
+        # other runs keep under .orbit/state or the sweep's own .orbit/tmp scratch.
+        manifests = {
+            ".orbit/auto_tasks/.orbit-managed-assets.json": b'{"assets": []}\n',
+            ".orbit/routines/.orbit-managed-assets.json": b'{"assets": [{"id": "routine"}]}\n',
+        }
+        foreign = [".orbit/state/worktrees/other-run/.orbit-managed-assets.json",
+                   ".orbit/tmp/orbit-qa-full-scratch/.orbit-managed-assets.json"]
+        for relative, body in [*manifests.items(), *((path, b"{}\n") for path in foreign)]:
+            (repo / relative).parent.mkdir(parents=True, exist_ok=True)
+            (repo / relative).write_bytes(body)
+        resolved = managed_assets_for("resolved")
+        assert resolved.get("status") == "resolved" and resolved.get("manifests") == {
+            relative: hashlib.sha256(body).hexdigest() for relative, body in manifests.items()}, resolved
 
 
 def builtin_readback_self_test(harness, scratch):
@@ -408,6 +458,7 @@ def self_test():
     scratch.mkdir(parents=True, exist_ok=True)
     builtin_readback_self_test(harness, scratch)
     report_output_self_test(harness, scratch)
+    managed_asset_manifest_self_test(harness, scratch)
     candidate_build_report_self_test(harness, scratch)
     native_emitter_cleanup_self_test(harness, scratch)
     native_recorder_prefix_self_test(harness, scratch)
@@ -489,13 +540,17 @@ def self_test():
                 evidence = repo / ".orbit/tmp/hosted.json"
                 evidence.write_text(json.dumps(hosted))
                 extra = [*extra, "--platform-evidence", str(evidence)]
+            # The report path is fixed across cases: a crashed run must not leave
+            # the previous case's report to satisfy this case's assertions.
+            report_path = repo / ".orbit/tmp/report.json"
+            report_path.unlink(missing_ok=True)
             child = subprocess.run([sys.executable, str(driver), str(harness), str(repo),
                                     "--run-commands", *extra], cwd=repo,
                                    env={**os.environ, "PATH": f"{cargo.parent}:{os.environ['PATH']}"},
                                    capture_output=True, text=True, timeout=60)
-            report_path = repo / ".orbit/tmp/report.json"
-            if not report_path.is_file():
-                raise AssertionError(f"sweep did not produce a report: {child.stdout}\n{child.stderr}")
+            if child.returncode not in (0, 1) or not report_path.is_file():
+                raise AssertionError(
+                    f"sweep did not produce a report (exit {child.returncode}): {child.stdout}\n{child.stderr}")
             return json.loads(report_path.read_text())
 
         def row(report, name):
@@ -639,7 +694,10 @@ def self_test():
         assert row(report, "macos-platform")["native_certificate_sha256"] == hashlib.sha256(hosted_bytes).hexdigest(), report
         for mode in ["hosted-skip", "hosted-listing"]:
             report = sweep([native], mode)
-            assert report["decision"] == "INCOMPLETE", report
+            # Rejected evidence earns no credit: the certificate stays unclaimed
+            # and the import row fails (a valid one would be a digest-bound claim).
+            assert report["decision"] == "INCOMPLETE" and not native_claimed(report), (mode, report)
+            assert row(report, "platform-evidence-import")["outcome"] == "FAIL", (mode, report)
         # Capture a real subprocess through the workflow recorder CLI. The
         # fixture Cargo/Git executables provide deterministic host adapters.
         (repo / "mode.json").write_text(json.dumps("complete"))
@@ -1396,13 +1454,18 @@ def retired_cases_orphan_proof_self_test(harness, scratch):
                 "required_capability_gaps": {},
             }
             (repo / "scripts/qa-full-sweep-inventory.json").write_text(json.dumps(inventory))
+            report_path = repo / ".orbit/tmp/report.json"
+            report_path.unlink(missing_ok=True)
             child = subprocess.run(
                 [sys.executable, str(driver), str(harness), str(repo), "--run-commands"],
                 cwd=repo,
                 env={**os.environ, "PATH": f"{cargo.parent}:{os.environ['PATH']}"},
                 capture_output=True, text=True, timeout=60,
             )
-            report = json.loads((repo / ".orbit/tmp/report.json").read_text())
+            if child.returncode not in (0, 1) or not report_path.is_file():
+                raise AssertionError(
+                    f"sweep did not produce a report (exit {child.returncode}): {child.stdout}\n{child.stderr}")
+            report = json.loads(report_path.read_text())
             guard = next(r for r in report["results"] if r["scenario"] == "inventory-guard")
             return child, report, guard
 
@@ -1496,7 +1559,7 @@ def source_identity_self_test(harness, scratch):
     followed byte identical, so only the entry's own identity can fail them.
     """
     stub = ('qa.candidate_source = lambda *_: {"candidate_id": "fixture-candidate", "head": "a" * 40,\n'
-            '                                "status": [], "diff_sha256": "fixture"}\n')
+            '                                "status": [], "changed_paths": [], "diff_sha256": "fixture"}\n')
     assert stub in DRIVER, "driver no longer stubs candidate_source"
     with tempfile.TemporaryDirectory(prefix="qa-source-identity-", dir=scratch) as tmp:
         root = Path(tmp)
@@ -2014,6 +2077,41 @@ def darwin_process_observation_self_test(harness, scratch):
         table = qa["_proc_snapshot"]()
         assert os.getpid() in table, "snapshot lost this process"
         darwin["darwin_identity"] = original_identity
+
+        # A refusal that clears on a re-read is transient: a process that
+        # is gone by the second read, or readable on it, does not poison the
+        # table or the per-pid state.
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        try:
+            refusals = {"left": 2}
+
+            def refuse_then_read(candidate, with_cmdline=True):
+                if candidate == child.pid and refusals["left"] > 0:
+                    refusals["left"] -= 1
+                    darwin["DARWIN_DENIED"].append(
+                        f"process info for process {candidate} failed: Operation not permitted")
+                    return None
+                return original_identity(candidate, with_cmdline)
+            darwin["darwin_identity"] = refuse_then_read
+            assert child.pid in qa["_proc_snapshot"](), "a transient refusal poisoned the snapshot"
+            assert refusals["left"] == 0, "the refused descendant was not read again"
+            refusals["left"] = 2
+            seen = qa["_proc_identity"](child.pid)
+            assert seen is not None and seen["pid"] == child.pid, "a transient refusal hid the descendant"
+        finally:
+            darwin["darwin_identity"] = original_identity
+            child.kill()
+            child.wait(timeout=5)
+
+        # A refused process that exits before its short info is read is gone.
+        original_short = darwin["_darwin_short_info"]
+        try:
+            deny_only(1)
+            darwin["_darwin_short_info"] = lambda pid: None
+            qa["_proc_snapshot"]()
+        finally:
+            darwin["_darwin_short_info"] = original_short
+            darwin["darwin_identity"] = original_identity
 
         # A live descendant that becomes unreadable is unknown, never gone.
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])

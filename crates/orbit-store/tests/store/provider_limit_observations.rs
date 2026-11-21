@@ -128,6 +128,104 @@ fn the_latest_observation_per_provider_scope_wins() {
     assert_eq!(store.provider_limits().unwrap(), [close, reading]);
 }
 
+/// [ORB-25967] A complete usage reading retires the same account's older
+/// `event` windows it no longer reports, and only those: another account, an
+/// `error` observation and a newer reading keep theirs.
+#[test]
+fn a_usage_reading_retires_the_event_windows_it_no_longer_reports() {
+    if !provider_limit_observations_isolated(
+        "a_usage_reading_retires_the_event_windows_it_no_longer_reports",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
+    let store =
+        provider_limit_store_from_store(Store::open(&root.path().join("orbit.db")).unwrap());
+    let window =
+        |account: Option<&str>, model: &str, label: &str, hour: u32| ProviderLimitObservation {
+            account: account.map(ToOwned::to_owned),
+            model: Some(model.to_string()),
+            window: Some(label.to_string()),
+            exhausted: false,
+            source: ProviderLimitSource::Event,
+            used_percent: Some(50.0),
+            window_minutes: Some(300),
+            ..observation("antigravity", at(hour, 0), Some(at(23, 0)))
+        };
+    let keys = |store: &dyn orbit_store::contracts::ProviderLimitStoreBackend| {
+        let mut keys = store
+            .provider_limits()
+            .unwrap()
+            .into_iter()
+            .map(|limit| {
+                format!(
+                    "{}/{}/{}",
+                    limit.account.unwrap_or_default(),
+                    limit.model.unwrap_or_default(),
+                    limit.window.unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>();
+        keys.sort();
+        keys
+    };
+
+    for older in [
+        window(None, "argon", "wtu", 10),
+        window(None, "flash", "5h", 10),
+        window(Some("crew-a"), "argon", "wtu", 10),
+        window(Some("crew-b"), "argon", "wtu", 10),
+    ] {
+        store.record_provider_limit(&older).unwrap();
+    }
+    let failure = ProviderLimitObservation {
+        model: Some("neon".to_string()),
+        window: Some("failure".to_string()),
+        ..observation("antigravity", at(10, 0), Some(at(23, 0)))
+    };
+    store.record_provider_limit(&failure).unwrap();
+
+    store.record_provider_usage_reading(&[]).unwrap();
+    assert_eq!(keys(&*store).len(), 5, "an empty reading retires nothing");
+
+    store
+        .record_provider_usage_reading(&[window(None, "gemini", "5h", 11)])
+        .unwrap();
+    store
+        .record_provider_usage_reading(&[window(Some("crew-a"), "gemini", "5h", 11)])
+        .unwrap();
+    assert_eq!(
+        keys(&*store),
+        [
+            "/gemini/5h",
+            "/neon/failure",
+            "crew-a/gemini/5h",
+            "crew-b/argon/wtu",
+        ],
+        "each account's reading retires its own older event windows only"
+    );
+
+    // An older reading, delivered late, does not retire a newer one's windows.
+    // Nor does it restore a window the newer one retired, for the default
+    // login or a named account.
+    store
+        .record_provider_usage_reading(&[window(None, "flash", "5h", 9)])
+        .unwrap();
+    store
+        .record_provider_usage_reading(&[window(Some("crew-a"), "argon", "wtu", 9)])
+        .unwrap();
+    assert_eq!(
+        keys(&*store),
+        [
+            "/gemini/5h",
+            "/neon/failure",
+            "crew-a/gemini/5h",
+            "crew-b/argon/wtu",
+        ],
+        "a late older reading leaves exactly the newer windows"
+    );
+}
+
 /// A store from before the table gains it, with its v41 reading columns, on
 /// open without touching what it held, and records limits afterwards.
 #[test]

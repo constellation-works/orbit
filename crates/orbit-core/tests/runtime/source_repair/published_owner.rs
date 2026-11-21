@@ -1577,6 +1577,263 @@ pub(super) fn published_requeue_is_admitted_past_held_locks_and_reuses_its_pr() 
     assert_eq!(opened["pr_number"], "17");
 }
 
+/// An operator's explicit ship of a preserved published delivery overrides
+/// the local lock its gate deferred on: the gate keeps the publication, does
+/// not defer the footprint to the leaf, and the task's history names the
+/// holder. Without the mark the same shipment still defers and waits.
+pub(super) fn operator_shipped_published_requeue_overrides_held_local_lock() {
+    let mut f = Fixture::drained();
+    publication(&mut f);
+    requeue(&mut f);
+    let holder = f
+        .runtime
+        .add_task(orbit_core::application::task::TaskAddParams {
+            title: "Overlapping work in review".into(),
+            description: "Changes the same file".into(),
+            acceptance_criteria: vec!["Observable".into()],
+            plan: "Fixture".into(),
+            context_files: vec!["file:source.txt".into()],
+            complexity: orbit_core::TaskComplexity::Medium,
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap()
+        .id;
+    f.runtime
+        .apply_task_automation_update(
+            &holder,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Review),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let reserve = |input: Value| {
+        f.runtime
+            .run_deterministic("reserve_locks", &json!({}), &input, Default::default())
+            .unwrap()
+    };
+    let overrides = |f: &Fixture| {
+        f.runtime
+            .get_task_history(&f.task)
+            .unwrap()
+            .into_iter()
+            .filter(|entry| entry.event == "readiness_overridden")
+            .map(|entry| entry.note.unwrap_or_default())
+            .collect::<Vec<_>>()
+    };
+
+    let unmarked =
+        reserve(json!({"task_ids":[f.task],"ttl_seconds":120,"delivery_job":"task_pr_pipeline"}));
+    assert_eq!(
+        (&unmarked["reserved"], &unmarked["footprint_deferred"]),
+        (&json!(true), &json!(true)),
+        "an unmarked preserved shipment still defers its footprint: {unmarked}"
+    );
+    assert!(
+        overrides(&f).is_empty(),
+        "an unmarked shipment records no override: {:?}",
+        overrides(&f)
+    );
+
+    let gate = reserve(
+        json!({"task_ids":[f.task],"ttl_seconds":120,"delivery_job":"task_pr_pipeline","operator_readiness_override":true}),
+    );
+    assert_eq!(gate["reserved"], true, "{gate}");
+    assert_eq!(
+        gate["footprint_deferred"], false,
+        "the operator's ship does not defer the footprint to its leaf: {gate}"
+    );
+    assert_eq!(gate["reserved_files"], json!([]), "{gate}");
+    assert_eq!(
+        gate["published_delivery"],
+        json!({"source_run_id": f.source.run_id, "pull_request": "17"}),
+        "the preserved publication is still carried: {gate}"
+    );
+    let notes = overrides(&f);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(
+        notes[0].contains(&format!("context_lock_conflict (task {} on ", holder)),
+        "the history names the overridden holder: {notes:?}"
+    );
+
+    // The gate forwards `footprint_deferred: false` to the leaf, so its first
+    // editing activity takes no footprint wait while the holder still holds.
+    let (run, setup) = next_with(
+        &f,
+        json!({"task_ids":[f.task],"footprint_deferred":gate["footprint_deferred"],"footprint_wait_seconds":0}),
+    );
+    let resumed = f.action("candidate_resume", json!({"job_run_id":run.run_id,"task_ids":[f.task],"workspace_path":setup["workspace_path"],"base_sha":setup["base_sha"]}));
+    assert_eq!(resumed["outcome"], "resumed_carried");
+    assert_eq!(resumed["prior_pull_request"], "17");
+    checkpoint(&f, &run.run_id, 6, "resume_candidate", resumed);
+    f.runtime
+        .acquire_deferred_footprint(&run.run_id, "agent_implement")
+        .expect("the editing activity does not wait for the overridden local holder");
+}
+
+/// [ORB-24993] A resumed published delivery whose deferred footprint stays
+/// busy ends held, and terminal cleanup returns its task to the backlog
+/// still bound to that held run. Admission still treats the task as the
+/// preserved publication and defers its footprint again, and the next run
+/// adopts the same branch and pull request with no operator source repair.
+pub(super) fn footprint_held_resume_keeps_the_preserved_publication() {
+    let mut f = Fixture::drained();
+    publication(&mut f);
+    requeue(&mut f);
+    let holder = f
+        .runtime
+        .add_task(orbit_core::application::task::TaskAddParams {
+            title: "Overlapping work in review".into(),
+            description: "Changes the same file".into(),
+            acceptance_criteria: vec!["Observable".into()],
+            plan: "Fixture".into(),
+            context_files: vec!["file:source.txt".into()],
+            complexity: orbit_core::TaskComplexity::Medium,
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap()
+        .id;
+    let set_status = |id: &str, status| {
+        f.runtime
+            .apply_task_automation_update(
+                id,
+                TaskAutomationUpdate {
+                    status: Some(status),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    };
+    set_status(&holder, TaskStatus::Review);
+    let reserve = |input: Value| {
+        f.runtime
+            .run_deterministic("reserve_locks", &json!({}), &input, Default::default())
+            .unwrap()
+    };
+    let published_delivery = |f: &Fixture| {
+        let readiness = f
+            .runtime
+            .workspace_auto_readiness(&[], None, 50, &[])
+            .unwrap();
+        readiness["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["task_id"] == f.task)
+            .cloned()
+            .unwrap()
+    };
+
+    // The first resumed run adopts the publication and commits, then its
+    // review repair waits on the holder until the wait runs out.
+    set_status(&f.task, TaskStatus::InProgress);
+    let (held, setup) = next_with(
+        &f,
+        json!({"task_ids":[f.task],"footprint_deferred":true,"footprint_wait_seconds":0}),
+    );
+    let resumed = f.action("candidate_resume", json!({"job_run_id":held.run_id,"task_ids":[f.task],"workspace_path":setup["workspace_path"],"base_sha":setup["base_sha"],"prior_job_run_id":setup["prior_job_run_id"]}));
+    assert_eq!(resumed["outcome"], "resumed_carried");
+    assert_eq!(resumed["source_run_id"], f.source.run_id);
+    checkpoint(&f, &held.run_id, 6, "resume_candidate", resumed);
+    let checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    let commit = f.action("git_commit", json!({"job_run_id":held.run_id,"scope":"all","workspace_path":checkout,"base_sha":setup["base_sha"],"base_ref":setup["base_ref"]}));
+    assert_eq!(commit["committed"], true);
+    checkpoint(&f, &held.run_id, 1, "commit", commit);
+    let refused = f
+        .runtime
+        .acquire_deferred_footprint(&held.run_id, "agent_review_repair")
+        .unwrap_err();
+    assert!(refused.to_string().contains(&holder), "{refused}");
+    // The worker records the typed hold, then the terminal write runs the
+    // real task cleanup.
+    f.runtime
+        .complete_job_run_step(
+            &held.run_id,
+            &orbit_store::contracts::JobRunStepParams {
+                step_index: 7,
+                target_type: orbit_types::workflow::JobTargetType::Activity,
+                target_id: "complete_pr".into(),
+                state: JobRunState::Held,
+                started_at: Utc::now(),
+                finished_at: Utc::now(),
+                duration_ms: Some(1),
+                exit_code: None,
+                lock_wait_ms: None,
+                agent_response_json: None,
+                error_code: Some(orbit_types::workflow::FOOTPRINT_UNAVAILABLE_ERROR_CODE.into()),
+                error_message: Some(refused.to_string()),
+            },
+        )
+        .unwrap();
+    RuntimeHost::finalize_job_run(
+        &f.runtime,
+        &held.run_id,
+        JobRunState::Held,
+        Utc::now(),
+        Some(1),
+    )
+    .unwrap();
+    let mut stopped = f.runtime.show_job_run_observed(&held.run_id).unwrap();
+    assert_eq!(stopped.state, JobRunState::Held);
+    stopped.pid = None;
+    save_run(&f, &stopped);
+    let task = f.runtime.get_task(&f.task).unwrap();
+    assert_eq!(task.status, TaskStatus::Backlog);
+    assert_eq!(
+        task.job_run_id.as_deref(),
+        Some(held.run_id.as_str()),
+        "the requeue leaves the task bound to the held run"
+    );
+
+    let entry = published_delivery(&f);
+    assert_eq!(
+        (&entry["eligible"], &entry["reason"]),
+        (&json!(true), &json!("ready")),
+        "the held lock still does not hold back the published delivery: {entry}"
+    );
+    assert_eq!(
+        (
+            &entry["published_delivery"]["source_run_id"],
+            &entry["published_delivery"]["pull_request"]
+        ),
+        (&json!(f.source.run_id), &json!("17")),
+        "the original preserved publication is still the one to resume: {entry}"
+    );
+    let gate =
+        reserve(json!({"task_ids":[f.task],"ttl_seconds":120,"delivery_job":"task_pr_pipeline"}));
+    assert_eq!(
+        (&gate["reserved"], &gate["footprint_deferred"]),
+        (&json!(true), &json!(true)),
+        "admission defers the footprint again: {gate}"
+    );
+    assert_eq!(gate["published_delivery"]["source_run_id"], f.source.run_id);
+
+    // Once the holder releases, the next run adopts the same branch and PR.
+    set_status(&holder, TaskStatus::Done);
+    let (run, setup) = next(&f);
+    assert_eq!(setup["prior_job_run_id"], held.run_id);
+    let resumed = f.action("candidate_resume", json!({"job_run_id":run.run_id,"task_ids":[f.task],"workspace_path":setup["workspace_path"],"base_sha":setup["base_sha"],"prior_job_run_id":setup["prior_job_run_id"]}));
+    assert_eq!(resumed["outcome"], "resumed_carried", "{resumed}");
+    assert_eq!(resumed["implement"], false);
+    assert_eq!(resumed["source_run_id"], f.source.run_id);
+    assert_eq!(resumed["reused_branch"], f.branch);
+    assert_eq!(resumed["prior_pull_request"], "17");
+    checkpoint(&f, &run.run_id, 6, "resume_candidate", resumed);
+    let checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    let commit = f.action("git_commit", json!({"job_run_id":run.run_id,"scope":"all","workspace_path":checkout,"base_sha":setup["base_sha"],"base_ref":setup["base_ref"]}));
+    assert_eq!(commit["committed"], true);
+    let pushed = f.action("git_push", json!({"job_run_id":run.run_id,"workspace_path":checkout,"branch":f.branch,"base":"main","base_ref":setup["base_ref"]}));
+    assert_eq!(pushed["remote_sha_before"], f.head);
+    let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    answer["headRefOid"] = json!(git(&checkout, &["rev-parse", "HEAD"]));
+    std::fs::write(&f.answer, answer.to_string()).unwrap();
+    let opened = f.action("pr_open", json!({"job_run_id":run.run_id,"workspace_path":checkout,"completed_task_ids":[f.task],"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":setup["base_sha"]}));
+    assert_eq!(opened["pr_reused"], true);
+    assert_eq!(opened["pr_number"], "17");
+}
+
 /// Two resumed runs that deferred the same footprint behind a third task each
 /// hold their task `in-progress` and neither holds a file. Once the holder
 /// releases, one run takes the footprint and the other is refused by that

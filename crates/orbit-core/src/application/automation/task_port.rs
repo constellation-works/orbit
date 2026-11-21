@@ -24,6 +24,10 @@ impl SourceGit for Source<'_> {
     fn git_preserving_output(&self, args: &[&str]) -> Result<String, AutomationError> {
         Source::git_preserving_output(self, args)
     }
+
+    fn is_ancestor(&self, older: &str, newer: &str) -> Result<bool, AutomationError> {
+        Source::is_ancestor(self, older, newer)
+    }
 }
 
 impl TaskAutomationPort for OrbitRuntime {

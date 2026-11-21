@@ -623,13 +623,12 @@ spec:
       below: report it as an evidence gap unless creation is authorized, and
       never invent a filename.
     - MCP-surface companions: when a plan adds, removes or renames a builtin
-      MCP tool, changes its advertised placement, or changes its id route,
-      locate each companion below at `source_revision` (`rg -l` on the named
-      test or table, `rg --files` for a named golden file), declare it as a
-      `file:` selector, and record each mapping and its `path:line` evidence in
-      `assessment_rationale`. A workspace without these fixtures adds none. A
-      body-only tool edit that keeps the name, placement and id route adds none
-      of them.
+      MCP tool, or changes its advertised placement, id route, advertised
+      description or input schema, locate the applicable companions at
+      `source_revision` (`rg -l` on the named test or table, `rg --files` for a
+      named golden file) and declare each one under its specific trigger below as
+      a `file:` selector. Record each mapping and its `path:line` evidence in
+      `assessment_rationale`. A workspace without these fixtures adds none.
       - The handwritten exact advertised-name list, asserted by the test
         `canonical_builtin_definitions_preserve_the_exact_workspace_surface`, is
         a handwritten expected-value fixture. Declare its file for an advertised
@@ -656,8 +655,27 @@ spec:
         adds, removes or renames a builtin orbit.* tool or verb. A placement or
         id-route change alone, and a body-only tool edit that keeps the name,
         verbs and id route, adds none of this companion.
+      A body-only tool edit that keeps the name, verbs, placement and id route
+      declares none of the four companions above.
+      - The handwritten per-role MCP surface budget (`mcp_role_budgets.json`
+        in the `orbit-mcp` crate's `tests/boundary/` directory), read by
+        `role_surface_budget` in `role_surface.rs`, is another companion.
+        Locate it at `source_revision` with `rg --files -g 'mcp_role_budgets.json'`,
+        verify the matching include in `role_surface.rs`, and declare its exact
+        workspace-relative path as a `file:` selector. Its ceilings bound each
+        role's tool count and approximate tokens (serialized name, description
+        and input-schema byte count divided by four). Declare this fixture when a
+        plan adds, removes or renames a builtin MCP tool, or changes its advertised
+        description or input schema. A placement-only change, id-route-only
+        change, or implementation-only edit that leaves the advertised name,
+        description and input schema unchanged does not trigger it. Keep the
+        measured surface within the recorded ceilings. If a change requires
+        more surface, raise only the affected ceiling in this file as a reviewed
+        decision and explain in the PR why the role needs the extra surface, as
+        the file comment requires.
       No other golden, snapshot, tool-list or routing file is implied by this
-      rule; a companion beyond these needs its own source evidence.
+      rule; the role-budget fixture above is the fifth companion, and any
+      further companion needs its own source evidence.
     - Registration wiring: for a new or renamed action or a changed
       cross-module interface, inspect the existing sites it needs to resolve
       and run: the typed action catalog or registry, any embedding or asset
@@ -753,7 +771,30 @@ spec:
       the audit records. Do not substitute operational logs or follower data.
       Candidate checks repeatable locally and task records readable through
       the bridge need no such hold. Preserve the explicit Friction criteria
-      and Post-deploy routes below for their landing and deployed evidence.
+      and Post-deploy routes below for their landing and deployed evidence. A
+      hard timing criterion can use a separate host-owned run if that run is
+      authorized and its evidence is reachable by review as specified below.
+    - **Hard timing criteria.** Before promotion, verify that the brief names
+      a disposable, reproducible fixture artifact or exact seed and reset
+      commands, exact build and measurement commands, the baseline and final
+      candidate revision selectors, and matching build profiles and settings.
+      Check that the bounded same-fixture protocol specifies pacing, warmups,
+      samples, repetitions, aggregation and a bound stable against the
+      measured spread of an unchanged build. A one-shot warm ratio is not
+      sufficient. Verify that the named lane and host or host requirements can
+      run the commands with granted access, and that the brief names the owner
+      of any necessary serial host-owned run and the exact log or artifact path
+      available to review. Use the existing evidence route. An empty
+      required-validation list, a behavioral-only command or a future
+      deployment measurement provides no benchmark result for a candidate
+      criterion. For a missing or infeasible route, or a protocol without an
+      unchanged-build control and a bound that its spread supports, emit a
+      `utility_warnings` object with `holds_promotion: true` naming the criterion
+      and the missing details; the authoring guide's informational,
+      deterministic-proxy or measurement-task alternatives are the repair. Use
+      Post-deploy only when the criterion itself needs the deployed
+      build. Informational timings and deterministic behavioral checks do not
+      need a benchmark route.
     - **Operator-only tool mentions.** For every `{criterion, tool}` that
       `partition.operator_tool_candidates` lists for a task, return one
       `operator_tool_classifications` entry with the same `criterion` and
@@ -857,12 +898,41 @@ spec:
       such a gate: a portable test or command, a gate on an item the criterion
       does not name, an `os` that differs from the gate, a path or line the
       pinned source does not confirm, or a `cfg(unix)` / `cfg(not(windows))`
-      gate that does not determine one OS. A host requirement stated only in
+      gate that does not determine one OS. The one exception is a
+      repository-required validation finding under Repository-required
+      validation below, whose evidence cites the guide rule instead of a
+      cfg gate. A host requirement stated only in
       `utility_warnings` routes nothing. If the task's existing `os:` tag names
       a different OS, also report the conflict in `utility_warnings`, citing the
       criterion. Requirements on several OSes add no tag, since several `os:`
       tags admit any one of them; recommend separate host-scoped validation
       tasks instead.
+    - **Repository-required validation.** Acceptance criteria are not the
+      only source of a host requirement. Read the task's tags together with
+      the workspace guide (`AGENTS.md`/`CLAUDE.md` and any runbook it links
+      for that validation): when a tag the task carries (or a path the plan
+      will change) triggers a repository-required validation, and that guide
+      states only one OS can produce a complete run of it — for this
+      repository, a task tagged `security` or `security-review` requires a
+      local CodeQL run and only Linux extracts every module — add
+      `{"criterion":N,"os":"linux","evidence":"..."}` to `required_os` for
+      the criterion that requires the repository's documented checks or
+      validation to pass (the first criterion when none names the checks).
+      The evidence must name CodeQL, the triggering tag, and cite both
+      guide lines at their repository-relative `path:line` in the pinned
+      source: the line that ties the tag to the CodeQL requirement and the
+      line that states only Linux can produce it. Do this only when no
+      permitted route lets a leaf on another OS hand off the complete
+      evidence: a criterion, plan or workspace rule that explicitly routes
+      this check to owner/external evidence fulfilled after handoff (the
+      leaf records it `not_run` and the review or owner run supplies the
+      Linux result) is such a route, so leave `required_os` empty then and
+      record the route in `assessment_rationale`. The candidate and its
+      complete CodeQL evidence are still required either way; a failed,
+      skipped or exit-3 run is never passing evidence. A platform mention,
+      cross-compilation target, mocked platform check or negative-platform
+      criterion triggers none of this: it names no repository-required
+      validation, so it stays portable under the Native OS rule above.
     - **Sandbox deferral.** A criterion may forbid sandbox deferral, or say a
       skip is not evidence, for a test that runs only under nested Seatbelt or
       Bubblewrap. When the test is in a required validation gate, report in

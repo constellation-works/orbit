@@ -1,11 +1,11 @@
 ---
 title: Crew Memory — Overview
 owner: claude
-last_updated: 2026-11-10
+last_updated: 2026-11-19
 last_validated: 2026-11-10
 status: Accepted
 stage: building
-next: "M5 shadow runs (ORB-23117); live from 2026-11-15, then conclude by 2026-12-20 (ORB-23110)"
+next: "Daniel: conclude exp-5342a4d6 (no difference) and decide the consolidation proposal (ORB-25838)"
 feature: crew-memory
 doc_role: overview
 type: design
@@ -55,7 +55,8 @@ Slices M1–M4 are built. M1 provides the store, write rules and operator CLI; M
 | Operator CLI (`orbit memory show\|history\|export\|write\|reset\|copy`) | `crates/orbit-common/src/governance/memory.rs`, `crates/orbit-cli/src/command/memory.rs` | [ORB-23113] |
 | Agent tools (`orbit.memory.*` for dreaming runs) | `crates/orbit-core/src/application/crew_memory/agent.rs` | [ORB-23115] |
 | Global-memory proposal review | `crates/orbit-core/src/application/crew_memory/proposals.rs` | [ORB-23116] |
-| Memory-on vs memory-off experiment: shadow started 2026-11-08 (exp-57f1ef67); live and conclusion pending (M5) | `docs/design/crew-memory/2_design.md` §7 | [ORB-23117] |
+| Memory-on vs memory-off experiment: shadow from 2026-11-08 (exp-57f1ef67); live from 2026-11-10 (exp-5342a4d6), paused 2026-11-19 at its horizon with the readout "no difference"; conclusion pending (M5) | `docs/design/crew-memory/2_design.md` §7 | [ORB-23117] |
+| Proposed, not built: one consolidator model, trigger-and-action notes and a per-note ledger | [specs/consolidation.md](./specs/consolidation.md) | [ORB-25838] |
 
 ## Task References
 
@@ -67,7 +68,8 @@ Slices M1–M4 are built. M1 provides the store, write rules and operator CLI; M
 - [ORB-23117] — starts the M5 memory-on vs memory-off experiment in shadow mode
 - [ORB-23110] — the ws_orbit on-call orchestration that carries the M5 live and conclusion handoff
 - [ORB-10736] — retired the native project-learning subsystem
+- [ORB-25838] — proposes outcome-checked consolidation after the live readout
 
-M5 runs and concludes the memory-on vs memory-off experiment: shadow started by [ORB-23117], with live and conclusion pending. Adoption remains undecided.
+M5 runs and concludes the memory-on vs memory-off experiment: shadow started by [ORB-23117]; the live run reached its horizon on 2026-11-19 without favouring memory and is not yet concluded. Adoption remains undecided.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -59,9 +59,88 @@ pub struct TaskPullRequestLanding {
     pub settlement_pending: Option<String>,
 }
 
-fn landing_refused(id: &str, reason: impl std::fmt::Display) -> OrbitError {
+/// The open delivery pull requests a task has.
+pub(super) enum OpenDelivery {
+    /// None of the task's recorded pull requests is open.
+    None,
+    /// Exactly one open pull request delivers the task into its target branch.
+    One { number: u64, target_branch: String },
+    /// Several open pull requests deliver the task, ascending. Which one lands
+    /// is not Orbit's choice.
+    Several(Vec<u64>),
+}
+
+/// Outcome of checking a delivery pull request a second time and asking the
+/// forge to merge it.
+pub(super) enum DeliveryMergeOutcome {
+    /// The forge merged the pull request.
+    Merged { merge_commit: String },
+    /// Mergeability could not be read (`None` or `PullRequestMergeabilityUnknown`).
+    BlockersUnavailable { reason: String },
+    /// The pull request head moved from the judged `expected_head`.
+    HeadChanged,
+    /// The pull request conflicts with its base.
+    Conflicting,
+    /// Required checks are no longer ready (`failed`, `pending`, or absent
+    /// passed checks when `require_passed_check` is set).
+    ChecksNotReady {
+        failed: Vec<String>,
+        pending: Vec<String>,
+    },
+    /// The pull request no longer targets `expected_base`.
+    TargetBranchChanged { reason: String },
+    /// The forge itself refused the merge request.
+    ForgeRefused { reason: String },
+}
+
+impl DeliveryMergeOutcome {
+    fn into_merge_commit(self, id: &str, number: u64) -> Result<String, OrbitError> {
+        match self {
+            Self::Merged { merge_commit } => Ok(merge_commit),
+            Self::BlockersUnavailable { reason } | Self::TargetBranchChanged { reason } => {
+                Err(landing_refused(id, reason))
+            }
+            Self::HeadChanged => Err(landing_refused(
+                id,
+                format_args!("pull request #{number} head changed since it was judged"),
+            )),
+            Self::Conflicting => Err(landing_refused(
+                id,
+                format_args!("pull request #{number} conflicts with its base"),
+            )),
+            Self::ChecksNotReady { failed, pending } => Err(landing_refused(
+                id,
+                format_args!(
+                    "pull request #{number} has required checks failed {failed:?} and unfinished {pending:?}"
+                ),
+            )),
+            Self::ForgeRefused { reason } => Err(landing_refused(
+                id,
+                format_args!("the forge refused to merge pull request #{number}: {reason}"),
+            )),
+        }
+    }
+}
+
+pub(super) fn landing_refused(id: &str, reason: impl std::fmt::Display) -> OrbitError {
     OrbitError::PolicyDenied(format!(
         "{TASK_LANDING_REFUSED}: task '{id}' did not land: {reason}"
+    ))
+}
+
+/// Refuse landing when `observed_base` does not match the `expected_base`
+/// established during candidate selection.
+pub(super) fn ensure_delivery_target_branch(
+    number: u64,
+    observed_base: Option<&str>,
+    expected_base: &str,
+) -> Result<(), String> {
+    if observed_base == Some(expected_base) {
+        return Ok(());
+    }
+    Err(format!(
+        "pull request #{number} targets {}, not its delivery target branch {expected_base}",
+        observed_base.unwrap_or("no branch")
     ))
 }
 
@@ -109,24 +188,38 @@ impl OrbitRuntime {
         self.ensure_mutation_proposals_applied(&candidate.task)
             .map_err(|error| landing_refused(id, error))?;
 
-        let Some(number) = self.open_delivery_pull_request(&candidate)? else {
-            // Nothing is open: a merge this call lost the reply of, or one made
-            // outside Orbit, settles here; otherwise this names why not.
-            let settled = self
-                .settle_externally_merged_task_as(id, actor)
-                .map_err(|error| match error {
-                    OrbitError::InvalidInput(reason) => landing_refused(id, reason),
-                    error => error,
-                })?;
-            return Ok(TaskPullRequestLanding {
-                task_id: settled.task_id,
-                pull_request: settled.pr_number,
-                merge_commit: settled.merge_commit,
-                status: TaskStatus::Done,
-                settlement_pending: None,
-            });
+        let (number, expected_base) = match self.open_delivery_pull_request(&candidate)? {
+            OpenDelivery::One {
+                number,
+                target_branch,
+            } => (number, target_branch),
+            OpenDelivery::Several(numbers) => {
+                return Err(landing_refused(
+                    id,
+                    format_args!("it has several open delivery pull requests: {numbers:?}"),
+                ));
+            }
+            OpenDelivery::None => {
+                // Nothing is open: a merge this call lost the reply of, or one made
+                // outside Orbit, settles here; otherwise this names why not.
+                let settled = self.settle_externally_merged_task_as(id, actor).map_err(
+                    |error| match error {
+                        OrbitError::InvalidInput(reason) => landing_refused(id, reason),
+                        error => error,
+                    },
+                )?;
+                return Ok(TaskPullRequestLanding {
+                    task_id: settled.task_id,
+                    pull_request: settled.pr_number,
+                    merge_commit: settled.merge_commit,
+                    status: TaskStatus::Done,
+                    settlement_pending: None,
+                });
+            }
         };
-        let merge_commit = self.merge_delivery_pull_request(id, number)?;
+        let merge_commit = self
+            .merge_delivery_pull_request(id, number, None, &expected_base, false)?
+            .into_merge_commit(id, number)?;
         // The work has landed, so a settlement that fails now is not a failed
         // landing: the owner's settlement pass reads the same merge.
         let settlement_pending = self
@@ -193,10 +286,13 @@ impl OrbitRuntime {
         Ok(())
     }
 
-    /// The candidate's one open PR that may deliver it, or `None` when none of
-    /// its PRs is open. An open PR that cannot deliver the task, or more than
-    /// one that can, is refused: the choice is not this call's to make.
-    fn open_delivery_pull_request(&self, candidate: &Candidate) -> Result<Option<u64>, OrbitError> {
+    /// The candidate's open PRs that may deliver it. An open PR that cannot
+    /// deliver the task is refused; several that can are reported as
+    /// [`OpenDelivery::Several`], because the choice is not this call's to make.
+    pub(super) fn open_delivery_pull_request(
+        &self,
+        candidate: &Candidate,
+    ) -> Result<OpenDelivery, OrbitError> {
         let id = candidate.task.id.as_str();
         let repo_root = self.context.paths().repo_root.clone();
         let forge = self.task_pr_forge();
@@ -213,7 +309,7 @@ impl OrbitRuntime {
             }
         }
         if open.is_empty() {
-            return Ok(None);
+            return Ok(OpenDelivery::None);
         }
         let authors = self.settlement_authors(&repo_root);
         let mut delivering = Vec::new();
@@ -221,15 +317,15 @@ impl OrbitRuntime {
             let base = forge
                 .lease_pull_request(&repo_root, &format!("#{}", pull.number))?
                 .map(|bound| bound.base_branch);
-            let delivers = orbit_types::task::names_task_delivery_pull_request(
-                branches,
-                &pull.head_branch,
-                &pull.body,
-                id,
-            ) && base.as_deref().is_some_and(|base| {
-                self.delivers_candidate(candidate, pull.number, &pull.author, base, &authors)
+            let target_branch = base.filter(|base| {
+                orbit_types::task::names_task_delivery_pull_request(
+                    branches,
+                    &pull.head_branch,
+                    &pull.body,
+                    id,
+                ) && self.delivers_candidate(candidate, pull.number, &pull.author, base, &authors)
             });
-            if !delivers {
+            let Some(target_branch) = target_branch else {
                 return Err(landing_refused(
                     id,
                     format_args!(
@@ -237,70 +333,110 @@ impl OrbitRuntime {
                         pull.number
                     ),
                 ));
-            }
-            delivering.push(pull.number);
+            };
+            delivering.push((pull.number, target_branch));
         }
-        match delivering.as_slice() {
-            [number] => Ok(Some(*number)),
-            numbers => Err(landing_refused(
-                id,
-                format_args!("it has several open delivery pull requests: {numbers:?}"),
-            )),
-        }
+        delivering.sort_unstable_by_key(|(number, _)| *number);
+        let mut iter = delivering.into_iter();
+        Ok(match (iter.next(), iter.next()) {
+            (Some((number, target_branch)), None) => OpenDelivery::One {
+                number,
+                target_branch,
+            },
+            (Some((first, _)), Some((second, _))) => OpenDelivery::Several(
+                [first, second]
+                    .into_iter()
+                    .chain(iter.map(|(number, _)| number))
+                    .collect(),
+            ),
+            (None, _) => OpenDelivery::None,
+        })
     }
 
-    /// Merge `number` at the head whose required checks were just read.
-    fn merge_delivery_pull_request(&self, id: &str, number: u64) -> Result<String, OrbitError> {
+    /// Merge `number` at the head whose required checks were just read,
+    /// verifying it still targets `expected_base`.
+    /// `expected_head` pins the head a caller already judged (the owner's
+    /// automatic landing); a pull request that moved since returns
+    /// [`DeliveryMergeOutcome::HeadChanged`] without issuing a merge.
+    pub(super) fn merge_delivery_pull_request(
+        &self,
+        id: &str,
+        number: u64,
+        expected_head: Option<&str>,
+        expected_base: &str,
+        require_passed_check: bool,
+    ) -> Result<DeliveryMergeOutcome, OrbitError> {
         let repo_root = self.context.paths().repo_root.clone();
         let forge = self.task_pr_forge();
-        let blockers = await_known_merge_blockers(id, number, forge, &repo_root)?;
+        let blockers = match await_known_merge_blockers(number, forge, &repo_root)? {
+            KnownMergeBlockers::Ready(blockers) => blockers,
+            KnownMergeBlockers::Unavailable(reason) => {
+                return Ok(DeliveryMergeOutcome::BlockersUnavailable { reason });
+            }
+        };
+        if expected_head.is_some_and(|head| head != blockers.head_sha) {
+            return Ok(DeliveryMergeOutcome::HeadChanged);
+        }
         if blockers.conflicting {
-            return Err(landing_refused(
-                id,
-                format_args!("pull request #{number} conflicts with its base"),
-            ));
+            return Ok(DeliveryMergeOutcome::Conflicting);
         }
         if !blockers.failed_required_checks.is_empty()
             || !blockers.pending_required_checks.is_empty()
+            || (require_passed_check && blockers.passed_required_checks.is_empty())
         {
-            return Err(landing_refused(
-                id,
-                format_args!(
-                    "pull request #{number} has required checks failed {:?} and unfinished {:?}",
-                    blockers.failed_required_checks, blockers.pending_required_checks
-                ),
-            ));
+            return Ok(DeliveryMergeOutcome::ChecksNotReady {
+                failed: blockers.failed_required_checks,
+                pending: blockers.pending_required_checks,
+            });
         }
-        match forge.merge_pull_request(&repo_root, number, &blockers.head_sha)? {
-            PullRequestMergeOutcome::Merged { merge_commit } => Ok(merge_commit),
-            PullRequestMergeOutcome::Refused { reason } => Err(landing_refused(
-                id,
-                format_args!("the forge refused to merge pull request #{number}: {reason}"),
-            )),
+        let base = forge
+            .lease_pull_request(&repo_root, &format!("#{number}"))?
+            .map(|bound| bound.base_branch);
+        if let Err(reason) = ensure_delivery_target_branch(number, base.as_deref(), expected_base) {
+            return Ok(DeliveryMergeOutcome::TargetBranchChanged { reason });
+        }
+        let message = orbit_engine::compose_squash_merge_message(
+            &repo_root,
+            std::slice::from_ref(&self.get_task(id)?),
+            self.pr_config(),
+            base.as_deref(),
+            &blockers.head_sha,
+            number,
+        );
+        match forge.merge_pull_request(&repo_root, number, &blockers.head_sha, &message)? {
+            PullRequestMergeOutcome::Merged { merge_commit } => {
+                Ok(DeliveryMergeOutcome::Merged { merge_commit })
+            }
+            PullRequestMergeOutcome::Refused { reason } => {
+                Ok(DeliveryMergeOutcome::ForgeRefused { reason })
+            }
         }
     }
+}
+
+enum KnownMergeBlockers {
+    Ready(PullRequestBlockers),
+    Unavailable(String),
 }
 
 /// Read what holds `number` back, waiting out GitHub's `UNKNOWN` mergeability
 /// window. A conflict, a closed pull request and any other forge error return
 /// on the first read.
 fn await_known_merge_blockers(
-    id: &str,
     number: u64,
     forge: &dyn TaskPrForge,
     repo_root: &std::path::Path,
-) -> Result<PullRequestBlockers, OrbitError> {
+) -> Result<KnownMergeBlockers, OrbitError> {
     let started = Instant::now();
     let mut virtual_elapsed = mergeability_wait_is_virtual().then_some(Duration::ZERO);
     let mut attempt = 0_u32;
     loop {
         match forge.pull_request_blockers(repo_root, number) {
-            Ok(Some(blockers)) => return Ok(blockers),
+            Ok(Some(blockers)) => return Ok(KnownMergeBlockers::Ready(blockers)),
             Ok(None) => {
-                return Err(landing_refused(
-                    id,
-                    format_args!("the forge cannot say what holds pull request #{number} back"),
-                ));
+                return Ok(KnownMergeBlockers::Unavailable(format!(
+                    "the forge cannot say what holds pull request #{number} back"
+                )));
             }
             Err(OrbitError::PullRequestMergeabilityUnknown { .. }) => {
                 let elapsed = virtual_elapsed.unwrap_or_else(|| started.elapsed());
@@ -308,17 +444,15 @@ fn await_known_merge_blockers(
                 // One more step than the documented backoff, so a clock that
                 // does not advance cannot spin.
                 if remaining.is_zero() || attempt > MERGEABILITY_UNKNOWN_BACKOFF_SECS.len() as u32 {
-                    return Err(landing_refused(
-                        id,
-                        OrbitError::PullRequestMergeabilityUnknown { number },
+                    return Ok(KnownMergeBlockers::Unavailable(
+                        OrbitError::PullRequestMergeabilityUnknown { number }.to_string(),
                     ));
                 }
                 let delay = mergeability_backoff(attempt, remaining);
                 attempt = attempt.saturating_add(1);
                 if delay.is_zero() {
-                    return Err(landing_refused(
-                        id,
-                        OrbitError::PullRequestMergeabilityUnknown { number },
+                    return Ok(KnownMergeBlockers::Unavailable(
+                        OrbitError::PullRequestMergeabilityUnknown { number }.to_string(),
                     ));
                 }
                 tracing::debug!(

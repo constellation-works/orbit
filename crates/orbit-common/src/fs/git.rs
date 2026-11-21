@@ -274,6 +274,8 @@ fn looks_like_remote_auth_or_network_failure(stderr_lower: &str) -> bool {
 const ADMITTED_CONFIG_OVERRIDES: &[(&str, Option<&str>)] = &[
     ("core.hooksPath", Some("/dev/null")),
     ("core.fsmonitor", Some("false")),
+    // An integer worker count for parallel checkout; it names no program.
+    ("checkout.workers", None),
     ("gc.auto", None),
     ("protocol.file.allow", None),
     ("user.name", None),
@@ -339,8 +341,14 @@ fn admitted_git_args<'a>(args: &[&'a str]) -> Result<Vec<&'a str>, OrbitError> {
             }
             index += 2;
         } else if arg == "--git-dir" {
+            if args.get(index + 1).is_none_or(|value| value.is_empty()) {
+                return refuse("`--git-dir` has no path".to_string());
+            }
             index += 2;
-        } else if arg.starts_with("--git-dir=") {
+        } else if let Some(value) = arg.strip_prefix("--git-dir=") {
+            if value.is_empty() {
+                return refuse("`--git-dir=` has no path".to_string());
+            }
             index += 1;
         } else {
             return refuse(format!("global option `{arg}` is not admitted"));
@@ -448,6 +456,48 @@ pub fn run_git_within(
         code: output.status.code(),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
+}
+
+/// What `git merge-base --is-ancestor` answered, as [`git_ancestry`] reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitAncestry {
+    /// Exit 0: the first commit is an ancestor of (or equal to) the second.
+    Ancestor,
+    /// Exit 1: it is not.
+    NotAncestor,
+    /// Any other exit (such as 128, an unresolvable revision): Git could not
+    /// answer. `code` is `None` when a signal ended the process.
+    Unanswered { code: Option<i32>, stderr: String },
+}
+
+/// Ask Git whether `ancestor` is an ancestor of `descendant` in `repo`.
+///
+/// Spawn and timeout failures propagate as [`run_git`] reports them. Each
+/// caller decides whether [`GitAncestry::Unanswered`] reads as "not an
+/// ancestor" or as an error.
+pub fn git_ancestry(
+    repo: &Path,
+    ancestor: &str,
+    descendant: &str,
+) -> Result<GitAncestry, OrbitError> {
+    let answer = run_git(
+        repo,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            "--end-of-options",
+            ancestor,
+            descendant,
+        ],
+    )?;
+    Ok(match answer.code {
+        Some(0) => GitAncestry::Ancestor,
+        Some(1) => GitAncestry::NotAncestor,
+        code => GitAncestry::Unanswered {
+            code,
+            stderr: answer.stderr,
+        },
     })
 }
 

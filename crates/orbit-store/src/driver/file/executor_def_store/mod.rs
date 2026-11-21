@@ -121,8 +121,8 @@ fn parse_executor_def(content: &str, label: String) -> Result<ExecutorDef, Orbit
     doc.metadata.validate_name()?;
     Ok(ExecutorDef::from_resource_spec(
         doc.metadata.name,
-        doc.spec.clone(),
-        doc.spec.created_at,
-        doc.spec.updated_at,
+        doc.spec,
+        None,
+        None,
     ))
 }

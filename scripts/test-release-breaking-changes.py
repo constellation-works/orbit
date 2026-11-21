@@ -346,6 +346,80 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(len(missed), 0, f"{len(missed)} unsound schema pairs; "
                          f"first counterexamples (old, new, instance): {list(missed.items())[:10]}")
 
+    def test_same_keyword_conjunct_edits_report_breaking(self):
+        def choice(keyword, *types):
+            return {keyword: [{"type": t} for t in types]}
+
+        cases = [
+            ({"allOf": [choice("anyOf", "integer", "null"), choice("anyOf", "string", "integer")]},
+             {"allOf": [choice("anyOf", "integer", "null"), choice("anyOf", "string", "null")]}),
+            ({"allOf": [choice("anyOf", "integer", "null"), choice("anyOf", "boolean", "integer")]},
+             {"allOf": [choice("anyOf", "integer", "null"), choice("anyOf", "string", "boolean")]}),
+            ({"allOf": [choice("anyOf", "null"), choice("anyOf", "string", "null")]},
+             {"allOf": [choice("anyOf", "integer"), choice("anyOf", "string", "null")]}),
+            ({"allOf": [choice("oneOf", "integer"), choice("oneOf", "string", "integer")]},
+             {"allOf": [choice("oneOf", "boolean"), choice("oneOf", "string", "integer")]}),
+            ({"allOf": [choice("anyOf", "string", "boolean"), choice("oneOf", "string", "boolean"),
+                        choice("anyOf", "boolean", "null")]}, choice("anyOf", "string", "null")),
+        ]
+        for index, (before, after) in enumerate(cases):
+            with self.subTest(case=index):
+                tools = self.repo.mcp()
+                tools[0]["inputSchema"] = before
+                self.repo.write_mcp(tools)
+                self.repo.commit("chore: prepare conjunct edit [ORB-90]")
+                self.repo.git("tag", "-f", "v0.35.0")
+                tools[0]["inputSchema"] = after
+                self.repo.write_mcp(tools)
+                self.repo.commit("chore: edit conjunct [ORB-91]")
+                report = self.report()
+                self.assertEqual(report["bump"], "minor")
+                self.assertTrue(any(s["signal"] == "mcp-schema" for s in report["signals"]))
+
+    def test_schema_oracle_unknown_keyword_refusal_and_semantics(self):
+        with self.assertRaises(ValueError):
+            schema_accepts_instance({"items": {"type": "string"}}, ["a"])
+        # Unsupported keywords are refused wherever they sit, even when instance
+        # evaluation never visits the subtree.
+        skipped_subtrees = [
+            ({"allOf": [False, {"items": {}}]}, []),
+            ({"if": False, "then": {"items": {}}}, []),
+            ({"if": True, "else": {"items": {}}}, []),
+            ({"if": {"items": {}}}, []),
+            ({"propertyNames": {"items": {}}}, {}),
+            ({"anyOf": [True, {"items": {}}]}, []),
+            ({"properties": {"a": {"items": {}}}}, {}),
+            ({"additionalProperties": {"items": {}}}, {}),
+        ]
+        for schema, instance in skipped_subtrees:
+            with self.subTest(schema=schema):
+                with self.assertRaises(ValueError):
+                    schema_accepts_instance(schema, instance)
+        # Valid unchosen branches stay inactive; keywords inside literal
+        # const/enum values and property names are data, not schema.
+        self.assertTrue(schema_accepts_instance(
+            {"if": False, "then": False, "else": True}, 1))
+        self.assertFalse(schema_accepts_instance(
+            {"if": True, "then": False, "else": True}, 1))
+        self.assertTrue(schema_accepts_instance(
+            {"const": {"items": {}}, "enum": [{"items": {}}]}, {"items": {}}))
+        self.assertTrue(schema_accepts_instance(
+            {"properties": {"items": {"type": "string"}}}, {"items": "a"}))
+        # then/else without if have no effect in JSON Schema.
+        self.assertTrue(schema_accepts_instance({"then": {"type": "string"}}, 1))
+        self.assertFalse(schema_accepts_instance(
+            {"if": {"required": ["a"]}, "then": {"required": ["b"]}, "else": {"required": ["c"]}},
+            {"a": 1},
+        ))
+        self.assertTrue(schema_accepts_instance(
+            {"if": {"required": ["a"]}, "then": {"required": ["b"]}, "else": {"required": ["c"]}},
+            {"c": 1},
+        ))
+        self.assertFalse(schema_accepts_instance(
+            {"allOf": [{"type": "object"}, {"propertyNames": {"enum": ["a", "b"]}}]},
+            {"c": 1},
+        ))
+
     def test_schema_bump_and_deny_unknown_field_decide_minor(self):
         # The v0.35.0..v0.36.0 shape: a SQLite migration and a new optional
         # field on the persisted task envelope, next to an additive MCP field.
@@ -580,6 +654,446 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "minor")
         self.assertEqual(report["next_version"], "0.36.0")
 
+    def _write_conditional_schema(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["allOf"] = [{
+            "if": {"required": ["fields"]},
+            "then": {
+                "required": ["id"],
+                "propertyNames": {"enum": ["id", "view", "fields"]},
+                "properties": {"view": {"type": "string"}},
+            },
+            "else": {"required": ["id"]},
+        }]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add conditional contract [ORB-53] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+    def _assert_conditional_change_is_breaking(self, mutate, detail):
+        self._write_conditional_schema()
+        tools = self.repo.mcp()
+        mutate(tools[0]["inputSchema"]["allOf"][0])
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Change conditional contract [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(self.signals(report), {("ORB-54", "mcp-schema", detail)})
+        self.assertEqual(report["bump"], "minor")
+
+    def test_conditional_then_required_decides_minor(self):
+        self._assert_conditional_change_is_breaking(
+            lambda branch: branch["then"]["required"].append("view"),
+            "`orbit_task_show` property `inputSchema[then].view` newly required")
+
+    def test_conditional_else_required_decides_minor(self):
+        self._assert_conditional_change_is_breaking(
+            lambda branch: branch["else"]["required"].append("view"),
+            "`orbit_task_show` property `inputSchema[else].view` newly required")
+
+    def test_moving_root_required_into_existing_else_decides_patch(self):
+        self._write_conditional_schema()
+        tools = self.repo.mcp()
+        # `id` was required of every request at the root; now only the else
+        # branch requires it, so every former request still validates.
+        tools[0]["inputSchema"]["required"] = [
+            name for name in tools[0]["inputSchema"]["required"] if name != "id"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Move id requirement into else [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
+    def test_new_requirement_in_else_stays_minor_when_root_did_not_require_it(self):
+        self._write_conditional_schema()
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["allOf"][0]["else"]["required"].append("view")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Require view in else [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(self.signals(report), {
+            ("ORB-54", "mcp-schema",
+             "`orbit_task_show` property `inputSchema[else].view` newly required")})
+        self.assertEqual(report["bump"], "minor")
+
+    def test_conditional_property_names_enum_drop_decides_minor(self):
+        self._assert_conditional_change_is_breaking(
+            lambda branch: branch["then"]["propertyNames"]["enum"].remove("view"),
+            "`orbit_task_show` `inputSchema{allOf0}[then][propertyNames]` "
+            'enum value "view" removed')
+
+    def test_conditional_then_property_removal_decides_minor(self):
+        self._assert_conditional_change_is_breaking(
+            lambda branch: branch["then"]["properties"].pop("view"),
+            "`orbit_task_show` property `inputSchema{allOf0}[then].view` "
+            "removed or renamed")
+
+    def test_conditional_additive_changes_decide_patch(self):
+        self._write_conditional_schema()
+        tools = self.repo.mcp()
+        branch = tools[0]["inputSchema"]["allOf"][0]
+        branch["then"]["propertyNames"]["enum"].append("limit")
+        branch["then"]["required"] = []
+        branch["if"]["required"].append("view")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Relax conditional contract [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
+    def _write_guarded_request_schema(self):
+        # Shape of orbit_task_add: a request_id-mode `then`, and an `else`
+        # that demands `complexity`, which neither the root nor `then` does.
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["allOf"] = [{
+            "if": {"required": ["request_id"]},
+            "then": {"required": ["id", "view"]},
+            "else": {"required": ["id", "complexity"]},
+        }]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add guarded request contract [ORB-53] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+    def test_conditional_if_edit_into_stricter_else_decides_minor(self):
+        self._write_guarded_request_schema()
+        tools = self.repo.mcp()
+        # `{id, request_id, view}` was valid; with `crew` also selecting the
+        # `then` branch it now falls into `else` and lacks `complexity`.
+        tools[0]["inputSchema"]["allOf"][0]["if"]["required"].append("crew")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Narrow guarded request selector [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(self.signals(report), {(
+            "ORB-54", "mcp-schema",
+            "`orbit_task_show` `inputSchema{allOf0}` conditional `if` edited: "
+            "instances it moves into `else` meet a stricter branch and now "
+            "requires `complexity`")})
+        self.assertEqual(report["bump"], "minor")
+
+    def test_conditional_if_edit_into_stricter_then_decides_minor(self):
+        self._write_guarded_request_schema()
+        tools = self.repo.mcp()
+        # Dropping the selector name sends requests without `request_id` to
+        # `then`, which demands `view`.
+        tools[0]["inputSchema"]["allOf"][0]["if"] = {"required": []}
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Widen guarded request selector [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual({detail for _, _, detail in self.signals(report)}, {
+            "`orbit_task_show` `inputSchema{allOf0}` conditional `if` edited: "
+            "instances it moves into `then` meet a stricter branch and now "
+            "requires `view`"})
+
+    def test_conditional_selector_only_edit_into_looser_else_stays_patch(self):
+        self._write_conditional_schema()
+        tools = self.repo.mcp()
+        # Requests that left `then` land in `else`, which asks only for the
+        # root-required `id`, so nothing previously valid is rejected.
+        tools[0]["inputSchema"]["allOf"][0]["if"]["required"].append("view")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Narrow conditional selector [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
+    def _write_nested_payload_conditional(self, then_payload, else_payload):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["allOf"] = [{
+            "if": {"required": ["a"]},
+            "then": {"properties": {"payload": then_payload}},
+            "else": {"properties": {"payload": else_payload}},
+        }]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add nested payload conditional [ORB-53] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+        tools[0]["inputSchema"]["allOf"][0]["if"]["required"].append("c")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Narrow nested payload selector [ORB-54] (#2)")
+        return self.report()
+
+    def test_conditional_if_edit_into_nested_required_else_decides_minor(self):
+        # `{a, payload: {}}` was valid; with `c` also selecting `then` it falls
+        # into `else` and its payload now lacks `b`.
+        report = self._write_nested_payload_conditional({}, {"required": ["b"]})
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual([(s["task"], s["signal"]) for s in report["signals"]],
+                         [("ORB-54", "mcp-schema")])
+
+    def test_conditional_if_edit_between_equal_nested_requirements_stays_patch(self):
+        report = self._write_nested_payload_conditional(
+            {"required": ["b"]}, {"required": ["b"]})
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
+    def test_conditional_if_edit_into_weaker_nested_required_else_stays_patch(self):
+        # Requests that have `a` and lack `c` leave `then`, which requires
+        # payload `b` and `d`, and land in `else`, which requires only `b`.
+        report = self._write_nested_payload_conditional(
+            {"required": ["b", "d"]}, {"required": ["b"]})
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_conditional_if_edit_into_stricter_nested_required_else_decides_minor(self):
+        # `{a, payload: {b}}` was valid under `then`. With `c` also selecting
+        # `then` it falls into `else` and its payload now lacks `d`.
+        report = self._write_nested_payload_conditional(
+            {"required": ["b"]}, {"required": ["b", "d"]})
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+        self.assertEqual(self.signals(report), {(
+            "ORB-54", "mcp-schema",
+            "`orbit_task_show` `inputSchema{allOf0}` conditional `if` edited: "
+            "instances it moves into `else` meet a stricter branch")})
+
+    def _assert_selector_edit_into_else_is_minor(self, report):
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(self.signals(report), {(
+            "ORB-54", "mcp-schema",
+            "`orbit_task_show` `inputSchema{allOf0}` conditional `if` edited: "
+            "instances it moves into `else` meet a stricter branch")})
+
+    def test_conditional_if_edit_into_const_literal_else_decides_minor(self):
+        # A payload equal to `{required: [b, d]}` passed `then`. With `c` also
+        # selecting `then` it falls into `else`, whose const object is
+        # `{required: [b]}`: literal equality rejects the payload.
+        report = self._write_nested_payload_conditional(
+            {"const": {"required": ["b", "d"]}}, {"const": {"required": ["b"]}})
+        self._assert_selector_edit_into_else_is_minor(report)
+
+    def test_conditional_if_edit_into_enum_literal_else_decides_minor(self):
+        # Same shape as the const case, with the object as one enum member.
+        report = self._write_nested_payload_conditional(
+            {"enum": [{"required": ["b", "d"]}]}, {"enum": [{"required": ["b"]}]})
+        self._assert_selector_edit_into_else_is_minor(report)
+
+    def test_conditional_if_edit_into_max_contains_branch_decides_minor(self):
+        # `[{b, d}, {b}]` matched `then`'s `contains` on one item only. In
+        # `else`, the weaker `contains` matches both items and breaks
+        # `maxContains: 1`.
+        report = self._write_nested_payload_conditional(
+            {"type": "array", "contains": {"required": ["b", "d"]}, "maxContains": 1},
+            {"type": "array", "contains": {"required": ["b"]}, "maxContains": 1})
+        self._assert_selector_edit_into_else_is_minor(report)
+
+    def _commit_added_payload_then(self, then_required):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["properties"]["payload"] = {"required": ["b"]}
+        tools[0]["inputSchema"]["allOf"] = [{
+            "if": {"required": ["a"]},
+            "else": {"properties": {"payload": {"required": []}}},
+        }]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Require payload b at the root [ORB-53] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+        tools[0]["inputSchema"]["allOf"][0]["then"] = {
+            "properties": {"payload": {"required": then_required}},
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add then payload requirement [ORB-54] (#2)")
+        return self.report()
+
+    def test_added_then_repeating_enclosing_nested_requirement_stays_patch(self):
+        report = self._commit_added_payload_then(["b"])
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_added_then_with_new_nested_requirement_decides_minor(self):
+        report = self._commit_added_payload_then(["c"])
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(self.signals(report), {(
+            "ORB-54", "mcp-schema",
+            "`orbit_task_show` `inputSchema{allOf0}` conditional `then` branch added")})
+
+    def test_adding_conditional_contract_decides_minor(self):
+        self._write_guarded_request_schema()
+        report = self.report("--range", "v0.35.0~1..v0.35.0")
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual([(s["task"], s["signal"]) for s in report["signals"]],
+                         [("ORB-53", "mcp-schema")])
+
+    def test_allof_reorder_and_moving_shared_branch_requirement_to_root_stay_patch(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {
+            "type": "object",
+            "allOf": [
+                {"if": {"required": ["fields"]},
+                 "then": {"required": ["id", "view"]},
+                 "else": {"required": ["id", "view"]}},
+                {"properties": {"id": {"type": "string"}, "view": {"type": "string"},
+                                "fields": {"type": "array"}}},
+            ],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Prepare allOf conditional baseline [ORB-53] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        tools[0]["inputSchema"] = {
+            "type": "object",
+            "required": ["id", "view"],
+            "allOf": [
+                {"properties": {"id": {"type": "string"}, "view": {"type": "string"},
+                                "fields": {"type": "array"}}},
+                {"if": {"required": ["fields"]},
+                 "then": {},
+                 "else": {}},
+            ],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Reorder allOf and hoist shared requirement [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
+    def _write_sibling_conditional_baseline(self, first_then):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {
+            "type": "object",
+            "allOf": [
+                {"if": {"required": ["a"]}, "then": first_then},
+                {"if": {"required": ["b"]}, "then": {}},
+            ],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add sibling conditionals [ORB-53] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+        return tools
+
+    def test_sibling_selector_does_not_guarantee_edited_then_requirement(self):
+        # `{"b": 0}` was valid; the second arm is selected by `b` alone, so
+        # the first arm's selector on `a` guarantees nothing there.
+        tools = self._write_sibling_conditional_baseline({})
+        tools[0]["inputSchema"]["allOf"][1]["then"] = {"required": ["a"]}
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Require a in the b arm [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(self.signals(report), {
+            ("ORB-54", "mcp-schema",
+             "`orbit_task_show` property `inputSchema[then].a` newly required")})
+        self.assertEqual(report["bump"], "minor")
+
+    def test_false_sibling_then_does_not_mask_edited_then_requirement(self):
+        # The first arm's `false` only rejects requests carrying `a`; `{"b": 0}`
+        # was valid and now lacks `c`.
+        tools = self._write_sibling_conditional_baseline(False)
+        tools[0]["inputSchema"]["allOf"][1]["then"] = {"required": ["c"]}
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Require c in the b arm [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(self.signals(report), {
+            ("ORB-54", "mcp-schema",
+             "`orbit_task_show` property `inputSchema[then].c` newly required")})
+        self.assertEqual(report["bump"], "minor")
+
+    def test_reordering_arms_around_a_false_then_stays_patch(self):
+        tools = self._write_sibling_conditional_baseline(False)
+        tools[0]["inputSchema"]["allOf"].reverse()
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Reorder arms around a false then [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
+    def test_reordered_siblings_with_own_selector_requirement_stay_patch(self):
+        tools = self._write_sibling_conditional_baseline({})
+        arms = tools[0]["inputSchema"]["allOf"]
+        arms[1]["then"] = {"required": ["b"]}
+        arms.reverse()
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Reorder arms and require b under b [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
+    def test_unreachable_literal_conditional_arms_stay_patch_and_reachable_decide_minor(self):
+        # Changes inside `then` under `if: false` or `else` under `if: true`
+        # (including alongside another allOf conditional sharing `[then]`/`[else]`)
+        # cannot reject any input and must stay patch with no MCP signal.
+        unreachable_cases = (
+            ("false-then-required", {"if": False, "then": {}}, {"if": False, "then": {"required": ["a"]}}),
+            ("false-then-type", {"if": False, "then": {}}, {"if": False, "then": {"type": "string"}}),
+            ("false-then-false", {"if": False, "then": {"type": "string"}}, {"if": False, "then": False}),
+            ("true-else-required", {"if": True, "else": {}}, {"if": True, "else": {"required": ["a"]}}),
+            ("empty-if-else-required", {"if": {}, "else": {}}, {"if": {}, "else": {"required": ["a"]}}),
+            (
+                "allof-sibling-false-then-required",
+                {"allOf": [{"if": False, "then": {}}, {"if": {"required": ["x"]}, "then": {}}]},
+                {"allOf": [{"if": False, "then": {"required": ["a"]}}, {"if": {"required": ["x"]}, "then": {}}]},
+            ),
+            (
+                "allof-sibling-true-else-required",
+                {"allOf": [{"if": True, "else": {}}, {"if": {"required": ["x"]}, "else": {}}]},
+                {"allOf": [{"if": True, "else": {"required": ["a"]}}, {"if": {"required": ["x"]}, "else": {}}]},
+            ),
+        )
+        for label, before, after in unreachable_cases:
+            with self.subTest(kind="unreachable", label=label):
+                self.assertTrue(schema_accepts_instance(before, {}))
+                self.assertTrue(schema_accepts_instance(after, {}))
+                tools = self.repo.mcp()
+                tools[0]["inputSchema"] = before
+                self.repo.write_mcp(tools)
+                self.repo.commit("chore: prepare unreachable conditional arm [ORB-26158]")
+                self.repo.git("tag", "-f", "v0.35.0")
+                tools[0]["inputSchema"] = after
+                self.repo.write_mcp(tools)
+                self.repo.commit("feat: edit unreachable conditional arm [ORB-26158]")
+                report = self.report()
+                self.assertEqual(report["signals"], [])
+                self.assertEqual(report["bump"], "patch")
+
+        # The same constraint edit in the reachable arm (or flipping `if` from
+        # false to true so the constrained `then` becomes reachable) rejects `{}`
+        # and must emit an MCP schema signal and recommend minor.
+        reachable_cases = (
+            (
+                "false-else-required",
+                {"if": False, "else": {}},
+                {"if": False, "else": {"required": ["a"]}},
+                "`orbit_task_show` property `inputSchema[else].a` newly required",
+            ),
+            (
+                "true-then-required",
+                {"if": True, "then": {}},
+                {"if": True, "then": {"required": ["a"]}},
+                "`orbit_task_show` property `inputSchema[then].a` newly required",
+            ),
+            (
+                "false-to-true-exposes-then-required",
+                {"if": False, "then": {"required": ["a"]}},
+                {"if": True, "then": {"required": ["a"]}},
+                "`orbit_task_show` `inputSchema` conditional `if` edited: "
+                "instances it moves into `then` meet a stricter branch and now requires `a`",
+            ),
+        )
+        for label, before, after, detail in reachable_cases:
+            with self.subTest(kind="reachable", label=label):
+                self.assertTrue(schema_accepts_instance(before, {}))
+                self.assertFalse(schema_accepts_instance(after, {}))
+                tools = self.repo.mcp()
+                tools[0]["inputSchema"] = before
+                self.repo.write_mcp(tools)
+                self.repo.commit("chore: prepare reachable conditional arm [ORB-26158]")
+                self.repo.git("tag", "-f", "v0.35.0")
+                tools[0]["inputSchema"] = after
+                self.repo.write_mcp(tools)
+                self.repo.commit("feat: edit reachable conditional arm [ORB-26158]")
+                report = self.report()
+                self.assertEqual(report["bump"], "minor")
+                self.assertEqual(self.signals(report), {("ORB-26158", "mcp-schema", detail)})
+
+    def test_help_removal_is_found_when_repo_is_a_subdirectory(self):
+        self.repo.write("tools/note.txt", "x\n")
+        self.repo.remove(f"{GOLDENS}/task/show.txt")
+        self.repo.commit("feat: Remove task show [ORB-55] (#1)")
+        report = json.loads(subprocess.run(
+            [sys.executable, str(SCRIPT), "--repo", str(self.repo.root / "tools"),
+             "--offline", "--json"],
+            env=git_environment(self.repo.env), capture_output=True, text=True,
+            timeout=self_test_hang.HANG_CEILING_SECONDS, check=True).stdout)
+        self.assertIn(("ORB-55", "cli-help"),
+                      {(s["task"], s["signal"]) for s in report["signals"]})
+
     def test_front_inserted_anyof_alternative_is_additive(self):
         # An inserted anyOf branch only admits input: {"view", "fields"} still
         # matches, so the decision stays patch.
@@ -653,6 +1167,41 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "patch")
         self.assertEqual(report["signals"], [])
 
+    def test_mcp_output_type_widening_and_equivalent_rewrite(self):
+        tools = self.repo.mcp()
+        tools[0]["outputSchema"] = {"type": "object", "properties": {
+            "payload": {"type": "integer"}}}
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare output type fixture [ORB-64]")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        tools[0]["outputSchema"]["properties"]["payload"]["type"] = "number"
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: widen output type [ORB-65]")
+        report = self.report()
+        self.assertEqual(report["bump"], "minor")
+        self.assertIn(("ORB-65", "mcp-schema",
+                       '`orbit_task_show` `outputSchema.payload` type "integer" → "number"'),
+                      self.signals(report))
+
+        self.repo.git("tag", "-f", "v0.35.0")
+        tools[0]["outputSchema"]["properties"]["payload"]["type"] = ["integer", "number"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: rewrite equivalent output type [ORB-66]")
+        report = self.report()
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["signals"], [])
+
+        self.repo.git("tag", "-f", "v0.35.0")
+        tools[0]["inputSchema"]["properties"]["id"]["type"] = "integer"
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: narrow input type [ORB-67]")
+        report = self.report()
+        self.assertEqual(report["bump"], "minor")
+        self.assertIn(("ORB-67", "mcp-schema",
+                       '`orbit_task_show` `inputSchema.id` type "string" → "integer"'),
+                      self.signals(report))
+
     def test_removing_type_inside_oneof_decides_minor_with_additive_controls(self):
         tools = self.repo.mcp()
         tools[0]["inputSchema"] = {"oneOf": [{"type": "string"}, {"type": "integer"}]}
@@ -684,6 +1233,41 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         report = self.report()
         self.assertEqual(report["bump"], "patch")
         self.assertEqual(report["signals"], [])
+
+    def test_conditional_selector_edit_inside_oneof_needs_a_constraining_arm(self):
+        # With empty `then` and no `else` the branch accepts every instance in
+        # both revisions, so moving the selector changes nothing (ORB-26156).
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {"oneOf": [
+            {"if": {"required": ["a"]}, "then": {}}, {"type": "string"}]}
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare unconstrained oneOf conditional [ORB-26156]")
+        self.repo.git("tag", "-f", "v0.35.0")
+        tools[0]["inputSchema"]["oneOf"][0]["if"]["required"] = ["b"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Move unconstrained selector [ORB-26157]")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
+        # A constrained arm makes the selector decide which instances are held
+        # to it: {"a": 1} matched only the second branch before; once the
+        # selector also needs `b` the first branch accepts it too, so oneOf
+        # rejects it.
+        tools[0]["inputSchema"]["oneOf"] = [
+            {"type": "object", "if": {"required": ["a"]}, "then": {"required": ["c"]}},
+            {"type": "object", "required": ["a"]},
+        ]
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare constrained oneOf conditional [ORB-26158]")
+        self.repo.git("tag", "-f", "v0.35.0")
+        tools[0]["inputSchema"]["oneOf"][0]["if"]["required"] = ["a", "b"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Narrow constrained selector [ORB-26159]")
+        report = self.report()
+        self.assertEqual(report["bump"], "minor")
+        self.assertIn("conditional `if` edited inside oneOf alternative",
+                      "\n".join(sig["detail"] for sig in report["signals"]))
 
     def test_oneof_branch_relaxations_decide_minor_but_root_relaxations_stay_patch(self):
         tools = self.repo.mcp()
@@ -1243,6 +1827,113 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "minor")
         self.assertEqual(report["next_version"], "0.36.0")
 
+    def _write_independent_anyof_pair(self, members):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {"allOf": members}
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Prepare independent anyOf members [ORB-92] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+        return tools
+
+    def test_independent_anyof_sibling_under_allof_decides_by_direction(self):
+        # Each allOf member is its own conjunct, so a surviving anyOf at the
+        # same instance location is not the deleted sibling's counterpart.
+        first = {"anyOf": [{"type": "string"}, {"type": "boolean"}]}
+        second = {"anyOf": [{"type": "string"}, {"type": "integer"}]}
+        tools = self._write_independent_anyof_pair([first, second])
+        tools[0]["inputSchema"]["allOf"] = [first]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Drop the second anyOf member [ORB-93] (#2)")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
+        self.repo.git("tag", "-f", "v0.35.0")
+        tools[0]["inputSchema"]["allOf"] = [first, second]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add the second anyOf member [ORB-94] (#3)")
+        report = self.report()
+        self.assertEqual(self.signals(report), {
+            ("ORB-94", "mcp-schema", "`orbit_task_show` `inputSchema` anyOf constraint added")})
+        self.assertEqual(report["bump"], "minor")
+
+    def test_branch_removed_from_independent_anyof_sibling_decides_minor(self):
+        first = {"anyOf": [{"type": "string"}, {"type": "boolean"}]}
+        second = {"anyOf": [{"type": "string"}, {"type": "integer"}]}
+        tools = self._write_independent_anyof_pair([first, second])
+        tools[0]["inputSchema"]["allOf"] = [first, {"anyOf": [{"type": "string"}]}]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Narrow the second anyOf member [ORB-93] (#2)")
+        report = self.report()
+        self.assertEqual(self.signals(report), {
+            ("ORB-93", "mcp-schema",
+             "`orbit_task_show` `inputSchema{allOf1}{anyOf1}` anyOf alternative removed")})
+        self.assertEqual(report["bump"], "minor")
+
+    def test_reordering_independent_anyof_members_stays_patch(self):
+        first = {"anyOf": [{"type": "string"}, {"type": "boolean"}]}
+        second = {"anyOf": [{"type": "string"}, {"type": "integer"}]}
+        tools = self._write_independent_anyof_pair([first, second])
+        tools[0]["inputSchema"]["allOf"] = [second, first]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Reorder anyOf members [ORB-93] (#2)")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
+    def test_wrapping_bare_anyof_into_allof_with_sibling_decides_minor(self):
+        # Wrapping a bare anyOf into allOf alongside a new independent sibling
+        # rejects values the original anyOf accepted (such as true/false).
+        first = {"anyOf": [{"type": "string"}, {"type": "boolean"}]}
+        second = {"anyOf": [{"type": "string"}, {"type": "integer"}]}
+        for order, members in (("wrapped first", [first, second]),
+                               ("sibling first", [second, first])):
+            with self.subTest(order=order):
+                tools = self.repo.mcp()
+                tools[0]["inputSchema"] = first
+                self.repo.write_mcp(tools)
+                self.repo.commit("feat: Prepare bare anyOf [ORB-95] (#1)")
+                self.repo.git("tag", "-f", "v0.35.0")
+
+                tools[0]["inputSchema"] = {"allOf": members}
+                self.repo.write_mcp(tools)
+                self.repo.commit("feat: Wrap anyOf into allOf with sibling [ORB-96] (#2)")
+                report = self.report()
+                self.assertEqual(self.signals(report), {
+                    ("ORB-96", "mcp-schema",
+                     "`orbit_task_show` `inputSchema` anyOf constraint added")})
+                self.assertEqual(report["bump"], "minor")
+
+        # Unwrapping back to the single bare anyOf relaxes the schema (patch),
+        # while unwrapping and dropping an alternative still decides minor.
+        self.repo.git("tag", "-f", "v0.35.0")
+        tools[0]["inputSchema"] = first
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Unwrap allOf back to bare anyOf [ORB-97] (#3)")
+        unwrapped = self.report()
+        self.assertEqual(unwrapped["signals"], [])
+        self.assertEqual(unwrapped["bump"], "patch")
+
+        tools = self._write_independent_anyof_pair([first, second])
+        tools[0]["inputSchema"] = {"anyOf": [{"type": "boolean"}]}
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Unwrap and narrow surviving anyOf [ORB-98] (#4)")
+        narrowed = self.report()
+        self.assertEqual(self.signals(narrowed), {
+            ("ORB-98", "mcp-schema",
+             "`orbit_task_show` `inputSchema{allOf0}{anyOf0}` anyOf alternative removed")})
+        self.assertEqual(narrowed["bump"], "minor")
+
+        # Replacing one allOf sibling with a new oneOf must not suppress both.
+        tools = self._write_independent_anyof_pair([first, second])
+        tools[0]["inputSchema"]["allOf"] = [first, {"oneOf": [{"type": "integer"}]}]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Replace second anyOf member with oneOf [ORB-99] (#5)")
+        replaced = self.report()
+        self.assertEqual(replaced["bump"], "minor")
+        self.assertEqual([(s["task"], s["signal"]) for s in replaced["signals"]][:1],
+                         [("ORB-99", "mcp-schema")])
+
     def test_removing_nested_input_mcp_applicator_is_additive(self):
         tools = self.repo.mcp()
         options = {
@@ -1644,6 +2335,27 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         fallback = self.report("--range", "v0.35.0..HEAD", tasks={})
         self.assertEqual(fallback["task_source"], "commit-subjects")
         self.assertEqual(fallback["detected_untagged"], ["ORB-31"])
+
+    def test_bundle_commits_attribute_every_task_id(self):
+        # A bundle's second id lives only in its Orbit-Task trailer (the
+        # subject had no room), and an older subject brackets a comma list:
+        # each tagged task still reaches the report.
+        self.repo.commit("feat: A bundle of two changes [ORB-40] (#5)\n\n"
+                         "- ORB-40: first\n- ORB-41: second\n\n"
+                         "Orbit-Task: ORB-40\nOrbit-Task: ORB-41")
+        self.repo.commit("feat(dashboard): drain card [ORB-42, ORB-43] (#6)")
+        tagged = {"tags": ["breaking-change"],
+                  "execution_summary": "Breaking: x removed → use y"}
+        tasks = {task_id: dict(tagged, title=task_id)
+                 for task_id in ("ORB-40", "ORB-41", "ORB-42", "ORB-43")}
+
+        report = self.report("--range", "v0.35.0..HEAD", tasks=tasks)
+        self.assertEqual(report["task_source"], "orbit")
+        self.assertEqual(report["tasks_unread"], [])
+        self.assertEqual(sorted(task["id"] for task in report["breaking"]),
+                         ["ORB-40", "ORB-41", "ORB-42", "ORB-43"])
+        self.assertEqual(report["tagged_without_signal"],
+                         ["ORB-40", "ORB-41", "ORB-42", "ORB-43"])
 
     def test_each_mechanical_signal(self):
         # A subcommand's copy of a global option moves to the condensed

@@ -137,7 +137,7 @@ fn settle_merged_settles_only_when_pr_merged() {
             let bin = fixture.path("bin");
             std::fs::create_dir_all(&bin).unwrap();
             let script = format!(
-                "#!/bin/sh\ncase \"$*\" in\n*\"api user\"*) echo orbit-bot ;;\n*\"pr view 42\"*) cat <<'JSON'\n{{\"number\":42,\"state\":\"MERGED\",\"headRefName\":\"orbit/{merged_id}-47642870\",\"baseRefName\":\"agent-main\",\"headRefOid\":\"9b4c1e0f2d3a4b5c6d7e8f9091a2b3c4d5e6f708\",\"body\":\"Delivers {merged_id}.\",\"author\":{{\"login\":\"orbit-bot\"}},\"mergeCommit\":{{\"oid\":\"03f7af7d6a1b2c3d4e5f60718293a4b5c6d7e8f9\"}}}}\nJSON\n;;\n*\"pr view 43\"*) cat <<'JSON'\n{{\"number\":43,\"state\":\"OPEN\",\"headRefName\":\"orbit/{open_id}-47642870\",\"baseRefName\":\"agent-main\",\"body\":\"Delivers {open_id}.\",\"author\":{{\"login\":\"orbit-bot\"}}}}\nJSON\n;;\n*) echo '[]' ;;\nesac\n"
+                "#!/bin/sh\ncase \"$*\" in\n*\"api user\"*) echo orbit-bot ;;\n*\"pr view 42\"*) cat <<'JSON'\n{{\"number\":42,\"url\":\"https://github.com/owner/repository/pull/42\",\"state\":\"MERGED\",\"mergedAt\":\"2026-11-20T02:41:33Z\",\"headRefName\":\"orbit/{merged_id}-47642870\",\"baseRefName\":\"agent-main\",\"headRefOid\":\"9b4c1e0f2d3a4b5c6d7e8f9091a2b3c4d5e6f708\",\"body\":\"Delivers {merged_id}.\",\"author\":{{\"login\":\"orbit-bot\"}},\"mergeCommit\":{{\"oid\":\"03f7af7d6a1b2c3d4e5f60718293a4b5c6d7e8f9\"}}}}\nJSON\n;;\n*\"pr view 43\"*) cat <<'JSON'\n{{\"number\":43,\"state\":\"OPEN\",\"headRefName\":\"orbit/{open_id}-47642870\",\"baseRefName\":\"agent-main\",\"body\":\"Delivers {open_id}.\",\"author\":{{\"login\":\"orbit-bot\"}}}}\nJSON\n;;\n*) echo '[]' ;;\nesac\n"
             );
             std::fs::write(bin.join("gh"), script).unwrap();
             use std::os::unix::fs::PermissionsExt;
@@ -167,6 +167,10 @@ fn settle_merged_settles_only_when_pr_merged() {
                 .unwrap();
             assert_eq!(body["status"], json!("done"));
             assert_eq!(body["pr_number"], json!(42));
+            assert_eq!(
+                body["merge_commit"],
+                json!("03f7af7d6a1b2c3d4e5f60718293a4b5c6d7e8f9")
+            );
             assert_eq!(
                 fixture.runtime.get_task(&merged_id).unwrap().status,
                 TaskStatus::Done

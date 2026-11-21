@@ -1,17 +1,15 @@
 //! Observational runtime sources. Never use run listing/show or resume planners
 //! here: those entry points may reconcile owners or recover coordination journals.
 use super::sources::{
-    AttentionCandidates, SharedOpenTasks, attention_reason, attention_task, workspace_degraded,
+    AttentionCandidates, AttentionSourceContext, SharedOpenTasks, attention_reason, attention_task,
+    workspace_degraded,
 };
 use crate::{
     OrbitRuntime,
     application::job::{self, RunOwnerLiveness},
 };
 use chrono::{DateTime, Duration, Utc};
-use orbit_common::{
-    OrbitError,
-    governance::attention::{cursor, filter::AttentionFilter},
-};
+use orbit_common::{OrbitError, governance::attention::cursor};
 use orbit_store::contracts::{ClaimInspection, JobRunQuery, LocalPullPhase};
 use orbit_types::{
     task::Task,
@@ -363,15 +361,18 @@ impl RuntimeAttention<'_> {
                     }
                     _ => continue,
                 };
-                let (claimed, held) = self.run_claim_state(run)?;
-                let high = if kind == AttentionKind::RunFailed {
-                    claimed
-                } else {
-                    held
-                };
+                // `claimed_leaf` is "this run was a claimed leaf", including
+                // after the claim settled. `held` is a live claim only.
+                // Severity and `held_claim` follow the live claim: a settled
+                // claim (`failed`, `landed`, `revoked`) must not read as one
+                // that still needs recovery. Resume advice stays on
+                // `claimed_leaf`; settlement and recovery are unchanged.
+                let (claimed_leaf, held) = self.run_claim_state(run)?;
+                let high = held;
                 let mut next = self.run_next(
                     run,
-                    kind == AttentionKind::RunFailed && self.run_resume_advice(run, claimed)?,
+                    kind == AttentionKind::RunFailed
+                        && self.run_resume_advice(run, claimed_leaf)?,
                 );
                 if kind == AttentionKind::RunFailed {
                     next.also.push(AttentionNext {
@@ -418,7 +419,10 @@ impl RuntimeAttention<'_> {
                     Some(_) => "Run exceeds the configured wall-clock bound".into(),
                     None => format!("Run ended {}", run.state),
                 });
-                let mut detail = json!({"job_id": run.job_id, "state": run.state, "cause": cause, "held_claim": high});
+                let mut detail = json!({"job_id": run.job_id, "state": run.state, "cause": cause, "held_claim": held});
+                if kind == AttentionKind::RunFailed {
+                    detail["claimed_leaf"] = json!(claimed_leaf);
+                }
                 if let Some(deadline) = declared_deadline {
                     detail["declared_deadline"] =
                         json!(deadline.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
@@ -522,17 +526,17 @@ fn parse_claim_time(time: &str) -> Result<DateTime<Utc>, OrbitError> {
         .map_err(|error| OrbitError::Store(format!("invalid claim timestamp: {error}")))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn read_runtime_attention(
-    runtime: &OrbitRuntime,
-    workspace: &AttentionWorkspace,
-    host: &AttentionHost,
-    filter: &AttentionFilter,
-    now: DateTime<Utc>,
+    context: &AttentionSourceContext<'_>,
     operator: bool,
     candidates: &mut AttentionCandidates,
     open_tasks: &SharedOpenTasks,
 ) {
+    let runtime = context.runtime;
+    let workspace = context.workspace;
+    let host = context.host;
+    let filter = context.filter;
+    let now = context.now;
     let kinds = RUNTIME_KINDS
         .into_iter()
         .filter(|kind| filter.selected(*kind))
@@ -720,7 +724,28 @@ pub(super) fn read_runtime_attention(
             ));
         } else {
             match result {
-                Ok(items) => candidates.items.extend(items),
+                Ok(items) => {
+                    // A replica has no read of the owner's task status:
+                    // `task_status_index_for` is empty here, and the local
+                    // task copy is not authoritative, so a terminal owner
+                    // task cannot suppress the item. The run itself is
+                    // authoritative on this host, so the item stays and the
+                    // kind says the terminal check could not be applied.
+                    // Candidate reads included: federated attention is the
+                    // view that was listing these as unqualified failures.
+                    if !owner
+                        && kind == AttentionKind::RunFailed
+                        && items.iter().any(|item| item.refs["task_id"].is_string())
+                    {
+                        candidates.degraded.push(workspace_degraded(
+                            workspace,
+                            kind.as_str(),
+                            "source_unavailable",
+                            "Task records on a replica are not authoritative; read the workspace owner",
+                        ));
+                    }
+                    candidates.items.extend(items);
+                }
                 Err(error) => candidates.degraded.push(workspace_degraded(
                     workspace,
                     kind.as_str(),

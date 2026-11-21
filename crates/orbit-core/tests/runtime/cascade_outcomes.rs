@@ -304,15 +304,12 @@ fn a_leaf_held_on_a_red_base_still_holds_its_task_in_the_backlog() {
 fn a_cancelled_leaf_cancels_the_gate_and_auto_parents_that_wait_on_it() {
     let fixture = Fixture::new();
     let leaf = fixture.queued(json!({}));
-    fixture
-        .jobs
-        .finalize_job_run(&leaf, JobRunState::Cancelled, Utc::now(), None)
-        .unwrap();
+    fixture.runtime.cancel_job_run(&leaf).unwrap();
+    assert_eq!(fixture.stored(&leaf).state, JobRunState::Cancelled);
 
     let gate = fixture.guard(None, json!([{ "status": "cancelled", "run_id": leaf }]));
     assert_eq!(gate.state, JobRunState::Cancelled, "{:?}", gate.steps);
     assert!(step_codes(&gate).is_empty(), "{:?}", gate.steps);
-    assert!(!failure_text(&gate).is_empty(), "{:?}", gate.steps);
     assert_eq!(fixture.state(&gate.run_id).root_cause, None);
 
     let auto = fixture.guard(
@@ -321,13 +318,57 @@ fn a_cancelled_leaf_cancels_the_gate_and_auto_parents_that_wait_on_it() {
     );
     assert_eq!(auto.state, JobRunState::Cancelled, "{:?}", auto.steps);
     assert!(step_codes(&auto).is_empty(), "{:?}", auto.steps);
-    for run in [&gate, &auto] {
+    for (run, child) in [(&gate, &leaf), (&auto, &gate.run_id)] {
         let row = job_run_to_json(run, Some(&fixture.state(&run.run_id)));
         assert!(row["error_code"].is_null(), "{row}");
-        assert!(!row["error_message"].is_null(), "{row}");
-        let counts_as_failure = matches!(row["state"].as_str(), Some("failed" | "interrupted"))
-            || (row["state"] == "cancelled" && !row["error_code"].is_null());
-        assert!(!counts_as_failure, "{row}");
+        assert!(
+            row["error_message"].is_null(),
+            "an operator-cancelled child must not count as a run failure: {row}"
+        );
+        assert!(
+            run.steps.iter().any(|step| step
+                .agent_response_json
+                .as_ref()
+                .and_then(|output| output["message"].as_str())
+                .is_some_and(|message| message.contains(child))),
+            "the stored cancellation step must still name {child}: {:?}",
+            run.steps
+        );
+        let events = fixture
+            .runtime
+            .collect_run_audit_events(&run.run_id)
+            .unwrap();
+        let finished = events
+            .iter()
+            .find(|event| {
+                matches!(
+                    event.body,
+                    orbit_core::runtime::audit::run::RunTrailBody::RunFinished { .. }
+                )
+            })
+            .expect("the cancelled parent must have a terminal audit event");
+        assert_eq!(finished.raw["outcome"], "cancelled", "{:?}", finished.raw);
+        assert!(
+            finished.raw["error_message"].is_null(),
+            "{:?}",
+            finished.raw
+        );
+        for (surface, mcp) in mcp_views(&fixture.runtime, &run.run_id) {
+            assert_eq!(mcp["state"], "cancelled", "{surface}: {mcp}");
+            assert!(mcp["error_code"].is_null(), "{surface}: {mcp}");
+            assert!(mcp["error_message"].is_null(), "{surface}: {mcp}");
+            assert!(
+                mcp["steps"].as_array().unwrap().iter().any(|step| {
+                    step["error_message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains(child))
+                        || step["agent_response_json"]["message"]
+                            .as_str()
+                            .is_some_and(|message| message.contains(child))
+                }),
+                "{surface} must still explain the cancelled child {child}: {mcp}"
+            );
+        }
     }
 
     // A failure beside the cancellation is still a failure.
@@ -339,6 +380,13 @@ fn a_cancelled_leaf_cancels_the_gate_and_auto_parents_that_wait_on_it() {
         ]),
     );
     assert_eq!(mixed.state, JobRunState::Failed, "{:?}", mixed.steps);
+    let row = job_run_to_json(&mixed, Some(&fixture.state(&mixed.run_id)));
+    assert!(
+        row["error_message"]
+            .as_str()
+            .is_some_and(|message| message.contains("cargo test failed")),
+        "{row}"
+    );
 }
 
 fn cascaded_parents_name_their_leaf_and_fold_into_one_incident() {

@@ -79,8 +79,9 @@ pub(super) fn run_admitted_step(
         Ok(StepOutcome { message, .. }) => ("failed", message.clone()),
         Err(DispatchError::ReviewEvidenceHold(_)) => ("held", None),
         Err(
-            error
-            @ (DispatchError::ForgeUnavailableHold(_) | DispatchError::DeliveryRefused { .. }),
+            error @ (DispatchError::ForgeUnavailableHold(_)
+            | DispatchError::DeliveryRefused { .. }
+            | DispatchError::FootprintUnavailable(_)),
         ) => ("held", Some(error.to_string())),
         Err(error @ DispatchError::ChildRunCancelled { .. }) => {
             ("cancelled", Some(error.to_string()))
@@ -98,6 +99,10 @@ pub(super) fn run_admitted_step(
             step_id: step.id.clone(),
             outcome: outcome_str.to_string(),
             error_message,
+            error_diagnostic: result
+                .as_ref()
+                .err()
+                .and_then(DispatchError::error_diagnostic),
         },
     );
 
@@ -147,13 +152,11 @@ pub(super) fn run_step_with_retry(
                 if outcome.success {
                     return Ok(outcome);
                 }
-                // [ORB-14269] An implementer blocker is not a flaky attempt.
-                // Another try would spend another provider invocation on a
-                // stop the agent already declared. Nor is an upgrade refusal:
-                // the next attempt meets the same installed `orbit`.
-                // Test the two classes directly: `unrepairable_failure` returns
-                // the first matching class, so a blocker whose evidence quotes
-                // another unrepairable marker would otherwise be missed here.
+                // [ORB-14269] Preserve declared blockers and upgrade refusals.
+                // A verified model refusal also makes another attempt under
+                // this step's frozen crew waste a provider invocation.
+                // Test these directly since the recovery table returns the
+                // first match and a blocker may quote another class's marker.
                 let error_code = outcome
                     .failure_code
                     .as_ref()
@@ -161,6 +164,8 @@ pub(super) fn run_step_with_retry(
                 let message = outcome.message.as_deref();
                 if orbit_types::workflow::is_task_blocked_by_agent(error_code, message)
                     || orbit_types::workflow::is_upgrade_pending(error_code, message)
+                    || outcome.failure_code
+                        == Some(orbit_types::workflow::StepFailureCode::MuseModelAccessRefused)
                 {
                     return recover_or_return_original(
                         step,

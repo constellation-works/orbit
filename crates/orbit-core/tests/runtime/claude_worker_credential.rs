@@ -67,6 +67,19 @@ fn drain_input(runtime: &OrbitRuntime) -> Value {
         .expect("the drain carries its input")
 }
 
+/// How many drain runs have been persisted, so a test can tell that an
+/// admission added its own run rather than reading back an earlier one.
+fn drain_run_count(runtime: &OrbitRuntime) -> usize {
+    runtime
+        .list_job_runs(JobRunListParams {
+            job_id: Some("workspace_auto_pipeline".to_string()),
+            limit: Some(100),
+            ..Default::default()
+        })
+        .unwrap()
+        .len()
+}
+
 fn remedy_warnings(runtime: &OrbitRuntime) -> usize {
     runtime
         .submission_notices(SubmissionKind::Drain)
@@ -99,7 +112,13 @@ fn a_drain_without_a_worker_credential_excludes_claude_crews_and_names_the_fix()
     );
 
     for writer in ["writer", "writer@high"] {
+        let before = drain_run_count(&runtime);
         admit(&runtime, &[writer.into(), "reviewers@high".into()]);
+        assert_eq!(
+            drain_run_count(&runtime),
+            before + 1,
+            "{writer}: the admission persisted its own run"
+        );
         assert_eq!(
             drain_input(&runtime)["allowed_crews"],
             json!(["reviewers@high"])

@@ -1011,7 +1011,7 @@ fn a_disallow_list_that_predates_a_mutating_tool_still_denies_it() {
 const STRUCTURED_EXHAUSTED: &str = r#"{"type":"result","subtype":"error_max_structured_output_retries","is_error":true,"terminal_reason":"structured_output_retry_exhausted","errors":["Failed to provide valid structured output after 5 attempts"],"usage":{"input_tokens":11,"output_tokens":7}}"#;
 const STRUCTURED_SIGNATURE: &str = "structured_output_retry_exhausted";
 
-fn structured_exhaustion() -> String {
+fn structured_exhaustion_with_stop_reason(stop_reason: Option<&str>) -> String {
     let tool = json!({
         "type": "assistant",
         "message": { "content": [{
@@ -1019,11 +1019,53 @@ fn structured_exhaustion() -> String {
             "input": serde_json::from_str::<Value>(VALID).unwrap(),
         }] },
     });
+    let mut terminal: Value = serde_json::from_str(STRUCTURED_EXHAUSTED).unwrap();
+    if let Some(stop_reason) = stop_reason {
+        terminal["stop_reason"] = json!(stop_reason);
+    }
     format!(
         "{}\n{}\necho 'Warning: workspace trust is not configured' >&2\nexit 1",
         reply(&tool.to_string()),
-        reply(STRUCTURED_EXHAUSTED),
+        reply(&terminal.to_string()),
     )
+}
+
+fn structured_exhaustion() -> String {
+    structured_exhaustion_with_stop_reason(None)
+}
+
+#[test]
+fn structured_output_exhaustion_with_tool_use_stop_reason_gets_bounded_correction() {
+    let first = structured_exhaustion_with_stop_reason(Some("tool_use"));
+    let fixture = Fixture::new(&first, &reply(VALID));
+    let Dispatched { outcome, .. } = fixture.dispatch(admitted(1), 30);
+
+    assert!(
+        outcome.success,
+        "invocations={}: {:?}",
+        fixture.invocations(),
+        outcome.message
+    );
+    assert_eq!(fixture.invocations(), 2, "exactly one bounded correction");
+    assert_eq!(outcome.output["summary"], "the answer");
+    assert_eq!(outcome.output["response_correction"]["rounds"], 1);
+    assert_eq!(
+        outcome.output["response_correction"]["max_rounds"], 1,
+        "tool_use does not expand the declared correction budget"
+    );
+
+    let fixture = Fixture::new(&first, &reply(VALID));
+    let outcome = fixture.dispatch(None, 30).outcome;
+    assert!(!outcome.success);
+    assert_eq!(fixture.invocations(), 1, "no policy means no correction");
+    assert!(outcome.output.get("response_correction").is_none());
+    assert!(
+        outcome
+            .message
+            .as_deref()
+            .unwrap()
+            .contains(STRUCTURED_SIGNATURE)
+    );
 }
 
 #[test]
@@ -1258,6 +1300,16 @@ fn structured_output_markers_do_not_override_other_failures_or_incomplete_eviden
             ),
         ),
         (
+            "quota hidden in errors",
+            changed(
+                "errors",
+                json!([
+                    "Failed to provide valid structured output after 5 attempts",
+                    "Usage limit reached"
+                ]),
+            ),
+        ),
+        (
             "refusal hidden in errors",
             changed(
                 "errors",
@@ -1336,6 +1388,14 @@ fn structured_output_markers_do_not_override_other_failures_or_incomplete_eviden
         (
             "refusal stop reason",
             changed("stop_reason", json!("refusal")),
+        ),
+        (
+            "other stop reason",
+            changed("stop_reason", json!("end_turn")),
+        ),
+        (
+            "contradictory provider error field",
+            changed("error", json!({ "message": "Failed to authenticate" })),
         ),
         (
             "API rejection in provider message",

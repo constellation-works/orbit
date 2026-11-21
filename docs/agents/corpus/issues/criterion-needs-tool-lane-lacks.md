@@ -17,7 +17,7 @@ Pilot `validation_tool_warnings`: `acceptance criterion requires <tool>, a gover
 
 ## Resolution
 
-Verify by source comparison, `--help` or a tool listing, not a live call. Triage proposed replacing the criterion with synthetic-log or source checks for ORB-18702 and ORB-18848; whether it was applied was not checked. Operator resolutions seen: ORB-18197 `clear` (criterion 3 proved from the diff, no tool call needed), ORB-18911 and ORB-19240 `rescope`. Do not call operator tools; state the unverifiable criterion in the summary.
+Verify by source comparison, `--help` or a tool listing, not a live call. Triage proposed offline synthetic-log or source checks for ORB-18702 and ORB-18848. ORB-18702's acceptance criteria were reworded to the offline synthetic-byte `StreamedLogCollector` sweep; ORB-18848's current criteria allow `orbit_common` `redact_all` or a complete `StreamedLogCollector` read as the public test boundary. Operator resolutions seen: ORB-18197 `clear` (criterion 3 proved from the diff, no tool call needed), ORB-18911 and ORB-19240 `rescope`. Do not call operator tools; state the unverifiable criterion in the summary.
 
 ## Fix task
 

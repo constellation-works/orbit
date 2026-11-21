@@ -75,6 +75,30 @@ and line counts stay the source counts.
 EOF, collector batch boundaries, overlong context, capped displays and ordinary
 line/step selections are covered without live GitHub access or authentication.
 
+## Log cache through the registered tool
+
+`two_windows_of_a_completed_job_download_its_log_once` and
+`a_cached_job_log_is_served_only_to_a_caller_that_may_read_it_now` read through
+the registered `github.run.logs` tool with the same isolated `gh` and disposable
+HOME and `ORBIT_ROOT`, so the shipped wiring enables and locates the cache. The
+stub serves job and run metadata only when a case writes `job_metadata` or
+`run_metadata`; the golden cases write neither and keep refusing it, and a
+`denied` file makes every later call fail as a caller that lost access. The
+tests cover one download across two windows of a completed job (plus the status
+request a warm read makes), owner-only entry permissions, the age bound, a job
+or run that is not completed (never cached), refused access after a warm fill
+(never served from the cache) and another resolved repository with unchanged run
+ID and attempt (its own entry), for both job-scoped and whole-run requests.
+Rerun-attempt keying and the secret-free cache live in
+`tests/tools/github_log_cache.rs`. `a_fresh_log_survives_a_reader_that_found_the_entry_it_replaced_expired`
+(Linux only) carries the publish-versus-expiry race: it holds the cache's own
+`<directory>.lock`, waits until `/proc/locks` shows the reader queued for it
+(it has classified the aged entry), publishes a fresh replacement, fails the
+reader's download and requires a later read to reuse the replacement. It fails
+if a removal stops re-checking that the name still holds the classified file.
+The size bound and staging-file cleanup of the cache are internal to it and have
+no public-boundary carrier.
+
 ## Carrier cost and boundary coverage
 
 Rows write `golden row start: <suite>/<fixture>` to stderr before source

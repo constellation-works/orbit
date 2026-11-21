@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: the fleet notice record, its effective state, expiry defaults, linked-task close and dedupe"
-last_validated: 2026-11-05
+last_validated: 2026-11-15
 title: Spec — Notice record and lifecycle
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: fleet-notices
 tags: [fleet-notices, spec]
 related_features: [fleet-notices, human-decision-channel]
 related_artifacts: [ORB-21207]
-last_updated: 2026-11-05
+last_updated: 2026-11-15
 ---
 
 # Spec: Notice record and lifecycle
@@ -35,14 +35,14 @@ unattended, and dedupe keeps forty agents hitting one bug from producing forty n
 | `id` | string, required | `ntc_` plus 16 lowercase hex, minted by the owner. Stable for the notice's life, including updates. |
 | `workspace` | object, required | `{id, name}` of the home workspace. Federated results add `selector`. |
 | `scope` | enum, required | `workspace` or `global` ([notice-federation](./notice-federation.md#scope)). |
-| `kind` | enum, required | `incident`, `maintenance` or `info`. |
+| `kind` | enum, required | `warn`, `incident`, `maintenance` or `info`. |
 | `title` | string, required | One line, 1–120 characters after trimming, no control characters. |
 | `body` | string | Plain text (Markdown is stored verbatim and never rendered as HTML), at most 4096 UTF-8 bytes. Control characters other than newline and tab are refused. |
 | `dedupe_key` | string, required | 1–128 characters of `[a-z0-9._:/-]`. Supplied or derived ([Dedupe](#dedupe)). |
 | `author` | object, required | `{class, crew, model, task_id, run_id, machine_id}`; `class` is `operator`, `orchestrator` or `agent` ([notice-authority](./notice-authority.md#poster-classes)). `task_id` and `run_id` are present exactly when `class` is `agent`. `crew` is the orchestrator crew for `orchestrator`, the run's crew for `agent`, absent for `operator`. |
 | `linked_task` | object | `{id, workspace_id}` of a task the notice is about, usually its fix. Same owner host as the home workspace ([notice-federation](./notice-federation.md#linked-tasks)). |
 | `close_on_linked_done` | boolean | Default `true` when `linked_task` is set. `false` keeps the notice in force after the fix lands (for example "deployed, restart your drains"). |
-| `evidence` | array | Up to 8 references, each `{type, value}` with `type` one of `task`, `run`, `friction`, `pull_request`, `url`, `commit`. Values are at most 256 characters. Stored and shown; never dereferenced by Orbit. |
+| `evidence` | array | Up to 8 references, each `{type, value}` with `type` one of `task`, `run`, `friction`, `pull_request`, `decision`, `url`, `commit`. Values are at most 256 characters. Stored and shown; never dereferenced by Orbit. |
 | `hosts` | array | Up to 32 `machine_id`s a `maintenance` notice concerns. Display and filtering only in v1; reserved for the [dispatch-hold extension](../2_design.md#7-extension-point-maintenance-dispatch-hold). Refused on other kinds. |
 | `expires_at` | RFC 3339, required | Set at post from `expires_in_hours` or an explicit instant, bounded by [Expiry](#expiry). |
 | `opened_at` | RFC 3339, required | First post. |
@@ -97,12 +97,16 @@ not bump `revision`. A post that changed a content field still makes that write 
 Every notice has an `expires_at`; there is no "never". Defaults and caps, all fixed
 ([2_design.md §6](../2_design.md#6-configuration)):
 
-| | `incident` | `maintenance` | `info` |
-|---|---|---|---|
-| Default when omitted | 72 h | 12 h | 7 d |
-| Cap, `operator` | 30 d | 30 d | 30 d |
-| Cap, `orchestrator` | 7 d | 3 d | 7 d |
-| Cap, `agent` (default = cap) | 24 h | — (refused) | 24 h |
+| | `warn` | `incident` | `maintenance` | `info` |
+|---|---|---|---|---|
+| Default when omitted | 72 h | 72 h | 12 h | 7 d |
+| Cap, `operator` | 30 d | 30 d | 30 d | 30 d |
+| Cap, `orchestrator` | 7 d | 7 d | 3 d | 7 d |
+| Cap, `agent` (default = cap) | — (refused) | 24 h | — (refused) | 24 h |
+| Resident cycle | 72 h default, 7 d cap | 24 h | — (refused) | 24 h; the status line is set to twice the heartbeat |
+
+Every post of a resident's notice renews its expiry from the time of that post
+([notice-authority](./notice-authority.md#resident-mandates)).
 
 A requested expiry beyond the poster's cap is refused (`notice_expiry_exceeds_cap`), never
 clamped silently. An expiry in the past or less than 5 minutes ahead is refused. A non-repeat

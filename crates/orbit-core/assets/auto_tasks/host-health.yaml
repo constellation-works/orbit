@@ -1,7 +1,7 @@
 schemaVersion: 1
 name: host-health
 description: Weekly doctor, service-log, Orbit version and migration findings with owner dedupe, human routing and executable resolution steps
-enabled: true
+enabled: false
 schedule:
   cron: 10 7 * * 1
 template:

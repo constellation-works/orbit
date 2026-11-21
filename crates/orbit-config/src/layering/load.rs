@@ -15,7 +15,7 @@ use crate::persistence::PersistenceConfig;
 use crate::plugin_enablement::{
     plugin_enablement_from_document, reject_global_plugin_enablement, strip_plugin_enablement,
 };
-use crate::registry::{CONFIG_KEY_REGISTRY, GLOBAL_ONLY_KEY_PREFIX, resolve_percent};
+use crate::registry::{CONFIG_KEY_REGISTRY, GLOBAL_ONLY_KEY_PREFIX, resolve_bounded_range};
 use crate::resolved::{ResolvedConfig, warn_compatibility_keys};
 
 use super::document::{empty_document, merge_tables, parse_config_document, read_config_document};
@@ -170,7 +170,7 @@ fn load_layered_resolved_with_staged(
     translate_layers(global.as_mut(), workspace.as_mut())?;
 
     let global_memory_high_percent = match global.as_ref() {
-        Some(document) => resolve_percent(
+        Some(document) => resolve_bounded_range(
             config_document::read_typed_config_value(
                 &document.value,
                 "workflow.resource_throttle.memory_high_percent",

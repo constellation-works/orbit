@@ -51,7 +51,9 @@ For the read → full-union update → verify command sequence, see
 
 `orbit.task.show` resolves `id` globally through the host task registry by
 default. Cwd, MCP initialize metadata and linked-worktree runtime identities
-are not filters. Optional `workspace` is an explicit fail-closed filter.
+are not filters. Optional `workspace` is an explicit fail-closed filter
+argument, not a projection field; `workspace` and `workspace_path` do not
+belong in `fields`.
 
 For `orbit.task.show`, `orbit.task.add` and `orbit.task.update`, MCP accepts
 `fields` as an array of field names, or `field` as a single-field alias.
@@ -164,7 +166,11 @@ pagination for a projection.
   holds no context lock. A single-slot run, an explicit ship and owner pull
   admit such a backlog task on the next pass; a drain or ship with more than
   one slot waits for the task pilot (`awaiting_footprint`), then runs it only
-  alone (`awaiting_exclusive_slot`). Declared selectors keep their existing
+  alone (`awaiting_exclusive_slot`), unless an operator has tagged the task
+  `readiness-waived`. That waiver admits the task like ready work: it holds no
+  file lock, reserves no tree and may run beside other editing work. Only an
+  operator adds the tag; an agent's write that adds it is refused, and a new
+  task cannot be filed with it. Declared selectors keep their existing
   conflict checks; undeclared edit conflicts surface at landing.
 - `dependencies: ["<task-id>", ...]` — prerequisites must reach a satisfying
   status first. Not an `orbit.task.add` input: it is refused as an unknown
@@ -341,13 +347,12 @@ pagination for a projection.
   string (CLI `--clear-not-before`) clears it; `null` leaves it unchanged, as
   for any field. Until then a `backlog` task waits `scheduled`, with the time
   in `detail`, in drain listings, `orbit run readiness` and `run show`. No
-  local or pull drain starts it, and `orbit run ship <id>` and
-  `orbit.workflow` action `ship` refuse it with `task_scheduled`. The hold lifts by
-  itself on the first admission pass after that time, which can be later
-  than the time itself. Only an operator's
-  `orbit run ship <id> --ignore-schedule` starts it early, recording a
-  `schedule_overridden` history event; changing `not_before` reinstates the
-  hold. Other statuses ignore it.
+  local or pull drain starts it, and `orbit.workflow` action `ship` refuses it
+  with `task_scheduled`. The hold lifts by itself on the first admission pass
+  after that time, which can be later than the time itself. Only an
+  operator's explicit ship (`orbit run ship <id>` or the dashboard's Ship)
+  starts it early, recording `schedule_overridden` and `readiness_overridden`
+  history events; changing `not_before` reinstates the hold. Other statuses ignore it.
 - `origin` records why the task was filed, from a closed set:
   `operator_request` (a human operator asked for the work),
   `orchestrator_initiative` (the orchestrator judged it necessary on its own)
@@ -484,14 +489,17 @@ between two levels, take the lower and say why.
   Examples: a stale sentence in a reference doc; a misspelled help string;
   an off-by-one-pixel border.
 
-The agent scorecards apply coefficients to regression rates, not fixed
-score-point penalties. A held review finding earns its severity weight. For
-Implementers, escaped regressions have a coefficient of -0.5 on the
-actual-minus-expected rate, compared with the expected rate: the rate among the
-other rows for the same tier and expected-size bucket, falling back to other
-rows in the tier, then other rows overall, or zero without peers. Each escape is
-weighted by severity. For Reviewers, missed regressions have a coefficient of
--2 on the actual rate; each missed link is weighted by severity.
+## Scorecard weights
+
+The grade weights above feed the agent scorecards. The scorecards apply
+coefficients to regression rates, not fixed score-point penalties. A held review
+finding earns its severity weight. For Implementers, escaped regressions have a
+coefficient of -0.5 on the actual-minus-expected rate, compared with the expected
+rate: the rate among the other rows for the same tier and expected-size bucket,
+falling back to other rows in the tier, then other rows overall, or zero without
+peers. Each escape is weighted by severity. For Reviewers, missed regressions
+have a coefficient of -2 on the actual rate; each missed link is weighted by
+severity.
 
 ## Operator runbook: granting tools
 
@@ -610,9 +618,14 @@ another OS (see [Native host evidence](#native-host-evidence)).
   criterion means running the tool) becomes an operator validation hold and
   keeps this finding; a mention the pilot leaves unclassified, or classifies
   malformed, holds as `invoke`.
-- **External credentials.** `github.*` reads depend on authentication the lane
-  may not hold, so state that precondition instead of treating a
-  capability-unavailable result as a pass.
+- **External credentials.** Calling a `github.*` tool against live GitHub
+  depends on authentication the lane may not hold, so state that precondition
+  or hand the check to an operator instead of treating a capability-unavailable
+  result as a pass. A criterion that names `github.*` only as the subject
+  under test, or whose sentence states in the same clause as the call a
+  credential-free run (such as a fake `gh` or no live API), is not flagged.
+  Credential, offline or authentication wording in another clause or sentence
+  does not clear a live call.
 
 A criterion that *expects* a refusal is a correct negative test, and a tool
 name inside a quoted example is a copied observation, not a requirement.
@@ -657,7 +670,19 @@ entry's `os` is that OS. A portable criterion, a gate on an item the
 criterion does not name, an `os` that differs from the gate, a path or line
 the pin does not confirm, and a `cfg(unix)` or `cfg(not(windows))` gate that
 does not determine one OS are still rejected, and the rejection tells the
-pilot to leave `required_os` empty. When every
+pilot to leave `required_os` empty. One further exception is a
+repository-required validation: when a tag the task carries triggers a
+validation the workspace guide (`AGENTS.md`/`CLAUDE.md`) requires and states
+only Linux can produce — a `security`-tagged task's local CodeQL run in this
+repository, where the guide line names the trigger tag in backticks after
+`tagged` and other words on that line trigger nothing — the pilot may cite
+both guide lines at their `path:line`
+(the tag-to-CodeQL requirement and the only-Linux statement) instead of a
+cfg gate, and apply confirms both in the pinned source before admitting
+`os: linux`. The pilot makes no such finding when the task or a workspace
+rule explicitly routes that check to owner/external evidence after handoff,
+and a platform mention, cross-compilation target or mocked check is never
+such a finding. When every
 finding names one OS and the task carries no `os:` tag, the same atomic write
 adds that tag (`os:linux`), so admission routes the task by its tags and a host
 of another OS waits as `host_os_mismatch` (see [Executor definitions](../../orbit-setup/references/configuration.md#executor-definitions)). The pilot never removes or replaces

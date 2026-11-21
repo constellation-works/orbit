@@ -178,7 +178,7 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
     // and the un-absolutized policy profile, so the grant set it computed could
     // not match the one the sandbox would enforce, and could not grow with the
     // run. Anchors are now derived from the effective profile at each spawn —
-    // see `activity_job::cli_runner::spawn::spawn_linux_bwrap`.
+    // see `crate::sandbox_spawn::spawn_linux_bwrap`.
 
     let workspace_path_str = worktree_path.to_string_lossy().to_string();
 

@@ -27,7 +27,7 @@ Every event carries:
 - `schemaVersion`
 - `event_type`
 - `event_id`
-- timestamp
+- `ts` (timestamp)
 - `run_id`
 - `agent_identity`
 - optional `parent_event_id`

@@ -25,12 +25,10 @@ use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
     DASHBOARD_PLUGIN_DISABLE, DASHBOARD_PLUGIN_ENABLE, GovernedOperation,
 };
-use orbit_core::adapter::command::PluginSummary;
-use orbit_types::plugin::PluginStatus;
+use orbit_core::adapter::command::{self, PluginSummary};
 use serde_json::{Value, json};
 
 use super::routines::{OperationAudit, action_capability, authorization_denied, authorized_caller};
-use super::workspaces::abbreviate_home;
 use super::{blocking, not_found, validate_id, workspace_label};
 use crate::state::{DashboardState, Ws};
 
@@ -260,67 +258,16 @@ fn bounded_panel_response(output: Value) -> Value {
     })
 }
 
-/// Projects one plugin for the dashboard. `source` and `install_path` are
-/// display-only and can be absolute host paths, so they are `~`-abbreviated
-/// like the workspace listing rather than disclosing the home directory.
+/// Projects one plugin for the dashboard. `source`, `install_path`, and the
+/// `programs[]` `path` and `resolves_to` are display-only and can be absolute
+/// host paths, so they are `~`-abbreviated like the workspace listing rather
+/// than disclosing the home directory.
 pub(super) fn plugin_to_json(summary: &PluginSummary, home: Option<&FsPath>) -> Value {
-    json!({
-        "name": summary.name,
-        "version": summary.version,
-        "status": summary.status.as_str(),
-        "enabled": summary.status == PluginStatus::Active,
-        "host_enabled": summary.host_enabled,
-        "workspace_toggle": summary.workspace_toggle,
-        "disabled_by": summary.disabled_by.map(|layer| layer.as_str()),
-        "source": abbreviate_home(FsPath::new(&summary.source), home),
-        "install_path": abbreviate_home(FsPath::new(&summary.install_path), home),
-        "manifest_digest": summary.manifest_digest,
-        "publisher": summary.publisher,
-        "description": summary.description,
-        "first_party": summary.first_party,
-        "pinned": summary.pinned,
-        "unsandboxed": summary.unsandboxed,
-        "granted": summary.granted,
-        "certified_orbit_version": summary.certified_orbit_version,
-        "host_orbit_version": env!("CARGO_PKG_VERSION"),
-        "diagnostic": summary.diagnostic,
-        "permissions": summary
-            .permissions
-            .iter()
-            .map(|permission| json!({
-                "grant": permission.grant.as_str(),
-                "requested": permission.requested,
-                "granted": permission.granted,
-                "granted_roots": permission.granted_roots,
-            }))
-            .collect::<Vec<_>>(),
-        "tools": summary
-            .tools
-            .iter()
-            .map(|tool| json!({
-                "name": tool.name,
-                "advertised_name": tool.advertised_name,
-                "execution_kind": tool.execution_kind.as_str(),
-                "mcp_scope": tool.mcp_scope,
-                "active": tool.active,
-            }))
-            .collect::<Vec<_>>(),
-        "panels": summary
-            .panels
-            .iter()
-            .map(|panel| json!({
-                "id": panel.id,
-                "title": panel.title,
-                "tool": panel.tool,
-                "render": panel.render.as_str(),
-                "group": panel.group.as_str(),
-                "refresh_ms": panel.refresh_ms,
-            }))
-            .collect::<Vec<_>>(),
-        "links": summary
-            .links
-            .iter()
-            .map(|link| json!({ "title": link.title, "url": link.url }))
-            .collect::<Vec<_>>(),
-    })
+    command::plugin_summary_json(
+        summary,
+        command::PluginSummaryJsonProfile::Http {
+            home,
+            host_orbit_version: env!("CARGO_PKG_VERSION"),
+        },
+    )
 }

@@ -239,7 +239,7 @@ function buildHistoryDetails(group, data, id) {
   const details = el("div", { class: "history-details", id }, [list]);
   if (data) {
     const raw = first.parsed.json ? first.parsed.text : JSON.stringify(data);
-    const copy = el("button", { class: "history-copy", text: "Copy raw JSON", title: "Copy the recorded payload" });
+    const copy = el("button", { class: "history-copy", text: "Copy raw JSON", "aria-description": "Copy the recorded payload" });
     copy.type = "button";
     copy.addEventListener("click", (event) => {
       event.stopPropagation();

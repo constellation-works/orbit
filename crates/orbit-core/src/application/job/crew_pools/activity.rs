@@ -376,12 +376,9 @@ impl OrbitRuntime {
     /// another crew.
     fn final_recovery_candidates(&self) -> Result<Vec<CrewCandidate>, OrbitError> {
         let source = FINAL_RECOVERY_CREWS_CONFIG_KEY;
-        let registry = self.context.settings().crews();
-        let pool = canonical_crew_pool(
-            self.context.settings().final_recovery_crews(),
-            registry,
-            source,
-        )?;
+        let crew_settings = self.admission_crew_settings();
+        let registry = &crew_settings.crews;
+        let pool = canonical_crew_pool(&crew_settings.final_recovery_crews, registry, source)?;
         if pool.entries.is_empty() {
             return Err(OrbitError::InvalidInput(format!(
                 "final recovery is disabled: `{source}` is []"

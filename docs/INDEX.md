@@ -148,26 +148,26 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Application Approvals](./design/application-approvals/1_scope.md) | Orbit slices 1-5 shipped; office profile remains ORB-20363, compatibility retirement ORB-21043 | claude |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | File phase 3: host scope and notifications | claude |
-| [Crew Memory](./design/crew-memory/1_overview.md) | M5 shadow runs (ORB-23117); live from 2026-11-15, then conclude by 2026-12-20 (ORB-23110) | claude |
-| [Distributed Drain](./design/distributed-drain/1_overview.md) | Owner review of the building stage now receipts have an operator caller (ORB-19424). | claude |
+| [Crew Memory](./design/crew-memory/1_overview.md) | Daniel: conclude exp-5342a4d6 (no difference) and decide the consolidation proposal (ORB-25838) | claude |
 | [Experiments](./design/experiments/1_scope.md) | The horizon decision-channel step remains unfiled | claude |
 | [Model Ranking](./design/model-ranking/1_overview.md) | R4 has no open task (ORB-23305 rejected): file the freeze and 4-week shadow run | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
 | [Resident Orchestrator](./design/resident-orchestrator/1_overview.md) | Re-file the slice 10 pilot (ORB-21251 archived 2026-11-03, not done) once a bounded mandate with an operator authority grant and a manager session is ready | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
+| [Standing Drain](./design/standing-drain/1_scope.md) | Phases 1 (intent and surfaces) and 2 (the opt-in keeper) are built; enabling the keeper is Daniel's; next is the deploy hold, ORB-25992 | claude |
 
 ### Designing (6)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Review the Copilot existing-PR recovery companion; the Claude phase 0 spike remains pending | claude |
-| [Context Index](./design/context-index/1_overview.md) | File 2_design.md §13 tasks 1–5 in ws_orbit-graph (retired-tool fix, word_index variant, baselines and gates, options); Daniel answers the questions still open in §14.2 | claude |
+| [Context Index](./design/context-index/1_overview.md) | Decide from the [ORB-24866] measurement whether to file 2_design.md §13 tasks 1–5 in ws_orbit-graph | claude |
 | [Eval Harness](./design/eval-harness/1_overview.md) | Daniel accepted every recommendation in 2_design.md §14; file build-order tasks 1 to 5 once he names the Q7 spend cap and confirms the Q2 box | claude |
 | [Owner Failover](./design/owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
 
-### Shipped (37)
+### Shipped (38)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -179,6 +179,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Auto-tasks](./design/auto-tasks/1_overview.md) | — | claude |
 | [Automation Triggers](./design/automation-triggers/1_overview.md) | — | codex |
 | [Crew Credentials](./design/crew-credentials/1_scope.md) | — | claude |
+| [Distributed Drain](./design/distributed-drain/1_overview.md) | — | claude |
 | [Distributions](./design/distributions/1_scope.md) | — | claude |
 | [Executors](./design/executors/4_decisions.md) | — | claude |
 | [Federated MCP](./design/federated-mcp/1_overview.md) | — | grok |
@@ -229,12 +230,12 @@ a conservative title/status fallback.
 | --- | --- | --- | --- |
 | [Activity / Job](./design/activity-job/1_overview.md) | Activity / Job is Orbit's execution substrate. | Draft | codex |
 | [Agent Families](./design/agent-families/1_overview.md) | Orbit models AI coding systems as first-class agent families and groups concrete provider-model assignments into named crews. | Draft | grok |
-| [Agent Scorecards](./design/agent-scorecards/1_overview.md) | One scorecard per agent role (implementers, reviewers, task pilots), ranked by crew and model, where each problem counts against exactly one role. | Draft | claude |
+| [Agent Scorecards](./design/agent-scorecards/1_overview.md) | One scorecard per agent role (implementers, reviewers, task pilots), ranked by model and recorded effort, where each problem counts against exactly one role. | Draft | claude |
 | [Application Approvals](./design/application-approvals/1_scope.md) | Scope: parameterised application consent scopes (typed per-field constraints bound to live task state, bound read callbacks, named transitions) so an app can carry a user's approvals without operator authority | Draft | claude |
 | [Auditability](./design/auditability/1_overview.md) | Auditability is Orbit's answer to the operator question that matters after an agent touches a real repository: what happened, why, and who is accountable? | Draft | codex |
 | [Auto-concurrency](./design/auto-concurrency/1_overview.md) | Shipped predictive admission — Orbit records per-task CPU and memory samples, builds resource profiles, forecasts host load, and supports shadow or forecast-based admission for local and pull drains; operational accuracy evidence remains limited. | Draft | claude |
 | [Auto-tasks](./design/auto-tasks/1_overview.md) | Dynamically-defined recurring task templates minted by the host clock tick — periodic work as data, not code. | Implemented | claude |
-| [Automation Triggers](./design/automation-triggers/1_overview.md) | Proposed bounded state-driven triggers for routines and auto-tasks with durable work identity and honest coverage. | Draft | codex |
+| [Automation Triggers](./design/automation-triggers/1_overview.md) | Bounded delivery and preparation triggers for routines and auto-tasks, with durable work identity and honest coverage. | Draft | codex |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Scope: simulate real drain admission, review modes, retry outcomes, host resource fit and regression rework; expose task riskiness, score each forecast model version separately, and correct per-metric quantiles from scored residuals | Draft | claude |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Proposed Claude cloud task delivery, with a companion scope for Copilot repair of existing PRs under shared repair ownership, budgets and exact-head evidence. | Draft | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | Scope: a condition trigger kind whose predicate is a type-checked CEL expression over task, workspace, host and file state, fired once per subject edge with a durable fire identity, beside the typed trigger kinds | Draft | claude |
@@ -248,7 +249,7 @@ a conservative title/status fallback.
 | [Executors](./design/executors/4_decisions.md) | Decision log for executor registration, the local-shell executor, and the (now retired) External Executor Protocol. | Draft | claude |
 | [Experiments](./design/experiments/1_scope.md) | Scope: operator-defined experiments whose arms overlay instructions, skills, tools, crews, allowlisted config or crew memory on a task's runs; sticky random assignment at admission, durable SQLite records, per-arm outcome analysis with intervals, and an operator decision that files the promotion | Draft | claude |
 | [Federated MCP](./design/federated-mcp/1_overview.md) | Mux that presents one MCP namespace over the accepting machine plus operator-configured SSH remotes, keyed by machine_id, without becoming a fleet registry. | Draft | grok |
-| [Fleet Notices](./design/fleet-notices/1_overview.md) | Fleet notices: short-lived, scoped, authored coordination notes (incident, maintenance, info) held by the owner, reached through an opt-in notice MCP toolset and quoted into agent briefs as untrusted data | Draft | claude |
+| [Fleet Notices](./design/fleet-notices/1_overview.md) | Fleet notices: short-lived, scoped, authored coordination notes (warn, incident, maintenance, info) held by the owner, reached through an opt-in notice MCP toolset and quoted into agent briefs as untrusted data | Draft | claude |
 | [Granted Tools](./design/granted-tools/1_scope.md) | Scope: an operator-only `granted_tools` task field that lifts the implementing activity's deny list for named tools, without granting capability, placement or live side effects | Implemented | claude |
 | [Host Registry](./design/host-registry/1_overview.md) | The live host-registry feature is a machine-local identity and workspace catalog. | Implemented | codex |
 | [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Scope: a core decision-request record and delegated-human channel, with email as a plugin transport, so held Orbit work can be decided by replying to an email | Draft | claude |
@@ -262,7 +263,7 @@ a conservative title/status fallback.
 | [Task Search](./design/orbit-search/1_overview.md) | Lexical task search using SQLite FTS5 BM25. | Implemented | codex |
 | [Owner Failover](./design/owner-failover/1_overview.md) | Proposed owner failover — followers mirror owner task changes on every drain call, git publication bootstraps them, and an epoch-fenced handoff or takeover moves ownership while the old owner rejoins as a follower. | Draft | claude |
 | [Path Leases](./design/path-leases/1_overview.md) | Lease storage, queue, notices, the loopback REST routes, orbit-auth credentials, the Unix intake socket and the token-authenticated lease listener are implemented but unreachable: the lease.* config keys, the orbit lease CLI and the orbit.lease.* MCP tools were withdrawn in ORB-22808 and leases stay disabled. | Draft | claude |
-| [Plugins](./design/plugins/1_scope.md) | Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest | Implemented | claude |
+| [Plugins](./design/plugins/1_scope.md) | Implemented plugin manifest, lifecycle, grants, brokered agent calls, consented builds and declarative extensions. | Implemented | claude |
 | [Policy & Sandboxing](./design/policy-sandbox/1_overview.md) | Policy & Sandboxing is Orbit's safety surface for filesystem access and process execution. | Draft | claude |
 | [Process Supervision](./design/process-supervision/1_overview.md) | Record of converging Orbit's child-process supervisors (orbit-common's bounded runner, orbit-exec's SupervisedChild, the engine CLI runner, and two ad-hoc loops) onto one kill-on-drop supervisor in orbit-common, with the caller inventory and the seven-step migration, now landed. | Draft | claude |
 | [Project Learnings](./design/project-learnings/4_decisions.md) | Project Learnings — Decisions: why the native learning subsystem was removed and why leftover .orbit/learnings/ files stay ignored. | Accepted | claude |
@@ -272,6 +273,7 @@ a conservative title/status fallback.
 | [Routines](./design/routines/1_overview.md) | Durable checkout-local routine definitions dispatch catalog jobs on cron, delivery or state eligibility, with host-local checkpoints. | Accepted | claude |
 | [Scheduled Tasks](./design/scheduled-tasks/1_scope.md) | Scope: let a task wait for a date — an optional not_before instant that every dispatcher honours as a self-lifting admission hold, readable by date range so a calendar can show it | Draft | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | Scope: a job step that runs a workspace script by name inside the executor sandbox, authorized by an operator grant bound to the script's content digest, with JSON stdin/stdout, declared files, audit and the job retry policy | Draft | claude |
+| [Standing Drain](./design/standing-drain/1_scope.md) | Scope: an opt-in, config-gated drain intent that re-submits a bounded auto drain on the owner when none is live, work is waiting and nobody paused it, so deploys and window ends stop leaving ws_orbit idle | Draft | claude |
 | [State Compatibility](./design/state-compatibility/1_overview.md) | How an Orbit binary decides whether it may open workspace state written by a newer Orbit, instead of refusing every command on a version number. | Draft | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Scope: a routine-built per-symbol index of body size, test coverage and regression-site history, read by admission riskiness and a test-priority view, each shipped only if its backtest beats today's model | Draft | claude |
 | [Task Artifacts](./design/task-artifacts/1_overview.md) | Tasks are Orbit's durable intent records: they explain what an agent or human is trying to change, how the work should be validated, what context is relevant, who acted on the work, and how the work connects to other Orbit artifacts. | Draft | codex |

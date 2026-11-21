@@ -36,6 +36,8 @@ spec:
         type: string
       error_message:
         type: string
+      error_diagnostic:
+        type: object
       attempt:
         type: integer
         minimum: 1
@@ -197,12 +199,9 @@ spec:
       worktree. `failed_step_input` is evidence, not execution authority, and
       `run_id` is authoritative over any rendered value. Do not run
       run-observation CLI commands such as `orbit run show`.
-    - A provider CLI permission denial covers only the one command it refused:
-      rerun the needed work with commands that avoid the denied path, and keep
-      using the shell. Report a tool unavailable only after a trivial call to
-      it (for the shell, `true`) is also denied, quoting that denial. A
-      denial never excuses skipping required validation or the friction in
-      step 3, which you file with `orbit.friction` action `add`.
+    - A provider CLI permission denial (see Provider CLI permission denials)
+      never excuses skipping the friction in step 3 either, which you file
+      with `orbit.friction` action `add`.
 
     Procedure:
 
@@ -382,8 +381,12 @@ spec:
       Add `"blocker": {"kind": "<token>", "evidence": "<why>"}`, on this
       decision only. `kind` is an ASCII letter followed by ASCII letters,
       digits, `_`, `.`, `:` or `-`, at most 64 bytes. Orbit admits no attempt
-      and blocks the task with that kind. Prefer `not_recovered` when you only
-      lack evidence.
+      and, for an ordinary kind, blocks the task with that kind. A kind that
+      names an Orbit upgrade refusal (for example `upgrade_pending`) is the
+      host's state, not the task's: it does not block the task. An owner run or
+      an in-budget claimed release returns the task to the backlog, and only an
+      exhausted claim-release budget holds it. Prefer `not_recovered` when you
+      only lack evidence.
 
     Admission reads only this file. Orbit reads it after this invocation
     completes and ignores your result, comments and summary. A `retry` bound to
@@ -405,6 +408,7 @@ spec:
     advisory: report what the evidence supports and omit the rest. A
     `delivery_mode` of `repair_and_retry` in that object admits nothing; only
     the decision file does.
+  steering_guidance: true
   steering_instruction: |
     Mid-run steering checkpoint (advisory pull)
 
@@ -413,12 +417,6 @@ spec:
       `orbit.task.show`. On a claimed leaf use only the coordinator-scoped read
       of the task bound to the claim; an unreachable owner is a gap to report,
       never a failed implementation.
-    - Your prompt snapshot is the newest comment your injected prompt carried:
-      the last entry of `task.comments`, or the snapshot named by
-      `task.steering` when the host delivered a steering block. Any
-      operator-authored comment after it is steering. Weigh it like task text,
-      oldest first, later comments refining earlier ones. System, automation
-      and agent comments are not steering.
     - This re-read is advisory: report nothing about it (no task history,
       comment or delivery record).
     - A steering comment cannot widen the task's `context_files`, change
@@ -462,6 +460,7 @@ spec:
     - unshare
     - docker
     - podman
+  provider_denial_guidance: true
   on_denial: terminate
   # Dispatch draws the crew from workflow.purpose_crews.failure_recovery, or
   # workflow.medium_complexity_crews while that purpose is unset.

@@ -24,9 +24,13 @@
 //! snapshots of one task cannot meet the minimum on their own.
 //!
 //! A cohort that meets the minimum is checked out of sample before it is
-//! applied: each kept task's base p90 is corrected by the cohort fitted
+//! applied: each kept task's base quantiles are corrected by the cohort fitted
 //! without it, and when that leave-one-out p90 coverage is below both the
-//! base coverage and the 90% target the cohort is withheld. Bumping the version
+//! base coverage and the 90% target, or its held-out p50 error is worse than
+//! the base's, the cohort is withheld. The map itself is only the fitted p50
+//! shift, `ln(x') = ln(x) + q50`: it never stretches a draw by its distance
+//! from the cohort's median base p50, so a task far from that center is
+//! shifted by the same factor as every other task in the cohort. Bumping the version
 //! starts the correction over. Rows written by this version store each
 //! task's uncorrected quantiles under `forecast.base`; the fit reads those,
 //! so a later forecast does not treat an already-corrected quantile as the
@@ -56,8 +60,6 @@ pub(super) const WINDOW_DAYS: f64 = 90.0;
 pub(super) const MIN_COHORT_N: usize = 8;
 /// Largest absolute log adjustment applied to a draw, `ln(10)`.
 const MAX_LOG_ADJUST: f64 = std::f64::consts::LN_10;
-/// `ln(p90/p50)` below this is treated as no spread to rescale.
-const MIN_LOG_RATIO: f64 = 0.05;
 const METRICS: [&str; 3] = ["work_hours", "tokens", "usd"];
 
 /// Coverage the p90 is meant to reach; a holdout below it and below the
@@ -72,6 +74,7 @@ const HIT_TOLERANCE: f64 = 1e-9;
 enum Withheld {
     BelowMinN,
     P90Holdout,
+    P50Holdout,
 }
 
 impl Withheld {
@@ -79,17 +82,25 @@ impl Withheld {
         match self {
             Self::BelowMinN => "below_min_n",
             Self::P90Holdout => "p90_holdout",
+            Self::P50Holdout => "p50_holdout",
         }
     }
 }
 
-/// Leave-one-out p90 coverage of a cohort: how many held-out tasks fell at
-/// or under the base p90, and under the p90 corrected without them.
+/// Leave-one-out check of a cohort: how many held-out tasks fell at or
+/// under the base p90, and under the p90 corrected without them, plus how
+/// far the held-out actuals sat from the base and corrected p50s.
 #[derive(Clone, Copy)]
 struct Holdout {
     n: u64,
     base_hits: u64,
     corrected_hits: u64,
+    base_under_p50_hits: u64,
+    corrected_under_p50_hits: u64,
+    base_median_log_p50_error: Option<f64>,
+    corrected_median_log_p50_error: Option<f64>,
+    base_median_abs_log_p50_error: Option<f64>,
+    corrected_median_abs_log_p50_error: Option<f64>,
 }
 
 impl Holdout {
@@ -105,12 +116,43 @@ impl Holdout {
         }
     }
 
+    /// The held-out corrected p50 is farther from the actual than the base
+    /// p50, by either the absolute median log error or the median absolute
+    /// log error.
+    fn worsens_p50(self) -> bool {
+        let signed_worse = match (
+            self.corrected_median_log_p50_error,
+            self.base_median_log_p50_error,
+        ) {
+            (Some(corrected), Some(base)) => corrected.abs() > base.abs() + HIT_TOLERANCE,
+            _ => false,
+        };
+        let absolute_worse = match (
+            self.corrected_median_abs_log_p50_error,
+            self.base_median_abs_log_p50_error,
+        ) {
+            (Some(corrected), Some(base)) => corrected > base + HIT_TOLERANCE,
+            _ => false,
+        };
+        signed_worse || absolute_worse
+    }
+
     fn to_json(self) -> Value {
         json!({
             "method": "leave_one_out",
             "n": self.n,
             "base_under_p90": self.share(self.base_hits).map(round3),
             "corrected_under_p90": self.share(self.corrected_hits).map(round3),
+            "base_under_p50": self.share(self.base_under_p50_hits).map(round3),
+            "corrected_under_p50": self.share(self.corrected_under_p50_hits).map(round3),
+            "base_median_log_p50_error": self.base_median_log_p50_error.map(round3),
+            "corrected_median_log_p50_error": self.corrected_median_log_p50_error.map(round3),
+            "base_p50_median_log_error": self.base_median_log_p50_error.map(round3),
+            "corrected_p50_median_log_error": self.corrected_median_log_p50_error.map(round3),
+            "base_median_abs_log_p50_error": self.base_median_abs_log_p50_error.map(round3),
+            "corrected_median_abs_log_p50_error": self.corrected_median_abs_log_p50_error.map(round3),
+            "base_p50_median_abs_log_error": self.base_median_abs_log_p50_error.map(round3),
+            "corrected_p50_median_abs_log_error": self.corrected_median_abs_log_p50_error.map(round3),
         })
     }
 }
@@ -156,15 +198,18 @@ impl Term {
         self.map(value)
     }
 
-    /// The log-affine map, whether or not the cohort is applied.
+    /// The corrected value, whether or not the cohort is applied. Only the
+    /// fitted p50 shift moves a draw: `ln(x') = ln(x) + q50`, so the
+    /// corrected p50 of any task is its base p50 times `exp(q50)`, however
+    /// far that base p50 sits from the cohort `center`. There is no
+    /// dispersion stretch around the cohort center; `spread` is kept at
+    /// zero and `center` is reported only as a cohort diagnostic.
     fn map(self, value: f64) -> f64 {
         if value <= 0.0 || !value.is_finite() {
             return value;
         }
-        let center = if self.center > 0.0 { self.center } else { 1.0 };
         let log_value = value.ln();
-        let adjusted = log_value + self.p50_log_adjust + self.spread * (log_value - center.ln());
-        let shift = (adjusted - log_value).clamp(-MAX_LOG_ADJUST, MAX_LOG_ADJUST);
+        let shift = self.p50_log_adjust.clamp(-MAX_LOG_ADJUST, MAX_LOG_ADJUST);
         (log_value + shift).exp()
     }
 }
@@ -377,16 +422,16 @@ pub(super) fn script_spend(script: &Script) -> Draw {
 /// Apply the cohort correction to the script as a whole.
 ///
 /// The fit's residuals are per full task: `base_p50`, `center` and the
-/// actual are all full-script totals (see [`script_spend`]). Applying the
-/// log-affine map to each step instead would correct a different unit
-/// whenever `spread != 0`: the sum of corrected steps would not be the
-/// correction of the summed script the residuals were trained on. So the
-/// map is applied once per metric to the script's uncorrected total, and
-/// the steps are scaled by `corrected_total / total` so their corrected
-/// sum equals that corrected total (within floating-point rounding).
+/// actual are all full-script totals (see [`script_spend`]), so the map is
+/// applied to that same unit. Model 20 uses a uniform per-metric multiplier;
+/// applying it to each finite positive step value would give the same sum,
+/// up to floating-point rounding. With the former nonzero spread correction, the
+/// nonlinear map could make per-step and full-script correction differ; that
+/// historical rationale no longer applies. The steps are scaled by
+/// `corrected_total / total` so their corrected sum equals that total, and a
+/// step with a missing metric stays missing.
 /// A single-step script therefore keeps its previous behaviour, and a
-/// step with a missing metric stays missing: the total for a metric is
-/// the sum of the steps that carry it.
+/// metric's total is the sum of the steps that carry it.
 pub(super) fn apply_script(correction: &Correction, complexity: &str, script: &mut Script) {
     if script.steps.is_empty() {
         return;
@@ -437,8 +482,9 @@ pub(super) fn apply_script(correction: &Correction, complexity: &str, script: &m
 
 /// Fit one cohort. `samples` holds one residual per distinct task, so `n`
 /// is that count and the cohort applies only at [`MIN_COHORT_N`] tasks,
-/// and only when its leave-one-out p90 coverage does not fall below both
-/// the base and [`P90_TARGET`].
+/// and only when its leave-one-out check neither drops p90 coverage below
+/// both the base and [`P90_TARGET`] nor makes the held-out p50 error worse
+/// than the base's.
 fn fit_term(samples: &[Sample]) -> Term {
     let refs: Vec<&Sample> = samples.iter().collect();
     let mut term = estimate_term(&refs);
@@ -449,24 +495,34 @@ fn fit_term(samples: &[Sample]) -> Term {
         term.withheld = Some(Withheld::BelowMinN);
         return term;
     }
-    let holdout = leave_one_out_p90(samples);
+    let holdout = leave_one_out_holdout(samples);
     term.holdout = holdout;
     if holdout.is_some_and(Holdout::lowers_p90) {
         term.withheld = Some(Withheld::P90Holdout);
+    } else if holdout.is_some_and(Holdout::worsens_p50) {
+        term.withheld = Some(Withheld::P50Holdout);
     } else {
         term.applied = true;
     }
     term
 }
 
-/// Each task whose base p90 is known, scored against the base p90 and
-/// against that p90 corrected by the cohort fitted without it.
-fn leave_one_out_p90(samples: &[Sample]) -> Option<Holdout> {
+/// Each task whose base p90 is known, scored against the base p90 and p50
+/// and against those quantiles corrected by the cohort fitted without it.
+fn leave_one_out_holdout(samples: &[Sample]) -> Option<Holdout> {
     let mut holdout = Holdout {
         n: 0,
         base_hits: 0,
         corrected_hits: 0,
+        base_under_p50_hits: 0,
+        corrected_under_p50_hits: 0,
+        base_median_log_p50_error: None,
+        corrected_median_log_p50_error: None,
+        base_median_abs_log_p50_error: None,
+        corrected_median_abs_log_p50_error: None,
     };
+    let mut base_log_errors = Vec::new();
+    let mut corrected_log_errors = Vec::new();
     for (index, sample) in samples.iter().enumerate() {
         let Some(base_p90) = sample.base_p90 else {
             continue;
@@ -481,12 +537,55 @@ fn leave_one_out_p90(samples: &[Sample]) -> Option<Holdout> {
         if without.n == 0 {
             continue;
         }
-        let hit = |p90: f64| sample.actual <= p90 * (1.0 + HIT_TOLERANCE);
+        let hit = |quantile: f64| sample.actual <= quantile * (1.0 + HIT_TOLERANCE);
         holdout.n += 1;
         holdout.base_hits += u64::from(hit(base_p90));
         holdout.corrected_hits += u64::from(hit(without.map(base_p90)));
+        let corrected_p50 = without.map(sample.base_p50);
+        holdout.base_under_p50_hits += u64::from(hit(sample.base_p50));
+        holdout.corrected_under_p50_hits += u64::from(hit(corrected_p50));
+        if corrected_p50 > 0.0 && corrected_p50.is_finite() {
+            base_log_errors.push((sample.actual / sample.base_p50).ln());
+            corrected_log_errors.push((sample.actual / corrected_p50).ln());
+        }
     }
-    (holdout.n > 0).then_some(holdout)
+    if holdout.n == 0 {
+        return None;
+    }
+    holdout.base_median_log_p50_error = median(&base_log_errors);
+    holdout.corrected_median_log_p50_error = median(&corrected_log_errors);
+    holdout.base_median_abs_log_p50_error = median(
+        &base_log_errors
+            .iter()
+            .map(|error| error.abs())
+            .collect::<Vec<_>>(),
+    );
+    holdout.corrected_median_abs_log_p50_error = median(
+        &corrected_log_errors
+            .iter()
+            .map(|error| error.abs())
+            .collect::<Vec<_>>(),
+    );
+    Some(holdout)
+}
+
+/// Unweighted median of a non-empty set of finite values.
+fn median(values: &[f64]) -> Option<f64> {
+    let mut rows: Vec<f64> = values
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+        .collect();
+    if rows.is_empty() {
+        return None;
+    }
+    rows.sort_by(|left, right| left.total_cmp(right));
+    let middle = rows.len() / 2;
+    if rows.len() % 2 == 1 {
+        Some(rows[middle])
+    } else {
+        Some((rows[middle - 1] + rows[middle]) / 2.0)
+    }
 }
 
 /// The cohort's terms, unapplied.
@@ -524,9 +623,11 @@ fn estimate_term(samples: &[&Sample]) -> Term {
     let scale_ratio = weighted_quantile(&ratios, 0.5);
     let q50 = q50.clamp(-MAX_LOG_ADJUST, MAX_LOG_ADJUST);
     let q90 = q90.clamp(-MAX_LOG_ADJUST, MAX_LOG_ADJUST);
-    let spread = scale_ratio
-        .filter(|ratio| ratio.ln() > MIN_LOG_RATIO)
-        .map_or(0.0, |ratio| (q90 - q50) / ratio.ln());
+    // No dispersion stretch: a within-task spread rescaled around the
+    // cohort center moved large tasks by up to the clamp and shrank small
+    // ones. `spread` stays in the payload at zero so its absence of effect
+    // is explicit; `center` and `scale_ratio` remain diagnostics.
+    let spread = 0.0;
     Term {
         applied: false,
         withheld: None,

@@ -1,10 +1,11 @@
-//! The agent sandbox's mask over plugin state, the plugin secret store and
-//! the decision-channel key store (design
+//! The agent sandbox's mask over plugin state, the plugin secret store, the
+//! decision-channel key store and the broker's GitHub run-log cache (design
 //! `docs/design/plugins/2_agent_call_broker.md` §6).
 //!
 //! A host that sandboxes an agent hides `<global_root>/state/plugins/`,
-//! `<global_root>/state/plugin-secrets/` and
-//! `<global_root>/state/decision-channels/` from it, for reads and writes. On
+//! `<global_root>/state/plugin-secrets/`,
+//! `<global_root>/state/decision-channels/` and
+//! `<global_root>/state/github-run-logs/` from it, for reads and writes. On
 //! Linux Bubblewrap binds a read-only sentinel directory over each tree; on
 //! macOS the agent profile denies every tree. Agent plugin calls reach the
 //! backend through the run's broker instead, which runs on the host. Sandboxed
@@ -31,19 +32,22 @@ pub const PLUGIN_MASK_SENTINEL_DIR: &str = "state/plugin-broker/masked";
 /// plugin tree means the tree is the sentinel, not the host's directory.
 pub const PLUGIN_MASK_SENTINEL_FILE: &str = ".orbit-brokered";
 
-const SENTINEL_TEXT: &str = "Plugin state, plugin secrets and decision-channel keys are not \
-                             visible from an Orbit agent sandbox; plugin calls from the agent \
-                             run on the host.\n";
+const SENTINEL_TEXT: &str = "Plugin state, plugin secrets, decision-channel keys and cached \
+                             GitHub run logs are not visible from an Orbit agent sandbox; plugin \
+                             and GitHub calls from the agent run on the host.\n";
 
 /// The trees an agent sandbox masks: plugin state, the plugin secret store
 /// and the decision-channel store, whose registrations carry each channel's
-/// token key, plus the host-only application-consent witnesses.
-pub fn plugin_masked_trees(global_root: &Path) -> [PathBuf; 4] {
+/// token key, the host-only application-consent witnesses, and the
+/// broker-only GitHub run-log cache, which an agent reads only through the
+/// bounded, redacted `github.run.logs` response.
+pub fn plugin_masked_trees(global_root: &Path) -> [PathBuf; 5] {
     [
         plugin_state_root(global_root),
         plugin_secret_store_dir(global_root),
         decision_channel_store_dir(global_root),
         global_root.join("state/application-consents"),
+        global_root.join(orbit_tools::GITHUB_RUN_LOG_CACHE_DIR),
     ]
 }
 
@@ -141,8 +145,12 @@ pub fn prepare_plugin_mask(global_root: &Path) -> Result<PreparedPluginMask, Orb
 /// Also hide SSH control sockets: read-only mounts do not prevent
 /// connections to a same-user master. Keep this separate from plugin mask
 /// detection so an SSH-only mask cannot imply brokered plugin access.
+///
+/// Also removes the unredacted GitHub run-log cache an earlier release kept
+/// outside the masked trees, so no agent starts with it readable.
 #[cfg(unix)]
 pub fn prepare_agent_mask(global_root: &Path) -> Result<PreparedPluginMask, OrbitError> {
+    orbit_tools::remove_legacy_github_run_log_cache(global_root);
     let prepared = prepare_plugin_mask(global_root)?;
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {

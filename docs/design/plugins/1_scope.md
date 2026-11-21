@@ -5,17 +5,17 @@ status: Implemented
 feature: plugins
 doc_role: scope
 type: design
-summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
+summary: "Implemented plugin manifest, lifecycle, grants, brokered agent calls, consented builds and declarative extensions."
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_updated: 2026-11-12
-last_validated: 2026-11-12
+last_updated: 2026-11-15
+last_validated: 2026-11-15
 stage: shipped
 next: "—"
 ---
 
 # Scope: Orbit plugin standard
 
-Status: phases 1-4 landed; phase 5 remains proposal.
+Status: phases 1–4 shipped; provider plugins (phase 5) remain deferred vision.
 Bearing: [Operations as data, not inherent methods](../orbit-core/4_decisions.md).
 Precedents: `*.orbit-tool.yaml` sidecar manifests (orbit-graph still ships three; its migration
 to `plugin.yaml` is pending), and orbit-research's version/capability allowlist against the
@@ -36,7 +36,9 @@ One manifest (`plugin.yaml`, `schemaVersion: 2`, superseding the v1 tool sidecar
 every contribution (tools, CLI, dashboard panels, routines, auto-tasks, activities, jobs,
 skills, config); one lifecycle (`orbit plugin …`); one execution protocol; one set of
 invariants enforced at load, enable and call time. A plugin is **data plus one backend
-executable**: no Rust, no dashboard JavaScript.
+executable**: no Rust, no dashboard JavaScript. The committed standard shipped in
+[ORB-12735]–[ORB-12738]; the host-side broker and consented install-time builds
+are also implemented (see their delivery sections below).
 
 ### Non-goals for v1
 
@@ -582,12 +584,35 @@ existing regular files, separately from directory roots in `fs.write`. It uses t
 same templates, `fs` consent (including scoped `fs=<root>` grants), digest binding,
 certification and upgrade re-consent. Omit the list when unused; empty, missing or
 non-file paths refuse rather than materialize a file or grant its parent. The exact
-file must be user-owned, have one hard link, and have no group/other write bits.
-Its physical path may not traverse symbolic links or unsafe directories; use the
-physical spelling (for example `/private/tmp` rather than macOS's `/tmp` alias).
-Orbit opens each component without following links and validates the opened file,
-then repeats admission before spawning. Protected install, Orbit state and workspace
-metadata boundaries apply to exact files too. A scoped grant covers a requested file
+file must be user-owned, have one hard link, and have no other-write bit; a group
+write bit is accepted, because a checkout made under umask 0002 is group-writable and
+the grant gives the plugin nothing the group does not already hold. Its ancestors
+must be directories owned by the user or root: an other-writable one must be sticky,
+and a group-writable one must be the user's own or sticky. The physical path may not
+traverse symbolic links; use the physical spelling (for example `/private/tmp` rather
+than macOS's `/tmp` alias). Orbit opens each component without following links and
+validates the opened file, then repeats admission before spawning and refuses the
+spawn when the file now resolves elsewhere.
+
+*Workspace root files.* A grant such as `{{workspace}}/AGENTS.md` lets a mutating
+plugin (the constellation `standards` sync) rewrite one file at the workspace root;
+in a managed run `{{workspace}}` renders to the task worktree, so the grant reaches
+that worktree's file. The leaf, and only the leaf, may be a symbolic link when the
+call has a workspace: the link must sit inside it and its target must resolve to a
+safe regular file inside the same workspace, outside `.git` and `.orbit`. The
+resolved target (`CLAUDE.md` for Orbit's own `AGENTS.md` -> `CLAUDE.md`) is what
+both platforms grant, so a write through the link reaches it and the link itself
+stays. A link whose target leaves the workspace, is missing, or lands in `.git` or
+`.orbit` is refused, as is any link without a workspace. Because an exact-file grant
+admits only an existing file and a conformance workspace starts empty, `orbit plugin
+test` creates each `fs.write_files` entry that renders inside its scratch workspace
+(outside `.git` and `.orbit`) as an empty owner-only file before admission. We chose
+this over a `{{workspace}}` directory grant that carves out `.git` and `.orbit`:
+that grant would also open every other root file and every file or directory
+created at the root later, where the need is one named file. Following the final link is a
+deliberate departure from STD-05@1 §R7, recorded in [4_decisions.md](./4_decisions.md). [ORB-25145]
+
+Protected install, Orbit state and workspace metadata boundaries apply to exact files too. A scoped grant covers a requested file
 only when it names that file or an ancestor directory; a descendant never grants a
 directory beneath the file. File replacement/creation and atomic rename require a
 separate directory capability. macOS emits a `subpath` rule rooted at the file itself,
@@ -957,7 +982,10 @@ Writable is a named inventory, never the roots:
 `state/plugin-secrets/` and core's decision-channel store `state/decision-channels/` have a
 broad read deny for every plugin child, regardless of manifest grants. The last keeps every
 channel's token key; a channel's bound plugin receives its own key only as `channel_key` in
-`context.secrets`, so nothing in it is granted back. On macOS, denied ancestors of an allowed state tree or single file admit metadata reads
+`context.secrets`, so nothing in it is granted back. The broker's GitHub run-log cache
+`state/github-run-logs/` has the same deny, with nothing granted back: an agent reads a cached
+log only through the bounded, redacted `github.run.logs` response [ORB-25955]. On macOS, denied
+ancestors of an allowed state tree or single file admit metadata reads
 for path traversal, but no directory listing or content reads. Each child gets back exactly its
 own session record and own grant witness (single files), and its
 own `state/plugins/<ns>` (`{{plugin_state}}`, a whole tree); nothing in the secret store is
@@ -1157,7 +1185,9 @@ removed. A typed task field would do the same job as the tag but change the pers
   `orbit <word>`, including a host-disabled plugin's namespace, is clap's unknown-subcommand
   error. A plugin switched off in the current workspace keeps its group, and a call refuses
   through the audited dispatch with `plugin_disabled_in_workspace`.
-  `orbit --help` lists groups under `Plugins:`; `orbit <ns> --help` lists verbs.
+  `orbit --help` lists groups under `Plugins:`; `orbit <ns> --help` lists verbs. Those rows and
+  each `-h` line show only the first sentence of the manifest description, cut to one line; the
+  full description is in `--help` and `orbit plugin show`.
 - The tree is built at startup from the enabled `plugins` rows (SQLite opened read-only; no
   enabled row, no manifest read). Manifests are cached per process and shared by CLI, runtime
   and host-global MCP discovery; a changed `plugin.yaml` stamp re-checks the digest before the
@@ -1185,7 +1215,16 @@ is limited to the recorded grant set and program paths; changed or absent
 consent must be reviewed with `orbit plugin enable`.
 
 The `plugins` tab lists every installed or pinned plugin from `GET /api/plugins` (enable
-state, diagnostics, tools, panels, links) and draws each panel with one generic renderer:
+state, diagnostics, tools, panels, links). Its plugin records and CLI JSON from
+`plugin list`, `show`, `add`, `enable`, `disable` and `upgrade` share one
+`orbit-core` projection. Both include the consented `build` record, program
+resolution/grant diagnostics, `tools[].agent_callable` and `panels[].refresh_ms`.
+The HTTP profile also includes effective `enabled` and `host_orbit_version`,
+and abbreviates `source` and `install_path` under the home directory to `~`;
+CLI paths remain usable as filesystem arguments. Session `capabilities` are
+added by the HTTP list handler rather than the plugin projection.
+
+The tab draws each panel with one generic renderer:
 
 | `render` | Input the panel's tool returns | Rendering |
 |---|---|---|
@@ -1322,6 +1361,10 @@ provenance-aware disabled-plugin skip beside `RETIRED_ROUTINE_JOBS`;
 5. **Provider plugins** — deferred: open `ProviderRegistry` and collapse the four provider
    vocabularies only when a second external provider exists.
 
+The [host-side broker](./2_agent_call_broker.md#8-rollout-and-follow-up-tasks)
+and [install-time builds](./3_install_time_build.md#6-implementation) shipped
+after these four phases. Neither is pending phase-5 provider work.
+
 ## 8. Risks
 
 - **Grant fatigue.** `--grant requested`/`all` for interactive use; explicit lists for scripts.
@@ -1387,5 +1430,7 @@ provenance-aware disabled-plugin skip beside `RETIRED_ROUTINE_JOBS`;
   its configured-catalog-only scope.
 - [ORB-21774] — closed `--host` and id-routed bypasses of the cross-host
   callback refusal.
+- [ORB-25145] — admitted exact-file writes to workspace root files, including
+  a final symlink whose checked target stays inside the worktree.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

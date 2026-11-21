@@ -6,7 +6,7 @@ import {
   el, forecastView, forecastCard, pinnedInfoHint, forecastMoreSection, reportsReviewMode,
 } from './forecast-shared.js';
 import {
-  forecastBaselineFigures, forecastCount, forecastUnavailableInfo, num, recordedPoolsContainGaps,
+  forecastBaselineFigures, forecastBoundedGap, forecastCount, forecastUnavailableInfo, num, recordedPoolsContainGaps,
   regressionGapReasonPhrase, regressionHistoryIsAbsent,
 } from './forecast-summary.js';
 import * as forecastSummary from './forecast-summary.js';
@@ -23,6 +23,14 @@ function proposedForecastUnavailable() {
   if (!approved || !forecastCount(forecastView.payload.backlog?.proposed)) return null;
   const coverage = forecastSummary.proposedForecastCoverage(forecastView.payload);
   return forecastUnavailableInfo(approved, { coverage });
+}
+
+function boundedGapCheckHint(forecast) {
+  const gap = forecastBoundedGap(forecast);
+  if (gap) return gap.detail;
+  const maxShare = num(forecast?.regression_rework?.support?.max_bounded_gap_share ?? forecastView.payload.inputs?.regression_rework?.max_bounded_gap_share);
+  const cap = maxShare != null ? `up to ${Math.round(maxShare * 100)}%` : "bounded";
+  return `Tasks whose regression pool holds ${cap} unmeasured fix observations and still has enough measured bundles to report adjusted totals. Measured bundles stand in for unmeasured fixes.`;
 }
 
 // Every coverage check as [key, label, count, definition]: the groups show the
@@ -58,11 +66,15 @@ function coverageItems() {
     : historyAbsent
       ? "Tasks whose pool has no regression history, so regression follow-up cannot be estimated. The pre-regression baseline excludes that follow-up work."
       : "Tasks whose regression follow-up cannot be estimated from recorded fix history. This is why the adjusted forecast may be unavailable; the pre-regression baseline excludes that follow-up work.";
+  const boundedItem = Object.prototype.hasOwnProperty.call(coverage, "regression_history_bounded") ? [
+    ["regression_history_bounded", "Bounded regression gaps", coverage.regression_history_bounded, boundedGapCheckHint(forecastView.payload.forecast)],
+  ] : [];
   const regressionItems = ["regression_history_missing", "risk_unestimated", "regression_history_thin"].some((key) => Object.prototype.hasOwnProperty.call(coverage, key)) ? [
     ["regression_history_missing", historyLabel, coverage.regression_history_missing, historyHint],
+    ...boundedItem,
     ["risk_unestimated", "Risk not estimated", coverage.risk_unestimated, "Tasks whose regression risk has no estimate."],
     ["regression_history_thin", "Thin regression history", coverage.regression_history_thin, "Tasks with some regression history, but fewer bundles than the minimum sample."],
-  ] : [];
+  ] : boundedItem;
   return [
     ...regressionItems,
     ["unassessed", "Unassessed", coverage.unassessed, unassessedHint],

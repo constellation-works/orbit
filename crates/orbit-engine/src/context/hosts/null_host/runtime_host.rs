@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::activity_job::{
+use crate::context::dispatch_contract::{
     DispatchError, DispatchInvocationTrace, ResolvedCliExecutor, ResolvedSandbox,
     ResolvedShellExecutor,
 };
@@ -368,6 +368,12 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<Option<String>, OrbitError> {
         NullRuntimeHost::review_report_correction(self, request)
     }
+    fn review_report_evidence_hold(
+        &self,
+        request: &ReviewReportCorrectionRequest,
+    ) -> Result<Option<String>, OrbitError> {
+        NullRuntimeHost::review_report_evidence_hold(self, request)
+    }
     fn handoff_landing_context(
         &self,
         handoff_id: &str,
@@ -569,6 +575,12 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
         observation: &ProviderLimitObservation,
     ) -> Result<(), OrbitError> {
         NullRuntimeHost::record_provider_limit(self, observation)
+    }
+    fn record_provider_usage_reading(
+        &self,
+        observations: &[ProviderLimitObservation],
+    ) -> Result<(), OrbitError> {
+        NullRuntimeHost::record_provider_usage_reading(self, observations)
     }
     fn activity_implementer_identity(
         &self,

@@ -32,7 +32,6 @@ fn culprit(pair: &Pair) -> String {
 /// `regression_from`, and return the owner's settlement pass with the
 /// handoff and the drain.
 fn hand_off_attributing(pair: &Pair, regression_from: &str) -> (Value, TaskHandoff, String) {
-    *pair.wire.accept_handoffs.lock().unwrap() = true;
     let drain = pair.run_drain();
     let leaf = pair.running_leaf(&drain, 1);
     let mut delivered = handoff(&pair.admission(&leaf));

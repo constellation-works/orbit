@@ -1,8 +1,8 @@
 ---
 title: Automation Triggers — Design
 owner: codex
-last_updated: 2026-11-15
-last_validated: 2026-11-15
+last_updated: 2026-11-16
+last_validated: 2026-11-16
 status: Draft
 feature: automation-triggers
 doc_role: design
@@ -18,7 +18,7 @@ related_artifacts: [ORB-11315, ORB-11314, ORB-11316]
 
 **Delivery triggers are implemented in [ORB-11330]; bounded state consumers in [ORB-11331].**
 The supported configuration, evidence contract and operational limits are in
-[Operations](5_operations.md). Later sections retain the broader design intent;
+[Operations](references/operations.md). Later sections retain the broader design intent;
 the schema-v2 YAML in section 8 is illustrative and is not accepted configuration.
 Historical ADRs are not inputs to this design.
 
@@ -42,8 +42,10 @@ Historical ADRs are not inputs to this design.
   artifact. The owner checks assignment, exact frozen input/revisions, completeness
   and provenance before accepting an immutable receipt. Job-only consumers use
   persisted step results. QA and review remain independent.
-- State-member pilot freshness and bounded causal triage use the same Store
-  checkpoint path [ORB-11331]. Broader multi-member coordination,
+- State-member pilot freshness and the original causal triage used the same Store
+  checkpoint path [ORB-11331]; failed-run triage is now retired (§7). Pilot batching
+  shipped in [ORB-12746], with mixed-crew partitioning in [ORB-16839]. Broader
+  cross-consumer coordination,
   policy-driven waiver/migration workflows and usage accounting below remain
   separately owned proposals. The implemented before-PR review gate excludes
   only deliveries whose certificate, task meaning, repository, reviewed trees,
@@ -59,7 +61,7 @@ A definition has one typed trigger and one action. Supported candidate variants:
 | `cron` / `interval` | One UTC slot identity; missed slots collapse or skip according to explicit policy. | Accepted action outcome; legacy definitions keep legacy semantics. |
 | `deliveries_landed` | Oldest uncovered verified deliveries reach `threshold`, or nonempty pending work reaches `max_wait_minutes`. | Validated coverage of the captured delivery/range obligations. |
 | `condition` | Due on a subject edge (true for `for_minutes`, held until `rearm`), owner only, under a durable fire identity. | Durable condition state per consumer; `orbit automation explain` shows arm state, holds, stalls and fires. |
-| `preparation_eligible` | Proposed/backlog task has never had an applied pilot assessment. | Per-task accepted assessment, including an unready verdict. |
+| `preparation_eligible` | Eligible proposed/backlog task has no applied assessment, or its description/criteria changed. | Per-task accepted assessment, including an unready verdict. |
 | `execution_failed` | Retired (see §7): still parses, no shipped target job. | None. |
 | `finding_unverified` | Retired [ORB-22844]: still parses, observes nothing, and the loader skips a routine that uses it ([archived finding verification](../_archived/finding-verification/2_design.md)). | None. |
 | `pilot_warnings_held` | Retired [ORB-22844] ([§6.1](#61-pilot-warning-holds-pilot_warnings_held)): still parses, and the loader skips a routine that uses it. | None. |
@@ -209,7 +211,7 @@ For six deliveries with four valid review exclusions, review threshold three see
 two; the next uncovered delivery makes it due. QA can count all seven.
 [ORB-11333] implements this: certificates are produced by the before-PR gate
 and consumed as `excluded` state and batch `exclusions`; see
-[Operations](./5_operations.md#before-pr-coverage-exclusions-orb-11333).
+[Operations](./references/operations.md#before-pr-coverage-exclusions-orb-11333).
 
 ## 4. Observation, dispatch, and successful coverage
 
@@ -730,13 +732,19 @@ one slot waits for an enabled task-pilot routine this host owns to prepare
 such a task (`awaiting_footprint`, bounded by the trigger's
 `max_wait_minutes + deadline_minutes` from the task's last change), then runs
 it only alone (`awaiting_exclusive_slot`) [ORB-15191]. A pilot assessment that
-leaves the task without selectors ends the wait. A live pilot's preparation
+leaves the task without selectors ends the wait. An operator's `readiness-waived` tag
+waives the rule and the complexity gate: the task is admitted like ready work
+without the whole-tree reservation, holding no file lock unless it declares selectors, and counts as editing
+work in its wave ([decision](4_decisions.md#readiness-waived-is-an-operator-waiver-of-readiness-gaps))
+[ORB-25084]. A live pilot's preparation
 reservation or successful checkpoint still holds its tasks until that run
 settles.
 Local automatic admission rejects any
 still-unassessed task, including urgent security work, except
 one tagged exactly `no-diff-expected`, which is admitted without an assessment
-because an implementation lane sizes no diff for it [ORB-12118]; missing
+because an implementation lane sizes no diff for it [ORB-12118], and a backlog
+task an operator tagged `readiness-waived`, which is admitted with its
+configured or default crew [ORB-25084]; missing
 validation permission is a readiness blocker rather than a complexity or
 priority inference. The low/medium/hard examples in the activity contract are
 deterministic policy fixtures, not a claim about live-model accuracy.
@@ -744,7 +752,11 @@ deterministic policy fixtures, not a claim about live-model accuracy.
 For the routine example Core supplies a reserved `trigger_batch` input plus
 explicit `task_ids` members; templates or arbitrary run input cannot
 override the server-issued batch. Auto-task creation attaches the same manifest
-as task input evidence without invoking a job. These input paths need implementation.
+as task input evidence without invoking a job. [ORB-11330] implemented delivery
+batch attachment, and [ORB-11331] implemented
+state preparation input; [ORB-12746] extended it to batches of explicit task IDs.
+The schema-v2 spelling above remains illustrative; the accepted schema-v1 forms
+are in [Operations](./references/operations.md).
 Time alternatives are `trigger: {kind: cron, cron: "0 6 * * *", missed_run: catch_up_once}`
 or `trigger: {kind: interval, every_minutes: 360}`. UTC slot identity and existing
 host-local cron/DST behavior remain; intervals retain a fixed baseline and do not
@@ -809,18 +821,19 @@ older binaries must not reinterpret schema v2 as time-only work.
 
 ## 11. Implementation phases and validation
 
-1. Add typed dry-run evaluation, explicit bounded source scans and verified
-   delivery/incident evidence adapters. Show due/deferred/unknown reasons without
-   minting or invoking. Establish reference fixtures for the contract below.
-2. Extend store-owned batch/receipt records and common action-key admission;
-   fault-inject every file/SQLite/dispatch boundary. Add immutable routine input
-   and auto-task batch attachment. Migrate no definitions automatically.
-3. Opt in QA/review delivery consumers with baseline preview, pinned inputs and
-   validated coverage acknowledgement. Test failure retries before enabling them.
-4. Extend pilot fingerprints and per-member apply, then triage episode/retry/
-   cancellation provenance and recursion guards at their existing domain owners.
-   Switch their time routines only once semantic checks pass. Optional mode
-   defaults and event wakeups can follow independently.
+The original rollout is delivered or retired as follows. The validation scenarios
+remain the contract; this table records implementation, not a fresh execution of every fixture.
+
+| Phase | Implementing task and current disposition |
+| --- | --- |
+| Typed evaluation, bounded scans and delivery evidence adapters | [ORB-11330] implemented (done). |
+| Store batch/receipt records, action-key admission and immutable inputs | [ORB-11330] implemented delivery batches; [ORB-11331] implemented state checkpoints (done). |
+| Opt-in delivery consumers, baseline preview and coverage acknowledgement | [ORB-11330] implemented (done); [ORB-11333] added content-specific review exclusions (done). |
+| Pilot fingerprints, per-member apply and bounded preparation | [ORB-11331] implemented (done); [ORB-13638] made freshness configurable; [ORB-12746] added batching; [ORB-16839] added crew partitions (done). |
+| Failure triage and warning/finding routines | [ORB-11331] originally implemented failure triage; failed-run triage is retired (§7), and [ORB-22844] retired warning/finding routines (done). |
+
+Optional event wakeups and broader coordination remain future work. Operation mode
+was removed; it is not an unfinished prerequisite of the shipped triggers.
 
 | Validation scenario | Required assertion |
 | --- | --- |
@@ -867,16 +880,17 @@ quality; exact thresholds are an open product decision.
 
 ## 12. Concerns & Honest Limitations
 
-Delivery grouping for rebased/manual work, typed cancellation causes, comprehensive
-pilot fingerprints, and recoverable cross-store action creation are new work.
-They are prerequisites to the claimed semantics, not features inferred from
-existing task/run history. Conservative source invalidation may repeatedly stale
+Delivery grouping, configurable pilot fingerprints and recoverable action-key
+admission are implemented by [ORB-11330], [ORB-11331] and [ORB-13638]. The broader
+coordination and schema-v2 proposals above remain future intent, and retired
+triage contracts do not imply an active incident consumer. Conservative source
+invalidation may repeatedly stale
 pilots on a busy branch; retained evidence has storage cost. Bounded reconciliation
 adds clock/lap latency and requires source retention. A missing provider or
 ambiguous orphan can stop a consumer until someone resolves it. This is preferable
 to duplicate execution or manufactured coverage, but must be operationally visible.
-This proposal does not establish that any live host definition is enabled or safe
-to change; implementation scope and defaults still require approval.
+This reference does not establish that any live host definition is enabled or safe
+to change; future implementation scope and changes to live defaults still require approval.
 
 ## Task References
 
@@ -892,9 +906,13 @@ to change; implementation scope and defaults still require approval.
   current head and recomputes freshness. An unavailable source comparison can
   still follow ordinary-failure handling.
 - [ORB-15191] — bounds how long multi-slot admission waits for a task pilot to prepare empty-context backlog work.
+- [ORB-25084] — lets an operator waive a backlog task's readiness gaps with the `readiness-waived` tag.
 - [ORB-11314] — designed the operation-mode presets for automated preparation and delivery; the mode concept was later removed.
 - [ORB-11316] — extended the operation-mode design with review timing and repair policy; the mode concept was later removed.
 - [ORB-21238] — let an operator skip a stale pilot with the `no-pilot` tag, which admission honors even when a receipt exists.
 - [ORB-22153] — kept an assessed complexity tier when a later pilot cannot establish the footprint, recording a `footprint_unresolved` hold.
+- [ORB-12746] — batched due preparation members into one task-pilot run.
+- [ORB-16839] — partitioned mixed-crew preparation into bounded pilot groups.
+- [ORB-22844] — retired finding-verification and pilot-warning-triage routines.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

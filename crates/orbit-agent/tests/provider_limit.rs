@@ -7,7 +7,7 @@ use std::time::Duration;
 use chrono::{FixedOffset, TimeZone, Utc};
 use orbit_agent::{
     apply_antigravity_print_timeout, provider_quota_exceeded, provider_usage_limit,
-    provider_usage_limit_details, provider_usage_windows,
+    provider_usage_limit_details, provider_usage_snapshot, provider_usage_windows,
 };
 use orbit_types::workflow::activity_job::Provider;
 
@@ -294,6 +294,11 @@ const GROK_BILLING: &[u8] = include_bytes!("provider_invocation/fixtures/grok_bi
 const ANTIGRAVITY_USAGE: &[u8] =
     include_bytes!("provider_invocation/fixtures/antigravity_usage.json");
 
+/// agy 1.5.13 on dk-server-2, 2026-11-20, Pro account: native `/usage` control
+/// payload whose shared "Gemini Models" group lists Gemini 4 Neon and Hydrogen.
+const ANTIGRAVITY_USAGE_1_5_13: &[u8] =
+    include_bytes!("provider_invocation/fixtures/antigravity_usage_1_5_13.json");
+
 #[test]
 fn antigravity_quota_command_reports_scoped_windows_without_reading_answer_text() {
     use orbit_types::telemetry::ProviderLimitSource;
@@ -301,7 +306,7 @@ fn antigravity_quota_command_reports_scoped_windows_without_reading_answer_text(
     let readings = provider_usage_windows(Provider::Antigravity, ANTIGRAVITY_USAGE, None, now);
     assert_eq!(
         readings.len(),
-        9,
+        15,
         "five buckets split by their covered model families"
     );
     for reading in &readings {
@@ -321,7 +326,10 @@ fn antigravity_quota_command_reports_scoped_windows_without_reading_answer_text(
                 reading.resets_at,
                 Some("2026-10-24T08:49:02Z".parse().unwrap())
             );
-            assert!(["flash", "pro"].contains(&reading.model.as_deref().unwrap()));
+            assert!(
+                ["flash", "pro", "neon", "carbon", "hydrogen"]
+                    .contains(&reading.model.as_deref().unwrap())
+            );
         } else {
             assert_eq!(reading.used_percent, Some(0.0));
             assert!(reading.resets_at.is_some());
@@ -334,7 +342,7 @@ fn antigravity_quota_command_reports_scoped_windows_without_reading_answer_text(
     assert_eq!(
         argon.len(),
         1,
-        "Argon's separate quota cannot inherit Flash/Pro limits"
+        "Argon's separate quota cannot inherit the shared Gemini limits"
     );
     assert_eq!(argon[0].window.as_deref(), Some("gemini-argon-wtu-weekly"));
 
@@ -352,6 +360,27 @@ fn antigravity_quota_command_reports_scoped_windows_without_reading_answer_text(
     );
     assert_eq!(readings.len(), 6);
     assert_eq!(readings[0].model.as_deref(), Some("gemini"));
+}
+
+#[test]
+fn antigravity_1_5_13_shared_gemini_group_gates_neon_and_hydrogen() {
+    // agy 1.5.13 lists Gemini 4 Neon and Hydrogen in the shared Gemini group;
+    // on a Pro account their crews stay gated by it beside Argon's own
+    // bucket, and Argon never inherits the shared group. [ORB-25818]
+    let now = Utc.with_ymd_and_hms(2026, 11, 20, 2, 12, 0).unwrap();
+    let readings =
+        provider_usage_windows(Provider::Antigravity, ANTIGRAVITY_USAGE_1_5_13, None, now);
+    let windows = |model: &str| {
+        readings
+            .iter()
+            .filter(|reading| reading.model.as_deref() == Some(model))
+            .filter_map(|reading| reading.window.as_deref())
+            .collect::<Vec<_>>()
+    };
+    for model in ["neon", "hydrogen", "flash"] {
+        assert_eq!(windows(model), ["gemini-weekly", "gemini-5h"], "{model}");
+    }
+    assert_eq!(windows("argon"), ["gemini-argon-wtu-weekly"]);
 }
 
 #[test]
@@ -404,6 +433,27 @@ fn antigravity_quota_command_ignores_unknown_and_invalid_control_data() {
             "invalid {field}"
         );
     }
+    // [ORB-26000] A known enabled bucket that cannot be read leaves the
+    // reading incomplete; an unknown, disabled or absent one does not.
+    let snapshot = |bucket: Value| {
+        let body = json!({"status":"SUCCESS", "command":{"name":"usage", "data":{"groups":[{"buckets":[bucket]}]}}});
+        provider_usage_snapshot(
+            Provider::Antigravity,
+            body.to_string().as_bytes(),
+            None,
+            now,
+        )
+    };
+    let mut unreadable = bucket.clone();
+    unreadable["reset_time"] = json!("invalid");
+    assert!(!snapshot(unreadable).complete);
+    assert!(snapshot(bucket.clone()).complete);
+    let mut other = bucket.clone();
+    other["id"] = json!("future-weekly");
+    assert!(snapshot(other).complete);
+    let mut disabled = bucket.clone();
+    disabled["disabled"] = json!(true);
+    assert!(snapshot(disabled).complete);
     assert!(provider_usage_windows(Provider::Antigravity, b"not json", None, now).is_empty());
     let body = json!({"status":"SUCCESS", "command":{"name":"usage", "data":{"groups":[{"buckets":[{"id":"3p-5h", "window":"5h", "remaining_fraction":0, "reset_time":"2026-10-24T09:00:00Z"}]}]}}});
     let readings = provider_usage_windows(

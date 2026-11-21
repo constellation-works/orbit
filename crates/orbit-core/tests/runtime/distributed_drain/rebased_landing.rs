@@ -261,6 +261,7 @@ fn handoff_ci_history_uses_the_claim_scoped_mutation() {
         handoff_id: accepted.handoff_id.clone(),
         event: "ci_check_rerun".into(),
         note: "wrong invocation".into(),
+        decision: None,
     };
     let other_claim = ClaimInvocation::trusted_operator(
         accepted.handoff.task_id.clone(),
@@ -302,6 +303,7 @@ fn handoff_ci_history_uses_the_claim_scoped_mutation() {
         handoff_id: "different-handoff".into(),
         event: "ci_check_rerun".into(),
         note: "must be refused".into(),
+        decision: None,
     };
     assert!(
         owner
@@ -1071,14 +1073,27 @@ fn base_update_admission_rechecks_current_native_handoff_authority() {
         matches!(RuntimeHost::admit_ci_rerun(&reopened,std::slice::from_ref(&accepted.handoff.task_id),Some(&accepted.handoff_id),&retry,chrono::Utc::now().timestamp_millis() as u64).unwrap(),orbit_types::workflow::CiRerunAdmission::Observe(prior) if *prior==retry),
         "a fresh runtime re-observes the durable authorization after an unknown reply, without admitting another send"
     );
+    let reserved = reopened
+        .get_task_history(&accepted.handoff.task_id)
+        .unwrap()
+        .into_iter()
+        .filter(|entry| entry.event == orbit_types::workflow::CI_RERUN_RESERVED_EVENT)
+        .collect::<Vec<_>>();
+    assert_eq!(reserved.len(), 1);
+    // [ORB-25127] The reservation note is one readable line (STD-08 §R7);
+    // the complete plan, `authentication` included, is the entry's typed
+    // decision instead of a serialized-JSON note.
+    let note = reserved[0].note.as_deref().unwrap_or_default();
+    assert!(
+        !note.contains('\n') && note.chars().count() <= 200 && !note.contains("authentication"),
+        "the reservation note is one line without the serialized plan: {note}"
+    );
     assert_eq!(
-        reopened
-            .get_task_history(&accepted.handoff.task_id)
-            .unwrap()
-            .iter()
-            .filter(|entry| entry.event == orbit_types::workflow::CI_RERUN_RESERVED_EVENT)
-            .count(),
-        1
+        reserved[0].decision,
+        Some(orbit_types::task::TaskDecision::CiRerunReserved(Box::new(
+            retry.clone()
+        ))),
+        "the complete plan is recoverable from the typed decision"
     );
     let mut next = retry.clone();
     next.run_attempt = 2;

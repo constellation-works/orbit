@@ -62,6 +62,14 @@ export const taskState = {
   // Operator records (pilot-admission / post-deploy): a refused record's typed
   // code and message, kept with the action like a refused recovery.
   operatorRecordRefusals: new Map(),
+  // A refused decision answer, keyed `<workspace>:<task id>:<request id>`.
+  // The message stays with the decision card across a detail rebuild: the
+  // request itself does not change, so a refresh used to drop the only sign
+  // that the answer failed.
+  decisionAnswerRefusals: new Map(),
+  // The refusal key whose card should be scrolled into view once, after the
+  // render that first shows it.
+  decisionAnswerFocus: null,
   // Guard duplicate clicks while a Ship request is pending. Once the server
   // accepts it, the server's 409 protects the live run; releasing this guard lets
   // a task returned to backlog be shipped again without reloading the page.
@@ -229,10 +237,36 @@ export function pullRequestLink(task) {
 
 // A failed action is announced when it appears: the row's own controls are the
 // only thing the operator is looking at, and a plain div is never read out.
-export function actionErrorNode(text, remedy) {
+// `detail`, when it says more than `text`, stays behind Show full. The line
+// itself keeps the action, so the operator never has to open it to know the
+// next step.
+export function actionErrorNode(text, remedy, detail) {
   const node = el("div", { class: "action-error", text });
   node.setAttribute("role", "alert");
   if (remedy) node.appendChild(el("div", { class: "action-error-remedy", text: remedy }));
+  const extra = typeof detail === "string" ? detail.trim() : "";
+  if (extra && extra !== text) {
+    const full = el("div", { class: "action-error-detail", hidden: true, text: extra });
+    const toggle = el("button", {
+      class: "action-error-toggle",
+      type: "button",
+      text: "Show full",
+      "aria-description": "Show the full refusal, including the other ways to recover",
+    });
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const open = full.hidden;
+      full.hidden = !open;
+      toggle.setAttribute("aria-expanded", String(open));
+      toggle.textContent = open ? "Show less" : "Show full";
+      toggle.setAttribute("aria-description", open
+        ? "Hide the full refusal"
+        : "Show the full refusal, including the other ways to recover");
+    });
+    node.appendChild(toggle);
+    node.appendChild(full);
+  }
   return node;
 }
 

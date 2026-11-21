@@ -1,7 +1,7 @@
 ---
 title: Task Migration — Overview
 owner: claude
-last_updated: 2026-11-05
+last_updated: 2026-11-15
 last_validated: 2026-11-01
 status: Draft
 stage: shipped
@@ -11,7 +11,7 @@ doc_role: overview
 type: design
 summary: Move orbit tasks between hosts with export/import (tar.zst); task_prefix identifies each task's canonical owner, while an admitted follower may execute a fenced claim without taking authority.
 tags: [task-migration, multi-host, task-prefix]
-paths: ["crates/orbit-store/src/workflow/task/**", "crates/orbit-cli/src/command/task/**", "crates/orbit-core/src/bootstrap/task_migration.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs"]
+paths: ["crates/orbit-store/src/workflow/task/**", "crates/orbit-cli/src/command/task/**", "crates/orbit-core/src/application/task_bundle/migration.rs", "crates/orbit-core/src/bootstrap/task_migration.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs"]
 related_features: [task-migration, task-artifacts, host-registry]
 related_artifacts: [ORB-00034, ORB-10721, ORB-12126]
 ---
@@ -81,7 +81,8 @@ machine a disjoint id range).
 | Reindex from disk | [crates/orbit-store/src/workflow/task/reindex.rs](../../../crates/orbit-store/src/workflow/task/reindex.rs) | [ORB-00034] |
 | Allocator seed/bump + prefix primitives | [crates/orbit-store/src/driver/sqlite/task_registry/allocator.rs](../../../crates/orbit-store/src/driver/sqlite/task_registry/allocator.rs) | [ORB-00034], [ORB-10721] |
 | Prefix projection into the allocator | [crates/orbit-cmd/src/registry/runtime/selection.rs](../../../crates/orbit-cmd/src/registry/runtime/selection.rs) | [ORB-10721] |
-| Runtime facades | [crates/orbit-core/src/bootstrap/task_migration.rs](../../../crates/orbit-core/src/bootstrap/task_migration.rs) | [ORB-00034] |
+| Request-time runtime facades | [crates/orbit-core/src/application/task_bundle/migration.rs](../../../crates/orbit-core/src/application/task_bundle/migration.rs) | [ORB-24534] moved export/import/reindex into application |
+| Open-time allocator seeding | [crates/orbit-core/src/bootstrap/task_migration.rs](../../../crates/orbit-core/src/bootstrap/task_migration.rs) | [ORB-00034] introduced seeding; [ORB-24534] kept only open-time code here |
 | CLI surfaces | [crates/orbit-cli/src/command/task/export.rs](../../../crates/orbit-cli/src/command/task/export.rs), [import.rs](../../../crates/orbit-cli/src/command/task/import.rs) | [ORB-00034] |
 | `[tasks] id_start` config | [crates/orbit-config/src/registry/settings/table/keys_head.rs](../../../crates/orbit-config/src/registry/settings/table/keys_head.rs) | [ORB-00034] |
 | Owner-wins mirror sync | [crates/orbit-store/src/workflow/task/import.rs](../../../crates/orbit-store/src/workflow/task/import.rs) | [ORB-12126] |
@@ -93,7 +94,9 @@ foreign-prefix reindex entries from advancing the local allocator, and
 [ORB-13653] bounded reindex's bundle locks. [ORB-15666] corrected registry
 recovery guidance, while [ORB-15668] reconciled the authority rules with
 shipped follower claims. [ORB-12725] moved machine identity configuration
-from `host.toml` into global `config.toml`.
+from `host.toml` into global `config.toml`. [ORB-24534] moved the request-time
+`OrbitRuntime::{export_tasks, import_tasks, reindex_tasks}` facades into
+`application/task_bundle/migration.rs`; bootstrap now keeps allocator seeding only.
 
 ## 4. The migration recipe
 
@@ -333,5 +336,6 @@ that record and the current [distributed-drain setup procedure](../../runbooks/d
 - [ORB-15666] corrected the lost-registry recovery procedure.
 - [ORB-15668] reconciled task authority guidance with claimed follower execution.
 - [ORB-20828] preflighted unresolved import relation targets before any registry or bundle write.
+- [ORB-24534] moved request-time bundle migration into the application layer.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -88,7 +88,7 @@ enum Purpose {
 /// place, before anything reads it. `lower` is the layer beneath `document`
 /// as read from disk (the global file under a workspace file), or `None` for
 /// the lowest file, whose unstated halves take their built-in defaults.
-pub fn translate_deprecated_keys(
+pub(crate) fn translate_deprecated_keys(
     document: &mut toml::Value,
     lower: Option<&toml::Value>,
     config_path: &Path,
@@ -114,7 +114,7 @@ fn translate(
     translate_worker_containment(document, config_path)?;
     rename(
         document,
-        crate::LEGACY_TASK_TYPES_KEY,
+        crate::crew::task_types::LEGACY_TASK_TYPES_KEY,
         crate::TASK_TYPES_KEY,
     );
     Ok(())
@@ -124,7 +124,7 @@ fn translate(
 /// without its deprecated spellings: each replacement key the translated
 /// file states that `original` (the file as written) does not, or states
 /// only in a deprecated value form. `lower` is the layer beneath, as for
-/// [`translate_deprecated_keys`]. `orbit doctor --fix-retired-config-keys`
+/// `translate_deprecated_keys`. `orbit doctor --fix-retired-config-keys`
 /// writes these, then deletes the deprecated keys.
 pub fn deprecated_key_rewrites(
     original: &toml::Value,
@@ -327,7 +327,7 @@ fn translate_worker_containment(
 
 /// `machine.worker_containment`: how detached pipeline workers are bounded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkerContainmentMode {
+pub(crate) enum WorkerContainmentMode {
     /// Launch workers in the caller's cgroup.
     Off,
     /// Launch each worker in its own scope, or in the caller's cgroup with a

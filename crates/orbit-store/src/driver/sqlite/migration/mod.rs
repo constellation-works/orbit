@@ -15,6 +15,7 @@ mod baseline;
 mod condition_triggers;
 mod crew_memory;
 mod crew_performance;
+mod drain_intent;
 mod evolution;
 mod executor_census;
 mod experiments;
@@ -57,6 +58,7 @@ use backlog_forecasts::apply_backlog_forecasts;
 use baseline::apply_baseline_schema;
 use condition_triggers::apply_condition_triggers;
 use crew_performance::{apply_agent_task_facts, apply_crew_performance_snapshot};
+use drain_intent::apply_drain_intents;
 use executor_census::apply_executor_census;
 use experiments::{
     apply_experiment_admissions, apply_experiment_delete, apply_experiments,
@@ -80,10 +82,10 @@ use invocation::{
 use job_run_tasks::apply_job_run_task_recency;
 use job_runs::{
     apply_execution_provenance, apply_flat_crew_model, apply_job_run_archive_stage,
-    apply_job_run_build, apply_job_run_host_id_indexes, apply_job_run_id_allocations,
-    apply_job_run_states, apply_job_run_step_activity_window_index, apply_job_run_step_lock_wait,
-    apply_job_runs_created_index, apply_job_runs_job_created_and_retry_indexes,
-    apply_job_runs_recency_index,
+    apply_job_run_build, apply_job_run_crew_model_backfill, apply_job_run_host_id_indexes,
+    apply_job_run_id_allocations, apply_job_run_states, apply_job_run_step_activity_window_index,
+    apply_job_run_step_lock_wait, apply_job_runs_created_index,
+    apply_job_runs_job_created_and_retry_indexes, apply_job_runs_recency_index,
 };
 use landed_diff_stats::{apply_landed_diff_reviewable_lines, apply_landed_diff_stats};
 use learning::{apply_learning_index_workspace_scope, apply_remove_native_learning_subsystem};
@@ -101,7 +103,7 @@ use resource_minutes::{
     apply_worker_cpu_accounting,
 };
 use retention_analytics::apply_retention_analytics;
-use routine::apply_routine_scheduler_schema;
+use routine::{apply_routine_breakers, apply_routine_scheduler_schema};
 use scripts::apply_script_grants;
 use task_commit_journal::{apply_task_commit_journal, apply_task_coordination_claim_indexes};
 use task_reservations::{

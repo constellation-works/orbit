@@ -126,6 +126,9 @@ struct PassReads {
     forge_error: Option<String>,
     /// The activity catalog's load result, once read.
     catalog: Option<Result<(), String>>,
+    /// Runs bound to an execution claim, read once: resolving every claim is
+    /// the costliest per-run read and the answer is the same for each run.
+    claim_bound_runs: Option<Result<BTreeSet<String>, String>>,
 }
 
 /// What one pass does with one interrupted run.
@@ -210,8 +213,24 @@ impl OrbitRuntime {
             if adopted.len() >= authority.budget {
                 break;
             }
+            // A run an earlier pass decided, or a retry resumed, is not this
+            // pass's to consider: spare it the audit read below. A failed
+            // read falls through, so the verdict reports it as before.
+            if self.adoption_already_resolved(&run) {
+                continue;
+            }
             // Outside the window and upgrade interruptions are not this
-            // pass's to consider at all.
+            // pass's to consider at all. The recent-activity read below can
+            // only move the run's time earlier, so a run already outside the
+            // window by its finish time skips it.
+            let Some(finished_at) = run.finished_at else {
+                continue;
+            };
+            if now.signed_duration_since(finished_at) > ADOPTION_WINDOW
+                || super::upgrade_resume::upgrade_interrupted(&run)
+            {
+                continue;
+            }
             // Orphan timing may now be the detection-time upper bound. Keep
             // adoption's activity window independent of when a reader happened
             // to discover a dead worker, and never extend an older terminal row.
@@ -230,11 +249,8 @@ impl OrbitRuntime {
             } else {
                 None
             };
-            if run
-                .finished_at
-                .map(|finished| activity_at.map_or(finished, |activity| finished.min(activity)))
-                .is_none_or(|at| now.signed_duration_since(at) > ADOPTION_WINDOW)
-                || super::upgrade_resume::upgrade_interrupted(&run)
+            if activity_at
+                .is_some_and(|activity| now.signed_duration_since(activity) > ADOPTION_WINDOW)
             {
                 continue;
             }
@@ -340,7 +356,7 @@ impl OrbitRuntime {
                 ),
             ));
         }
-        match self.is_claimed_execution(&run.run_id) {
+        match self.claimed_execution_in_pass(&run.run_id, reads) {
             Ok(false) => {}
             Ok(true) => {
                 return skip(Skip::decided(
@@ -348,7 +364,12 @@ impl OrbitRuntime {
                     "a claimed leaf's release keeps its pull request for the task's next claim",
                 ));
             }
-            Err(error) => return skip(Skip::unreadable("read the run's claim", &error)),
+            Err(error) => {
+                return skip(Skip::deferred(
+                    "store_unreadable",
+                    format!("read the run's claim: {error}"),
+                ));
+            }
         }
         let state = match self.read_run_state(&run.run_id) {
             Ok(Some(state)) => state,
@@ -438,6 +459,47 @@ impl OrbitRuntime {
                 skip(Skip::decided("not_resumable", error.to_string()))
             }
             Err(error) => skip(Skip::deferred("resume_unplannable", error.to_string())),
+        }
+    }
+
+    /// Whether a retry already resumed `run` or an earlier pass decided it,
+    /// each a reason the pass ignores it. A read that fails is not an answer.
+    fn adoption_already_resolved(&self, run: &JobRun) -> bool {
+        matches!(
+            self.stores().jobs().job_run_retries(&run.run_id, 1),
+            Ok(retries) if !retries.is_empty()
+        ) || matches!(self.orphan_adoption_decided(&run.run_id), Ok(true))
+    }
+
+    /// Whether `run_id` is a claimed execution: its local pull is indexed by
+    /// run, and the claims bound to runs are resolved once per pass.
+    fn claimed_execution_in_pass(
+        &self,
+        run_id: &str,
+        reads: &mut PassReads,
+    ) -> Result<bool, String> {
+        if self
+            .stores()
+            .jobs()
+            .local_pull_for_run(run_id)
+            .map_err(|error| error.to_string())?
+            .is_some()
+        {
+            return Ok(true);
+        }
+        let bound = reads.claim_bound_runs.get_or_insert_with(|| {
+            self.resolve_execution_claims()
+                .map(|claims| {
+                    claims
+                        .into_iter()
+                        .filter_map(|claim| claim.bound_run.map(|bound| bound.run_id))
+                        .collect()
+                })
+                .map_err(|error| error.to_string())
+        });
+        match bound {
+            Ok(bound) => Ok(bound.contains(run_id)),
+            Err(error) => Err(error.clone()),
         }
     }
 

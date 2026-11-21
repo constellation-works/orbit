@@ -72,9 +72,7 @@ impl OrbitRuntime {
         }
         init::ensure_orbit_root_initialized(&roots.global_root, &roots.shared_root)?;
         build_runtime(
-            &roots.global_root,
-            &roots.shared_root,
-            &roots.local_root,
+            &roots,
             binding,
             HostLifetime::ShortLived,
             false,
@@ -88,15 +86,7 @@ impl OrbitRuntime {
         roots: OrbitRuntimeRoots,
         binding: Option<WorkspaceRuntimeBinding>,
     ) -> Result<Self, OrbitError> {
-        build_runtime(
-            &roots.global_root,
-            &roots.shared_root,
-            &roots.local_root,
-            binding,
-            HostLifetime::ShortLived,
-            true,
-            None,
-        )
+        build_runtime(&roots, binding, HostLifetime::ShortLived, true, None)
     }
 
     pub fn resolve_roots_for_cwd(
@@ -177,15 +167,12 @@ impl OrbitRuntime {
         local_root: &Path,
         task_prefix: Option<&str>,
     ) -> Result<Self, OrbitError> {
-        build_runtime(
-            global_root,
-            shared_root,
-            local_root,
-            None,
-            HostLifetime::ShortLived,
-            false,
-            task_prefix,
-        )
+        let roots = OrbitRuntimeRoots {
+            global_root: global_root.to_path_buf(),
+            shared_root: shared_root.to_path_buf(),
+            local_root: local_root.to_path_buf(),
+        };
+        build_runtime(&roots, None, HostLifetime::ShortLived, false, task_prefix)
     }
 
     /// [`Self::from_roots_with_binding`] with a `task_prefix` projection
@@ -199,15 +186,12 @@ impl OrbitRuntime {
         host_lifetime: HostLifetime,
         task_prefix: Option<&str>,
     ) -> Result<Self, OrbitError> {
-        build_runtime(
-            global_root,
-            shared_root,
-            local_root,
-            Some(binding),
-            host_lifetime,
-            false,
-            task_prefix,
-        )
+        let roots = OrbitRuntimeRoots {
+            global_root: global_root.to_path_buf(),
+            shared_root: shared_root.to_path_buf(),
+            local_root: local_root.to_path_buf(),
+        };
+        build_runtime(&roots, Some(binding), host_lifetime, false, task_prefix)
     }
 
     pub fn from_resolved_roots_read_only_with_binding(
@@ -216,15 +200,12 @@ impl OrbitRuntime {
         local_root: &Path,
         binding: WorkspaceRuntimeBinding,
     ) -> Result<Self, OrbitError> {
-        build_runtime(
-            global_root,
-            shared_root,
-            local_root,
-            Some(binding),
-            HostLifetime::ShortLived,
-            true,
-            None,
-        )
+        let roots = OrbitRuntimeRoots {
+            global_root: global_root.to_path_buf(),
+            shared_root: shared_root.to_path_buf(),
+            local_root: local_root.to_path_buf(),
+        };
+        build_runtime(&roots, Some(binding), HostLifetime::ShortLived, true, None)
     }
 
     /// Open existing state for host routine inspection without migrations,
@@ -234,21 +215,41 @@ impl OrbitRuntime {
         shared_root: &Path,
         binding: WorkspaceRuntimeBinding,
     ) -> Result<Self, OrbitError> {
-        ProductProfile::Orbit.validate_roots(&[global_root, shared_root])?;
-        let _generation = pin_executable_generation(global_root, true)?;
-        let layout_report = observe_or_upgrade_layout(shared_root, true)?;
-        let config = ResolvedConfig::load(&ConfigRoots::new(global_root, shared_root))?;
+        let roots = OrbitRuntimeRoots {
+            global_root: global_root.to_path_buf(),
+            shared_root: shared_root.to_path_buf(),
+            local_root: shared_root.to_path_buf(),
+        };
+        Self::initialize_from_resolved_roots_observational(roots, Some(binding))
+    }
+
+    /// Open existing state for an inspection report (`orbit doctor`) that must
+    /// not create, migrate or repair anything before it audits: no store or
+    /// registry creation, no schema migration, no layout upgrade, no policy or
+    /// allocator seeding and no stale-run reconciliation. A store that is
+    /// missing or needs migration is refused here, and the report names the
+    /// setup step instead (STD-01 §R31).
+    pub fn initialize_from_resolved_roots_observational(
+        roots: OrbitRuntimeRoots,
+        binding: Option<WorkspaceRuntimeBinding>,
+    ) -> Result<Self, OrbitError> {
+        ProductProfile::Orbit.validate_roots(&[
+            &roots.global_root,
+            &roots.shared_root,
+            &roots.local_root,
+        ])?;
+        let _generation = pin_executable_generation(&roots.global_root, true)?;
+        let layout_report = observe_or_upgrade_layout(&roots.shared_root, true)?;
+        let config =
+            ResolvedConfig::load(&ConfigRoots::new(&roots.global_root, &roots.shared_root))?;
+        let config_loader = runtime_config_loader(&roots.global_root, &roots.shared_root);
         RuntimeKernel::build_from_resolved_config_write_free(
-            &OrbitRuntimeRoots {
-                global_root: global_root.to_path_buf(),
-                shared_root: shared_root.to_path_buf(),
-                local_root: shared_root.to_path_buf(),
-            },
-            Some(binding),
+            &roots,
+            binding,
             &config,
             layout_report,
             HostLifetime::ShortLived,
-            runtime_config_loader(global_root, shared_root),
+            config_loader,
             &APPLICATION_PORT,
         )
         .map(Self::from_kernel)
@@ -317,16 +318,16 @@ pub fn pin_executable_generation_as(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_runtime(
-    global_root: &Path,
-    shared_root: &Path,
-    local_root: &Path,
+    roots: &OrbitRuntimeRoots,
     binding: Option<WorkspaceRuntimeBinding>,
     host_lifetime: HostLifetime,
     read_only: bool,
     task_prefix: Option<&str>,
 ) -> Result<OrbitRuntime, OrbitError> {
+    let global_root = roots.global_root.as_path();
+    let shared_root = roots.shared_root.as_path();
+    let local_root = roots.local_root.as_path();
     ProductProfile::Orbit.validate_roots(&[global_root, shared_root, local_root])?;
     let generation = pin_executable_generation(global_root, read_only)?;
     let write_free = generation.joined_foreign_generation();
@@ -348,14 +349,9 @@ fn build_runtime(
     if !write_free && !read_only {
         init::refresh_workspace_catalog_copies_on_open(global_root, shared_root);
     }
-    let roots = OrbitRuntimeRoots {
-        global_root: global_root.to_path_buf(),
-        shared_root: shared_root.to_path_buf(),
-        local_root: local_root.to_path_buf(),
-    };
     let kernel = if write_free {
         RuntimeKernel::build_from_resolved_config_write_free(
-            &roots,
+            roots,
             binding,
             &runtime_config,
             layout_report,
@@ -365,7 +361,7 @@ fn build_runtime(
         )?
     } else {
         RuntimeKernel::build_from_resolved_config(
-            &roots,
+            roots,
             binding,
             &runtime_config,
             layout_report,

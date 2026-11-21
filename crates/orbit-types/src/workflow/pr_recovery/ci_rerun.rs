@@ -1,5 +1,6 @@
 //! Unchanged-head CI retries, reserved before external mutation.
-use crate::task::TaskHistoryEntry;
+use crate::plugin::is_sha1_commit_id;
+use crate::task::{TaskDecision, TaskHistoryEntry};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -39,6 +40,75 @@ pub struct CiRerunPlan {
     pub failed_jobs: Vec<Value>,
     /// Source blobs, policy, checks, run and complete listing used for admission.
     pub authentication: Value,
+}
+
+/// Longest `ci_check_rerun_reserved` note, in characters.
+const CI_RERUN_RESERVED_NOTE_MAX_CHARS: usize = 200;
+
+impl CiRerunPlan {
+    /// The one-line note people read on the `ci_check_rerun_reserved`
+    /// event, at most 200 characters. The complete plan rides on the
+    /// entry's [`TaskDecision::CiRerunReserved`].
+    pub fn reservation_note(&self) -> String {
+        let one_line = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut checks: Vec<String> = Vec::new();
+        let mut classes: Vec<String> = Vec::new();
+        for root in &self.roots {
+            let check = format!("'{}'", one_line(&root.check));
+            if !checks.contains(&check) {
+                checks.push(check);
+            }
+            let class = one_line(&root.classification);
+            if !classes.contains(&class) {
+                classes.push(class);
+            }
+        }
+        let tail = format!(
+            " on PR #{} run {} attempt {} ({})",
+            one_line(&self.pr_number),
+            self.run_id,
+            self.run_attempt,
+            classes.join(", ")
+        );
+        let mut note = format!("CI rerun reserved: {}{tail}", checks.join(", "));
+        if note.chars().count() > CI_RERUN_RESERVED_NOTE_MAX_CHARS && checks.len() > 1 {
+            note = format!("CI rerun reserved: {} checks{tail}", checks.len());
+        }
+        if note.chars().count() > CI_RERUN_RESERVED_NOTE_MAX_CHARS {
+            note = note
+                .chars()
+                .take(CI_RERUN_RESERVED_NOTE_MAX_CHARS - 1)
+                .chain(std::iter::once('…'))
+                .collect();
+        }
+        note
+    }
+
+    /// The history entry recording this plan's reservation: a one-line
+    /// note and the complete plan as its typed decision.
+    pub fn reservation_entry(&self, at: chrono::DateTime<chrono::Utc>) -> TaskHistoryEntry {
+        TaskHistoryEntry::new(at, "system", CI_RERUN_RESERVED_EVENT)
+            .with_note(Some(self.reservation_note()))
+            .with_decision(Some(TaskDecision::CiRerunReserved(Box::new(self.clone()))))
+    }
+
+    /// The plan a `ci_check_rerun_reserved` entry reserved. Reads the typed
+    /// decision; an entry with no decision was written before it and is read
+    /// from its JSON note. `None` for another event, a foreign decision or an
+    /// unreadable legacy note.
+    pub fn from_reservation_entry(entry: &TaskHistoryEntry) -> Option<Self> {
+        if entry.event != CI_RERUN_RESERVED_EVENT {
+            return None;
+        }
+        match &entry.decision {
+            Some(TaskDecision::CiRerunReserved(plan)) => Some(plan.as_ref().clone()),
+            Some(_) => None,
+            None => entry
+                .note
+                .as_deref()
+                .and_then(|note| serde_json::from_str::<Self>(note).ok()),
+        }
+    }
 }
 
 /// A durable hold before another infrastructure retry is admitted.
@@ -310,7 +380,7 @@ impl CiCheckRerunRecord {
     /// `None` when the receipt omitted or malformed either.
     pub fn action_identity(&self) -> Option<(&str, u64)> {
         let head = self.head.as_deref()?;
-        let valid = head.len() == 40 && head.bytes().all(|byte| byte.is_ascii_hexdigit());
+        let valid = is_sha1_commit_id(head);
         valid.then_some((head, self.run_id?))
     }
 
@@ -591,6 +661,51 @@ fn wildcard_matches(pattern: &[u8], text: &[u8]) -> bool {
     pattern[p..].iter().all(|byte| *byte == b'*')
 }
 
+/// Why CI retry admission was refused. Consumers match the variant;
+/// `Display` preserves the historical wording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CiRerunRefusal {
+    /// The authenticated plan lacks complete or supported authorization.
+    InvalidAuthorization,
+    /// A stored reservation could not be decoded.
+    UnreadableReservation,
+    /// A stored reservation uses an unsupported schema version.
+    UnsupportedVersion,
+    /// Reservations disagree about the same provider attempt.
+    ConflictingReservations,
+    /// A legacy rerun history note could not be decoded.
+    UnreadableLegacyHistory,
+    /// A legacy rerun record lacks its action identity.
+    MissingLegacyActionIdentity,
+    /// Legacy history already spent the shared unchanged-head retry.
+    SharedBudgetSpent,
+    /// A claimed worker asked; retries require the owning host.
+    RequiresOwningHost,
+    /// The owning task is terminal.
+    OwningTaskTerminal,
+    /// This host keeps no CI retry ledger.
+    LedgerAbsent,
+}
+
+impl std::fmt::Display for CiRerunRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::InvalidAuthorization => "incomplete CI retry authorization",
+            Self::UnreadableReservation => "unreadable CI retry reservation",
+            Self::UnsupportedVersion => "unsupported CI retry reservation version",
+            Self::ConflictingReservations => "conflicting CI retry reservations for this attempt",
+            Self::UnreadableLegacyHistory => "unreadable legacy CI retry history",
+            Self::MissingLegacyActionIdentity => {
+                "legacy CI retry history omitted its action identity"
+            }
+            Self::SharedBudgetSpent => "the shared unchanged-head CI retry budget is spent",
+            Self::RequiresOwningHost => "CI retry requires the owning host",
+            Self::OwningTaskTerminal => "CI retry owning task is terminal",
+            Self::LedgerAbsent => "this host keeps no CI retry ledger",
+        })
+    }
+}
+
 /// Admission is atomic under the owning task/claim boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CiRerunAdmission {
@@ -604,7 +719,7 @@ pub enum CiRerunAdmission {
         attempts: u32,
     },
     Observe(Box<CiRerunPlan>),
-    Refused(String),
+    Refused(CiRerunRefusal),
 }
 
 /// Decide under the owning task/claim lock; unknown sends consume a reservation.
@@ -625,23 +740,17 @@ pub fn decide_ci_rerun_with_policy(
             )
         })
     {
-        return CiRerunAdmission::Refused("incomplete CI retry authorization".into());
+        return CiRerunAdmission::Refused(CiRerunRefusal::InvalidAuthorization);
     }
     let mut reserved: Vec<(CiRerunPlan, u64)> = Vec::new();
     let mut legacy_spent = false;
     for entry in history {
         if entry.event == CI_RERUN_RESERVED_EVENT {
-            let prior = entry
-                .note
-                .as_deref()
-                .and_then(|note| serde_json::from_str::<CiRerunPlan>(note).ok());
-            let Some(prior) = prior else {
-                return CiRerunAdmission::Refused("unreadable CI retry reservation".into());
+            let Some(prior) = CiRerunPlan::from_reservation_entry(entry) else {
+                return CiRerunAdmission::Refused(CiRerunRefusal::UnreadableReservation);
             };
             if prior.schema_version != 1 {
-                return CiRerunAdmission::Refused(
-                    "unsupported CI retry reservation version".into(),
-                );
+                return CiRerunAdmission::Refused(CiRerunRefusal::UnsupportedVersion);
             }
             if prior.repository_id == plan.repository_id
                 && prior.pr_number == plan.pr_number
@@ -651,9 +760,7 @@ pub fn decide_ci_rerun_with_policy(
                     existing.run_id == prior.run_id && existing.run_attempt == prior.run_attempt
                 }) {
                     if existing != &prior {
-                        return CiRerunAdmission::Refused(
-                            "conflicting CI retry reservations for this attempt".into(),
-                        );
+                        return CiRerunAdmission::Refused(CiRerunRefusal::ConflictingReservations);
                     }
                 } else {
                     reserved.push((
@@ -664,12 +771,10 @@ pub fn decide_ci_rerun_with_policy(
             }
         } else if entry.event == CI_CHECK_RERUN_EVENT {
             let Some(prior) = CiCheckRerunRecord::from_history_note(entry.note.as_deref()) else {
-                return CiRerunAdmission::Refused("unreadable legacy CI retry history".into());
+                return CiRerunAdmission::Refused(CiRerunRefusal::UnreadableLegacyHistory);
             };
             let Some((head, _)) = prior.action_identity() else {
-                return CiRerunAdmission::Refused(
-                    "legacy CI retry history omitted its action identity".into(),
-                );
+                return CiRerunAdmission::Refused(CiRerunRefusal::MissingLegacyActionIdentity);
             };
             if head == plan.head_sha {
                 legacy_spent = true;
@@ -706,9 +811,7 @@ pub fn decide_ci_rerun_with_policy(
         return CiRerunAdmission::InfrastructureExhausted { attempts: 0 };
     }
     if legacy_spent && reserved.is_empty() {
-        return CiRerunAdmission::Refused(
-            "the shared unchanged-head CI retry budget is spent".into(),
-        );
+        return CiRerunAdmission::Refused(CiRerunRefusal::SharedBudgetSpent);
     }
     CiRerunAdmission::Reserved
 }

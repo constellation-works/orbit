@@ -23,22 +23,27 @@ a clean query against that database is invalid evidence.
 
 ## Prerequisites
 
-Use an existing CodeQL bundle (CLI plus Rust query packs), `rustup`, Cargo
-proxies on `PATH`, and a working Bubblewrap installation that can create its
-Linux namespaces. The owner-side fulfilment runs candidate-controlled scripts
-inside Bubblewrap, with the detached evidence checkout as the only writable
-task-controlled path. The script does not install CodeQL or global toolchains.
-Rust downloads and any Cargo dependency fetches use only the executor's granted
-network access. Start in the checkout being validated.
+For a local run, use an existing CodeQL bundle (CLI plus Rust query packs),
+`rustup`, and Cargo proxies on `PATH`. Owner-side fulfilment also requires a
+working Bubblewrap installation that can create its Linux namespaces; see
+[Owner fulfilment](#owner-fulfilment). That run executes candidate-controlled
+scripts inside Bubblewrap, with the detached evidence checkout as the only
+writable task-controlled path. The script does not install CodeQL or global
+toolchains. Rust downloads and any Cargo dependency fetches use only the
+executor's granted network access. Start in the checkout being validated.
 
 When validating a hosted alert, use the same CodeQL bundle version as the
 hosted analysis when possible. Record the local version from `codeql version`
 and the hosted analysis version shown with the alert or its analysis metadata.
 If they differ, record both versions in the evidence and treat the local result
-as limited evidence for that hosted alert.
+as limited evidence for that hosted alert. A rule the local bundle does not
+offer cannot be confirmed at all: the code-scanning sweep holds such a repair
+behind a proposed `CodeQL bundle <version> needed on <host>` prerequisite and
+an open drift friction record ([CONFIG.md](../CONFIG.md#security_alert_sweep--security-finding-severity)).
+Install that bundle on the host, then mark the prerequisite done.
 
-The default extractor toolchain is **Rust 1.97.0 plus rust-src**, confirmed for
-CodeQL **2.27.1**. This is separate from the repository's build toolchain. For
+The default extractor toolchain is **Rust 1.99.0 plus rust-src**, confirmed for
+CodeQL **2.27.5**. This is separate from the repository's build toolchain. For
 another bundle, inspect its extractor's requested version and pass
 `--toolchain <version>`; do not substitute the host's installed stable version.
 
@@ -305,7 +310,7 @@ when it returns `Result<PathBuf, E>` or `Result<Option<PathBuf>, E>`:
 - ["orbit_crate::module::validated_path", "ReturnValue", "path-injection", "manual"]
 ```
 
-On Linux with CodeQL 2.27.1 (rust-all 0.2.22), the real-CodeQL fixture below
+On Linux with CodeQL 2.27.1 (rust-all 0.2.22) and 2.27.5 (rust-all 0.2.26), the real-CodeQL fixture below
 reports `rust/path-injection` through
 `ReturnValue.Field[core::result::Result::Ok(0)]` and through its nested
 `.Field[core::option::Option::Some(0)]` form. The SARIF path traverses the
@@ -424,18 +429,22 @@ declares a workspace rule that a Rust change owes it:
 kind = "codeql"
 name = "Linux CodeQL (rust)"
 paths = ["**/*.rs"]
+tags = ["security", "security-review"]
 os = "linux"
 command = "scripts/codeql-rust-local.sh --ram 16384 codeql/rust-queries:codeql-suites/rust-security-extended.qls"
 artifact = "evidence/codeql-rust-linux.json"
 ```
 
-On a non-Linux follower, a candidate that changes a matching path owes this
-requirement. The reviewer's manifest names it in `owed_external_evidence`. It records the
+On a non-Linux follower, a candidate that changes a matching path, or a task
+tagged `security` or `security-review` whatever it changed (such as an
+npm-only dependency update), owes this requirement. The implementer records
+the command `not_run` with the exit-3 refusal and hands off; it does not fail
+for the missing Linux run. The reviewer's manifest names it in `owed_external_evidence`. It records the
 command `not_run` and never attempts it. Settlement adds the requirement
 whatever the report says, so the review holds for the owner's run. It neither
 blocks on an `incomplete` verdict whose only gap this is, nor ships a pass the
 host could not have run. A Linux follower, or a candidate that changes no
-matching path, owes nothing
+matching path on a task carrying no listed tag, owes nothing
 ([design](../design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545)).
 This repository declares no `hosted_check`: its hosted CodeQL emits no pull
 request check, so a before-landing review that owes this requirement holds for

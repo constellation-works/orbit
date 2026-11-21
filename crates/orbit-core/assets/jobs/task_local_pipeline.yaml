@@ -17,7 +17,10 @@
 # - ORB-11187: when the submitting operator authorized completion
 #   (`completion: done`), `complete_tasks` runs *after* `push`, so a failed merge
 #   or a failed push fails the run with the tasks still in `review`. Completion is
-#   never reached by a leaf whose publication did not succeed.
+#   never reached by a leaf whose publication did not succeed. `completion: done`
+#   also forces the `push` step on, whatever `auto_push` says (ORB-25144): the
+#   drain never sets `auto_push`, so without that a completed task's merge
+#   existed only on the local base.
 # - ORB-23365: under `completion: done`, `merge` first decides a
 #   `completion.hold` rule against the candidate's diff. A held candidate
 #   is not merged onto the base, not pushed and not completed; the run
@@ -196,13 +199,21 @@ spec:
               task_id: "{{ item }}"
               status: "{{ input.terminal_status }}"
 
+    # Publishes the merged base. It runs when the invocation asked for a push
+    # (`auto_push`) and, unconditionally, under `completion: done`: a task is
+    # only `done` once its merge is on the remote, never while it sits on this
+    # host's local base alone. `integrate_remote` merges a remote other hosts
+    # moved into the local base (history only grows, so merge shas the run
+    # recorded stay reachable) before the fast-forward push; a conflict, or any
+    # other failed push, fails the run with the tasks still in `review`.
     - id: push
-      when: "{{ input.auto_push }} == true && {{ steps.merge.output.merged }} != false"
+      when: "{{ input.auto_push }} == true && {{ steps.merge.output.merged }} != false || {{ input.completion }} == done && {{ steps.commit.output.decision }} != verified_finding_invalid && {{ steps.merge.output.merged }} != false"
       recovery_activity: step_failure_recovery
       target: activity:git_push
       default_input:
         workspace_path: "{{ steps.worktree.output.workspace_path }}"
         branch: "{{ input.base_branch }}"
+        integrate_remote: true
 
     # Last: every publication step this invocation required has succeeded by
     # here, which is the precondition the completion authorization was granted

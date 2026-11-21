@@ -69,7 +69,7 @@ pub(super) fn assert_readable_schema(
         return Ok(ReadableRegistry { pre_ledger: false });
     }
     if version > 0 {
-        return Err(OrbitError::Store(format!(
+        return Err(OrbitError::StoreWritableOpenOwed(format!(
             "task registry '{}' requires a writable migration: the database is read-only, and \
              observing it found registry ledger version {version} instead of version \
              {SUPPORTED_REGISTRY_VERSION}. Open the registry once from writable storage, then \
@@ -84,7 +84,10 @@ pub(super) fn assert_readable_schema(
     if user_version == PRE_LEDGER_COMPATIBLE && action_keys {
         return Ok(ReadableRegistry { pre_ledger: true });
     }
-    if user_version > 6 {
+    // A ledgerless v6 is adoptable only when its shape is the recognized
+    // additive one. An unrecognized v6 gets the unsupported guidance a writable
+    // open gives, not a setup step that open would refuse.
+    if !is_adoptable(conn)? {
         return Err(unsupported_schema(user_version, path));
     }
     let action_keys = if action_keys {
@@ -92,9 +95,9 @@ pub(super) fn assert_readable_schema(
     } else {
         " without task action keys"
     };
-    Err(OrbitError::Store(format!(
-        "task registry '{}' requires writable additive setup/recovery: the database is read-only, \
-         and observing it found schema version {user_version}{action_keys} instead of version \
+    Err(OrbitError::StoreWritableOpenOwed(format!(
+        "task registry '{}' requires writable additive setup/recovery: \
+         the database is read-only, and observing it found schema version {user_version}{action_keys} instead of version \
          {PRE_LEDGER_COMPATIBLE} with task action keys. Open the registry once from writable \
          storage, then retry the observation",
         path.display()

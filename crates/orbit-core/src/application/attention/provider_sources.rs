@@ -1,15 +1,16 @@
 //! Provider and record sources: `ci_red` from the provider read behind
 //! `github.run.list`, cached per workspace and bounded by the source timeout.
 use super::sources::{
-    AttentionCandidates, SharedOpenTasks, attention_reason, attention_task, workspace_degraded,
+    AttentionCandidates, AttentionSourceContext, SharedOpenTasks, attention_reason, attention_task,
+    workspace_degraded,
 };
 use crate::OrbitRuntime;
 use crate::application::contracts::ToolInvocationPort;
 use chrono::{DateTime, Utc};
-use orbit_common::governance::attention::{cursor, filter::AttentionFilter};
+use orbit_common::governance::attention::cursor;
 use orbit_types::tool::{
-    AttentionHost, AttentionItem, AttentionKind, AttentionNext, AttentionSeverity, AttentionTask,
-    AttentionWorkspace, ToolSessionContext,
+    AttentionItem, AttentionKind, AttentionNext, AttentionSeverity, AttentionTask,
+    ToolSessionContext,
 };
 use serde_json::{Value, json};
 use std::{
@@ -166,17 +167,17 @@ fn build_repair_lookup(
     lookup
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn read_ci_attention(
-    runtime: &OrbitRuntime,
-    workspace: &AttentionWorkspace,
-    host: &AttentionHost,
-    filter: &AttentionFilter,
-    now: DateTime<Utc>,
+    context: &AttentionSourceContext<'_>,
     session: &ToolSessionContext,
     candidates: &mut AttentionCandidates,
     open_tasks: &SharedOpenTasks,
 ) {
+    let runtime = context.runtime;
+    let workspace = context.workspace;
+    let host = context.host;
+    let filter = context.filter;
+    let now = context.now;
     if !filter.selected(AttentionKind::CiRed) {
         return;
     }

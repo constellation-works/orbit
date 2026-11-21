@@ -16,8 +16,8 @@ use orbit_cmd::registry_routines::{
 };
 use orbit_common::governance::authorization::{
     AuthorizationDenial, CallerCapabilities, CallerEnvelope, DASHBOARD_CLOCK_CADENCE,
-    DASHBOARD_CLOCK_SERVICE, DASHBOARD_JOB_RUN, DASHBOARD_ROUTINE_TOGGLE,
-    DASHBOARD_ROUTINE_TRIGGER, GovernedOperation, authorize,
+    DASHBOARD_CLOCK_SERVICE, DASHBOARD_JOB_RUN, DASHBOARD_ROUTINE_BREAKER,
+    DASHBOARD_ROUTINE_TOGGLE, DASHBOARD_ROUTINE_TRIGGER, GovernedOperation, authorize,
 };
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_core::application::routines::{
@@ -49,17 +49,8 @@ const ROUTINE_HEALTH_TTL: Duration = Duration::from_secs(5);
 /// compute.
 const ROUTINE_HEALTH_REFRESH_AFTER: Duration = Duration::from_secs(3);
 
-/// Host-wide cache key: selection does not restrict the host's routine list.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub(crate) struct RoutineMemoKey {
-    inputs: Vec<(PathBuf, Option<(SystemTime, u64)>)>,
-    /// Routine fire, cursor, pause and automation rows in the shared audit
-    /// database. Not the database's file stamp, which every unrelated audit
-    /// write moves.
-    routine_store: Option<String>,
-    include_inactive_plugins: bool,
-    operator: bool,
-}
+// Compatibility shim. Retirement: callers import `crate::runtime_memo::RoutineMemoKey`.
+pub(crate) use crate::runtime_memo::RoutineMemoKey;
 
 /// Inputs routine health reads that a live drain rewrites constantly: job runs
 /// and the task registry files. Keying on them recomputed synchronously, about
@@ -165,12 +156,12 @@ pub(super) async fn list_routine_health(
                 None => (None, None),
             };
         Ok((
-            RoutineMemoKey {
+            RoutineMemoKey::from_stamped_inputs(
                 inputs,
                 routine_store,
                 include_inactive_plugins,
-                operator: operator_session,
-            },
+                operator_session,
+            ),
             RoutineChurn {
                 job_runs,
                 task_store,
@@ -493,6 +484,7 @@ pub(super) fn report_json(
         "capabilities": {
             "routine_toggle": action_capability(&DASHBOARD_ROUTINE_TOGGLE, operator_session),
             "routine_trigger": action_capability(&DASHBOARD_ROUTINE_TRIGGER, operator_session),
+            "routine_breaker": action_capability(&DASHBOARD_ROUTINE_BREAKER, operator_session),
             "job_run": action_capability(&DASHBOARD_JOB_RUN, operator_session),
             "clock_service": action_capability(&DASHBOARD_CLOCK_SERVICE, operator_session),
             "clock_cadence": action_capability(&DASHBOARD_CLOCK_CADENCE, operator_session),
@@ -557,6 +549,8 @@ const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[
     ("last_fire", RoutineField::LastFire(FIRE_COLUMNS)),
     ("recent_fires", RoutineField::RecentFires(FIRE_COLUMNS)),
     ("failure_streak", RoutineField::FailureStreak),
+    ("state", RoutineField::State),
+    ("breaker", RoutineField::Breaker),
 ];
 
 /// The zone cron triggers are evaluated in: the host's local zone, as the

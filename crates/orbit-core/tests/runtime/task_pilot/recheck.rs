@@ -462,8 +462,41 @@ fn each_fallback_runs_a_full_pilot_and_records_why() {
     );
 }
 
+/// [ORB-25722] Admission holds on `already_landed`, so a re-check must name it
+/// as a holding finding: a task held only by it is re-checked, not labelled
+/// `prior_not_held`, and a `resolved` verdict releases it.
+fn an_already_landed_hold_is_a_holding_finding() {
+    let workspace = Workspace::new();
+    let task = workspace.recheck_task("landed");
+    let prepared = workspace.prepare_with(&task.id, json!({}));
+    let mut landed = assessment(&task.id);
+    landed["utility_warnings"] = json!([]);
+    landed["already_landed"] = json!({"evidence": "README.md:1 already names the fixture."});
+    let applied = workspace.apply_tasks(&prepared, vec![landed]);
+    assert_eq!(applied["applied_count"], 1, "{applied}");
+
+    let prepared = workspace.prepare_with(&task.id, json!({}));
+    let snapshot = &prepared["tasks"][0];
+    assert_eq!(snapshot["pilot_mode"], "recheck", "{snapshot}");
+    let holding = snapshot["recheck"]["holding_findings"].as_array().unwrap();
+    assert_eq!(holding.len(), 1, "{snapshot}");
+    assert_eq!(holding[0]["id"], "already_landed", "{snapshot}");
+
+    let applied = workspace.apply_tasks(
+        &prepared,
+        vec![json!({"task_id": task.id, "recheck_findings": [{
+            "id": "already_landed", "status": "resolved",
+            "evidence": "README.md:1 lacks the guide link the criteria now ask for.",
+        }]})],
+    );
+    assert_eq!(applied["applied_count"], 1, "{applied}");
+    let (_, audit) = workspace.latest_receipt(&task.id);
+    assert!(audit["assessment"]["already_landed"].is_null(), "{audit}");
+}
+
 crate::scenario_table!(
     recheck_scenarios,
+    an_already_landed_hold_is_a_holding_finding,
     a_held_assessment_is_rechecked_with_its_findings_and_task_diff,
     a_recheck_keeps_untouched_fields_and_records_its_verdicts,
     a_recheck_without_a_verdict_per_holding_finding_is_sent_to_repair,

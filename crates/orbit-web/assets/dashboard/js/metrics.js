@@ -528,7 +528,7 @@ function groupedSeriesCard(card) {
       class: `mx-series-row mx-s-${entry.swatch || entry.key}${entry.on ? " on" : " off"}${entry.dashed ? " dashed" : ""}`,
       type: "button",
       "aria-pressed": entry.on ? "true" : "false",
-      title: entry.on ? `Hide ${entry.label}` : `Show ${entry.label}`,
+      "aria-description": entry.on ? `Hide ${entry.label}` : `Show ${entry.label}`,
     }, [
       el("span", { class: "mx-series-row-head" }, [
         el("span", { class: `mx-swatch${entry.dashed ? " dashed" : ""}`, "aria-hidden": "true" }),
@@ -568,7 +568,7 @@ function seriesCards(cards) {
       class: `mx-sc mx-s-${card.swatch || card.key}${card.on ? " on" : " off"}`,
       type: "button",
       "aria-pressed": card.on ? "true" : "false",
-      title: card.on ? `Hide ${card.label}` : `Show ${card.label}`,
+      "aria-description": card.on ? `Hide ${card.label}` : `Show ${card.label}`,
     }, [
       el("span", { class: "mx-sc-label" }, [
         el("span", { class: `mx-swatch${card.bar ? " bar" : ""}${card.dashed ? " dashed" : ""}`, "aria-hidden": "true" }),

@@ -219,3 +219,77 @@ fn failed_zero_job_workflow_routes_by_candidate_ownership() {
         },
     );
 }
+
+/// A text-only diagnosis present at reservation and absent at revalidation is
+/// not a changed verified source: the one rerun is still sent and completes.
+#[test]
+fn zero_job_rerun_survives_a_diagnosis_that_vanishes_after_reservation() {
+    isolated(
+        "infrastructure::failed_workflow::zero_job_rerun_survives_a_diagnosis_that_vanishes_after_reservation",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let fx = fixture_with_workflow(row);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                open_for_completion(&fx, &host);
+                setup(&fx, "positive");
+                update(&fx, "policy", |value| {
+                    value["data"]["repository"]["pullRequest"]["baseRef"]["branchProtectionRule"] = json!({"id":"classic-rule","requiredStatusChecks":[{"context":"Protected (rust)","app":{"databaseId":900,"slug":"github-actions"}}]})
+                });
+                put(&fx, "rules", json!([]));
+                for file in ["run-before", "runs-before", "run-after", "runs-after"] {
+                    update(&fx, file, |value| {
+                        let run = if file.starts_with("runs-") {
+                            &mut value["workflow_runs"][0]
+                        } else {
+                            value
+                        };
+                        run["pull_requests"] = json!([]);
+                    });
+                }
+                fs::write(
+                    fx.forge.join("infra-log"),
+                    "This run likely failed because of a workflow file issue.\n",
+                )
+                .unwrap();
+                fs::write(fx.forge.join("infra-log-vanishes"), "").unwrap();
+                put(&fx, "jobs", json!({"total_count":0,"jobs":[]}));
+                put(
+                    &fx,
+                    "checks-before",
+                    json!({"total_count":0,"check_runs":[]}),
+                );
+                put(
+                    &fx,
+                    "rollup-policy",
+                    json!({"data":{"repository":{"pullRequest":{"headRefOid":fx.candidate,"commits":{"nodes":[{"commit":{"oid":fx.candidate,"statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}}]}}}}}),
+                );
+                fx.script_checks(&["prerequisite"]);
+                let mut input = fx.complete_ungated_input();
+                input["auto_fix"] = json!(true);
+                input["completion"] = json!("review");
+                input["max_wait_seconds"] = json!(15);
+                let output = complete_with_logical_clock(&host, &input)
+                    .expect("the verified zero-job workflow completes after one rerun");
+                assert_eq!(output["merge"]["head_sha"], json!(fx.candidate), "{output}");
+                let calls = fs::read_to_string(fx.forge.join("calls")).unwrap();
+                assert_eq!(
+                    calls.lines().filter(|line| *line == "run rerun").count(),
+                    1,
+                    "exactly one rerun: {calls}"
+                );
+                let reservations = pr_infrastructure_reservations(&host.history(TASK_ID)).unwrap();
+                assert_eq!(reservations.len(), 1);
+                assert!(
+                    reservations[0]
+                        .evidence
+                        .failed_workflow_run()
+                        .and_then(|failure| failure.provider_message.as_deref())
+                        .is_some_and(|message| message.contains("workflow file issue")),
+                    "the reservation retained the diagnosis"
+                );
+                assert!(fx.merge_requests().is_empty());
+                assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+            });
+        },
+    );
+}

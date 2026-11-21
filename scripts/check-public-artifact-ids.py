@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Reject concrete workspace-local IDs embedded in shipped Rust string literals."""
+"""Reject concrete workspace-local IDs embedded in shipped Rust string literals.
+
+A literal may span lines. An ID on an interior line of a normal or raw string
+is the same leak as one on the line that opens the literal. Line comments and
+block comments are provenance and are not scanned.
+"""
 
 from pathlib import Path
 import re
@@ -10,57 +15,176 @@ SOURCE_ROOTS = sorted((path for path in (ROOT / "crates").glob("*/src") if path.
 CONCRETE_ID = re.compile(
     r"(?<![A-Za-z0-9])(?:ORB-|ADR-|L-)\d+\b|(?<![A-Za-z0-9])F\d{4}-\d{2}-\d{3}\b"
 )
+TEST_CFG = "#[cfg(test)]"
+OUTER_ATTRIBUTE = re.compile(r"\s*#\[[^\]]*\]")
+INLINE_MODULE = re.compile(r"\s*(?:pub(?:\s*\([^)]*\)\s*|\s+))?mod\s+\w+\s*\{")
+BRACE = re.compile(r"[{}]")
+LEXICAL_BOUNDARY = re.compile(r"""//|/\*|['"]""")
+BLOCK_COMMENT_BOUNDARY = re.compile(r"/\*|\*/")
 
 
 def production_lines(path: Path):
-    """Yield source lines outside sibling and inline Rust test modules."""
-    in_test_module = False
+    """Yield line numbers and literal contents outside inline Rust test modules."""
     brace_depth = 0
     pending_test_module = False
+    pending_string = None
+    block_depth = 0
 
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        if "#[cfg(test)]" in line:
-            pending_test_module = True
+        # Lex every line, including excluded ones, so module filtering and
+        # literal scanning always use the same string and comment boundaries.
+        code, contents, pending_string, block_depth = lex_rust_line(
+            line, pending_string, block_depth
+        )
+        start = 0
+        while start < len(code):
+            if brace_depth:
+                for brace in BRACE.finditer(code, start):
+                    brace_depth += 1 if brace.group() == "{" else -1
+                    if not brace_depth:
+                        start = brace.end()
+                        break
+                else:
+                    break
+                continue
 
-        if pending_test_module and re.search(r"\bmod\s+\w+\s*\{", line):
-            pending_test_module = False
-            in_test_module = True
-            brace_depth = line.count("{") - line.count("}")
-            continue
-        # cfg applies to the next item, not a later module. Keep it across
-        # blank/comment/attribute lines only; a test-only use/fn/const consumes it.
-        item = strip_line_comment(line).strip()
-        item = re.sub(r"#\[[^\]]*\]", "", item).strip()
-        if pending_test_module and item:
-            pending_test_module = False
+            item_start = start
+            while attribute := OUTER_ATTRIBUTE.match(code, item_start):
+                pending_test_module |= attribute.group().strip() == TEST_CFG
+                item_start = attribute.end()
+            if pending_test_module:
+                if module := INLINE_MODULE.match(code, item_start):
+                    pending_test_module = False
+                    brace_depth = 1
+                    start = module.end()
+                    continue
+                # A non-module item consumes the attribute. Blank, comment,
+                # and attribute-only lines leave it pending for the next item.
+                if code[item_start:].strip():
+                    pending_test_module = False
 
-        if in_test_module:
-            brace_depth += line.count("{") - line.count("}")
-            if brace_depth <= 0:
-                in_test_module = False
-            continue
+            # Another item can start on this line. Scan any production literals
+            # before its cfg attribute, then consider the next item separately.
+            next_cfg = code.find(TEST_CFG, item_start)
+            end = len(code) if next_cfg == -1 else next_cfg
+            for column, content in contents:
+                if start <= column < end:
+                    yield line_number, content
+            start = end
 
-        yield line_number, line
+
+def skip_char_or_lifetime(line: str, index: int) -> int:
+    """Advance past a character literal or lifetime that starts at index."""
+    nxt = index + 1
+    if nxt >= len(line):
+        return len(line)
+    if line[nxt] == "\\":
+        if nxt + 2 < len(line) and line[nxt + 1] == "u" and line[nxt + 2] == "{":
+            close = line.find("}", nxt + 3)
+            nxt = len(line) if close == -1 else close + 1
+        elif nxt + 1 < len(line) and line[nxt + 1] == "x":
+            nxt = min(len(line), nxt + 4)
+        else:
+            nxt = min(len(line), nxt + 2)
+        if nxt < len(line) and line[nxt] == "'":
+            return nxt + 1
+        return index + 1
+    if nxt + 1 < len(line) and line[nxt + 1] == "'":
+        return nxt + 2
+    if line[nxt].isalpha() or line[nxt] == "_":
+        nxt += 1
+        while nxt < len(line) and (line[nxt].isalnum() or line[nxt] == "_"):
+            nxt += 1
+        return nxt
+    return index + 1
 
 
-def strip_line_comment(line: str) -> str:
-    """Return the line up to a // comment that is outside a string literal."""
-    in_string = False
+def raw_opener_at(line: str, quote: int):
+    """Hash count when the quote opens an r/br/cr string, else None.
+
+    `foo_r"` is an ordinary string: only the exact prefixes `r`, `br` and `cr`
+    are raw. `b"` and `c"` are ordinary escaped strings.
+    """
+    hashes = 0
+    index = quote - 1
+    while index >= 0 and line[index] == "#":
+        hashes += 1
+        index -= 1
+    end = index + 1
+    while index >= 0 and (line[index].isalnum() or line[index] == "_"):
+        index -= 1
+    if line[index + 1:end] in {"r", "br", "cr"}:
+        return hashes
+    return None
+
+
+def lex_rust_line(line: str, pending, block_depth: int):
+    """Return masked Rust syntax, literal contents with offsets, and lexer state."""
+    code = list(line)
+    contents = []
     index = 0
     while index < len(line):
-        char = line[index]
-        if in_string:
-            if char == "\\":
-                index += 2
-                continue
-            if char == '"':
-                in_string = False
-        elif char == '"':
-            in_string = True
-        elif char == "/" and line[index + 1:index + 2] == "/":
-            return line[:index]
+        if pending is not None:
+            end = string_closer_at(line, index, *pending)
+            if end == -1:
+                contents.append((index, line[index:]))
+                code[index:] = " " * (len(line) - index)
+                break
+            contents.append((index, line[index:end]))
+            after = end + len(pending[1])
+            code[index:after] = " " * (after - index)
+            index = after
+            pending = None
+            continue
+
+        if block_depth:
+            boundary = BLOCK_COMMENT_BOUNDARY.search(line, index)
+            end = boundary.end() if boundary else len(line)
+            code[index:end] = " " * (end - index)
+            if boundary:
+                block_depth += 1 if boundary.group() == "/*" else -1
+            index = end
+            continue
+
+        boundary = LEXICAL_BOUNDARY.search(line, index)
+        if not boundary:
+            break
+        index = boundary.start()
+        token = boundary.group()
+        if token == "//":
+            code[index:] = " " * (len(line) - index)
+            break
+        if token == "/*":
+            code[index:index + 2] = "  "
+            block_depth = 1
+            index = boundary.end()
+        elif token == "'":
+            end = skip_char_or_lifetime(line, index)
+            code[index + 1:end] = " " * (end - index - 1)
+            index = end
+        else:
+            # Keep the opening quote as a placeholder for the literal token.
+            hashes = raw_opener_at(line, index)
+            if hashes is None:
+                pending = ("normal", '"')
+            else:
+                pending = ("raw", '"' + "#" * hashes)
+            index = boundary.end()
+    return "".join(code), contents, pending, block_depth
+
+
+def string_closer_at(line: str, index: int, kind: str, closer: str) -> int:
+    """Find the closing delimiter on this line, respecting ordinary escapes."""
+    if kind == "raw":
+        return line.find(closer, index)
+    while index < len(line):
+        if line[index] == "\\":
+            index += 2
+            continue
+        if line[index] == '"':
+            return index
         index += 1
-    return line
+    return -1
 
 
 def main() -> int:
@@ -70,16 +194,13 @@ def main() -> int:
             relative = path.relative_to(ROOT)
             if "tests" in relative.parts:
                 continue
-            for line_number, line in production_lines(path):
-                # Internal provenance belongs in ordinary source comments, which
-                # are intentionally outside this shipped-string guard.
-                code = strip_line_comment(line)
-                if '"' not in code:
+            for line_number, content in production_lines(path):
+                if not (match := CONCRETE_ID.search(content)):
                     continue
-                if match := CONCRETE_ID.search(code):
-                    violations.append(
-                        f"{relative}:{line_number}: concrete artifact ID {match.group(0)!r} in a shipped string literal"
-                    )
+                violations.append(
+                    f"{relative}:{line_number}: concrete artifact ID {match.group(0)!r} "
+                    "in a shipped string literal"
+                )
 
     if violations:
         print(

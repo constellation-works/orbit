@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::{redact_all, redact_all_error};
-use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, run_process};
-use orbit_tools::github_cli;
+use orbit_exec::{EnvironmentMode, ExecRequest};
+use orbit_tools::{github_cli, github_quota};
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
@@ -35,22 +35,30 @@ pub(super) fn query_root<H: RuntimeHost + ?Sized>(
 }
 
 /// Run `gh` from `repo_root` under the cleared VCS environment, so it never
-/// inherits the drain's provider credentials or ORBIT_* envelope.
+/// inherits the drain's provider credentials or ORBIT_* envelope. The sweeps
+/// are background spenders of the host's GitHub quota: a read the guard
+/// refuses returns its typed throttle and runs nothing.
 pub(super) fn run_gh_process(
     repo_root: &Path,
     mut request: ExecRequest,
 ) -> Result<orbit_exec::ExecutionResult, OrbitError> {
     request.current_dir = Some(repo_root.to_string_lossy().into_owned());
     request.environment_mode = EnvironmentMode::ClearAndSet(gh_environment());
-    run_process(&request, &NoSandbox)
+    github_quota::run_gh_request(github_quota::GithubCaller::Background, &request)
 }
 
 /// Guard for `orbit_tools::github_cli::read_run_log_guarded`: put one `gh`
-/// subprocess request under the cleared VCS environment.
-pub(super) fn clear_gh_environment(request: &ExecRequest) -> ExecRequest {
+/// subprocess request under the cleared VCS environment, admitted as
+/// `caller`'s read of the host's GitHub quota. The returned request carries
+/// only the timeout budget left after admission; an exhausted budget is the
+/// typed timeout and the read never starts.
+pub(super) fn clear_gh_environment(
+    request: &ExecRequest,
+    caller: github_quota::GithubCaller,
+) -> Result<ExecRequest, OrbitError> {
     let mut request = request.clone();
     request.environment_mode = EnvironmentMode::ClearAndSet(gh_environment());
-    request
+    github_quota::admit_gh_request_within_budget(caller, &request)
 }
 
 pub(super) fn run_gh(

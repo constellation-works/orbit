@@ -575,7 +575,8 @@ fn write_field(value: &Value, field: &str, text: &mut String) -> Result<(), Orbi
 }
 
 /// The human readiness readout of a `proposed` or `backlog` task: `ready` or
-/// `not ready`, then one indented line per gap with its fix. `None` for any
+/// `not ready`, then one indented line per gap with its fix, marking a gap an
+/// operator waived. `None` for any
 /// other status, whose record carries no readiness.
 fn readiness_text(readiness: &Value) -> Option<String> {
     let ready = readiness.get("ready")?.as_bool()?;
@@ -586,9 +587,14 @@ fn readiness_text(readiness: &Value) -> Option<String> {
         .map_or(&[][..], Vec::as_slice)
     {
         let part = |key: &str| gap.get(key).and_then(Value::as_str).unwrap_or_default();
+        let waived = if gap.get("waived").and_then(Value::as_bool) == Some(true) {
+            ", waived"
+        } else {
+            ""
+        };
         let _ = write!(
             text,
-            "\n  - {} [{}]: {} Fix: {}.",
+            "\n  - {} [{}{waived}]: {} Fix: {}.",
             part("code"),
             part("severity"),
             part("message"),
@@ -627,13 +633,72 @@ fn comment_line(comment: &TaskComment) -> String {
 fn history_line(entry: &TaskHistoryEntry) -> String {
     let stamp = dimmed(&format!("[{}]", format_task_show_timestamp(entry.at)));
     match &entry.note {
-        Some(note) => format!(
-            "{stamp} {}: {} ({note})",
-            entry.by,
-            format_task_history_event(entry)
-        ),
+        Some(note) => {
+            let summary = history_note_summary(note);
+            format!(
+                "{stamp} {}: {} ({summary})",
+                entry.by,
+                format_task_history_event(entry)
+            )
+        }
         None => format!("{stamp} {}: {}", entry.by, format_task_history_event(entry)),
     }
+}
+
+// Only human-oriented fields are eligible: arbitrary scalar fields can contain
+// ledger keys, identifiers or hashes. `classification` and `attempts` are the
+// retry-exhaustion fields the docs name, shown with their labels. The original
+// note remains in JSON output.
+fn history_note_summary(note: &str) -> String {
+    let Ok(Value::Object(object)) = serde_json::from_str::<Value>(note) else {
+        return note.to_owned();
+    };
+    let words = |key: &str| {
+        object
+            .get(key)
+            .and_then(Value::as_str)
+            .map(history_text_words)
+            .filter(|value| !value.is_empty())
+    };
+    let mut parts: Vec<String> = ["summary", "tool", "phase", "ref", "outcome", "status"]
+        .iter()
+        .copied()
+        .filter_map(words)
+        .collect();
+    parts.extend(words("classification").map(|value| format!("classification={value}")));
+    parts.extend(
+        object
+            .get("attempts")
+            .and_then(Value::as_u64)
+            .map(|attempts| format!("attempts={attempts}")),
+    );
+    let summary = if parts.is_empty() {
+        "structured note".to_owned()
+    } else {
+        parts.join(" · ")
+    };
+    let mut chars = summary.chars();
+    let prefix: String = chars.by_ref().take(75).collect();
+    if chars.next().is_some() {
+        format!("{prefix}…")
+    } else {
+        prefix
+    }
+}
+
+/// Keeps the words of a note field that are not digests or long hex identifiers.
+fn history_text_words(value: &str) -> String {
+    value
+        .split_whitespace()
+        .filter(|word| {
+            let lower = word.to_ascii_lowercase();
+            !lower.contains("sha256")
+                && !word
+                    .split(|c: char| !c.is_ascii_hexdigit())
+                    .any(|part| part.len() >= 32)
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The words after `Next:` on a task show. Local and routed text both use this.

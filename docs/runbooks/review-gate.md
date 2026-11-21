@@ -5,7 +5,7 @@ tags: [operations, review-gate, delivery]
 paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs"]
 related_features: [review-gate]
 related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194", "ORB-14849", "ORB-22808"]
-last_validated: 2026-11-14
+last_validated: 2026-11-16
 ---
 
 # Operate the Review Gate
@@ -102,7 +102,7 @@ review certificate to another head.
 | Verdict | Candidate branch | Delivery |
 | --- | --- | --- |
 | `accept` | the implementation commit(s) only | the PR opens on that head |
-| `accept_with_fixes` | the implementation, then one `review: <summary>` commit authored by `<family>-reviewer` | owner validation reruns on the reviewer commit and its paths widen the task's selectors; the PR opens with a "Review fixes" section |
+| `accept_with_fixes` | the implementation, then one `<type>: <summary> [<task>]` commit authored by `orbit[<model>] <reviewer@orbit.invalid>` | owner validation reruns on the reviewer commit and its paths widen the task's selectors; the PR opens with a "Review fixes" section |
 | `reject` or other substantive `incomplete` | whatever was committed, kept | the task is blocked, no PR is opened, and final recovery gets one look |
 | Abandoned review: the reviewer exited cleanly but its only report is the initial placeholder (`incomplete`, no escalation, finding or validation record, never revised) | the implementation is pushed; nothing was reviewed | settlement releases the attempt and refuses with `review_abandoned:`, so the candidate's one review is not spent; the task is blocked with a comment saying so, and resuming the run or requeueing it admits a reviewer again within the remaining minutes; no PR opens |
 | Reviewer wall-clock timeout | the implementation and any partial reviewer repairs are pushed; the partial report is retained | the first timeout on a task's implementation tree requeues it to `backlog` with `review_timeout_incomplete`; another timeout on that tree blocks it with `review_timeout_requeue_exhausted`; no PR opens |
@@ -169,6 +169,34 @@ auto parents waiting on it pass it as held. A reviewer timeout, failed
 revalidation, `push_lease_lost` or `review_repair_after_merge` still ends the run
 `failed`. The last of those also blocks the task; the others leave it in
 `review`.
+
+When the handoff's `reviewer_push` records the reviewer commit as a
+fast-forward of the published head on the PR branch, an operator requeue of
+the task, or the decision answer that requeues it, resumes the same PR at that
+reviewer head. Its required checks must have passed there. The requeue
+authenticates only that prior push — that the reviewer commit is the
+receipt-attested fast-forward of the published head — not that the successor
+will review it. The next run validates the adopted head afresh. Whether that head
+is reviewed again is decided by the successor's own captured review timing, not
+by the requeue, and the prior publication is authenticated independently of that
+timing:
+
+- `review.timing = "off"` (the workspace default) skips independent review.
+  `landing_review_gate_admit` reports `applies: false` (`review_before_landing_off`)
+  and the `landing_review` step is skipped, so the adopted reviewer head lands
+  without an independent review of its own.
+- `review.timing = "before_landing"` (for example `--review before-landing` on the
+  successor run, the recommended layer) reviews the published candidate in the
+  before-landing review of its open pull request.
+- The supported legacy `review.timing = "before_pr"` (or an admitted
+  `--review before-pr` request) gates the adopted candidate at `review_gate_admit`,
+  before push, and the landing step reports `reviewed_before_pr`. The requeue does
+  not skip that gate.
+
+To obtain independent review on the successor, select a review layer for that
+run. A requeue is refused when the local or remote
+branch, or the PR head, is anywhere else, when the receipt names another
+published head, branch or run, or when the task specification changed.
 
 A reviewer that exits cleanly with only its initial placeholder report is
 released, not settled: the refusal leads with `review_abandoned:`, the failure
@@ -289,8 +317,8 @@ The owner enforces what it is owed in two places:
   between retries). The budget survives watcher/completion restarts and
   unknown replies; the same provider attempt is never resent. Candidate
   siblings prevent this recovery. Exhaustion appends
-  `ci_infrastructure_retry_exhausted`, naming the transient classification
-  and attempt count in `orbit task show` history, and keeps the task in review.
+  `ci_infrastructure_retry_exhausted`; `orbit task show` history shows it as
+  `classification=transient` and `attempts=<n>`, and the task stays in review.
   The existing completion deadline still bounds the wait. Rate-limited log
   reads follow the recorded read-deferral path without spending an attempt.
   Owner-local review deliveries use the same planner from their existing
@@ -300,7 +328,11 @@ The owner enforces what it is owed in two places:
   `handoff_land` holds in review (`delivery_base_checks_pending`) after
   `max_base_ci_cycles` observation cycles (default 3) or `max_wait_seconds`
   (default 3600 seconds), whichever comes
-  first, and names the missing evidence. Branch protection may still treat a skipped or
+  first, and names the missing evidence. At the cycle limit, a same-check pass on a base-branch
+  push run at a commit containing the candidate's base, with no same-check failure there or on the
+  landing tip, reclassifies a base-suspect failure as `candidate` (`ci_base_suspect_reclassified`)
+  and requeues it instead of holding; a hold at the `max_wait_seconds` deadline never reclassifies.
+  Branch protection may still treat a skipped or
   neutral rerun of the failed required check as satisfied; this gate does not. The candidate
   stays in review. A local candidate owed a hosted check stops too.
 
@@ -337,7 +369,7 @@ reads another task's record to decide it.
 The timeout bound permits one automatic requeue per task and implementation
 tree, recorded in task history without a time window. The implementation tree
 is the tree of the candidate head after stepping back over the gate's own
-`review: partial reviewer repairs preserved` commits, so the reviewer's partial
+`<type>: partial reviewer repairs preserved [<task>]` commits, so the reviewer's partial
 work, which changes the candidate tree on every timeout, never renews the
 allowance. A fresh run starts a new review lineage with its captured minute
 budget; resuming the same lineage uses its remaining budget. A new commit
@@ -414,6 +446,13 @@ any managed run. A result or log an agent attached never counts
 the kind, exact command and candidate tree. Attempt, commit, display name and
 artifact path changes do not expire a result on the same tree. Unrelated,
 different-tree, failed or incomplete evidence leaves the hold in place.
+
+A reviewer that returns a failed envelope because its host denied a required
+check is judged the same way: when its report is a valid `incomplete` for the
+admitted attempt whose only gap is the external check it names, the reviewer
+step's output carries `reviewer_declared_failure` and settlement decides the
+hold. Any other report leaves the reviewer step failed with its declared
+error code.
 
 After a checkpoint resume, the hold names the resumed run that settled the
 review, while the task keeps its original checkpoint-owner binding. Evidence
@@ -502,11 +541,21 @@ Findings:
   - Changed: added the length check and a test (src/reader.rs, tests/reader.rs)
 - `F2` [low, disposed: intended behaviour] Log level
 
+Accepted with the reviewer's fixes as a separate commit; … Full certificate: `review-gate.json`.
 - Reviewer: crew `reviewers` (…)
-- Implementation: `<sha>` on base `<sha>` (1 commit(s), unchanged by review)
-- Reviewer commit: `<sha>` `review: …` by <family>-reviewer
-…
+- Implementation: `<sha12>` on base `<sha12>` (1 commit(s), unchanged by review)
+- Reviewer commit: `<sha12>` `fix: … [<task>]` by orbit[<model>] <reviewer@orbit.invalid>
+- Validation on final candidate: … record(s) […], complete: …
+- Reviewer runtime: …s of … min
 ```
+
+The lead line keeps its form. Evidence lines appear only when they carry
+information: the reviewer commit, the final candidate when it differs from the
+implementation, widened selectors, owner-required checks when any are
+configured, failed diagnostics, retained checks and an escalation. Commits are
+shortened to 12 characters. The full certificate is the `review-gate.json`
+artifact, and the typed settlement on the task history carries the full commit
+ids.
 
 Caller-supplied artifacts on task updates, including updates that start a task,
 cannot write the reserved `review-*` namespace. The exception is a
@@ -623,7 +672,12 @@ carries `--lib` or another target selector stays uncovered.
 Record each requirement as its own `required`, `not_run` record too. A host
 result for each requirement then establishes the broader record. A notice no
 requirement names exactly leaves the record `not_run`, and the review blocks
-instead of holding
+instead of holding. A prose label such as `sandbox boundary` is not a test
+path, so no requirement can cover its notice. Give each requirement its own
+`.json` `artifact`: when two requirements share an artifact or its derived
+`.log.json` path, the whole set is refused as evidence (no hold forms, no host
+run starts), and a `review-*` name is reserved. A reviewer's own captured log
+is never a host result
 ([design](../design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545)).
 
 One exception: when the reviewer accepted with no open findings, settlement
@@ -635,6 +689,32 @@ holds for the host run instead of blocking as `validation_incomplete`
 [ORB-24656]. Reviewers should still name
 each deferred test as above; settlement's synthesis is the backstop, and a
 Bubblewrap notice it cannot name a command for still blocks.
+
+Settlement owes that synthesized run only when the candidate can reach the
+deferred test [ORB-25096]. A candidate that changes only Markdown and Rust
+sources under a `tests` directory outside `tests/support`, none of which names
+the test or mentions
+`sandbox`, `bwrap` or `bubblewrap` (in its path or its content before or
+after the change), cannot: the notice is cleared with a `not owed` note, a
+reviewer-named Linux run covering only that notice leaves the named
+evidence (its `not_run` record becomes `excluded`), and the review settles
+on its other records. A host whose kernel refuses user namespaces would
+never produce the run, so such a delivery no longer ends in an evidence hold
+that final recovery escalates to an operator. The review does not count on a
+later pull request run to execute the test: CI scope decides that. A docs-only
+pull request runs no test job; one confined to `crates/` normally runs tests
+for the affected and always-run crates, but runs every test for a member
+manifest (`crates/<crate>/Cargo.toml`), a `crates/` path no member owns, or a
+selection covering the whole workspace; any other pull request runs every
+test unless a `FILE_READERS`-declared reader selects affected crates
+(`scripts/ci-change-scope.sh`, via `scripts/ci-test-affected.py
+pull_request_scope`). Any other changed path —
+production code, a manifest, a build script, configuration, a script or an
+asset — or a workspace `[[review.host_evidence]]` rule that owes the same
+check keeps the run owed, and the review holds for real execution evidence
+as before. Any changed Rust source under `tests/support` keeps the run owed:
+shared test support can affect the deferred sandbox test even when its source
+does not mention the test or sandbox.
 
 A test runner may instead exit nonzero because nested Seatbelt application
 or a required child-process spawn was refused by the review sandbox. Record
@@ -837,15 +917,26 @@ Identify the failed step from `orbit run show`, then act:
   re-implement it with
   `orbit task requeue <task-id> --reason '<why it can continue>'` once the
   task's run has stopped. The next run adopts the same branch, head and pull
-  request, then validates, reviews and lands it afresh. A changed task
+  request, then validates it afresh and lands it. Review follows the successor
+  run's own captured `review.timing`, as described earlier in this runbook: `off`
+  skips independent review (`review_before_landing_off`), `before_landing` (for
+  example `--review before-landing` on the successor run) reviews the published
+  candidate in its before-landing review, and the supported legacy `before_pr`
+  (or `--review before-pr`) gates it before push. Requeue authentication
+  preserves the publication independently of that timing; it does not select
+  review for the successor. A changed task
   specification is refused with `--discard-candidate` as the exit, which
   closes the task's undelivered Orbit pull requests and reruns from scratch. See
   [stuck job runs](./stuck-job-runs.md#requeue-a-failure-handoff-task-onto-its-published-candidate).
-- **`review_gate_admit` refused with `review_budget_exhausted`**: the
+- **`review_gate_admit` held with `review_budget_exhausted`**: the
   candidate already had its one review (`review_candidate_reviewed`) or its
-  reviewer spent `review.minutes` (`review_minutes_exhausted`). Renew it only
+  reviewer spent `review.minutes` (`review_minutes_exhausted`). Both admission
+  and the early minutes preflight end the run `held`, outside failure counts,
+  without retry, recovery or a failure handoff. The task status, ledger and
+  operator recovery text are preserved; no new review is reserved. Renew it only
   with a recorded decision:
-  `orbit task review-reset <task-id> --lineage '<exact-lineage-key>' --reason '<decision>'`.
+  `orbit task review-reset <task-id> --lineage '<exact-lineage-key>' --reason '<decision>'`,
+  then resume the held local run.
 
   A **claimed** leaf keeps that ledger on the executing host until settlement
   copies it to the owner. A claim is one attempt and keys its own lineage, so
@@ -859,7 +950,7 @@ Identify the failed step from `orbit run show`, then act:
   `--root` alone does not select a checkout. Run it on the owner, not on a
   replica: a replica does not hold the task, and it refuses control-plane
   writes. The task's next claim continues the kept candidate under a new
-  admission with a review budget of its own. `orbit job resume` of the failed
+  admission with a review budget of its own. `orbit job resume` of the held
   leaf stays refused.
 
 - **A claimed reviewer reported `incomplete` because its manifest or report

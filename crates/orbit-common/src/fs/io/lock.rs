@@ -278,7 +278,7 @@ where
     F: FnOnce() -> Result<T, E>,
     E: From<io::Error>,
 {
-    let Some(parent) = target_path.parent() else {
+    let Some(parent) = crate::fs::path::parent_dir_or_current(target_path) else {
         return op();
     };
     if !parent.is_dir() {
@@ -329,7 +329,7 @@ fn resolved_lock_path(target_path: &Path) -> io::Result<PathBuf> {
     let Some(file_name) = lock_path.file_name() else {
         return Ok(lock_path);
     };
-    match lock_path.parent().map(fs::canonicalize) {
+    match crate::fs::path::parent_dir_or_current(&lock_path).map(fs::canonicalize) {
         Some(Ok(parent)) => Ok(parent.join(file_name)),
         _ => Ok(lock_path),
     }

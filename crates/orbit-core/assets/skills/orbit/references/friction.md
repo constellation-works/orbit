@@ -29,9 +29,11 @@ re-diagnosing the same problem.
 
 Records live in Orbit's store, keyed by `(workspace_id, friction_id)` — IDs are
 workspace-local and monthly (`F<YYYY>-<MM>-<NNN>`), so the same ID in two
-workspaces is two unrelated records. Reach them only through `orbit.friction` and the friction CLI;
-any `.orbit/frictions/` markdown tree is legacy evidence, and editing a file
-there cannot change what a read returns. Creation is durable; `update` can replace the body and triage metadata. New records start `open` and may become `triaged` or `resolved`.
+workspaces is two unrelated records. Agents write them through
+`orbit.friction` (actions `add` and `update`) and read them through
+`orbit.search` (kind `friction`); the `orbit friction` CLI serves people. Any
+`.orbit/frictions/` markdown tree is legacy evidence, and editing a file there
+cannot change what a read returns. Creation is durable; `update` can replace the body and triage metadata. New records start `open` and may become `triaged` or `resolved`.
 
 ```bash
 orbit tool run orbit.friction --input '{"action":"add",
@@ -43,6 +45,17 @@ orbit tool run orbit.friction --input '{"action":"add",
 
 `during_task` must name an existing task; an id that names none is refused as not
 found instead of being recorded.
+
+When an MCP session has no execution model, friction creation records the
+receiving host's resolved process actor in `model`, matching task-write
+attribution. This also applies to federated routes: no per-call model is
+needed. Updating a friction preserves its original attribution.
+
+A claimed worker's friction is attributed from its claim on the owner, not
+from the call: the claim's bound run crew model when it recorded one, else
+the claimed task's crew model, else the owner's own resolved process actor.
+The record is filed during the claimed task, and the call's own `model`
+field never supplies the attribution.
 
 **Write the `title` yourself.** It is the record's handle everywhere the corpus
 is scanned — `friction list`, the dashboard, and the search someone runs before
@@ -88,6 +101,14 @@ lists every status. Over a pipe, `--header` labels the plain columns.
 ```bash
 orbit friction tags      # the vocabulary this workspace actually accepts
 ```
+
+Every tag on a friction add or update must come from that vocabulary.
+`orbit friction add --tag <tag>` (repeatable), `orbit.friction` action `add`, and
+`orbit.friction` action `update` with `tags` refuse a tag outside the workspace
+taxonomy. The refusal names each unknown tag and lists the valid tags, and nothing
+is recorded. Run `orbit friction tags` to see the accepted vocabulary before filing.
+Re-homing is the exception: a tag the owning taxonomy does not define is dropped,
+not refused (see [Re-homing](#re-homing-a-friction-to-its-owning-workspace)).
 
 The seeded defaults:
 
@@ -209,10 +230,11 @@ edits in the same call apply first, then the move runs as one transaction:
   body gives the new ID.
 
 Tags the owning taxonomy does not define are dropped and listed in
-`dropped_tags`. The move is refused when the record is already resolved, when
-the same call also sets `status: resolved`, when the target is the current
-workspace or is not registered, or when either checkout is a replica that
-refuses coordination writes. A refused move writes nothing.
+`dropped_tags`; the move itself is not refused for them, so the add and update
+refusal above does not apply to a re-home. The move is refused when the record
+is already resolved, when the same call also sets `status: resolved`, when the
+target is the current workspace or is not registered, or when either checkout is
+a replica that refuses coordination writes. A refused move writes nothing.
 
 **Record the owner.** When you know which workspace owns the fix but it is not
 registered here, add `"move": false`. That records only the `rehome_required`
@@ -232,6 +254,15 @@ orbit friction show <ID>
 orbit friction stats                          # friction rates over time
 orbit search "<terms>" --kind friction        # lexical friction search
 ```
+
+The `orbit friction` commands above are for people at a terminal. They are not
+`orbit.friction` actions, and that tool refuses `show`, `list` and `comment`. An
+MCP session or `orbit tool run` caller reads and lists only through
+`orbit.search`. `{"kind":"friction","query":"<ID>","all":true}` reads one record.
+The query is a substring match over several fields, so take the hit whose `id`
+equals `<ID>`. `all` is required to reach a triaged or resolved record, since a
+query otherwise defaults to open records. Omit `query` to list them, across every
+status.
 
 Frictions use lexical matching. Search by the words someone would actually have used.
 → [search.md](search.md)

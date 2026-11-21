@@ -2,6 +2,18 @@ use std::path::{Path, PathBuf};
 
 use crate::OrbitError;
 
+/// The directory that holds `path`, with the empty parent of a bare relative
+/// name (`state.json`) read as the current directory (`.`), as an atomic write
+/// target does. `None` for a path with no parent, such as a root.
+pub(crate) fn parent_dir_or_current(path: &Path) -> Option<&Path> {
+    let parent = path.parent()?;
+    Some(if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    })
+}
+
 /// Worker-facing scratch directory under a checkout: `<root>/.orbit/tmp`.
 ///
 /// Gitignored with the rest of `.orbit/`, inside `workspace_root` so

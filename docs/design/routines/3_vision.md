@@ -41,7 +41,7 @@ and validation evidence, not by drifting in.
    schema is in [2_design.md §1](./2_design.md#1-routine-definition), with persisted
    behavior in [§3.1](./2_design.md#31-delivery-and-state-evaluation); interval
    scheduling remains an auto-task feature. The
-   [operations guide](../automation-triggers/5_operations.md#state-preparation-orb-11331)
+   [operations guide](../automation-triggers/references/operations.md#state-preparation-orb-11331)
    describes the shipped state configuration; `execution_failed` is retired and
    fires nothing. Broader multi-member coordination, automatic policy/host
    migration and complete usage accounting in the

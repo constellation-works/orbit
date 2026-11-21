@@ -8,7 +8,9 @@ use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
 use super::super::completion_deadline::Deadline;
-use super::prerequisite::{api, complete_list, gate_passed, gate_present, snapshot, unreadable};
+use super::prerequisite::{
+    api, complete_list, gate_passed, gate_present, poll_interval_ms, snapshot, unreadable,
+};
 use super::workflow_dependency::job_names;
 use super::{
     MAX_WORKFLOW_SOURCE_BYTES,
@@ -159,11 +161,7 @@ fn sources(
         if fields.len() != 3 || !matches!(fields[0], "100644" | "100755") || fields[1] != "blob" {
             return Err(unreadable("workflow source mode"));
         }
-        let contents = api(
-            deadline,
-            workspace,
-            &format!("repos/{{owner}}/{{repo}}/contents/{path}?ref={commit}"),
-        )?;
+        let contents = super::read_cache::contents_at_commit(deadline, workspace, path, commit)?;
         same(
             &contents["type"],
             &json!("file"),
@@ -213,7 +211,16 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     let branch = required_string(input, "head_branch")?;
     let base = required_string(input, "base_branch")?;
     let deadline = Deadline::from_input(input)?;
-    let current = snapshot(deadline, workspace, pr, head, branch, base)?;
+    let current = snapshot(
+        deadline,
+        workspace,
+        pr,
+        head,
+        branch,
+        base,
+        poll_interval_ms(input),
+        &super::read_reset::SnapshotWaits::default(),
+    )?;
     let checks = complete_list(&current.checks, "check_runs")?;
     let statuses = complete_list(&current.statuses, "statuses")?;
     let missing: Vec<_> = current
@@ -476,6 +483,8 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
         required_string(input, "head_sha")?,
         text(proof, "head_branch", unreadable)?,
         text(proof, "base_branch", unreadable)?,
+        poll_interval_ms(input),
+        &super::read_reset::SnapshotWaits::default(),
     )?;
     same(
         &json!(current.repository),
@@ -612,6 +621,8 @@ pub(super) fn current_gates(input: &Value) -> Result<Value, OrbitError> {
         required_string(input, "head_sha")?,
         required_string(input, "head_branch")?,
         required_string(input, "base_branch")?,
+        poll_interval_ms(input),
+        &super::read_reset::SnapshotWaits::default(),
     )?;
     let revisions = policy_revisions(deadline, workspace, &current.policy)?;
     let checks = complete_list(&current.checks, "check_runs")?;

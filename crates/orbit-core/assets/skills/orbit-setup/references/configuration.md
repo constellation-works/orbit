@@ -180,8 +180,8 @@ orbit doctor
 - **Widening reseeds on the next sync.** Add a name to the list or set a key
   back to `all`, then preview and apply sync again. This seeds the shipped
   definition, not the preserved edited copy. Selecting a default is separate
-  from enabling it: shipped auto-tasks start disabled, except `host-health`,
-  which ships enabled. The shipped `worktree-gc`, `task-pilot` and
+  from enabling it: shipped auto-tasks start disabled, including `host-health`.
+  The shipped `worktree-gc`, `task-pilot` and
   `crew-memory-dream` routines seed enabled; other shipped routines seed
   disabled. `crew-memory-dream` mints nothing while `crew_memory.enabled`
   is false or no running memory-arm experiment applies, so its seeded
@@ -192,8 +192,8 @@ orbit doctor
   auto-task delete` survives exclusion and later widening, so sync still leaves
   that default absent. First include it in `seeding.auto_tasks`, then use
   `orbit auto-task restore <name>` to clear the opt-out and restore its shipped
-  content with the shipped `enabled` value: disabled for most defaults, enabled
-  for `host-health`. Restore refuses an excluded name or an existing definition.
+  content with the shipped `enabled` value: disabled for every default,
+  including `host-health`. Restore refuses an excluded name or an existing definition.
   See [Deleting a definition](auto-tasks.md#deleting-a-definition). For routines,
   a name-list policy is the durable per-name opt-out.
 
@@ -215,8 +215,8 @@ file, retain the [workspace preset procedure](first-run.md#workspace-presets).
 |---|---|
 | `workflow.base_branch` | Config fallback for ship/auto/pilot base branch. A registered workspace `base_branch` takes precedence. |
 | `workflow.default_crew` | Crew for any task that doesn't declare one. |
-| `workflow.<tier>_complexity_crews` | Automatic crew pool per task complexity (`low`, `medium`, `hard`, `xhard`); entries `crew[@effort]` or `crew[@effort]:weight` (`opus@medium:100` runs opus at medium effort as its own member). Empty (`[]`) routes that tier to `default_crew`. Orbit's own work draws from them too while its purpose pool is unset: auto-task templates by complexity, the task pilot and PR auto-fix from `low`, failure and PR conflict recovery from `medium`. The retired system-crew key loads with a deprecation warning and is ignored. |
-| `workflow.purpose_crews.<purpose>` | Weighted pool for one purpose of work, written like the complexity pools: `task_pilot`, `failure_recovery`, `final_recovery`, `auto_fix`, `pre_landing_review`, `review`, `baseline_red_repair`, `sweep_tasks` (every task the CI failure, Dependabot and code-scanning sweeps file, and merged-head repairs a review reconciliation files). An explicit task, template or activity crew wins; otherwise the purpose pool is drawn, narrowed by `--allow-crew`; unset or `[]` keeps the earlier route. A provider limit or failure hold on the assigned member redraws from the pool's other enabled members before the complexity pool. `final_recovery` has no earlier route: `final_recovery = []` disables final recovery. `pre_landing_review` falls back to `review` when unset or empty; `review` also supplies after-landing review and is described below. `orbit config show --all` lists each purpose's resolved pool and its source (`crew_purposes` in `--json`). |
+| `workflow.<tier>_complexity_crews` | Automatic crew pool per task complexity (`low`, `medium`, `hard`, `xhard`); entries `crew[@effort]` or `crew[@effort]:weight` (`opus@medium:100` runs opus at medium effort as its own member). Empty (`[]`) routes that tier to `default_crew`. Orbit's own work draws from them too while its purpose pool is unset: auto-task templates by complexity, the task pilot and PR auto-fix from `low`, failure and PR conflict recovery from `medium`. A running drain reads these pools again at each admission, so removing or adding a crew reaches it at its next admission without a relaunch; a pool the drain was launched with as a run override (`orbit run auto --medium-complexity-crews` and its siblings) stays as launched. The admitted run's input records the pools it used. The retired system-crew key loads with a deprecation warning and is ignored. |
+| `workflow.purpose_crews.<purpose>` | Weighted pool for one purpose of work, written like the complexity pools: `task_pilot`, `failure_recovery`, `final_recovery`, `auto_fix`, `pre_landing_review`, `review`, `baseline_red_repair`, `sweep_tasks` (every task the CI failure, Dependabot and code-scanning sweeps file, and merged-head repairs a review reconciliation files), `pilot_warning_triage` (the triager of each held task-pilot assessment; keeps only crews whose executor declares `inspection_args`, and unset or `[]` falls back to `workflow.hard_complexity_crews`). An explicit task, template or activity crew wins; otherwise the purpose pool is drawn, narrowed by `--allow-crew`; unset or `[]` keeps the earlier route. A provider limit or failure hold on the assigned member redraws from the pool's other enabled members before the complexity pool. `final_recovery` has no earlier route: `final_recovery = []` disables final recovery. `pre_landing_review` falls back to `review` when unset or empty; `review` also supplies after-landing review and is described below. `orbit config show --all` lists each purpose's resolved pool and its source (`crew_purposes` in `--json`). |
 | `workflow.generated_paths` | **Advanced: executes commands during conflict recovery.** Default `{}`; table of workspace-relative path globs to non-empty regeneration commands. Applies only to conflicting generated files in a stopped rebase. Verify the recovery's `regenerated_paths` and command result. See [Recovery settings](#recovery-settings). |
 | `workflow.unlocked_context_paths` | Default `["**/*.md"]`; array of workspace-relative globs (`*` within a component, `**` across components; no absolute paths or `..`). Matching context entries take no lock in mixed tasks; an all-matching task still locks every entry. `[]` locks all entries. Verify with `orbit run readiness` and `orbit task eligible`. Keep code and build/CI definitions locked. |
 | `workflow.lock_modes` | **Advanced: admission policy.** Default `[]` (every overlap blocks); ordered `[[workflow.lock_modes]]` tables, each a `pattern` (Rust regex searched for in the workspace-relative path; anchor with `^`/`$`) and a `mode` of `exclusive` (default) or `shared`. First match wins. An overlap is waived when its point, the narrower selector's path, is shared, so tasks sharing only, say, `(^|/)mod\.rs$` run together and the second to land resolves any conflict. `module:`/`command:` selectors stay exclusive. Set it in the workspace config only for files that merge cleanly or are regenerated. Verify with `orbit run readiness` and `orbit task eligible`. |
@@ -227,18 +227,19 @@ file, retain the [workspace preset procedure](first-run.md#workspace-presets).
 | `worktree.reclaim_below_free_mib` | **Advanced: reclaims rebuildable output.** Default unset; non-negative integer MiB (`u64`). During admission, reclaim `worktree.reclaim` paths from oldest terminal worktrees while free space under the state directory is below this mark; active runs remain protected. `0` never triggers it. Verify candidates with `orbit gc worktrees --reclaim --dry-run --estimate-bytes` and actual reclamation via the `worktree.reclaim` audit event. See [Worktree GC](maintenance.md#worktree-garbage-collection). |
 | `workflow.provider_limit_overrides` | Delivery admission skips a crew while a live usage window of its provider or model is exhausted or used at or above 90%. Each entry replaces that percent for one provider: `provider:percent` (1..=100; 100 skips only on exhaustion) or `provider:off` (record readings without gating). Each provider once. |
 | `workflow.provider_limit_explicit_crews` | When an explicit crew is at its provider's limit: `wait` (default) leaves the task in the backlog until the limit lifts; `pool` draws from unlimited members of its complexity pool. A purpose-sourced crew is not an explicit pin; it redraws within its purpose pool first. |
-| `workflow.crew_selection` | `static` (default) draws on configured weights; `usage_pressure` scales task creation, re-rate and admission draws by each crew's weekly usage pressure (`weight × clamp(pressure, 1/8, 8)`) and re-draws a system-chosen crew at admission, keeping its crew source. A pull follower re-draws a claimed leaf's system-chosen crew on its own readings and reports per-crew pressure so the owner offers it first, among tied tasks, the ones whose pools hold its highest-pressure crews. Explicit crews are never re-drawn. Not the run's recorded `crew_selection`. |
+| `workflow.crew_selection` | `static` (default) draws on configured weights; `usage_pressure` scales task creation, re-rate and admission draws by each crew's weekly usage pressure (`weight × clamp(pressure, 1/8, 8)`) and re-draws a system-chosen crew at admission, keeping its crew source. A pull follower re-draws a claimed leaf's system-chosen crew on its own readings and reports per-crew pressure so the owner offers it first, among tied tasks, the ones whose pools hold its highest-pressure crews. A crew whose account has used up a usage window that has not yet reset (an exhausted limit error or a window at 100%) is left out of the draw while another member the run may draw (not excluded by its crew allowlist) has quota. Explicit crews are never re-drawn. Not the run's recorded `crew_selection`. |
 | `workflow.provider_limit_budgets` | Rolling budgets for providers that report no usage, each `provider:<amount><usd|tokens>/<n><h|d>` (for example `grok:30usd/5h`), one per provider, or for a crew that sets `env`, its own account (`opus-credits:200usd/30d`). Spend is this host's invocation ledger. None by default. |
 | `workflow.task_types` | Ordered task types that `workflow.type_complexity_crews` routes by and the implementer scorecard's by-type matrix (`orbit agents scorecard --role implementers --by-type`) splits by. Each entry has a unique non-empty `name` (never `other`) and at least one of `tags` or `paths`; a task takes the first matching type, else `other`. Empty (default) means every task is `other`. The former name `workflow.crew_performance_types` loads into it with a deprecation warning until 2026-12-07; `orbit doctor --fix-retired-config-keys` rewrites it. `workflow.crew_performance`, `_strength`, `_cap` and `_window_days` are deprecated and ignored: crew-performance weighting was removed. |
 | `review.timing` | Review before landing, one layer at most (default `off`). `before_pr` holds PR creation for a fresh reviewer that fixes what it finds. `before_landing` opens the PR first and reviews it while hosted CI runs; it merges only at the reviewed head, and any other outcome leaves the PR open with the task in `review` (PR route only). A run captures it at submission. After-landing review is not a key: toggle the `delivery-code-review` auto-task (`orbit auto-task toggle delivery-code-review on`). |
 | `review.before_landing_hosts` | Machine ids (`hm_...`) whose claimed leaves review their open PR before it lands, while this owner's own deliveries keep `review.timing` off. Probe and pull admission resolve the caller's label and the claim captures it. Ignored when `review.timing` is already `before_landing`. Loading fails while `review.timing` is `before_pr` and the list is non-empty. The label is caller-chosen, so this is policy, not a security boundary. Default empty. |
 | `review.minutes` | Wall-clock limit for one candidate's before-PR or before-landing review (1..=1440, default 30). Each candidate gets one review; a changed candidate, such as a completion rebase, is a new one. |
 | `review.baseline_commands` | Default `[]`; commands the owner trusts review settlement to rerun on the host for a reviewer's red-base claim, in addition to required validation commands. Entries are trimmed strings; blank entries are dropped. A configured command is binding during settlement. |
-| `[[review.host_evidence]]` | Default `[]`; owner policy for checks owed on claimed reviews when changed paths match. This TOML array replaces the whole global list at workspace scope; see [review baseline commands and owed host evidence](#review-baseline-commands-and-owed-host-evidence). |
+| `[[review.host_evidence]]` | Default `[]`; owner policy for checks owed on claimed reviews when changed paths or listed task tags match. This TOML array replaces the whole global list at workspace scope; see [review baseline commands and owed host evidence](#review-baseline-commands-and-owed-host-evidence). |
 | `workflow.purpose_crews.review` | Crew or pool for after-landing review tasks the `delivery-code-review` auto-task mints. Before-PR and before-landing review use `workflow.purpose_crews.pre_landing_review` when non-empty, falling back to this pool when it is unset or empty. A pool such as `["sol", "grok"]` (or weighted `["sol:3", "grok:1"]`) draws one crew per review, skipping disabled or provider-limited crews and preferring one that did not implement the work. |
 | `workflow.distributed_completion` | Standing owner authority for accepted distributed-drain handoffs: `review` (default, each handoff waits for operator approval) or `done` (acceptance authorizes owner landing). Owner configuration only; landing rechecks it. See [Distributed-drain completion policy](#distributed-drain-completion-policy). |
 | `tasks.id_start` | Floor for this machine's task-id allocator; forward-only. → [multi-host.md](multi-host.md) |
 | `execution.env.pass` | Environment variable names allow-listed into agent subprocesses. |
+| `execution.env.login_auth` | Providers (`claude`, `codex`) authenticated by the CLI's own login; their unset credential names in `pass` are not reported. |
 | `execution.codex.sandbox` | `read-only`, `workspace-write`, or `danger-full-access`. |
 | `execution.codex.approval_policy` | `untrusted`, `on-request`, or `never`. |
 | `machine.auto_concurrency.mode` | Forecast admission: `off` (default) builds no forecast, `shadow` records what forecasting would admit while retaining ordinary admission, `enforce` uses forecast fit to decide admissions within the worker ceiling. |
@@ -249,6 +250,9 @@ file, retain the [workspace preset procedure](first-run.md#workspace-presets).
 | `workflow.resource_throttle.disk_high_percent`, `workflow.resource_throttle.disk_resume_percent` | Space-used hold/resume marks for each watched filesystem; defaults `90` / `85`, integers `1..=100`, resume strictly below high. |
 | `machine.auto_concurrency.admit_cpu_percent` | Forecast CPU limit as a percentage of host cores (default 90; 1..=100). The memory limit is fixed at 75% of non-reclaimable memory, so global `workflow.resource_throttle.memory_high_percent` must be above 75. |
 | `machine.auto_concurrency.min_profile_deliveries` | Completed deliveries a profile key needs before admission uses it without fallback (default 10; at most the fixed 50-delivery profile window). |
+| `machine.github_quota.agent_reserve_percent` | Share of the host's GitHub API quota per resource that agents' `github.*` reads may not spend (default 20; 0 disables). Delivery keeps no reserve; after a GitHub rate-limit answer every read of that resource on the host waits for the reset. `orbit tool run github.auth.status` shows the record under `quota`. |
+| `machine.github_quota.background_reserve_percent` | The same for background reads: sweeps, auto-task sources, deterministic job steps (default 10; 0 disables). |
+| `machine.github_quota.refresh_interval_seconds` | Shortest interval between two rate-limit endpoint reads on the host that the caller's own timeout did not cut short (default 60; 10..=3600). A cut-short read records nothing and does not start the interval. |
 | `pr.task_url_template` | URL template linking a task ID in PR descriptions. |
 | `pr.delivery_authors` | Forge logins whose PRs count as Orbit-authored for closing them (Orbit closes a task's open delivery and `[BLOCKED]` PRs when it lands, is rejected or archived, moves back to backlog or someday, or a newer attempt opens its own PR) and for settling a task to done from its delivery PR merged outside Orbit. Empty uses the `gh` login on this machine. |
 | `pr.title_template`, `pr.body_template` | Single-task PR title and body templates with `{{placeholder}}` values (`task_id`, `title`, `type`, `description`, `acceptance_criteria`, `execution_summary`, `validation`, `freshness`, `task_url`, `ext.<system>`). The body is `"repo"` (the repository's `pull_request_template.md`) or a repository-relative path, read at the delivery's base revision. An unknown placeholder fails the config load. A rendered body ends with an Orbit comment naming the task, so a template that omits `{{task_id}}` still identifies the delivery. |
@@ -591,22 +595,25 @@ with a deprecation warning, are ignored, and stop being recognised after
 Fleet notices are short, expiring, attributed announcements. Their limits
 are fixed; no key changes them:
 
-- Default expiry: 72 hours for an incident, 12 for maintenance, 168 for
-  info. A managed agent's notice defaults to, and is capped at, 24 hours.
-- Longest expiry: 720 hours for an operator; 168 (incident), 72
-  (maintenance) and 168 (info) for an orchestrator.
+- Default expiry: 72 hours for a warn or incident, 12 for maintenance, 168
+  for info. A managed agent's notice defaults to, and is capped at, 24 hours.
+  A resident mandate's warn defaults to 72 hours (at most 168 hours), and its
+  status line expires at twice the mandate's heartbeat (or 168 hours for a
+  control line left when paused, taken over, or stopped).
+- Longest expiry: 720 hours for an operator; 168 (warn, incident, info) and 72
+  (maintenance) for an orchestrator; 168 for a resident mandate's warn.
 - Size: titles up to 120 characters, bodies up to 4096 UTF-8 bytes, at most
   8 evidence references.
 - Open notices: 20 per workspace, 10 global per owner host, 2 per managed
-  task.
+  task, 10 per resident mandate.
 - Post rates: 5 per managed task in 24 hours (corroborations included), 30
-  per orchestrator crew per hour.
+  per orchestrator crew per hour, 30 per resident mandate per hour.
 - Retention: closed and expired notices stay listable for 30 days.
 - Agents: managed agents always may post and close their own notices
   through their bound task.
-- Brief: opted-in managed activities always receive up to 5 open notices,
-  each body cut to 600 characters; a read that takes over 2000 ms gives an
-  unavailable brief.
+- Brief: opted-in managed activities always receive up to 5 open notices
+  (warn notices and residents' status lines are excluded), each body cut to
+  600 characters; a read that takes over 2000 ms gives an unavailable brief.
 
 The former `notice.*` keys load with a deprecation warning, are ignored, and
 stop being recognised after 2026-12-08. Delete the `[notice]` table.
@@ -839,8 +846,8 @@ hosted_check = "CodeQL / Analyze"
 ```
 
 Each rule admits only these fields: `kind`, `name`, `paths`, `os`,
-`command`, `artifact`, and optional `hosted_check`; unknown fields are
-rejected. `kind` is exactly `codeql` or `host_sandbox_test`, `os` is
+`command`, `artifact`, and optional `hosted_check` and `tags`; unknown
+fields are rejected. `kind` is exactly `codeql` or `host_sandbox_test`, `os` is
 `linux` or `macos`, `name` and `command` must be non-empty, and `paths`
 must contain at least one valid workspace-relative glob. The `artifact` must
 be a unique relative `.json` path across rules. A `host_sandbox_test`
@@ -863,6 +870,13 @@ executable bit cannot run.
 Configuration accepts any non-empty `codeql` command, and a custom command
 is not fulfilled by the built-in path: the hold stays, and the refusal names
 this contract and that download.
+
+A rule applies when the candidate changes a path matching `paths`, or when
+the claimed task carries any tag listed in optional `tags` (compared
+case-insensitively; a blank tag fails load), such as
+`tags = ["security", "security-review"]` for a check every security task
+owes whatever it changed. Followers need a matching Orbit build to claim
+work under a rule that lists tags.
 
 A `codeql` rule is owed when the claimed review host has a different OS from
 the rule's `os`, and the owner fulfils it on the named OS. A
@@ -1245,7 +1259,7 @@ holds, pull-drain auth exclusions and probes are its own, and
 (`opus-credits:200usd/30d`).
 
 `orbit init` writes every built-in crew (Claude: `opus`, `sonnet`, `haiku`, and `fable` pinned to `claude-fable-5-2`;
-Codex: `astra`, `sol`, `terra`, `luna`; Antigravity: `gemini-flash`, `argon`;
+Codex: `astra`, `sol`, `terra`, `luna`; Antigravity: `gemini-flash`, `argon`, `neon`, `hydrogen`, `carbon`;
 Grok: `grok`; Copilot: `copilot`; Muse: `muse-spark`, `muse-wonder`, `muse-wonder-full`;
 no built-in Gemini CLI crew; the `cursor`, `pi`, and `opencode` lanes were [retired](providers.md#provider-identity-and-resolution)), with `enabled = true` on the crews whose
 agent CLI it detects and `enabled = false` on the rest, and points
@@ -1256,7 +1270,7 @@ table, nor a system-crew key. The four
 `workflow.*_complexity_crews` pools are seeded from the detected families
 (Claude only: `haiku` / `sonnet` / `opus` / `fable`; Codex only: `luna` / `terra` /
 `sol` / `astra`; both: `haiku, luna` / `terra, sonnet` / `sol, opus` / `fable, astra`;
-grok joins `medium`; a detected `agy` appends `gemini-flash` to `low` and `argon` to `hard`;
+grok joins `medium`; a detected `agy` appends `gemini-flash` to `low`, `hydrogen` to `medium`, `argon` and `neon` to `hard`, and `carbon` to `xhard`;
 a detected `muse` appends `muse-spark`, `muse-wonder`, and `muse-wonder-full` to `low`, `medium`, and `hard`;
 Copilot and other families leave them `[]`). A user-authored
 legacy `qa` crew remains loadable, but init never creates it. Init also writes the
@@ -1267,8 +1281,11 @@ muse-spark@high`; `failure_recovery` from `luna, haiku, muse-spark, grok`; `auto
 opus@medium`; `baseline_red_repair` from `terra, sonnet, muse-wonder, grok`. A pool left empty
 is omitted, except `final_recovery`, written as `[]` (off). Editing
 `workflow.*_complexity_crews` later does not move those purpose pools; to move system
-work, edit its `workflow.purpose_crews.<purpose>` pool directly. Creating this machine's
-identity also sets `machine.auto_concurrency.mode = "enforce"` (an existing machine keeps
+work, edit its `workflow.purpose_crews.<purpose>` pool directly. `sweep_tasks` and
+`pilot_warning_triage` are not written: until an operator sets
+`workflow.purpose_crews.pilot_warning_triage`, pilot-warning triage stays on the
+hard-tier route and draws from `workflow.hard_complexity_crews`. Creating this
+machine's identity also sets `machine.auto_concurrency.mode = "enforce"` (an existing machine keeps
 its mode), and the seed sets `experiments.enabled = true`,
 `workflow.crew_selection = "static"`, `workflow.mid_run_steering.enabled = true`,
 `workflow.task_pilot_freshness.material_fields = ["description", "criteria"]` and
@@ -1303,8 +1320,8 @@ tags = ["ops"]
 
 **Supported keys and restrictions.** A human crew takes only `description`
 and `tags` besides `kind`. Setting an agent key (`provider`, `model`,
-`effort`, `env`, `vision`, `enabled`, `backend`, or a retired role table)
-fails load naming the crew. Its name must not match an agent crew,
+`effort`, `env`, `vision`, `enabled`, or `backend`) fails load naming the
+crew. Its name must not match an agent crew,
 built-in ones included. Human crews are kept apart from the agent crews, so
 a `[crews]` table holding only human crews still gets the built-in agent
 crews. Names normalize to lowercase letters, digits, `_` and `-`.
@@ -1491,7 +1508,9 @@ is read-only. `$CARGO_HOME` is the child's variable when
 `[execution.env].pass` names it, else `~/.cargo`. There is no executor field
 for this: the grant applies only to profiles that already grant some write
 (`implementer`, `unrestricted`, `docs_writer`, …) and never to read-only
-profiles. On Linux a cache path missing on the host is skipped, not created.
+profiles: `reviewer` reads the workspace but writes nothing, and
+`pure_compute` neither reads nor writes the workspace, so neither gets the
+grant. On Linux a cache path missing on the host is skipped, not created.
 
 To use a non-default cache location, pass it through
 `[execution.env].pass`; to change what a worker may write, change the
@@ -2002,8 +2021,11 @@ A policy defines the filesystem profiles activities run under.
 orbit doctor fs-access <profile> <path>    # dry-run a workspace-relative path against the profile rules
 ```
 
-Shipped profiles: `reviewer` and `pure_compute` (read-only), `docs_writer`
-(scoped writes), `implementer` (workspace writes), `unrestricted`.
+Shipped profiles: `reviewer` (reads the workspace, writes nothing),
+`pure_compute` (neither reads nor writes the workspace, so pick it only for an
+activity that needs no workspace files), `docs_writer` (scoped writes),
+`implementer` (workspace writes), `unrestricted`. A read-only activity that
+opens workspace files should use `reviewer`; `pure_compute` denies those reads too.
 
 The trap worth knowing: an activity that omits `fsProfile` falls back to
 the `unrestricted` profile. A read-only activity must declare its profile

@@ -218,6 +218,54 @@ fn a_config_templated_write_root_outside_scratch_needs_fs_consent() -> Outcome {
     Outcome::Passed
 }
 
+/// An exact-file grant on a workspace root file such as `AGENTS.md` is
+/// certified: the conformance workspace starts empty and an exact-file grant
+/// admits only an existing file, so the run creates it, and the backend
+/// rewrites it under the sandbox.
+#[cfg(unix)]
+fn a_workspace_exact_file_grant_passes_conformance_on_a_created_file() -> Outcome {
+    if let Some(skipped) = nested_seatbelt_skip() {
+        return skipped;
+    }
+    if !super::plugin_fixture::enter_isolated_child(
+        module_path!(),
+        "a_workspace_exact_file_grant_passes_conformance_on_a_created_file",
+    ) {
+        return Outcome::Passed;
+    }
+    let fixture = PluginFixture::new();
+    let root = write_tested_plugin(&fixture, "agentsfile", "world");
+    std::fs::write(
+        root.join("bin/backend.sh"),
+        r#"#!/bin/sh
+cat > /dev/null
+printf managed > AGENTS.md 2>/dev/null || { printf '{"ok":false,"error":{"code":"unwritable","message":"AGENTS.md"}}\n'; exit 0; }
+printf '{"ok":true,"output":{"subject":"%s"}}\n' "$(cat AGENTS.md)"
+"#,
+    )
+    .expect("write AGENTS.md backend");
+    std::fs::write(
+        root.join("tests/conformance/greet.yaml"),
+        "schemaVersion: 1\nkind: PluginTest\ntests:\n  - name: rewrites_agents_md\n    tool: \
+         greet\n    input: {}\n    expect:\n      output:\n        subject: managed\n",
+    )
+    .expect("write golden");
+    patch_manifest(
+        &root,
+        "",
+        "  permissions:\n    fs:\n      write_files: [\"{{workspace}}/AGENTS.md\"]\n",
+    );
+
+    let report = run(&fixture.runtime, &root)
+        .expect("a `{{workspace}}` exact file needs no external-write consent");
+    assert!(
+        report.passed(),
+        "the run creates the granted file and the backend rewrites it: {:?}",
+        report.results
+    );
+    Outcome::Passed
+}
+
 /// A plugin declaring `api_token`, whose backend reports which of two known
 /// values its request carried — the golden's fixture (at version `fixture`)
 /// or the host's stored one — without echoing either.
@@ -345,7 +393,8 @@ fn a_golden_supplying_an_undeclared_secret_is_refused() {
 crate::scenario_table!(
     a_config_templated_write_root_outside_scratch_needs_fs_consent_scenarios,
     a_config_templated_write_root_outside_scratch_needs_fs_consent,
-    goldens_supply_fixture_secrets_and_the_host_store_is_never_read
+    goldens_supply_fixture_secrets_and_the_host_store_is_never_read,
+    a_workspace_exact_file_grant_passes_conformance_on_a_created_file
 );
 
 /// A nested-Seatbelt lane [ORB-19501]: with the Seatbelt apply refused, the
@@ -381,6 +430,7 @@ fn nested_seatbelt_defers_conformance_rows_without_pass_credit() {
     for row in [
         "a_config_templated_write_root_outside_scratch_needs_fs_consent",
         "goldens_supply_fixture_secrets_and_the_host_store_is_never_read",
+        "a_workspace_exact_file_grant_passes_conformance_on_a_created_file",
     ] {
         assert!(
             !stderr.contains(&format!("qa-scenario-pass: {row}")),

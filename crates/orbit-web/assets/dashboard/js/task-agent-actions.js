@@ -27,7 +27,21 @@ const TRIAGE_REFUSAL_MS = 20000;
 // Recovery (requeue / settle-merged): a refused recovery's typed code and
 // message, kept with the action like a refused Triage.
 export const recoveryRefusals = new Map();
+// The stored diagnostic behind a recovery refusal's one-line note, keyed the
+// same way. Cleared with the note.
+export const recoveryRefusalDetails = new Map();
 const RECOVERY_REFUSAL_MS = 20000;
+
+function rememberRecoveryRefusal(key, message, detail) {
+  recoveryRefusals.set(key, message);
+  if (detail) recoveryRefusalDetails.set(key, detail);
+  else recoveryRefusalDetails.delete(key);
+}
+
+function forgetRecoveryRefusal(key) {
+  recoveryRefusals.delete(key);
+  recoveryRefusalDetails.delete(key);
+}
 // Fix PR: whether the server would start an out-of-run auto-fix of a review
 // task's pull request, keyed like the ship guard. Read once when the panel
 // shows the task and again after FIX_PR_READINESS_MS or a start, so a list
@@ -50,15 +64,19 @@ function pilotDisabledReason(task, mutable, running) {
   return "";
 }
 
-// Run pilot on a proposed task: one explicit task-pilot run for this task. It
-// refreshes the task's selectors and complexity; it never approves or ships it.
+// Run pilot on a proposed or backlog task: one explicit task-pilot run for this
+// task. It refreshes the task's selectors and complexity; it never approves or
+// ships it.
 export function appendPilotControls(actions, task, detail, context, mutable) {
   const running = pilotRunsByTask.get(taskShared.taskDispatchIdentity(task));
   const reason = pilotDisabledReason(task, mutable, running);
+  const help = task.status === "backlog"
+    ? "Re-check this task's selectors and complexity with a task-pilot run; it never dispatches the task"
+    : "Assess this task with a task-pilot run: it re-checks selectors and complexity and never approves or dispatches the task";
   const btn = el("button", {
     class: "action pilot",
     text: running ? "piloting…" : "run pilot",
-    title: reason || "Assess this task with a task-pilot run: it re-checks selectors and complexity and never approves or dispatches the task",
+    "aria-description": reason || help,
   });
   btn.disabled = Boolean(reason);
   btn.addEventListener("click", (e) => {
@@ -85,19 +103,33 @@ export function pilotSignature(task) {
   return `${running ? running.runId : ""}|${pilotRefusals.get(key) || ""}`;
 }
 
+async function submitTaskAgentAction(detail, button, path, body) {
+  for (const note of detail.querySelectorAll(".lifecycle-actions .action-error")) note.remove();
+  for (const action of detail.querySelectorAll(".action")) action.disabled = true;
+  button.innerHTML = `<span class="spinner"></span>wait`;
+  try {
+    return await postJson(path, body);
+  } finally {
+    // A repeated refusal can have exactly the previous text. The mounted
+    // detail now shows pending controls, so settlement must repaint it even
+    // in that case. The pinned wrapper owns the hash outside the list.
+    const keyed = detail.closest("[data-key]");
+    if (keyed) {
+      delete keyed.dataset.hash;
+      delete keyed.dataset.baseHash;
+    }
+  }
+}
+
 async function runPilot(task, detail, btnNode, context) {
   const visit = captureWorkspaceVisit();
   const key = taskShared.taskDispatchIdentity(task);
   if (!canMutateTask(task) || pilotRunsByTask.has(key)) return;
   const requestPath = visit.path(taskMutationPath(task, "/pilot"));
   pilotRefusals.delete(key);
-  const prior = detail.querySelector(".action-error");
-  if (prior) prior.remove();
-  for (const b of detail.querySelectorAll(".action")) b.disabled = true;
-  btnNode.innerHTML = `<span class="spinner"></span>wait`;
   let result;
   try {
-    result = await postJson(requestPath, {});
+    result = await submitTaskAgentAction(detail, btnNode, requestPath, {});
   } catch (error) {
     if (!visit.isCurrent()) return;
     const message = `run pilot failed: ${error.message || String(error)}`;
@@ -185,7 +217,7 @@ export function appendTriageControls(actions, task, detail, context, mutable) {
   const btn = el("button", {
     class: "action triage",
     text: running ? "triaging…" : "triage",
-    title: reason || subjectWords,
+    "aria-description": reason || subjectWords,
   });
   btn.disabled = Boolean(reason);
   btn.addEventListener("click", (e) => {
@@ -218,13 +250,9 @@ async function runTriage(task, detail, btnNode, context) {
   if (!canMutateTask(task) || triageRunsByTask.has(key)) return;
   const requestPath = visit.path(taskMutationPath(task, "/triage"));
   triageRefusals.delete(key);
-  const prior = detail.querySelector(".action-error");
-  if (prior) prior.remove();
-  for (const b of detail.querySelectorAll(".action")) b.disabled = true;
-  btnNode.innerHTML = `<span class="spinner"></span>wait`;
   let result;
   try {
-    result = await postJson(requestPath, {});
+    result = await submitTaskAgentAction(detail, btnNode, requestPath, {});
   } catch (error) {
     if (!visit.isCurrent()) return;
     const message = `triage failed: ${error.message || String(error)}`;
@@ -279,12 +307,12 @@ async function watchTriageRun(task, key, runId, visit, context) {
 export function appendRecoveryControls(actions, task, detail, context, mutable) {
   const blocked = task.status === "blocked";
   const settleable = blocked || task.status === "in-progress" || task.status === "review";
-  const disabledTitle = mutable ? "" : aggregateRefusalTitle("Recovery", "recover a task");
+  const disabledDescription = mutable ? "" : aggregateRefusalTitle("Recovery", "recover a task");
   if (blocked) {
     const resume = el("button", {
       class: "action requeue-resume",
       text: "Resume candidate",
-      title: disabledTitle || "Return this blocked task to the backlog keeping its published candidate: the next run adopts that candidate and pull request without re-implementing, then validates, reviews and lands it afresh",
+      "aria-description": disabledDescription || "Return this blocked task to the backlog with its published candidate. The next delivery adopts it and its pull request without re-implementing, then validates it. Any fresh independent review follows that delivery's selected review policy, which may be off.",
     });
     resume.disabled = !mutable;
     resume.addEventListener("click", (e) => { e.stopPropagation(); runRecovery(task, detail, resume, context, "resume"); });
@@ -292,7 +320,7 @@ export function appendRecoveryControls(actions, task, detail, context, mutable) 
     const discard = el("button", {
       class: "action requeue-discard",
       text: "Discard and re-implement",
-      title: disabledTitle || "Discard this blocked task's published candidate, close its undelivered pull requests, and return it to the backlog so the next run implements fresh",
+      "aria-description": disabledDescription || "Discard this blocked task's published candidate, close its undelivered pull requests, and return it to the backlog so the next run implements fresh",
     });
     discard.disabled = !mutable;
     discard.addEventListener("click", (e) => { e.stopPropagation(); runRecovery(task, detail, discard, context, "discard"); });
@@ -302,15 +330,16 @@ export function appendRecoveryControls(actions, task, detail, context, mutable) 
     const settle = el("button", {
       class: "action settle-merged",
       text: "Settle merged PR",
-      title: disabledTitle || "Settle this task as done from its delivery pull request if that pull request already merged outside the pipeline into its target branch; if it has not merged, nothing changes",
+      "aria-description": disabledDescription || "Settle this task as done from its delivery pull request if that pull request already merged outside the pipeline into its target branch; if it has not merged, nothing changes",
     });
     settle.disabled = !mutable;
     settle.addEventListener("click", (e) => { e.stopPropagation(); runRecovery(task, detail, settle, context, "settle"); });
     actions.appendChild(settle);
   }
-  const refusal = recoveryRefusals.get(taskShared.taskDispatchIdentity(task));
+  const refusalKey = taskShared.taskDispatchIdentity(task);
+  const refusal = recoveryRefusals.get(refusalKey);
   if (refusal) {
-    const note = actionErrorNode(refusal);
+    const note = actionErrorNode(refusal, undefined, recoveryRefusalDetails.get(refusalKey));
     note.style.flexBasis = "100%";
     actions.appendChild(note);
   }
@@ -338,18 +367,18 @@ async function runRecovery(task, detail, btnNode, context, kind) {
     const discard = kind === "discard";
     const explain = discard
       ? `Discard and re-implement ${task.id}? This discards the candidate its stopped run published, closes the task's undelivered pull requests, and returns the task to the backlog so the next run implements fresh.`
-      : `Resume candidate for ${task.id}? This returns the blocked task to the backlog keeping the candidate its stopped run published: the next run adopts that candidate and pull request without re-implementing, then validates, reviews and lands it afresh.`;
+      : `Resume candidate for ${task.id}? This returns the blocked task to the backlog with its stopped run's candidate. The next delivery adopts it and its pull request without re-implementing, then validates it. Any fresh independent review follows that delivery's selected review policy, which may be off. The normal landing gates still apply.`;
     if (typeof window.confirm !== "function" || !window.confirm(explain)) return;
     if (typeof window.prompt !== "function") return;
     const reason = window.prompt(`Reason for requeueing ${task.id} (recorded in task history):`, "");
     if (reason === null) return;
     if (!reason.trim()) {
       const message = "[requeue_reason_required] requeue needs a reason; it is recorded with the decision";
-      recoveryRefusals.set(key, message);
+      rememberRecoveryRefusal(key, message);
       rerender(context);
       setTimeout(() => {
         if (recoveryRefusals.get(key) !== message) return;
-        recoveryRefusals.delete(key);
+        forgetRecoveryRefusal(key);
         rerender(context);
       }, RECOVERY_REFUSAL_MS);
       return;
@@ -359,22 +388,19 @@ async function runRecovery(task, detail, btnNode, context, kind) {
     successText = discard ? `${task.id}: requeued to implement fresh` : `${task.id}: requeued onto its published candidate`;
   }
   const requestPath = visit.path(taskMutationPath(task, suffix));
-  recoveryRefusals.delete(key);
-  const prior = detail.querySelector(".action-error");
-  if (prior) prior.remove();
-  for (const b of detail.querySelectorAll(".action")) b.disabled = true;
-  btnNode.innerHTML = `<span class="spinner"></span>wait`;
+  forgetRecoveryRefusal(key);
   try {
-    await postJson(requestPath, body);
+    await submitTaskAgentAction(detail, btnNode, requestPath, body);
   } catch (error) {
     if (!visit.isCurrent()) return;
     const code = error && error.code ? error.code : "recovery_refused";
     const message = `[${code}] ${error.message || String(error)}`;
-    recoveryRefusals.set(key, message);
+    const detail = error && error.body && typeof error.body.detail === "string" ? error.body.detail : "";
+    rememberRecoveryRefusal(key, message, detail);
     rerender(context);
     setTimeout(() => {
       if (recoveryRefusals.get(key) !== message) return;
-      recoveryRefusals.delete(key);
+      forgetRecoveryRefusal(key);
       rerender(context);
     }, RECOVERY_REFUSAL_MS);
     return;
@@ -522,7 +548,7 @@ export function appendFixPrControls(actions, task, detail, context, mutable) {
   const btn = el("button", {
     class: "action fix-pr",
     text: "fix PR",
-    title: reason || `Hand pull request #${data.pr_number || taskPullRequestNumber(task)} back to its delivery to ${purpose}. The repair pushes to the same branch and never merges a pull request its delivery was not allowed to merge`,
+    "aria-description": reason || `Hand pull request #${data.pr_number || taskPullRequestNumber(task)} back to its delivery to ${purpose}. The repair pushes to the same branch and never merges a pull request its delivery was not allowed to merge`,
   });
   btn.disabled = Boolean(reason);
   btn.dataset.fixPrSignature = fixPrSignature(task);

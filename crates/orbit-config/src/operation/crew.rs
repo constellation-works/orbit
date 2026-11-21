@@ -9,7 +9,7 @@ use super::layer::OperationLayerSource;
 /// [ORB-15195]. A single name is a one-member pool.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(untagged)]
-pub enum ReviewCrewSetting {
+pub(crate) enum ReviewCrewSetting {
     /// `review = "sol"`.
     One(String),
     /// `review = ["sol", "grok"]`.

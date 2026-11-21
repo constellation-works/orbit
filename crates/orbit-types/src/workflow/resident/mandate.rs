@@ -68,12 +68,32 @@ pub struct ResidentWatch {
 
 /// How often a resident may wake.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
+#[serde(from = "ResidentCadenceInput")]
 pub struct ResidentCadence {
-    /// Fewest minutes between two cycles.
+    /// Fewest minutes between two cycles. A mandate that omits it gets its
+    /// heartbeat: only an operator asking for faster reaction sets it lower.
     pub floor_minutes: u32,
     /// Most minutes without a cycle.
     pub heartbeat_minutes: u32,
+}
+
+/// The cadence as a mandate document may write it: `floor_minutes` is
+/// optional and defaults to `heartbeat_minutes`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResidentCadenceInput {
+    #[serde(default)]
+    floor_minutes: Option<u32>,
+    heartbeat_minutes: u32,
+}
+
+impl From<ResidentCadenceInput> for ResidentCadence {
+    fn from(input: ResidentCadenceInput) -> Self {
+        Self {
+            floor_minutes: input.floor_minutes.unwrap_or(input.heartbeat_minutes),
+            heartbeat_minutes: input.heartbeat_minutes,
+        }
+    }
 }
 
 /// Whether a resident resumes a provider conversation between cycles.
@@ -157,6 +177,11 @@ impl ResidentMandate {
         }
         if self.crew.trim().is_empty() {
             return Err(ResidentMandateError::Empty("crew"));
+        }
+        if self.cadence.heartbeat_minutes < RESIDENT_MIN_FLOOR_MINUTES {
+            return Err(ResidentMandateError::Cadence(format!(
+                "mandate `cadence.heartbeat_minutes` must be at least {RESIDENT_MIN_FLOOR_MINUTES}"
+            )));
         }
         if self.cadence.floor_minutes < RESIDENT_MIN_FLOOR_MINUTES {
             return Err(ResidentMandateError::Cadence(format!(

@@ -1055,35 +1055,8 @@ pub(super) fn store(fixture: &Fixture) -> orbit_store::Store {
 }
 
 /// The one `v2_audit_events` insert shape every scenario seeds through.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn insert_audit(
-    fixture: &Fixture,
-    workspace: &str,
-    source: &str,
-    event_id: &str,
-    run_id: &str,
-    ts: DateTime<Utc>,
-    event_type: &str,
-    agent: &str,
-    parent: Option<&str>,
-    payload: Value,
-) {
-    fixture
-        .runtime
-        .insert_v2_audit_event(&V2AuditEventInsertParams {
-            workspace_id: workspace.into(),
-            event_id: event_id.into(),
-            source: source.into(),
-            schema_version: 1,
-            event_type: event_type.into(),
-            ts,
-            run_id: run_id.into(),
-            agent_identity: agent.into(),
-            parent_event_id: parent.map(str::to_string),
-            workspace_path: None,
-            payload_json: payload.to_string(),
-        })
-        .unwrap();
+pub(super) fn insert_audit(fixture: &Fixture, params: V2AuditEventInsertParams) {
+    fixture.runtime.insert_v2_audit_event(&params).unwrap();
 }
 
 /// [`insert_audit`] with the default source and the fixture agent.
@@ -1098,15 +1071,19 @@ pub(super) fn insert_audit_default(
 ) {
     insert_audit(
         fixture,
-        workspace,
-        "v2_envelope",
-        event_id,
-        run_id,
-        ts,
-        event_type,
-        "fixture",
-        None,
-        payload,
+        V2AuditEventInsertParams {
+            workspace_id: workspace.into(),
+            event_id: event_id.into(),
+            source: "v2_envelope".into(),
+            schema_version: 1,
+            event_type: event_type.into(),
+            ts,
+            run_id: run_id.into(),
+            agent_identity: "fixture".into(),
+            parent_event_id: None,
+            workspace_path: None,
+            payload_json: payload.to_string(),
+        },
     );
 }
 
@@ -1233,15 +1210,19 @@ pub(super) fn insert_test_event(
     let ts = ts.parse::<DateTime<Utc>>().unwrap();
     insert_audit(
         fixture,
-        workspace,
-        "v2_envelope",
-        event_id,
-        run_id,
-        ts,
-        "test.event",
-        "codex",
-        parent,
-        payload,
+        V2AuditEventInsertParams {
+            workspace_id: workspace.into(),
+            event_id: event_id.into(),
+            source: "v2_envelope".into(),
+            schema_version: 1,
+            event_type: "test.event".into(),
+            ts,
+            run_id: run_id.into(),
+            agent_identity: "codex".into(),
+            parent_event_id: parent.map(str::to_string),
+            workspace_path: None,
+            payload_json: payload.to_string(),
+        },
     );
 }
 
@@ -1351,15 +1332,19 @@ pub(super) fn insert_cancel_audit(fixture: &Fixture, run_id: &str, ts: DateTime<
     });
     insert_audit(
         fixture,
-        &ws_id(fixture),
-        "v2_envelope",
-        &format!("evt-{run_id}"),
-        run_id,
-        ts,
-        "run.cancelled",
-        "not-the-actor",
-        None,
-        payload,
+        V2AuditEventInsertParams {
+            workspace_id: ws_id(fixture),
+            event_id: format!("evt-{run_id}"),
+            source: "v2_envelope".into(),
+            schema_version: 1,
+            event_type: "run.cancelled".into(),
+            ts,
+            run_id: run_id.into(),
+            agent_identity: "not-the-actor".into(),
+            parent_event_id: None,
+            workspace_path: None,
+            payload_json: payload.to_string(),
+        },
     );
 }
 

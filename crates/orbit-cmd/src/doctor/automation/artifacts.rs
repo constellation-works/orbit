@@ -27,10 +27,11 @@ pub(in crate::doctor) fn doctor_check_task_relations(
         }
     };
     match runtime.audit_dangling_relations(Some(&workspace_id)) {
-        Err(error) => check(
+        Err(error) => actionable_check(
             "task-relations",
             WorkspaceDoctorStatus::Warning,
             format!("cannot audit task relations: {error}"),
+            "Resolve the reported audit error, then rerun `orbit doctor`.".to_string(),
         ),
         Ok(dangling) if dangling.is_empty() => check(
             "task-relations",

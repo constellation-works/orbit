@@ -1,4 +1,5 @@
 //! Cumulative owner reservation for a provider base update, shared by causes.
+use crate::plugin::is_full_commit_id;
 use crate::task::TaskHistoryEntry;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -21,12 +22,61 @@ pub struct PrBaseUpdateReservation {
     pub evidence: Value,
 }
 
+/// Why a base-update admission was refused. Consumers match the variant,
+/// never the rendered message; `Display` preserves the historical wording.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrBaseUpdateRefusal {
+    /// The request lacks complete identity or evidence.
+    IncompleteRequest,
+    /// Stored reservation history could not be read; retains the exact
+    /// diagnostic from `pr_base_update_reservations`.
+    UnreadableHistory(String),
+    /// The cumulative budget is spent. `for_this_head` preserves the
+    /// head-specific suffix of the historical message.
+    BudgetSpent { for_this_head: bool },
+    /// A claimed worker asked; base updates require the owning host.
+    RequiresOwningHost,
+    /// The current handoff authority is unavailable on this host.
+    HandoffAuthorityUnavailable,
+    /// This host keeps no base-update ledger.
+    LedgerAbsent,
+}
+
+impl std::fmt::Display for PrBaseUpdateRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IncompleteRequest => {
+                write!(
+                    f,
+                    "base update reservation has incomplete identity or evidence"
+                )
+            }
+            Self::UnreadableHistory(diagnostic) => write!(f, "{diagnostic}"),
+            Self::BudgetSpent {
+                for_this_head: true,
+            } => {
+                write!(f, "{PR_BASE_UPDATE_BUDGET_SPENT} for this head")
+            }
+            Self::BudgetSpent {
+                for_this_head: false,
+            } => {
+                write!(f, "{PR_BASE_UPDATE_BUDGET_SPENT}")
+            }
+            Self::RequiresOwningHost => write!(f, "base updates require the owning host"),
+            Self::HandoffAuthorityUnavailable => {
+                write!(f, "current handoff authority is unavailable")
+            }
+            Self::LedgerAbsent => write!(f, "no base update ledger"),
+        }
+    }
+}
+
 /// Only a new reservation permits the single provider call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrBaseUpdateAdmission {
     Reserved,
     Observe(Box<PrBaseUpdateReservation>),
-    Refused(String),
+    Refused(PrBaseUpdateRefusal),
 }
 
 /// Malformed history refuses instead of granting a fresh budget.
@@ -43,7 +93,7 @@ pub fn pr_base_update_reservations(
                     .ok_or("base update reservation lacks evidence")?,
             )
             .map_err(|error| format!("unreadable base update reservation: {error}"))?;
-            validate(&reservation)?;
+            validate(&reservation).map_err(|refusal| refusal.to_string())?;
             Ok(reservation)
         })
         .collect()
@@ -64,12 +114,14 @@ pub fn decide_pr_base_update(
     history: &[TaskHistoryEntry],
     request: &PrBaseUpdateReservation,
 ) -> PrBaseUpdateAdmission {
-    if let Err(reason) = validate(request) {
-        return PrBaseUpdateAdmission::Refused(reason);
+    if let Err(refusal) = validate(request) {
+        return PrBaseUpdateAdmission::Refused(refusal);
     }
     let reservations = match pr_base_update_reservations(history) {
         Ok(reservations) => reservations,
-        Err(reason) => return PrBaseUpdateAdmission::Refused(reason),
+        Err(reason) => {
+            return PrBaseUpdateAdmission::Refused(PrBaseUpdateRefusal::UnreadableHistory(reason));
+        }
     };
     let prior: Vec<_> = reservations
         .into_iter()
@@ -83,9 +135,9 @@ pub fn decide_pr_base_update(
         {
             return PrBaseUpdateAdmission::Observe(Box::new((*previous).clone()));
         }
-        return PrBaseUpdateAdmission::Refused(format!(
-            "{PR_BASE_UPDATE_BUDGET_SPENT} for this head"
-        ));
+        return PrBaseUpdateAdmission::Refused(PrBaseUpdateRefusal::BudgetSpent {
+            for_this_head: true,
+        });
     }
     if !prior.is_empty() {
         let handoff_retry = request.evidence["cause"] == "inherited"
@@ -98,15 +150,16 @@ pub fn decide_pr_base_update(
                     && row.base_sha != request.base_sha
             });
         if !handoff_retry {
-            return PrBaseUpdateAdmission::Refused(PR_BASE_UPDATE_BUDGET_SPENT.into());
+            return PrBaseUpdateAdmission::Refused(PrBaseUpdateRefusal::BudgetSpent {
+                for_this_head: false,
+            });
         }
     }
     PrBaseUpdateAdmission::Reserved
 }
 
-fn validate(request: &PrBaseUpdateReservation) -> Result<(), String> {
-    let sha =
-        |s: &str| matches!(s.len(), 40 | 64) && s.bytes().all(|byte| byte.is_ascii_hexdigit());
+fn validate(request: &PrBaseUpdateReservation) -> Result<(), PrBaseUpdateRefusal> {
+    let sha = is_full_commit_id;
     if [
         &request.execution,
         &request.repository,
@@ -125,7 +178,7 @@ fn validate(request: &PrBaseUpdateReservation) -> Result<(), String> {
             .as_object()
             .is_some_and(|value| !value.is_empty())
     {
-        return Err("base update reservation has incomplete identity or evidence".into());
+        return Err(PrBaseUpdateRefusal::IncompleteRequest);
     }
     Ok(())
 }

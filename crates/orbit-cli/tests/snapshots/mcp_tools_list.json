@@ -40,7 +40,10 @@
               "friction_untriaged",
               "host_unhealthy",
               "notice_open",
-              "resident_stalled"
+              "resident_stalled",
+              "routine_tripped",
+              "drain_paused",
+              "drain_breaker_open"
             ]
           },
           "description": "Include kinds (repeatable)."
@@ -62,7 +65,10 @@
               "friction_untriaged",
               "host_unhealthy",
               "notice_open",
-              "resident_stalled"
+              "resident_stalled",
+              "routine_tripped",
+              "drain_paused",
+              "drain_breaker_open"
             ]
           },
           "description": "Exclude kinds (repeatable)."
@@ -125,6 +131,10 @@
           "description": "Public response limit, 1–500 (default 100).",
           "minimum": 1,
           "maximum": 500
+        },
+        "wait_grant": {
+          "type": "boolean",
+          "description": "Also mint a shell token for `orbit attention wait`."
         },
         "candidate_read": {
           "type": "boolean",
@@ -657,7 +667,7 @@
         },
         "view": {
           "type": "string",
-          "description": "Bounded metadata view. The only accepted value is `bounded`."
+          "description": "Bounded metadata view; requires `workspace`. The only accepted value is `bounded`."
         },
         "offset": {
           "type": "integer",
@@ -710,15 +720,15 @@
           "items": {
             "type": "string"
           },
-          "description": "No pagination with a projection on a claimed read."
+          "description": "Fields to return, keyed (even one)."
         },
         "field": {
           "type": "string",
-          "description": "No pagination with a projection on a claimed read."
+          "description": "Alias for `fields` taking one field."
         },
         "run_id": {
           "type": "string",
-          "description": "No pagination with a delivery selector on a claimed read."
+          "description": "Delivery run to report."
         },
         "workspace": {
           "type": "string",
@@ -726,23 +736,23 @@
         },
         "view": {
           "type": "string",
-          "description": "Bounded metadata view."
+          "description": "Bounded metadata view; requires `workspace`."
         },
         "limit": {
           "type": "integer",
-          "description": "No projection with pagination on a claimed read."
+          "description": "Detail page size for a paginated claimed read."
         },
         "comments_offset": {
           "type": "integer",
-          "description": "No projection with pagination on a claimed read."
+          "description": "Comment offset for a paginated claimed read."
         },
         "history_offset": {
           "type": "integer",
-          "description": "No projection with pagination on a claimed read."
+          "description": "History offset for a paginated claimed read."
         },
         "artifacts_offset": {
           "type": "integer",
-          "description": "No projection with pagination on a claimed read."
+          "description": "Artifact metadata offset for a paginated claimed read."
         }
       },
       "required": [

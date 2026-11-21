@@ -1,10 +1,11 @@
 //! Authenticate the host commit, review, synchronization and publication chain.
 use super::*;
+use orbit_types::plugin::is_sha1_commit_id;
 use orbit_types::workflow::{SuccessfulCheckpoint, pr_auto_fix_pushes};
 
 /// Whether a source-repair identity is a full SHA-1 object name.
 pub(super) fn is_exact_sha(sha: &str) -> bool {
-    sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+    is_sha1_commit_id(sha)
 }
 
 /// Read Git output with the deadline and refusal appropriate to the observation.
@@ -36,11 +37,10 @@ pub(super) fn is_git_ancestor(
     ancestor: &str,
     descendant: &str,
 ) -> Result<bool, OrbitError> {
-    Ok(orbit_common::fs::git::run_git(
-        repo,
-        &["merge-base", "--is-ancestor", ancestor, descendant],
-    )?
-    .success)
+    Ok(matches!(
+        orbit_common::fs::git::git_ancestry(repo, ancestor, descendant)?,
+        orbit_common::fs::git::GitAncestry::Ancestor
+    ))
 }
 
 /// Verify that the supplied name resolves exactly to the same commit.

@@ -891,10 +891,15 @@ fn operator_validation_holds_human_approved_work_and_requires_an_evidenced_decis
         agent_comment(&workspace, &task, comment.clone());
         // The registered agent tool cannot mint an operator decision even
         // when a caller omits provenance on a human-owned runtime.
-        let _ = workspace.runtime.run_tool(
-            "orbit.task.update",
-            json!({"id": task.id, "comment": comment}),
-        );
+        // The call is accepted as ordinary discussion, so an unrelated input
+        // error cannot stand in for the missing operator provenance below.
+        workspace
+            .runtime
+            .run_tool(
+                "orbit.task.update",
+                json!({"id": task.id, "comment": comment}),
+            )
+            .expect("the agent tool records the comment without operator authority");
         assert_admission(&workspace, &task, Some("operator_validation_handoff"));
         assert_no_event(&workspace, &task, "operator_validation_resolved");
         human_comment_err(
@@ -1495,6 +1500,54 @@ fn an_evaluated_answer_still_listed_on_an_older_request_is_refused() {
     assert_admission(&workspace, &task, None);
 }
 
+/// [ORB-25722] A stale assessment needs a new pilot, which no answer gives.
+/// Admission raises no request for it, and a request still open for the
+/// stale hold refuses `clear` before writing, so answering cannot loop.
+fn a_stale_assessment_raises_no_decision_request_and_refuses_an_answer() {
+    let workspace = decision_channel_workspace();
+    let task = stale_backlog_task(&workspace);
+    assert_admission(&workspace, &task, Some("pilot_assessment_stale"));
+    assert!(
+        decision_requests(&workspace, &task).is_empty(),
+        "no answer resolves a stale hold, so none is requested"
+    );
+
+    let operation_id = task_comments(&workspace, &task)
+        .iter()
+        .rev()
+        .find_map(|comment| comment.operation_id.clone())
+        .expect("the pilot receipt carries its operation id");
+    let older = DecisionRequest::new(
+        task.id.clone(),
+        DecisionGate::PilotAdmission,
+        PilotAdmissionVerdict::decision_answers(),
+        orbit_types::task::DecisionBinding::PilotOperation { operation_id },
+        "task_pilot".into(),
+        chrono::Utc::now(),
+    );
+    append_history(&workspace, &task, older.history_entry("task-pilot"));
+    let comments_before = task_comments(&workspace, &task);
+    let history_before = hist(&workspace, &task);
+    let message = answer_req_refused(
+        &workspace,
+        &older.id,
+        "clear",
+        Some("The edit was cosmetic.".into()),
+        "clear does not resolve a stale assessment",
+    );
+    assert!(
+        message.contains("answer_not_applicable") && message.contains("nothing was applied"),
+        "{message}"
+    );
+    assert_snapshot_unchanged(&workspace, &task, &comments_before, &history_before);
+    assert_admission(&workspace, &task, Some("pilot_assessment_stale"));
+    assert_eq!(
+        decision_requests(&workspace, &task).len(),
+        1,
+        "admission raises no further request after the refused answer"
+    );
+}
+
 fn a_disabled_pilot_hold_writes_no_decision_request() {
     let (workspace, task) = fresh_backlog();
     assess(&workspace, &task, Some("duplicate_of"));
@@ -1758,6 +1811,7 @@ crate::scenario_table!(
     an_evaluated_answer_on_a_finding_hold_is_refused_and_a_valid_answer_releases_it,
     an_evaluated_answer_still_listed_on_an_older_request_is_refused,
     a_disabled_pilot_hold_writes_no_decision_request,
+    a_stale_assessment_raises_no_decision_request_and_refuses_an_answer,
     a_changed_pilot_hold_supersedes_its_request_without_a_new_request,
     a_registered_channel_submission_releases_the_pilot_hold_as_the_human,
     agent_and_unregistered_submissions_leave_the_pilot_hold_held,
@@ -2017,7 +2071,11 @@ fn no_pilot_keeps_every_other_admission_rule() {
         })
         .unwrap();
     unready(&unassessed);
-    readiness_reason(&unassessed);
+    // Readiness reports the unassessed-complexity exclusion as a missing pilot.
+    assert_eq!(
+        readiness_reason(&unassessed),
+        "task_pilot_preparation_required"
+    );
 }
 
 crate::scenario_table!(

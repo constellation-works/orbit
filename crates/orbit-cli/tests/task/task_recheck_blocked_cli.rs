@@ -15,6 +15,11 @@ use isolated_cli_fixture::Fixture;
 
 #[test]
 fn recheck_blocked_cli_previews_and_requeues_only_cleared_launchers_without_execution() {
+    if crate::isolated_test::run_in_child(
+        "task_recheck_blocked_cli::recheck_blocked_cli_previews_and_requeues_only_cleared_launchers_without_execution",
+    ) {
+        return;
+    }
     let fixture = Fixture::new();
     let shown = fixture.json(&["workspace", "show", "--format", "json"]);
     let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());

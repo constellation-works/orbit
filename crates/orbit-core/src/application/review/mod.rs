@@ -35,7 +35,6 @@ mod fulfilment;
 pub(crate) use fulfilment::test_support as fulfilment_test_support;
 mod gate;
 mod handoff;
-mod handoff_repair;
 mod landing;
 mod landing_dispatch_port;
 mod projection;
@@ -56,7 +55,7 @@ pub use fulfilment::{
 };
 pub(crate) use gate::{
     record_reviewer_invocation, release_review_attempt, review_gate_admit, review_gate_settle,
-    review_report_correction,
+    review_report_correction, review_report_evidence_hold,
 };
 /// The owner handoff console [ORB-12516]: what an authorized owner surface
 /// reads and the typed refusals it renders. Adapters above Core cannot reach

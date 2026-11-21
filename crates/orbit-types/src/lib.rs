@@ -19,6 +19,7 @@ pub mod record;
 pub mod resource;
 pub mod task;
 pub mod telemetry;
+pub mod timestamp;
 pub mod tool;
 pub mod workflow;
 pub mod workspace;

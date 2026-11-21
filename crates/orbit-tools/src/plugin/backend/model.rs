@@ -1,4 +1,5 @@
 use super::*;
+use crate::github_run_log_cache::GITHUB_RUN_LOG_CACHE_DIR;
 
 /// Host ceiling on `spec.backend.timeout_ms`.
 pub const PLUGIN_TIMEOUT_CEILING_MS: u64 = 300_000;
@@ -91,6 +92,13 @@ pub fn orbit_product_markers_above_roots(roots: impl IntoIterator<Item = PathBuf
 /// is denied whole, staged writes included, and nothing in it is granted
 /// back: a channel's key reaches its bound plugin only through
 /// `context.secrets`.
+///
+/// [`GITHUB_RUN_LOG_CACHE_DIR`] is the broker's cache of completed GitHub run
+/// logs. An agent reads one only through the bounded, redacted
+/// `github.run.logs` response, so the agent sandbox masks it (`orbit-runtime`'s
+/// `plugin_masked_trees`). A plugin granted `orbit_tools` or a `$ORBIT_ROOT`
+/// read holds the whole global root, so the cache is denied whole here as
+/// well, with nothing granted back [ORB-25955].
 pub(super) const PLUGIN_GLOBAL_READ_DENY_DIRS: &[&str] = &[
     "state/plugin-callbacks",
     "state/application-consents",
@@ -98,6 +106,7 @@ pub(super) const PLUGIN_GLOBAL_READ_DENY_DIRS: &[&str] = &[
     "state/plugins",
     PLUGIN_SECRET_STORE_DIR,
     DECISION_CHANNEL_STORE_DIR,
+    GITHUB_RUN_LOG_CACHE_DIR,
 ];
 
 /// The host-owned secret store, relative to the global root (`orbit-core`'s

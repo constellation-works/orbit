@@ -7,9 +7,14 @@
 //! task's history stamp (its event and comment logs' length, modification time
 //! and file identity, taken without reading them) plus a digest of the task's
 //! other per-task inputs (its envelope fields, failed claim settlements,
-//! delivery runs and pulled claims). A new history event, a comment, an
-//! envelope edit, a new run or a claim settlement therefore recomputes that
-//! task, and a format change recomputes every row instead of misreading it.
+//! delivery runs and the pulled claims of this task, with the crews' known
+//! models that decide a pulled attempt's crew with them). A new history
+//! event, a comment, an envelope edit, a new run or a claim settlement
+//! therefore recomputes that task — and only that task: one task's new
+//! settlement must not stale every other row, or a busy fleet recomputes
+//! the whole workspace on every scan — and a format change recomputes
+//! every row instead of misreading it. The stamps are taken for every
+//! task in one pass when the rows load, before any read they label.
 //! Non-terminal tasks, tasks with an open span, and tasks the store cannot
 //! stamp or whose history or comments read failed are computed at every scan
 //! and never stored.
@@ -23,7 +28,7 @@
 //! reads they would have saved, and dropping the table rebuilds it on the
 //! next scan with identical facts.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 use orbit_common::security::release::sha256_hex;
@@ -31,6 +36,7 @@ use orbit_store::contracts::{AgentFactsStoreBackend, AgentTaskFactsRow};
 use orbit_types::task::{Task, TaskHistoryEntry};
 
 use super::super::records::block_cause;
+use super::attempts::PulledClaimRunners;
 use super::model::{RunRecord, Runner, TaskFacts};
 use super::task::task_facts;
 use crate::OrbitRuntime;
@@ -41,8 +47,13 @@ use crate::application::codebase::SettledFailure;
 /// wrote a pulled attempt's `Some(None)` provider-default report as JSON
 /// `null` and read it back as no report [ORB-24640]; version 2 keeps the
 /// three states, and version-1 rows are recomputed from their settlement
-/// and history inputs instead of being reused.
-pub(super) const FACTS_FORMAT_VERSION: u32 = 2;
+/// and history inputs instead of being reused. Version 3 stops keying a
+/// pulled attempt to a history crew whose known models exclude the model its
+/// crew-less late report names [ORB-24967]; version-2 rows hold that pairing
+/// and are recomputed. Version 4 keys each row's pulled-claim digest to the
+/// claims of its own task instead of every claim's, so version-3 sources
+/// never match again and their rows are recomputed once.
+pub(super) const FACTS_FORMAT_VERSION: u32 = 4;
 
 /// One task's facts during a scan, and whether they need writing back.
 pub(super) struct Entry {
@@ -59,13 +70,22 @@ pub(super) struct Entry {
 pub(super) struct StoredFacts {
     /// `None` when the rows could not be read: nothing is reused or written.
     workspace_id: Option<String>,
-    pulled_digest: String,
+    /// The crews' known models as one digest, shared by the pulled-claim
+    /// digest of every task that has claims.
+    crew_models_digest: String,
+    /// Each listed task's history stamp, taken in one pass at load; a task
+    /// is absent when nothing can vouch for its logs.
+    stamps: BTreeMap<String, String>,
     rows: HashMap<String, AgentTaskFactsRow>,
     writes: Vec<AgentTaskFactsRow>,
 }
 
 impl StoredFacts {
-    pub(super) fn load(runtime: &OrbitRuntime, pulled: &HashMap<&str, Runner>) -> Self {
+    pub(super) fn load(
+        runtime: &OrbitRuntime,
+        pulled: &PulledClaimRunners<'_>,
+        task_ids: &[String],
+    ) -> Self {
         let loaded = runtime.workspace_id().and_then(|workspace_id| {
             let rows = runtime.sqlite_store()?.agent_task_facts(&workspace_id)?;
             Ok((workspace_id, rows))
@@ -82,9 +102,17 @@ impl StoredFacts {
                 (None, HashMap::new())
             }
         };
+        // One stamp pass for the whole scan: the per-task stamp re-checks
+        // the partition for a commit to recover every time, which a scan
+        // of thousands of tasks pays thousands of times.
+        let stamps = workspace_id
+            .as_ref()
+            .map(|_| runtime.task_history_stamps(task_ids))
+            .unwrap_or_default();
         Self {
             workspace_id,
-            pulled_digest: pulled_digest(pulled),
+            crew_models_digest: sha256_hex(format!("{:?}", pulled.crew_models).as_bytes()),
+            stamps,
             rows,
             writes: Vec::new(),
         }
@@ -97,21 +125,21 @@ impl StoredFacts {
         task: &Task,
         settlements: &[SettledFailure],
         runs: &[RunRecord],
-        pulled: &HashMap<&str, Runner>,
+        pulled: &PulledClaimRunners<'_>,
         computed_at: DateTime<Utc>,
     ) -> Entry {
         let id = task.id.as_str();
-        // Only terminal tasks can have no open span; the stamp is taken before
-        // any read it labels.
+        // Only terminal tasks can have no open span; the stamps were taken
+        // at load, before any read they label.
         let source = self
             .workspace_id
             .as_ref()
             .filter(|_| task.status.is_terminal())
-            .and_then(|_| runtime.task_history_stamp(id))
+            .and_then(|_| self.stamps.get(id))
             .map(|stamp| {
                 format!(
                     "{stamp}|{}",
-                    inputs_digest(task, settlements, runs, &self.pulled_digest)
+                    inputs_digest(task, settlements, runs, &self.pulled_digest_for(id, pulled))
                 )
             });
         if let Some(source) = &source
@@ -154,6 +182,15 @@ impl StoredFacts {
             source: source.filter(|_| storeable),
             dirty: true,
         }
+    }
+
+    /// The stamps taken at load, for a following scan of the same tasks
+    /// (the codebase scan inside a scorecard scan) to reuse instead of
+    /// stamping every log again. Taken before this scan's reads, they
+    /// label that scan's reads or something older, as stamps taken there
+    /// would.
+    pub(super) fn take_stamps(&mut self) -> BTreeMap<String, String> {
+        std::mem::take(&mut self.stamps)
     }
 
     /// Queue `entry` for writing when it changed and may be stored.
@@ -205,13 +242,26 @@ fn has_no_open_span(facts: &TaskFacts) -> bool {
     facts.attempts.iter().all(|attempt| attempt.end.is_some())
 }
 
-fn pulled_digest(pulled: &HashMap<&str, Runner>) -> String {
-    if pulled.is_empty() {
-        return String::new();
+impl StoredFacts {
+    /// A value that changes with the runners of this task's own pulled
+    /// claims and with the crews' known models, which decide a pulled
+    /// attempt's crew with them. Empty for a task no claim pulled: its
+    /// facts cannot read a claim runner, and a claim that settles later
+    /// for this task gives it an entry here, so the value changes then.
+    fn pulled_digest_for(&self, task_id: &str, pulled: &PulledClaimRunners<'_>) -> String {
+        let Some(claim_ids) = pulled.by_task.get(task_id) else {
+            return String::new();
+        };
+        if claim_ids.is_empty() {
+            return String::new();
+        }
+        let mut entries: Vec<(&str, &Runner)> = claim_ids
+            .iter()
+            .filter_map(|claim| pulled.by_claim.get(claim).map(|runner| (*claim, runner)))
+            .collect();
+        entries.sort_by_key(|(id, _)| *id);
+        sha256_hex(format!("{entries:?}|{}", self.crew_models_digest).as_bytes())
     }
-    let mut entries: Vec<(&str, &Runner)> = pulled.iter().map(|(id, r)| (*id, r)).collect();
-    entries.sort_by_key(|(id, _)| *id);
-    sha256_hex(format!("{entries:?}").as_bytes())
 }
 
 /// The non-history inputs to [`task_facts`], as one value that changes with

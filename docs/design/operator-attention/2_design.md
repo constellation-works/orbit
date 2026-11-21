@@ -106,6 +106,9 @@ dashboard reading "the same feed" a later, small step.
 - **CLI**: `orbit attention [filters]` in the *Observe* group beside `doctor` and `log`, with
   the global `--format` / `--json` modes. Help text and errors stand alone: no source paths,
   no task or friction ids in help, and the kind names are the user-visible vocabulary.
+- **Shell wait**: `orbit attention wait --since <cursor>` blocks without a model turn and is
+  admitted only with a short-lived grant a capability-holding session mints through the MCP-only
+  `wait_grant` input ([decision](./4_decisions.md#a-shell-waits-on-attention-only-through-a-grant-its-own-session-mints)).
 - **MCP**: one tool, no new transport. Annotated read-only so clients may auto-approve it.
   It belongs to `tasks-read`, so the operator, manager, resident, agent and reader roles
   all serve it, as does the default surface. Roles select tools independently of capability:
@@ -189,8 +192,13 @@ Slice 1 also measures per-source cost on the real workspace so explicit polling 
   `run_failed` uses the newest submission per job and subject task, so a newer successful,
   pending or running attempt supersedes a failure. `run_window_hours` bounds failure history;
   active rows remain eligible for `run_stuck` beyond that window. Blocked items fold their
-  referenced runs before runtime filtering. Runtime kinds require Operator capability, with
-  one workspace-scoped `degraded` entry per selected unreadable kind otherwise.
+  referenced runs before runtime filtering. Run and claim kinds require Operator capability, with
+  one workspace-scoped `degraded` entry per selected unreadable kind otherwise; `host_unhealthy`
+  gets a single host-scoped entry instead. A live resident cycle (the trusted run binding
+  names a `resident_cycle_pipeline` run holding its mandate's live grant) reads them read-only
+  for the workspaces its grant covers, and host health likewise; a workspace outside the mandate
+  and any other agent session keep the `capability` entries.
+  The session gains no write capability [ORB-25254].
 - **`run_stuck` has no heartbeat.** `run_owner_liveness` compares the persisted pid/start token
   through the existing job owner classifier. Linux obtains stable process start identity from
   `/proc/<pid>/stat` and `/proc/stat` (boot time), including the PID namespace in v2 tokens.
@@ -241,6 +249,7 @@ Slice 1 also measures per-source cost on the real workspace so explicit polling 
 - [ORB-21170] — slice 3: `ci_red` and `friction_untriaged`
 - [ORB-21171] — slice 4: federation across workspaces and hosts, and `host_unhealthy`
 - [ORB-21680] — made CI attention use the fetched base-branch head
+- [ORB-25277] — shell wait through a session-minted read grant
 - [ORB-22808] — fixed the former `[attention]` bounds at their defaults and deprecated the keys
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

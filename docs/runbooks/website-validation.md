@@ -100,8 +100,12 @@ npm --prefix "$SANDBOX_ROOT/source/website" run build
 
 `scripts/qa-full-sweep.sh --website-build --run-commands` performs this
 procedure automatically with a clean child environment, a private npm cache
-and a disposable scratch copy. It captures the `npm ci` command, output and
-exit code in the website row's `preparation`, then runs the inventory's
+and a disposable scratch copy. It records the `npm ci` command, duration,
+timeout, `timed_out`, exit code and outcome in the website row's `preparation`,
+with redacted tails of its stdout and stderr and the last progress of npm's
+debug log, so a slow or timed-out install is visible without a separate timing
+run. Registry URLs, addresses and credential-bearing lines are redacted; raw
+install output stays out of the report. The procedure then runs the inventory's
 `npm --prefix website run build` from the staged root. Dependency preparation
 failure makes the row `FAIL` and prevents the build. A completed build earns
 `PASS`; this procedure starts no preview and performs no deployment. Existing

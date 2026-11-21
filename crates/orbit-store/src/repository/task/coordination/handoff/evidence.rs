@@ -8,7 +8,9 @@ use orbit_types::workflow::{KnownRedValidation, handoff::*};
 
 use super::super::lifecycle::invalid;
 use super::review::known_red_validation;
-use super::{TaskCommitBoundary, object_id};
+use orbit_types::plugin::is_full_commit_id;
+
+use super::TaskCommitBoundary;
 use crate::contracts::*;
 
 impl TaskCommitBoundary {
@@ -189,7 +191,7 @@ impl TaskCommitBoundary {
                 || proof.run_id != handoff.run_id
                 || proof.tested_head != handoff.candidate.candidate.commit
                 || proof.covering_commit != *covering_commit
-                || !object_id(covering_commit)
+                || !is_full_commit_id(covering_commit)
                 || handoff.candidate.candidate != handoff.candidate.base
                 || !already_landed_scope_matches(
                     &proof.scope,

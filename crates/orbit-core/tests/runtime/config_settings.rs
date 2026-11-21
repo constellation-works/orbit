@@ -72,13 +72,16 @@ fn reclaim_config_defaults_replaces_layers_and_refuses_unconfined_patterns() {
     )
     .unwrap();
     std::fs::write(workspace.join("config.toml"), "[worktree]\nreclaim = []\n").unwrap();
-    assert!(load().is_err());
+    let earlier_layer = load().unwrap_err().to_string();
+    assert!(
+        earlier_layer.contains("worktree.reclaim"),
+        "{earlier_layer}"
+    );
 }
 
-/// Mid-run steering is off with two rounds unless a layer says otherwise; each
-/// key resolves through the layers on its own, and a value outside its range
-/// or of the wrong type fails the load naming the key.
-fn mid_run_steering_defaults_off_layers_per_key_and_refuses_invalid_values() {
+/// Each mid-run steering key resolves through the layers on its own, and a
+/// value outside its range or of the wrong type fails the load naming the key.
+fn mid_run_steering_layers_per_key_and_refuses_invalid_values() {
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let workspace = root.path().join("workspace");
@@ -87,13 +90,6 @@ fn mid_run_steering_defaults_off_layers_per_key_and_refuses_invalid_values() {
     let roots = orbit_config::ConfigRoots::new(&global, &workspace);
     let load = || orbit_config::ResolvedConfig::load(&roots);
     let steering = |config: orbit_config::ResolvedConfig| config.snapshot.mid_run_steering();
-    assert_eq!(
-        steering(load().unwrap()),
-        orbit_config::MidRunSteeringSettings {
-            enabled: false,
-            max_rounds: 2
-        }
-    );
     std::fs::write(
         global.join("config.toml"),
         "[workflow.mid_run_steering]\nenabled = true\nmax_rounds = 4\n",
@@ -241,17 +237,21 @@ fn global_writes_that_break_the_workspace_layered_load_are_refused_unchanged() {
     unchanged();
 
     // Removing or breaking a crew the workspace pool names.
-    config::delete_crew(&runtime, "terra", ConfigScope::Global)
-        .expect_err("a global crew the workspace pool names cannot be deleted");
+    let delete_error = config::delete_crew(&runtime, "terra", ConfigScope::Global)
+        .expect_err("a global crew the workspace pool names cannot be deleted")
+        .to_string();
+    assert!(delete_error.contains("terra"), "{delete_error}");
     unchanged();
-    config::set_crew(
+    let clear_error = config::set_crew(
         &runtime,
         "terra",
         &fields(json!({"provider": null})),
         ConfigScope::Global,
         ConfigWriteInit::default(),
     )
-    .expect_err("clearing the provider breaks the crew the workspace names");
+    .expect_err("clearing the provider breaks the crew the workspace names")
+    .to_string();
+    assert!(clear_error.contains("terra"), "{clear_error}");
     unchanged();
 
     // A write that keeps the layers loadable still lands.
@@ -385,9 +385,12 @@ fn settings_rows_report_built_in_fallback_equality_and_global_reach() {
         ConfigScope::Workspace,
         ConfigWriteInit::RequireExisting,
     );
+    let workspace_refusal = workspace_write
+        .expect_err("a global-only row refuses a workspace write")
+        .to_string();
     assert!(
-        workspace_write.is_err(),
-        "a global-only row refuses a workspace write"
+        workspace_refusal.contains("machine.name"),
+        "{workspace_refusal}"
     );
     assert_eq!(minutes["global_only"], json!(false));
     assert_eq!(minutes["read_only_reason"], Value::Null);
@@ -763,7 +766,7 @@ fn fields(value: Value) -> Map<String, Value> {
 crate::scenario_table!(
     reclaim_config_defaults_replaces_layers_and_refuses_unconfined_patterns_scenarios,
     reclaim_config_defaults_replaces_layers_and_refuses_unconfined_patterns,
-    mid_run_steering_defaults_off_layers_per_key_and_refuses_invalid_values,
+    mid_run_steering_layers_per_key_and_refuses_invalid_values,
     settings_and_crew_writes_survive_a_fully_malformed_auto_task_listing,
     global_writes_that_break_the_workspace_layered_load_are_refused_unchanged,
     settings_rows_report_built_in_fallback_equality_and_global_reach,

@@ -168,10 +168,18 @@ impl StreamedLogCollector {
 
         if let Some(selection) = self.selection.clone() {
             if selection.needs_line_mode() {
+                // The partial line held so far has no newline: scan only the
+                // appended bytes, so one very long line costs linear time.
+                let mut scanned = self.scoped_line.len();
                 self.scoped_line.extend_from_slice(chunk);
-                while let Some(end) = self.scoped_line.iter().position(|byte| *byte == b'\n') {
-                    let line: Vec<u8> = self.scoped_line.drain(..=end).collect();
+                while let Some(offset) = self.scoped_line[scanned..]
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                {
+                    let line: Vec<u8> = self.scoped_line.drain(..=scanned + offset).collect();
                     self.process_scoped_line(&line, &selection);
+                    // Whatever follows the drained line is still unscanned.
+                    scanned = 0;
                 }
             } else {
                 self.process_scoped_bytes(chunk, &selection);

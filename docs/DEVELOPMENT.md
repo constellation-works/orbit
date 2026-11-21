@@ -101,10 +101,11 @@ asks for it. Keep the brief's evidence artifacts and execution summary.
 - `make ci-guards` (or `scripts/ci-guardrails.sh --static`) runs the file and
   metadata-only subset of the fast repository guards before candidate handoff.
   It includes unit-test admissions, QA surface inventory, public artifact IDs,
-  test shell waits, dependency direction, orphan modules, vendored standards
-  integrity (`docs/standards/check.sh`), doc links and indexes, and the skill
-  mirror check. The QA inventory uses `--check --static` to omit
-  its fixture self-tests and explicitly request offline metadata. Cargo is used
+  test shell waits, test child runners, dependency direction, orphan modules,
+  vendored standards integrity (`docs/standards/check.sh`), doc links and
+  indexes, and the skill mirror check. The QA inventory uses `--check --static`
+  to omit its fixture self-tests and explicitly request offline metadata. Cargo
+  is used
   only for metadata, with `CARGO_NET_OFFLINE=true`; no compilation, formatting,
   Rust tests or network requests run. It needs Python 3.11+, PyYAML, ripgrep and
   an installed Cargo toolchain. The networked workflow action-pin check, Node UI
@@ -137,7 +138,7 @@ asks for it. Keep the brief's evidence artifacts and execution summary.
   disallowed methods in production code over the command-line `-A`,
   test and test-feature code stays exempt, and the doc build reuses
   Clippy's check instead of re-checking with plain rustc.
-- `make ci-fast` runs independent repository script checks through a background pool. Its width is the build budget's Cargo job count (`scripts/build-budget.py --cargo-jobs`: `ORBIT_CARGO_JOBS`, then `CARGO_BUILD_JOBS`, then the `cargo-jobs` file, default 4), so guard fan-out never exceeds the same budget Cargo receives. The pool admits a new guard whenever any running member finishes, so a slow early guard does not keep the slots of guards that have already exited; at most that many guards run at once. Each script's output is captured separately and printed in launch order, per-script wall times are printed, and every failing script is named before the first failure's exit code is returned. Fixture self-tests run only when their inputs change: `scripts/`, `.github/`, `Makefile`, `.cargo/`, the root Cargo manifest/lockfile, `install.sh`, `RELEASING.md`, `docs/dev/qa/path-leases-listener-sudo.md`, `docs/standards/`, `AGENTS.md`, `CLAUDE.md`, `plugin/`, `npm/`, `.agents/` or `.claude-plugin/`. Self-tests that assert wall-clock time or timeouts, measure build-budget admission, or drive a real Cargo target run one at a time, at normal priority, in a separate exclusive lane: `test-build-budget.sh`, `test-ci-fast-guards.py`, `test-ci-test-affected.py`, `test-codeql-rust-local.py`, `test-compiler-cache.sh` and `test-compiler-cache-namespaces.sh`. The lane starts after formatting, beside the pool. Each pool guard and, in full mode, the workflow test build starts in Linux's idle scheduling class, with a direct `nice -n 19` launch where idle scheduling is unavailable. Priority changes apply to the launching command itself, so macOS workers need no permission to renice a parent process. Nice scheduling lowers competition for CPU; Linux's idle class uses only CPU time the exclusive suites leave idle. `test-ci-download-verified.py` spends nearly all of its wall time in fixed slow-child and hang delays, so it starts beside the pool, outside its window, and is reaped after the pool drains. Its helper deadlines run on an injected clock, and a fixture step fails only after 120 s without output. Pooled workflow and fixture self-tests that used a short subprocess wall-clock cap share one hang ceiling in `scripts/self_test_hang.py` (`HANG_CEILING_SECONDS`, 120 s, the fixture-step deadline). A step that exits is not failed for wall time. A step still running at the ceiling is killed, and the failure names the step or command. The removed 10 s and 20 s caps failed correct release and PR-state steps when idle scheduling stretched wall time. Timeouts that are the subject of a test, including the exclusive-lane suites and the QA sweep's supervision cases, stay as they are. Every other guard and self-test shares the pool. In full mode the pool and the exclusive lane overlap the workflow test build. Both join before the workspace tests start, the pool first, so no guard shares the host with their elapsed-time and timeout assertions and a pool failure stays the job's exit status. Nothing in the pool depends on that build or takes the Cargo build lock. Selection uses the same `CI_TEST_BASE` override and merge-base fallback as affected tests and includes committed, staged, unstaged, deleted and untracked paths. If Git cannot resolve the base or diff, every self-test runs. The QA sweep inventory check still runs for crates-only changes because it reads live CLI/MCP/web surfaces. Full `make ci` always runs all self-tests. The MSRV compile check is timed on its own, separate from those scripts: make prints `ci-fast: MSRV check <seconds> s` for `cargo +<MSRV> check --workspace --locked`, and each guardrail keeps its own `ci-guardrails: <name> <seconds> s` line.
+- `make ci-fast` runs independent repository script checks through a background pool. Its width is the build budget's Cargo job count (`scripts/build-budget.py --cargo-jobs`: `ORBIT_CARGO_JOBS`, then `CARGO_BUILD_JOBS`, then the `cargo-jobs` file, default 4), so guard fan-out never exceeds the same budget Cargo receives. The pool admits a new guard whenever any running member finishes, so a slow early guard does not keep the slots of guards that have already exited; at most that many guards run at once. Each script's output is captured separately and printed in launch order, per-script wall times are printed, and every failing script is named before the first failure's exit code is returned. Fixture self-tests run only when their inputs change: `scripts/`, `.github/`, `Makefile`, `.cargo/`, the root Cargo manifest/lockfile, `.config/nextest.toml`, `crates/orbit-engine/tests/engine/pr_landing/infrastructure/fixtures/legacy-codeql.yml`, `install.sh`, `RELEASING.md`, `docs/dev/qa/path-leases-listener-sudo.md`, `docs/standards/`, `AGENTS.md`, `CLAUDE.md`, `plugin/`, `npm/`, `.agents/` or `.claude-plugin/`. Self-tests that assert wall-clock time or timeouts, measure build-budget admission, or drive a real Cargo target run one at a time, at normal priority, in a separate exclusive lane: `test-build-budget.sh`, `test-ci-await-jobs.py`, `test-ci-fast-guards.py`, `test-ci-workspace-cache.py`, `test-installer-security.sh`, `test-ci-test-affected.py`, `test-codeql-rust-local.py`, `test-compiler-cache.sh` and `test-compiler-cache-namespaces.sh`. The lane starts after formatting, beside the pool. Each pool guard and, in full mode, the workflow test build starts in Linux's idle scheduling class, with a direct `nice -n 19` launch where idle scheduling is unavailable. Priority changes apply to the launching command itself, so macOS workers need no permission to renice a parent process. Nice scheduling lowers competition for CPU; Linux's idle class uses only CPU time the exclusive suites leave idle. `test-ci-download-verified.py` spends nearly all of its wall time in fixed slow-child and hang delays, so it starts beside the pool, outside its window, and is reaped after the pool drains. Its helper deadlines run on an injected clock, and a fixture step fails only after 120 s without output. Pooled workflow and fixture self-tests that used a short subprocess wall-clock cap share one hang ceiling in `scripts/self_test_hang.py` (`HANG_CEILING_SECONDS`, 120 s, the fixture-step deadline). A step that exits is not failed for wall time. A step still running at the ceiling is killed, and the failure names the step or command. The removed 10 s and 20 s caps failed correct release and PR-state steps when idle scheduling stretched wall time. Timeouts that are the subject of a test, including the exclusive-lane suites and the QA sweep's supervision cases, stay as they are. Every other guard and self-test shares the pool. In full mode the pool and the exclusive lane overlap the workflow test build. Both join before the workspace tests start, the pool first, so no guard shares the host with their elapsed-time and timeout assertions and a pool failure stays the job's exit status. Nothing in the pool depends on that build or takes the Cargo build lock. Selection uses the same `CI_TEST_BASE` override and merge-base fallback as affected tests and includes committed, staged, unstaged, deleted and untracked paths. If Git cannot resolve the base or diff, every self-test runs. The QA sweep inventory check still runs for crates-only changes because it reads live CLI/MCP/web surfaces. Full `make ci` always runs all self-tests. The MSRV compile check is timed on its own, separate from those scripts: make prints `ci-fast: MSRV check <seconds> s` for `cargo +<MSRV> check --workspace --locked`, and each guardrail keeps its own `ci-guardrails: <name> <seconds> s` line.
 - The pooled hang guard and verified-download fixture reserve each command's process group with a separate owned child blocked on an stdin pipe. Polling or communicating with an exited command may reap it; the anchor stays unreaped through the final group signal, then both owned children are reaped and their pipes closed. Cleanup also runs after successful commands and startup failures. This uses Python 3.11's `process_group`, without `preexec_fn`, so threaded fixtures can use it. Descendants that intentionally leave the group need their own identity-bound guard. The public runner regressions in `test-pr-state-workflows.py` and `test-ci-download-verified.py` share an intercepted process model in `scripts/self_test_hang_regression.py`: reaping immediately permits a replacement group, and every signal must still have an owned reservation. They cover exited leaders and escaped pipe holders without PID churn or synthetic load; the real descendant-cleanup fixtures remain enabled.
 - `make ci-fast` passing says nothing about the Rust tests. Focused test filters help you investigate but do not replace `make ci-test-affected`: an existing test can encode behavior your change breaks even when your new tests pass.
 - Run Cargo-based gates (`ci-fast`, `ci-test-affected`, `goldens`, `ci-lint`, `cargo test` / `nextest`) one at a time when they share a target directory, or give each its own `CARGO_TARGET_DIR`. Concurrent gates in one target can rebuild `target/debug/orbit` under running generation-bound fixtures and fail them.
@@ -151,7 +152,7 @@ asks for it. Keep the brief's evidence artifacts and execution summary.
 - [check-unused-dependencies.py](../scripts/check-unused-dependencies.py) fails on a manifest dependency its sources never use, a normal dependency only test targets use, or a `[workspace.dependencies]` entry no member declares. Keep a feature-only dependency in its `FEATURE_ONLY` allowlist with a reason. Self-test: `python3 scripts/test-check-unused-dependencies.py`.
 - [check-linux-gated-test-items.py](../scripts/check-linux-gated-test-items.py) runs in the static guard list beside `check-windows-portability.py` (`make ci-guards`) and fails when an import, test helper `fn`/`const`/`static` or fixture `mod` in a Rust test file or `#[cfg(test)]` module is left ungated while every use site is compiled out on macOS (typically `#[cfg(target_os = "linux")]`), which turns native macOS Clippy red under `-D warnings` with `unused import` or `never used`. It reuses the Windows guard's cfg evaluation and module edges for a macOS target, scans `crates/` and `desktop/`, and names the file, line and item of each failure. It is lexical: it matches use sites by name within the item's block and the modules declared or `include!`d in it, skips `pub` items, UpperCamel imports (a trait import is also used implicitly through method calls) and items under `allow(dead_code)`/`allow(unused_imports)` (a `cfg_attr` allowance counts only where its condition may hold on macOS), and does not reach dead code behind macros. Self-test: `python3 scripts/test-linux-gated-test-items.py`.
 - [check-openpty-portability.py](../scripts/check-openpty-portability.py) runs in `make ci-guards` and rejects recognizable immutable fourth or fifth `libc::openpty` arguments in Rust code reachable on macOS. It shares the Windows guard tokenizer, cfg evaluation and module reachability, ignores comments and literals, and reports the argument and file:line. This lexical check does not resolve aliased calls, function pointers, macro-generated calls, pointer locals, turbofish `null::<T>()` or other unknown pointer expressions; native compilation remains necessary. Self-test: `python3 scripts/test-openpty-portability.py`, also selected by the existing guard self-test route when script inputs change.
-- [check-windows-portability.py](../scripts/check-windows-portability.py) runs in `make ci-fast` and rejects recognizable Unix std APIs reachable on Windows, including test helpers. It checks Rust files under `crates/`, follows external and inline module declarations (including `#[path]`). An inline module's `#[path]` replaces that module's directory for its children, the same way an external `#[path]` replaces the file, and both ordinary and raw string literals (`r"..."`, `r#"..."#`) count as path attributes. It accepts enclosing item, module or file gates that exclude Windows. Ordinary file modules resolve children under their stem directory; `mod.rs`, Cargo roots and files loaded through `#[path]` resolve children beside the file. The shared scanner tracks these loading contexts separately, including inline descendants, so excluding one context does not activate its children through another, while independent Cargo targets remain checked. It evaluates `unix`, `windows`, `target_os`, `target_family`, `all`/`any`/`not`, and conditional `cfg_attr`; unknown features and test flags remain potentially enabled. `cfg!(unix)` does not remove code from compilation. The static approach runs on every worker without installing a Windows target or linker, and needs no path allowlist. It scans Unix std paths/grouped imports, distinctive extension calls such as `from_mode`, `pre_exec` and `ino`, qualified permission/metadata trait calls and `permissions().mode()`. It ignores comments and literals. It does not expand macros or infer receiver types, so ambiguous application methods such as `mode`, `set_mode` and `blocks` are checked only in recognizable std forms; hosted Windows compilation remains the complete check. Self-test: `python3 scripts/test-windows-portability.py`.
+- [check-windows-portability.py](../scripts/check-windows-portability.py) runs in `make ci-fast` and rejects recognizable Unix std APIs reachable on Windows, including test helpers. It checks Rust files under `crates/`, follows external and inline module declarations (including `#[path]`). An inline module's `#[path]` replaces that module's directory for its children, the same way an external `#[path]` replaces the file, and both ordinary and raw string literals (`r"..."`, `r#"..."#`) count as path attributes. It accepts enclosing item, module or file gates that exclude Windows. Ordinary file modules resolve children under their stem directory; `mod.rs`, Cargo roots and files loaded through `#[path]` resolve children beside the file. The shared scanner tracks these loading contexts separately, including inline descendants, so excluding one context does not activate its children through another, while independent Cargo targets remain checked. It evaluates `unix`, `windows`, `target_os`, `target_family`, `all`/`any`/`not`, and conditional `cfg_attr`; unknown features and test flags remain potentially enabled. `cfg!(unix)` does not remove code from compilation. The static approach runs on every worker without installing a Windows target or linker, and needs no path allowlist. It scans Unix std paths/grouped imports (`std::os::{unix,linux,macos,fd}`), distinctive extension calls such as `from_mode`, `pre_exec` and `ino`, qualified permission/metadata trait calls and `permissions().mode()`. It ignores comments and literals. It does not expand macros or infer receiver types, so ambiguous application methods such as `mode`, `set_mode` and `blocks` are checked only in recognizable std forms. No CI job compiles for Windows (native Windows is unsupported), so this lexical check is the only Windows guard. Self-test: `python3 scripts/test-windows-portability.py`.
 
 For contributor setup, create a virtual environment with your supported Python,
 activate it before validation, and install the mandatory module there:
@@ -414,8 +415,8 @@ PR jobs use two revisions: the primary checkout, build and tests use
 `github.event.pull_request.head.sha`, while workflow orchestration helpers use
 `github.sha`, the revision supplying the workflow (the PR merge ref). In
 `ci.yml`, a separate sparse checkout under `.orbit/tmp/workflow-ci` supplies
-`ci-download-verified.sh`, `ci-repack-nextest.py`, `ci-probe-bubblewrap.sh` and
-`ci-workspace-cache.py`; their invocations use that path. The Check job's
+`ci-download-verified.sh`, `ci-repack-nextest.py`, `ci-probe-bubblewrap.sh`,
+`ci-rust-dependency-cache-key.py` and `ci-workspace-cache.py`; their invocations use that path. The Check job's
 `Await the test build and nextest shards` step instead runs
 `scripts/ci-await-jobs.py` as a dependency-producer from a full checkout of the
 base revision under `.orbit/tmp/dependency-producer`. The scope job checks out `github.sha` directly. Keep this rule when adding
@@ -433,8 +434,8 @@ Two workspace checkouts that name different commits stay ambiguous.
 
 In `ci.yml`, a `Change scope` job ([ci-change-scope.sh](../scripts/ci-change-scope.sh)) narrows each run before build runners start:
 
-- **`docs`**: every changed path, on a PR or in a push, is Markdown outside `crates/` and `plugin/`. A push additionally requires a successful completed GitHub Actions `Check / Clippy / Test` on its `before` commit. A missing, pending, cancelled, failed or skipped check, or an API error, runs the full gate instead: the previous tip may contain code whose pending run was replaced. Markdown under `crates/` is compiled in as assets, `plugin/` is the generated skill mirror, `orbit-cli`'s tests read `website/src/content/docs/reference/config.md`, and the `scripts/test-*` self-tests execute or digest `RELEASING.md`, `npm/README.md` and `docs/dev/qa/path-leases-listener-sudo.md`, so each still leaves the docs-only lane. The self-test pages take the full gate. Only `Docs guards` runs (`ci-guardrails.sh --static`: doc links and indexes, the skill mirror and the other file and metadata guards).
-- **`affected:<crate>,...`**: a PR whose changed paths all sit inside workspace crates or are declared in `FILE_READERS`, apart from Markdown outside `crates/` and `plugin/`. Every job runs, but `Test build` compiles and archives only the build set of the changed crates, their reverse dependents and the always-run crates, and every partition runs only those crates' tests (see [PR test selection](#pr-test-selection)). Pushes are never narrowed this way.
+- **`docs`**: every changed path, on a PR or in a push, is Markdown outside `crates/` and `plugin/`. A push additionally requires a successful completed GitHub Actions `Check / Clippy / Test` on its `before` commit. A missing, pending, cancelled, failed or skipped check, or an API error, runs the full gate instead: the previous tip may contain code whose pending run was replaced. Markdown under `crates/` is compiled in as assets and `plugin/` is the generated skill mirror. Every Markdown path declared in `FILE_READERS` in `scripts/ci-test-affected.py` is also outside the docs-only lane; the classifier derives that exclusion from the list, including `docs/design/auto-tasks/1_overview.md` and `website/src/content/docs/reference/config.md`. `RELEASING.md`, `npm/README.md` and `docs/dev/qa/path-leases-listener-sudo.md` are not in `FILE_READERS`; the `scripts/test-*` self-tests execute or digest them, so they leave the docs-only lane. The self-test pages take the full gate. Only `Docs guards` runs (`ci-guardrails.sh --static`: doc links and indexes, the skill mirror and the other file and metadata guards).
+- **`affected:<crate>,...`**: a PR whose changed paths all sit inside workspace crates or are declared in `FILE_READERS`, apart from Markdown outside `crates/` and `plugin/` that `FILE_READERS` does not declare. Every job runs, but `Test build` compiles and archives only the build set of the changed crates, their reverse dependents and the always-run crates, and every partition runs only those crates' tests (see [PR test selection](#pr-test-selection)). Pushes are never narrowed this way.
 - **`skip`**: a push whose commit has exactly the tree of the merged PR's head, when that head's latest `Check / Clippy / Test` succeeded in a run that tested every crate. The same bytes already passed the full gate, so nothing reruns. A PR run that tests every crate says so in its `Change scope` job with a `Test selection` notice reading `full`, and the push requires that notice from the same run (check suite) as the passing check. An `affected:` PR run, or a head whose run left no notice, gets a full push run. A merge whose tree differs from what the PR tested also runs in full. With non-strict required checks, most merges differ: the PR was tested against an older base.
 - **`full`**: everything else, including any classification error. The job never fails, and an empty mode admits the full run.
 
@@ -507,9 +508,13 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   compare pack/restore time and transfer bytes together on hosted candidates.
   This captures repeated linked executable sections beyond the native
   archive's 2 MiB window. It requires the runner's `zstd` CLI; the decoder
-  is capped at the same 512 MiB window the encoder may emit. The job uploads
-  each part as its own one-day artifact, then runs
-  `ci-guardrails.sh --test-partitions PATH`:
+  is capped at the same 512 MiB window the encoder may emit. The job then
+  starts `ci-guardrails.sh --test-partitions PATH` in the background and
+  uploads each part as its own one-day artifact while it runs; after the
+  uploads, `Prove the shards cover every test` waits for it (using a lock
+  acquired before the worker starts and held until it exits), prints its
+  output and exits with its status, or fails if it recorded none. The proof
+  reads only the original archive:
   it extracts the archive once, and
   [check-nextest-partitions.py](../scripts/check-nextest-partitions.py) lists
   that extraction (`--binaries-metadata` and `--cargo-metadata`) once
@@ -526,20 +531,25 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   including when a later step fails. This separates compilation critical
   paths from filter listing and archive time. Each test job needs the whole
   `Test build` job, so it starts only once that job has finished, including
-  its post-upload partition proof.
-- `Test shard k/N` jobs, one per shard, each need the `Test build` job (`needs: [pr-state, scope, test-build]`), so each starts once the whole build job has finished, including its post-upload partition proof. If the build did not succeed, the job fails in its first step, `Require a successful test build`, with `ci-await: Test build concluded <result>: <run url>`. Each job then downloads every part at once (one
+  the partition proof it waits for after the upload.
+- `Test shard k/N` jobs, one per shard, each need the `Test build` job (`needs: [pr-state, scope, test-build]`), so each starts once the whole build job has finished, including the partition proof the build waits for after the upload. If the build did not succeed, the job fails in its first step, `Require a successful test build`, with `ci-await: Test build concluded <result>: <run url>`. Each job then downloads every part at once (one
   stream per artifact; a single stream ran at 3–10 MB/s on some runners),
-  in at most three download attempts. The first two attempts continue on
-  error; the third fails the job, so nextest does not run without the
-  archive. It restores a native small-window encoding of
-  their concatenation with
-  `ci-repack-nextest.py unpack SOURCE DESTINATION --parts N`, and runs
-  `cargo nextest run --profile ci --partition count:k/N`
-  from it, where N is `NEXTEST_PARTITIONS` and k is the job's `PARTITION`.
-  The `Test extra partition`, `Test partition 2` and `6`–`12` jobs
-  run the same steps on nine more test runners, selecting partitions 5, 2 and
-  6–12 and uploading `nextest-junit-extra` and `nextest-junit-partition-k`.
-  They start after the whole build job has finished, including the post-upload partition proof. None of them is a `Test shard k/N` job, so
+  in at most three download attempts of one minute each (the slowest of 240
+  measured transfers took 31.8 s). Each attempt
+  downloads to its own directory and verifies artifact digests. A failure or
+  timeout in the first two attempts triggers the next one. A failed or timed-out
+  third attempt fails the job before extraction. The shard reads every required
+  part from the successful attempt's directory, decodes their concatenation
+  once and extracts it under the checkout's `target/` with
+  `ci-repack-nextest.py extract SOURCE DESTINATION --parts N` (only regular
+  files and directories under `target/`, through tarfile's `data` filter),
+  and runs `cargo nextest run --profile ci --partition count:k/N` from that
+  extraction's `--binaries-metadata` and `--cargo-metadata`,
+  where N is `NEXTEST_PARTITIONS` and k is the job's `PARTITION`.
+  The `Test extra partition`, `Test partition 2` and `6`–`13` jobs
+  run the same steps on ten more test runners, selecting partitions 5, 2 and
+  6–13 and uploading `nextest-junit-extra` and `nextest-junit-partition-k`.
+  They start after the whole build job has finished, including the partition proof the build waits for after the upload. None of them is a `Test shard k/N` job, so
   `NEXTEST_SHARDS` and the ruleset's names stay unchanged; the Check job
   awaits them like shards. Profile `ci`
   starts the measured long tests first, using nextest's per-test priority
@@ -553,9 +563,8 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   Repacking preserves every tar byte; it never extracts members or replaces
   an existing destination. Both zstd stages must succeed before publishing
   the destination, and corrupt input, a missing part, missing zstd or encoder
-  failure fails the job. Download artifact digest verification still precedes conversion;
-  nextest retains responsibility for safe extraction. The original build-side
-  archive remains the input to the partition proof. The transfer's larger
+  failure fails the job. The original build-side archive remains the input
+  to the partition proof. The transfer's larger
   window cannot be passed directly to nextest's default decoder.
   Extracting into the checkout puts `target/debug/orbit` and the test binaries
   at the paths they were built for. Each shard uploads its nextest JUnit report
@@ -573,7 +582,7 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   archive-restore steps (every additional partition job's too), the build's pack
   step and the Check job's wait with stub tools, and fails unless
   those jobs together select `count:1/N` through `count:N/N` once each, the
-  build's last upload precedes the partition guard, each test job needs the whole
+  build's last upload precedes the wait for the partition guard, each test job needs the whole
   build job with `Require a successful test build` as its first step and downloads
   every uploaded part with no archive-poll wait, and the Check
   job's wait names the build, every shard, every additional partition job, `CI guardrails` and `CI QA guardrails`. After a change to this layout, re-measure the budget over
@@ -589,7 +598,7 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   On a pull request (`CI_SELF_TESTS=changed`) each hosted route runs
   the `scripts/test-*` self-tests only when their inputs changed against the
   PR base, by the rule `make ci-fast` uses (`scripts/`, `.github/`, `Makefile`,
-  `.cargo/`, the root manifests, `install.sh`, `RELEASING.md`, `docs/dev/qa/path-leases-listener-sudo.md`, `docs/standards/`,
+  `.cargo/`, the root manifests, `.config/nextest.toml`, `crates/orbit-engine/tests/engine/pr_landing/infrastructure/fixtures/legacy-codeql.yml`, `install.sh`, `RELEASING.md`, `docs/dev/qa/path-leases-listener-sudo.md`, `docs/standards/`,
   `AGENTS.md`, `CLAUDE.md`, `plugin/`, `npm/`, `.agents/`, `.claude-plugin/`); `test-qa-full-sweep.py --check`
   always runs its inventory check and runs its fixture self-test under the
   same rule. That process fixture accepts an identity-bound pidfd signal only
@@ -611,7 +620,7 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   is ARM, and no gate pairs that `cfg` with one `target_arch`, so this single
   target covers those items. It then
   waits for `Test build`, every shard, `Test extra partition`, `Test partition 2`,
-  `6`–`12`, `CI guardrails` and `CI QA guardrails`, and fails as soon as one of them
+  `6`–`13`, `CI guardrails` and `CI QA guardrails`, and fails as soon as one of them
   completes without success. Its elapsed time therefore covers the whole gate,
   including any queue wait for the other jobs' runners. That is the time the
   400-second budget measures, and its
@@ -724,10 +733,13 @@ These are wall seconds at Bash's one-second resolution with
 the original command exit status. They let bounded hosted excerpts retain build/check costs
 separately from nextest testcase sums and the full GitHub job elapsed time.
 
-The Rust build caches are the `Swatinem/rust-cache` dependency
-archives, one each for `Test build` and the Check job in `ci.yml`, plus the MSRV entry saved by `msrv.yml` push runs (same key). They hold
-dependency artifacts only; every run compiles the workspace members from its
-checkout. Each step sets `save-if: ${{ github.event_name == 'push' }}`, so a
+The Rust dependency caches are the `Swatinem/rust-cache`
+archives, one each for `Test build`, the Check job and CI guardrails in `ci.yml`,
+plus the MSRV entry saved by `msrv.yml` push runs. They hold dependency artifacts
+only. Every one, and each seeder in `ci-cache-seed.yml`, takes its `prefix-key`
+from `scripts/ci-rust-dependency-cache-key.py`, so a dependency added to the
+root manifest keeps the restore namespace while a profile change starts a
+new one. Each step sets `save-if: ${{ github.event_name == 'push' }}`, so a
 pull request restores the base branch's entries and never writes one: only a
 push to `main` or `agent-main` saves. A missed key or a failed restore leaves a
 cold or partial `target/`, and Cargo rebuilds what is missing. Hosted CI keeps
@@ -738,9 +750,77 @@ restores or saves. sccache cannot cache the workspace members, which Cargo
 compiles through `clippy-driver`, and rust-cache already supplies every
 dependency. The
 [compiler-cache runbook](runbooks/compiler-cache.md#ordinary-linux-ci) records
-the measurements, including why caching workspace members would not pay.
+the measurements, including why sccache cannot cache folded workspace compilations.
 `scripts/test-pr-state-workflows.py` fails if any cache step in `ci.yml` can
 save on a non-push event.
+
+`Test build` separately restores workspace outputs from `target/`. Its key
+binds the toolchain, Cargo manifests and lockfile, Cargo config, and the lint
+and source-restore implementations. It excludes `ci.yml`: editing job
+scheduling or another job must not discard otherwise reusable workspace
+outputs. Only protected-branch pushes save this cache. A fresh checkout
+gets old source mtimes back only after `ci-workspace-cache.py` verifies
+identical bytes and modes; changed inputs get a fresh mtime. Cargo still
+invalidates compiler, features and codegen environment changes. A workflow
+file is an ordinary tracked input: changed bytes get a fresh mtime, and Cargo
+rebuilds a consumer only if it records that file, through an `include_str!`
+path or a build script's `cargo:rerun-if-changed`.
+
+The restore step prints one JSON object whose fields depend on whether the
+restored `target/` holds a source manifest. With no manifest, which includes a
+cold cache miss, it prints only `cache: "miss"` and `reused_inputs: 0`: there
+is no `source_head` and no `changed_inputs`. A restore prints
+`cache: "restored"`, `reused_inputs`, `changed_inputs` and `source_head`, the
+commit the manifest was captured at. A partial `restore-keys` match can carry a
+manifest from an older protected-branch commit than the base.
+
+The two lists differ. `git diff --name-only <source_head> <tested_head>` names
+the tracked paths whose content differs between those commits, deletions
+included; it never names an untracked file. `changed_inputs` counts the current
+regular files, tracked or non-ignored untracked, whose bytes, mode or size
+differ from the manifest or that the manifest does not record. Each counted
+file gets a fresh mtime. A deleted input is not counted, and a new non-ignored
+untracked file is counted without appearing in the commit diff. Use the commit
+diff for the committed change list, and read `changed_inputs` only as the
+number of inputs refreshed; neither is an exact inventory of the other.
+
+The folded list-build (`check-ci-macos.sh --workspace-build`) reads Cargo's
+JSON messages, so Cargo's own progress does not reach the log; it prints
+`check-ci-macos: workspace units rebuilt=N fresh=M rebuilt_packages=…`
+instead. A change to a library's `src/` rebuilds that library and every
+selected workspace dependent, while a test-only change rebuilds its test
+target. `orbit-cli`'s build script also reruns whenever a watched path under
+`crates/` or `scripts/` (or the Git index) changes, so its units appear in
+almost every PR's rebuilt set. Attribute list-build time from these two
+lines before comparing runner CPUs.
+
+The 2026-11-17 investigation found a workspace-cache miss preceding a 279 s
+folded test build in hosted run 44043933622 (Check: 516 s). The workflow file
+was part of the cache hash, so workflow edits invalidated the previous cache
+identity. A local six-run replay of a workflow-only edit, using a
+dependency-free two-target fixture under the folded lint environment, reduced
+median restore-plus-build time from 0.279 s to 0.073 s and compiler
+invocations from two to zero. This measures cache invalidation, not hosted
+seconds saved: artifact download/copy costs are excluded, the fixture is
+small, and an executed protected-push `Test build` must populate the new
+namespace (skip-only seeders populate dependencies, not workspace outputs).
+Changed codegen settings and older changed embedded workflow bytes both
+rebuilt in the replay. No checks or tests were retired. Measurement commands,
+logs and the replay script are retained in the task's `ci-budget/` artifacts.
+
+After merge, the operator should collect the latest 20 completed PR CI
+workflows carrying the change and run
+`python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`. Retain full run,
+head and job identities and timestamps; report executed, failed, skipped,
+cancelled and missing measurements, with gaps never counted as zero. Report
+nearest-rank p90, median and maximum; keep Check's pre-start queue wait and
+awaited jobs' queue wait after Check starts separate from elapsed time, or
+mark unavailable timestamps as gaps. Compare workspace and dependency cache
+hits, selected crates, runner image/CPU, compile/guard/transfer/partition
+phases, and cold-cache runs before attributing any change. The
+[budget measurement handoff](design-patterns/test_strategy.md#quality-and-the-400-second-budget)
+gives the collection details; this implementation lane does not certify a
+post-merge hosted p90.
 
 #### PR test selection
 
@@ -750,17 +830,17 @@ On a pull request that is not docs-only, the `Change scope` job runs `scripts/ci
 
 It runs every test instead (`full`) when any of these holds:
 
-- a path outside `crates/` that `FILE_READERS` does not declare: the root `Cargo.toml` or `Cargo.lock`, `rust-toolchain.toml`, `.cargo/`, `.github/`, `scripts/`, `plugin/` or any other repository file, since a test may read it at run time. Markdown outside `crates/` and `plugin/` is the exception. A declared path selects its readers, or no crate (`scripts/qa-full-sweep-inventory.json`, read only by the guardrail sweep; `scripts/unit-test-baseline.json`, read only by the always-run `unit-test-inventory.py --check` guard; `plugin/evals/`, the `claude plugin eval` suite no CI job reads; `scripts/ux-rules/ui/`, `scripts/ux-rules/cli/`, `scripts/ux-rules/tests/`, `scripts/ux-rules/README.md`, `scripts/ux-rules/lib/ui-context.mjs`, `scripts/ux-rules/lib/cli-context.mjs` and `scripts/ux-rules/lib/manifest.mjs`, which no Cargo test reads since the ux-rules routine was removed [ORB-22844]), so its PR runs the always-run set alone. `scripts/ux-rules/run.mjs` is not declared, so a change to it runs the full suite.
+- a path outside `crates/` that `FILE_READERS` does not declare: the root `Cargo.toml` or `Cargo.lock`, `rust-toolchain.toml`, `.cargo/`, `.github/`, `scripts/`, `plugin/` or any other repository file, since a test may read it at run time. Markdown outside `crates/` and `plugin/` that `FILE_READERS` does not declare is the exception. A declared path selects its readers, or no crate (`scripts/qa-full-sweep-inventory.json`, read only by the guardrail sweep; `scripts/unit-test-baseline.json`, read only by the always-run `unit-test-inventory.py --check` guard; `plugin/evals/`, the `claude plugin eval` suite no CI job reads; `scripts/ux-rules/ui/`, `scripts/ux-rules/cli/`, `scripts/ux-rules/tests/`, `scripts/ux-rules/README.md`, `scripts/ux-rules/lib/ui-context.mjs`, `scripts/ux-rules/lib/cli-context.mjs` and `scripts/ux-rules/lib/manifest.mjs`, which no Cargo test reads since the ux-rules routine was removed [ORB-22844]), so its PR runs the always-run set alone. `scripts/ux-rules/run.mjs` is not declared, so a change to it runs the full suite.
 - a member's `Cargo.toml`, which can change the features of every crate in the workspace build;
 - a path under `crates/` that no current member owns, such as a removed crate;
 - every workspace crate is selected anyway (for example, a change to `orbit-types` or `orbit-common`);
 - the PR file listing is incomplete, or the selection fails for any reason, including unreadable Cargo metadata.
 
-Cargo metadata cannot see a test reading another crate's files. The ones that matter are those whose reader does not already depend on the owner, and they are declared in `FILE_READERS`. `orbit-engine`'s tests read `orbit-core`'s job and activity assets, and `orbit-mcp` compiles in `orbit-web`'s vendored dashboard scripts. Every other cross-crate read found (`orbit-cli` reading `orbit-core` and `orbit-tools` fixtures, `orbit-web` compiling an `orbit-store` fixture, `orbit-core` running an `orbit-engine` fixture) is by a dependent, so the reverse-dependency walk covers it. Reads of repository files outside `crates/` are declared there too (`scripts/build-budget.py`, `server.json`, `plugin/hooks/`, `plugin/skills/`, the skill mirror the sync guard checks against its source, with no reader, the configuration reference page, the QA sweep script and its inventory, the unit-test baseline, the plugin evals, and the UX rule files named above); any other such path runs the full suite.
+Cargo metadata cannot see a test reading another crate's files. The ones that matter are those whose reader does not already depend on the owner, and they are declared in `FILE_READERS`. `orbit-engine`'s tests read `orbit-core`'s job and activity assets, and `orbit-mcp` compiles in `orbit-web`'s vendored dashboard scripts. Every other cross-crate read found (`orbit-cli` reading `orbit-core` and `orbit-tools` fixtures, `orbit-web` compiling an `orbit-store` fixture, `orbit-core` running an `orbit-engine` fixture) is by a dependent, so the reverse-dependency walk covers it. Reads of repository files outside `crates/` are declared there too (`scripts/build-budget.py`, `server.json`, `plugin/hooks/`, `plugin/skills/`, the skill mirror the sync guard checks against its source and `orbit-core`'s default catalog test reads, the configuration reference page, `docs/design/auto-tasks/1_overview.md`, the QA sweep script and its inventory, the unit-test baseline, the plugin evals, and the UX rule files named above); any other such path runs the full suite.
 
 `Test build` passes the mode to `ci-guardrails.sh --test-archive` as `CI_TEST_SCOPE`. For an `affected:` scope, `ci-test-affected.py --test-build-packages` checks the crates against the PR head's metadata and adds the unselected members that keep every dependency's resolved features equal to the workspace build's (`cargo tree`). Resolver 2 unifies features over the selected packages only, so a narrower set would rebuild dependencies the CI caches hold with the workspace's features. `orbit-cli` depends on every other crate, so it is in nearly every selection, and its dev-dependencies name the features only other crates' tests enable (`tokio`'s `test-util`, `rusqlite`'s `hooks`, the `test-support` of `orbit-exec` and `orbit-mcp`), so it normally needs no anchor: an anchor compiles its unit-test harness, which no target flag excludes. A new gap adds an anchor at that compile cost, and the build's reason line names it. Both the folded build (`check-ci-macos.sh --workspace-build --packages`, which lists only the macOS workflow's filters for crates in the build) and `cargo nextest archive` then take `-p` for that set. A crate the head lacks, or a feature gap no member closes, builds the whole workspace. The archive's package list is written to `PATH.packages`, and the partition guard then runs with `--allow-empty`: an archive with few tests can leave a count partition empty, but every test must still be in exactly one shard.
 
-The archive holds the build set's tests, but every partition (the shards and the nine additional test runners) passes `-E 'package(a) | package(b) …'` for the `affected:` crates, so a feature anchor's tests are built, not run; the partition guard lists the same filter. The shards keep their names and run with `--no-tests pass`, so a shard whose partition is empty runs nothing and passes. The full archive cannot have an empty shard, because its partition guard fails `Test build`. Shard 1's Linux sandbox/policy enforcement gate runs on every full run and on every `affected:` run that includes `orbit-exec`; without `orbit-exec`, neither the sandbox code nor its dependencies changed, and the gate is skipped. Production Clippy, documentation and the repository guards stay workspace-wide, and every test job still runs: a failed or skipped one fails the `Check / Clippy / Test` wait. The MSRV check is no longer part of pull-request runs; it runs push-only in `.github/workflows/msrv.yml`.
+The archive holds the build set's tests, but every partition (the shards and the ten additional test runners) passes `-E 'package(a) | package(b) …'` for the `affected:` crates, so a feature anchor's tests are built, not run; the partition guard lists the same filter. The shards keep their names and run with `--no-tests pass`, so a shard whose partition is empty runs nothing and passes. The full archive cannot have an empty shard, because its partition guard fails `Test build`. Shard 1's Linux sandbox/policy enforcement gate runs on every full run and on every `affected:` run that includes `orbit-exec`; without `orbit-exec`, neither the sandbox code nor its dependencies changed, and the gate is skipped. Production Clippy, documentation and the repository guards stay workspace-wide, and every test job still runs: a failed or skipped one fails the `Check / Clippy / Test` wait. The MSRV check is no longer part of pull-request runs; it runs push-only in `.github/workflows/msrv.yml`.
 
 A PR run can still miss a failure only the full suite shows, such as a test reading another crate's file through a path neither a dependency edge nor `FILE_READERS` records. The `agent-main` push run after the merge is the check of the merged tree and always tests every crate.
 
@@ -913,26 +993,33 @@ Detached-worker tests use `tests/support/workflow_gate.rs` to hold a step at a s
 
 A managed lane exports Orbit routing and authority: `ORBIT_REGISTRY_ROOT`, `ORBIT_WORKSPACE`, `ORBIT_ROOT`, `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_TASK_ID` and about two dozen more. Unsetting a few of them, or overriding only `HOME`, still lets a dev binary resolve the live global registry. Run from a run worktree with the real home, a candidate build also opens the host's primary workspace `.orbit` and global store, and opening them applies the candidate's pending layout and schema migrations: a read-only command or `web serve` is enough. Once they advance, the installed binary is refused on that host. Orbit refuses a breaking migration from a build that is not the installed orbit ([upgrades runbook](runbooks/upgrades.md#a-build-that-is-not-the-installed-orbit)), but that guard is a backstop for hosts with an installed binary, not isolation. Run every candidate command, reads and `web serve` included, against a disposable home and its own workspace: clear the whole environment and point `HOME` at a disposable directory.
 
-Workspace selection depends on the working directory, not only on `HOME`. Without an explicit root, `crates/orbit-runtime/src/resolve.rs` can select the main checkout's `.orbit/` from a linked worktree or discover an ancestor workspace by walking up. Changing `HOME` does not stop linked-worktree discovery. A home under a managed checkout's `.orbit/tmp/` therefore does not isolate a command run inside it: even a read-only command can open the primary checkout's live state. An explicit `--root` takes precedence over both discovery paths and selects the registry root too. The wrapper below supplies it to every candidate command, and every command runs from an independent disposable directory outside the checkout. `HOME` also remains disposable for any home-relative files.
+Workspace selection depends on the working directory, not only on `HOME`. Without an explicit root, `crates/orbit-runtime/src/resolve.rs` can select the main checkout's `.orbit/` from a linked worktree or discover an ancestor workspace by walking up. Changing `HOME` does not stop linked-worktree discovery. A home under a managed checkout's `.orbit/tmp/` therefore does not isolate a command run inside it: even a read-only command can open the primary checkout's live state. An explicit `--root` takes precedence over both discovery paths and selects the registry root too. The wrapper below supplies it to every candidate command, and every command runs from an independent disposable directory that is its own Git repository under the run's `.orbit/tmp/`. `HOME` also remains disposable for any home-relative files.
 
 Run the steps below as one shell session, from the managed checkout:
 
 ```bash
 CHECKOUT="$(git rev-parse --show-toplevel)"
 ORBIT_BIN="$CHECKOUT/target/debug/orbit"   # cargo build -p orbit-cli --bin orbit --locked
+mkdir -p "$CHECKOUT/.orbit/tmp"
 QA_BASE="$(mktemp -d "$CHECKOUT/.orbit/tmp/manual-qa.XXXXXX")"
 QA_HOME="$QA_BASE/home"
-QA_REPO="$(mktemp -d /tmp/orbit-qa-repo.XXXXXX)"
-QA_CWD="$(mktemp -d /tmp/orbit-qa-cwd.XXXXXX)"
-mkdir -p "$QA_HOME"
+QA_REPO="$QA_BASE/repo"
+QA_CWD="$QA_BASE/cwd"
+mkdir -p "$QA_HOME" "$QA_REPO" "$QA_CWD"
 qa() { env -i PATH=/usr/bin:/bin HOME="$QA_HOME" "$ORBIT_BIN" --root "$QA_REPO/.orbit" "$@"; }
+
+# Make each scratch directory its own Git repository, so linked-worktree discovery and the
+# uninitialized ancestor walk stop there instead of reaching the checkout (ORB-22643).
+for dir in "$QA_REPO" "$QA_CWD"; do
+  env -i PATH=/usr/bin:/bin HOME="$QA_HOME" git -C "$dir" init -q
+done
 
 # Mint the scratch root's machine identity first: `workspace init` does not create one,
 # and `host list` and the dashboard's /api/hosts refuse until `orbit init` has run.
 # Run it from QA_CWD, outside QA_REPO, so QA_REPO stays free of Orbit state.
 (cd "$QA_CWD" && qa init --non-interactive --machine-name manual-qa --task-prefix MQA)
 
-# Initialize the workspace; no Git repository is required.
+# Initialize the workspace in the scratch repository.
 cd "$QA_REPO"
 qa workspace init --name manual-qa
 
@@ -945,16 +1032,210 @@ qa host list --format json
 
 # Dashboard QA: serve only the scratch registry, from the scratch repository.
 # Run it in the foreground and stop it with Ctrl-C; it must exit before cleanup.
+# A script that drives a browser uses the lifecycle below instead.
 qa web serve --port 0 --no-open
 
-# Cleanup, once the server has exited.
+# Cleanup: once the server has exited, see the managed-lane rule below.
 cd "$CHECKOUT"
-rm -rf -- "${QA_BASE:?}" "${QA_REPO:?}" "${QA_CWD:?}"
 ```
 
 With this explicit-root recipe, `global_root`, `shared_root` and `local_root` must all print `$QA_REPO/.orbit`; the real `~/.orbit` must never appear. `host list` must succeed rather than report a missing `[machine]` identity. If any check fails or prints another path, stop before running another command. The workspace must report `$QA_REPO` as its checkout. The scratch registry's workspace list must contain only `manual-qa`, with its checkout under `$QA_REPO`; no live workspace identity may appear. Do not add `--confirm` until those checks match. Preview a destructive command first, then confirm it with the same `qa …` wrapper. Stderr warnings such as "no actor identity resolved" are expected in a cleared environment.
 
-`orbit init` mints the machine identity in the scratch root's global `config.toml` (`$QA_REPO/.orbit` under `--root`); `workspace init` does not. The `qa init` step passes `--non-interactive` with an explicit `--machine-name` and `--task-prefix`, so it never prompts. It runs from `QA_CWD`, not `QA_REPO`: do not run any other Orbit command in `QA_REPO` before `workspace init`. The first such command writes a `.orbit/config.yaml` with a generated workspace identity, and `workspace init` then refuses with an identity conflict. Keep `QA_REPO` outside every checkout; the recipe uses `/tmp` explicitly so an inherited `TMPDIR` inside the checkout cannot redirect it. `QA_BASE` stays under `.orbit/tmp/`, outside Bubblewrap's `/tmp` overlay, as the fixtures' homes are. Every candidate command uses the cleared environment and explicit root in `qa`. Delete `QA_BASE`, `QA_REPO` and `QA_CWD` when the QA is finished, after the server has exited.
+`orbit init` mints the machine identity in the scratch root's global `config.toml` (`$QA_REPO/.orbit` under `--root`); `workspace init` does not. The `qa init` step passes `--non-interactive` with an explicit `--machine-name` and `--task-prefix`, so it never prompts. It runs from `QA_CWD`, not `QA_REPO`: do not run any other Orbit command in `QA_REPO` before `workspace init`. The first such command writes a `.orbit/config.yaml` with a generated workspace identity, and `workspace init` then refuses with an identity conflict. `QA_BASE`, `QA_HOME`, `QA_REPO` and `QA_CWD` all stay under the run's `.orbit/tmp/`, the only scratch location the implement activity allows (never `/tmp`), and outside Bubblewrap's `/tmp` overlay, as the fixtures' homes are. `mktemp` takes that explicit path, so an inherited `TMPDIR` cannot redirect it. Every candidate command uses the cleared environment and explicit root in `qa`. `--root` is resolved before every discovery step, so `qa` commands resolve `$QA_REPO/.orbit` from any working directory. The `QA_REPO` and `QA_CWD` Git repositories also stop the linked-worktree and uninitialized ancestor walks. The initialized-only lookup (`RequireInitialized` in [`resolve.rs`](../crates/orbit-runtime/src/resolve.rs)) walks past a Git boundary, so a command run without `--root` from these directories could reach the checkout's `.orbit/`. The recipe runs none.
+
+Cleanup: once the QA is finished and the server has exited, an operator shell deletes `QA_BASE` with `rm -rf -- "${QA_BASE:?}"`, which removes `QA_REPO` and `QA_CWD` with it. A managed lane must not run `rm -rf`: its cleanup rule forbids raw removal. `QA_BASE` is ignored scratch under the run's `.orbit/tmp/`, which the lane clears with the worktree, so the lane needs no further step.
+
+#### Scripted dashboard QA: spawn, capture and teardown
+
+A script that starts `web serve` for screenshots, instead of a person pressing Ctrl-C, must own the exact child from the spawn onward. The incident this guards against (F2026-11-362): a harness spawned a detached server, awaited readiness before entering its `try/finally`, closed the browser before stopping the server and sent a fallback KILL without waiting for the exit. Two isolated listeners survived with PPID 1. The recipe below keeps the isolation above (`qa`'s cleared environment and explicit `--root`, run from `QA_REPO`) and changes only who owns the process:
+
+- **Arm teardown before the spawn.** The `EXIT` trap is installed first, so a readiness timeout, a browser failure, `set -e` or SIGINT/SIGTERM all reach it.
+- **Record the PID and its start-time token as the next statements, with signals deferred across that interval.** The server is spawned with `exec` in a backgrounded subshell, so `$!` is the server itself, not a wrapper. SIGINT/SIGTERM arriving between the spawn and the token capture is recorded, not acted on, until the `(pid, token)` pair exists; the start then fails at once and teardown runs. Teardown signals only a PID whose token still matches (`/proc/<pid>/stat` field 22, or `ps -o lstart=` where `/proc` is absent), never a name pattern, process group or port owner. While the token is still empty the recorded PID is this script's own unreaped child, so it cannot have been reused and `kill -0` alone identifies it; teardown may also recover that PID from `$!` when the assignment itself was interrupted, but only once the start has armed that recovery and only when `$!` is not the caller's own earlier background job: a `( )` subshell inherits the caller's last background PID in `$!`, and with an empty token existence alone would accept it, so a cancellation before the spawn would SIGTERM a job the script never started.
+- **Stop the server on every path, after the browser attempt.** The browser's close is attempted whenever it was started, its failure is recorded without skipping the server stop, and the first nonzero status is the run's status.
+- **Wait for the exit.** SIGTERM, a bounded wait for the exit, then SIGKILL (sent only to the verified PID) and a second bounded wait. A server that survives SIGKILL fails the run loudly and keeps `SERVER_PID` set for a retry; nothing blocks on an unbounded `wait`.
+- **Never delete artifacts.** Teardown touches only the process. Screenshots under `QA_BASE` stay for `orbit.task.artifact` action `put`; the managed-lane rule above still forbids raw removal.
+
+For a static Jobs screenshot, use the prepared Playwright kit and wait for the rendered panel instead of page or network quiescence. The capture deadline is 20 seconds from Chromium launch, including page creation and evidence writing. Browser cleanup has a separate five-second bound; the Node process exits after that bound even if Playwright retains open handles, allowing server teardown to start. Navigate with `waitUntil: "domcontentloaded"`, observe the real `/api/events/stream` response, then wait for `#jobs-live-body .operation-running` to be visible and `#jobs-live-count` to be populated. That pair means the Jobs Live request rendered; the `EventSource` remains open. `browser.close()` runs in `finally`, then `qa_serve_stop` sends TERM, waits at most five seconds, escalates to KILL, reaps the exact server child and confirms its port closed. A screenshot from a static fixture that stubs `/api/events/stream` proves only the rendered state; keep event delivery, reconnect and resync checks on the real stream.
+
+```bash
+# Define once, after `qa workspace init`. Run the capture below as `bash script.sh` or in a ( ) subshell.
+QA_LOG="$QA_BASE/serve.log"; SHOTS="$QA_BASE/shots"; mkdir -p "$SHOTS"
+SERVE_CMD=(env -i PATH=/usr/bin:/bin HOME="$QA_HOME" "$ORBIT_BIN" --root "$QA_REPO/.orbit" web serve --port 0 --no-open)
+SERVER_PID=; SERVER_TOKEN=; QA_PORT=; QA_URL=; QA_DEFERRED_SIGNAL=; QA_STOPPED_PID=; QA_SPAWN_ARMED=; QA_SPAWN_PRIOR=
+
+# Start-time token: the (pid, token) pair identifies one process, so a reused PID never matches.
+qa_token() {
+  if [ -r "/proc/$1/stat" ]; then sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f20
+  else ps -o lstart= -p "$1" 2>/dev/null; fi
+}
+qa_defer_signal() { QA_DEFERRED_SIGNAL=1; }
+qa_alive() {
+  [ -n "$SERVER_PID" ] || return 1
+  # No token yet: the PID is still our own unreaped child, so it cannot have
+  # been reused; existence alone identifies it.
+  if [ -z "$SERVER_TOKEN" ]; then kill -0 "$SERVER_PID" 2>/dev/null; return; fi
+  [ "$(qa_token "$SERVER_PID")" = "$SERVER_TOKEN" ]
+}
+qa_wait_gone() {  # bounded poll: $1 = tenths of a second
+  for _ in $(seq "$1"); do qa_alive || return 0; sleep 0.1; done; ! qa_alive
+}
+qa_listening() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+
+# Spawn: `exec` makes the child the server itself, so $! is its PID.
+qa_serve_start() {  # $1 = readiness deadline in seconds
+  : >"$QA_LOG"
+  # Defer INT/TERM until the (pid, token) pair exists: an exiting handler in
+  # this interval would run teardown with no PID, or with a PID and no token.
+  QA_DEFERRED_SIGNAL=
+  trap qa_defer_signal INT TERM
+  # A ( ) subshell inherits the caller's last background PID in $!. Remember it
+  # (only while that job is alive, so it cannot be our child) and arm the $!
+  # recovery in qa_serve_stop only now: before this point no server exists.
+  QA_SPAWN_PRIOR=; if [ -n "${!:-}" ] && kill -0 "$!" 2>/dev/null; then QA_SPAWN_PRIOR="$!"; fi
+  QA_SPAWN_ARMED=1
+  ( exec "${SERVE_CMD[@]}" ) >"$QA_LOG" 2>&1 </dev/null &
+  SERVER_PID=$!
+  SERVER_TOKEN="$(qa_token "$SERVER_PID")"
+  trap 'exit 143' INT TERM
+  if [ -n "$QA_DEFERRED_SIGNAL" ]; then echo "interrupted while capturing the server identity" >&2; return 143; fi
+  for _ in $(seq $(($1 * 10))); do
+    qa_alive || { echo "server exited before readiness" >&2; return 1; }
+    QA_URL="$(sed -n 's/^Dashboard listening on \(http:\/\/[^ ]*\).*/\1/p' "$QA_LOG" | head -n1)"
+    [ -n "$QA_URL" ] && { QA_PORT="${QA_URL##*:}"; return 0; }
+    sleep 0.1
+  done
+  echo "no readiness announcement within $1s" >&2; return 1
+}
+
+# Teardown: idempotent; signals only the recorded (pid, token); waits for the exit.
+qa_serve_stop() {
+  local pid="$SERVER_PID" rc=0
+  # Interrupted before the assignment above, after the spawn was armed: $! names
+  # the spawned child, which is unreaped and identified by existence while it
+  # has no token yet. Never adopt the caller's earlier job that a ( ) subshell
+  # inherits in $!, nor any $! before the spawn is armed.
+  if [ -z "$pid" ] && [ -n "$QA_SPAWN_ARMED" ] && [ -n "${!:-}" ] && [ "${!:-}" != "$QA_SPAWN_PRIOR" ] \
+     && [ -z "$SERVER_TOKEN" ] && [ "${!:-}" != "$QA_STOPPED_PID" ]; then pid="$!"; SERVER_PID="$pid"; fi
+  [ -n "$pid" ] || return 0
+  if qa_alive; then
+    kill -TERM "$pid" 2>/dev/null
+    if ! qa_wait_gone "${QA_TERM_GRACE:-50}"; then
+      echo "server ignored SIGTERM; sending SIGKILL" >&2
+      qa_alive && kill -KILL "$pid" 2>/dev/null
+      qa_wait_gone 50 || { echo "server $pid survived SIGKILL" >&2; rc=1; }
+    fi
+  fi
+  [ "$rc" -eq 0 ] && { wait "$pid" 2>/dev/null || :; } # reaps it; TERM/KILL wait statuses are expected
+  if [ "$rc" -eq 0 ] && qa_alive; then rc=1; fi
+  if [ -n "$QA_PORT" ] && qa_listening "$QA_PORT"; then echo "port $QA_PORT still listening" >&2; rc=1; fi
+  [ "$rc" -eq 0 ] && { SERVER_PID=; QA_STOPPED_PID="$pid"; }
+  return "$rc"
+}
+
+browser_shoot() {  # $1 = dashboard URL; $2 = screenshot; $3 = elapsed-time evidence JSON
+  . "$ORBIT_BROWSER_KIT_ENV"
+  node --input-type=module - "$@" <<'NODE'
+import { writeFile } from 'node:fs/promises';
+import { writeSync } from 'node:fs';
+import { inspect } from 'node:util';
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE);
+const [baseUrl, screenshotPath, evidencePath] = process.argv.slice(2);
+const started = performance.now();
+const deadline = Date.now() + 20_000;
+const remaining = () => {
+  const ms = deadline - Date.now();
+  if (ms <= 0) throw new Error('20-second screenshot deadline expired');
+  return ms;
+};
+let browser;
+let streamClosed = false;
+let captureTimer;
+let cleanupTimer;
+const capture = async () => {
+  browser = await chromium.launch({ timeout: remaining(), args: ['--no-zygote', '--disable-gpu', '--disable-dev-shm-usage'] });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const streamPromise = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname === '/api/events/stream' && (response.headers()['content-type'] || '').includes('text/event-stream');
+  }, { timeout: remaining() });
+  // Attach a rejection handler immediately, including when navigation fails first.
+  void streamPromise.catch(() => {});
+  await page.goto(`${baseUrl}/#jobs/live`, { waitUntil: 'domcontentloaded', timeout: remaining() });
+  const stream = await streamPromise;
+  if (stream.status() !== 200) throw new Error(`event stream returned ${stream.status()}`);
+  void stream.finished().then(() => { streamClosed = true; }, () => { streamClosed = true; });
+  await page.waitForSelector('#jobs-live-body .operation-running', { state: 'visible', timeout: remaining() });
+  await page.waitForFunction(() => {
+    const count = document.querySelector('#jobs-live-count')?.textContent?.trim();
+    return Boolean(count && count !== '-');
+  }, undefined, { timeout: remaining() });
+  await page.screenshot({ path: screenshotPath, fullPage: false, timeout: remaining() });
+  if (streamClosed) throw new Error('dashboard event stream closed before screenshot capture');
+  const evidence = {
+    url: `${baseUrl}/#jobs/live`,
+    readiness: '#jobs-live-body .operation-running visible and #jobs-live-count populated',
+    event_stream_url: stream.url(),
+    event_stream_status: stream.status(),
+    event_stream_content_type: stream.headers()['content-type'],
+    event_stream_open_at_screenshot: !streamClosed,
+    viewport: { width: 1280, height: 900 },
+    screenshot: screenshotPath,
+    elapsed_ms: Math.round(performance.now() - started),
+    deadline_ms: 20_000,
+  };
+  await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  writeSync(1, `${JSON.stringify(evidence)}\n`);
+};
+let captureError;
+let cleanupError;
+try {
+  await Promise.race([
+    capture(),
+    new Promise((_, reject) => {
+      captureTimer = setTimeout(() => reject(new Error('20-second screenshot deadline expired')), remaining());
+    }),
+  ]);
+} catch (error) {
+  captureError = error;
+} finally {
+  clearTimeout(captureTimer);
+  if (browser) {
+    try {
+      await Promise.race([
+        browser.close(),
+        new Promise((_, reject) => {
+          cleanupTimer = setTimeout(() => reject(new Error('5-second browser cleanup deadline expired')), 5_000);
+        }),
+      ]);
+    } catch (error) {
+      cleanupError = error;
+    } finally {
+      clearTimeout(cleanupTimer);
+    }
+  }
+}
+if (captureError) writeSync(2, `Screenshot capture failed: ${inspect(captureError)}\n`);
+if (cleanupError) writeSync(2, `Browser cleanup failed: ${inspect(cleanupError)}\n`);
+// Playwright can retain handles after a timeout. Do not let them delay server teardown.
+process.exit(captureError || cleanupError ? 1 : 0);
+NODE
+}
+
+# Capture. The browser helper owns Chromium; the EXIT trap owns the server child.
+trap qa_serve_stop EXIT                  # armed before the spawn
+trap 'exit 143' INT TERM
+cd "$QA_REPO"; rc=0
+qa_serve_start 30 || rc=$?                                    # readiness timeout or early exit
+if [ "$rc" -eq 0 ]; then
+  browser_shoot "$QA_URL" "$SHOTS/jobs-live-dark-1280.png" "$QA_BASE/jobs-live-capture.json" || rc=$?
+fi
+qa_serve_stop || { st=$?; [ "$rc" -ne 0 ] || rc=$st; }
+exit "$rc"
+```
+
+Calling `qa_serve_stop` explicitly before `exit` reports its failure in the run's status; the trap is the backstop for every earlier exit and is a no-op once the explicit call has cleared `SERVER_PID`. If the script itself is SIGKILLed no trap can run, so check for an orphan afterwards (below).
+
+Verify teardown with probes on the exact child, with no `ps`, `pgrep`, `lsof` or `ss` pattern and nothing global, so they work inside the supported sandbox: record `pid=$SERVER_PID port=$QA_PORT` before stopping, then after it `kill -0 "$pid"` must fail (the child is reaped, not a zombie) and `qa_listening "$port"` must fail (a loopback connect, refused once the listener is closed). To rehearse a failure path, point `SERVE_CMD` at a stub: `(sh -c 'exec sleep 300')` never announces and exercises the readiness timeout; `(sh -c 'trap "" TERM; echo "Dashboard listening on http://127.0.0.1:1"; exec sleep 300')` ignores SIGTERM and exercises the fallback KILL with `QA_TERM_GRACE=5`; a bad flag such as `--port notaport` exits early. A rehearsal on Linux in a disposable workspace (success, browser-init failure, browser-close failure, readiness timeout, early exit and a SIGTERM-ignoring child, plus SIGTERM to the script mid-readiness) left each child gone and each listener closed, with captured files intact. The `dashboard_qa_recipe_reaps_child_when_interrupted_at_identity_boundaries` regression in `crates/orbit-cli/tests/process/web_serve_shutdown.rs` drives the extracted recipe deterministically. A Bash `DEBUG` hook (with `set -T`) sends SIGTERM just before the spawn, just before the PID assignment and just before the token assignment. The normal-path stub owns its listener: it binds an ephemeral loopback port, announces that port and keeps it open, so an unrelated local service on any fixed port cannot change the "still listening" teardown probe; the capture stub connects to the announced port, which proves the listener was open, and the run must still exit 0 once teardown has reaped the child. For the two post-spawn signals the stub blocks on a FIFO before publishing its PID, and the hook records `$!`, so the Linux subreaper parent can still prove that exact child was reaped. The same parent classifies an intentionally unreaped child — the recipe subshell SIGKILLed after a descendant exists, or the runner's timeout taken once that unpublished child is recorded — then terminates and reaps the owned process group, including a descendant that ignores SIGTERM. The recipe runs in a `( )` subshell with a caller background job started first. A `wrapper_stall` case stops the outer wrapper (`SIGSTOP`) right after it starts that job, so only the runner's own timeout ends it; the sweep must reap the wrapper and the caller's job so output collection reaches EOF. The parent asserts the harness result, that the caller's job is untouched on the paths that return to it, and that the capture directory survives.
 
 ## Testing & Coverage
 
@@ -1229,6 +1510,13 @@ The desktop maintenance exceptions were assessed on 2026-10-19. **Orbit desktop 
 | [RUSTSEC-2026-0372](https://rustsec.org/advisories/RUSTSEC-2026-0372.html) | Same parents and zbus version -> `zvariant 5.15.1 -> zvariant_derive 5.15.1`. Derives moved into zbus 6. |
 
 The latest published [notify-rust 4.18.2](https://docs.rs/crate/notify-rust/4.18.2/source/Cargo.toml) and [tauri-plugin-opener 2.7.2](https://docs.rs/crate/tauri-plugin-opener/2.7.2/source/Cargo.toml) still require `zbus ^5` and `^5.9` respectively; substituting zbus 6 needs upstream API migrations. No patched standalone version is listed for these four advisories. Until the parents migrate, accept the documented maintenance risk with exact-ID exceptions. The regression executes the workflow's real audit command with real Cargo and cargo-deny against tiny independent workspaces and an offline fixture advisory database: the root-only command misses a desktop-only finding, the desktop command fails, an exact-ID exception passes, and another unknown ID still fails. It also checks that a stale desktop lockfile fails without being rewritten. Only the local fixture dependency's metadata source is adapted to registry form so no crate download or native build is needed.
+
+The workspace chrono exceptions were assessed on 2026-11-18. **Orbit dependency maintainers** own re-review by **2027-02-17** and removal once the workspace migration completes. Both advisories report unmaintained crates, and cargo-deny finds no safe upgrade. The exact dependency chains covered by the exceptions in the root workspace graph are:
+
+| Advisory | Dependency chain and constraint |
+| --- | --- |
+| [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543.html) | Root: Orbit crates use `chrono 0.4.43` directly; `rmcp` and `schemars` also depend on it as normal dependencies (`rusqlite` does not enable it, since its `chrono` feature is off); `orbit-automation -> cel 0.15.0 -> chrono` also retains it. `croner` is built without its `chrono` feature, so it adds no chrono edge. All chrono versions are affected, so there is no patched release to select. |
+| [RUSTSEC-2026-0555](https://rustsec.org/advisories/RUSTSEC-2026-0555.html) | `orbit-automation -> cel 0.15.0 -> chrono-tz 0.10.4` (the `cel` `chrono` feature behind CEL temporal values) is the only chain; the scheduling test fixtures evaluate DST in host-local time instead. No safe chrono-tz upgrade is available; removal requires migrating CEL temporal evaluation. |
 
 ## Vendored dashboard JavaScript
 

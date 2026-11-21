@@ -26,3 +26,29 @@ removed or changed in meaning.
 - **v6 (2026-11-14):** adds R39 (a panel's header row and a row of summary figures stay on
   one line: members shrink first, then the least important are removed). From the owner's
   drain-card correction in session f09993e5 (ORB-24812, F2026-11-296).
+- **v7 (2026-11-15):** R39 keeps members at full size wherever the row fits and starts
+  shrinking only at the width where the full-size row stops fitting, never at a fixed
+  breakpoint that also catches fitting widths. It also covers tab strips. From the owner's
+  Tasks-dock tab correction in session f09993e5 (ORB-25032, F2026-11-302).
+- **v8 (2026-11-15):** adds R40 (an inline list's separator sits directly after the
+  preceding item or its icon and is followed by a clear gap, the same everywhere; a small
+  icon sits close to its item, and an enlarged tap target adds no visible space). From the
+  owner's task-detail relation-row corrections in session f09993e5 (ORB-25033,
+  F2026-11-303).
+- **v9 (2026-11-15):** adds R41 (every button carries a short hover help saying what it
+  does, including consequences the label does not show, and why it is disabled), and R32
+  names a button's effect as detail a tooltip may add. From the owner's direction in
+  session f09993e5 (F2026-11-304).
+- **v10 (2026-11-15):** adds R42 (a control is as wide as its content: a select fits its
+  longest option, capped by the space its row leaves, and shrinks no further than the part
+  that tells options apart). From the owner's drain-target select question in session
+  f09993e5 (ORB-25074, F2026-11-310).
+- **v11 (2026-11-15):** adds R43 (when side-by-side regions collapse into one column, the
+  page's primary region stays shown; a secondary region replaces it only when the operator
+  navigated to it at that width, and a selection inside it does not count). From the
+  owner's Tasks/Drain collapse correction in session f09993e5 (ORB-25093, F2026-11-311).
+- **v12 (2026-11-17):** R9 adds that a label is vertically centred against its value, including a multi-line value (the owner's Fleet host-dialog correction, ORB-25399).
+  R16 adds that a detail view, dialog or drill-down does not repeat what the view that opened it already shows (the owner's Fleet host-dialog correction, ORB-25399).
+- **v13 (2026-11-17):** R41 reverses button hover help: a button shows no hover or focus bubble or native tooltip, its effect goes in its accessible description, and a consequence or disabled reason goes behind an info icon or in its confirmation (the owner's Fleet correction, ORB-25398).
+  R32's closing sentence now says buttons carry no tooltip, following R41 (ORB-25398).
+- **v14 (2026-11-17):** adds R44 (a close button on a surface Esc closes is labelled "esc", not ×, "Close" or "Back to list"; its accessible name still says what it closes) (the owner's direction after ORB-25406, ORB-25389).

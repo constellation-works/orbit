@@ -223,6 +223,8 @@ pub(super) fn assemble_forecast_simulation(
         known_origins: BTreeMap::new(),
         gaps: Vec::new(),
         pool_gaps: Vec::new(),
+        pool_fixes: Vec::new(),
+        in_origin_review: 0,
         excluded_links: BTreeMap::new(),
     };
     for task in &queued {

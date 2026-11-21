@@ -72,6 +72,13 @@ impl orbit_engine::test_support::NullRuntimeHost for UsageHost {
     ) -> Result<(), orbit_common::OrbitError> {
         self.store.record_provider_limit(reading).map(|_| ())
     }
+
+    fn record_provider_usage_reading(
+        &self,
+        readings: &[ProviderLimitObservation],
+    ) -> Result<(), orbit_common::OrbitError> {
+        self.store.record_provider_usage_reading(readings)
+    }
 }
 
 /// Dispatch a fake `binary` that prints `stdout`, with `agent_env` in the
@@ -156,6 +163,25 @@ fn dispatch_with_options(
     agent_env: &[(&str, &Path)],
     options: DispatchOptions<'_>,
 ) -> (DispatchOutcome, Vec<ProviderLimitObservation>) {
+    dispatch_into_store(
+        orbit_store::Store::open_in_memory().unwrap(),
+        binary,
+        provider,
+        stdout,
+        agent_env,
+        options,
+    )
+}
+
+/// Dispatch against `store`, so a later run sees what an earlier one stored.
+fn dispatch_into_store(
+    store: orbit_store::Store,
+    binary: &str,
+    provider: Provider,
+    stdout: &str,
+    agent_env: &[(&str, &Path)],
+    options: DispatchOptions<'_>,
+) -> (DispatchOutcome, Vec<ProviderLimitObservation>) {
     let fake = FakeProvider::with_usage_command(
         binary,
         stdout,
@@ -179,7 +205,7 @@ fn dispatch_with_options(
     };
     let host = UsageHost {
         provider: host,
-        store: orbit_store::Store::open_in_memory().unwrap(),
+        store,
         cli_command,
         cli_args,
     };
@@ -249,7 +275,7 @@ fi
         |stdout: &str| dispatch_with_prelude("agy", Provider::Antigravity, stdout, &env, prelude);
     let (outcome, limits) = run(&success);
     assert!(outcome.success, "{:?}", outcome.message);
-    assert_eq!(limits.len(), 9);
+    assert_eq!(limits.len(), 15);
     for reading in &limits {
         assert_eq!(reading.provider, "antigravity");
         assert_eq!(reading.source, ProviderLimitSource::Event);
@@ -276,7 +302,7 @@ fi
     );
     let (failed, failed_limits) = run("no completion envelope");
     assert!(!failed.success);
-    assert_eq!(failed_limits.len(), 9, "failed runs also record usage");
+    assert_eq!(failed_limits.len(), 15, "failed runs also record usage");
     for body in ["not json".to_string(), "{}".to_string(), "x".repeat(65537)] {
         fs::write(&response, body).unwrap();
         let (outcome, limits) = run(&success);
@@ -294,6 +320,162 @@ fi
         "an unavailable quota command cannot fail a run"
     );
     assert!(limits.is_empty());
+}
+
+/// [ORB-25967] The same account's `/usage` first carries a separate Argon
+/// bucket, so the shared Gemini quota is split into family scopes, then does
+/// not. Windows the later reading no longer reports stop showing and gating at
+/// once; an error-sourced limit keeps its own expiry.
+fn antigravity_later_usage_reading_retires_windows_it_no_longer_reports() {
+    let home = tempfile::tempdir().unwrap();
+    let response = home.path().join("usage.json");
+    let full: Value = serde_json::from_str(include_str!(
+        "../../../orbit-agent/tests/provider_invocation/fixtures/antigravity_usage_1_5_13.json"
+    ))
+    .unwrap();
+    let mut without_argon = full.clone();
+    without_argon["command"]["data"]["groups"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|group| group["name"] != "Gemini 4 Argon");
+    let prelude = r#"
+if [ "$1" = '--print' ]; then
+  cat "$HOME/usage.json"
+  exit $?
+fi
+"#;
+    let success = json!({"event":"result", "result": {
+        "status":"SUCCESS", "response":super::provider_capacity::SUCCESS_ENVELOPE,
+        "usage":{"input_tokens":12, "output_tokens":4}
+    }})
+    .to_string();
+    let env = [("HOME", home.path())];
+    let store = orbit_store::Store::open_in_memory().unwrap();
+    let run = |usage: &Value| {
+        fs::write(&response, usage.to_string()).unwrap();
+        let (outcome, limits) = dispatch_into_store(
+            store.clone(),
+            "agy",
+            Provider::Antigravity,
+            &success,
+            &env,
+            DispatchOptions {
+                stderr: "",
+                exit_code: 0,
+                prelude,
+                launcher: None,
+                conversation_ref: None,
+            },
+        );
+        assert!(outcome.success, "{:?}", outcome.message);
+        limits
+    };
+    let scopes = |limits: &[ProviderLimitObservation]| {
+        let mut scopes = limits
+            .iter()
+            .map(|limit| {
+                format!(
+                    "{}/{}",
+                    limit.model.as_deref().unwrap_or_default(),
+                    limit.window.as_deref().unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>();
+        scopes.sort();
+        scopes
+    };
+
+    let split = run(&full);
+    assert!(
+        scopes(&split).contains(&"argon/gemini-argon-wtu-weekly".to_string())
+            && scopes(&split).contains(&"flash/gemini-5h".to_string()),
+        "the first reading splits the shared quota: {:?}",
+        scopes(&split)
+    );
+
+    // A usage-limit failure of the same provider, with its own reset.
+    let error = ProviderLimitObservation {
+        model: Some("neon".to_string()),
+        window: Some("failure".to_string()),
+        exhausted: true,
+        source: ProviderLimitSource::Error,
+        resets_at: Some("2026-11-20T09:30:00Z".parse().unwrap()),
+        used_percent: None,
+        window_minutes: None,
+        ..split[0].clone()
+    };
+    store.record_provider_limit(&error).unwrap();
+
+    let latest = run(&without_argon);
+    assert_eq!(
+        scopes(&latest),
+        [
+            "claude/3p-5h",
+            "claude/3p-weekly",
+            "gemini/gemini-5h",
+            "gemini/gemini-weekly",
+            "gpt/3p-5h",
+            "gpt/3p-weekly",
+            "neon/failure",
+        ],
+        "only the latest reading's windows and the error's own expiry remain"
+    );
+    let kept = latest
+        .iter()
+        .find(|limit| limit.source == ProviderLimitSource::Error)
+        .unwrap();
+    assert_eq!(kept.resets_at, error.resets_at);
+
+    // [ORB-26000] A still-present known bucket with an unreadable field keeps
+    // its previous reading while its readable sibling updates.
+    let mut partly_unreadable = without_argon.clone();
+    for group in partly_unreadable["command"]["data"]["groups"]
+        .as_array_mut()
+        .unwrap()
+    {
+        for bucket in group["buckets"].as_array_mut().unwrap() {
+            match bucket["id"].as_str().unwrap() {
+                "gemini-5h" => bucket["reset_time"] = json!("not a time"),
+                "3p-weekly" => bucket["remaining_fraction"] = json!(0.5),
+                _ => {}
+            }
+        }
+    }
+    let mixed = run(&partly_unreadable);
+    assert_eq!(
+        scopes(&mixed),
+        scopes(&latest),
+        "the unreadable bucket's window is kept, not retired"
+    );
+    let used = |limits: &[ProviderLimitObservation], model: &str, window: &str| {
+        limits
+            .iter()
+            .find(|limit| {
+                limit.model.as_deref() == Some(model) && limit.window.as_deref() == Some(window)
+            })
+            .and_then(|limit| limit.used_percent)
+    };
+    assert_eq!(used(&mixed, "claude", "3p-weekly"), Some(50.0));
+    assert_eq!(
+        used(&mixed, "gemini", "gemini-5h"),
+        used(&latest, "gemini", "gemini-5h"),
+        "the unreadable bucket keeps its previous reading"
+    );
+
+    // A fully readable reading that lacks the bucket retires it.
+    let mut removed = without_argon.clone();
+    for group in removed["command"]["data"]["groups"].as_array_mut().unwrap() {
+        group["buckets"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|bucket| bucket["id"] != "gemini-5h");
+    }
+    let retired = run(&removed);
+    assert!(
+        !scopes(&retired).contains(&"gemini/gemini-5h".to_string()),
+        "{:?}",
+        scopes(&retired)
+    );
 }
 
 fn antigravity_preserves_launcher_prefix_arguments_in_quota_reads() {
@@ -339,7 +521,7 @@ fi
     };
     let (outcome, limits) = run(&success);
     assert!(outcome.success, "{:?}", outcome.message);
-    assert_eq!(limits.len(), 9);
+    assert_eq!(limits.len(), 15);
     for reading in &limits {
         assert_eq!(reading.provider, "antigravity");
         assert_eq!(reading.source, ProviderLimitSource::Event);
@@ -366,7 +548,7 @@ fi
     );
     let (failed, failed_limits) = run("no completion envelope");
     assert!(!failed.success);
-    assert_eq!(failed_limits.len(), 9, "failed runs also record usage");
+    assert_eq!(failed_limits.len(), 15, "failed runs also record usage");
     for body in ["not json".to_string(), "{}".to_string(), "x".repeat(65537)] {
         fs::write(&response, body).unwrap();
         let (outcome, limits) = run(&success);
@@ -1354,6 +1536,10 @@ fn usage_window_contracts_1() {
             (
                 "antigravity_records_native_quota_and_unavailable_readings_are_advisory",
                 antigravity_records_native_quota_and_unavailable_readings_are_advisory,
+            ),
+            (
+                "antigravity_later_usage_reading_retires_windows_it_no_longer_reports",
+                antigravity_later_usage_reading_retires_windows_it_no_longer_reports,
             ),
             (
                 "antigravity_preserves_launcher_prefix_arguments_in_quota_reads",

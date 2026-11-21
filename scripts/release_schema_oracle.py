@@ -4,13 +4,17 @@ This is deliberately not a general JSON Schema validator. The grammar is:
   value := {} | {type: T} | {enum: E} | {const: V} | {required: [K]}
   atom := true | false | value | {properties: {a: P}} | {additionalProperties: false}
         | {type: object, properties: {a: {}}, additionalProperties: false}
-  choice := {anyOf|oneOf: [atom, atom]}
+        | {propertyNames: {enum: E}}
+  choice := {anyOf|oneOf|allOf: [atom, atom]}
   nested := {anyOf|oneOf: [choice, atom]}
+  conditional := {if: S, then?: B, else?: B}
 The finite terminals below bound T, E, V and K; P is {}, type: string or
 enum: ["a"]. Pairs also wrap atoms (including true/false) in a property
 schema, and choices may have a sibling applicator. Pairs
 exhaust atom substitutions, substitutions in a branch/property, branch
-insertion/deletion/reordering, and keyword deletion under one outer choice.
+insertion/deletion/reordering, keyword deletion under one outer choice,
+allOf member/conjunction edits (including independent sibling applicators), conditional selector/branch edits, moving
+required names between root and then/else, and propertyNames enum edits.
 This is a finite soundness check, not a proof over arbitrary JSON Schema.
 """
 
@@ -21,8 +25,9 @@ from itertools import product
 # with absent, declared, extra and nested properties. No randomness or network.
 INSTANCES = [None, False, True, 0, 1, 1.0, 1.5, "a", "b", [], [1], {}]
 INSTANCES += [{"a": value} for value in (None, False, 0, 1, "a", "b", {}, {"a": "a"})]
-INSTANCES += [{"b": "b"}, {"c": 0}]
+INSTANCES += [{"b": "b"}, {"c": 0}, {"c": "c"}]
 INSTANCES += [{"a": left, "b": right} for left, right in product((0, "a", "b"), repeat=2)]
+INSTANCES += [{"a": "a", "c": "c"}, {"a": 0, "c": "c"}, {"b": "b", "c": "c"}, {"a": "a", "b": "b", "c": "c"}]
 
 
 def schema_instance_equal(left, right):
@@ -42,14 +47,44 @@ def schema_instance_equal(left, right):
     return left == right
 
 
-def schema_accepts_instance(schema, instance):
-    """Independently interpret every keyword in the grammar; reject unknowns."""
+_SCHEMA_KEYWORDS = {"type", "enum", "const", "required", "properties",
+                    "additionalProperties", "anyOf", "oneOf", "allOf",
+                    "if", "then", "else", "propertyNames"}
+
+
+def require_schema_in_grammar(schema):
+    """Refuse any keyword the oracle does not implement, anywhere in the schema.
+
+    Instance evaluation skips subtrees (a failed allOf member, an unchosen
+    then/else arm, propertyNames over an empty object), so admission walks every
+    schema position. enum and const values and property names are data, not
+    schemas, and are never inspected.
+    """
     if isinstance(schema, bool):
-        return schema
-    unknown = schema.keys() - {"type", "enum", "const", "required", "properties",
-                               "additionalProperties", "anyOf", "oneOf"}
+        return
+    if not isinstance(schema, dict):
+        raise ValueError(f"oracle does not implement schema {schema!r}")
+    unknown = schema.keys() - _SCHEMA_KEYWORDS
     if unknown:
         raise ValueError(f"oracle does not implement {unknown}")
+    children = [schema[key] for key in ("additionalProperties", "propertyNames",
+                                        "if", "then", "else") if key in schema]
+    children += schema.get("properties", {}).values()
+    for key in ("anyOf", "oneOf", "allOf"):
+        children += schema.get(key, [])
+    for child in children:
+        require_schema_in_grammar(child)
+
+
+def schema_accepts_instance(schema, instance):
+    """Independently interpret every keyword in the grammar; reject unknowns."""
+    require_schema_in_grammar(schema)
+    return _schema_accepts(schema, instance)
+
+
+def _schema_accepts(schema, instance):
+    if isinstance(schema, bool):
+        return schema
     types = {
         "null": instance is None,
         "boolean": isinstance(instance, bool),
@@ -72,17 +107,28 @@ def schema_accepts_instance(schema, instance):
     if isinstance(instance, dict):
         if not set(schema.get("required", [])) <= instance.keys():
             return False
+        if "propertyNames" in schema:
+            name_schema = schema["propertyNames"]
+            if not all(_schema_accepts(name_schema, name) for name in instance):
+                return False
         properties = schema.get("properties", {})
         for name, value in instance.items():
             child = properties.get(name, schema.get("additionalProperties", True))
-            if not schema_accepts_instance(child, value):
+            if not _schema_accepts(child, value):
                 return False
     if "anyOf" in schema and not any(
-            schema_accepts_instance(branch, instance) for branch in schema["anyOf"]):
+            _schema_accepts(branch, instance) for branch in schema["anyOf"]):
         return False
     if "oneOf" in schema and sum(
-            schema_accepts_instance(branch, instance) for branch in schema["oneOf"]) != 1:
+            _schema_accepts(branch, instance) for branch in schema["oneOf"]) != 1:
         return False
+    if "allOf" in schema and not all(
+            _schema_accepts(branch, instance) for branch in schema["allOf"]):
+        return False
+    if "if" in schema:
+        branch_key = "then" if _schema_accepts(schema["if"], instance) else "else"
+        if branch_key in schema and not _schema_accepts(schema[branch_key], instance):
+            return False
     return True
 
 
@@ -115,3 +161,201 @@ def bounded_schema_pairs():
         for keep in ({}, {"anyOf" if inner == "oneOf" else "oneOf": [right]}):
             before = dict(keep, **{inner: [left]})
             yield {outer: [before, right]}, {outer: [keep, right]}
+
+    # allOf member substitutions, insertions, deletions, reorderings, and
+    # interactions with enclosing/nested applicators.
+    allof_atoms = [
+        True, False, {}, {"type": "string"}, {"type": "object"},
+        {"enum": ["a"]}, {"enum": ["a", "b"]}, {"const": "a"},
+        {"required": ["a"]}, {"required": ["b"]}, {"required": ["a", "b"]},
+        {"properties": {"a": {"type": "string"}}},
+        {"additionalProperties": False},
+        {"propertyNames": {"enum": ["a", "b"]}},
+        {"propertyNames": {"enum": ["a"]}},
+    ]
+    for before, after in product(allof_atoms, repeat=2):
+        yield {"allOf": [before]}, {"allOf": [after]}
+        yield {"allOf": [before, {"type": "object"}]}, {"allOf": [after, {"type": "object"}]}
+        yield {"allOf": [before, {"required": ["b"]}]}, {"allOf": [after, {"required": ["b"]}]}
+    for left, right in product(allof_atoms, siblings):
+        for branches in ([left], [right, left], [left, right, left]):
+            yield {"allOf": [left, right]}, {"allOf": branches}
+        for branches in ([left, right], [right, left]):
+            yield {"allOf": [left]}, {"allOf": branches}
+        yield left, {"allOf": [left, right]}
+        yield left, {"allOf": [right]}
+        yield {"allOf": [left, right]}, left
+        yield {"allOf": [left]}, {}
+        for outer in ("anyOf", "oneOf"):
+            yield {outer: [{"allOf": [left]}, right]}, {outer: [{}, right]}
+            yield {outer: [{"allOf": [left, right]}, right]}, {outer: [{"allOf": [left]}, right]}
+            yield {outer: [{"allOf": [left]}, right]}, {outer: [{"allOf": [left, right]}, right]}
+            yield {outer: [left, right]}, {outer: [{"allOf": [left, right]}, right]}
+            yield {"allOf": [{outer: [left, right]}]}, {"allOf": [{outer: [left]}]}
+            yield {"allOf": [{outer: [left]}]}, {"allOf": [{outer: [left, right]}]}
+            yield {"allOf": [{outer: [left, right]}]}, {"allOf": [{}]}
+
+    # Independent same-keyword applicators in one allOf: adding, deleting or
+    # narrowing one conjunct while a sibling of the same keyword survives, and
+    # wrapping/unwrapping a bare applicator into allOf alongside a sibling.
+    conjuncts = [{"anyOf": [{"type": "string"}, {"type": "boolean"}]},
+                 {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+                 {"oneOf": [{"type": "string"}, {"type": "boolean"}]},
+                 {"oneOf": [{"type": "string"}, {"type": "integer"}]}]
+    for left, right in product(conjuncts, repeat=2):
+        yield {"allOf": [left, right]}, {"allOf": [left]}
+        yield {"allOf": [left]}, {"allOf": [left, right]}
+        yield {"allOf": [left, right]}, {"allOf": [right, left]}
+        yield left, {"allOf": [left, right]}
+        yield left, {"allOf": [right, left]}
+        yield {"allOf": [left, right]}, left
+        for keyword in ("anyOf", "oneOf"):
+            if keyword in right:
+                yield ({"allOf": [left, right]},
+                       {"allOf": [left, {keyword: right[keyword][:1]}]})
+            if keyword in left:
+                yield left, {"allOf": [{keyword: left[keyword][:1]}, right]}
+                yield {"allOf": [left, right]}, {keyword: left[keyword][:1]}
+
+    # Replace an alternative in one conjunct while a sibling can mask the
+    # old/new branch types at the flattened instance location.
+    type_atoms = [{"type": t} for t in ("null", "boolean", "integer", "string")]
+    for keyword, shared, old, new in product(("anyOf", "oneOf"), type_atoms, type_atoms, type_atoms):
+        sibling = {keyword: [old, new]}
+        yield ({"allOf": [sibling, {keyword: [shared, old]}]},
+               {"allOf": [sibling, {keyword: [shared, new]}]})
+    yield ({"allOf": [{"anyOf": [type_atoms[3], type_atoms[1]]},
+                      {"oneOf": [type_atoms[3], type_atoms[1]]},
+                      {"anyOf": [type_atoms[1], type_atoms[0]]}]},
+           {"anyOf": [type_atoms[3], type_atoms[0]]})
+
+    # if / then / else conditionals: selector edits, branch edits, adding/removing
+    # if/then/else, moving required names between root and then/else, and
+    # propertyNames enum changes inside branches.
+    def make_cond(if_s, then_s, else_s):
+        schema = {"if": if_s} if if_s is not None else {}
+        if then_s is not None:
+            schema["then"] = then_s
+        if else_s is not None:
+            schema["else"] = else_s
+        return schema
+
+    selectors = [
+        True,
+        False,
+        {"required": []},
+        {"required": ["a"]},
+        {"required": ["b"]},
+        {"required": ["a", "b"]},
+        {"type": "object"},
+        {"properties": {"a": {"type": "string"}}, "required": ["a"]},
+    ]
+    cond_branches = [
+        None,
+        True,
+        False,
+        {},
+        {"required": ["a"]},
+        {"required": ["b"]},
+        {"required": ["c"]},
+        {"required": ["b", "c"]},
+        {"type": "string"},
+        {"properties": {"a": {"type": "string"}}},
+        {"additionalProperties": False},
+        {"propertyNames": {"enum": ["a", "b"]}},
+        {"propertyNames": {"enum": ["a"]}},
+        {"allOf": [{"required": ["b"]}]},
+    ]
+    # Selector (`if`) edits with representative then/else pairs.
+    branch_pairs = [
+        (None, {"required": ["c"]}),
+        ({"required": ["b"]}, None),
+        ({"required": ["b"]}, {"required": ["c"]}),
+        ({"required": ["b"]}, {"type": "string"}),
+        ({"type": "string"}, {"required": ["c"]}),
+        ({"propertyNames": {"enum": ["a", "b"]}}, {"required": ["c"]}),
+        ({"allOf": [{"required": ["b"]}]}, {"required": ["c"]}),
+        (False, {"required": ["c"]}),
+    ]
+    for old_if, new_if in product(selectors, repeat=2):
+        for then_s, else_s in branch_pairs:
+            old_c = make_cond(old_if, then_s, else_s)
+            new_c = make_cond(new_if, then_s, else_s)
+            yield old_c, new_c
+            yield {"allOf": [old_c]}, {"allOf": [new_c]}
+            yield {"required": ["b"], "allOf": [old_c]}, {"required": ["b"], "allOf": [new_c]}
+            yield {"oneOf": [old_c, {"type": "string"}]}, {"oneOf": [new_c, {"type": "string"}]}
+
+    # Branch (`then` / `else`) edits including branch addition and removal.
+    for if_s in ({"required": ["a"]}, {"type": "object"}, True, False):
+        for old_b, new_b in product(cond_branches, repeat=2):
+            for other in (None, {"required": ["c"]}):
+                old_t = make_cond(if_s, old_b, other)
+                new_t = make_cond(if_s, new_b, other)
+                yield old_t, new_t
+                yield {"allOf": [old_t]}, {"allOf": [new_t]}
+                old_e = make_cond(if_s, other, old_b)
+                new_e = make_cond(if_s, other, new_b)
+                yield old_e, new_e
+                yield {"allOf": [old_e]}, {"allOf": [new_e]}
+
+    # Adding/removing `if` (with/without existing then/else) and adding/removing
+    # a whole conditional inside root, allOf, anyOf, oneOf.
+    sample_conds = [
+        make_cond({"required": ["a"]}, {"required": ["b"]}, None),
+        make_cond({"required": ["a"]}, None, {"required": ["c"]}),
+        make_cond({"required": ["a"]}, {"required": ["b"]}, {"required": ["c"]}),
+        make_cond({"required": ["a"]}, {"propertyNames": {"enum": ["a"]}}, {"type": "string"}),
+    ]
+    for cond in sample_conds:
+        without_if = {k: v for k, v in cond.items() if k != "if"}
+        for base in ({}, {"type": "object"}, without_if):
+            yield base, cond
+            yield cond, base
+            yield {"allOf": [base]}, {"allOf": [cond]}
+            yield {"allOf": [cond]}, {"allOf": [base]}
+            yield {"allOf": [{"required": ["a"]}]}, {"allOf": [{"required": ["a"]}, cond]}
+            yield {"allOf": [{"required": ["a"]}, cond]}, {"allOf": [{"required": ["a"]}]}
+            for outer in ("anyOf", "oneOf"):
+                yield {outer: [base, {"type": "string"}]}, {outer: [cond, {"type": "string"}]}
+                yield {outer: [cond, {"type": "string"}]}, {outer: [base, {"type": "string"}]}
+
+    # Moving a required name between root and then/else (both flat and allOf-wrapped).
+    req_sets = [[], ["b"], ["c"], ["b", "c"]]
+    for if_s in ({"required": ["a"]}, {"required": []}, True, {"type": "object"}):
+        for r_old, t_old, e_old in product(req_sets, req_sets, req_sets):
+            if r_old == t_old == e_old:
+                continue
+            for r_new, t_new, e_new in (
+                ([], sorted(set(t_old) | set(r_old)), e_old),
+                ([], t_old, sorted(set(e_old) | set(r_old))),
+                ([], sorted(set(t_old) | set(r_old)), sorted(set(e_old) | set(r_old))),
+                (sorted(set(r_old) | set(t_old)), [], e_old),
+                (sorted(set(r_old) | set(e_old)), t_old, []),
+                (sorted(set(r_old) | (set(t_old) & set(e_old))),
+                 sorted(set(t_old) - set(e_old)),
+                 sorted(set(e_old) - set(t_old))),
+            ):
+                yield (
+                    {"required": r_old, "if": if_s, "then": {"required": t_old}, "else": {"required": e_old}},
+                    {"required": r_new, "if": if_s, "then": {"required": t_new}, "else": {"required": e_new}},
+                )
+                yield (
+                    {"required": r_old, "allOf": [{"if": if_s, "then": {"required": t_old}, "else": {"required": e_old}}]},
+                    {"required": r_new, "allOf": [{"if": if_s, "then": {"required": t_new}, "else": {"required": e_new}}]},
+                )
+
+    # Multiple conditionals inside allOf (reordering, adding, removing).
+    c1 = {"if": {"required": ["a"]}, "then": {"required": ["b"]}, "else": {"required": ["c"]}}
+    c2 = {"if": {"required": ["b"]}, "then": {"propertyNames": {"enum": ["a", "b"]}}, "else": {"type": "object"}}
+    yield {"allOf": [c1, c2]}, {"allOf": [c2, c1]}
+    yield {"allOf": [c1]}, {"allOf": [c2, c1]}
+    yield {"allOf": [c1, c2]}, {"allOf": [c1]}
+
+    # Standalone propertyNames edits (root, allOf, oneOf).
+    prop_name_atoms = [{}, {"propertyNames": {"enum": ["a", "b"]}},
+                       {"propertyNames": {"enum": ["a"]}}, {"propertyNames": False}]
+    for old_pn, new_pn in product(prop_name_atoms, repeat=2):
+        yield old_pn, new_pn
+        yield {"allOf": [old_pn]}, {"allOf": [new_pn]}
+        yield {"oneOf": [old_pn, {"type": "string"}]}, {"oneOf": [new_pn, {"type": "string"}]}

@@ -11,8 +11,17 @@ fn error_payload(err: &OrbitError) -> Value {
     if let OrbitError::RemoteTool { payload, .. } = err {
         return payload.clone();
     }
+    let stored = err.mcp_error_message();
+    let reader = orbit_common::source_repair_reader_text(&stored);
+    let shown = reader
+        .as_ref()
+        .map(|text| text.line.as_str())
+        .unwrap_or(stored.as_str());
     let mut fields = err.wire_details();
     fields.insert("code".into(), json!(err.wire_code()));
-    fields.insert("message".into(), json!(err.to_string()));
+    fields.insert("message".into(), json!(shown));
+    if let Some(text) = reader.filter(|text| text.line != text.detail) {
+        fields.insert("detail".into(), json!(text.detail));
+    }
     Value::Object(fields)
 }

@@ -82,6 +82,26 @@ pub fn mark_process_as_pipeline_worker_binary() {
 /// `test-support` feature. Enable it only from `[dev-dependencies]`.
 #[cfg(feature = "test-support")]
 pub mod test_support {
+    /// Serve the production broker dispatch in an isolated test whose peer is the test process.
+    #[cfg(unix)]
+    pub fn start_test_run_broker(
+        runtime: &crate::OrbitRuntime,
+        run: orbit_engine::PluginBrokerRun,
+    ) -> Result<crate::runtime::plugin::broker::PluginBroker, orbit_common::OrbitError> {
+        use crate::runtime::plugin::broker::{PeerAnchor, PluginBroker};
+        let peer = orbit_common::process::ancestry::process_start_key(std::process::id())
+            .ok_or_else(|| orbit_common::OrbitError::Execution("test process has exited".into()))?;
+        let run_id = run.run_id.clone();
+        let dispatch = crate::adapter::command::RunDispatch::new(runtime.clone(), run);
+        let broker = PluginBroker::start(
+            &runtime.global_root(),
+            &run_id,
+            std::sync::Arc::new(dispatch),
+        )?;
+        broker.bind_anchor(PeerAnchor::Ancestor(peer));
+        Ok(broker)
+    }
+
     pub use crate::application::auto_tasks::completion_test_support::with_completion_adapter_run;
     /// Freeze source budget time in an isolated test process and its CLI children.
     pub use crate::application::automation::source::SOURCE_ELAPSED_ENV;
@@ -124,6 +144,12 @@ pub mod test_support {
         with_decision_answer_checkpoint, with_decision_dkim_resolver,
         with_decision_raise_checkpoint,
     };
+    /// Fail this thread's next plugin-manifest digest record as a store error.
+    pub use crate::application::tool_name_migration::plugin_manifest_publish_hook::fail_next_plugin_digest_upsert;
+    /// Fail this thread's next rollback after a plugin digest record fails.
+    pub use crate::application::tool_name_migration::plugin_manifest_publish_hook::fail_next_plugin_manifest_restore;
+    /// Run a competing plugin migration before this thread publishes a manifest.
+    pub use crate::application::tool_name_migration::plugin_manifest_publish_hook::with_plugin_manifest_publish_hook;
     /// Fail the next drain pass's release of its unadmitted gap-fit reservations.
     pub use crate::application::workspace_auto::with_reservation_release_failure;
     pub use crate::runtime::{
@@ -208,6 +234,7 @@ pub use application::search::{
 pub use application::task::LockContentionReport;
 pub use application::workflow::{CompletionPolicy, ShipMode, find_workflow, resolved_ship_mode};
 pub use application::workspace_auto::FleetReadinessFacts;
+pub use application::workspace_auto::{IDLE_WITH_WORK_DAYS, IdleWithWork};
 pub use application::workspace_live_runs::workspace_live_run_ids;
 pub use application::workspace_sync::{
     ManagedArtifactOutcome, ManagedArtifactScope, WorkspaceManagedArtifactSyncReport,

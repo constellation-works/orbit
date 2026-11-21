@@ -209,6 +209,39 @@ impl Fixture {
     }
 }
 
+/// A plugin whose group and tool descriptions run to several sentences. The
+/// group's first sentence is longer than a listing row may be; each second
+/// sentence is the part only `--help` should print. Written into the source's
+/// `.orbit-plugin/`.
+fn write_verbose_plugin(source: &Path) {
+    let root = write_shell_backend(
+        source,
+        "#!/bin/sh\nprintf '{\"ok\":true,\"output\":{}}\\n'\n",
+    );
+    std::fs::write(
+        root.join("plugin.yaml"),
+        r#"schemaVersion: 2
+kind: Plugin
+metadata:
+  name: verbose
+  version: 0.1.0
+  description: Verbose fixture whose first sentence runs well past the listing cap so that it is cut to one line. Its second sentence belongs to --help only.
+spec:
+  backend:
+    type: exec
+    command: bin/backend.sh
+  tools:
+    - name: inspect
+      description: Inspect one target and report what it finds. This second sentence belongs to --help only.
+      execution_kind: read_only
+      mcp_scope: workspace
+      input_schema:
+        type: object
+"#,
+    )
+    .expect("write manifest");
+}
+
 /// A plugin whose one tool's schema covers every shape the mapping names:
 /// string, integer, boolean, enum, array and a nested object. The backend
 /// echoes the input back, so the two spellings can be compared by result.
@@ -620,6 +653,96 @@ fn a_derived_group_is_the_same_operation_and_result_as_tool_run() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("unrecognized subcommand"));
+}
+
+/// Listings show one summary line per plugin group and verb: its first
+/// sentence, cut to the listing cap. `--help` keeps the full descriptions, and
+/// `orbit plugin show` prints the manifest description unchanged.
+#[cfg(unix)]
+#[test]
+fn plugin_listings_show_one_line_summaries_and_help_keeps_the_full_text() {
+    // The longest built-in root row (`orbit --help`, the `automation` row) is
+    // the bound a plugin's root row may not exceed.
+    const LONGEST_BUILT_IN_ROOT_DESCRIPTION: usize = 68;
+    const SECOND_SENTENCE: &str = "belongs to --help only";
+
+    let fixture = Fixture::new();
+    let source = fixture.source("verbose");
+    write_verbose_plugin(&source);
+    fixture.add(&source, &["--enable"]);
+
+    let stdout = |args: &[&str]| -> String {
+        let output = fixture
+            .orbit()
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        String::from_utf8(output).expect("help is UTF-8")
+    };
+
+    // Root help (piped, so rows do not wrap): one capped line for the group.
+    let root_help = stdout(&["--help"]);
+    assert!(
+        !root_help.contains(SECOND_SENTENCE),
+        "root help printed a plugin's full description:\n{root_help}"
+    );
+    let row = root_help
+        .lines()
+        .find_map(|line| line.trim_start().strip_prefix("verbose "))
+        .unwrap_or_else(|| panic!("no plugin row in root help:\n{root_help}"))
+        .trim();
+    assert!(
+        row.starts_with("Verbose fixture whose first sentence"),
+        "plugin row lost its first sentence: {row}"
+    );
+    assert!(
+        row.chars().count() <= LONGEST_BUILT_IN_ROOT_DESCRIPTION,
+        "plugin row is longer than the longest built-in row: {row}"
+    );
+
+    // `-h` on the group lists each verb on one summary line.
+    let group_short = stdout(&["verbose", "-h"]);
+    assert!(
+        !group_short.contains(SECOND_SENTENCE),
+        "group -h printed a full description:\n{group_short}"
+    );
+    assert!(
+        group_short.lines().any(|line| {
+            line.trim_start().starts_with("inspect")
+                && line.contains("Inspect one target and report what it finds.")
+        }),
+        "verb row missing its summary:\n{group_short}"
+    );
+
+    // `-h` on a verb shows the summary; `--help` still prints the full text.
+    let verb_short = stdout(&["verbose", "inspect", "-h"]);
+    assert!(verb_short.contains("Inspect one target and report what it finds."));
+    assert!(
+        !verb_short.contains(SECOND_SENTENCE),
+        "verb -h printed the full description:\n{verb_short}"
+    );
+    let verb_long = stdout(&["verbose", "inspect", "--help"]);
+    assert!(
+        verb_long.contains(SECOND_SENTENCE),
+        "verb --help dropped the full description:\n{verb_long}"
+    );
+    let group_long = stdout(&["verbose", "--help"]);
+    assert!(
+        group_long.contains("Its second sentence belongs to --help only."),
+        "group --help dropped the full description:\n{group_long}"
+    );
+
+    // The manifest's description is what `orbit plugin show` reports.
+    let shown = fixture.json(["plugin", "show", "verbose"]);
+    assert!(
+        shown
+            .to_string()
+            .contains("Its second sentence belongs to --help only."),
+        "plugin show lost the manifest description: {shown}"
+    );
 }
 
 #[cfg(unix)]

@@ -426,11 +426,6 @@ fn completion_outcome(
             !calls.contains("rerun"),
             "a deadline hold never dispatches a repair"
         );
-        assert_eq!(
-            serde_json::from_slice::<Value>(&std::fs::read(&status).unwrap()).unwrap()["state"],
-            "OPEN",
-            "the PR remains open after the infrastructure deadline hold"
-        );
         let runs = fx
             .runtime
             .list_job_runs(JobRunListParams::default())

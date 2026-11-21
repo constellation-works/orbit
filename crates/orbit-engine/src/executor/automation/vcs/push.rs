@@ -24,7 +24,7 @@ use super::handoff::{
     record_failed_handoff,
 };
 use super::operations;
-use super::pr::{PrMergeState, classify_pr_state, read_pr_status};
+use super::pr_answers::{PrMergeState, classify_pr_state, read_pr_status};
 use super::remote_probe::{RemoteBranchProbe, pre_push_remote_branch};
 
 pub(in crate::executor::automation) fn push_batch_changes<H: RuntimeHost + ?Sized>(
@@ -296,13 +296,35 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
                 .map_or_else(|| "missing".to_string(), |sha| format!("at {sha}"))
         )));
     }
-    let decision = push_decision(
+    let mut decision = push_decision(
         workspace_path,
         &push_url,
         &branch,
         &local_sha,
         remote_sha.as_deref(),
     )?;
+    // A local delivery publishes its base after other hosts may have pushed
+    // to it. With `integrate_remote` the moved remote is merged into the local
+    // base (history only grows, recorded shas stay reachable) and the push
+    // then fast-forwards; otherwise it is refused as below.
+    let mut local_sha = local_sha;
+    let mut integrated_remote = false;
+    if input.get("integrate_remote").and_then(Value::as_bool) == Some(true)
+        && matches!(decision, PushDecision::RemoteAhead | PushDecision::Diverged)
+        && let Some(observed) = remote_sha.as_deref()
+    {
+        let repo_root = canonicalize_existing_dir(&host.repo_root()?, "repo_root")?;
+        super::worktree::merge_remote_head_into_base(&repo_root, &branch, observed)?;
+        integrated_remote = true;
+        local_sha = commit_sha(workspace_path, &branch)?;
+        decision = push_decision(
+            workspace_path,
+            &push_url,
+            &branch,
+            &local_sha,
+            remote_sha.as_deref(),
+        )?;
+    }
     let (label, force_with_lease) = match decision {
         PushDecision::Missing => ("performed_create", false),
         PushDecision::Current => {
@@ -362,6 +384,7 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
         force_with_lease,
         &probe,
     );
+    output["integrated_remote"] = json!(integrated_remote);
     // What the transient retries cost, for the run's step record.
     output["push_attempts"] = pushed.get("attempts").cloned().unwrap_or(json!(1));
     output["push_waited_ms"] = pushed.get("waited_ms").cloned().unwrap_or(json!(0));

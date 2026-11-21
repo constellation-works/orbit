@@ -32,6 +32,7 @@ mod draw;
 #[cfg(feature = "test-support")]
 mod draw_quantile;
 mod host_os_wait;
+mod model_access;
 mod purpose;
 #[cfg(feature = "test-support")]
 mod selection_checkpoint;
@@ -49,6 +50,7 @@ pub(crate) use draw::{
 };
 #[cfg(feature = "test-support")]
 pub use draw_quantile::with_crew_draw_quantile;
+pub(crate) use model_access::{MUSE_MODEL_REFUSAL_WINDOW_HOURS, is_muse_crew};
 #[cfg(feature = "test-support")]
 pub use selection_checkpoint::with_crew_selection_checkpoint;
 pub(crate) use types::CapturedCrewPools;
@@ -74,11 +76,11 @@ impl crate::OrbitRuntime {
             .filter(|entry| entry.weight > 0)
             .map(|entry| entry.name.clone())
             .collect::<std::collections::BTreeSet<_>>();
-        let settings = self.context.settings();
-        for (task_type, tier, entries) in settings.type_complexity_crews().iter() {
+        let crew_settings = self.admission_crew_settings();
+        for (task_type, tier, entries) in crew_settings.type_complexity_crews.iter() {
             let pool = orbit_config::canonical_crew_pool(
                 entries,
-                settings.crews(),
+                &crew_settings.crews,
                 &orbit_config::type_complexity_crews_key(task_type, tier),
             )?;
             names.extend(

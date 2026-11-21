@@ -75,9 +75,9 @@ pub(crate) fn recover_auto_task(
         let state = store
             .automation_state(&consumer)?
             .ok_or_else(|| OrbitError::InvalidInput("unknown delivery consumer".into()))?;
-        let receipts = store.automation_receipts(&consumer, 100)?;
+        let receipts = store.automation_receipt_count(&consumer)?;
         let (mut page, record) = source
-            .replay_history(&trigger.branch, &state, receipts.len())
+            .replay_history(&trigger.branch, &state, receipts)
             .map_err(automation_error_to_orbit)?;
         // Replayed deliveries are attributed exactly as observed ones are.
         super::provider::attribute(runtime, &mut page.deliveries)

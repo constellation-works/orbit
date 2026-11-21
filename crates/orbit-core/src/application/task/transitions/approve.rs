@@ -1,10 +1,25 @@
 use super::*;
 
-/// What an approval runs on other records once its task lock is released.
-#[must_use = "an approval's deferred effects must run after the caller's task lock"]
+/// What an approval or a decision-answered rejection runs on other records
+/// once its task lock is released.
+#[must_use = "a transition's deferred effects must run after the caller's task lock"]
 pub(crate) struct DeferredApprovalEffects {
+    /// The status the written transition left.
+    previous: TaskStatus,
     task: Task,
     note: Option<String>,
+}
+
+impl DeferredApprovalEffects {
+    /// The pull-request closure a rejection of `task` from `previous` owes
+    /// once its caller releases the task lock.
+    pub(crate) fn after_rejection(previous: TaskStatus, task: Task, reason: String) -> Self {
+        Self {
+            previous,
+            task,
+            note: Some(reason),
+        }
+    }
 }
 
 /// The caller-supplied parts of an approval, shared by the locked and
@@ -169,14 +184,24 @@ impl OrbitRuntime {
         )
     }
 
-    /// Run the effects an approval deferred until its caller released the
-    /// task lock: resolves bookkeeping and PR closure for a review approval.
+    /// Run the effects a transition deferred until its caller released the
+    /// task lock: resolves bookkeeping and PR closure for a review approval,
+    /// PR closure for a rejection.
     pub(crate) fn run_deferred_approval_effects(&self, effects: DeferredApprovalEffects) {
-        let DeferredApprovalEffects { task, note } = effects;
-        if task.status == TaskStatus::Done {
-            self.record_resolves_side_effects(TaskStatus::Review, &task);
-            // Approval to done only ever leaves `review`.
-            self.close_task_prs_after_transition(TaskStatus::Review, &task, note.as_deref());
+        let DeferredApprovalEffects {
+            previous,
+            task,
+            note,
+        } = effects;
+        match task.status {
+            TaskStatus::Done => {
+                self.record_resolves_side_effects(previous, &task);
+                self.close_task_prs_after_transition(previous, &task, note.as_deref());
+            }
+            TaskStatus::Rejected => {
+                self.close_task_prs_after_transition(previous, &task, note.as_deref());
+            }
+            _ => {}
         }
     }
 
@@ -264,6 +289,9 @@ impl OrbitRuntime {
             }
         })?;
         let effects = DeferredApprovalEffects {
+            // Approval to done only ever leaves `review`; an approval to
+            // backlog has no deferred effects.
+            previous: TaskStatus::Review,
             task: result.clone(),
             note,
         };

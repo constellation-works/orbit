@@ -1,7 +1,7 @@
 // Orbit dashboard task pane: the pane render, its head, the resizer and the
 // keyboard navigation around it.
 
-import { el, getWorkspace, hostWriteRefusal, makeCopyButton, syncNodes } from './common.js';
+import { el, escCloseButton, getWorkspace, hostWriteRefusal, makeCopyButton, syncNodes } from './common.js';
 import { $, taskState } from './task-shared.js';
 import * as taskShared from './task-shared.js';
 import { closeTaskPane, filterTasks, focusTaskRow, openTaskPage, revealTaskRow, selectTask, stopRowInteraction } from './task-nav.js';
@@ -15,7 +15,7 @@ import { buildRelationRow, drainDependencyIds, relationTargets } from './task-re
 import * as taskReadiness from './task-readiness.js';
 import * as taskComments from './task-comments.js';
 import * as taskFields from './task-fields.js';
-import { retainDecisionNotes, retireClosedDecisionCards } from './task-decision.js';
+import { decisionAnswerSignature, refreshDecisionAnswerFeedback, retainDecisionNotes, retireClosedDecisionCards } from './task-decision.js';
 
 // A detail kept for an open draft can refresh its read-only readiness and
 // selector displays without touching the editor holding that draft.
@@ -31,6 +31,7 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
   refreshFixPrControls(wrap, task, context);
   taskFields.refreshFieldCells(wrap, readinessTask);
   taskReadiness.refreshOperatorRecordFeedback(wrap, task);
+  refreshDecisionAnswerFeedback(wrap, task, context);
   if (Array.isArray(readinessTask.context_files)) {
     const count = wrap.querySelector(`#detail-${task.id}-tab-context_files .detail-tab-count`);
     if (count) count.textContent = String(readinessTask.context_files.length);
@@ -128,6 +129,10 @@ function refreshDraftComplexityControl(wrap, task, context) {
   const newFeedback = refreshed.querySelector(":scope > .mutation-feedback");
   if (newFeedback) control.appendChild(newFeedback);
 }
+function taskActionSignature(task) {
+  return [pilotSignature(task), triageSignature(task), recoverySignature(task)].join("|");
+}
+
 // The pinned resolver result shares the normal detail's crew control. Only
 // the dock needs the outside-the-list note; full-page CSS hides that box. A
 // task the filter matches is only further down its section than the rows
@@ -149,7 +154,7 @@ function buildPinnedTask(ptask, context) {
   const wrap = el("div", { class: "pinned-task-wrap" }, [row, detail]);
   wrap.teardown = () => taskComments.disconnectCommentCards(wrap);
   wrap.dataset.key = `pinned-${taskShared.taskDispatchIdentity(ptask)}`;
-  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask)}-${fixPrSignature(ptask)}-${taskReadiness.operatorRecordSignature(ptask)}`;
+  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask)}-${taskActionSignature(ptask)}-${fixPrSignature(ptask)}-${taskReadiness.operatorRecordSignature(ptask)}-${decisionAnswerSignature(ptask)}`;
   return wrap;
 }
 /* ORB-11655: a comment or reject form, or an open field editor (ORB-12235),
@@ -244,7 +249,7 @@ function buildListTaskDetail(t, drafts, existing, context) {
   // its read state instead; a detail rendered from the cached projection must
   // not be rebuilt just because a refresh has a read in flight.
   const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t)}-${taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(t))}-${pilotSignature(t)}-${triageSignature(t)}-${recoverySignature(t)}-${taskReadiness.operatorRecordSignature(t)}-${fixPrSignature(t)}-${hostWriteRefusal()}`;
+  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t)}-${taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(t))}-${taskActionSignature(t)}-${taskReadiness.operatorRecordSignature(t)}-${decisionAnswerSignature(state.task || t)}-${fixPrSignature(t)}-${hostWriteRefusal()}`;
   const detailHash = `${baseHash}-${taskDrainSignature(drain)}`;
   const existingDetail = existing.get(key);
   if (existingDetail && existingDetail.dataset.hash === detailHash) return existingDetail;
@@ -270,35 +275,28 @@ function buildListTaskDetail(t, drafts, existing, context) {
 }
 function buildPaneHead(task, pinned, context) {
   const page = taskState.taskPageId === task.id;
-  const back = page ? el("button", {
-    class: "action task-pane-back",
-    type: "button",
-    text: "Back to list",
-    title: "Back to the task list at this task (Esc)",
+  const back = page ? escCloseButton("Close task page (Esc)", {
+    description: "Back to the task list at this task",
+    onClick: () => closeTaskPane(context, { forget: true }),
   }) : null;
-  if (back) back.addEventListener("click", () => closeTaskPane(context, { forget: true }));
-  // Icon buttons: the glyph is CSS, the accessible name is the label.
+  // Open full page stays an icon. Close is the shared "esc" control (R44).
   const full = page ? null : el("button", {
     class: "task-pane-icon task-pane-full",
     type: "button",
-    title: "Open full page (Enter on its row)",
+    "aria-description": "Open full page (Enter on its row)",
     "aria-label": "Open full page",
   });
   if (full) full.addEventListener("click", () => openTaskPage(task.id, context));
-  const close = page ? null : el("button", {
-    class: "task-pane-icon task-pane-close",
-    type: "button",
-    title: "Close (Esc)",
-    "aria-label": "Close task detail",
+  const close = page ? null : escCloseButton("Close task details (Esc)", {
+    onClick: () => closeTaskPane(context, { forget: true }),
   });
-  if (close) close.addEventListener("click", () => closeTaskPane(context, { forget: true }));
   const key = `pane-head-${task.id}`;
   // The head carries only the id and title; status, crew, run and dates live in
   // the detail's Details section, which edits them.
   const baseHash = `${task.id}-${task.title}-${pinned}-${page}`;
   const title = el("h2", { class: "task-pane-title", id: "task-pane-title", text: task.title || task.id });
   title.tabIndex = -1;
-  const id = makeCopyButton(task.id, { class: "id mono", title: "Copy task ID" });
+  const id = makeCopyButton(task.id, { class: "id mono", description: "Copy task ID" });
   const spacer = el("span", { class: "task-pane-spacer" });
   const head = el("div", { class: "task-pane-head" }, [
     el("div", { class: "task-pane-bar" }, page
@@ -313,9 +311,11 @@ function buildPaneHead(task, pinned, context) {
 }
 // A full page whose task is still being read, or could not be.
 function buildTaskPagePlaceholder(context) {
-  const back = el("button", { class: "action task-pane-back", type: "button", text: "Back to list" });
-  back.addEventListener("click", () => closeTaskPane(context));
-  const id = makeCopyButton(taskState.taskPageId, { class: "id mono", title: "Copy task ID" });
+  const back = escCloseButton("Close task page (Esc)", {
+    description: "Back to the task list at this task",
+    onClick: () => closeTaskPane(context),
+  });
+  const id = makeCopyButton(taskState.taskPageId, { class: "id mono", description: "Copy task ID" });
   const note = el("p", {
     class: taskState.taskPageError ? "panel-placeholder action-error" : "panel-placeholder",
     text: taskState.taskPageError || `Loading ${taskState.taskPageId}…`,

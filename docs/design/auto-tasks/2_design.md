@@ -1,7 +1,7 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-11-08
+last_updated: 2026-11-20
 last_validated: 2026-11-08
 status: Accepted
 feature: auto-tasks
@@ -906,5 +906,6 @@ accurate.
 - [ORB-15327] — shipped the generic `qa-full-sweep` default auto-task.
 - [ORB-20704] — demoted eight unproven defaults and made proven yield the
   condition for shipping a default.
+- [ORB-23047] — made dashboard operator authority the server's `--operator` flag, not the browser, the server terminal, or `ORBIT_OPERATOR`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

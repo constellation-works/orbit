@@ -11,6 +11,7 @@
                                 "delay": <seconds>,
                                 "hold": <bool>,
                                 "bind_gate": <"first" or "every" or null>,
+                                "fail_first_spawn_bind": <bool>,
                                 "bind_delay": <seconds>}}}
 
 Every invocation first appends one JSON line to `log`: its pid, its mode
@@ -25,6 +26,9 @@ host), the host, the remote command and the full argv. Then:
   `<release>-<pid>` exists. Tests take the selected port before releasing it,
   without choosing a scheduler delay. Bind syscall results (pid, mode, port,
   errno and parent) are recorded separately in `bind-events.jsonl`;
+- `fail_first_spawn_bind` makes the first spawn-mode invocation report the
+  exact local bind failure OpenSSH reports with `ExitOnForwardFailure=yes`
+  and exit 255 before binding, running its LocalCommand or proxying;
 - otherwise it sleeps `bind_delay` seconds (authentication), then binds the
   `-L` listener. When the port is taken it exits 255 at once, as ssh does
   with `ExitOnForwardFailure=yes`. Once bound it runs `-o LocalCommand`
@@ -40,6 +44,7 @@ failed test cannot leak it.
 monotonic timestamps. Callers print this evidence before cleaning up a failed
 fixture; an absent child entry must not be confused with an identity timeout.
 """
+import errno
 import json
 import os
 import socket
@@ -106,6 +111,21 @@ def main():
         phase("bind_gate")
         wait_for(Path(config["release"] + f"-{os.getpid()}"))
     target = host_config.get(record["mode"])
+    if record["mode"] == "spawn" and host_config.get("fail_first_spawn_bind"):
+        try:
+            (Path(sys.argv[0]).resolve().parent / "spawn-bind-claimed").touch(
+                exist_ok=False
+            )
+        except FileExistsError:
+            pass
+        else:
+            phase("bind_failed", port=local_port, errno=errno.EADDRINUSE)
+            bind_event(config, record, local_port, errno.EADDRINUSE)
+            sys.stderr.write(
+                f"bind [127.0.0.1]:{local_port}: Address already in use\n"
+                "Could not request local forwarding.\n"
+            )
+            sys.exit(255)
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:

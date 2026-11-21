@@ -20,7 +20,7 @@ fn input() -> serde_json::Value {
         "auto_crew_pools": {
             "hard": {
                 "crews": [{"name": CREW, "weight": 1}],
-                "source": "test"
+                "source": "run_input.hard_complexity_crews"
             }
         }
     })

@@ -6,7 +6,10 @@
 //! and for good when its pull request is no longer open, its task moved on or
 //! was deleted, it never opened one, or it is itself an interrupted resume.
 //! A typed base-chase hold is adopted even on a resumed attempt; other holds
-//! stay parked. One run's store error, an unreachable forge (read once per pass) and an
+//! stay parked. A run that ran as a claimed execution (a local pull admission
+//! indexed by run, or an execution claim bound to it) is never adopted: its
+//! release keeps the pull request for the task's next claim. One run's store
+//! error, an unreadable claim, an unreachable forge (read once per pass) and an
 //! unloadable activity catalog defer instead of deciding, and nothing is
 //! adopted under host resource pressure.
 //!
@@ -30,7 +33,9 @@ use orbit_core::runtime::task_pr_forge::{
 };
 use orbit_core::{OrbitRuntime, TaskStatus};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
-use orbit_store::contracts::{JobRunStepParams, JobRunStoreBackend};
+use orbit_store::contracts::{
+    ExecutionClaimPhase, JobRunStepParams, JobRunStoreBackend, LocalPullPhase,
+};
 use orbit_tools::ToolContext;
 use orbit_types::task::ExternalRef;
 use orbit_types::workflow::{
@@ -658,6 +663,136 @@ fn host_resource_pressure_holds_adoption() {
     assert_eq!(fx.forge.0.lock().unwrap().reads, 0, "{pass}");
 }
 
+fn a_claimed_executions_leaf_is_never_adopted() {
+    let fx = Fixture::new();
+    let (_, run, head) = fx.dead_leaf(Some(81));
+    fx.forge.open(81, &head);
+    // The leaf ran as a claimed follower: its local pull is indexed by run.
+    super::attention_observation::seed_local_pull(
+        &fx.runtime,
+        &run,
+        LocalPullPhase::Launched,
+        "pull-81",
+    );
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "done", true);
+    assert_eq!(pass["adopted"], json!([]), "{pass}");
+    assert_eq!(
+        skipped_reason(&pass, &run),
+        Some(("claimed_execution".to_string(), true)),
+        "{pass}"
+    );
+    assert!(fx.retries(&run).is_empty(), "a claimed leaf is not resumed");
+
+    let again = fx.pass(&drain, "done", true);
+    assert_eq!(again["adopted"], json!([]), "{again}");
+    assert!(fx.retries(&run).is_empty(), "a later pass adopts nothing");
+}
+
+fn a_claim_bound_leaf_is_skipped_while_an_unclaimed_leaf_in_the_same_pass_is_adopted() {
+    let fx = Fixture::new();
+    let (claimed_task, claimed, claimed_head) = fx.dead_leaf(Some(82));
+    let (_, unclaimed, unclaimed_head) = fx.dead_leaf(Some(83));
+    fx.forge.open(82, &claimed_head);
+    fx.forge.open(83, &unclaimed_head);
+    // No local pull: only an execution claim is bound to the first run.
+    super::attention_observation::seed_bound_claim(
+        &fx.runtime,
+        &claimed_task,
+        &claimed,
+        ExecutionClaimPhase::Running,
+        "exec-m",
+    );
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "done", true);
+    assert_eq!(
+        skipped_reason(&pass, &claimed),
+        Some(("claimed_execution".to_string(), true)),
+        "{pass}"
+    );
+    assert_eq!(skipped_reason(&pass, &unclaimed), None, "{pass}");
+    let entries = pass["adopted"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "{pass}");
+    assert_eq!(entries[0]["source_run_id"], unclaimed, "{pass}");
+    assert!(
+        fx.retries(&claimed).is_empty(),
+        "a claimed leaf is not resumed"
+    );
+    assert_eq!(fx.retries(&unclaimed).len(), 1, "{pass}");
+
+    let again = fx.pass(&drain, "done", true);
+    assert_eq!(again["adopted"], json!([]), "{again}");
+    assert!(fx.retries(&claimed).is_empty());
+    assert_eq!(fx.retries(&unclaimed).len(), 1, "adopted exactly once");
+}
+
+fn an_unreadable_claim_defers_the_run_instead_of_reading_it_as_unclaimed() {
+    let fx = Fixture::new();
+    let (other_task, other, other_head) = fx.dead_leaf(Some(84));
+    fx.forge.open(84, &other_head);
+    let (_, run, head) = fx.dead_leaf(Some(85));
+    fx.forge.open(85, &head);
+    super::attention_observation::seed_bound_claim(
+        &fx.runtime,
+        &other_task,
+        &other,
+        ExecutionClaimPhase::Running,
+        "exec-m",
+    );
+    let store = fx.runtime.sqlite_store().unwrap();
+    let claim_payload: String = store
+        .connection()
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT payload_json FROM task_coordination_rows \
+             WHERE kind = 'distributed-execution-claim-v1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let set_claim_payload = |payload: &str| {
+        store
+            .connection()
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE task_coordination_rows SET payload_json = ?1 \
+                 WHERE kind = 'distributed-execution-claim-v1'",
+                rusqlite::params![payload],
+            )
+            .unwrap();
+    };
+    set_claim_payload("{}");
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "done", true);
+    assert_eq!(pass["adopted"], json!([]), "{pass}");
+    assert_eq!(
+        skipped_reason(&pass, &run),
+        Some(("store_unreadable".to_string(), false)),
+        "{pass}"
+    );
+    assert!(
+        fx.retries(&run).is_empty(),
+        "an unreadable claim is not 'unclaimed'"
+    );
+
+    // Deferred, not decided: once the claim reads again, the pass answers.
+    set_claim_payload(&claim_payload);
+    let fixed = fx.pass(&drain, "done", true);
+    assert_eq!(
+        skipped_reason(&fixed, &other),
+        Some(("claimed_execution".to_string(), true)),
+        "{fixed}"
+    );
+    assert_eq!(fixed["adopted"].as_array().unwrap().len(), 1, "{fixed}");
+    assert_eq!(fixed["adopted"][0]["source_run_id"], run, "{fixed}");
+    assert!(fx.retries(&other).is_empty());
+}
+
 crate::scenario_table!(
     orphan_adoption_scenarios,
     a_dead_leafs_open_pull_request_is_adopted_once_by_a_drain_holding_its_authority,
@@ -668,4 +803,7 @@ crate::scenario_table!(
     an_unreachable_forge_is_read_once_per_pass_and_defers_every_run,
     an_unloadable_activity_catalog_defers_instead_of_deciding,
     host_resource_pressure_holds_adoption,
+    a_claimed_executions_leaf_is_never_adopted,
+    a_claim_bound_leaf_is_skipped_while_an_unclaimed_leaf_in_the_same_pass_is_adopted,
+    an_unreadable_claim_defers_the_run_instead_of_reading_it_as_unclaimed,
 );

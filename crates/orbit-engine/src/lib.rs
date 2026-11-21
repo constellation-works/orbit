@@ -55,6 +55,7 @@ pub mod test_support {
 mod condition;
 mod context;
 mod executor;
+mod sandbox_spawn;
 mod template;
 
 #[cfg(test)]
@@ -70,21 +71,23 @@ pub use activity_job::{
 };
 pub use context::{
     AGENT_STALL_MINUTES, AutoTaskAdmission, AutoTaskObservation, AutoTaskReadiness,
-    AutoTaskStepRequest, ClaimExecutionContext, CompletionObservationAdmission, CrewConfig,
-    FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
-    FinalRecoveryApplied, GeneratedPath, HandoffLandingContext, HandoffLandingStep,
-    HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun,
-    PrAutoFixAdmission, PrAutoFixRequest, PrConfig, RebaseRecoveryAttemptScope,
-    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
-    ReviewReportCorrectionRequest, ReviewerInvocationRequest, RuntimeHost,
-    STEP_RECOVERY_DECISION_SCHEMA_VERSION, ScratchGcEntry, ScratchGcReport, ScriptStepEnd,
-    ScriptStepOutputs, ScriptStepRan, ScriptStepRequest, ScriptStepRun, SteeringGateReading,
-    SteeringRoundAdmission, StepRecoveryAdmission, StepRecoveryDecisionRead,
-    StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, StepRecoveryVerdict, TaskActivityUpdate,
-    TaskAutomationUpdate, UnlockedPathValidation, ValidatedTree, WORKFLOW_RUN_FAILED_EVENT,
-    WORKFLOW_RUN_INTERRUPTED_EVENT, WORKTREE_PARKED_RECLAIM_AFTER_HOURS, WorktreeGcTaskLookup,
-    baseline_red_hold_update, blocked_workflow_failure_update,
-    blocked_workflow_interruption_update, blocked_workflow_owner_signoff_update,
+    AutoTaskStepRequest, ClaimExecutionContext, CompletionObservationAdmission,
+    CompletionOwnerLiveness, CrewConfig, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
+    FinalRecoveryApplication, FinalRecoveryApplied, GeneratedPath, HandoffLandingContext,
+    HandoffLandingStep, HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle,
+    PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig,
+    PublishedCompletionObservation, RebaseRecoveryAttemptScope, ResolvedActivityTools,
+    ReviewLandingRequest, ReviewReleaseRequest, ReviewReportCorrectionRequest,
+    ReviewerInvocationRequest, RuntimeHost, STEP_RECOVERY_DECISION_SCHEMA_VERSION, ScratchGcEntry,
+    ScratchGcReport, ScriptStepEnd, ScriptStepOutputs, ScriptStepRan, ScriptStepRequest,
+    ScriptStepRun, SteeringGateReading, SteeringRoundAdmission, StepRecoveryAdmission,
+    StepRecoveryDecisionRead, StepRecoveryDecisionRequest, StepRecoveryDecisionSlot,
+    StepRecoveryVerdict, TaskActivityUpdate, TaskAutomationUpdate, UnlockedPathValidation,
+    ValidatedTree, WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT,
+    WORKTREE_PARKED_RECLAIM_AFTER_HOURS, WorktreeGcTaskLookup,
+    admit_published_completion_observation, baseline_red_hold_update,
+    blocked_workflow_failure_update, blocked_workflow_interruption_update,
+    blocked_workflow_owner_signoff_update,
 };
 pub use executor::automation::ci::log_signature as ci_log_signature;
 pub use executor::automation::ci::run_event as ci_run_event;
@@ -99,14 +102,16 @@ pub use executor::automation::vcs::landing_wait_gate_cleared;
 pub use executor::automation::vcs::review_gate;
 pub use executor::automation::vcs::run_private_operation as run_private_vcs_operation;
 pub use executor::automation::vcs::{
-    BaselineHoldStatus, ClaimedKnownRed, KnownRedUnconfirmed, PullRequestStatus,
+    BaselineHoldStatus, CheckState, ClaimedKnownRed, KnownRedUnconfirmed, PullRequestStatus,
     WORKTREE_IDENTITY_INPUT_KEYS, WorktreeGcOptions, WorktreeGcRecovery, WorktreeGcResult,
-    WorktreeReclaimReport, baseline_hold_status, collect_worktrees, fetch_remote_base,
-    judge_light_delivery, judge_light_delivery_with_key, recorded_baseline_hold_status,
-    review_skip_decision, run_deferral_probe, run_review_skip_guard,
-    run_worktree_has_reclaim_output, run_worktree_paths, validate_claim_new_paths,
-    verify_claimed_known_red, verify_claimed_known_red_base,
+    WorktreeReclaimReport, baseline_hold_status, classify_rollup_context, collect_worktrees,
+    compose_squash_merge_message, fetch_remote_base, judge_light_delivery,
+    judge_light_delivery_with_key, recorded_baseline_hold_status, review_skip_decision,
+    run_deferral_probe, run_review_skip_guard, run_worktree_has_reclaim_output, run_worktree_paths,
+    validate_claim_new_paths, verify_claimed_known_red, verify_claimed_known_red_base,
 };
 pub use orbit_agent::provider_supports_continuity;
 
-pub use executor::automation::vcs::completion_hold::candidate_completion_hold;
+pub use executor::automation::vcs::completion_hold::{
+    candidate_commit_completion_hold, candidate_completion_hold,
+};

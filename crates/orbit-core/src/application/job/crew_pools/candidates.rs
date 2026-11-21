@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use orbit_common::OrbitError;
 use orbit_config::{
     CrewPoolEntry, canonical_crew_pool, canonical_crew_pool_entries, executor_host_os,
@@ -20,6 +22,7 @@ use super::draw::{
     complexity_crews_key, permitted_candidates, pools_from_input, seeded_crew_ticket,
     sole_candidate, weighted_candidates, weighted_draw,
 };
+use super::model_access::{MuseModelRefusals, is_muse_crew, model_access_hold};
 use super::purpose::task_crew_purpose;
 use super::types::{COMPLEXITIES, CapturedCrewPool, CapturedCrewPools, POOLS_KEY};
 
@@ -28,6 +31,7 @@ impl OrbitRuntime {
         &self,
         input: &Value,
     ) -> Result<CapturedCrewPools, OrbitError> {
+        let crew_settings = self.admission_crew_settings();
         COMPLEXITIES
             .into_iter()
             .map(|complexity| {
@@ -42,19 +46,18 @@ impl OrbitRuntime {
                         format!("run_input.{key}"),
                     ),
                     None => (
-                        self.context
-                            .settings()
-                            .complexity_crews()
+                        crew_settings
+                            .complexity_crews
                             .pool(complexity)
                             .unwrap_or_default()
                             .to_vec(),
                         format!("workflow.{key}"),
                     ),
                 };
-                let pool = canonical_crew_pool(&names, self.context.settings().crews(), &source)?;
+                let pool = canonical_crew_pool(&names, &crew_settings.crews, &source)?;
                 // A run override is admitted like the configured pool: an
                 // `@auto` member needs bands for its crew.
-                let policy = self.context.settings().auto_effort();
+                let policy = &crew_settings.auto_effort;
                 if let Some(base) = pool.entries.iter().find_map(|entry| {
                     orbit_types::identity::auto_effort_base(&entry.name)
                         .filter(|base| policy.bands(base).is_none())
@@ -102,10 +105,10 @@ impl OrbitRuntime {
                 );
             }
         }
-        let settings = self.context.settings();
-        for (task_type, tier, names) in settings.type_complexity_crews().iter() {
+        let crew_settings = self.admission_crew_settings();
+        for (task_type, tier, names) in crew_settings.type_complexity_crews.iter() {
             let key = orbit_config::type_complexity_crews_key(task_type, tier);
-            if let Ok(pool) = canonical_crew_pool(names, settings.crews(), &key) {
+            if let Ok(pool) = canonical_crew_pool(names, &crew_settings.crews, &key) {
                 pools.insert(
                     CrewSource::Type {
                         task_type: task_type.to_string(),
@@ -117,11 +120,12 @@ impl OrbitRuntime {
             }
         }
         for purpose in orbit_types::workflow::CrewPurpose::ALL {
-            let names = settings.purpose_crews().pool(purpose);
+            let names = crew_settings.purpose_crews.pool(purpose);
             if names.is_empty() {
                 continue;
             }
-            if let Ok(pool) = canonical_crew_pool(names, settings.crews(), purpose.config_key()) {
+            if let Ok(pool) = canonical_crew_pool(names, &crew_settings.crews, purpose.config_key())
+            {
                 pools.insert(
                     CrewSource::Purpose(purpose.as_str().to_string()).to_string(),
                     pool.entries.into_iter().map(|entry| entry.name).collect(),
@@ -131,7 +135,61 @@ impl OrbitRuntime {
         pools
     }
 
-    /// Classifiers use the coordinator's frozen policy, including CLI overrides.
+    /// `frozen` pools as a running drain admits with them now: every tier a
+    /// launch captured from `workflow.<tier>_complexity_crews` is read again
+    /// from the current configuration, so a crew removed from a pool stops
+    /// being drawn and a crew added becomes drawable at the drain's next
+    /// admission. A tier the launch took from a run override
+    /// (`run_input.<tier>_complexity_crews`) stays as launched, and so does
+    /// everything when no pools were captured or the configuration cannot be
+    /// read (logged). A change from the frozen pool is logged per tier.
+    pub(super) fn refresh_auto_crew_pools(&self, frozen: CapturedCrewPools) -> CapturedCrewPools {
+        if frozen.is_empty() {
+            return frozen;
+        }
+        let live = match self.capture_auto_crew_pools(&Value::Null) {
+            Ok(live) => live,
+            Err(error) => {
+                tracing::warn!(
+                    "could not read the current crew pools; admitting with the pools captured \
+                     at launch: {error}"
+                );
+                return frozen;
+            }
+        };
+        let names = |pool: &CapturedCrewPool| {
+            pool.crews
+                .iter()
+                .map(|entry| entry.name.clone())
+                .collect::<BTreeSet<_>>()
+        };
+        let mut pools = frozen;
+        for (tier, current) in live {
+            if let Some(launched) = pools.get(&tier)
+                && launched.source.starts_with("run_input.")
+            {
+                continue;
+            }
+            if let Some(launched) = pools.get(&tier) {
+                let (before, after) = (names(launched), names(&current));
+                if before != after {
+                    tracing::info!(
+                        tier = %tier,
+                        source = %current.source,
+                        removed = ?before.difference(&after).collect::<Vec<_>>(),
+                        added = ?after.difference(&before).collect::<Vec<_>>(),
+                        "crew pool changed since the run captured it; admitting with the \
+                         current configuration"
+                    );
+                }
+            }
+            pools.insert(tier, current);
+        }
+        pools
+    }
+
+    /// Classifiers use the coordinator's frozen policy, including CLI overrides,
+    /// with config-sourced pools read again ([`Self::refresh_auto_crew_pools`]).
     /// A read-only call without a run uses the current configuration.
     pub(crate) fn auto_crew_pools_for_input(
         &self,
@@ -143,10 +201,12 @@ impl OrbitRuntime {
             .and_then(non_empty)
             && let Some(run) = self.get_job_run_backend(run_id)?
         {
-            return pools_from_input(run.input.as_ref().unwrap_or(&Value::Null));
+            return Ok(self.refresh_auto_crew_pools(pools_from_input(
+                run.input.as_ref().unwrap_or(&Value::Null),
+            )?));
         }
         if input.get(POOLS_KEY).is_some() {
-            pools_from_input(input)
+            Ok(self.refresh_auto_crew_pools(pools_from_input(input)?))
         } else {
             self.capture_auto_crew_pools(input)
         }
@@ -168,6 +228,70 @@ impl OrbitRuntime {
     /// A `<crew>@auto` member resolves against the task here
     /// ([`task_auto_effort_subject`]), whichever fallback produced it.
     pub(crate) fn auto_task_crew_candidates(
+        &self,
+        task: &Task,
+        pools: &CapturedCrewPools,
+        explicit: Option<&str>,
+        allowlist: Option<&CrewAllowlist>,
+    ) -> Result<(Vec<CrewCandidate>, String, Option<RedrawReason>), OrbitError> {
+        let (mut candidates, mut source, mut reason) =
+            self.auto_task_crew_candidates_before_model_access(task, pools, explicit, allowlist)?;
+        let drawable = |candidate: &CrewCandidate| {
+            candidate.weight > 0 && allowlist.is_none_or(|list| list.permits(&candidate.crew))
+        };
+        if explicit.is_some()
+            || !candidates
+                .iter()
+                .any(|c| drawable(c) && is_muse_crew(&c.crew))
+        {
+            return Ok((candidates, source, reason));
+        }
+        let crew_source = self.task_crew_source(task)?;
+        let assigned = self
+            .crew_unless_retired(task.crew.as_deref())
+            .and_then(non_empty)
+            .is_some();
+        if assigned && !crew_source.as_ref().is_some_and(CrewSource::is_automatic) {
+            return Ok((candidates, source, reason));
+        }
+        let refusals = self.task_muse_model_refusals(&task.id)?;
+        let mut excluded = BTreeSet::new();
+        let mut keep = |candidate: &CrewCandidate| {
+            if !refusals.rejects_crew_model(&candidate.crew) {
+                return true;
+            }
+            if drawable(candidate) {
+                excluded.insert(candidate.crew.assignment.model.clone());
+            }
+            false
+        };
+        candidates.retain(&mut keep);
+        if !candidates.iter().any(drawable) && assigned {
+            // Static selection keeps a valid persisted assignment as a
+            // singleton. Retry its ordinary route with no preferred member.
+            let mut redraw = task.clone();
+            redraw.crew = None;
+            redraw.crew_source = crew_source;
+            (candidates, source, reason) = self.auto_task_crew_candidates_before_model_access(
+                &redraw, pools, explicit, allowlist,
+            )?;
+            candidates.retain(keep);
+        }
+        if excluded.is_empty() {
+            return Ok((candidates, source, reason));
+        }
+        if !candidates.iter().any(drawable) {
+            return Err(model_access_hold(&excluded));
+        }
+        let models = excluded.into_iter().collect::<Vec<_>>().join(", ");
+        Ok((
+            candidates,
+            format!("{source}; Muse refused access to {models}"),
+            reason,
+        ))
+    }
+
+    pub(super) fn auto_task_crew_candidates_before_model_access(
         &self,
         task: &Task,
         pools: &CapturedCrewPools,
@@ -217,11 +341,9 @@ impl OrbitRuntime {
         let pool = if source == CrewSource::Other(orbit_config::REVIEW_CREW_KEY.to_string()) {
             let policy = self.operation_policy();
             let source_key = source.to_string();
-            let pool = canonical_crew_pool(
-                &policy.review_crew.value,
-                self.context.settings().crews(),
-                &source_key,
-            )?;
+            let crew_settings = self.admission_crew_settings();
+            let pool =
+                canonical_crew_pool(&policy.review_crew.value, &crew_settings.crews, &source_key)?;
             self.pool_member_candidates(&pool.entries, &source_key, None)?
         } else if matches!(source, CrewSource::Purpose(_)) {
             self.purpose_assignment_candidates(task)?
@@ -289,23 +411,36 @@ impl OrbitRuntime {
         Ok(Some(redraw))
     }
 
-    /// The crew a claimed leaf runs as under this follower's own usage
-    /// pressure [ORB-17773], or `None` to keep the owner's crew from the
-    /// claimed-task snapshot.
+    /// The crew a claimed leaf runs as on this follower, or `None` to keep
+    /// the owner's crew from the claimed-task snapshot.
+    ///
+    /// Two follower-local facts re-draw an automatic assignment:
+    ///
+    /// - [ORB-17773] this follower's own usage pressure, under
+    ///   `usage_pressure` policy;
+    /// - [ORB-25663] a Muse model this follower's own claimed leaves of the
+    ///   task were verified to be refused on the crew's provider account
+    ///   ([`Self::claimed_leaf_muse_model_refusals`]), under any policy.
+    ///   Every member on a refused model and account leaves the draw; when
+    ///   no drawable member remains, the leaf ends on the typed
+    ///   `provider_model_access_hold` error before any provider runs.
+    ///   For a `type:` source, a refusal of the assigned crew opens the
+    ///   named type pool. Usage pressure alone keeps that assignment.
     ///
     /// The re-draw is the [ORB-17770] admission re-draw over a view built
     /// from the snapshot (`crew`, its automatic `crew_source` and
     /// `complexity`): the whole pool its source names, as this follower
     /// captures that pool, narrowed by this host's holds and provider
     /// limits and by the run's crew allowlist, then weighed by this
-    /// host's weekly readings. The owner's readings never reach it. An
-    /// explicit or legacy crew (no automatic source), `static` policy, a
-    /// draw with no pool to weigh, and any failure to
-    /// compute the draw all keep the snapshot crew: a leaf that the owner
-    /// admitted must not fail because an optional re-draw could not run.
-    /// Nothing is persisted — the task lives in the owner's store — and
-    /// the ticket is seeded from the claim, so every resolution of the
-    /// leaf's crew in this run draws the same member.
+    /// host's weekly readings when usage pressure applies. The owner's
+    /// readings and evidence never reach it. An explicit or legacy crew (no
+    /// automatic source) and a run-input `crew` are never re-drawn. Under
+    /// `static` policy with no refusal, a draw with no pool to weigh, and
+    /// any other failure to compute the draw, the snapshot crew is kept: a
+    /// leaf that the owner admitted must not fail because an optional
+    /// re-draw could not run. Nothing is persisted — the task lives in the
+    /// owner's store — and the ticket is seeded from the claim, so every
+    /// resolution of the leaf's crew in this run draws the same member.
     pub(crate) fn claimed_leaf_redrawn_crew(
         &self,
         input: &Value,
@@ -313,21 +448,42 @@ impl OrbitRuntime {
         crew: Option<&str>,
         crew_source: Option<&CrewSource>,
         complexity: Option<TaskComplexity>,
-    ) -> Option<String> {
-        if !self.provider_limit_policy().usage_pressure.applies() {
-            return None;
+    ) -> Result<Option<String>, OrbitError> {
+        let Some(original) = self.crew_unless_retired(crew).and_then(non_empty) else {
+            return Ok(None);
+        };
+        let Some(source) = crew_source.filter(|source| source.is_automatic()) else {
+            return Ok(None);
+        };
+        // A crew the run input names wins over the task's crew.
+        if input
+            .get("crew")
+            .and_then(Value::as_str)
+            .and_then(non_empty)
+            .is_some()
+        {
+            return Ok(None);
         }
-        let original = crew.and_then(non_empty)?;
-        let source = crew_source.filter(|source| source.is_automatic())?;
-        match self.claimed_leaf_redraw(input, task_id, original, source, complexity) {
-            Ok(drawn) => drawn,
+        let refusals = self
+            .claimed_leaf_muse_model_refusals(task_id, chrono::Utc::now())
+            .unwrap_or_else(|error| {
+                tracing::warn!(
+                    task_id,
+                    "could not read this host's Muse model-access evidence for the claimed \
+                     task; drawing without it: {error}"
+                );
+                MuseModelRefusals::default()
+            });
+        match self.claimed_leaf_redraw(input, task_id, original, source, complexity, &refusals) {
+            Ok(drawn) => Ok(drawn),
+            Err(error @ OrbitError::ProviderModelAccessHold(_)) => Err(error),
             Err(error) => {
                 tracing::warn!(
                     task_id,
-                    "could not re-draw the claimed task's crew under this host's usage \
-                     pressure; keeping the owner's crew `{original}`: {error}"
+                    "could not re-draw the claimed task's crew on this host; keeping the \
+                     owner's crew `{original}`: {error}"
                 );
-                None
+                Ok(None)
             }
         }
     }
@@ -339,17 +495,19 @@ impl OrbitRuntime {
         original: &str,
         source: &CrewSource,
         complexity: Option<TaskComplexity>,
+        refusals: &MuseModelRefusals,
     ) -> Result<Option<String>, OrbitError> {
-        // The claimed snapshot carries no tags or context files to classify
-        // the task by, so a type-pool crew keeps the owner's draw.
-        if matches!(source, CrewSource::Type { .. }) {
+        let pressure = self.provider_limit_policy().usage_pressure.applies();
+        let refused = self
+            .resolve_crew_for_task(Some(original), None)
+            .ok()
+            .filter(|crew| refusals.rejects_crew_model(crew))
+            .map(|crew| crew.assignment.model);
+        let type_source = source.type_route().is_some();
+        // Only a verified refusal reopens a type assignment on the follower.
+        if refused.is_none() && (!pressure || type_source) {
             return Ok(None);
         }
-        let pools = if input.get(POOLS_KEY).is_some() {
-            pools_from_input(input)?
-        } else {
-            self.capture_auto_crew_pools(input)?
-        };
         let now = chrono::Utc::now();
         let tags = source
             .purpose()
@@ -384,7 +542,9 @@ impl OrbitRuntime {
             relations: Vec::new(),
             job_run_id: None,
             job_run_machine: None,
-            crew: Some(original.to_string()),
+            // The [ORB-17770] re-draw view: no member, so the draw covers the
+            // source's whole pool.
+            crew: None,
             crew_source: Some(source.clone()),
             orchestrator: None,
             orchestrator_model: None,
@@ -396,22 +556,70 @@ impl OrbitRuntime {
             updated_at: now,
             not_before: None,
         };
-        let Some(redraw) = self.usage_pressure_redraw_view(&view)? else {
-            return Ok(None);
+        let (crews, draw_source) = if type_source {
+            // The source names the pool's type and tier. The follower does
+            // not need the owner's tags or context files to open that pool.
+            self.type_assignment_candidates(&view)?
+                .unwrap_or_else(|| (Vec::new(), source.to_string()))
+        } else {
+            let pools = if input.get(POOLS_KEY).is_some() {
+                self.refresh_auto_crew_pools(pools_from_input(input)?)
+            } else {
+                self.capture_auto_crew_pools(input)?
+            };
+            let (crews, draw_source, _) =
+                self.admissible_claimed_leaf_crew_candidates(&view, &pools)?;
+            (crews, draw_source)
         };
-        let (crews, draw_source, _) =
-            self.admissible_claimed_leaf_crew_candidates(&redraw, &pools)?;
         let mut crews = self.reresolve_auto_candidates(crews, &task_auto_effort_subject(&view))?;
+        if type_source {
+            let hold = self.admission_provider_hold(&view);
+            let gate = self.provider_limit_gate(now);
+            crews.retain(|candidate| {
+                hold.as_ref().is_none_or(|hold| {
+                    !hold.excluded_crews.is_empty() && !hold.excludes(&candidate.crew.name)
+                }) && gate.limit_for(&candidate.crew).is_none()
+            });
+        }
+        let allowlist = self.crew_allowlist_from_input(input)?;
+        let drawable = |candidate: &CrewCandidate| {
+            candidate.weight > 0
+                && allowlist
+                    .as_ref()
+                    .is_none_or(|list| list.permits(&candidate.crew))
+        };
+        let mut excluded = refused.into_iter().collect::<BTreeSet<_>>();
+        crews.retain(|candidate| {
+            if !refusals.rejects_crew_model(&candidate.crew) {
+                return true;
+            }
+            if drawable(candidate) {
+                excluded.insert(candidate.crew.assignment.model.clone());
+            }
+            false
+        });
+        if !crews.iter().any(drawable) {
+            if excluded.is_empty() {
+                return Ok(None);
+            }
+            return Err(model_access_hold(&excluded));
+        }
         // This re-draw weighs this host's usage pressure.
         let weighting = weighted_candidates(
             &mut crews,
+            allowlist.as_ref(),
             &self.provider_limit_policy().usage_pressure,
             || self.usage_pressure_read(chrono::Utc::now()),
         );
-        if weighting.is_none() {
+        if weighting.is_none() && excluded.is_empty() {
             return Ok(None);
         }
-        let allowlist = self.crew_allowlist_from_input(input)?;
+        let draw_source = if excluded.is_empty() {
+            draw_source
+        } else {
+            let models = excluded.into_iter().collect::<Vec<_>>().join(", ");
+            format!("{draw_source}; Muse refused access to {models}")
+        };
         let candidates = permitted_candidates(crews, &draw_source, allowlist.as_ref())?;
         let mut ticket = seeded_crew_ticket(format!("claimed:{task_id}:{source}:{original}"));
         let selected = weighted_draw(&candidates, &draw_source, &mut ticket)?;
@@ -419,7 +627,7 @@ impl OrbitRuntime {
             tracing::info!(
                 task_id,
                 "crew redrawn from {source} (`{original}`) to {source} (`{}`) for the \
-                 claimed leaf under this host's usage pressure",
+                 claimed leaf on this host ({draw_source})",
                 selected.crew.name
             );
         }
@@ -634,8 +842,8 @@ impl OrbitRuntime {
         else {
             return Ok(None);
         };
-        let registry = self.context.settings().crews();
-        let entries = canonical_crew_pool_entries(&pool.crews, registry, &pool.source)?;
+        let crew_settings = self.admission_crew_settings();
+        let entries = canonical_crew_pool_entries(&pool.crews, &crew_settings.crews, &pool.source)?;
         self.pool_member_candidates(&entries, &pool.source, task_os)
     }
 

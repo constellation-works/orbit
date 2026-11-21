@@ -141,7 +141,7 @@ fn fleet_drain_row(
                     capacity["drain_phase"].as_str().unwrap_or("idle")
                 };
             row["phase"] = json!(phase);
-            // Keep the independent drain and pull states for Settings Hosts;
+            // Keep the independent drain and pull states for host diagnostics;
             // the fleet's combined `phase` alone loses a concurrent pull.
             row["drain_phase"] = json!(capacity["drain_phase"].as_str().unwrap_or(
                 if capacity["drain_run_id"].is_string() {
@@ -153,6 +153,12 @@ fn fleet_drain_row(
             row["pull_active"] = json!(capacity["pull_drain_run_id"].is_string());
             row["pull_admissions_stopped"] =
                 json!(capacity["pull_drain_admissions_stopped"] == true);
+            // Keep concurrent owner and pull windows distinguishable in Fleet.
+            row["owner_admissions_stopped"] = json!(capacity["admissions_stopped"] == true);
+            row["drain_run_id"] = capacity["drain_run_id"].clone();
+            row["pull_drain_run_id"] = capacity["pull_drain_run_id"].clone();
+            row["owner_running_tasks"] = capacity["running_admitted_workers"].clone();
+            row["pull_running_tasks"] = capacity["wrapper_leaf_runs"].clone();
             row["owner_machine_id"] = payload["owner_machine_id"].clone();
             // Pull coordinators execute the local workspace's claimed leaves,
             // rather than admitting owner workers into their own checkpoint.

@@ -31,6 +31,7 @@ mod external_merge;
 mod proposed;
 pub use proposed::ProposedTaskInput;
 mod provider_hold;
+mod readiness_waiver;
 pub(crate) use provider_hold::AdmissionProviderPass;
 pub(crate) mod provider_limit;
 pub(crate) use desktop::HandoffPullRequest;
@@ -53,7 +54,6 @@ mod notice_port;
 mod os_readout;
 mod params;
 mod paths;
-pub(in crate::application) use paths::{CONTEXT_FILES_PRUNED_EVENT, pruned_selectors_from_note};
 pub(crate) mod pilot;
 mod post_deploy;
 mod pr_closure;
@@ -143,7 +143,9 @@ pub(crate) use finding_verification::{
 };
 pub use finding_verification::{FindingVerdict, VerdictSource};
 use job_port::CrewPools;
-pub(in crate::application) use job_port::{NativePublicationIdentity, TaskJobPort};
+pub(in crate::application) use job_port::{
+    DeliveryCompletion, NativePublicationIdentity, TaskJobPort,
+};
 pub(crate) use lint::TaskLintReport;
 pub use lint::{TaskLintFinding, TaskLintSeverity};
 pub use list_result::{TaskListResultPolicy, TaskListResultProfile};
@@ -182,8 +184,8 @@ pub use screened::{ScreenedTaskWrite, TaskUpdateAuthority, TaskWriteScreen};
 pub(crate) use selector_match::task_selectors_contain_path;
 pub(in crate::application) use sweep_filing_port::TaskSweepFilingPort;
 pub(crate) use sweep_filing_port::{
-    AdmissionClosure, CiSweepAdmission, CiSweepAdmissionDecision, CiSweepFilingEvidence,
-    CiSweepFilingSource, PromotionDecision,
+    AdmissionClosure, CiSweepAdmission, CiSweepAdmissionDecision, CiSweepAdmissionRequest,
+    CiSweepFilingEvidence, CiSweepFilingSource, PromotionDecision,
 };
 pub use transient_infra::TransientInfraBlockedTask;
 pub(crate) use validation_tools::positive_validation_tools;
@@ -201,7 +203,10 @@ pub(crate) use write_response::{
 };
 
 pub(crate) use external_merge::settled_merge_commit;
-pub use external_merge::{ExternalMergeSettlement, ExternalMergeSettlementProfile};
+pub use external_merge::{
+    AutoLanding, ExternalMergeSettlement, ExternalMergeSettlementProfile, FOLLOW_UP_OWNER_OPERATOR,
+    LANDING_FOLLOW_UP_EVENT, LandingFollowUp,
+};
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};
 pub use lifecycle::EXTERNAL_MERGE_SETTLED_EVENT;
 pub(crate) use lifecycle::{

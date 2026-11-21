@@ -5,9 +5,14 @@
 //! same trust task filing extends), so the rights it unlocks are the ones a
 //! mistaken unmanaged session could use without lasting harm.
 
+use chrono::Duration;
 use orbit_common::{NoticeRefusalCode, OrbitError};
-use orbit_types::record::{AuthorClass, NoticeAuthor, NoticeKind, NoticeScope};
+use orbit_types::record::{
+    AuthorClass, NoticeAuthor, NoticeKind, NoticeScope, resident_notice_key_prefix,
+    resident_status_notice_key,
+};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::workflow::RESIDENT_TAG;
 
 use super::limits;
 use crate::OrbitRuntime;
@@ -41,9 +46,39 @@ pub(crate) struct NoticePoster {
     pub(crate) task_id: Option<String>,
     pub(crate) run_id: Option<String>,
     pub(crate) machine_id: Option<String>,
+    /// Set when the poster is a resident mandate: its cycle's run, or Orbit
+    /// writing the mandate's line for a control action. `task_id` is then
+    /// the mandate's assignment.
+    pub(crate) resident: Option<ResidentNoticePoster>,
+}
+
+/// What a resident mandate's notice posts are held to.
+#[derive(Debug, Clone)]
+pub(crate) struct ResidentNoticePoster {
+    /// How long the status line stays in force after the post that wrote it.
+    pub(crate) status_line_ttl: Duration,
 }
 
 impl NoticePoster {
+    /// The key of this resident's status line, when the poster is one.
+    pub(crate) fn resident_status_key(&self) -> Option<String> {
+        self.resident.as_ref()?;
+        self.task_id.as_deref().map(resident_status_notice_key)
+    }
+
+    /// Whether this poster may write `key`: keys under `resident:` belong to
+    /// the mandate they name.
+    pub(crate) fn may_post_key(&self, key: &str) -> bool {
+        if !key.starts_with(orbit_types::record::RESIDENT_NOTICE_KEY_PREFIX) {
+            return true;
+        }
+        self.resident.is_some()
+            && self
+                .task_id
+                .as_deref()
+                .is_some_and(|mandate| key.starts_with(&resident_notice_key_prefix(mandate)))
+    }
+
     pub(crate) fn author(&self) -> NoticeAuthor {
         NoticeAuthor {
             class: self.class,
@@ -65,7 +100,14 @@ impl NoticePoster {
     pub(crate) fn may_post_kind(&self, kind: NoticeKind) -> bool {
         match self.class {
             AuthorClass::Operator | AuthorClass::Orchestrator => true,
-            AuthorClass::Agent | AuthorClass::System => kind != NoticeKind::Maintenance,
+            // An operator ask is the operator's, an orchestrator's or a
+            // resident's to raise; other managed agents report through
+            // their task.
+            AuthorClass::Agent | AuthorClass::System => match kind {
+                NoticeKind::Incident | NoticeKind::Info => true,
+                NoticeKind::Warn => self.resident.is_some(),
+                NoticeKind::Maintenance => false,
+            },
         }
     }
 
@@ -90,6 +132,11 @@ impl NoticePoster {
         match self.class {
             AuthorClass::Operator | AuthorClass::System => limits::MAX_EXPIRY_HOURS_OPERATOR,
             AuthorClass::Orchestrator => limits::max_expiry_hours_orchestrator(kind),
+            // A resident's warn stands until its blocker clears, which a
+            // day rarely covers.
+            AuthorClass::Agent if self.resident.is_some() && kind == NoticeKind::Warn => {
+                limits::max_expiry_hours_orchestrator(kind)
+            }
             AuthorClass::Agent => limits::MAX_EXPIRY_HOURS_AGENT,
         }
     }
@@ -98,6 +145,9 @@ impl NoticePoster {
     /// is its cap.
     pub(crate) fn default_expiry_hours(&self, kind: NoticeKind) -> u32 {
         match self.class {
+            AuthorClass::Agent if self.resident.is_some() && kind == NoticeKind::Warn => {
+                limits::default_expiry_hours(kind)
+            }
             AuthorClass::Agent => limits::MAX_EXPIRY_HOURS_AGENT,
             AuthorClass::Operator | AuthorClass::Orchestrator | AuthorClass::System => {
                 limits::default_expiry_hours(kind).min(self.expiry_cap_hours(kind))
@@ -114,6 +164,53 @@ fn non_empty(value: Option<&str>) -> Option<String> {
 }
 
 impl OrbitRuntime {
+    /// The notice terms of the mandate on `task_id`: its status line lapses
+    /// after twice the heartbeat, the same silence the stall check uses. A
+    /// mandate that cannot be read falls back to the agent expiry.
+    fn resident_notice_poster(&self, task_id: &str) -> ResidentNoticePoster {
+        let status_line_ttl =
+            match crate::application::resident::resident_mandate_from_artifact(self, task_id) {
+                Ok(Ok(mandate)) => {
+                    Duration::minutes(2 * i64::from(mandate.cadence.heartbeat_minutes))
+                }
+                Ok(Err(_)) | Err(_) => Duration::hours(i64::from(limits::MAX_EXPIRY_HOURS_AGENT)),
+            };
+        ResidentNoticePoster { status_line_ttl }
+    }
+
+    /// The poster Orbit writes a mandate's control line as: the mandate's
+    /// own assignment, so the next cycle's status line replaces it in place.
+    ///
+    /// A line for a mandate that stays quiet (`lasting`: paused, taken over,
+    /// stopped) outlives the heartbeat; one for a mandate that should cycle
+    /// again lapses like a cycle's own line, so a mandate that never does
+    /// reads as silent.
+    pub(crate) fn resident_control_line_poster(
+        &self,
+        task_id: &str,
+        lasting: bool,
+    ) -> Result<NoticePoster, OrbitError> {
+        let task = self.get_task(task_id)?;
+        let resident = if lasting {
+            ResidentNoticePoster {
+                status_line_ttl: Duration::hours(i64::from(
+                    limits::RESIDENT_CONTROL_LINE_EXPIRY_HOURS,
+                )),
+            }
+        } else {
+            self.resident_notice_poster(task_id)
+        };
+        Ok(NoticePoster {
+            class: AuthorClass::Agent,
+            crew: task.crew.clone(),
+            model: None,
+            task_id: Some(task.id.to_string()),
+            run_id: None,
+            machine_id: self.automation_machine_identity().map(ToOwned::to_owned),
+            resident: Some(resident),
+        })
+    }
+
     /// Resolve the poster class of `caller`: operator capability first, then
     /// a managed-run binding, then orchestrator attribution naming a
     /// configured crew. Anything else is refused.
@@ -134,6 +231,7 @@ impl OrbitRuntime {
                 task_id: None,
                 run_id: None,
                 machine_id,
+                resident: None,
             });
         }
         let bound = match &caller.session.worker_invocation {
@@ -161,6 +259,12 @@ impl OrbitRuntime {
                 non_empty(caller.scope_run_id.as_deref()),
             ) {
                 (Some(task_id), Some(run_id)) => Some((task_id, Some(run_id), machine_id.clone())),
+                // A resident cycle is bound by its run alone: the run names
+                // its mandate.
+                (None, Some(run_id)) => self
+                    .resident_cycle_mandate_of_run(&run_id)
+                    .ok()
+                    .map(|mandate| (mandate, Some(run_id), machine_id.clone())),
                 _ => None,
             },
         };
@@ -171,6 +275,14 @@ impl OrbitRuntime {
                     "the bound task is not in this workspace",
                 )
             })?;
+            let resident = run_id
+                .as_deref()
+                .filter(|_| task.tags.iter().any(|tag| tag == RESIDENT_TAG))
+                .filter(|run_id| {
+                    self.resident_cycle_mandate_of_run(run_id)
+                        .is_ok_and(|mandate| mandate == task_id)
+                })
+                .map(|_| self.resident_notice_poster(&task_id));
             return Ok(NoticePoster {
                 class: AuthorClass::Agent,
                 crew: task.crew.clone(),
@@ -178,6 +290,7 @@ impl OrbitRuntime {
                 task_id: Some(task_id),
                 run_id,
                 machine_id,
+                resident,
             });
         }
         if capabilities.contains(&McpCapability::Agent)
@@ -200,6 +313,7 @@ impl OrbitRuntime {
                 task_id: None,
                 run_id: None,
                 machine_id,
+                resident: None,
             });
         }
         Err(OrbitError::notice_refused(

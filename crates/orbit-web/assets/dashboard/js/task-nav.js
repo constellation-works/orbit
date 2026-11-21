@@ -4,8 +4,9 @@ import { captureWorkspaceVisit, getSelectedWorkspaces, getWorkspace, isWorkspace
 import { $, taskState, onDecisionAnswered, rerender, taskList, activeStatusSet, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskMutationPath, taskWorkspacePath, taskDispatchIdentity, isSelectedTask, STATUS_LABELS } from './task-shared.js';
 import { applyUpdatedTask, forgetTaskDetailLoad, mergeTaskRecord, taskDetailSnapshot } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
-import { humanCrewFor, isMyWorkTask, loadAggregateCrews, myWorkCrewNames } from './task-crew.js';
+import { humanCrewFor, isOpenTask, isMyWorkTask, loadAggregateCrews, myWorkCrewNames } from './task-crew.js';
 import { recordRoutedHref } from './router.js';
+import { quickFilterActive, quickFilterMatches } from './task-quick-filter.js';
 
 // Advances whenever `taskState.openTaskId` changes, so a pin read for a task
 // the hash no longer names is dropped.
@@ -39,10 +40,6 @@ let waitingGeneration = 0;
 // Whether a filter only the browser applies (Not ready, My work, Waiting on
 // you) narrows the loaded rows. The server's section totals do not count it.
 export function browserTaskFilterActive() { return notReadyOnly || myWorkOnly || waitingOnly; }
-// Terminal statuses mirror TaskStatus::is_terminal (done, archived, rejected)
-// plus both spellings of cancelled; "All" lists them, but nothing waits on them.
-const TERMINAL_TASK_STATUSES = new Set(["done", "archived", "rejected", "cancelled", "canceled"]);
-function isOpenTask(t) { return !TERMINAL_TASK_STATUSES.has(t.status); }
 export function taskWaitsOnYou(t) {
   if (!isOpenTask(t)) return false;
   if (Array.isArray(t.open_decisions) && t.open_decisions.length) return true;
@@ -115,14 +112,17 @@ async function refreshWaitingCount(context) {
   }
 }
 
-export function filterTasks(tasks, context) {
+// `quick: false` leaves out the Shift-Shift quick filter, for the rows it narrows.
+export function filterTasks(tasks, context, { quick = true } = {}) {
   const activeStatuses = activeStatusSet(context);
+  const quickNarrows = quick && quickFilterActive();
   return tasks.filter((t) => {
     if (!activeStatuses.has(t.status)) return false;
     if (notReadyOnly && !taskReadiness.isNotReady(t)) return false;
     if (pilotWarningsOnly && !taskReadiness.pilotWarnings(t).length) return false;
     if (myWorkOnly && !isMyWorkTask(t)) return false;
     if (waitingOnly && !taskWaitsOnYou(t)) return false;
+    if (quickNarrows && !quickFilterMatches(t)) return false;
     return true;
   });
 }
@@ -450,6 +450,7 @@ function renderChips(context) {
   const activeStatuses = activeStatusSet(context);
   const allOn = activeStatuses.size === statusOrder(context).length;
   const counts = statusCounts(context);
+  const myWorkCount = taskList(context).filter(isMyWorkTask).length;
   for (const chip of container.querySelectorAll(".chip")) {
     if (chip.dataset.role === "workspaces") continue;
     const status = chip.dataset.status;
@@ -461,7 +462,7 @@ function renderChips(context) {
       : chip.dataset.role === "my-work" ? myWorkOnly
       : isAll ? allOn : activeStatuses.has(status);
     chip.classList.toggle("active", on);
-    if (chip.dataset.role === "my-work") chip.hidden = myWorkCrewNames().length === 0 && !myWorkOnly && !taskList(context).some((t) => isMyWorkTask(t));
+    if (chip.dataset.role === "my-work") chip.hidden = myWorkCrewNames().length === 0 && !myWorkOnly && myWorkCount === 0;
     // ORB-10874: chip state must not rely on the active/inactive color
     // difference alone — aria-pressed exposes it to assistive tech too.
     chip.setAttribute("aria-pressed", on ? "true" : "false");
@@ -470,6 +471,8 @@ function renderChips(context) {
     if (chip.dataset.role === "waiting") {
       // Updated even while its chip is hidden, unlike a status count that clears while its chip is off.
       count.textContent = String(waitingCountNow(context));
+    } else if (chip.dataset.role === "my-work") {
+      count.textContent = String(myWorkCount);
     } else {
       count.textContent = status && on && counts ? String(counts.get(status) || 0) : "";
     }
@@ -635,9 +638,9 @@ export function buildChips(context) {
   const container = $("task-filter");
   container.innerHTML = "";
   const chip = (text, attrs, quiet, title) => {
-    const node = el("button", { class: `chip${quiet ? " chip-quiet" : ""}`, type: "button", title }, [
+    const node = el("button", { class: `chip${quiet ? " chip-quiet" : ""}`, type: "button", "aria-description": title }, [
       el("span", { class: "chip-label", text }),
-      ...((attrs.status || attrs.role === "waiting") ? [el("span", { class: "chip-count" })] : []),
+      ...((attrs.status || attrs.role === "waiting" || attrs.role === "my-work") ? [el("span", { class: "chip-count" })] : []),
     ]);
     Object.assign(node.dataset, attrs);
     return node;
@@ -695,7 +698,7 @@ export function buildChips(context) {
     type: "button",
     "aria-controls": "task-filter-more",
     "aria-expanded": "false",
-    title: "My work, Waiting on you, closed statuses, All, Not ready and Pilot warnings",
+    "aria-description": "My work, Waiting on you, closed statuses, All, Not ready and Pilot warnings",
   }, [el("span", { text: "More" })]);
   more.addEventListener("click", () => {
     const open = more.getAttribute("aria-expanded") !== "true";
@@ -834,7 +837,7 @@ function paintWorkspaceFilter() {
   if (label) label.textContent = narrowing ? `${selected.length} workspace${selected.length === 1 ? "" : "s"}` : "Workspaces";
   button.classList.toggle("active", narrowing);
   button.setAttribute("aria-pressed", narrowing ? "true" : "false");
-  button.title = narrowing ? selected.map((workspaceId) => workspaceDisplayName(workspaceId)).join(", ") : "All workspaces";
+  button.setAttribute("aria-description", narrowing ? selected.map((workspaceId) => workspaceDisplayName(workspaceId)).join(", ") : "All workspaces");
   for (const option of list.children) {
     const on = checked.has(option.dataset.workspace);
     option.setAttribute("aria-selected", String(on));
@@ -854,7 +857,7 @@ function buildWorkspaceFilter(context) {
     "aria-expanded": "false",
     "aria-controls": "task-workspace-options",
     "aria-label": "Filter by workspace",
-    title: "All workspaces",
+    "aria-description": "All workspaces",
   }, [el("span", { class: "chip-label", text: "Workspaces" })]);
   button.dataset.role = "workspaces";
   const list = el("div", {

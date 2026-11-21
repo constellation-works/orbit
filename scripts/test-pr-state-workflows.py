@@ -12,6 +12,7 @@ import self_test_hang
 import shlex
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -312,7 +313,7 @@ class CiCacheWorkflowTests(unittest.TestCase):
         self.output.write_text("")
         self.envfile.write_text("")
         result = self_test_hang.run(
-            ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+            ["bash", "-e", "-c", step["run"]],
             step=str(step.get("id") or step.get("name") or "workflow step"),
             cwd=self.root, env=self.env, text=True, capture_output=True, timeout=timeout)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -348,7 +349,7 @@ class CiCacheWorkflowTests(unittest.TestCase):
         self.assertEqual(set(writers), {"ci", "docs", "guardrails", "test-1", "test-2",
                                                 "test-3", "test-build", "test-extra", "test-partition-2",
                                                 "test-partition-6", "test-partition-7", "test-partition-8",
-                                                "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"})
+                                                "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12", "test-partition-13"})
         self.assertEqual(self.document.get("on", self.document.get(True, {}))["push"]["branches"], ["main", "agent-main"],
                          "push-only saves are trusted only while pushes come from protected branches")
 
@@ -384,7 +385,7 @@ exit "${FIXTURE_VERSION_EXIT:-0}"
         self.write(".orbit/tmp/workflow-ci/scripts/ci-probe-bubblewrap.sh",
                    helper.replace("/usr/bin/bwrap", str(fake_bwrap)))
         return self_test_hang.run(
-            ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+            ["bash", "-e", "-c", step["run"]],
             step="bubblewrap-probe", cwd=self.root, env=self.env,
             text=True, capture_output=True)
 
@@ -816,13 +817,99 @@ class NextestShardWorkflowTests(unittest.TestCase):
             path.write_text(record)
             path.chmod(0o755)
 
-    def run_step(self, job, name, expected_status=0):
+    @unittest.skipUnless(hasattr(os, "mkfifo") and shutil.which("flock"), "requires Unix FIFOs and flock")
+    def test_proof_start_waits_for_lock_and_wait_propagates_result(self):
+        job = self.document["jobs"]["test-build"]
+        steps = {step.get("name"): step for step in job["steps"]}
+        names = list(steps)
+        start_name, wait_name = "Start the shard coverage proof", "Prove the shards cover every test"
+        for name in [f"Upload nextest archive part {n}/4" for n in range(1, 5)] + ["Upload test build timings"]:
+            self.assertLess(names.index(start_name), names.index(name))
+            self.assertLess(names.index(name), names.index(wait_name))
+
+        for outcome in ("0", "7", "interrupted"):
+            with self.subTest(outcome=outcome):
+                root = self.root / outcome
+                (root / "bin").mkdir(parents=True)
+                (root / "scripts").mkdir()
+                os.mkfifo(root / "admit")
+                os.mkfifo(root / "finish")
+                flock = root / "bin/flock"
+                flock.write_text('#!/bin/bash\nif [[ "$1" == 9 ]]; then\n'
+                                 '  touch "$RUNNER_TEMP/lock-paused"\n'
+                                 '  read -r _ < "$RUNNER_TEMP/admit"\nfi\n'
+                                 f'exec {shlex.quote(shutil.which("flock"))} "$@"\n')
+                flock.chmod(0o755)
+                proof = root / "scripts/ci-guardrails.sh"
+                proof.write_text('#!/bin/bash\ntouch "$RUNNER_TEMP/proof-running"\n'
+                                 'read -r _ < "$RUNNER_TEMP/finish"\n'
+                                 'echo "proof diagnostic"\n'
+                                 + ('kill -KILL "$PPID"\n' if outcome == "interrupted" else f'exit {outcome}\n'))
+                proof.chmod(0o755)
+                env = dict(os.environ, RUNNER_TEMP=str(root), PATH=f"{root / 'bin'}:{os.environ['PATH']}")
+
+                def await_file(path):
+                    deadline = time.monotonic() + 10
+                    while not path.exists() and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertTrue(path.exists(), f"timed out waiting for {path}")
+
+                def stop_process_group(process):
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        process.wait(timeout=1)
+                    except subprocess.TimeoutExpired as error:
+                        raise AssertionError("workflow step process did not stop") from error
+
+                start = subprocess.Popen(["bash", "-e", "-c", steps[start_name]["run"]],
+                                         cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                         start_new_session=True)
+                self.addCleanup(stop_process_group, start)
+                await_file(root / "lock-paused")
+                try:
+                    start.wait(timeout=0.5)
+                    released_early = True
+                except subprocess.TimeoutExpired:
+                    released_early = False
+                with (root / "admit").open("w") as pipe:
+                    pipe.write("go\n")
+                self.assertEqual(start.wait(timeout=10), 0)
+                await_file(root / "proof-running")
+                wait = subprocess.Popen(["bash", "-e", "-c", steps[wait_name]["run"]],
+                                        cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                        start_new_session=True)
+                self.addCleanup(stop_process_group, wait)
+                try:
+                    self.assertIsNone(wait.poll(), "wait returned while proof was still running")
+                finally:
+                    with (root / "finish").open("w") as pipe:
+                        pipe.write("go\n")
+                stdout, stderr = wait.communicate(timeout=10)
+                self.assertEqual(wait.returncode, 1 if outcome == "interrupted" else int(outcome), stdout + stderr)
+                self.assertIn("proof diagnostic", stdout)
+                if outcome == "interrupted":
+                    self.assertIn("without an exit status", stderr)
+                self.assertFalse(released_early, "start released uploads before the proof acquired its lock")
+
+    @staticmethod
+    def resolve_download_path(expression, download_outputs):
+        """Evaluate `${{ a || b }}` over download-path outputs: the first output that was set wins."""
+        assert expression.startswith("${{") and expression.endswith("}}"), expression
+        terms = [term.strip() for term in expression[3:-2].split("||")]
+        return next((download_outputs[term] for term in terms if term in download_outputs), "")
+
+    def run_step(self, job, name, expected_status=0, *, download_outputs=None):
         step = next(step for step in job["steps"] if step.get("name") == name)
         self.calls.write_text("")
         env = dict(PATH=f"{self.root / 'bin'}:{os.environ['PATH']}", RUNNER_TEMP=str(self.root),
                    SHARD_FIXTURE_EXIT=str(expected_status),
                    **self.document["env"], **job.get("env", {}))
-        env.update(step.get("env", {}))
+        env.update({key: self.resolve_download_path(value, download_outputs or {})
+                    if "outputs.download-path" in str(value) else value
+                    for key, value in step.get("env", {}).items()})
         cwd = self.root / step.get("working-directory", ".")
         cwd.mkdir(parents=True, exist_ok=True)
         if step.get("working-directory"):
@@ -846,7 +933,13 @@ class NextestShardWorkflowTests(unittest.TestCase):
                 capture_output=True, text=True, check=True).stdout.strip()
         script = self.root / "step-script"
         script.write_text(step["run"])
-        shell = step.get("shell", "bash --noprofile --norc -e -o pipefail {0}")
+        explicit_shell = step.get("shell")
+        if explicit_shell is None:
+            shell = "bash -e {0}"
+        elif explicit_shell == "bash":
+            shell = "bash --noprofile --norc -e -o pipefail {0}"
+        else:
+            shell = explicit_shell
         result = self_test_hang.run(
             [word.replace("{0}", str(script)) for word in shlex.split(shell)],
             step=name, cwd=cwd,
@@ -854,6 +947,24 @@ class NextestShardWorkflowTests(unittest.TestCase):
             text=True, capture_output=True)
         self.assertEqual(result.returncode, expected_status, result.stdout + result.stderr)
         return [json.loads(line) for line in self.calls.read_text().splitlines()]
+
+    def test_extraction_reads_the_download_attempt_that_succeeded(self):
+        # Each attempt downloads into its own directory, and extraction must read
+        # the one that passed. Run 44227650517 held a shard in one unbounded download.
+        job = self.document["jobs"]["test-1"]
+        attempts = ["nextest-archive-download", "nextest-archive-download-2", "nextest-archive-download-3"]
+        extract = next(step for step in job["steps"] if step.get("name") == "Extract nextest archive")
+        self.assertEqual(
+            [term.strip() for term in extract["env"]["NEXTEST_ARCHIVE_DIR"][3:-2].split("||")],
+            [f"steps.{step_id}.outputs.download-path" for step_id in reversed(attempts)],
+            "extraction must prefer the latest attempt; a later attempt runs only after an earlier one failed")
+        for succeeded, step_id in enumerate(attempts, 1):
+            with self.subTest(attempt=succeeded):
+                directory = self.root / f"attempt-{succeeded}"
+                [extract_call] = self.run_step(
+                    job, "Extract nextest archive",
+                    download_outputs={f"steps.{step_id}.outputs.download-path": str(directory)})
+                self.assertEqual(Path(extract_call[2]).parent, directory)
 
     def test_shard_jobs_partition_once_each_and_the_check_job_awaits_all_of_them(self):
         shards = int(self.document["env"]["NEXTEST_SHARDS"])
@@ -887,9 +998,13 @@ class NextestShardWorkflowTests(unittest.TestCase):
                 self.assertNotIn("strategy", job, "Orbit's rerun certification needs literal shard jobs")
                 self.assertEqual(job["steps"], shard_jobs["test-1"]["steps"], "every shard runs the same steps")
                 [nextest] = self.run_step(job, "Run nextest shard")
-                [unpack] = self.run_step(job, "Restore native nextest archive")
-                self.assertEqual(unpack[:2], [pack[0], "unpack"])
-                self.assertEqual(unpack[2:], [pack[3], pack[2], "--parts", str(parts)])
+                download_directory = self.root / "verified-download"
+                [extract] = self.run_step(
+                    job, "Extract nextest archive",
+                    download_outputs={"steps.nextest-archive-download.outputs.download-path": str(download_directory)})
+                self.assertEqual(extract[:2], [pack[0], "extract"])
+                self.assertEqual(extract[2:], [str(download_directory / Path(pack[3]).name),
+                                               str(self.root), "--parts", str(parts)])
                 downloads = [step for step in job["steps"]
                              if str(step.get("name", "")).startswith("Download nextest archive")]
                 self.assertEqual(
@@ -900,13 +1015,23 @@ class NextestShardWorkflowTests(unittest.TestCase):
                     "run 42657013708 failed GetSignedArtifactURL with ECONNRESET and had no retry")
                 uploaded = {step["with"]["name"] for other in jobs.values() for step in other["steps"]
                             if step.get("uses", "").startswith("actions/upload-artifact@")}
+                download_paths = {download["with"]["path"] for download in downloads}
+                self.assertEqual(len(download_paths), len(downloads),
+                                 "extraction cannot reuse parts from a timed-out download")
                 for download in downloads:
                     self.assertTrue(download["with"]["merge-multiple"])
-                    self.assertEqual(download["with"]["path"], "${{ runner.temp }}")
+                    self.assertTrue(download["with"]["path"].startswith("${{ runner.temp }}/"))
+                    self.assertGreater(
+                        download.get("timeout-minutes", 0), 0,
+                        "run 44227650517 held the required Check job in a single unbounded download")
                     self.assertTrue(str(download.get("uses", "")).startswith("actions/download-artifact@"))
                     self.assertEqual(
                         {name for name in uploaded if fnmatch.fnmatchcase(name, download["with"]["pattern"])},
                         names, "every shard downloads every part and nothing else")
+                self.assertLess(
+                    sum(download["timeout-minutes"] for download in downloads), job["timeout-minutes"],
+                    "the download attempts must fit the shard's job timeout, or the job timeout cancels "
+                    "a stalled shard before its last attempt fails the gate")
                 self.assertEqual({step["uses"] for step in downloads}, {downloads[0]["uses"]})
                 self.assertIs(downloads[0].get("continue-on-error"), True)
                 self.assertIs(downloads[1].get("continue-on-error"), True)
@@ -939,7 +1064,7 @@ class NextestShardWorkflowTests(unittest.TestCase):
                         ("cancelled", 1, f"ci-await: {jobs['test-build']['name']} concluded cancelled: "
                                          "https://github.com/fixture/repository/actions/runs/7\n")):
                     completed = self_test_hang.run(
-                        ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", require["run"]],
+                        ["bash", "-e", "-c", require["run"]],
                         step=require["name"], cwd=self.root, text=True, capture_output=True,
                         env={"PATH": os.environ["PATH"], "TEST_BUILD_RESULT": result,
                              "GITHUB_SERVER_URL": "https://github.com",
@@ -947,8 +1072,15 @@ class NextestShardWorkflowTests(unittest.TestCase):
                     self.assertEqual((completed.returncode, completed.stdout, completed.stderr),
                                      (status, "", stderr))
                 self.assertLess(step_names.index("Download nextest archive attempt 3"),
-                                step_names.index("Restore native nextest archive"))
-                self.assertEqual(nextest[nextest.index("--archive-file") + 1], unpack[3])
+                                step_names.index("Extract nextest archive"))
+                # nextest runs the tests the extraction wrote, from its metadata.
+                self.assertNotIn("--archive-file", nextest)
+                self.assertEqual(nextest[nextest.index("--binaries-metadata") + 1],
+                                 "target/nextest/binaries-metadata.json")
+                self.assertEqual(nextest[nextest.index("--cargo-metadata") + 1],
+                                 "target/nextest/cargo-metadata.json")
+                self.assertEqual(nextest[nextest.index("--target-dir-remap") + 1], f"{extract[3]}/target")
+                self.assertEqual(nextest[nextest.index("--workspace-remap") + 1], extract[3])
                 self.assertEqual(nextest[:4], ["--label", "nextest", "--", "cargo"])
                 self.assertIn("--no-fail-fast", nextest)
                 self.assertNotIn("--run-ignored", nextest)
@@ -965,7 +1097,7 @@ class NextestShardWorkflowTests(unittest.TestCase):
                          sorted([f"Test shard {k}/{shards}" for k in range(1, shards + 1)]
                                 + [jobs["test-extra"]["name"], jobs["test-partition-2"]["name"],
                                    jobs["test-partition-6"]["name"], jobs["test-partition-7"]["name"],
-                                   jobs["test-partition-8"]["name"], *[jobs[f"test-partition-{k}"]["name"] for k in range(9, 13)]]))
+                                   jobs["test-partition-8"]["name"], *[jobs[f"test-partition-{k}"]["name"] for k in range(9, 14)]]))
         [wait] = self.run_step(jobs["ci"], "Await the test build and nextest shards")
         self.assertEqual(wait[0], "scripts/ci-await-jobs.py")
         awaited = wait[2::2]
@@ -978,10 +1110,12 @@ class NextestShardWorkflowTests(unittest.TestCase):
     def test_repack_and_shard_failures_remain_failed_workflow_steps(self):
         for job, step in (("test-build", "Pack nextest archive for transfer"),
                           ("test-partition-2", "Run nextest shard"),
-                          ("test-1", "Restore native nextest archive"),
+                          ("test-1", "Extract nextest archive"),
                           ("test-1", "Run nextest shard")):
             with self.subTest(step=step):
-                self.run_step(self.document["jobs"][job], step, expected_status=7)
+                self.run_step(self.document["jobs"][job], step, expected_status=7,
+                              download_outputs={"steps.nextest-archive-download.outputs.download-path":
+                                                str(self.root / "verified-download")})
 
     def test_an_affected_crates_archive_passes_empty_partitions_and_gates_only_orbit_exec(self):
         jobs = self.document["jobs"]
@@ -991,7 +1125,7 @@ class NextestShardWorkflowTests(unittest.TestCase):
                              ("test-partition-6", "Run nextest shard"),
                              ("test-partition-7", "Run nextest shard"),
                              ("test-partition-8", "Run nextest shard"),
-                             *[(f"test-partition-{k}", "Run nextest shard") for k in range(9, 13)]):
+                             *[(f"test-partition-{k}", "Run nextest shard") for k in range(9, 14)]):
             with self.subTest(job=job_id):
                 [nextest] = self.run_step(jobs[job_id], step)
                 # The full archive's partition guard fails the test build on an
@@ -1165,6 +1299,11 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         self.assertEqual(self.pull_request("npm/README.md"), "full")
         self.assertEqual(self.pull_request("docs/dev/qa/path-leases-listener-sudo.md"), "full")
         self.assertEqual(self.pull_request("docs/dev/qa/path-leases-listener-sudo.md", "README.md"), "full")
+        # ci-guardrails.sh selects its self-tests for the vendored standards and the
+        # root agent guides, so a docs-only run would never execute them.
+        for path in ("docs/standards/STD-01-cli-surface/STD-01.md", "AGENTS.md", "CLAUDE.md"):
+            self.assertEqual(self.pull_request(path), "full", path)
+            self.assertEqual(self.pull_request(path, "README.md"), "full", path)
         self.assertEqual(self.pull_request("RELEASING.md", "crates/orbit-cli/src/main.rs"),
                          "affected:orbit-auth,orbit-cli,orbit-exec,orbit-policy,orbit-store")
         # A listing that disagrees with the reported count is not trusted.
@@ -1232,7 +1371,43 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         self.assertEqual(self.push("npm/README.md"), "full")
         self.assertEqual(self.push("docs/dev/qa/path-leases-listener-sudo.md"), "full")
         self.assertEqual(self.push("README.md", "docs/dev/qa/path-leases-listener-sudo.md"), "full")
+        for path in ("docs/standards/STD-01-cli-surface/STD-01.md", "AGENTS.md", "CLAUDE.md"):
+            self.assertEqual(self.push(path), "full", path)
         self.assertEqual(self.classify("push", {}, SHA=self.SHA, BEFORE=self.BEFORE), "full")
+
+    def test_cargo_read_markdown_is_not_docs_only(self):
+        """Every Markdown path FILE_READERS names stays out of docs mode.
+
+        The classifier derives that exclusion from the list, so a new reader
+        fails here until both sides agree. docs/design/auto-tasks/1_overview.md
+        selects the same crates as an orbit-core change; a push of it is full.
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "ci_test_affected", ROOT / "scripts/ci-test-affected.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        core_scope = self.pull_request("crates/orbit-core/src/lib.rs")
+        saw_overview = False
+        for prefix, _readers in module.FILE_READERS:
+            text = prefix.as_posix()
+            if text.startswith(("crates/", "plugin/")):
+                continue
+            if text.endswith(".md"):
+                candidates = [text]
+            elif (ROOT / prefix).is_dir():
+                candidates = [f"{text}/cargo-read.md"]
+            else:
+                continue
+            for candidate in candidates:
+                with self.subTest(path=candidate):
+                    self.assertNotEqual(self.pull_request(candidate), "docs")
+                    self.assertNotEqual(self.push(candidate), "docs")
+            if text == "docs/design/auto-tasks/1_overview.md":
+                saw_overview = True
+                self.assertEqual(self.pull_request(text), core_scope)
+                self.assertEqual(self.push(text), "full")
+        self.assertTrue(saw_overview, "FILE_READERS no longer names the auto-task overview")
 
     def test_docs_push_after_untested_before_runs_full_gate(self):
         jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
@@ -1246,7 +1421,7 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
                     job["if"], "push", dependency_skipped=True, bindings={SCOPE: mode})}
                 self.assertEqual(admitted, {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2",
                                             "test-3", "test-extra", "test-partition-2",
-                                            "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"})
+                                            "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12", "test-partition-13"})
         self.assertEqual(self.push("docs/guide.md", same_tree=True, before_check="cancelled"), "skip",
                          "an exact tree that passed on the PR head is safe independently of BEFORE")
 
@@ -1269,9 +1444,9 @@ print(json.dumps(dict(workspace_members=sorted(graph), packages=[
         document = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
         jobs = document["jobs"]
         expected = {
-            "full": {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"},
-            "affected:orbit-cli": {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"},
-            "": {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12"},
+            "full": {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12", "test-partition-13"},
+            "affected:orbit-cli": {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12", "test-partition-13"},
+            "": {"scope", "ci", "guardrails", "guardrails-qa", "test-build", "test-1", "test-2", "test-3", "test-extra", "test-partition-2", "test-partition-6", "test-partition-7", "test-partition-8", "test-partition-9", "test-partition-10", "test-partition-11", "test-partition-12", "test-partition-13"},
             "docs": {"scope", "docs"},
             "skip": {"scope"},
         }

@@ -492,12 +492,8 @@ fn a_delivery_routine_settles_held_and_timed_out_jobs_without_retrying() {
             .unwrap();
         let stopped = workspace.runtime.show_job_run(&run.run_id).unwrap();
         assert_eq!(stopped.state, terminal);
-        assert!(
-            stopped
-                .steps
-                .iter()
-                .all(|step| step.agent_response_json.is_none())
-        );
+        // The run was only marked running and finalized, never executed.
+        assert!(stopped.steps.is_empty(), "{:?}", stopped.steps);
 
         for minutes in [1, 2] {
             let result = evaluate_routine(

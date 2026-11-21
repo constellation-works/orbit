@@ -80,6 +80,9 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             OrbitError::CallbackWorkspaceOutsideSandbox(redact(&m))
         }
         OrbitError::NoJobRuns => OrbitError::NoJobRuns,
+        OrbitError::TaskDeliveryUnavailable(task_id) => {
+            OrbitError::TaskDeliveryUnavailable(redact(&task_id))
+        }
         OrbitError::NotFound { kind, id, guidance } => OrbitError::NotFound {
             kind,
             id: redact(&id),
@@ -211,6 +214,8 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             message: redact(&message),
         },
         OrbitError::Execution(m) => OrbitError::Execution(redact(&m)),
+        OrbitError::ProviderModelAccessHold(m) => OrbitError::ProviderModelAccessHold(redact(&m)),
+        OrbitError::FootprintUnavailable(m) => OrbitError::FootprintUnavailable(redact(&m)),
         OrbitError::UpgradeAdmissionRefused(mut refusal) => {
             refusal.message = redact(&refusal.message);
             OrbitError::UpgradeAdmissionRefused(refusal)
@@ -292,6 +297,7 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             OrbitError::FileLockTimeout(redact_file_lock_timeout(*timeout, redact))
         }
         OrbitError::Store(m) => OrbitError::Store(redact(&m)),
+        OrbitError::StoreWritableOpenOwed(m) => OrbitError::StoreWritableOpenOwed(redact(&m)),
         OrbitError::SqliteContention(contention) => {
             OrbitError::SqliteContention(redact_sqlite_contention(*contention, redact))
         }
@@ -349,6 +355,11 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
         OrbitError::JobRunControlConflict(m) => OrbitError::JobRunControlConflict(redact(&m)),
         OrbitError::Io(m) => OrbitError::Io(redact(&m)),
         OrbitError::WorkspaceError(m) => OrbitError::WorkspaceError(redact(&m)),
+        OrbitError::WorkspaceRebindHostStoreRequired { path } => {
+            OrbitError::WorkspaceRebindHostStoreRequired {
+                path: redact(&path.to_string_lossy()).into(),
+            }
+        }
         OrbitError::Migration(m) => OrbitError::Migration(redact(&m)),
         OrbitError::StorageAccessDenied { layer, message } => OrbitError::StorageAccessDenied {
             layer,
@@ -361,6 +372,11 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
         OrbitError::SourceRepairRunStateRefused { reason, message } => {
             OrbitError::SourceRepairRunStateRefused {
                 reason,
+                message: redact(&message),
+            }
+        }
+        OrbitError::SourceRepairOperatorDecisionRefused { message } => {
+            OrbitError::SourceRepairOperatorDecisionRefused {
                 message: redact(&message),
             }
         }

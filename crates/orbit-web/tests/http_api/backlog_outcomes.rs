@@ -13,6 +13,7 @@ use super::backlog_forecast::{
     ENDPOINT, backlog_task, completed, drain_hours, initial_work_forecast_baseline,
     one_hour_history, prediction,
 };
+use super::backlog_rework::edit_task;
 use super::support::{Fixture, isolated, json_ok};
 
 /// A medium task now in `status`, whose recorded history is `steps`: each
@@ -465,6 +466,23 @@ fn whole_forecast_baseline_scores_without_filling_withheld_adjusted_totals() {
             }
             assert_eq!(level["settled"], 1);
             assert_eq!(calibration["by_model_version"][0]["forecast_level"], *level);
+            // The series that matures while adjusted totals are withheld is
+            // labeled, and each stored forecast names the series it carries.
+            let series = level["series"].as_array().unwrap();
+            assert_eq!(series[1]["key"], "pre_regression_baseline", "{level}");
+            assert!(
+                series[1]["scores"]
+                    .as_str()
+                    .unwrap()
+                    .contains("without simulated regression follow-up")
+            );
+            let row = &calibration["forecasts"][0];
+            assert_eq!(
+                row["scorable_series"],
+                json!(["pre_regression_baseline"]),
+                "{row}"
+            );
+            assert_eq!(row["pre_regression_baseline"], baseline, "{row}");
 
             // An adjusted-only stored row scores as before and contributes
             // no invented baseline. A young baseline stays provisional.
@@ -561,7 +579,7 @@ fn subsecond_and_immediate_returns_stay_drawable() {
                 block_that_returned(&fixture, delay);
                 let id = backlog_task(&fixture, "Waiting", &["file:wait.rs"], &[], &[]);
                 let forecast = forecast(&fixture);
-                assert_eq!(forecast["model_version"], 19);
+                assert_eq!(forecast["model_version"], 21);
                 assert_eq!(
                     forecast["inputs"]["outcomes"]["episodes"],
                     json!({"blocked": 1, "delivered": 1})
@@ -649,7 +667,7 @@ fn forecast_queued_against(
     dated_task(&fixture, status, steps);
     let id = backlog_task(&fixture, label, &["file:queued.rs"], &[], &[]);
     let forecast = forecast(&fixture);
-    assert_eq!(forecast["model_version"], 19, "{label}");
+    assert_eq!(forecast["model_version"], 21, "{label}");
     assert_eq!(forecast["inputs"]["history_deliveries"], 5, "{label}");
     assert_eq!(forecast["forecast"]["tasks"], 1, "{label}");
     assert_eq!(
@@ -983,7 +1001,7 @@ fn stored_task_forecasts_count_failed_attempts_and_score_like_measures() {
             assert_eq!(cohort["tasks"], 1, "{response}");
             let simulated = prediction(&response, &queued);
             let stored = fixture.runtime.backlog_forecasts(1).unwrap().remove(0);
-            assert_eq!(stored.model_version, 19);
+            assert_eq!(stored.model_version, 21);
             let tasks: Value = serde_json::from_str(&stored.tasks_json).unwrap();
             let task = &tasks[0]["forecast"];
             assert_eq!(tasks[0]["id"], queued.as_str());
@@ -1287,6 +1305,116 @@ fn mature_model10_cohort_keeps_retry_slot_hours_outside_the_sample_window() {
             assert_eq!(
                 commented, expected,
                 "a terminal comment moved the retained cohort's work-hours actual: {commented_body}"
+            );
+        },
+    );
+}
+
+/// A mature model-21 snapshot of one measured $1, 100-token origin and the
+/// done fix `repair` filed against it afterwards; the fix has no invocation
+/// of its own. Returns the calibration after scoring.
+fn calibrated_origin_with_unmeasured_fix(
+    repair: impl FnOnce(&mut orbit_types::task::TaskEnvelopeV2, &str),
+) -> Value {
+    let fixture = Fixture::new();
+    let version = forecast(&fixture)["model_version"].as_u64().unwrap() as u32;
+    let at = Utc::now() - Duration::days(100);
+    let step = |hours: i64, to| (at + Duration::hours(hours), to);
+    let origin = dated_task(
+        &fixture,
+        TaskStatus::Done,
+        &[step(0, TaskStatus::InProgress), step(1, TaskStatus::Done)],
+    );
+    invocation_model(
+        &fixture,
+        &origin,
+        at + Duration::hours(1),
+        1,
+        1.0,
+        "claude-opus-4-7",
+    );
+    let fix = dated_task(
+        &fixture,
+        TaskStatus::Done,
+        &[step(2, TaskStatus::InProgress), step(3, TaskStatus::Done)],
+    );
+    edit_task(&fixture, &fix, |task| {
+        task.created_at = at + Duration::hours(2);
+        repair(task, &origin);
+    });
+    let quantiles = json!({
+        "time_to_drain_hours": {"p50": 0.5, "p90": 8.0},
+        "tokens": {"p50": 50.0, "p90": 1_000_000.0},
+        "usd": {"p50": 0.5, "p90": 2.0},
+    });
+    assert!(
+        fixture
+            .runtime
+            .record_backlog_forecast(
+                StoredBacklogForecast {
+                    workspace_id: String::new(),
+                    forecast_at: at - Duration::hours(2),
+                    model_version: version,
+                    inputs_json: "{}".into(),
+                    result_json: quantiles.to_string(),
+                    tasks_json: json!([{"id": origin, "complexity": "medium", "forecast": {}}])
+                        .to_string(),
+                },
+                Duration::minutes(1),
+            )
+            .unwrap()
+    );
+    forecast(&fixture)["calibration"].clone()
+}
+
+#[test]
+fn an_in_origin_review_repair_keeps_the_measured_origin_spend_scorable() {
+    isolated(
+        "backlog_outcomes::an_in_origin_review_repair_keeps_the_measured_origin_spend_scorable",
+        || {
+            let relation = |relation_type, origin: &str| orbit_types::task::TaskRelation {
+                relation_type,
+                target: origin.into(),
+                regression: None,
+            };
+            // Repaired by the origin's landing review: its spend is the
+            // origin's, counted once.
+            let calibration = calibrated_origin_with_unmeasured_fix(|task, origin| {
+                task.tags = vec!["defect-record".into()];
+                task.relations = vec![
+                    relation(orbit_types::task::TaskRelationType::RegressionFrom, origin),
+                    relation(orbit_types::task::TaskRelationType::SpawnedFrom, origin),
+                ];
+            });
+            let row = &calibration["forecasts"][0];
+            assert_eq!(row["actual"]["usd"], 1.0, "{calibration}");
+            assert_eq!(row["actual"]["tokens"], 100.0, "{calibration}");
+            assert_eq!(row["actual"]["drained"], true, "{calibration}");
+            let level = &calibration["forecast_level"]["adjusted"];
+            assert_eq!(
+                level["usd"],
+                json!({"n": 1, "under_p50": 0.0, "under_p90": 1.0}),
+                "{calibration}"
+            );
+            assert_eq!(
+                level["tokens"],
+                json!({"n": 1, "under_p50": 0.0, "under_p90": 1.0}),
+                "{calibration}"
+            );
+
+            // Repaired by hand: the fix's spend is unknown and stays missing.
+            let calibration = calibrated_origin_with_unmeasured_fix(|task, origin| {
+                task.relations = vec![relation(
+                    orbit_types::task::TaskRelationType::RegressionFrom,
+                    origin,
+                )];
+            });
+            let row = &calibration["forecasts"][0];
+            assert!(row["actual"]["usd"].is_null(), "{calibration}");
+            assert!(row["actual"]["tokens"].is_null(), "{calibration}");
+            assert_eq!(
+                calibration["forecast_level"]["adjusted"]["usd"]["n"], 0,
+                "{calibration}"
             );
         },
     );

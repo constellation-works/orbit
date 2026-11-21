@@ -12,15 +12,17 @@
 //!   limit · resets 3pm (America/Los_Angeles)`.
 //! - Antigravity: `Individual quota reached. … Resets in 1h37m37s.`
 //! - Gemini CLI: `TerminalQuotaError: You exceeded your current quota`.
+//! - Muse: `Subscription quota exhausted … resets at <RFC3339>`.
 //! - grok 1.0.46: HTTP `Too Many Requests (` and `Payment Required (`; Grok
 //!   Build: `API error (status 402 Payment Required): Grok Build usage balance
 //!   exhausted`.
 
 use chrono::{
     DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta,
-    TimeZone, Utc,
+    TimeZone, Timelike, Utc,
 };
 use orbit_types::workflow::ProviderLimitFailure;
+use tz::{TimeZoneRef, datetime::FoundDateTimeKind};
 
 /// Phrases that alone say a usage limit was reached. Lowercase, with
 /// typographic apostrophes folded to `'`.
@@ -38,6 +40,7 @@ const PROVIDER_LIMIT_PHRASES: &[&str] = &[
     "payment required (",
     "payment required)",
     "usage balance exhausted",
+    "subscription quota exhausted",
 ];
 
 /// Claude Code's openings, which say a limit only alongside the word.
@@ -81,10 +84,34 @@ pub fn provider_usage_limit_details(
         model: limit_model(&folded),
         window: None,
         resets_at: relative_reset(&folded, now)
+            .or_else(|| rfc3339_reset(text))
             .or_else(|| try_again_at(&folded, now, local))
             .or_else(|| resets_at_zone(&folded, now))
             .or_else(|| epoch_suffix(&folded)),
     }
+}
+
+/// Muse's `resets at <RFC3339>` timestamp, with optional trailing punctuation.
+fn rfc3339_reset(text: &str) -> Option<DateTime<Utc>> {
+    const LEAD: &str = "resets at ";
+    // ASCII case folding preserves byte positions for the timestamp only when
+    // the prefix is ASCII, so locate it in the original text instead.
+    let start = text
+        .char_indices()
+        .find(|(index, _)| {
+            text[*index..]
+                .get(..LEAD.len())
+                .is_some_and(|s| s.eq_ignore_ascii_case(LEAD))
+        })?
+        .0
+        + LEAD.len();
+    let stamp = text[start..]
+        .split_whitespace()
+        .next()?
+        .trim_end_matches(['.', ',', ';', ')']);
+    DateTime::parse_from_rfc3339(stamp)
+        .ok()
+        .map(|at| at.with_timezone(&Utc))
 }
 
 /// Codex's `usage limit for <model>`, lowercased like crew models compare.
@@ -173,33 +200,63 @@ fn resets_at_zone(folded: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
     let open = rest.find('(')?;
     let close = open + rest[open..].find(')')?;
     let zone_text = rest[open + 1..close].trim();
-    // The text is folded; match the zone's name without case.
-    let zone = chrono_tz::TZ_VARIANTS
-        .iter()
-        .find(|zone| zone.name().eq_ignore_ascii_case(zone_text))?;
+    // Exclude the IANA placeholder and non-name bytes before the database's
+    // case-insensitive lookup, which can equate DEL with an underscore.
+    if zone_text == "factory"
+        || !zone_text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'_' | b'+' | b'-'))
+    {
+        return None;
+    }
+    let zone = *tzdb_data::find_tz(zone_text.as_bytes())?;
     let when = rest[..open].trim().trim_end_matches(',');
     let (date, time) = match when.rsplit_once(", ") {
         Some((date, time)) => (Some(date.trim()), time.trim()),
         None => (None, when),
     };
     let time = parse_clock(time)?;
-    let today = now.with_timezone(zone).date_naive();
+    let observed_offset = zone.find_local_time_type(now.timestamp()).ok()?.ut_offset();
+    let observed_offset = FixedOffset::east_opt(observed_offset)?;
+    let today = now.naive_utc().checked_add_offset(observed_offset)?.date();
     let date = match date {
         Some(date) => nearest_explicit_date(date, today)?,
         None => today,
     };
-    let at = zone
-        .from_local_datetime(&date.and_time(time))
-        .earliest()?
-        .with_timezone(&Utc);
+    let at = resolve_named_reset_utc(zone, date, time)?;
     if at <= now && date == today {
-        let tomorrow = date.succ_opt()?;
-        zone.from_local_datetime(&tomorrow.and_time(time))
-            .earliest()
-            .map(|at| at.with_timezone(&Utc))
+        resolve_named_reset_utc(zone, date.succ_opt()?, time)
     } else {
         Some(at)
     }
+}
+
+fn resolve_named_reset_utc(
+    zone: TimeZoneRef<'_>,
+    date: NaiveDate,
+    time: NaiveTime,
+) -> Option<DateTime<Utc>> {
+    let candidates = tz::DateTime::find(
+        date.year(),
+        date.month() as u8,
+        date.day() as u8,
+        time.hour() as u8,
+        time.minute() as u8,
+        0,
+        0,
+        zone,
+    )
+    .ok()?;
+    // Candidates are in UTC order. Take the first real instant in a fold
+    // and reject a clock time skipped by a forward transition.
+    let at = candidates
+        .into_inner()
+        .into_iter()
+        .find_map(|candidate| match candidate {
+            FoundDateTimeKind::Normal(at) => Some(at),
+            FoundDateTimeKind::Skipped { .. } => None,
+        })?;
+    DateTime::from_timestamp(at.unix_time(), 0)
 }
 
 /// The year-less `Jan 2` occurrence nearest `today`, so a January reset seen in

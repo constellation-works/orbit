@@ -1,5 +1,5 @@
 use orbit_common::OrbitError;
-use orbit_exec::{EnvironmentMode, ExecRequest, StdinMode};
+use orbit_exec::ExecRequest;
 use orbit_types::tool::{ToolParam, ToolSchema};
 use serde_json::Value;
 
@@ -14,6 +14,7 @@ pub use self::streaming::*;
 pub mod auth;
 pub mod dependabot_alerts;
 mod diagnostic;
+mod log_cache;
 mod nextest_regions;
 pub(crate) mod throttle;
 pub use diagnostic::strip_ansi_sequences;

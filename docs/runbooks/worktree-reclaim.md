@@ -231,12 +231,8 @@ into `someday`, read from the task history (or its last update when the
 history cannot be read), not from when the run finished, so a long-finished
 run whose task was parked just now keeps its worktree as
 `skipped:parked_too_recent`. A replica reads that history from the task's
-holder. `rejected` and `archived` tasks keep their immediate eligibility.
-
-```toml
-[worktree]
-parked_reclaim_after_hours = 336
-```
+holder. `rejected` and `archived` tasks keep their immediate eligibility. The
+336-hour age is fixed; no configuration key changes it.
 
 Both `orbit gc worktrees` and the scheduled `worktree_gc_pipeline` apply the
 rule, with every gate a settled worktree passes plus these, each reported in

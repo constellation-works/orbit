@@ -13,12 +13,34 @@ pub(in crate::activity_job::job_executor) enum FinalRecoveryVerdict {
     Settled,
     /// The task is parked for a human; the run's `failure_activity` follows.
     Escalated,
+    /// Applying the decision failed, or the host answered `resume` with no
+    /// step to resume from; the run fails with its `failure_activity`, as an
+    /// escalation does. Distinct from [`Self::Escalated`], which records a
+    /// park the host successfully applied.
+    RecoveryApplicationFailed,
+    /// A park or current-policy requeue the host successfully applied for a
+    /// verified unchanged completion observation [ORB-25661]; the executor
+    /// holds the run instead of failing it, without its `failure_activity`.
+    CompletionObservationHeld,
 }
 
 impl FinalRecoveryVerdict {
     /// Whether the job's terminal `failure_activity` still runs.
     pub(in crate::activity_job::job_executor) fn runs_failure_activity(&self) -> bool {
-        matches!(self, Self::Skipped | Self::Escalated)
+        matches!(
+            self,
+            Self::Skipped | Self::Escalated | Self::RecoveryApplicationFailed
+        )
+    }
+
+    /// This verdict as the hold for a transient completion observation, when
+    /// it records a disposition the host successfully applied. A failed
+    /// application and every other verdict keep their own path.
+    pub(in crate::activity_job::job_executor) fn held_for_completion_observation(self) -> Self {
+        match self {
+            Self::Settled | Self::Escalated => Self::CompletionObservationHeld,
+            other => other,
+        }
     }
 }
 

@@ -326,6 +326,9 @@ fn a_path_coupled_registry_adopts_without_cascading_into_its_children() {
     assert_eq!(registry.local_task_prefix().unwrap(), "ORB");
 }
 
+/// An unrecognized ledgerless v6 gets the unsupported-schema guidance on both
+/// a writable open and an observation-only open, and neither touches it. A
+/// recognized v6 still asks for writable setup on observation and adopts.
 #[test]
 fn an_unrecognized_v6_is_refused_and_left_unadopted() {
     if !task_registry_ledger_isolated("an_unrecognized_v6_is_refused_and_left_unadopted") {
@@ -344,9 +347,35 @@ fn an_unrecognized_v6_is_refused_and_left_unadopted() {
         error.contains("not the known compatible additive format"),
         "{error}"
     );
+    let observed = TaskRegistryStore::open_read_only(&path)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        observed.contains("not the known compatible additive format"),
+        "observation names the unsupported format: {observed}"
+    );
+    assert!(
+        !observed.contains("the database is read-only"),
+        "observation must not prescribe a writable setup step: {observed}"
+    );
     let conn = Connection::open(&path).unwrap();
     assert!(!has_table(&conn, "schema_meta"));
     assert_eq!(user_version(&conn), 6);
+
+    let recognized = root.join("recognized");
+    let path = populated(&recognized);
+    as_pre_ledger(&path, 6, true);
+    let observed = TaskRegistryStore::open_read_only(&path)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        observed.contains("requires writable additive setup"),
+        "a recognized v6 still names its setup: {observed}"
+    );
+    drop(TaskRegistryStore::open(&path).unwrap());
+    assert_adopted(&Connection::open(&path).unwrap());
 }
 
 /// Forward compatibility: the current release predates the registry ledger

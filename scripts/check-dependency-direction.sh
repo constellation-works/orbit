@@ -61,7 +61,8 @@ allowed_internal_deps() {
       echo "orbit-common orbit-types"
       ;;
     orbit-tools)
-      echo "orbit-common orbit-exec orbit-policy orbit-types"
+      # Its dev-only self dependency enables the `test-support` feature.
+      echo "orbit-common orbit-exec orbit-policy orbit-tools orbit-types"
       ;;
     orbit-agent)
       echo "orbit-common orbit-types"
@@ -115,6 +116,10 @@ allowed_internal_deps() {
 
 allowed_dev_only_deps() {
   case "$1" in
+    orbit-tools)
+      # Tools' own integration tests enable its `test-support` feature.
+      echo "orbit-tools"
+      ;;
     orbit-mcp)
       # Only integration tests enable its test-support transport hooks.
       echo "orbit-mcp"
@@ -298,18 +303,6 @@ while IFS=$'\t' read -r crate manifest dependency kind; do
   fi
 done < "$dependency_listing"
 
-# orbit-core is one crate, but its internal boundaries are directional too.
-# The runtime kernel lives in orbit-runtime, which cannot reach Core's use
-# cases or adapters (the dependency policy above); composition is the only
-# owner allowed to join resolved config, bootstrap, runtime construction, and
-# adapter registration.
-if dependency_matches -n 'crate::adapter' \
-  "$repo_root/crates/orbit-core/src/application" \
-  -g '*.rs' -g '!**/tests/**'; then
-  echo "forbidden orbit-core application-to-adapter import"
-  fail=1
-fi
-
 # Within the application layer [ORB-17924]: constants and DTOs that several
 # modules share live in `application::contracts`, which imports none of the
 # application modules; `task` reaches the state scheduler only through its
@@ -327,10 +320,17 @@ contracts_higher="${app_modules}|routines|auto_tasks"
 # nonzero when one is found. With `$4` set to `crate-root`, `$1` is any layer under
 # the crate source and the modules are crate-root modules: a `super::` chain counts
 # when it climbs out to the crate root, and a `crate::` path or use-tree counts too
-# [ORB-22005]. With `$4` set to `application-root`, also expand absolute
-# `crate::application::` paths and nested use-trees into the application modules.
+# [ORB-22005]. Without it, `$1` is the application layer: a `super::` chain counts
+# when it climbs to `application`, and an absolute `crate::application::<module>`
+# path or use-tree counts too, however it is grouped (`use crate::{X,
+# application::<module>::Y}` or a nested `use crate::application::{a::{B},
+# <module>::C}`).
+# With `$4` set to `named-path`, match the `|`-separated path prefixes `$3`
+# anywhere in code, including grouped trees, while preserving comments and
+# literals as non-dependencies. A single name matches that identifier alone.
+# With `$5` set to `include-tests`, also scan sibling test modules.
 super_chains_into() {
-  python3 - "$1" "$2" "$3" "${4:-}" <<'PY'
+  python3 - "$1" "$2" "$3" "${4:-}" "${5:-}" <<'PY'
 import pathlib
 import re
 import sys
@@ -340,7 +340,7 @@ module = sys.argv[2]
 upper = set(sys.argv[3].split("|"))
 crate_root = sys.argv[4] == "crate-root"
 climb_target = [] if crate_root else [app.name]
-path_starts = ("super", "crate") if sys.argv[4] in ("crate-root", "application-root") else ("super",)
+path_starts = ("super", "crate")
 token = re.compile(
     r"(?P<line>//[^\n]*)|(?P<block>/\*)"
     r'|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")'
@@ -375,8 +375,11 @@ def code_tokens(source):
             yield match.group(), match.start()
 
 
-def use_tree(tokens, index, prefix=()):
-    """Expand relative paths, carrying the prefix through nested use groups."""
+def use_tree(tokens, index, prefix=(), aliases=None):
+    """Expand relative paths, carrying the prefix through nested use groups.
+
+    When `aliases` is a list, each `path as name` rename appends `(path, name)`.
+    """
     paths = []
     while index + 1 < len(tokens) and tokens[index + 1][0] == "::":
         prefix += (tokens[index][0],)
@@ -384,7 +387,7 @@ def use_tree(tokens, index, prefix=()):
     if index < len(tokens) and tokens[index][0] == "{":
         index += 1
         while index < len(tokens) and tokens[index][0] != "}":
-            member_paths, index = use_tree(tokens, index, prefix)
+            member_paths, index = use_tree(tokens, index, prefix, aliases)
             paths.extend(member_paths)
             if index < len(tokens) and tokens[index][0] == ",":
                 index += 1
@@ -396,22 +399,66 @@ def use_tree(tokens, index, prefix=()):
         paths.append(prefix + (tokens[index][0],))
         index += 1
         if index < len(tokens) and tokens[index][0] == "as":
+            if aliases is not None and index + 1 < len(tokens):
+                aliases.append((paths[-1], tokens[index + 1][0]))
             index += 2
     return paths, index
 
 
 failed = False
 target = app / module
+if not target.exists():
+    alt = target.with_name(target.name + ".rs") if target.suffix == "" else None
+    if alt is not None and alt.is_file():
+        target = alt
+    else:
+        print(f"dependency scan path missing: {app / module}", file=sys.stderr)
+        sys.exit(1)
 paths = [target] if target.is_file() else sorted(target.rglob("*.rs"))
 for path in paths:
     rel = path.relative_to(app)
-    if "tests" in rel.parts[:-1] or rel.name == "tests.rs":
+    if sys.argv[5] != "include-tests" and ("tests" in rel.parts[:-1] or rel.name == "tests.rs"):
         continue
     parts = ([] if crate_root and module else [app.name]) + list(rel.with_suffix("").parts)
     if parts[-1] == "mod":
         parts.pop()
     source = path.read_text()
     tokens = list(code_tokens(source))
+    if sys.argv[4] == "named-path":
+        prefixes = [tuple(name.split("::")) for name in upper]
+        # A `use <path>::landing as l;` rename lets `l::checks` stand for
+        # `landing::checks`: track each alias of a multi-segment prefix's first
+        # segment, including aliases of aliases, and match prefixes through it.
+        renames = []
+        for index, (name, _) in enumerate(tokens):
+            if name == "use":
+                use_tree(tokens, index + 1, (), renames)
+        expanded = []
+        for prefix in prefixes:
+            if len(prefix) < 2:
+                continue
+            heads = {prefix[0]}
+            grown = True
+            while grown:
+                grown = False
+                for segments, alias in renames:
+                    if segments[-1] == "self" and len(segments) > 1:
+                        segments = segments[:-1]
+                    if segments[-1] in heads and alias not in heads and alias != "_":
+                        heads.add(alias)
+                        grown = True
+            expanded.extend((head, *prefix[1:]) for head in heads - {prefix[0]})
+        prefixes = [*prefixes, *expanded]
+        for index, (name, start) in enumerate(tokens):
+            if not any(name == prefix[0] for prefix in prefixes):
+                continue
+            named_paths, _ = use_tree(tokens, index)
+            if any(segments[:len(prefix)] == prefix
+                   for segments in named_paths for prefix in prefixes):
+                number = source.count("\n", 0, start) + 1
+                print(f"{path}:{number}:{source.splitlines()[number - 1]}")
+                failed = True
+        continue
     index = 0
     while index + 1 < len(tokens):
         if tokens[index][0] not in path_starts or tokens[index + 1][0] != "::":
@@ -448,6 +495,17 @@ for path in paths:
 sys.exit(1 if failed else 0)
 PY
 }
+
+# orbit-core is one crate, but its internal boundaries are directional too.
+# The runtime kernel lives in orbit-runtime, which cannot reach Core's use
+# cases or adapters (the dependency policy above); composition is the only
+# owner allowed to join resolved config, bootstrap, runtime construction, and
+# adapter registration.
+# Grouped `use crate::{adapter::…}` trees count as an import too.
+if ! super_chains_into "$repo_root/crates/orbit-core/src/application" "" 'crate::adapter' named-path; then
+  echo "forbidden orbit-core application-to-adapter import"
+  fail=1
+fi
 
 # Resolve relative use trees at each file's module depth: grouped and multiline
 # imports into higher modules count, while imports within contracts stay legal.
@@ -628,9 +686,15 @@ lower_path = [app.name, *[part for part in module.split("/") if part]]
 names = set()
 for top in upper:
     # A module is a directory or, like `tag_instructions`, a single file.
+    # An empty name is the defining root itself. A missing module is a scan
+    # hole, not an empty layer.
     top_root = defs_root / top
-    if not top_root.exists() and (defs_root / f"{top}.rs").is_file():
+    if not top_root.exists() and top != "" and (defs_root / f"{top}.rs").is_file():
         top_root = defs_root / f"{top}.rs"
+    if not top_root.exists():
+        missing = defs_root / top if top else defs_root
+        print(f"dependency scan path missing: {missing}", file=sys.stderr)
+        sys.exit(1)
     for path, rel in production(top_root, defs_root):
         parts = [*def_prefix, *rel.with_suffix("").parts]
         if parts[-1] == "mod":
@@ -682,7 +746,15 @@ def qualified_type(toks, end):
         return name
     return None
 failed = False
-for path, rel in production(app / module, app):
+scan_root = app / module
+if not scan_root.exists():
+    alt = scan_root.with_name(scan_root.name + ".rs") if scan_root.suffix == "" else None
+    if alt is not None and alt.is_file():
+        scan_root = alt
+    else:
+        print(f"dependency scan path missing: {app / module}", file=sys.stderr)
+        sys.exit(1)
+for path, rel in production(scan_root, app):
     if any(str(rel).startswith(e) for e in exempt):
         continue
     source = path.read_text()
@@ -718,7 +790,7 @@ PY
 # adapter's blocks, so a new adapter method is covered without being listed.
 # Same-named methods on receivers that are not `OrbitRuntime`: the skill catalog's
 # `doctor` and the plugin store's `list_plugins`. Exact lines only.
-adapter_upcall_allowed='^health/artifact_diagnosis\.rs:[0-9]+:.*runtime\.skill_catalog\(\)\.doctor\(|^skill\.rs:[0-9]+:.*self\.skill_catalog\(\)\.doctor\(|^plugin/inspect/summary\.rs:[0-9]+:\s+\.list_plugins\(\)\?$|^plugin/secrets\.rs:[0-9]+:.*stores\(\)\.plugins\(\)\.list_plugins\(|^tool_name_migration\.rs:[0-9]+:.*stores\(\)\.plugins\(\)\.list_plugins\('
+adapter_upcall_allowed='^health/artifact_diagnosis\.rs:[0-9]+:.*runtime\.skill_catalog\(\)\.doctor\(|^skill\.rs:[0-9]+:.*self\.skill_catalog\(\)\.doctor\(|^plugin/inspect/summary\.rs:[0-9]+:\s+\.list_plugins\(\)\?$|^plugin/secrets\.rs:[0-9]+:.*stores\(\)\.plugins\(\)\.list_plugins\(|^tool_name_migration/plugin_manifest\.rs:[0-9]+:.*stores\(\)\.plugins\(\)\.list_plugins\('
 if ! inherent_calls_into "$app_src" "" "" "$adapter_upcall_allowed" '' "$repo_root/crates/orbit-core/src/adapter"; then
   echo "orbit-core application must not call inherent OrbitRuntime methods defined under adapter; reach them through an application-owned port [ORB-22004]"
   fail=1
@@ -990,7 +1062,7 @@ fi
 # dispatch only through its own ReviewLandingDispatchPort. Refuse paths,
 # grouped trees, relative chains and calls into landing's inherent methods.
 # These exact lines read the task store, whose method shares a runtime name.
-landing_store_reads_allowed='^task/external_merge/candidate\.rs:[0-9]+:\s+\.landing_attempts\(\)$|^task/external_merge/rescued\.rs:[0-9]+:\s+if tasks\.landing_attempts\(\)\?\.iter\(\)\.any\(\|attempt\| \{$|^review/handoff\.rs:[0-9]+:\s+self\.stores\(\)\.tasks\(\)\.landing_attempts\(\)\?$'
+landing_store_reads_allowed='^task/external_merge/candidate\.rs:[0-9]+:\s+\.landing_attempts\(\)$|^task/external_merge/rescued\.rs:[0-9]+:\s+if tasks\.landing_attempts\(\)\?\.iter\(\)\.any\(\|attempt\| \{$|^review/handoff/console\.rs:[0-9]+:\s+self\.stores\(\)\.tasks\(\)\.landing_attempts\(\)\?$'
 for lower_module in task job review distributed; do
   if dependency_matches -n 'crate::application::landing\b' \
     "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||
@@ -1037,7 +1109,7 @@ done
 # Selective-review retirement removed review's risk-model freeze and its
 # codebase dependency. Keep that direction closed: review has no codebase
 # exception, including calls indexed from codebase's inherent runtime methods.
-if ! super_chains_into "$app_src" review codebase application-root ||
+if ! super_chains_into "$app_src" review codebase ||
   ! inherent_calls_into "$app_src" review codebase '' ''; then
   echo "orbit-core review must not name codebase or call its inherent methods"
   fail=1
@@ -1090,26 +1162,24 @@ fi
 # is directional: contracts and shared fs mechanics are leaves; each driver is
 # isolated; only repositories, workflows, and composition may join drivers.
 store_src="$repo_root/crates/orbit-store/src"
-if dependency_matches -n 'crate::(driver|repository|workflow)|\brusqlite\b' \
-  "$store_src/contracts" -g '*.rs' -g '!**/tests/**'; then
+if ! super_chains_into "$store_src" contracts 'crate::driver|crate::repository|crate::workflow' named-path ||
+  dependency_matches -n '\brusqlite\b' \
+    "$store_src/contracts" -g '*.rs' -g '!**/tests/**'; then
   echo "orbit-store contracts must not import persistence implementations"
   fail=1
 fi
 
-if dependency_matches -n 'crate::(driver::sqlite|repository|workflow)|use crate::(Store|StoreTx)' \
-  "$store_src/driver/file" -g '*.rs' -g '!**/tests/**'; then
+if ! super_chains_into "$store_src" driver/file 'crate::driver::sqlite|crate::repository|crate::workflow|crate::Store|crate::StoreTx' named-path; then
   echo "orbit-store file driver must not import SQLite, repositories, or workflows"
   fail=1
 fi
 
-if dependency_matches -n 'crate::(driver::file|repository|workflow)' \
-  "$store_src/driver/sqlite" -g '*.rs' -g '!**/tests/**'; then
+if ! super_chains_into "$store_src" driver/sqlite 'crate::driver::file|crate::repository|crate::workflow' named-path; then
   echo "orbit-store SQLite driver must not import file drivers, repositories, or workflows"
   fail=1
 fi
 
-if dependency_matches -n 'crate::(driver|repository|workflow)' \
-  "$store_src/fs" -g '*.rs' -g '!**/tests/**'; then
+if ! super_chains_into "$store_src" fs 'crate::driver|crate::repository|crate::workflow' named-path; then
   echo "orbit-store filesystem primitives must not import drivers or orchestration"
   fail=1
 fi
@@ -1184,6 +1254,215 @@ for consumer in handoff.rs commit/actions.rs commit/summary.rs commit/already_re
   fi
 done
 
+# Shared hosted-check handling sits below landing. Scan Rust identifiers and
+# use trees so the word landing in unchanged evidence and docs is not an edge.
+# PR, base and claim must consume checks directly, never through landing.
+if ! super_chains_into "$vcs_src" checks landing named-path; then
+  echo "orbit-engine vcs checks must not reference landing"
+  fail=1
+fi
+for consumer in pr base claim; do
+  if ! super_chains_into "$vcs_src" "$consumer" 'landing::checks' named-path; then
+    echo "orbit-engine vcs ${consumer} must consume checks directly, not landing::checks"
+    fail=1
+  fi
+done
+
+# [ORB-25311] `vcs::pr_answers` owns the PR read model and sits below checks,
+# pr, landing, base, push and claim. A Rust path segment naming one of those
+# modules is an edge; a bare identifier or a string (a pull-request number,
+# the `checks` field, a `base` pin) is not. checks, base, push, claim
+# publication and candidate_resume read the model from pr_answers and must not
+# path-name `pr` [ORB-25493]. The order is `pr_answers < candidate_resume < pr`.
+# Print every such path as `<file>:<line>:<text>` and exit nonzero when one
+# is found. A missing scan root fails closed.
+module_paths_into() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1])
+module = sys.argv[2]
+forbidden = set(sys.argv[3].split("|"))
+target = root / module
+if not target.exists():
+    print(f"dependency scan path missing: {target}", file=sys.stderr)
+    sys.exit(1)
+token = re.compile(
+    r"(?P<line>//[^\n]*)|(?P<block>/\*)"
+    r'|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")'
+    r'|(?P<literal>(?:b|c)?"(?:\\[\s\S]|[^"\\])*"'
+    r"|b?'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F_]+\}|[^\n])|[^'\\\n])')"
+    r"|::|r\#[a-zA-Z_][a-zA-Z_0-9]*|[a-zA-Z_][a-zA-Z_0-9]*|\S"
+)
+block_delimiter = re.compile(r"/\*|\*/")
+
+
+def segment_name(token_text):
+    # [ORB-26107] `r#builtin` names the module `builtin`. Keywords keep their
+    # raw spelling, so `r#use` is never read as a `use` item.
+    return token_text.removeprefix("r#")
+
+
+def code_tokens(source):
+    index = 0
+    while match := token.search(source, index):
+        index = match.end()
+        if match.lastgroup in ("line", "literal"):
+            continue
+        if match.group("block") is not None:
+            depth = 1
+            while depth and (delimiter := block_delimiter.search(source, index)):
+                depth += 1 if delimiter.group() == "/*" else -1
+                index = delimiter.end()
+            if depth:
+                return
+        elif match.group("raw") is not None:
+            closing = '"' + match.group("hashes")
+            end = source.find(closing, index)
+            if end == -1:
+                return
+            index = end + len(closing)
+        else:
+            yield match.group(), match.start()
+
+
+def use_tree(tokens, index, prefix=()):
+    paths = []
+    while index + 1 < len(tokens) and tokens[index + 1][0] == "::":
+        prefix += (segment_name(tokens[index][0]),)
+        index += 2
+    if index < len(tokens) and tokens[index][0] == "{":
+        index += 1
+        while index < len(tokens) and tokens[index][0] != "}":
+            member_paths, index = use_tree(tokens, index, prefix)
+            paths.extend(member_paths)
+            if index < len(tokens) and tokens[index][0] == ",":
+                index += 1
+            else:
+                break
+        if index < len(tokens) and tokens[index][0] == "}":
+            index += 1
+    elif index < len(tokens):
+        paths.append(prefix + (segment_name(tokens[index][0]),))
+        index += 1
+        if index < len(tokens) and tokens[index][0] == "as":
+            index += 2
+    return paths, index
+
+
+failed = False
+paths = [target] if target.is_file() else sorted(target.rglob("*.rs"))
+for path in paths:
+    rel = path.relative_to(root)
+    if "tests" in rel.parts[:-1] or rel.name == "tests.rs":
+        continue
+    source = path.read_text()
+    tokens = list(code_tokens(source))
+    reported = set()
+
+    def report(start):
+        global failed
+        number = source.count("\n", 0, start) + 1
+        if number in reported:
+            return
+        reported.add(number)
+        print(f"{path}:{number}:{source.splitlines()[number - 1]}")
+        failed = True
+
+    for index, (name, start) in enumerate(tokens):
+        if name != "use":
+            continue
+        imported, _ = use_tree(tokens, index + 1)
+        if any(segment in forbidden for segments in imported for segment in segments):
+            report(start)
+    for index, (name, start) in enumerate(tokens):
+        if segment_name(name) not in forbidden:
+            continue
+        previous = tokens[index - 1][0] if index else ""
+        following = tokens[index + 1][0] if index + 1 < len(tokens) else ""
+        if previous == "::" or following == "::":
+            report(start)
+sys.exit(1 if failed else 0)
+PY
+}
+
+if ! module_paths_into "$vcs_src" pr_answers 'pr|checks|landing|base|push|claim'; then
+  echo "orbit-engine vcs pr_answers must not name pr, checks, landing, base, push or claim"
+  fail=1
+fi
+for consumer in checks base push.rs claim/published.rs candidate_resume; do
+  if ! module_paths_into "$vcs_src" "$consumer" pr; then
+    echo "orbit-engine vcs ${consumer} must not name pr; read the PR model from pr_answers"
+    fail=1
+  fi
+done
+
+# The RuntimeHost port owns its dispatch contracts below activity execution.
+# Include test-support and test fixtures; paths into orbit-types' workflow
+# modules remain legal. The contract leaf must name no engine module at all.
+engine_src="$repo_root/crates/orbit-engine/src"
+if [[ ! -d "$engine_src/context" ]]; then
+  echo "dependency scan path missing: $engine_src/context" >&2
+  exit 1
+fi
+if ! super_chains_into "$engine_src" context activity_job crate-root include-tests; then
+  echo "orbit-engine context must not name activity_job; RuntimeHost owns its dispatch contracts"
+  fail=1
+fi
+if ! module_paths_into "$engine_src/context" dispatch_contract.rs crate; then
+  echo "orbit-engine dispatch contracts must not name any crate:: module"
+  fail=1
+fi
+
+# [ORB-26097] orbit-engine: `sandbox_spawn` sits below both
+# `executor/automation` and `activity_job`, and `executor/automation` sits below
+# `activity_job`. `sandbox_spawn.rs` may name `crate::context` (for
+# `ResolvedSandbox`) and no other crate-root module or crate-root re-export.
+# `executor/automation` must not name `activity_job` or any crate-root re-export
+# of an `activity_job` item. Children of `activity_job` must read
+# `DECLARED_FAILURE_EVIDENCE_KEY` from `context::dispatch_contract`, not the
+# `activity_job` root.
+if [[ ! -d "$engine_src/executor/automation" ]]; then
+  echo "dependency scan path missing: $engine_src/executor/automation" >&2
+  exit 1
+fi
+if [[ ! -f "$engine_src/sandbox_spawn.rs" ]]; then
+  echo "dependency scan path missing: $engine_src/sandbox_spawn.rs" >&2
+  exit 1
+fi
+for child in cli_runner job_executor; do
+  if [[ ! -d "$engine_src/activity_job/$child" ]]; then
+    echo "dependency scan path missing: $engine_src/activity_job/$child" >&2
+    exit 1
+  fi
+done
+engine_activity_job_names='activity_job|DispatchError|DispatchInvocationTrace|DispatchOutcome|JobOutcome|LinuxRuntimeWriteAuthority|ResolvedCliExecutor|ResolvedSandbox|ResolvedShellExecutor|SandboxMask|V2AuditWriter|V2DispatchInput|V2SqliteSink|dispatch_error_to_orbit|dispatch_v2_activity|execute_job_with_resume|load_activity_asset|resolve_crew_settings|resolve_job_catalog_refs_for_execution|resolve_job_catalog_refs_with_scripts_for_execution|validate_job|validate_job_deterministic_actions'
+if ! super_chains_into "$engine_src" executor/automation "$engine_activity_job_names" crate-root; then
+  echo "orbit-engine executor/automation must not name activity_job or its crate-root re-exports"
+  fail=1
+fi
+engine_spawn_forbidden="$engine_activity_job_names|test_support|ci_log_signature|ci_run_event|execute_deterministic_action|normalize_review_decision|observe_accepted_published_handoff|observe_candidate|observe_no_diff_candidate|observe_published_candidate|verify_handoff_pull_request_head|BaseSyncMode|landing_wait_gate_cleared|review_gate|run_private_vcs_operation|BaselineHoldStatus|CheckState|ClaimedKnownRed|KnownRedUnconfirmed|PullRequestStatus|WORKTREE_IDENTITY_INPUT_KEYS|WorktreeGcOptions|WorktreeGcRecovery|WorktreeGcResult|WorktreeReclaimReport|baseline_hold_status|classify_rollup_context|collect_worktrees|compose_squash_merge_message|fetch_remote_base|judge_light_delivery|judge_light_delivery_with_key|recorded_baseline_hold_status|review_skip_decision|run_deferral_probe|run_review_skip_guard|run_worktree_has_reclaim_output|run_worktree_paths|validate_claim_new_paths|verify_claimed_known_red|verify_claimed_known_red_base|provider_supports_continuity|candidate_commit_completion_hold|candidate_completion_hold"
+for entry in "$engine_src"/*; do
+  module="$(basename "$entry")"
+  module="${module%.rs}"
+  case "$module" in
+    context | lib | sandbox_spawn | tests) continue ;;
+  esac
+  if [[ -d "$entry" || "$entry" == *.rs ]]; then
+    engine_spawn_forbidden="${engine_spawn_forbidden}|${module}"
+  fi
+done
+if ! super_chains_into "$engine_src" sandbox_spawn.rs "$engine_spawn_forbidden" crate-root; then
+  echo "orbit-engine sandbox_spawn must not name any crate:: module except context"
+  fail=1
+fi
+if ! super_chains_into "$engine_src/activity_job" "" DECLARED_FAILURE_EVIDENCE_KEY; then
+  echo "orbit-engine activity_job children must read DECLARED_FAILURE_EVIDENCE_KEY from context::dispatch_contract, not the activity_job root"
+  fail=1
+fi
+
 # [ORB-24781] `job::run` (a run record's lifecycle: queries, cancellation,
 # reconciliation and drain controls) sits below `job::pipeline` (submission,
 # admission and worker execution). Run owns its audit trail (`audit_record`),
@@ -1206,6 +1485,51 @@ if dependency_matches -n '\b(crate::application::job|super::super|super)::pipeli
   echo "orbit-core job::run must not reach job::pipeline; run owns its audit writer, worker-exit evidence and definition reads"
   fail=1
 fi
+
+# [ORB-25492] orbit-web: api and serve sit above state, projections, lease and
+# the leaves, including runtime_memo. Production code in the lower modules
+# names neither api nor serve.
+# lease may name api::leases; it must not name serve. A missing scan root fails
+# closed. Tests are skipped inside module_paths_into.
+web_src="$repo_root/crates/orbit-web/src"
+for module in \
+  state why_stuck.rs projections.rs connect.rs host_tunnels.rs health.rs \
+  assets.rs run_failure.rs shutdown.rs runtime_memo.rs; do
+  if ! module_paths_into "$web_src" "$module" 'api|serve'; then
+    echo "orbit-web ${module} must not name api or serve"
+    fail=1
+  fi
+done
+if ! module_paths_into "$web_src" lease serve; then
+  echo "orbit-web lease must not name serve"
+  fail=1
+fi
+
+# [ORB-26098] orbit-tools: `builtin` sits above every other crate-root module.
+# Only `lib.rs` (its re-exports), `registry.rs` (through `register_builtins`)
+# and `github_cli.rs` (the documented re-exports of builtin GitHub builders)
+# name it; any other crate-root module's production code, `super::` chains
+# and grouped trees included, must not. Shared pieces live in crate-root
+# leaves (`gh_request`, `github_run_log_cache`, `task_guarded_selectors`).
+# Modules are enumerated, so a new one is covered without being listed. A
+# missing scan root fails closed. Tests are skipped inside module_paths_into.
+tools_src="$repo_root/crates/orbit-tools/src"
+if [[ ! -d "$tools_src/builtin" ]]; then
+  echo "dependency scan path missing: $tools_src/builtin" >&2
+  exit 1
+fi
+for entry in "$tools_src"/*; do
+  module="$(basename "$entry")"
+  case "$module" in
+    builtin | lib.rs | registry.rs | github_cli.rs | tests) continue ;;
+  esac
+  if [[ -d "$entry" || "$module" == *.rs ]]; then
+    if ! module_paths_into "$tools_src" "$module" builtin; then
+      echo "orbit-tools ${module} must not name builtin; move the shared piece into a crate-root leaf"
+      fail=1
+    fi
+  fi
+done
 
 if [[ "$fail" -ne 0 ]]; then
   exit 1

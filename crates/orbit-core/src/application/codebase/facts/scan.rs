@@ -142,13 +142,21 @@ pub(in crate::application::codebase) fn scan(
     runtime: &OrbitRuntime,
     delivery_window: Option<&super::super::sections::Params>,
     include_landed: bool,
+    listed: Option<(Vec<Task>, BTreeMap<String, String>)>,
 ) -> Result<CodebaseFacts, OrbitError> {
     let computed_at = Utc::now();
-    let tasks = runtime.list_task_metadata()?;
+    // A preceding scan of the same workspace may hand over its task list
+    // and history stamps; taken before its reads, the stamps label this
+    // scan's reads or something older, as stamps taken here would.
+    let (tasks, stamps) = match listed {
+        Some((tasks, stamps)) => (tasks, Some(stamps)),
+        None => (runtime.list_task_metadata()?, None),
+    };
     let pending_links = pending_links(&tasks);
 
     let settlements = failed_claim_settlements(runtime);
-    let mut stored = super::super::stored::StoredFacts::load(runtime);
+    let task_ids: Vec<String> = tasks.iter().map(|task| task.id.clone()).collect();
+    let mut stored = super::super::stored::StoredFacts::load(runtime, &task_ids, stamps);
     let mut facts = Vec::with_capacity(tasks.len());
     let mut landed_scan = include_landed.then(|| super::super::landed::Scanner::new(runtime));
     let notice_bases: std::collections::BTreeSet<_> = if include_landed {

@@ -1,7 +1,9 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{ExternalRef, TaskComment, TaskDecision, TaskStatus};
-use orbit_types::workflow::FailureHandoffDecision;
+use orbit_types::workflow::{
+    FailureHandoffDecision, FailureHandoffHistoryNote, RecordedCandidateConflict,
+};
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -432,14 +434,16 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
     } else {
         FAILURE_HANDOFF_EVENT
     };
-    let paths = if conflicting_paths.is_empty() {
-        "none reported".to_string()
-    } else {
-        conflicting_paths.join(", ")
+    let conflict = RecordedCandidateConflict {
+        failed_step: Some(failed_step_id.into()),
+        conflicting_paths: conflicting_paths.clone(),
     };
-    let note = format!(
-        "failure handoff published PR #{pr_number}: run={run_id}, failed_step={failed_step_id}, \
-         original_base={original_base_sha}, target_base={target_base_sha}, conflicts={paths}"
+    let note = FailureHandoffHistoryNote::encode(
+        &conflict,
+        &pr_number,
+        run_id,
+        &original_base_sha,
+        &target_base_sha,
     );
     host.apply_task_automation_update(
         &task.id,

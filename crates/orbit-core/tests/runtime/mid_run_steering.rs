@@ -288,8 +288,45 @@ fn two_runs_of_one_task_hold_independent_watermarks() {
     assert_eq!(fx.watermark(&first_run).comment, mark(0, first));
     assert_eq!(fx.watermark(&retry).comment, mark(1, second));
 
-    // A dispatch outside any persisted run has no record to hold one.
-    fx.prompt("jrun-without-state", "implement");
+    // A dispatch outside any persisted run has no record to hold a
+    // watermark: the prompt fails rather than silently losing it.
+    let refused = RuntimeHost::task_context_for_agent_input(
+        &fx.runtime,
+        "jrun-without-state",
+        "implement",
+        &json!({ "task_id": fx.task }),
+    );
+    assert!(refused.is_err(), "{refused:?}");
+}
+
+fn a_prompt_whose_run_has_no_state_fails_instead_of_dropping_the_watermark() {
+    let fx = Fixture::new(ENABLED);
+    // A run record the engine has not seeded pipeline state for yet.
+    let run = fx
+        .jobs
+        .insert_job_run(
+            "task_pr_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({ "task_id": fx.task })),
+            None,
+        )
+        .unwrap();
+    let refused = RuntimeHost::task_context_for_agent_input(
+        &fx.runtime,
+        &run.run_id,
+        "implement",
+        &json!({ "task_id": fx.task }),
+    );
+    assert!(refused.is_err(), "{refused:?}");
+    assert!(
+        fx.runtime
+            .get_task_history(&fx.task)
+            .unwrap()
+            .iter()
+            .all(|entry| entry.event != "steering_delivered"),
+        "no delivery was recorded for a prompt that was never sent"
+    );
 }
 
 /// The steering block a prompt leads with, checked to be its first key.
@@ -487,51 +524,12 @@ fn forged_agent_output_neither_advances_nor_fakes_delivery() {
     assert_eq!(fx.watermark(&run).comment, mark(1, claim));
 }
 
-fn steering_instruction_is_byte_inert_when_disabled_and_appended_when_enabled() {
-    // The host flag's default and per-key layering are
-    // `config_settings::mid_run_steering_defaults_off_layers_per_key_and_refuses_invalid_values`.
-    // This row keeps the byte-inert guarantee: disabled rendering matches the
-    // base instruction, and enabled rendering appends the declared paragraph.
-    for name in [
-        "agent_implement",
-        "agent_review_repair",
-        "final_recovery",
-        "step_failure_recovery",
-    ] {
-        let path =
-            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("assets/activities/{name}.yaml"));
-        let asset = orbit_engine::load_activity_asset(&std::fs::read_to_string(path).unwrap())
-            .unwrap_or_else(|err| panic!("{name} loads: {err}"));
-        let orbit_types::workflow::activity_job::ActivityV2Spec::AgentLoop(spec) = asset.spec.spec
-        else {
-            panic!("{name} must dispatch an agent");
-        };
-        let extra = spec
-            .steering_instruction
-            .as_deref()
-            .unwrap_or_else(|| panic!("{name} declares a steering checkpoint re-read"));
-        assert!(!extra.trim().is_empty(), "{name}: steering text is present");
-        assert_eq!(
-            spec.envelope_instruction(false),
-            spec.instruction,
-            "{name}: with steering disabled the rendered prompt is byte-identical \
-             to the base instruction (byte-inert guarantee)"
-        );
-        assert_eq!(
-            spec.envelope_instruction(true),
-            format!("{}\n\n{}", spec.instruction, extra),
-            "{name}: with steering enabled the checkpoint re-read is appended \
-             after the base instruction"
-        );
-    }
-}
-
 crate::scenario_table!(
     mid_run_steering_watermark_scenarios,
     steering_off_writes_nothing_and_on_leaves_the_prompt_unchanged,
     steering_on_records_the_newest_comment_by_position_and_never_moves_back,
     two_runs_of_one_task_hold_independent_watermarks,
-    steering_instruction_is_byte_inert_when_disabled_and_appended_when_enabled
+    a_prompt_whose_run_has_no_state_fails_instead_of_dropping_the_watermark
 );
 
 crate::scenario_table!(

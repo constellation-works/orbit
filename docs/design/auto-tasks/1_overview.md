@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-11-10
-last_validated: 2026-11-10
+last_updated: 2026-11-20
+last_validated: 2026-11-15
 status: Implemented
 stage: shipped
 next: "—"
@@ -100,9 +100,9 @@ becomes just the first definition.
   (ORB-10439, ORB-13432).
 - **Default catalog** — Orbit embeds a small catalog of workspace definitions.
   Initialization materializes a missing catalog file under `.orbit/auto_tasks/`.
-  Every default is `enabled: false` except `host-health`, the one default that
-  ships enabled ([Enabled by default](#enabled-by-default-host-health)). Seeding
-  never mints a task; an operator must explicitly enable any other definition
+  Every default is `enabled: false`, including `host-health`
+  ([Disabled by default: host-health](#disabled-by-default-host-health)). Seeding
+  never mints a task; an operator must explicitly enable a definition
   or use the existing manual-mint surface. Re-initialization preserves an
   operator-edited or workspace-authored definition byte-for-byte, including
   with workspace reconciliation `--force`; destructive lower-level
@@ -130,11 +130,11 @@ registered in `DEFAULT_AUTO_TASK_FILES`. The directory also holds the retired
 `blocked-task-triage.yaml`, which `RETIRED_AUTO_TASK_FILES` registers instead.
 A definition joins this catalog only on proven yield
 ([promotion](#promotion-to-the-shipped-defaults)). `orbit workspace init` materializes a
-missing file as `enabled: false`, except `host-health`, which it writes enabled;
+missing file as `enabled: false`, including `host-health`;
 re-init does not overwrite a workspace-authored definition of the same name.
 
 - `qa-sweep` — hands-on validation of recent changes (ORB-10148, embedded by ORB-10550).
-- `host-health` — enabled-by-default weekly review of host doctor findings, Orbit service logs, and read-only version, update and migration checks, with actionable operator resolution steps.
+- `host-health` — disabled-by-default weekly review of host doctor findings, Orbit service logs, and read-only version, update and migration checks, with actionable operator resolution steps. Enable it with `orbit auto-task toggle host-health on`.
 - `friction-curation` — disabled-by-default daily evidence-first pass that deduplicates open
   friction records, re-verifies survivors against current behavior, resolves
   records that no longer reproduce, and files non-duplicate fix tasks for
@@ -333,9 +333,10 @@ re-init does not overwrite a workspace-authored definition of the same name.
   at most 5 `proposed` fixes per pass, compares groups with the prior pass's
   `pilot-block-report.json`, and files a regression when a done fix did not
   reduce its group. When the workspace maps a tracked corpus index and provides
-  the corpus script, it proposes every observed group in the corpus and
-  regenerates its index; otherwise it records the missing prerequisite and
-  leaves a clean worktree. It never acts on an individual blocked or held task, and
+  the corpus script, it appends every observed group to an existing mechanism
+  document and regenerates the index; a group with no document gets a follow-up
+  task naming that document instead of creating it in the same pass [ORB-25391].
+  Otherwise it records the missing prerequisite and leaves a clean worktree. It never acts on an individual blocked or held task, and
   runs only on the owner (ORB-20516).
 - `delivery-code-review` — disabled-by-default review of newly landed
   deliveries. For behavior changes, its instructions locate documentation,
@@ -435,7 +436,10 @@ re-init does not overwrite a workspace-authored definition of the same name.
   `no-auto-approve`, with `context_files` and a `spawned_from` relation to the
   minted chore. A split or new module names each file it creates in
   `context_files` and is filed with `allow_missing_context: true`, so the task
-  carries `context_creation_authorized`. A fix changes the mechanism behind its
+  carries `context_creation_authorized`. A filed task without that grant is
+  reauthorized with `orbit.task.update` on the owner host; where that tool is
+  unavailable (claimed mode denies it), the task is left held for the pilot
+  rather than recorded as filed. A fix changes the mechanism behind its
   path class (a footprint or lock rule, a generator check, or a split of a
   coupling hotspot), never one regression. A workspace whose rankings all sit
   below `min_support` is a successful no-op that reports each ranking's
@@ -552,14 +556,16 @@ In Orbit's own workspace, the workspace-authored `default-auto-task-audit`
 definition checks each newly shipped default against this rule and files a
 demotion proposal when the evidence is missing.
 
-### Enabled by default: host-health
+### Disabled by default: host-health
 
-`host-health` is the one shipped default whose bundled body is `enabled: true`
-(Daniel's direction on ORB-21401, delivered by ORB-21596).
+`host-health` ships disabled, like every other shipped default: its bundled
+body is `enabled: false` (Daniel's direction of 2026-11-14, reversing the
+earlier ORB-21401 direction delivered by ORB-21596) [ORB-24934].
 `ENABLED_BY_DEFAULT_AUTO_TASKS` in `crates/orbit-core/src/application/auto_tasks/mod.rs`
-names it, and workspace sync refuses a bundled body whose `enabled` disagrees
-with that list, so every other default still ships disabled. Its yield evidence
-is the `ws_orbit` `auto-task-yield.json` of ORB-20991 (30 days to
+is empty, and workspace sync refuses a bundled body whose `enabled` disagrees
+with that list, so no default ships enabled. Turn it on in a workspace with
+`orbit auto-task toggle host-health on`. Its earlier yield evidence is the
+`ws_orbit` `auto-task-yield.json` of ORB-20991 (30 days to
 2026-11-01): 2 runs, no no-op runs, 4 filed tasks that all landed, and no
 duplicate or invalid rejections.
 
@@ -568,8 +574,8 @@ Existing workspaces follow the "no operator has configured it" rule:
 - `orbit init`, which only creates absent defaults in registered workspaces,
   leaves an existing `host-health.yaml` alone.
 - `orbit workspace sync` and `orbit workspace init` refresh a managed body that
-  still holds the bytes an earlier release wrote, so a never-edited, disabled
-  `host-health` becomes enabled there.
+  still holds the bytes an earlier release wrote, so a never-edited, enabled
+  `host-health` becomes disabled there.
 - Once an operator has set the flag with `orbit auto-task toggle`, the
   settings-table value decides, across sync and re-init. A body an operator
   edited is a fork and keeps its bytes, and its own `enabled` value.
@@ -586,7 +592,7 @@ ORB-20704 demoted `backlog-hygiene`, `ci-budget-watch`, `crew-ladder-review`,
 `design-sync` (shipped by [ORB-18557]), `flaky-test-hunt`, `structure-sweep`,
 `suppression-ratchet` and `workflow-health-audit`. Their names are listed in
 `orbit_config::DEMOTED_DEFAULT_AUTO_TASKS`, which `seeding.auto_tasks`
-admission still accepts, and their templates are no longer embedded. ORB-22803 later
+admission still accepts, and their templates are no longer embedded. [ORB-22803] later
 retired `crew-ladder-review` with the crew ladder it reviewed: it moved to
 `RETIRED_DEFAULT_AUTO_TASKS` with its last shipped template embedded again, so
 `orbit workspace sync` removes unedited copies.
@@ -742,7 +748,11 @@ encode this repository's branches and gates. Re-init preserves them:
 - [ORB-21401] — recorded Daniel's direction to make host-health a default
   auto-task (on-call, 2026-11-02).
 - [ORB-21596] — shipped host-health enabled by default, through
-  `ENABLED_BY_DEFAULT_AUTO_TASKS`.
+  `ENABLED_BY_DEFAULT_AUTO_TASKS` (superseded by ORB-24934).
+- [ORB-24934] — shipped the host-health auto-task disabled by default.
+- [ORB-22803] — retired `crew-ladder-review` with the crew ladder it reviewed, moving it to `RETIRED_DEFAULT_AUTO_TASKS` so sync removes unedited copies.
+- [ORB-23925] — kept the regression-label-audit helper from reading recorded labels until the model's second labels are saved.
+- [ORB-25391] — stopped `pilot-block-patterns` from creating a corpus topic document in the same pass; a group with no document gets a follow-up task naming that path.
 - [ORB-21840] — separated follower review-decision holds from failure
   accounting, with a separate `held_7d` counter.
 - [ORB-23301] — Shipped the disabled weekly `recovery-fault-audit` default

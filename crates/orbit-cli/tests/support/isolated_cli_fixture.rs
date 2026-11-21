@@ -1,4 +1,7 @@
 //! Disposable CLI home, registry, workspace, and bounded argv evidence shared by family tests.
+//!
+//! The default crew is pinned to the usable fixture crew (`fixture_crew::configure_sol`), so the
+//! fixture does not depend on which agent CLIs the host has.
 
 use std::fs;
 use std::io::Write;
@@ -48,6 +51,11 @@ impl Fixture {
             .command(&["workspace", "init", "--name", "audit-qa"])
             .assert()
             .success();
+        // `orbit init` derives `workflow.default_crew` from the agent CLIs on this
+        // host, and CI leaves some of those crews disabled. Pin a usable crew so a
+        // worker-launching test behaves the same everywhere; a test that checks
+        // host-derived crew selection builds its own home instead of this fixture.
+        crate::fixture_crew::configure_sol(&fixture.root);
         fixture.json(&[
             "task",
             "add",

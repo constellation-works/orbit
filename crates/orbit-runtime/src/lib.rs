@@ -96,8 +96,9 @@ mod tests;
 
 pub use application_port::ApplicationPort;
 pub use config_path::{CONFIG_TOML_FILE, existing_config_file_path};
-pub use orbit_runtime::RuntimeConfigLoader;
-pub use orbit_runtime::{HostLifetime, OrbitRuntimeRoots, RuntimeKernel};
+pub use orbit_runtime::{
+    AdmissionCrewSettings, HostLifetime, OrbitRuntimeRoots, RuntimeConfigLoader, RuntimeKernel,
+};
 pub use workspace::binding::{WorkspaceRuntimeBinding, workspace_runtime_binding};
 
 pub use resolve::{resolve_bootstrap_roots, resolve_initialize_roots};
@@ -121,4 +122,7 @@ pub use resolve::{
 // `pub` for host task-store maintenance in `orbit-cmd`, which must recognize
 // the one partition id no registry claims [ORB-12119].
 pub use builder::UNBOUND_DATA_DIR_PARTITION_ID;
+/// Guard this process's `gh` reads with the host's GitHub quota record. Only
+/// the `orbit` binary calls it, so test and library processes stay unguarded.
+pub use orbit_tools::github_quota::enable_host_guard as enable_github_quota_guard;
 pub use run_input::managed_workspace_selector_from_env;

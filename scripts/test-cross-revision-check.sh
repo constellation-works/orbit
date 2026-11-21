@@ -440,7 +440,7 @@ assert_contains "$work/baseline.log" "cache=inherited" "--keep-compiler-cache mu
 assert_contains "$work/baseline.log" "wrapper=[/inherited/wrapper]" "--keep-compiler-cache must keep the wrapper"
 assert_contains "$out" "enabled by --keep-compiler-cache" "the report should disclose the opt-in"
 
-# --- 7. Argument handling ----------------------------------------------------
+# --- 8. Argument handling ----------------------------------------------------
 
 "$HELPER" --help >/dev/null || fail "--help should succeed"
 
@@ -546,5 +546,13 @@ if failures:
                          + "\n".join(failures))
 PY
 fi
+
+# An option missing its value names itself instead of exiting silently.
+set +e
+missing="$("$HELPER" --baseline 2>&1)"
+missing_status=$?
+set -e
+assert_eq "$missing_status" "1" "a missing option value should fail"
+[[ "$missing" == *"--baseline requires a value"* ]] || fail "a missing option value should be diagnosed: $missing"
 
 printf 'test-cross-revision-check: ok\n'

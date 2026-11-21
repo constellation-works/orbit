@@ -1,7 +1,8 @@
 //! "Did this work actually reach that commit?", asked from local Git history.
 //!
-//! Every Orbit commit subject carries the bracketed task id (see
-//! `vcs::commit::message`), and the marker survives merge, squash and rebase.
+//! Every Orbit commit names its task ids in `Orbit-Task` trailers and, room
+//! permitting, as bracketed subject markers (see `vcs::commit::message`); both
+//! survive merge, squash and rebase.
 //! So delivery is decided by "is a *message match* reachable from this commit",
 //! never by "is a particular sha reachable" — a squash merge rewrites the sha
 //! and keeps the marker.
@@ -15,6 +16,8 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 
+use orbit_types::workflow::{Trailer, TrailerKey};
+
 use super::git::git_output;
 
 /// Task-id markers are short, bracketed, whitespace-free, and mix letters with
@@ -22,21 +25,55 @@ use super::git::git_output;
 /// keeps an unrelated bracketed prose fragment out of the marker set.
 const MAX_MARKER_LEN: usize = 64;
 
-/// Commits whose message contains `marker` (brackets included) within `scope`.
+/// Commits whose message names `marker` (brackets included) within `scope`:
+/// as a bracketed marker, as one id of an older comma-separated bracket list
+/// (`[ORB-1, ORB-2]`), or as an `Orbit-Task` trailer value. Quoted `Fixes:`
+/// attribution is excluded, and `max_count` limits only accepted deliveries.
 pub(super) fn commits_matching(
     repo_root: &Path,
     marker: &str,
     scope: &[&str],
+    max_count: Option<usize>,
 ) -> Result<Vec<String>, OrbitError> {
-    let grep = format!("--grep={marker}");
-    let mut args = vec!["log", "--no-color", "--format=%H", "--fixed-strings", &grep];
+    let id = marker
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or(marker);
+    let escaped_id = escape_extended_regex(id);
+    // Anchor the comma-list alternative inside brackets: an id is a list
+    // member only between `[` and the matching `]`, with no other `[` in
+    // between (each `[` opens its own candidate, as in `delivery_markers`),
+    // never in prose such as `Related work: ORB-111, ORB-222, ORB-333`.
+    let grep =
+        format!("--grep=\\[([^][]*, ?)?{escaped_id}(, ?[^][]*)?\\]|^Orbit-Task: {escaped_id}$");
+    let mut args = vec![
+        "log",
+        "--no-color",
+        "-z",
+        "--format=%H%x00%B",
+        "--extended-regexp",
+        &grep,
+    ];
     args.extend_from_slice(scope);
-    Ok(git_output(repo_root, &args)?
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect())
+    // Git's grep is only a candidate prefilter: it also sees quoted Fixes
+    // subjects. Keep messages paired with their SHAs using NUL separators,
+    // then apply the shared ownership parser before counting matches. Passing
+    // --max-count to Git would let newer quotes hide an older owned delivery.
+    let history = git_output(repo_root, &args)?;
+    let mut fields = history.split('\0');
+    Ok(
+        std::iter::from_fn(|| Some((fields.next()?, fields.next()?)))
+            .filter(|(_, message)| {
+                let mut owned = false;
+                // The caller already knows the task id. Keep accepting ids
+                // that the conservative marker-discovery grammar would omit.
+                visit_owned_delivery_tokens(message, |token| owned |= token == id);
+                owned
+            })
+            .take(max_count.unwrap_or(usize::MAX))
+            .map(|(sha, _)| sha.to_string())
+            .collect(),
+    )
 }
 
 /// Whether any commit reachable from `from` carries `marker`.
@@ -45,7 +82,7 @@ pub(super) fn marker_reachable(
     marker: &str,
     from: &str,
 ) -> Result<bool, OrbitError> {
-    Ok(!commits_matching(repo_root, marker, &["--max-count=1", from])?.is_empty())
+    Ok(!commits_matching(repo_root, marker, &[from], Some(1))?.is_empty())
 }
 
 /// The bracketed delivery markers a commit message carries, in first-seen
@@ -59,21 +96,56 @@ pub(super) fn marker_reachable(
 /// A `Fixes:` trailer quotes the subject of the commit a repair fixes, so any
 /// marker inside it names someone else's delivery. Trailer lines after the
 /// subject are skipped; only the commit's own subject and body carry ownership.
+///
+/// An `Orbit-Task: <id>` trailer yields `[<id>]`, so a bundle whose subject
+/// had no room for every id still reports each one. An older subject's
+/// comma-separated list (`[ORB-1, ORB-2]`) yields one marker per id.
 pub(super) fn delivery_markers(message: &str) -> Vec<String> {
-    let owned = owned_text(message);
     let mut markers: Vec<String> = Vec::new();
-    for candidate in owned.split('[').skip(1) {
-        let Some((token, _)) = candidate.split_once(']') else {
-            continue;
-        };
+    visit_owned_delivery_tokens(message, |token| {
         if is_marker(token) {
             let marker = format!("[{token}]");
             if !markers.contains(&marker) {
                 markers.push(marker);
             }
         }
-    }
+    });
     markers
+}
+
+/// Share attribution and token boundaries between known-id searches and
+/// conservative discovery; only discovery imposes the marker-shape grammar.
+fn visit_owned_delivery_tokens(message: &str, mut visit: impl FnMut(&str)) {
+    let owned = owned_text(message);
+    for candidate in owned.split('[').skip(1) {
+        let Some((token, _)) = candidate.split_once(']') else {
+            continue;
+        };
+        if token.contains(',') {
+            token.split(',').map(str::trim).for_each(&mut visit);
+        } else {
+            visit(token);
+        }
+    }
+    for line in owned.lines().skip(1) {
+        if let Some(trailer) = Trailer::parse_line(line)
+            && trailer.key == TrailerKey::OrbitTask
+        {
+            visit(trailer.value.trim());
+        }
+    }
+}
+
+/// `text` with every POSIX extended-regex metacharacter escaped.
+fn escape_extended_regex(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        if r"\.[]()*+?{}|^$".contains(character) {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }
 
 /// `message` without its quoted-attribution trailers (`Fixes: <sha> ("<subject>")`).

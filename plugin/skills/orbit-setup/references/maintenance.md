@@ -177,7 +177,7 @@ inexplicably. It has targeted repairs, each narrow on purpose:
 | `--fix-stale-locks` | Lock files whose recorded holder process is dead. |
 | `--fix-stale-task-locks` | Task reservations whose owner and task state are conclusively inactive. |
 | `--fix-stale-artifacts` | Retires deprecated skills, jobs, activities, auto-tasks, and routines that Orbit itself wrote. Locally modified ones are preserved, not deleted. |
-| `--fix-retired-config-keys` | Backs up each edited `config.toml` and removes retired or deprecated keys, first writing each deprecated key's translated value under its replacement key in the same layer while preserving explicit modern values. A second successful run writes nothing. Any legacy after-landing policy refuses before either config is changed or backed up; migrate it manually first. |
+| `--fix-retired-config-keys` | Backs up each edited `config.toml` and removes retired or deprecated keys, first writing each deprecated key's translated value under its replacement key in the same layer while preserving explicit modern values. The exception is a deprecated boolean `machine.worker_containment`: the repair rewrites its value in place (`true` to `"warn"`, `false` to `"off"`, or `"strict"` when `worker_containment_strict = true` is also set) and keeps the key, which stays settable. A second successful run writes nothing. Any legacy after-landing policy refuses before either config is changed or backed up; migrate it manually first. |
 | `--fix-automation-pins` | Deletes this Orbit root and workspace's own state-routine attempt pins that no consumer or live run still names. Legacy shared `refs/orbit/automation/<attempt>` pins and other roots' or workspaces' pins are retained and reported. Refuses while a routine sweep runs. |
 | `--fix-state-directory-permissions` | Restricts writable Orbit state directories to owner-only access, excluding run worktrees, Cargo target trees, and child symlinks (Unix only). |
 | `--fix-orphan-task-stores` | Deletes empty unclaimed task-store partitions, and populated partitions whose bound checkout is confirmed absent, including their task bundles. Unowned or unreachable populated partitions are left alone. Requires `--confirm`. |
@@ -212,7 +212,9 @@ keys or an MCP toolset name behind; a removed command simply stops existing.
 Orbit still loads the leftover keys and toolset names, warns on every load and
 ignores them. Delete each leftover, then verify the load is clean. Keys that were
 only renamed or moved are translated on load and rewritten by
-`--fix-retired-config-keys`; this table lists removed features only.
+`--fix-retired-config-keys`. This table lists removed features; the deprecated-key
+tables below cover the renamed, ignored and fixed-bound keys, with what each one
+becomes.
 
 | Removed feature | Leftovers to delete | Replacement | Recognized until |
 |---|---|---|---|
@@ -222,7 +224,7 @@ only renamed or moved are translated on load and rewritten by
 | Pilot explore brief | `[workflow.explore_brief]` table | None. Existing `explore-brief.json` artifacts stay readable. | 2026-12-07 |
 | Visual review | `[visual_review]` table; `workflow.purpose_crews.visual_review`. `orbit visual` and the `orbit.visual.*` tools are gone. | None. `mocks/` and `visual/` are ordinary artifact names now. | 2026-12-07 |
 | Crew-performance weighting | `workflow.crew_performance`, `crew_performance_strength`, `crew_performance_cap` and `crew_performance_window_days` | None for the weighting. The older `workflow.crew_performance_types` name is read as `workflow.task_types`; the repair rewrites it. | 2026-12-07 |
-| Weekly evolution pass | `resident.evolution.min_occurrences`, `min_distinct_cycles`, `min_distinct_mandates`, `min_cost_minutes` and `max_proposals` | None. `orbit evolution`, `orbit resident digest` and `resident.evolution.window_days` stay; nothing files proposal tasks automatically. | 2026-12-07 |
+| Weekly evolution pass | `resident.evolution.min_occurrences`, `min_distinct_cycles`, `min_distinct_mandates`, `min_cost_minutes` and `max_proposals` | None. `orbit evolution` and `orbit resident digest` stay, and nothing files proposal tasks automatically. The ledger's 14-day window and 30-day decline are fixed, see [deprecated keys](#deprecated-keys-translated-ignored-or-fixed). | 2026-12-07 |
 | UX rules | `[ux_rules]` table | None. No routine or installed command runs the rules. | 2026-12-07 |
 | Finding verification | `review.verify_findings` | None. The task pilot's `finding_invalid` result and an implementer's `finding-invalid.json` still reject an invalid finding. | 2026-12-07 |
 | Agent scoreboard | `[scoring]` table (`scoring.enabled`) | None; nothing records scoreboard metrics. | 2026-11-12 (window closed; now an unknown key) |
@@ -235,6 +237,7 @@ only renamed or moved are translated on load and rewritten by
 | MCP tool-family names | Per-action tool names such as `orbit_friction_add`, `orbit_friction_update`, `orbit_task_artifact_get` and `orbit_task_artifact_put`, in scripts, prompts and MCP client allow-lists. Stored names in existing records migrate on upgrade, so there is nothing to delete there. | The family tool with an `action` field: `orbit_friction` with `add` or `update`, and `orbit_task_artifact` with `get` or `put`. See [tool surface](../../orbit/references/tool-surface.md). | No window stated; removed in 0.48.0. |
 | MCP task schema string forms | A bare string where a list is expected on `orbit_task_add`, `orbit_task_update` and `orbit_task_list`, such as in `acceptance_criteria` or `context_files`. | Send a JSON array for each list field, such as `acceptance_criteria`, `context_files` and `relations`. | No window stated; removed in 0.48.0. |
 | Per-call `model` input and task aliases | The `model` input on MCP task calls, which the MCP schema no longer lists; the `agent` alias of `orbit_task_list`; the `context` alias on `orbit_task_add` and `orbit_task_update`. Orbit still accepts a sent `model` as an unadvertised identity key, and the session's own identity takes precedence over it. | Identity comes from the session's crew configuration or the MCP client's `clientInfo`, not from the call. Use `context_files` in place of `context`. For `agent` on `orbit_task_list`, read the list's field names with `orbit tool show orbit.task.list`. | No window stated; removed in 0.48.0. |
+| Retired activity-backend repair | `orbit doctor --fix-retired-activity-backends` is gone. A schemaVersion 2 `agent_loop` activity file that still declares the scalar `spec.backend: http` or `spec.backend: auto` warns on `orbit doctor`, naming the file and the rejected value. | None. Delete only that scalar key from the activity file by hand, then verify with `orbit doctor`. Leave a plugin manifest's structured `spec.backend` command backend (timeout and sandbox settings) in place; it is still supported. | No window stated; removed in 0.50.0. |
 
 The `finding-verification`, `evolution-pass`, and `ux-rules` routines are retired,
 while `pilot-warning-triage` is retired via its `pilot_warnings_held` state
@@ -249,6 +252,84 @@ otherwise remove it or retarget it. A routine on the retired
 job without the retired trigger stays active. Triage a
 task held on pilot warnings from the dashboard's Triage action.
 
+### Deprecated keys: translated, ignored or fixed
+
+These keys still load and warn on every load, and `orbit config get` and `set`
+refuse them (except `machine.worker_containment`, which stays a settable key;
+only its boolean value form is deprecated). `orbit doctor --problems` names each
+one with the file that sets it, and `orbit doctor --fix-retired-config-keys` acts
+on it as the tables below say. A key past its recognized date becomes an unknown
+setting, which the same check reports. Where a row gives no date, the load
+warning gives none either.
+
+**Translated** keys are rewritten by the repair into their replacement in the
+same file, then removed. Except for `machine.worker_containment` (whose boolean
+value form the repair rewrites in place while keeping the key), the repair writes
+a replacement only when that file does not already set it, so an explicit modern
+value wins and the old key is simply removed.
+
+| Key | Becomes | Recognized until |
+|---|---|---|
+| `operation.review_policy` | `before-pr` sets `review.timing = "before_pr"`, a deprecated value that still works (prefer `before_landing` or `off`). `after-landing` and `none` turn neither review on: after-landing review is the `delivery-code-review` auto-task's own flag, set with `orbit auto-task toggle delivery-code-review on` or `off`. A `[review]` table in the same file wins. | None stated |
+| `operation.review_minutes` | `review.minutes`, now one candidate's review limit rather than a lineage total | None stated |
+| `operation.review_crew` | `workflow.purpose_crews.review`, the same crew or pool | None stated |
+| `workflow.final_recovery_crews` | `workflow.purpose_crews.final_recovery`, the same pool | None stated |
+| `workflow.purpose_crews.ci_failure_sweep`, `dependabot`, `merged_head_repair` | `workflow.purpose_crews.sweep_tasks`, the one pool every sweep-filed task draws from. Load fails while one file sets them to different pools. | None stated |
+| `review.before_pr`, `review.before_landing` | `review.timing`: `before_pr`, `before_landing` or `off`. Both set to `true` fails load. | None stated |
+| `machine.worker_containment` as `true` or `false`, with `machine.worker_containment_strict` absent | `"warn"` or `"off"` (rewritten in place; key stays settable) | None stated |
+| `machine.worker_containment_strict` | `machine.worker_containment = "strict"` when `true`; `false` keeps the boolean's mode. Refused beside a `false` boolean. | None stated |
+| `workflow.crew_performance_types` | `workflow.task_types`, the same ordered entries | 2026-12-07 |
+
+**Ignored** keys have no value to set. Delete them.
+
+| Key | What to do instead | Recognized until |
+|---|---|---|
+| `workflow.system_crew` | Nothing. System work draws its crew from the `workflow.<tier>_complexity_crews` pools. | None stated |
+| `workflow.auto_ship` | Nothing. Dispatch with `orbit run auto` drains or `orbit run ship`. | None stated |
+| `workflow.validation_env.login_shell`, `workflow.validation_env.interactive` | Nothing. Required validation always probes the interactive login shell, falling back to a login shell. | 2026-12-08 |
+| `commit.planned_by_trailer`, `commit.implemented_by_trailer` | Nothing. Orbit no longer writes `Planned-By` or `Implemented-By` trailers. | None stated |
+| `workflow.explore.*`, `workflow.purpose_crews.explorer` | Nothing. Covered by the Explorer row in the removed-features table. | No date set |
+| `plugin.legacy_callback_identity` | Nothing. Plugin callbacks need the host-issued session descriptor; the environment token and process ancestry no longer authorize them. | None stated |
+| `execution.env.inherit` | Nothing. Inheritance is fixed off. Doctor reports this key as an unknown setting, with a did-you-mean hint. | None (unknown setting) |
+
+**Fixed-bound** keys are ignored because Orbit now uses the value shown. Delete them.
+
+| Keys | Fixed value | Recognized until |
+|---|---|---|
+| `workflow.admission_affinity` | `band` | 2026-12-08 |
+| `workflow.auto_effort.explore_share` | `0.1` | 2026-12-08 |
+| `workflow.provider_limit_max_used_pct` | 90% skip threshold. `workflow.provider_limit_overrides` still sets it per provider or crew. | 2026-12-08 |
+| `workflow.usage_pressure_cap`, `workflow.usage_pressure_strength` | 8 and 1. `workflow.crew_selection` still chooses the draw. | 2026-12-08 |
+| `workflow.resource_throttle.cpu_light_leaves`, `io_full_high_percent`, `io_full_resume_percent` | 2 CPU-light leaves under CPU-only pressure; throttles on Linux disk I/O stalls at 20%, resuming below 10% | 2026-12-08 |
+| `workflow.validation_env.shell_probe`, `path_mode`, `cargo_incremental` | Login-shell probe as above; `workflow.validation_env.path` is prepended to the resolved PATH; `CARGO_INCREMENTAL=0` for bound host validation | 2026-12-08 |
+| `[attention]` table | Cursors last 24 hours; failed runs are read back 48 hours; a run is stuck after 120 minutes; CI reads are cached 60 seconds; source reads time out after 10 seconds; cross-host fan-out has a 20-second budget; 200 candidates per workspace; severity rises at 24 and 72 hours | 2026-12-08 |
+| `automation.stall_window_minutes` | 60 minutes | 2026-12-08 |
+| `ci_failure.operator_suppression_hours` | 6 hours | 2026-12-08 |
+| `execution.agent_stall_minutes`, `execution.proc_spawn_max_timeout_minutes` | 30 minutes idle before a provider step stalls; 45 minutes per `proc.spawn` call | 2026-12-08 |
+| `experiments.max_running`, `experiments.min_delivered_rate` | 3 experiments at once; 0.9 delivered rate for a verdict | 2026-12-08 |
+| `jobs.failure_streak_warn` | 5 consecutive failed runs | 2026-12-08 |
+| `machine.application_consent_max_days`, `machine.host_shutdown_hold_minutes` | 30 days; 180 minutes. Global `config.toml` only. | 2026-12-08 |
+| `machine.auto_concurrency.admit_memory_percent`, `profile_window`, `horizon_cap_minutes`, `head_max_wait_minutes`, `head_stuck_passes` | 75% memory ceiling; 50-delivery profile window; 120-minute horizon cap; 30-minute and 20-pass starvation guard. `mode`, `admit_cpu_percent` and `min_profile_deliveries` stay settable. | 2026-12-08 |
+| `resident.evolution.window_days`, `resident.evolution.decline_suppress_days` | 14 days of cost; a declined proposal stays declined 30 days unless the decline names its own length | 2026-12-08 |
+| `retention.journal_days`, `retention.store_warn_bytes` | 14 days; `orbit doctor` warns about a store file over 1 GiB. `retention.audit_days` and `retention.runs_days` stay settable. | 2026-12-08 |
+| `runtime.log_retention_days`, `runtime.log_max_total_mb`, `runtime.log_max_file_mb` | Archives kept 7 days within 500 MiB; the log rolls at 100 MiB. Delete these keys from `[runtime]`. | 2026-12-08 |
+| `security_alert_sweep.min_severity` | Moderate and above. A sweep job's own `min_severity` input still overrides it. | 2026-12-08 |
+| `worktree.parked_reclaim_after_hours` | 336 hours (14 days) | 2026-12-08 |
+| `[notice]` table | Fleet notice limits at their former defaults; agent posting and brief delivery stay on | 2026-12-08 |
+| `pr.close_on_terminal`, `pr.draft`, `pr.freshness_section`, `pr.orchestration_trailer`, `pr.screenshot_section`, `pr.signature`, `commit.orchestrated_by_trailer`, `commit.regression_trailers` | Delivery is fixed: it closes a task's open Orbit PRs when the task ends, opens PRs ready for review (a draft only for a required-section gap), and always adds the Screenshots table for `ui` tasks, the Branch Freshness section, the model signature, and the Orchestrated-By and regression trailers | 2026-12-08 |
+
+Three groups are not enumerated in the tables above, and each needs its own step:
+
+- **Unknown keys and tables** (anything the registry does not know, including a
+  mistyped key) are reported as `unknown and ignored`, with a did-you-mean hint
+  where one exists. The repair removes them too, so read the list first when a
+  newer Orbit binary shares the file.
+- **A legacy `after-landing` review policy** is never removed automatically.
+  Migrate it as [Diagnose and repair](#diagnose-and-repair) describes.
+- **`[routines]`** (`role = "source"`) loads with a warning, but `orbit doctor`
+  does not list it and the repair does not remove it. Delete the table by hand.
+  It has no recognized-until date.
+
 ### Verify the cleanup
 
 1. List what still sets a retired key, with the file that sets it. The check
@@ -256,7 +337,11 @@ task held on pilot warnings from the dashboard's Triage action.
 
    ```bash
    orbit doctor --check retired-config-keys
+   orbit doctor --problems      # lists every retired, deprecated and unknown key
    ```
+
+   `--check` prints only the first key it finds, so use `--problems` when several
+   are set.
 
 2. Remove the leftover keys in one pass. It backs up each edited `config.toml`,
    writes each translated replacement before removing the old key, and writes
@@ -264,7 +349,7 @@ task held on pilot warnings from the dashboard's Triage action.
    policy is set; migrate that first, as [Diagnose and repair](#diagnose-and-repair)
    describes. The repair removes keys, not list entries, so delete
    `agent-invoke` from `machine.mcp.toolsets` and from any `--toolset` argument
-   by hand.
+   by hand. It also leaves a `[routines]` table in place; delete that table by hand.
 
    ```bash
    orbit doctor --fix-retired-config-keys
@@ -274,13 +359,25 @@ task held on pilot warnings from the dashboard's Triage action.
 
    ```bash
    orbit doctor --problems      # no retired-config-keys warning should appear
-   orbit config show --all      # loads with no deprecation warning
+   orbit config show --all      # loads with no deprecation warning; this also
+                                # catches a [routines] table, which doctor does not list
    orbit agents --help          # `ladder` is not listed
    orbit visual                 # reports an unrecognized subcommand
    ```
 
 A key that stays past its recognized date becomes an unknown setting. The same
 `retired-config-keys` check reports it, so one check covers both states.
+
+### Retired activity backends
+
+The `orbit doctor --fix-retired-activity-backends` repair is gone: no flag
+cleans up activity files for you. A schemaVersion 2 `agent_loop` activity file
+that still declares the retired scalar `spec.backend: http` or
+`spec.backend: auto` is a warning naming the file and the rejected value.
+Delete only that scalar key from the activity file by hand, then verify with
+`orbit doctor`. Do not remove a plugin manifest's structured `spec.backend`
+command backend (with its timeout and sandbox settings): that is a live plugin
+field and stays in place.
 
 ## Task locks
 
@@ -317,8 +414,9 @@ or run `orbit workspace sync --all` once per host from any directory to converge
 every registered workspace. `--all` reports `synced`, `already current`,
 `skipped` or `failed` per workspace, keeps going past a failure (exit 1), and
 skips, never rewrites, a workspace a live drain or run holds; rerun it when the
-drain ends. It never reaches across hosts and cannot be combined with
-`--workspace`.
+drain ends. Single-checkout `orbit workspace sync` does not check for live
+runs, so run it only when the workspace is idle. `--all` never reaches across
+hosts and cannot be combined with `--workspace`.
 It reconciles both host-global and workspace-local managed assets, including
 skill references, jobs, activities, routines, and auto-task definitions.
 Provenance distinguishes untouched shipped content from local edits. Read
@@ -416,6 +514,10 @@ Choose by intent:
   publication branch. Verify with `orbit workspace publication show --json`.
   See [Publication](publication.md) and [Multi-host](multi-host.md) before
   moving state between hosts.
+- If the checkout directory moved on disk and the repository did not change,
+  use `orbit workspace rebind --path <DIR>` to re-point this host at it. This
+  is not `remove` or `teardown`, and it does not change the source remote. See
+  [Rebind a moved checkout](#rebind-a-moved-checkout).
 
 Before `remove` or `teardown`, manually confirm there are no live drains, runs,
 or claims, and identify any unpublished tasks. The commands do not enforce
@@ -427,11 +529,84 @@ before teardown.
 
 Capture `orbit workspace show --json` and
 `orbit workspace source-remote show --json` before a change. After removal or
-teardown, use `orbit workspace list --json` to confirm the workspace is no
-longer registered on this host. After a rebind, use
-`orbit workspace list --json`, `orbit workspace show --json` and
+teardown, use `orbit workspace list --all --json` to confirm the workspace is no
+longer registered on this host. `--all` includes replica checkouts, which the
+default list hides. After a rebind, use `orbit workspace list --all --json`,
+`orbit workspace show --json` and
 `orbit workspace source-remote show --json` to verify the registration and
 new source identity.
+
+### Rebind a moved checkout
+
+Use `orbit workspace rebind --path <DIR>` after the operator has moved a
+registered Git checkout directory to a new path. It re-points this host's
+registration at the directory that was already moved. It works on owner and
+replica checkouts and keeps their role and owner.
+
+It does not move files, change the source remote, or change another host. Run
+it on each host whose checkout moved. If the repository's origin also changed,
+use the source-remote bullet under "Choose by intent" for that change; it is a
+separate operation. `remove` and `teardown` are not moves: `remove` stops
+tracking the checkout and keeps its data, and `teardown` deletes the checkout's
+Orbit data.
+
+Preconditions, all before the directory is moved:
+
+- Stop the workspace's runs, settle pulled claims, and release workspace claims
+  and path reservations.
+- Remove the retained Orbit-managed worktrees first.
+  [Worktree garbage collection](#worktree-garbage-collection) describes how
+  worktrees are reclaimed.
+- Move the entire repository, including `.git` and the checkout-local `.orbit`
+  directory. External Orbit data roots are refused.
+- Keep the host store outside the moved directory. The store, `orbit.db` under
+  `~/.orbit` (or under the selected `--root`), must already exist. On a newly
+  initialized checkout, run `orbit tool run orbit.task.list --input '{}'` from
+  the registered checkout before moving it. Without the store, both apply and
+  `--dry-run` refuse with `workspace_rebind_host_store_required` and write
+  nothing.
+- The new path must be the checkout's primary Git root, with the registered Git
+  origin and the existing `.orbit` task-store identity. A target claimed by
+  another workspace is refused.
+
+If the directory has already moved and the store is missing, move it back to
+its registered path, run the runtime command there, then move it again and
+rebind.
+
+Preview first. `--dry-run` validates and reports the new binding. It leaves the
+checkout's binding in the workspace registry and task store, the pending rebind
+record and the audit log unchanged. Normal generation admission and registry
+lock bookkeeping can still write, so a preview does not promise that the host
+root is untouched. A missing host store is refused earlier, before generation
+admission, as the precondition above describes. Review the output, then repeat
+the command without `--dry-run`:
+
+```bash
+orbit --workspace <registered-name-or-id> workspace rebind --path /new/checkout --dry-run --json
+orbit --workspace <registered-name-or-id> workspace rebind --path /new/checkout --json
+```
+
+If the command is interrupted, runtime commands refuse to open the workspace
+until the same rebind finishes its recovery. Repeat the same command with the
+same `--path`, and finish that recovery before starting another rebind.
+
+Verify from the new directory:
+
+```bash
+cd /new/checkout
+orbit workspace list --all --json
+orbit workspace show --json
+orbit tool run orbit.task.list --input '{}'
+```
+
+`workspace list --all --json` should list the workspace on this host. `--all`
+is required to include a replica checkout, which the default list hides. The
+record's `repo_root` should be the new path, and its `role` (`owner` or
+`replica`) is unchanged by the rebind. The default listing,
+`orbit workspace list --json`, still shows an owner checkout.
+`workspace show --json` should resolve it from the new directory. The runtime
+command confirms that the store opens against the moved checkout. A successful
+rebind also appears in `orbit audit list --json`.
 
 ## Persistent MCP clients during upgrades
 

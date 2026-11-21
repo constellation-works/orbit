@@ -21,7 +21,7 @@
 //! reads they would have saved, and dropping the table rebuilds it on the
 //! next scan with identical facts.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use orbit_common::security::release::sha256_hex;
 use orbit_store::contracts::{CodebaseFactsStoreBackend, CodebaseTaskFactsRow};
@@ -48,12 +48,19 @@ pub(super) struct Entry {
 pub(super) struct StoredFacts {
     /// `None` when the rows could not be read: nothing is reused or written.
     workspace_id: Option<String>,
+    /// Each listed task's history stamp, taken in one pass at load; a task
+    /// is absent when nothing can vouch for its logs.
+    stamps: BTreeMap<String, String>,
     rows: HashMap<String, CodebaseTaskFactsRow>,
     writes: Vec<CodebaseTaskFactsRow>,
 }
 
 impl StoredFacts {
-    pub(super) fn load(runtime: &OrbitRuntime) -> Self {
+    pub(super) fn load(
+        runtime: &OrbitRuntime,
+        task_ids: &[String],
+        stamps: Option<BTreeMap<String, String>>,
+    ) -> Self {
         let loaded = runtime.workspace_id().and_then(|workspace_id| {
             let rows = runtime.sqlite_store()?.codebase_task_facts(&workspace_id)?;
             Ok((workspace_id, rows))
@@ -70,8 +77,19 @@ impl StoredFacts {
                 (None, HashMap::new())
             }
         };
+        // One stamp pass for the whole scan: the per-task stamp re-checks
+        // the partition for a commit to recover every time, which a scan
+        // of thousands of tasks pays thousands of times. A preceding scan
+        // of the same tasks may hand its stamps over instead.
+        let stamps = stamps.unwrap_or_else(|| {
+            workspace_id
+                .as_ref()
+                .map(|_| runtime.task_history_stamps(task_ids))
+                .unwrap_or_default()
+        });
         Self {
             workspace_id,
+            stamps,
             rows,
             writes: Vec::new(),
         }
@@ -84,11 +102,11 @@ impl StoredFacts {
         id: &str,
         settlements: &[SettledFailure],
     ) -> Entry {
-        // The stamp is taken before any read it labels.
+        // The stamps were taken at load, before any read they label.
         let source = self
             .workspace_id
             .as_ref()
-            .and_then(|_| runtime.task_history_stamp(id))
+            .and_then(|_| self.stamps.get(id))
             .map(|stamp| format!("{stamp}|{}", settlement_digest(settlements)));
         if let Some(source) = &source
             && let Some(row) = self.rows.get(id)

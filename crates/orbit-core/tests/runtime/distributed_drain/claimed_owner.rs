@@ -153,6 +153,217 @@ fn a_claimed_worker_files_follow_up_work_only_from_its_active_claim() {
     assert!(stale.contains("stale_claim"), "{stale}");
 }
 
+/// [ORB-25665] A claimed worker with no session model files friction under
+/// attribution the owner resolves from the claim, recorded during the
+/// claimed task; once the claim is released the same call files nothing.
+fn a_claimed_workers_model_free_friction_uses_claim_attribution() {
+    let leaf = ReviewedLeaf::admit();
+    let owner = &leaf.pair.wire.owner;
+    let friction_count = || {
+        owner
+            .run_tool("orbit.friction.list", json!({}))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len()
+    };
+    let before = friction_count();
+
+    let friction = leaf
+        .bound
+        .run_tool(
+            "orbit.friction.add",
+            json!({"body": "Model-free friction from the claimed worker."}),
+        )
+        .expect("a model-free friction during the claim");
+    assert_eq!(friction["during_task"], leaf.task, "{friction}");
+    let model = friction["model"].as_str().expect("attribution");
+    assert!(!model.trim().is_empty(), "{friction}");
+    let stored = owner
+        .run_tool("orbit.friction.show", json!({"id": friction["id"]}))
+        .unwrap();
+    assert_eq!(stored["model"], model, "{stored}");
+    assert_eq!(stored["during_task"], leaf.task, "{stored}");
+    assert_eq!(friction_count(), before + 1);
+
+    // A caller-supplied `model` is not attribution: the record carries the
+    // claim's attribution, exactly as the model-free call does.
+    let spoofed = leaf
+        .bound
+        .run_tool(
+            "orbit.friction.add",
+            json!({
+                "body": "Friction naming a model the caller chose.",
+                "model": "gpt-5-caller-spoof",
+            }),
+        )
+        .expect("a friction call that names a model");
+    assert_eq!(spoofed["model"], model, "{spoofed}");
+    assert_eq!(friction_count(), before + 2);
+
+    let (_, worker) = leaf.claim();
+    owner
+        .mutate_execution_claim(
+            Some(&worker),
+            "model-free-friction-release",
+            &ClaimMutation::Release(ClaimEvidence {
+                summary: Some("The executor gave the claim back.".into()),
+                ..ClaimEvidence::default()
+            }),
+        )
+        .expect("the executor releases its claim");
+    let stale = leaf
+        .bound
+        .run_tool(
+            "orbit.friction.add",
+            json!({"body": "Friction after the claim ended."}),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(stale.contains("stale_claim"), "{stale}");
+    assert_eq!(
+        friction_count(),
+        before + 2,
+        "a refused claim files no friction"
+    );
+}
+
+/// [ORB-25701] Run IDs are machine-local. A follower claim whose bound run
+/// ID collides with an unrelated owner-local run must not inherit that
+/// run's model; an owner-local claim still does.
+fn a_colliding_owner_run_does_not_supply_a_followers_friction_model() {
+    let leaf = ReviewedLeaf::admit();
+    let owner = &leaf.pair.wire.owner;
+    let baseline = leaf
+        .bound
+        .run_tool(
+            "orbit.friction.add",
+            json!({"body": "Baseline friction before the collision."}),
+        )
+        .expect("baseline friction");
+    let trusted = baseline["model"]
+        .as_str()
+        .expect("baseline model")
+        .to_string();
+    assert_ne!(trusted, "owner-colliding-model");
+
+    // An unrelated owner-local run that happens to share the follower's
+    // bound run ID, with a distinguishable model.
+    let workspace = owner.workspace_id().unwrap();
+    let colliding = orbit_types::workflow::JobRun {
+        build: None,
+        executed_on: Some(orbit_types::task::ExecutionLocation {
+            machine_id: OWNER.into(),
+            machine_name: None,
+        }),
+        run_id: leaf.leaf.clone(),
+        job_id: "owner_local_job".into(),
+        attempt: 1,
+        state: orbit_types::workflow::JobRunState::Success,
+        scheduled_at: Utc::now(),
+        started_at: None,
+        finished_at: None,
+        duration_ms: None,
+        created_at: Utc::now(),
+        pid: None,
+        pid_start_time: None,
+        input: None,
+        retry_source_run_id: None,
+        knowledge_metrics: None,
+        resolved_crew: None,
+        crew_model: Some("owner-colliding-model".into()),
+        steps: Vec::new(),
+    };
+    owner
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&workspace, &colliding, None)
+        .unwrap();
+    assert_eq!(
+        owner
+            .show_job_run_observed(&leaf.leaf)
+            .unwrap()
+            .crew_model
+            .as_deref(),
+        Some("owner-colliding-model"),
+        "the colliding owner-local run is planted"
+    );
+
+    let fenced = leaf
+        .bound
+        .run_tool(
+            "orbit.friction.add",
+            json!({"body": "Friction while the IDs collide.", "model": "gpt-5-caller-spoof"}),
+        )
+        .expect("friction during the collision");
+    assert_eq!(fenced["model"], trusted, "{fenced}");
+    assert_ne!(
+        fenced["model"], "owner-colliding-model",
+        "a follower claim must not use an unrelated owner-local run's model: {fenced}"
+    );
+    let stored = owner
+        .run_tool("orbit.friction.show", json!({"id": fenced["id"]}))
+        .unwrap();
+    assert_eq!(stored["model"], trusted, "{stored}");
+}
+
+/// [ORB-25701] An owner-local claim's bound run lives in the owner's store,
+/// so its crew model remains the friction attribution.
+fn an_owner_local_claim_still_uses_its_bound_runs_model() {
+    let base = Pair::new(1);
+    let local = Pair::follower_of(
+        base._root.clone(),
+        base.wire.owner.clone(),
+        base.owner_repo.clone(),
+        base.tasks.clone(),
+        OWNER,
+    );
+    *local.wire.local.lock().unwrap() = true;
+    let drain = local.run_drain();
+    let leaf_id = local.launched_leaf(&drain, 1, std::process::id());
+    let record = local.admission(&leaf_id);
+    let claim = record.receipt.clone().unwrap().claim.unwrap();
+
+    let mut run = local
+        .follower_jobs
+        .get_job_run(&leaf_id)
+        .unwrap()
+        .expect("the owner-local leaf run");
+    run.crew_model = Some("owner-local-model".into());
+    let workspace = local.follower.workspace_id().unwrap();
+    local
+        .follower
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&workspace, &run, None)
+        .unwrap();
+
+    let bound = local
+        .follower
+        .clone()
+        .with_worker_invocation(
+            orbit_types::tool::WorkerInvocation {
+                owner_machine_id: OWNER.into(),
+                owner_workspace_id: record.destination.owner_workspace_id.clone(),
+                owner_destination: record.destination.selector.clone(),
+                task_id: claim.task_id.clone(),
+                claim_id: claim.claim_id.clone(),
+                execution: claim.executed_on.clone(),
+                bound_run_id: leaf_id.clone(),
+            },
+            Arc::new(super::claimed_review::ToOwner(local.wire.owner.clone())),
+        )
+        .unwrap();
+    let friction = bound
+        .run_tool(
+            "orbit.friction.add",
+            json!({"body": "Friction from the owner-local worker.", "model": "gpt-5-caller-spoof"}),
+        )
+        .expect("owner-local friction");
+    assert_eq!(friction["model"], "owner-local-model", "{friction}");
+    assert_eq!(friction["during_task"], claim.task_id, "{friction}");
+}
+
 fn agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist() {
     // The isolated launcher clears all activity grants and deny policies.
     assert!(std::env::var_os("ORBIT_ACTIVITY_TOOLS_DENY").is_none());
@@ -608,6 +819,9 @@ fn claim_evidence_is_searchable_without_reindex() {
 crate::scenario_table!(
     a_claimed_worker_files_follow_up_work_only_from_its_active_claim_scenarios,
     a_claimed_worker_files_follow_up_work_only_from_its_active_claim,
+    a_claimed_workers_model_free_friction_uses_claim_attribution,
+    a_colliding_owner_run_does_not_supply_a_followers_friction_model,
+    an_owner_local_claim_still_uses_its_bound_runs_model,
     a_claimed_worker_searches_and_lists_only_its_owners_workspace,
     agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist,
     a_worker_update_persists_redacted_text_and_a_task_scoped_audit,

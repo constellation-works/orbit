@@ -86,12 +86,18 @@ export function myWorkCrewNames() {
   return humans.map((crew) => crew.name);
 }
 
+// Terminal statuses mirror TaskStatus::is_terminal (done, archived, rejected)
+// plus both spellings of cancelled; "All" lists them, but nothing waits on them.
+const TERMINAL_TASK_STATUSES = new Set(["done", "archived", "rejected", "cancelled", "canceled"]);
+export function isOpenTask(t) { return !TERMINAL_TASK_STATUSES.has(t.status); }
+
 // Whether a task is the viewer's own work, from the server-stamped
 // `human_crew` on the task itself. The aggregate view clears the workspace
 // registry, so a name-based check loses every task there; the per-task
 // stamp survives and keeps same-named human/agent crews apart. When the
 // viewer is known only that crew counts, otherwise every human crew does.
 export function isMyWorkTask(task) {
+  if (!isOpenTask(task)) return false;
   const human = humanCrewFor(task);
   if (!human) return false;
   const viewer = taskState.lastCrewPayload && taskState.lastCrewPayload.viewer_human_crew;
@@ -174,31 +180,44 @@ function aggregateCrewSignature() {
   return JSON.stringify(rows);
 }
 
-// Read `/api/crews` for each workspace that has a task on this page. A failed
-// workspace is recorded and does not reject the caller, so the task list still
-// renders. `force` refetches, matching a refresh that asks for crew options;
-// otherwise a stored entry for this host is reused.
+// Refresh represented workspaces together. Missing registries remain unavailable.
+// A failed batch read is retried per workspace, so one failing workspace
+// disables only its own select; older forwarded hosts take the same path.
 export async function loadAggregateCrews(tasks, { force = false } = {}) {
   const hostRevision = getHostRevision();
   dropAggregateCrewsForOtherHosts(hostRevision);
-  const pending = [];
-  const seen = new Set();
+  const pending = new Set();
   for (const task of Array.isArray(tasks) ? tasks : []) {
     const id = task && task.workspace_id ? String(task.workspace_id) : "";
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    if (!force && aggregateCrewEntry(id)) continue;
-    pending.push(id);
+    if (id && (force || !aggregateCrewEntry(id))) pending.add(id);
   }
-  await Promise.all(pending.map(async (id) => {
-    try {
-      const payload = await fetchJson(`/api/crews?workspace=${encodeURIComponent(id)}`);
-      rememberAggregateCrew(id, hostRevision, payload);
-    } catch (error) {
-      rememberAggregateCrewFailure(id, hostRevision);
-      console.error(error);
+  if (!pending.size) return;
+  try {
+    const query = new URLSearchParams();
+    for (const id of pending) query.append("workspaces", id);
+    const response = await fetchJson(`/api/crews/all?${query}`);
+    const registries = response && response.workspaces || {};
+    for (const id of pending) {
+      if (Object.hasOwn(registries, id) && registries[id]) {
+        rememberAggregateCrew(id, hostRevision, registries[id]);
+      } else {
+        rememberAggregateCrewFailure(id, hostRevision);
+      }
     }
-  }));
+  } catch (error) {
+    // A missing route (older forwarded host) is expected; any other failure is
+    // logged. Either way the batch is not a registry verdict for every workspace.
+    if (!error.routeMissing) console.error(error);
+    await Promise.all([...pending].map(async (id) => {
+      try {
+        const payload = await fetchJson(`/api/crews?workspace=${encodeURIComponent(id)}`);
+        rememberAggregateCrew(id, hostRevision, payload);
+      } catch (failure) {
+        rememberAggregateCrewFailure(id, hostRevision);
+        console.error(failure);
+      }
+    }));
+  }
 }
 
 export function hasCrewOptions() {

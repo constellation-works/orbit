@@ -1,11 +1,12 @@
 // Job catalogue and live run operations [ORB-10875, ORB-10876].
 
-import { captureWorkspaceVisit, copyText, el, fetchJson, formatDayHeading, hostWriteRefusal, isAggregateView, postJson, requestPanel, relativeTime } from './common.js';
+import { captureWorkspaceVisit, copyText, el, fetchJson, formatDayHeading, hostWriteRefusal, isAggregateView, postJson, requestPanel, relativeTime, setBadgeDescription } from './common.js';
 
 import {
   $,
   controlReason,
   cronText,
+  routineScheduleText,
   durationText,
   explainUnavailable,
   feedback,
@@ -63,7 +64,7 @@ export function updateJobFailureBadges(failing) {
   if (!node) return;
   node.hidden = jobs.length === 0;
   node.textContent = jobs.length ? `${jobs.length} failing` : "";
-  node.title = jobs.length ? `${jobs.map(failureStreakSummary).join("; ")}. See Jobs › Catalogue.` : "";
+  setBadgeDescription(node, jobs.length ? `${jobs.map(failureStreakSummary).join("; ")}. See Jobs › Catalogue.` : "");
 }
 
 // Keep the rail pill true from every tab, including before Jobs is opened.
@@ -228,7 +229,7 @@ function jobRow(job, workspace, streak) {
   const key = `job:run:${workspace.id}:${job.id}`;
   const runReason = controlReason(operationsState.lastOperations, "job_run");
   const pending = pendingOperations.has(key);
-  const run = el("button", { class: "operation-button primary job-run", text: pending ? "Submitting…" : "Run ▸", title: runReason || `Run ${job.id} in ${workspace.name}` });
+  const run = el("button", { class: "operation-button primary job-run", text: pending ? "Submitting…" : "Run ▸", "aria-description": runReason || `Run ${job.id} in ${workspace.name}` });
   run.type = "button";
   run.disabled = Boolean(runReason) || pending;
   run.addEventListener("click", () => {
@@ -248,6 +249,7 @@ function jobRow(job, workspace, streak) {
     ? job.routines.map((routine) => {
       const cadence = routine.trigger?.deliveries_landed ? "on delivery"
         : routine.trigger?.state ? "on task change"
+        : routine.trigger?.condition ? routineScheduleText(routine)
         : cronText(routine.cron, routine.next_evaluation?.at || routine.next_due);
       const chip = el("a", { class: `operation-chip ${routine.enabled ? "" : "paused"}`.trim(), text: `${routine.name} · ${cadence}${routine.enabled ? "" : " · paused"}` });
       chip.href = "#operations/routines";
@@ -266,7 +268,7 @@ function jobRow(job, workspace, streak) {
       ].filter(Boolean)),
     ]
     : [el("span", { class: "operation-cell-main muted", text: "no recent run" })];
-  const copy = el("button", { class: "operation-button secondary", text: "Copy command", title: "Copy the CLI command" });
+  const copy = el("button", { class: "operation-button secondary", text: "Copy command", "aria-description": "Copy the CLI command" });
   copy.type = "button";
   copy.addEventListener("click", async () => {
     copy.textContent = (await copyText(command)) ? "Copied" : "Copy failed";
@@ -368,7 +370,10 @@ export function renderJobs(payload) {
     }
     body.appendChild(el("p", { class: "operation-control-note", text: `Catalogue projected from routine targets and the last ${JOB_RUN_LIMIT} runs.` }));
   }
-  $("jobs-count").textContent = `${catalog.size} job${catalog.size === 1 ? "" : "s"} · ${running.length} running · ${workspace.name}`;
+  // The running figure describes the listed jobs, matching their Active column.
+  // Delivery and other non-runnable runs in flight are counted in Jobs › Live.
+  const listedRunning = [...catalog.values()].reduce((sum, job) => sum + job.running, 0);
+  $("jobs-count").textContent = `${catalog.size} job${catalog.size === 1 ? "" : "s"} · ${listedRunning} running · ${workspace.name}`;
 }
 
 export function fetchAndRenderJobs({ routinesRead = null } = {}) {

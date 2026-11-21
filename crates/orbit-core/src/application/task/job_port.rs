@@ -38,8 +38,32 @@ use crate::application::contracts::{
 /// The crew pools an admitting pipeline captured, as task code names them.
 pub(in crate::application::task) type CrewPools = <crate::OrbitRuntime as TaskJobPort>::CrewPools;
 
+/// What a task's newest delivery run says about merging its pull request.
+pub(in crate::application) enum DeliveryCompletion {
+    /// A delivery run is still live; it finishes the task itself.
+    Live,
+    /// No delivery run authorised completion: there is none, or the newest
+    /// one did not carry `completion: done`.
+    NotAuthorized,
+    /// The newest run carried `completion: done` but failed or ended on a hold
+    /// a forge read cannot clear. It had the authority; the stop's own
+    /// disposition decides what happens next, so nothing here lands it or
+    /// calls it unauthorised.
+    Stopped,
+    /// The newest run carried `completion: done` and ended `success`, or held
+    /// on a delivery hold a fresh forge read can clear.
+    Authorized {
+        /// That run.
+        run_id: String,
+        /// The run held on `delivery_check_runs_absent`: the head had no
+        /// required check run to watch, so a merge needs a required check
+        /// that has since passed on it.
+        needs_passed_check: bool,
+    },
+}
+
 /// The authenticated identity of the pull request a task's own native run
-/// published, as desktop review compares it with the forge.
+/// published, as review and settlement compare it with the forge.
 pub(in crate::application) struct NativePublicationIdentity {
     /// The published head branch.
     pub(in crate::application) branch: String,
@@ -304,6 +328,17 @@ pub(in crate::application) trait TaskJobPort {
         &self,
         task: &Task,
     ) -> Result<NativePublicationIdentity, OrbitError>;
+
+    /// Whether `task_id`'s newest delivery run authorised completion and ended
+    /// where a fresh forge read may finish it.
+    fn delivery_completion(&self, task_id: &str) -> Result<DeliveryCompletion, OrbitError>;
+
+    /// The stopped completion run's authenticated publication, if it has an
+    /// inline PR checkpoint. A checkpoint that cannot be verified is an error.
+    fn stopped_publication_identity(
+        &self,
+        task: &Task,
+    ) -> Result<Option<NativePublicationIdentity>, OrbitError>;
 
     /// The enabled members of `purpose`'s `workflow.purpose_crews` pool,
     /// with the draw's source. With `inspection`, only members whose provider

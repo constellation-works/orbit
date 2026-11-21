@@ -1,8 +1,10 @@
 //! The Automation › Residents view: set up and manage resident mandates.
 //!
-//! Reads and writes go through the `orbit.resident.*` tools, so the view
-//! reports and changes exactly what `orbit resident list|show|relay|control`
-//! do. Two writes go to core use cases instead. Creation needs a file for
+//! Reads report exactly what `orbit resident list|show` do, and writes go
+//! through the `orbit.resident.*` tools, so the view changes exactly what
+//! `orbit resident list|show|relay|control` do. The list read uses the
+//! batched core card read instead of per-row tool calls. Two writes go to
+//! core use cases instead. Creation needs a file for
 //! `orbit.task.artifact` action `put`; its use case judges the draft with the same
 //! rule every mandate read applies before it writes the tagged assignment
 //! and its `resident/mandate.json`. The grant form goes to the dashboard
@@ -11,8 +13,9 @@
 //!
 //! * `GET /api/residents` — every mandate as `orbit.resident.show` reports
 //!   it, the configured crews for the form, the workspace's resident cycle
-//!   routine and what this session may do.
-//! * `GET /api/residents/<id>` — one mandate.
+//!   routine and what this session may do. Each mandate also carries
+//!   `cycle_authority` and `open_decisions` for the card.
+//! * `GET /api/residents/<id>` — one mandate, with the same two card reads.
 //! * `POST /api/residents` — create a mandate.
 //! * `POST /api/residents/<id>/grant` — narrow, or widen, through the core
 //!   dashboard grant operation, which owns the widen-then-narrow split of a
@@ -28,6 +31,7 @@
 //! writes. Turning the cycle routine on or off is the audited
 //! `POST /api/routines/toggle`.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -43,6 +47,7 @@ use orbit_core::application::resident::{
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::task::TaskComplexity;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::workflow::{RESIDENT_CYCLE_GRANTED_EVENT, ResidentCycleGrant, ResidentRight};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -171,6 +176,219 @@ fn resident_cycle_routine(state: &DashboardState, runtime: &OrbitRuntime) -> Val
         })
 }
 
+/// Card reads the show payload does not carry.
+///
+/// `cycle_authority` is the grant history recorded for the live cycle, or
+/// for the latest checkpoint's cycle when nothing is live. A live cycle
+/// with no grant stays null: an older checkpoint must not be labeled as
+/// that cycle. `open_decisions` is every open decision on the mandate,
+/// plus a checkpoint request that is still open on another task. A failed
+/// read is null so the card can fall back to the grant requests show
+/// already returned.
+fn attach_resident_card(runtime: &OrbitRuntime, shown: &mut Value) {
+    if !shown.is_object() {
+        return;
+    }
+    let Some(task_id) = shown
+        .get("task_id")
+        .and_then(Value::as_str)
+        .filter(|task_id| !task_id.is_empty())
+        .map(str::to_owned)
+    else {
+        return;
+    };
+    shown["open_decisions"] = open_decisions_for_card(runtime, &task_id, shown);
+    shown["cycle_authority"] = cycle_authority_for_card(runtime, &task_id, shown);
+}
+
+fn open_decisions_for_card(runtime: &OrbitRuntime, task_id: &str, shown: &Value) -> Value {
+    let requests = match runtime.list_decision_requests(None, Some(task_id), false) {
+        Ok(requests) => requests,
+        Err(error) => {
+            tracing::warn!(%error, %task_id, "resident card could not list open decisions");
+            return Value::Null;
+        }
+    };
+    let mut seen = BTreeSet::new();
+    let mut values = Vec::new();
+    for request in requests {
+        if seen.insert(request.id.clone()) {
+            push_decision_json(&mut values, &request);
+        }
+    }
+    for (other_task, decision_ids) in checkpoint_decisions_on_other_tasks(shown, task_id, &seen) {
+        let found = match runtime.list_decision_requests(None, Some(&other_task), false) {
+            Ok(found) => found,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    task = %other_task,
+                    "resident card could not read a checkpoint decision"
+                );
+                continue;
+            }
+        };
+        for request in found {
+            if decision_ids.iter().any(|id| id == &request.id) && seen.insert(request.id.clone()) {
+                push_decision_json(&mut values, &request);
+            }
+        }
+    }
+    Value::Array(values)
+}
+
+fn push_decision_json(values: &mut Vec<Value>, request: &impl serde::Serialize) {
+    match serde_json::to_value(request) {
+        Ok(value) => values.push(value),
+        Err(error) => {
+            tracing::warn!(%error, "resident card skipped a decision it could not render");
+        }
+    }
+}
+
+/// Checkpoint requests whose decision lives on another task, grouped by that task.
+fn checkpoint_decisions_on_other_tasks(
+    shown: &Value,
+    task_id: &str,
+    seen: &BTreeSet<String>,
+) -> BTreeMap<String, Vec<String>> {
+    let mut by_task = BTreeMap::new();
+    let Some(rows) = shown
+        .get("latest_checkpoint")
+        .and_then(|checkpoint| checkpoint.get("requests"))
+        .and_then(Value::as_array)
+    else {
+        return by_task;
+    };
+    for row in rows {
+        let Some(decision_id) = row
+            .get("decision_request")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+        else {
+            continue;
+        };
+        let Some(other_task) = row
+            .get("task")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty() && *id != task_id)
+        else {
+            continue;
+        };
+        if seen.contains(decision_id) {
+            continue;
+        }
+        let ids = by_task.entry(other_task.to_string()).or_default();
+        if !ids.iter().any(|id| id == decision_id) {
+            ids.push(decision_id.to_string());
+        }
+    }
+    by_task
+}
+
+fn cycle_authority_for_card(runtime: &OrbitRuntime, task_id: &str, shown: &Value) -> Value {
+    let Some((target, live)) = cycle_authority_target(shown) else {
+        return Value::Null;
+    };
+    let history = match runtime.get_task_history(task_id) {
+        Ok(history) => history,
+        Err(error) => {
+            tracing::warn!(%error, %task_id, "resident card could not read cycle authority");
+            return Value::Null;
+        }
+    };
+    if let Some(grant) = history.iter().rev().find_map(|entry| {
+        if entry.event != RESIDENT_CYCLE_GRANTED_EVENT {
+            return None;
+        }
+        let grant = serde_json::from_str::<ResidentCycleGrant>(entry.note.as_deref()?).ok()?;
+        (grant.cycle == target).then_some(grant)
+    }) {
+        return grant_authority_json(&grant, live);
+    }
+    if live {
+        return Value::Null;
+    }
+    reported_cycle_authority(shown, &target)
+}
+
+/// The live cycle when one is running, otherwise the latest checkpoint's cycle.
+fn cycle_authority_target(shown: &Value) -> Option<(String, bool)> {
+    if let Some(cycle) = shown
+        .get("live_cycle")
+        .and_then(|live| live.get("cycle"))
+        .and_then(Value::as_str)
+        .filter(|cycle| !cycle.is_empty())
+    {
+        return Some((cycle.to_string(), true));
+    }
+    let cycle = shown
+        .get("latest_checkpoint")
+        .and_then(|checkpoint| checkpoint.get("cycle"))
+        .and_then(Value::as_str)
+        .filter(|cycle| !cycle.is_empty())?;
+    Some((cycle.to_string(), false))
+}
+
+fn grant_authority_json(grant: &ResidentCycleGrant, live: bool) -> Value {
+    let rights: Vec<&str> = grant
+        .rights
+        .iter()
+        .copied()
+        .map(ResidentRight::as_str)
+        .collect();
+    let mut body = Map::new();
+    body.insert("cycle".into(), json!(grant.cycle));
+    body.insert("live".into(), json!(live));
+    body.insert("rights".into(), json!(rights));
+    body.insert("workspaces".into(), json!(grant.workspaces));
+    body.insert("observe_only".into(), json!(grant.observe_only));
+    if let Some(narrowed_by) = &grant.narrowed_by {
+        body.insert("narrowed_by".into(), json!(narrowed_by));
+    }
+    Value::Object(body)
+}
+
+/// The checkpoint's own authority report, only for the cycle it names.
+/// Workspaces are omitted: the report does not record them.
+fn reported_cycle_authority(shown: &Value, target: &str) -> Value {
+    let Some(checkpoint) = shown.get("latest_checkpoint") else {
+        return Value::Null;
+    };
+    if checkpoint.get("cycle").and_then(Value::as_str) != Some(target) {
+        return Value::Null;
+    }
+    let Some(authority) = checkpoint
+        .get("authority")
+        .filter(|value| value.is_object())
+    else {
+        return Value::Null;
+    };
+    let rights = authority
+        .get("rights")
+        .filter(|value| value.is_array())
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let mut body = Map::new();
+    body.insert("cycle".into(), json!(target));
+    body.insert("live".into(), json!(false));
+    body.insert("rights".into(), rights);
+    body.insert(
+        "observe_only".into(),
+        json!(
+            authority
+                .get("observe_only")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        ),
+    );
+    if let Some(narrowed_by) = authority.get("narrowed_by").and_then(Value::as_str) {
+        body.insert("narrowed_by".into(), json!(narrowed_by));
+    }
+    body.insert("reported".into(), json!(true));
+    Value::Object(body)
+}
+
 /// `GET /api/residents`.
 pub(super) async fn list_residents(
     State(state): State<DashboardState>,
@@ -180,25 +398,7 @@ pub(super) async fn list_residents(
     let operator = state.operator_session();
     let include_ended = query.all;
     match blocking("resident list", move || {
-        let session = dashboard_session(operator);
-        let listed = runtime.run_tool_with_session(
-            "orbit.resident.list",
-            json!({"include_ended": include_ended}),
-            session.clone(),
-        )?;
-        let mut mandates = Vec::new();
-        for row in listed["mandates"].as_array().into_iter().flatten() {
-            let Some(task_id) = row["task_id"].as_str() else {
-                continue;
-            };
-            let mut shown = runtime.run_tool_with_session(
-                "orbit.resident.show",
-                json!({"task_id": task_id}),
-                session.clone(),
-            )?;
-            shown["goal"] = row["goal"].clone();
-            mandates.push(shown);
-        }
+        let mandates = runtime.list_resident_mandate_cards(include_ended)?;
         let crews = serde_json::to_value(runtime.configured_crew_registry_projection())
             .unwrap_or(Value::Null);
         let crew_names: Vec<Value> = crews["crews"]
@@ -235,11 +435,13 @@ pub(super) async fn show_resident(
 ) -> Response {
     let operator = state.operator_session();
     match blocking("resident show", move || {
-        runtime.run_tool_with_session(
+        let mut shown = runtime.run_tool_with_session(
             "orbit.resident.show",
             json!({"task_id": id}),
             dashboard_session(operator),
-        )
+        )?;
+        attach_resident_card(&runtime, &mut shown);
+        Ok(shown)
     })
     .await
     {

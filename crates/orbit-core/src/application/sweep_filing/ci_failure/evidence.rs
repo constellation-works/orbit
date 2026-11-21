@@ -368,16 +368,33 @@ pub(super) fn deferred_errors(deferred: &[Value]) -> Vec<Value> {
         .collect()
 }
 
-/// [ORB-15517] Whether every deferred gap is a run-scoped collection error,
-/// the only kind collection's sweep history counts toward degrading or
-/// escalating. A registration gap (owner lookup, missing investigation) has
-/// no such threshold, so deferring it would defer it forever.
+/// [ORB-15517] Whether every deferred gap is run-scoped and has collection
+/// history that bounds how long it may be deferred. Most registration gaps
+/// (owner lookup, missing investigation, a filing-boundary identity gap) have
+/// no such threshold, so deferring them would defer them forever.
+///
+/// Bounded registration gaps are `run_view` when a failed run has no failed
+/// jobs and `checkout_evidence` when collection finds no actual checkout SHA.
+/// Collection records them per run; checkout identity gaps also retain their
+/// run/job/operation (and landing branch/workflow) history for escalation.
+/// They hold findings visibly until evidence is complete or escalated and
+/// never authorise filing against a guessed checkout.
+/// Every other registration gap, including `job_evidence_identity`'s
+/// checkout-identity protections (ambiguous SHAs, a provenance job
+/// mismatch), stays fail-closed.
 pub(super) fn deferral_is_bounded(deferred: &[Value]) -> bool {
     let errors = deferred_errors(deferred);
     !errors.is_empty()
         && errors.iter().all(|error| {
-            error.get("stage").and_then(Value::as_str) != Some("registration")
-                && error.get("run_id").is_some_and(|run_id| !run_id.is_null())
+            let missing_jobs = error["stage"] == "registration"
+                && error["operation"] == "run_view"
+                && error["message"] == "failed run returned no failed jobs";
+            let missing_checkout_identity =
+                error["stage"] == "registration" && error["operation"] == "checkout_evidence";
+            error.get("run_id").is_some_and(|run_id| !run_id.is_null())
+                && (error.get("stage").and_then(Value::as_str) != Some("registration")
+                    || missing_jobs
+                    || missing_checkout_identity)
         })
 }
 

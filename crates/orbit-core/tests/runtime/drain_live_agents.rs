@@ -7,7 +7,6 @@ use orbit_store::contracts::V2AuditEventInsertParams;
 use orbit_store::maintenance::task_registry::{WorkspaceConfig, write_workspace_config};
 use serde_json::{Value, json};
 
-#[test]
 fn readiness_counts_live_agents_by_activity() {
     let temp = tempfile::TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let root = temp.path().join("root");
@@ -56,9 +55,21 @@ fn readiness_counts_live_agents_by_activity() {
         false,
     );
     spawn(&runtime, &running, "review-done", "re_review", alive, true);
-    // A second running run, so the figures sum across runs. `recover` is the
+    // A retrying run, so the figures sum across live run states. `recover` is the
     // blocked-recovery step id; `final_recovery` is the job-level activity.
     let other = start_run(&runtime, "blocked_task_recovery_pipeline");
+    let changed = runtime
+        .sqlite_store()
+        .unwrap()
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE job_runs SET state = 'retrying' WHERE run_id = ?1",
+            [&other],
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
     spawn(&runtime, &other, "pilot-c", "repair_pilot", alive, false);
     spawn(
         &runtime,
@@ -197,3 +208,8 @@ fn insert(runtime: &OrbitRuntime, run_id: &str, event_id: &str, body: Value) {
         })
         .unwrap();
 }
+
+crate::scenario_table!(
+    live_agents_scenarios,
+    readiness_counts_live_agents_by_activity
+);

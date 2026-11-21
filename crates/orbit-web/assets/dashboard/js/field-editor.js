@@ -7,7 +7,7 @@
 // value is persisted. The caller supplies the current text, a renderer for the
 // read-only view, an async `save`, and what to do once a save lands.
 
-import { el } from './common.js';
+import { el, infoHint } from './common.js';
 
 /* A save that resolves closes the editor and hands the surrounding view back to
    its own data: the widget returns to its read-only view before `onSaved`, so
@@ -23,7 +23,7 @@ export function buildInlineFieldEditor({
   onSaved,
   editable = true,
   editTitle = "",
-  disabledTitle = "",
+  disabledDescription = "",
   multiline = true,
   placeholder = "",
   hint = "",
@@ -42,7 +42,7 @@ export function buildInlineFieldEditor({
     const editButton = el("button", {
       class: "field-edit",
       text: "edit",
-      title: editable ? accessibleName : disabledTitle,
+      "aria-description": editable ? null : (disabledDescription || null),
     });
     editButton.type = "button";
     editButton.disabled = !editable;
@@ -54,11 +54,13 @@ export function buildInlineFieldEditor({
       // widget rather than a property of how it happens to be rendered.
       if (editable) showEditor();
     });
+    // STD-07 R41: a disabled edit button's reason is behind an i beside it.
+    const disabledHint = !editable && disabledDescription ? infoHint(disabledDescription) : null;
     if (editSlot) {
       wrap.replaceChildren(renderView());
-      editSlot.replaceChildren(editButton);
+      editSlot.replaceChildren(...[editButton, disabledHint].filter(Boolean));
     } else {
-      wrap.replaceChildren(renderView(), editButton);
+      wrap.replaceChildren(...[renderView(), editButton, disabledHint].filter(Boolean));
     }
     return editButton;
   };

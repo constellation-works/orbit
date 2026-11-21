@@ -8,7 +8,7 @@
 
 mod all_job_runs;
 mod all_tasks;
-mod fan_out;
+pub(super) mod fan_out;
 mod fleet_drains;
 mod list;
 
@@ -16,4 +16,4 @@ pub(super) use all_job_runs::list_all_job_runs;
 pub(super) use all_tasks::list_all_tasks;
 pub(super) use fleet_drains::list_fleet_drains;
 pub(crate) use list::entry_is_owned;
-pub(super) use list::{abbreviate_home, list_workspaces};
+pub(super) use list::list_workspaces;

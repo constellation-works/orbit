@@ -24,14 +24,14 @@ pub const AUTO_EFFORT_BANDS_KEY: &str = "workflow.auto_effort.bands";
 /// The former `workflow.auto_effort.explore_share` default, fixed when the
 /// key was removed [ORB-22808]: one draw in ten runs another effort the
 /// bands name.
-pub const AUTO_EFFORT_EXPLORE_SHARE: f64 = 0.1;
+pub(crate) const AUTO_EFFORT_EXPLORE_SHARE: f64 = 0.1;
 /// Resolution of the exploration roll, in parts per million.
 const EXPLORE_SCALE: u64 = 1_000_000;
 
 /// The pools that admit `<crew>@auto`: the complexity and type pools
 /// (implementers), the task-pilot purpose pool and the two review pools.
 /// Every other pool refuses it.
-pub const AUTO_EFFORT_POOLS: &str = "workflow.<tier>_complexity_crews, \
+pub(crate) const AUTO_EFFORT_POOLS: &str = "workflow.<tier>_complexity_crews, \
      workflow.type_complexity_crews, workflow.purpose_crews.task_pilot, \
      workflow.purpose_crews.review and workflow.purpose_crews.pre_landing_review";
 
@@ -86,7 +86,7 @@ pub struct AutoEffortPolicy {
 
 impl AutoEffortPolicy {
     /// The policy over admitted bands and an exploration share
-    /// ([`AUTO_EFFORT_EXPLORE_SHARE`] for configured runtimes).
+    /// (`AUTO_EFFORT_EXPLORE_SHARE` for configured runtimes).
     pub fn new(bands: BTreeMap<String, Vec<AutoEffortBand>>, explore_share: f64) -> Self {
         Self {
             bands,

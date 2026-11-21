@@ -36,6 +36,7 @@ pub(crate) mod builtin;
 pub mod external;
 mod family;
 pub mod github_cli;
+pub mod github_quota;
 mod mcp;
 pub use mcp::builtin_mcp_rules;
 pub mod plugin;
@@ -45,8 +46,11 @@ pub mod tool_suggestions;
 mod artifact_materialize;
 mod context;
 mod fs_audit;
+mod gh_request;
+mod github_run_log_cache;
 mod host;
 mod program_policy;
+mod task_guarded_selectors;
 mod tool;
 
 /// Default network operation timeout (15 s). Used for most GitHub API calls
@@ -67,6 +71,7 @@ pub use context::{
     ReservationOwnerContext, ToolCaller, ToolContext, WitnessedProgramGrant,
 };
 pub use fs_audit::{FsAuditLogger, FsCallEvent, FsCallEventKind};
+pub use github_run_log_cache::{GITHUB_RUN_LOG_CACHE_DIR, remove_legacy_github_run_log_cache};
 pub use host::{
     DrainOwnerTransport, OrbitBuiltinAction, OrbitTaskScope, OrbitToolHost, OwnerCoordinator,
     prepare_remote_task_artifact_put,

@@ -60,6 +60,43 @@ class PanicInventoryTests(unittest.TestCase):
         self.assertEqual(report['per_crate']['orbit-config']['blast_radius'], 0)
         self.assertEqual(set(report['blast_radius_sites']), {'orbit-agent'})
 
+    def test_cfg_not_test_module_is_production_code(self):
+        scripts = self.root / 'scripts'
+        scripts.mkdir()
+        for name in ('audit_panics.py', 'audit_panics.sh', 'require-python.sh'):
+            shutil.copy2(SCRIPTS / name, scripts / name)
+        (self.root / 'Cargo.toml').write_text('[workspace]\nmembers = ["crates/orbit-agent"]\n')
+        crate = self.root / 'crates/orbit-agent'
+        (crate / 'src').mkdir(parents=True)
+        (crate / 'Cargo.toml').write_text('[package]\nname = "orbit-agent"\nversion = "0.1.0"\n')
+        (crate / 'src/lib.rs').write_text(
+            'pub fn first() { panic!("first"); }\n'
+            '#[cfg(not(test))]\nmod production {\n    pub fn run() { panic!("prod"); }\n}\n')
+        report = self.audit(self.root)
+        self.assertEqual(report['totals']['non_test'], 2)
+        self.assertEqual(report['totals']['blast_radius'], 2)
+
+    def test_double_negated_test_module_is_test_code(self):
+        # not(not(test)) is equivalent to test, so its module is test-only; not(test) is the
+        # production control. Both cases use the same fixture, differing only in the cfg.
+        for index, (cfg, expected_non_test) in enumerate((('not(not(test))', 1), ('not(test)', 2))):
+            with self.subTest(cfg=cfg):
+                root = self.root / f'case-{index}'
+                scripts = root / 'scripts'
+                scripts.mkdir(parents=True)
+                for name in ('audit_panics.py', 'audit_panics.sh', 'require-python.sh'):
+                    shutil.copy2(SCRIPTS / name, scripts / name)
+                (root / 'Cargo.toml').write_text('[workspace]\nmembers = ["crates/orbit-agent"]\n')
+                crate = root / 'crates/orbit-agent'
+                (crate / 'src').mkdir(parents=True)
+                (crate / 'Cargo.toml').write_text('[package]\nname = "orbit-agent"\nversion = "0.1.0"\n')
+                (crate / 'src/lib.rs').write_text(
+                    'pub fn first() { panic!("first"); }\n'
+                    f'#[cfg({cfg})]\nmod gated {{\n    pub fn run() {{ panic!("gated"); }}\n}}\n')
+                report = self.audit(root)
+                self.assertEqual(report['totals']['non_test'], expected_non_test, f'cfg({cfg})')
+                self.assertEqual(report['totals']['blast_radius'], expected_non_test, f'cfg({cfg})')
+
 
 if __name__ == '__main__':
     unittest.main()

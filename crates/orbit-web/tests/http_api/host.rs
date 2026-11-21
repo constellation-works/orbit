@@ -1,3 +1,5 @@
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -33,6 +35,72 @@ fn host_names(body: &Value) -> Vec<&str> {
         .iter()
         .map(|host| host["name"].as_str().unwrap())
         .collect()
+}
+
+fn read_response_without_finishing_request_body(origin: &str, method: &str, path: &str) -> Value {
+    let authority = origin.strip_prefix("http://").unwrap();
+    let mut stream = TcpStream::connect(authority).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    write!(
+        stream,
+        "{method} {path} HTTP/1.1\r\nHost: {authority}\r\nOrigin: {origin}\r\nContent-Type: application/json\r\nContent-Length: 1024\r\nConnection: close\r\n\r\n{{"
+    )
+    .unwrap();
+
+    let mut response = Vec::new();
+    let mut buffer = [0; 1024];
+    let mut expected_len = None;
+    loop {
+        let count = stream.read(&mut buffer).unwrap();
+        assert_ne!(count, 0, "server closed before returning an HTTP response");
+        response.extend_from_slice(&buffer[..count]);
+
+        if expected_len.is_none()
+            && let Some(header_end) = response.windows(4).position(|window| window == b"\r\n\r\n")
+        {
+            let headers = std::str::from_utf8(&response[..header_end]).unwrap();
+            let body_len = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .expect("response has a content length");
+            expected_len = Some(header_end + 4 + body_len);
+        }
+
+        if let Some(expected_len) = expected_len
+            && response.len() >= expected_len
+        {
+            response.truncate(expected_len);
+            break;
+        }
+    }
+
+    let response = String::from_utf8(response).unwrap();
+    let (headers, body) = response.split_once("\r\n\r\n").unwrap();
+    assert!(headers.starts_with("HTTP/1.1 403 "), "{headers}");
+    serde_json::from_str(body).unwrap()
+}
+
+#[test]
+fn host_edits_are_denied_before_an_incomplete_body_is_read() {
+    isolated(
+        "host::host_edits_are_denied_before_an_incomplete_body_is_read",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(false);
+
+            for (method, path) in [("POST", "/api/hosts"), ("PATCH", "/api/hosts/alpha")] {
+                let response =
+                    read_response_without_finishing_request_body(&server.origin, method, path);
+                assert_eq!(response["code"], "authorization_denied", "{method} {path}");
+            }
+        },
+    );
 }
 
 fn wait_gate(gate: &Path, point: &str) {

@@ -1,12 +1,13 @@
 // Routine-definition and host clock operations [ORB-10875].
 
-import { captureWorkspaceVisit, el, fetchJson, isAggregateView, postJson, relativeTime } from './common.js';
+import { captureWorkspaceVisit, el, fetchJson, isAggregateView, postJson, relativeTime, setBadgeDescription } from './common.js';
 import { conditionStateLabel, renderAutomation } from './automation.js';
 import { createRoutineCatalogue, resetRoutineCatalogue } from './operations-routines-catalogue.js';
 import { closeRoutineEditors, routineEditButton, routineEditorElement } from './operations-routines-editor.js';
 
 import {
   $,
+  actionReason,
   cadenceText,
   clockHm,
   clockServiceText,
@@ -77,7 +78,7 @@ function routineButton(payload, routine) {
     pending,
     reason: reason || "",
   });
-  if (!reason) button.title = `${nextEnabled ? "Enable" : "Disable"} ${routine.name} → ${routine.target}`;
+  if (!reason) button.setAttribute("aria-description", `${nextEnabled ? "Enable" : "Disable"} ${routine.name} → ${routine.target}`);
   button.addEventListener("click", () => {
     if (reason || !selection.current()) return;
     return runOperation({
@@ -90,6 +91,48 @@ function routineButton(payload, routine) {
       }),
       refresh: () => routinesFetchOperations(),
       success: (result) => `${result.message}: ${routine.name} → ${routine.target}.`,
+    });
+  });
+  return explainUnavailable(button, reason);
+}
+
+// The routine's open circuit breaker, or null [ORB-25103]: the scheduler has
+// stopped firing it after repeated identical failures.
+function trippedBreaker(routine) {
+  return routine.breaker?.tripped ? routine.breaker : null;
+}
+
+function trippedText(breaker) {
+  const next = breaker.next_trial_at ? ` · next trial ${relativeTime(breaker.next_trial_at) || time(breaker.next_trial_at)}` : "";
+  return `Tripped after repeated ${breaker.error_class || "failed"} failures${next}`;
+}
+
+function routineBreakerButton(payload, routine, action) {
+  const selection = selectionSnapshot();
+  const key = `routine-breaker:${selection.workspace}:${routine.name}`;
+  const reason = actionReason(payload, "routine_breaker") || "";
+  const pending = pendingOperations.has(key);
+  const reset = action === "reset";
+  const button = el("button", {
+    class: `operation-button ${reset ? "primary" : "secondary"}`,
+    text: pending ? "Pending…" : reset ? "Reset breaker" : "Fire once",
+    "aria-description": reason || (reset
+      ? `Close the breaker: ${routine.name} fires as scheduled again`
+      : `Let ${routine.name} fire once on the next scheduler tick`),
+  });
+  button.type = "button";
+  button.disabled = Boolean(reason) || pending;
+  button.addEventListener("click", () => {
+    if (reason || !selection.current() || pendingOperations.has(key)) return;
+    return runOperation({
+      selection, key, feedbackId: "routine-operation-feedback",
+      pending: `${reset ? "Resetting" : "Bypassing"} the breaker of ${routine.name}…`, failure: "Breaker change failed",
+      render: () => { if (operationsState.lastOperations && routinesRenderOperations) routinesRenderOperations(operationsState.lastOperations); },
+      request: () => postJson("/api/routines/breaker", {
+        name: routine.name, source: routine.source, action, machine_name: payload.machine_name,
+      }),
+      refresh: () => routinesFetchOperations(),
+      success: (result) => `${result.message}: ${routine.name}.`,
     });
   });
   return explainUnavailable(button, reason);
@@ -260,40 +303,56 @@ function watchRoutineTimelineSize(track) {
 function routineTimeline(routines, now = Date.now()) {
   const horizon = 60 * 60_000;
   const due = routines
-    .map((routine) => ({ routine, first: new Date(routineNextAt(routine) || NaN).getTime() }))
-    .filter(({ first }) => Number.isFinite(first) && first >= now - 60_000 && first <= now + horizon)
-    .flatMap(({ routine, first }) => routineFireTimes(routine, first, now + horizon)
-      .map((at, index) => ({ routine, at, repeat: index > 0 })))
+    .flatMap(routine => {
+      const breaker = trippedBreaker(routine);
+      const active = routineState(routine) === "active";
+      if (breaker) {
+        if (!active || breaker.trial_phase !== "armed") return [];
+        const at = Date.parse(breaker.trial_expected_at);
+        if (!Number.isFinite(at) || at < now - 60_000 || at > now + horizon) return [];
+        return [{ routine, kind: "trial", at, repeat: false }];
+      }
+      const first = Date.parse(routineNextAt(routine));
+      if (!Number.isFinite(first) || first < now - 60_000 || first > now + horizon) return [];
+      const kind = active ? "fires" : "skipped";
+      const times = routineFireTimes(routine, first, now + horizon);
+      return times.map((at, index) => ({ routine, kind, at, repeat: index > 0 }));
+    })
     .sort((a, b) => a.at - b.at);
   const strip = el("section", { class: "operation-timeline" });
   strip.setAttribute("aria-label", "Next hour");
-  const fires = due.filter(({ routine }) => routine.enabled && routine.effective !== false).length;
-  const active = routines.filter((routine) => routineState(routine) === "active").length;
+  const fires = due.filter(slot => slot.kind === "fires");
+  const trials = due.filter(slot => slot.kind === "trial").length;
+  const active = new Set(fires.map(slot => slot.routine)).size;
+  const summary = [
+    fires.length ? `${fires.length} fire${fires.length === 1 ? "" : "s"} from ${active} active routine${active === 1 ? "" : "s"}` : "",
+    trials ? `${trials} breaker trial${trials === 1 ? "" : "s"}` : "",
+  ].filter(Boolean).join(" · ");
   strip.appendChild(el("div", { class: "operation-timeline-head" }, [
     el("strong", { text: "Next hour" }),
     el("span", { class: "operation-timeline-range mono", text: `${clockHm(now, { zone: false })} → ${clockHm(now + horizon)}` }),
-    el("span", { class: "operation-timeline-summary", text: due.length
-      ? `${fires} fire${fires === 1 ? "" : "s"} from ${active} active routine${active === 1 ? "" : "s"}`
-      : "nothing is due in the next hour" }),
+    el("span", { class: "operation-timeline-summary", text: summary || (due.length ? "all slots paused" : "nothing is due in the next hour") }),
     el("span", { class: "operation-timeline-legend" }, [
-      el("span", { class: "operation-timeline-key fires", text: "will fire" }),
-      el("span", { class: "operation-timeline-key skipped", text: "paused · slot skipped" }),
+      fires.length ? el("span", { class: "operation-timeline-key fires", text: "will fire" }) : null,
+      trials ? el("span", { class: "operation-timeline-key trial", text: "breaker trial" }) : null,
+      due.some(slot => slot.kind === "skipped") ? el("span", { class: "operation-timeline-key skipped", text: "paused · slot skipped" }) : null,
     ]),
   ]));
   const track = el("div", { class: "operation-timeline-track" });
   track.appendChild(el("div", { class: "operation-timeline-axis" }));
   // Label rows are assigned from their rendered pixel widths after the track
   // enters the DOM. Repeated fires keep their tick marks but do not add labels.
-  due.forEach(({ routine, at, repeat }) => {
+  due.forEach(({ routine, at, repeat, kind }) => {
     const pct = Math.min(100, Math.max(0, ((at - now) / horizon) * 100));
-    const fires = routine.enabled && routine.effective !== false;
     const label = repeat ? null : el("span", { class: "operation-timeline-label mono", text: routine.name });
-    const tick = el("div", { class: `operation-timeline-tick ${fires ? "fires" : "skipped"}` }, [
+    const tick = el("div", { class: `operation-timeline-tick ${kind}` }, [
       el("span", { class: "operation-timeline-mark" }),
       label,
     ]);
     tick.style.left = `${pct}%`;
-    tick.title = `${routine.name} · ${clockHm(at)}${fires ? "" : " · paused"}`;
+    tick.title = `${routine.name} · ${clockHm(at)}${kind === "trial" ? " · breaker trial" : kind === "skipped" ? " · paused" : ""}`;
+    tick.setAttribute("aria-label", tick.title);
+    tick.tabIndex = 0;
     track.appendChild(tick);
   });
   watchRoutineTimelineSize(track);
@@ -302,13 +361,26 @@ function routineTimeline(routines, now = Date.now()) {
 }
 
 function routineFailureText(routine) {
+  const breaker = trippedBreaker(routine);
+  if (breaker) return trippedText(breaker);
   const streak = routine.failure_streak;
   if (!streak?.count) return "";
   return `Failing ${streak.truncated ? "at least " : ""}${streak.count} fire${streak.count === 1 ? "" : "s"} in a row since ${time(streak.since)}${streak.truncated ? " or earlier" : ""}`;
 }
 
+// Failing repeatedly but still firing: a tripped routine is reported as
+// tripped instead.
 function failingRoutines(routines) {
-  return routines.filter(routine => routine.failure_streak?.count >= 3);
+  return routines.filter(routine => !trippedBreaker(routine) && routine.failure_streak?.count >= 3);
+}
+
+function trippedRoutines(routines) {
+  return routines.filter(routine => trippedBreaker(routine));
+}
+
+// Everything the Health rail warns about: tripped and failing routines.
+function routinesNeedingAttention(routines) {
+  return [...trippedRoutines(routines), ...failingRoutines(routines)];
 }
 
 export function scopedRoutines(payload) {
@@ -328,20 +400,20 @@ function paintRoutineFailureBadge(failures, { unavailable = false } = {}) {
   node.dataset.stale = unavailable ? "true" : "false";
   if (failures.length) {
     node.textContent = `${failures.length} routine${failures.length === 1 ? "" : "s"}${unavailable ? " (stale)" : ""}`;
-    node.title = `${failures.map(routine => `${routine.name}: ${routineFailureText(routine)}`).join("; ")}. ${unavailable ? "The latest refresh failed, so this is the last known state. " : ""}See Automation › Routines.`;
+    setBadgeDescription(node, `${failures.map(routine => `${routine.name}: ${routineFailureText(routine)}`).join("; ")}. ${unavailable ? "The latest refresh failed, so this is the last known state. " : ""}See Automation › Routines.`);
   } else if (unavailable) {
     node.textContent = "routines ?";
-    node.title = "Routine failure status is unavailable: the read failed. It retries on the next refresh.";
+    setBadgeDescription(node, "Routine failure status is unavailable: the read failed. It retries on the next refresh.");
   } else {
     node.textContent = "";
-    node.title = "";
+    setBadgeDescription(node, "");
   }
 }
 
 // A successful payload (or a scope reset): paint it and remember it.
 export function updateRoutineFailureBadge(routines) {
   routineFailureRequest += 1;
-  knownFailingRoutines = failingRoutines(routines);
+  knownFailingRoutines = routinesNeedingAttention(routines);
   paintRoutineFailureBadge(knownFailingRoutines);
 }
 
@@ -395,23 +467,30 @@ function routineFireStrip(routine, workspaceId) {
 }
 
 function routineFailureSummary(routines) {
+  const tripped = trippedRoutines(routines);
   const failures = failingRoutines(routines);
-  if (!failures.length) return null;
+  if (!tripped.length && !failures.length) return null;
+  const heading = [
+    tripped.length ? `${tripped.length} routine${tripped.length === 1 ? "" : "s"} tripped` : null,
+    failures.length ? `${failures.length} routine${failures.length === 1 ? "" : "s"} failing repeatedly` : null,
+  ].filter(Boolean).join(" · ");
   return el("aside", { class: "routine-failures", role: "status" }, [
-    el("strong", { text: `${failures.length} routine${failures.length === 1 ? "" : "s"} failing repeatedly` }),
-    ...failures.map(routine => el("div", { text: `${routine.name} · ${routineFailureText(routine)}` })),
+    el("strong", { text: heading }),
+    ...[...tripped, ...failures].map(routine => el("div", { text: `${routine.name} · ${routineFailureText(routine)}` })),
   ]);
 }
 
 function routineRow(payload, routine, workspaceId) {
   const fire = routine.last_fire;
   const state = routineState(routine);
+  const breaker = trippedBreaker(routine);
   const detailsKey = `routine:${routine.name}`;
   const nextAt = routineNextAt(routine);
   const card = el("article", { class: `operation-card operation-row routine-card ${state}` });
   const identity = el("div", { class: "operation-identity" }, [
     el("strong", { text: routine.name }),
     state === "blocked" ? el("span", { class: "operation-state blocked", text: "blocked" }) : null,
+    breaker ? el("span", { class: "operation-state blocked", text: "tripped", title: trippedText(breaker) }) : null,
     routine.automation?.condition?.stall ? el("span", { class: "operation-state blocked", text: "stalled" }) : null,
   ]);
   const condition = routine.automation?.condition;
@@ -440,7 +519,7 @@ function routineRow(payload, routine, workspaceId) {
     ]
     : [el("span", { class: "operation-cell-main muted", text: "Never" })];
   lastRun.push(routineFireStrip(routine, workspaceId));
-  if (routine.failure_streak?.count) {
+  if (breaker || routine.failure_streak?.count) {
     lastRun.push(el("span", { class: "operation-cell-sub routine-failure-streak", text: routineFailureText(routine) }));
   }
   card.append(
@@ -451,7 +530,12 @@ function routineRow(payload, routine, workspaceId) {
         el("span", { class: "operation-cell-sub" }, [el("span", { text: "runs " }), jobLink(routine.target)]),
       ], "operation-cell-identity"),
       operationCell("Cadence", [...cadence, routineEditButton({ payload, routine, onOpened: () => { if (routinesRenderOperations) routinesRenderOperations(operationsState.lastOperations || payload, { force: true }); } })]),
-      routine.enabled
+      breaker && routine.enabled
+        ? operationCell("Next trial", [
+          el("span", { class: "operation-cell-main", text: breaker.next_trial_at ? `trial ${relativeTime(breaker.next_trial_at) || time(breaker.next_trial_at)}` : "trial pending", title: breaker.next_trial_at ? time(breaker.next_trial_at) : "" }),
+          el("span", { class: "operation-cell-sub", text: breaker.next_trial_at ? `${clockHm(breaker.next_trial_at)} · tripped` : "tripped" }),
+        ])
+        : routine.enabled
         ? whenCell("Next fire", nextAt, { fallback: nextEvaluationText(routine.next_evaluation, routine.next_due, routine.trigger) })
         : operationCell("Next fire", [el("span", { class: "operation-cell-main muted", text: nextAt ? `would be ${clockHm(nextAt)}` : "Paused" })]),
       operationCell("Last run", lastRun),
@@ -465,7 +549,13 @@ function routineRow(payload, routine, workspaceId) {
         field("Next evaluation", nextEvaluationText(routine.next_evaluation, routine.next_due, routine.trigger)),
         field("Last fire", fire ? time(fire.finished_at || fire.started_at) : "Never"),
         field("Linked run / outcome", fire ? `${fire.run_id || "No run"} · ${fire.state}` : "No fire recorded"),
-      ]),
+        breaker ? field("Circuit breaker", `Tripped ${time(breaker.tripped_at)} · ${breaker.error_class || "failed"} · trip ${breaker.trips}${breaker.last_run_id ? ` · run ${breaker.last_run_id}` : ""}`) : null,
+        breaker ? field("Next trial", breaker.next_trial_at ? time(breaker.next_trial_at) : "Pending") : null,
+      ].filter(Boolean)),
+      breaker ? el("div", { class: "operation-actions routine-breaker-actions" }, [
+        routineBreakerButton(payload, routine, "reset"),
+        routineBreakerButton(payload, routine, "bypass"),
+      ]) : null,
       renderAutomation(routine.automation, `${detailsKey}:automation`, { kind: "routine", name: routine.name, workspace: workspaceId }),
       routine.description ? el("p", { class: "operation-description", text: routine.description }) : null,
     ]),
@@ -519,7 +609,7 @@ function clockButton(payload, action, label) {
   const reason = unavailable
     ? clockUnavailableReason(payload.clock)
     : controlReason(payload, "clock_service");
-  const button = el("button", { class: "operation-button", text: pendingOperations.has(key) ? "Pending…" : label, title: reason });
+  const button = el("button", { class: "operation-button", text: pendingOperations.has(key) ? "Pending…" : label, "aria-description": reason });
   button.type = "button";
   button.disabled = Boolean(reason) || pendingOperations.has(key);
   button.addEventListener("click", () => {
@@ -583,7 +673,7 @@ export function renderClock(payload) {
     cadence.appendChild(option);
   }
   cadence.disabled = Boolean(reason) || pendingOperations.has(key);
-  const apply = el("button", { class: "operation-button secondary", text: pendingOperations.has(key) ? "Pending…" : "Apply cadence", title: "Reload cadence without changing whether the clock is enabled" });
+  const apply = el("button", { class: "operation-button secondary", text: pendingOperations.has(key) ? "Pending…" : "Apply cadence", "aria-description": "Reload cadence without changing whether the clock is enabled" });
   apply.type = "button";
   const syncApplyState = (chosen) => {
     apply.disabled = Boolean(reason) || pendingOperations.has(key) || chosen === clock.configured_cadence_seconds;

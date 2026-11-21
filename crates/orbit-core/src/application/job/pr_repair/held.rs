@@ -62,17 +62,20 @@ pub(crate) fn handed_back_hold(refusal: DeliveryRefusal) -> bool {
         | DeliveryRefusal::BaseChaseExhausted
         | DeliveryRefusal::OriginUnavailable
         | DeliveryRefusal::CheckRepairActivityAbsent
+        | DeliveryRefusal::ReviewBudgetExhausted
         | DeliveryRefusal::VisualNotEstablished
         | DeliveryRefusal::VisualReviewUnresolved
         // The claim already ended. Resuming this hold would land a revoked handoff.
-        | DeliveryRefusal::LandingRepairRequeue => false,
+        | DeliveryRefusal::LandingRepairRequeue
+        // The operator inspects explicit source repair or discards the candidate.
+        | DeliveryRefusal::SourceRepairDecision => false,
     }
 }
 
 /// The typed delivery refusal `run` ended `held` with, read from its last
 /// step's diagnostic code; `None` for a run that is not held or whose hold
 /// is not a delivery refusal. `run` must carry its steps.
-pub(super) fn held_refusal(run: &JobRun) -> Option<DeliveryRefusal> {
+pub(crate) fn held_refusal(run: &JobRun) -> Option<DeliveryRefusal> {
     if run.state != JobRunState::Held {
         return None;
     }

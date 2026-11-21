@@ -1,13 +1,13 @@
 //! Consecutive exclusion of a configured pool member, independent of whether
 //! any task happened to draw it in this pass.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
 use orbit_store::contracts::{FrictionAddParams, FrictionListFilter};
 use orbit_types::identity::{resolve_crew, same_crew_family};
 use orbit_types::record::FrictionStatus;
-use orbit_types::workflow::{CrewExclusion, CrewPoolExclusion};
+use orbit_types::workflow::{CrewExclusion, CrewExclusionSource, CrewPoolExclusion};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -47,19 +47,34 @@ pub(crate) fn record_pool_crew_health(
             exclusions
         };
         let unset = runtime.unset_crew_env();
-        let crews = runtime.context.settings().crews();
+        let crew_settings = runtime.admission_crew_settings();
+        let crews = &crew_settings.crews;
         let mut excluded = BTreeMap::new();
+        // Crews excluded by a provider usage window with a known reset, and
+        // crews an operator's `--allow-crew` window intentionally leaves out.
+        // Their streak and run warning are kept; no friction is filed for them.
+        let mut quota_limited = BTreeSet::new();
+        // An operator's intentional `--allow-crew` restriction, not a host
+        // failure. A crew that is also unset or window-excluded keeps its
+        // actionable reason and still files.
+        let mut allowlist_restricted = BTreeSet::new();
         for name in members {
-            let reason = unset
+            let unset_reason = unset
                 .iter()
                 .find(|unset| same_crew_family(&unset.crew, &name))
-                .map(|unset| unset.describe())
-                .or_else(|| {
-                    exclusions
-                        .iter()
-                        .find(|entry| same_crew_family(&entry.crew, &name))
-                        .map(|entry| entry.reason.clone())
-                })
+                .map(|unset| unset.describe());
+            let window_exclusion = exclusions
+                .iter()
+                .find(|entry| same_crew_family(&entry.crew, &name));
+            let quota =
+                unset_reason.is_none() && window_exclusion.is_some_and(lifts_with_provider_quota);
+            let allowlist_excluded = unset_reason.is_none()
+                && window_exclusion.is_none()
+                && resolve_crew(&name, crews).is_ok_and(|crew| {
+                    crew.enabled && allowed.is_some_and(|allowed| !allowed.permits(&crew))
+                });
+            let reason = unset_reason
+                .or_else(|| window_exclusion.map(|entry| entry.reason.clone()))
                 .or_else(|| {
                     resolve_crew(&name, crews).ok().and_then(|crew| {
                         if !crew.enabled {
@@ -72,6 +87,12 @@ pub(crate) fn record_pool_crew_health(
                     })
                 });
             if let Some(reason) = reason {
+                if quota {
+                    quota_limited.insert(name.clone());
+                }
+                if allowlist_excluded {
+                    allowlist_restricted.insert(name.clone());
+                }
                 excluded.insert(name, reason);
             }
         }
@@ -110,6 +131,13 @@ pub(crate) fn record_pool_crew_health(
                 tracing::warn!(target: "orbit.core.job_run", signal = "crew_pool_excluded", run_id, crew, warning = %streak.describe(&crew), "configured pool crew is excluded on every admission pass");
                 continue;
             }
+            // The window lifts at its reset by itself, and an intentional
+            // `--allow-crew` restriction is working as requested. The run
+            // warning already reports either, so an env-repair friction
+            // would misdirect.
+            if quota_limited.contains(&crew) || allowlist_restricted.contains(&crew) {
+                continue;
+            }
             let frictions = crate::runtime::friction::store_for(runtime)?;
             let key = dedupe_key(&crew, &streak.reason);
             let accepted = frictions.tags()?;
@@ -139,6 +167,12 @@ pub(crate) fn record_pool_crew_health(
     if let Err(error) = result {
         tracing::warn!(target: "orbit.core.job_run", run_id, %error, "could not record sustained pool crew exclusions");
     }
+}
+
+/// A provider usage window that lifts at a known reset. It expires by itself,
+/// so it is not an operational incident with an env-repair remedy.
+fn lifts_with_provider_quota(exclusion: &CrewExclusion) -> bool {
+    exclusion.source == CrewExclusionSource::ProviderLimit && exclusion.until.is_some()
 }
 
 /// Stable identity for one crew and one unchanged exclusion cause, across

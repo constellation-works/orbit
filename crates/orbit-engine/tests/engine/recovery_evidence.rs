@@ -235,7 +235,18 @@ fn both_recovery_dispatches_inject_bounded_chronological_run_evidence() {
         assert_eq!(attempts[0]["failed_step_id"], "prior-0");
         assert_eq!(attempts[1]["failed_step_id"], "prior-1");
         assert_eq!(attempts[1]["output"]["marker"], 1);
-        assert!(attempts[0]["attempted_at"].as_str() <= attempts[1]["attempted_at"].as_str());
+        let attempted_at = |attempt: &Value, index: usize| {
+            let raw = attempt["attempted_at"]
+                .as_str()
+                .unwrap_or_else(|| panic!("attempt {index} records attempted_at: {attempt}"));
+            chrono::DateTime::parse_from_rfc3339(raw).unwrap_or_else(|error| {
+                panic!("attempt {index} attempted_at is not a timestamp: {raw}: {error}")
+            })
+        };
+        assert!(
+            attempted_at(&attempts[0], 0) <= attempted_at(&attempts[1], 1),
+            "attempts are chronological"
+        );
         let diagnostic = attempts[1]["error_message"].as_str().unwrap();
         assert!(diagnostic.len() <= 8 * 1024);
         assert!(diagnostic.starts_with("start:") && diagnostic.ends_with(":end"));

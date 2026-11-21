@@ -29,7 +29,7 @@ use orbit_types::workflow::REVIEW_EVIDENCE_HOLD_ARTIFACT;
 pub(super) const REVIEW_CREW: &str = "sol";
 const REPOSITORY: &str = "owner/repository";
 
-fn before_pr_owner(crew: &str) -> String {
+pub(super) fn before_pr_owner(crew: &str) -> String {
     format!("[review]\nbefore_pr = true\n\n[operation]\nreview_crew = \"{crew}\"\n")
 }
 
@@ -634,7 +634,7 @@ fn a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence() {
     assert_eq!(
         git(&leaf.pair.follower_repo, &["log", "-1", "--format=%s"]).trim(),
         format!(
-            "review: Checked the change against the criteria. [{}]",
+            "chore: Checked the change against the criteria. [{}]",
             leaf.task
         ),
         "the reviewer's fix is the candidate's second commit"
@@ -1062,8 +1062,11 @@ fn a_claimed_review_held_for_linux_codeql_is_fulfilled_by_the_owner() {
     let probe = orbit_exec::probe_bwrap();
     if !probe.available {
         orbit_exec::report_bwrap_deferral(
-            "owner CodeQL fulfilment of a claimed hold",
-            &probe.detail,
+            "a_claimed_review_held_for_linux_codeql_is_fulfilled_by_the_owner",
+            &format!(
+                "owner CodeQL fulfilment of a claimed hold: {}",
+                probe.detail
+            ),
         );
         assert!(tick.dispatched.is_empty(), "{tick:?}");
         assert!(

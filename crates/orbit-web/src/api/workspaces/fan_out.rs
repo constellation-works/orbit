@@ -14,7 +14,7 @@ const MAX_AGGREGATE_FAN_OUT: usize = 8;
 /// index order. Each thread takes the next unclaimed index, so one slow
 /// workspace delays no other. A panicking worker re-raises in the caller,
 /// exactly as the serial loop would.
-pub(super) fn fan_out<T>(count: usize, work: impl Fn(usize) -> T + Sync) -> Vec<T>
+pub(in crate::api) fn fan_out<T>(count: usize, work: impl Fn(usize) -> T + Sync) -> Vec<T>
 where
     T: Send,
 {

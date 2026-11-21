@@ -2,12 +2,12 @@
 //! a hand merge and a forced completion (the published handoff incident).
 
 use super::decision_answer::raise_block_triage;
-use super::failed_publication::escalated_handoff_fixture;
+use super::failed_publication::{escalated_completion_fixture, escalated_handoff_fixture};
 use super::*;
 use orbit_core::application::task::DecisionListProfile;
 use orbit_core::runtime::task_pr_forge::{
-    ForgePullRequest, HandoffLandingPullRequest, MergedPullRequest, PullRequestBlockers,
-    PullRequestMergeOutcome, TaskPrForge,
+    ForgePullRequest, HandoffLandingPullRequest, LeasePullRequest, MergedPullRequest,
+    PullRequestBlockers, PullRequestMergeOutcome, TaskPrForge,
 };
 use orbit_core::{ActorIdentity, OrbitError};
 use orbit_types::task::{DecisionRequest, DecisionRequestState};
@@ -57,9 +57,11 @@ impl Forge {
         let pull = state.pull.take().unwrap();
         state.merged = Some(MergedPullRequest {
             pull: pull.blockers.pull,
+            url: "https://github.com/owner/repository/pull/17".into(),
             base_branch: pull.base_branch,
             head_sha: pull.blockers.head_sha,
             merge_commit: MERGE.into(),
+            merged_at: Utc::now(),
         });
         state.merges += 1;
     }
@@ -86,11 +88,42 @@ impl TaskPrForge for Forge {
     fn merged_pull_requests(&self, _: &Path) -> Result<Vec<MergedPullRequest>, OrbitError> {
         Ok(self.0.lock().unwrap().merged.iter().cloned().collect())
     }
+    fn lease_pull_request(
+        &self,
+        _: &Path,
+        _: &str,
+    ) -> Result<Option<LeasePullRequest>, OrbitError> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .pull
+            .as_ref()
+            .map(|pull| LeasePullRequest {
+                number: pull.blockers.pull.number,
+                base_branch: pull.base_branch.clone(),
+                merged: false,
+            }))
+    }
+    fn pull_request_blockers(
+        &self,
+        _: &Path,
+        _: u64,
+    ) -> Result<Option<PullRequestBlockers>, OrbitError> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .pull
+            .as_ref()
+            .map(|pull| pull.blockers.clone()))
+    }
     fn merge_pull_request(
         &self,
         _: &Path,
         number: u64,
         head: &str,
+        _: &orbit_types::workflow::MergeMessage,
     ) -> Result<PullRequestMergeOutcome, OrbitError> {
         {
             let state = self.0.lock().unwrap();
@@ -398,10 +431,186 @@ fn handoff_landing_reads_draft_and_checks_from_the_real_forge_adapter() {
     );
 }
 
+fn periodic_settlement_recovers_a_stopped_completion_during_rest_rate_limiting() {
+    let (f, _, _) = escalated_completion_fixture();
+    let recent = f._root.path().join("recent-merges.json");
+    std::fs::write(
+        f._root.path().join("bin/gh"),
+        format!(
+            "#!/bin/sh\ncase \"$1 $2 $3 $4\" in\n\
+             'pr list --state merged') cat '{}' ;;\n\
+             'pr list --state open') printf '[]' ;;\n\
+             'pr view 17 --json') cat '{}' ;;\n\
+             'api user --jq .login') printf 'gh: API rate limit exceeded (HTTP 403)\\n' >&2; exit 1 ;;\n\
+             *) exit 99 ;;\nesac\n",
+            recent.display(),
+            f.answer.display(),
+        ),
+    )
+    .unwrap();
+    let mut pr: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    pr["state"] = json!("CLOSED");
+    pr["author"] = json!({"login":"orbit-bot"});
+    pr["body"] = json!(format!("Delivers {}.", f.task));
+    std::fs::write(&f.answer, pr.to_string()).unwrap();
+    std::fs::write(&recent, "[]").unwrap();
+    assert!(
+        f.runtime
+            .settle_externally_merged_tasks()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(f.runtime.settle_externally_merged_task(&f.task).is_err());
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Blocked
+    );
+
+    pr["mergeCommit"] = json!({"oid": MERGE});
+    let merged_at = "2026-11-20T02:41:33Z";
+    pr["mergedAt"] = json!(merged_at);
+    // Even with a merge SHA, a closed answer is not a merged one.
+    std::fs::write(&recent, json!([&pr]).to_string()).unwrap();
+    assert!(
+        f.runtime
+            .settle_externally_merged_tasks()
+            .unwrap()
+            .is_empty()
+    );
+    pr["state"] = json!("MERGED");
+    for (field, wrong) in [
+        ("baseRefName", json!("release")),
+        ("headRefOid", json!(MERGE)),
+        (
+            "url",
+            json!("https://github.com/elsewhere/repository/pull/17"),
+        ),
+        ("mergedAt", Value::Null),
+    ] {
+        let mut stale = pr.clone();
+        stale[field] = wrong;
+        std::fs::write(&recent, json!([stale]).to_string()).unwrap();
+        assert!(
+            f.runtime
+                .settle_externally_merged_tasks()
+                .unwrap()
+                .is_empty(),
+            "{field}"
+        );
+        assert_eq!(
+            f.runtime.get_task(&f.task).unwrap().status,
+            TaskStatus::Blocked
+        );
+    }
+    std::fs::write(&recent, json!([pr]).to_string()).unwrap();
+    let settled = f.runtime.settle_externally_merged_tasks().unwrap();
+    assert_eq!(settled.len(), 1, "{settled:?}");
+    assert_eq!(settled[0].task_id, f.task);
+    assert_eq!(settled[0].pr_number, 17);
+    assert_eq!(settled[0].merge_commit, MERGE);
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Done
+    );
+    let history = f.runtime.get_task_history(&f.task).unwrap();
+    let entry = history
+        .iter()
+        .find(|entry| entry.event == "external_merge_settled")
+        .expect("settlement in task history");
+    assert_eq!(entry.from_status, Some(TaskStatus::Blocked));
+    assert_eq!(entry.to_status, Some(TaskStatus::Done));
+    let note = entry.note.as_deref().unwrap();
+    for detail in ["#17", MERGE, merged_at] {
+        assert!(note.contains(detail), "{note}");
+    }
+}
+
+fn the_owner_sweep_merges_a_stopped_publication_only_while_the_pull_request_is_unchanged() {
+    // ORB-25994: a stopped native run published head A. A pull request that
+    // moved to B must not be merged: settlement would reject B afterwards.
+    let (mut f, _, _) = escalated_completion_fixture();
+    f.source.state = JobRunState::Success;
+    super::published_owner::save_run(&f, &f.source);
+    f.runtime
+        .apply_task_automation_update(
+            &f.task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Review),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let forge = Forge::for_fixture(&f);
+    f.runtime = f
+        .runtime
+        .clone()
+        .with_task_pr_forge(Arc::new(forge.clone()));
+    let moved = "b".repeat(40);
+    forge
+        .0
+        .lock()
+        .unwrap()
+        .pull
+        .as_mut()
+        .unwrap()
+        .blockers
+        .head_sha = moved.clone();
+    for _ in 0..2 {
+        assert!(
+            f.runtime
+                .land_completion_authorized_tasks()
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert_eq!(
+        forge.0.lock().unwrap().merges,
+        0,
+        "the moved head is not merged"
+    );
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Review
+    );
+    let recorded = f
+        .runtime
+        .get_task_history(&f.task)
+        .unwrap()
+        .into_iter()
+        .filter(|entry| entry.event == "landing_follow_up")
+        .map(|entry| entry.note.unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(recorded.len(), 1, "recorded once: {recorded:?}");
+    assert!(
+        recorded[0].contains("publication_identity_changed") && recorded[0].contains(&moved),
+        "{}",
+        recorded[0]
+    );
+
+    forge
+        .0
+        .lock()
+        .unwrap()
+        .pull
+        .as_mut()
+        .unwrap()
+        .blockers
+        .head_sha = f.head.clone();
+    let landed = f.runtime.land_completion_authorized_tasks().unwrap();
+    assert_eq!(landed.len(), 1, "{landed:?}");
+    assert_eq!(forge.0.lock().unwrap().merges, 1);
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Done
+    );
+}
+
 crate::scenario_table!(
     handoff_landing_regressions,
     owner_lands_green_handoff_and_refusals_change_nothing,
     requeued_failure_handoff_settles_after_external_merge,
     required_review_hides_land_for_an_unreviewed_handoff,
     handoff_landing_reads_draft_and_checks_from_the_real_forge_adapter,
+    periodic_settlement_recovers_a_stopped_completion_during_rest_rate_limiting,
+    the_owner_sweep_merges_a_stopped_publication_only_while_the_pull_request_is_unchanged,
 );

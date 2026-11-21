@@ -161,12 +161,14 @@ fn metrics_text(value: &Value) -> String {
         let escalations = &mandate["escalations"];
         let _ = writeln!(
             out,
-            "  escalation load: {} (per mandate-day {}, median answer latency {}s, recommended share {}, expired {})",
+            "  escalation load: {} (per mandate-day {}, per human-day {}, median answer latency {}s, recommended share {}, expired {}, superseded {})",
             text(&escalations["count"]),
             text(&escalations["per_mandate_day"]),
+            text(&escalations["per_human_day"]),
             text(&escalations["median_answer_latency_seconds"]),
             text(&escalations["recommended_share"]),
             text(&escalations["expired_unanswered"]),
+            text(&escalations["superseded"]),
         );
         if let Some(marker) = mandate["reversals"].as_str() {
             let _ = writeln!(out, "  reversals: {marker}");
@@ -237,6 +239,20 @@ fn show_text(value: &Value) -> String {
     }
     if let Some(reason) = value["stalled_reason"].as_str() {
         let _ = writeln!(out, "Stalled: {reason}");
+    }
+    if !value["status_line"].is_null() {
+        let line = &value["status_line"];
+        let _ = writeln!(
+            out,
+            "Status{}: {} (posted {})",
+            if line["stale"].as_bool() == Some(true) {
+                " (silent since it lapsed)"
+            } else {
+                ""
+            },
+            text(&line["title"]),
+            text(&line["posted_at"]),
+        );
     }
     if !value["latest_checkpoint"].is_null() {
         let checkpoint = &value["latest_checkpoint"];

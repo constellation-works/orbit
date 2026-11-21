@@ -56,24 +56,29 @@ pub(crate) enum CiSweepAdmission {
     Superseded(Value),
 }
 
+/// The inputs one CI-sweep admission decides from, borrowed from the pilot
+/// apply that holds them.
+pub(crate) struct CiSweepAdmissionRequest<'a> {
+    pub(crate) action: &'a str,
+    pub(crate) task_id: &'a str,
+    pub(crate) task: &'a Task,
+    pub(crate) assessment: &'a Value,
+    pub(crate) selectors: &'a [String],
+    pub(crate) filing: &'a CiSweepFilingEvidence,
+    pub(crate) promotion_authorized: bool,
+    pub(crate) dependencies: &'a [String],
+    pub(crate) is_done: &'a dyn Fn(&str) -> bool,
+}
+
 /// The CI-sweep admission policy task-pilot apply calls, implemented by
 /// `sweep_filing`.
 pub(in crate::application) trait TaskSweepFilingPort {
-    /// Admit the task `filing` names from its validated `assessment` and
-    /// `selectors`, or refuse it, correlating both with the sweep's source
-    /// evidence.
-    #[allow(clippy::too_many_arguments)]
+    /// Admit the task `request.filing` names from its validated
+    /// `request.assessment` and `request.selectors`, or refuse it, correlating
+    /// both with the sweep's source evidence.
     fn ci_sweep_admission(
         &self,
-        action: &str,
-        task_id: &str,
-        task: &Task,
-        assessment: &Value,
-        selectors: &[String],
-        filing: &CiSweepFilingEvidence,
-        promotion_authorized: bool,
-        dependencies: &[String],
-        is_done: &dyn Fn(&str) -> bool,
+        request: CiSweepAdmissionRequest<'_>,
     ) -> Result<CiSweepAdmission, DispatchError>;
 
     /// The superseded outcome for CI-sweep task `task_id` when `prepared`

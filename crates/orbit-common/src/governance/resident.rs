@@ -141,7 +141,7 @@ const SHOW: OperationSpec<ResidentVerb> = OperationSpec {
     verb: ResidentVerb::Show,
     cli_path: &["show"],
     tool_name: "orbit.resident.show",
-    tool_description: "Show one resident mandate: the mandate artifact (or why it is missing or invalid), the effective authority (rights and the workspaces both the authority and the mandate cover), the authority record with its grant and narrowing history, open grant requests, the latest parsed checkpoint and live cycle, and the mandate's state (active, handed_off, ended or invalid). Read-only.",
+    tool_description: "Show one resident mandate: the mandate artifact (or why it is missing or invalid), the effective authority (rights and the workspaces both the authority and the mandate cover), the authority record with its grant and narrowing history, open grant requests, the latest parsed checkpoint and live cycle, the status line (the mandate's one info notice: title, body, when it was posted and lapses, and stale once it has lapsed), and the mandate's state (active, handed_off, ended or invalid). Read-only.",
     cli_about: "Show a resident mandate with its authority and grant history",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
@@ -182,7 +182,7 @@ const CHECKPOINT_PARAMS: &[ParamSpec] = &[
     required(both(
         "record",
         ParamType::Object,
-        "Complete resident.checkpoint v1 JSON object (kind, schema=1, mandate, cycle, run_id, crew, recovery_of, wake, authority, actions, decisions, requests, costs, notes, next_wake, continuity, outcome, probe). At most 64 KiB, 50 actions, 20 decisions, 20 costs and 2000 note characters. Action keys are resident:<mandate>:<cycle>:<positive integer>.",
+        "Complete resident.checkpoint v1 JSON object (kind, schema=1, mandate, cycle, run_id, crew, recovery_of, wake, authority, actions, decisions, requests, costs, notes, next_wake, continuity, outcome, probe). At most 64 KiB, 50 actions, 20 decisions, 20 costs and 600 note characters, where notes describe only this cycle's delta. Action keys are resident:<mandate>:<cycle>:<positive integer>.",
         CliArgKind::flag("record"),
         "Complete resident.checkpoint v1 JSON object",
     )),

@@ -80,7 +80,7 @@ pub(crate) fn stamp_human_crew_from_runtime(
     object: &mut Map<String, Value>,
 ) {
     let human = runtime.human_crew(object.get("crew").and_then(Value::as_str));
-    stamp_human_crew(object, human);
+    stamp_human_crew(object, human.as_ref());
 }
 
 /// The riskiness model cached for `runtime`. The first read for a runtime
@@ -208,6 +208,8 @@ pub(crate) struct TaskListProjection {
     os_readout: Result<TaskOsReadout, String>,
     local_machine_id: Option<String>,
     delivery_attention: BTreeMap<String, Value>,
+    /// The branch each row's local run recorded, read once for the page.
+    run_branches: BTreeMap<String, String>,
     /// Read once, on the page's first proposed or backlog row.
     preparing: OnceCell<BTreeSet<String>>,
     active_triage: OnceCell<Result<BTreeMap<String, Value>, String>>,
@@ -224,6 +226,7 @@ impl TaskListProjection {
             os_readout: TaskOsReadout::new(runtime).map_err(|error| error.to_string()),
             local_machine_id: runtime.automation_machine_identity().map(str::to_string),
             delivery_attention: BTreeMap::new(),
+            run_branches: BTreeMap::new(),
             preparing: OnceCell::new(),
             active_triage: OnceCell::new(),
             pull_request_links: PullRequestLinks::new(runtime),
@@ -233,6 +236,13 @@ impl TaskListProjection {
 
     pub(crate) fn with_riskiness(mut self, model: Option<Arc<TaskRiskinessModel>>) -> Self {
         self.riskiness = model;
+        self
+    }
+
+    /// The branch each task's run recorded (`OrbitRuntime::local_run_branches`),
+    /// so a row can carry `job_run_branch` for the dashboard's quick filter.
+    pub(crate) fn with_run_branches(mut self, branches: BTreeMap<String, String>) -> Self {
+        self.run_branches = branches;
         self
     }
 
@@ -324,6 +334,9 @@ impl TaskListProjection {
                 task,
             )),
         );
+        if let Some(branch) = self.run_branches.get(&task.id) {
+            object.insert("job_run_branch".to_string(), json!(branch));
+        }
         if let Some(attention) = self.delivery_attention.get(&task.id) {
             object.insert("delivery_attention".to_string(), attention.clone());
         }

@@ -492,6 +492,61 @@ env = ["ANTHROPIC_API_KEY=CREDITS_CLAUDE_KEY"]
     assert_eq!(plain_view.bar_pressures.len(), plain_view.providers.len());
 }
 
+/// Antigravity records every weekly window under a model scope and never
+/// account-wide. Its provider row takes the minimum over those scoped
+/// windows, not neutral beside live readings [ORB-25981].
+fn scoped_weekly_windows_set_the_provider_pressure() {
+    let fx = fixture_with_global(
+        "[crews.flash]\nprovider = \"antigravity\"\nmodel = \"gemini-3.8-flash-high\"\n",
+        "[workflow]\ndefault_crew = \"flash\"\n",
+    );
+    let now = Utc::now();
+    let weekly = |scope: &str, window: &str, used: f64| ProviderLimitObservation {
+        provider: "antigravity".into(),
+        account: None,
+        model: Some(scope.into()),
+        window: Some(window.into()),
+        exhausted: false,
+        source: ProviderLimitSource::Event,
+        resets_at: Some(now + Duration::days(7)),
+        used_percent: Some(used),
+        window_minutes: Some(10080),
+        gating: true,
+        partial: false,
+        observed_at: now,
+        run_id: None,
+        crew: None,
+        detail: String::new(),
+    };
+    fx.runtime
+        .record_provider_limit(&weekly("gemini", "gemini-weekly", 10.0))
+        .unwrap();
+    fx.runtime
+        .record_provider_limit(&weekly("claude", "3p-weekly", 80.0))
+        .unwrap();
+    let view = fx.runtime.provider_limits_view(Utc::now());
+    let bar = view
+        .bar_pressures
+        .iter()
+        .find(|status| status.provider == "antigravity" && status.account.is_none())
+        .unwrap_or_else(|| panic!("missing antigravity row in {view:?}"));
+    let window = bar
+        .usage
+        .pressure_window
+        .as_ref()
+        .unwrap_or_else(|| panic!("no weekly pressure beside live readings: {bar:?}"));
+    assert_eq!(
+        (window.window.as_deref(), window.used_percent),
+        (Some("3p-weekly"), 80.0),
+        "the binding window is the most used scoped weekly window"
+    );
+    assert!(
+        (bar.usage.pressure - 0.2).abs() < 0.001,
+        "(1 - 0.80) over a full week left: {}",
+        bar.usage.pressure
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     crew_account_scenarios,
@@ -501,5 +556,6 @@ crate::scenario_table!(
     a_hold_stored_before_accounts_were_named_applies_as_written,
     a_default_login_reading_does_not_limit_a_crew_account,
     a_crew_budget_gates_the_crew_from_its_own_ledger_spend,
-    shared_credential_model_crews_merge_on_the_usage_bar
+    shared_credential_model_crews_merge_on_the_usage_bar,
+    scoped_weekly_windows_set_the_provider_pressure
 );

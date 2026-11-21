@@ -106,7 +106,7 @@ fn ship(
         trigger: JobRunTrigger::cli(),
         strict_containment: false,
         review,
-        ignore_schedule: false,
+        operator_override: false,
     })
 }
 

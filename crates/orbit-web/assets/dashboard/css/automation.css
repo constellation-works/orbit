@@ -84,7 +84,7 @@ body.operations-active .rail {
 }
 .operation-details-body > :first-child { margin-top: 0; }
 .operation-details-body > :last-child { margin-bottom: 0; }
-.operation-action-unavailable { display: inline-flex; min-width: 0; }
+.operation-action-unavailable { display: inline-flex; align-items: center; min-width: 0; }
 .operation-state {
   padding: 2px 6px; border: 1px solid var(--border); border-radius: 999px;
   color: var(--fg-dim); font: 10px var(--font-mono); text-transform: uppercase;
@@ -324,6 +324,7 @@ a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
 .operation-timeline-legend { display: flex; gap: 12px; margin-left: auto; }
 .operation-timeline-key { display: flex; align-items: center; gap: 5px; }
 .operation-timeline-key::before { content: ""; width: 8px; height: 8px; background: var(--border); }
+.operation-timeline-key.trial::before, .operation-timeline-tick.trial .operation-timeline-mark { background: var(--state-pending); }
 .operation-timeline-key.fires::before { background: var(--accent); }
 .operation-timeline-track { position: relative; height: 39px; margin: 0 56px 0 6px; }
 .operation-timeline-axis { position: absolute; left: 0; right: 0; top: 6px; height: 1px; background: var(--border); }

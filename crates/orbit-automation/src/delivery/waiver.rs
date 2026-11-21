@@ -19,11 +19,11 @@ pub fn waive(
         ));
     }
 
-    // Waiving is idempotent: a batch already recorded as waived needs no second write.
+    // Waiving is idempotent: a batch already recorded as waived needs no second
+    // write. Look it up by its durable identity, not among a recent page.
     if store
-        .automation_waivers(consumer, 100)?
-        .iter()
-        .any(|w| w.batch_id == request.batch_id)
+        .automation_waiver(consumer, &request.batch_id)?
+        .is_some()
     {
         return Ok(());
     }

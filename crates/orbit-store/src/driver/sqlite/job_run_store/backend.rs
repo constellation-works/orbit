@@ -422,6 +422,18 @@ impl JobRunStoreBackend for SqliteJobRunStore {
         )
     }
 
+    fn drain_intent(&self) -> Result<Option<crate::contracts::DrainIntentRecord>, OrbitError> {
+        self.store.drain_intent_for_workspace(&self.workspace_id)
+    }
+
+    fn record_drain_intent(
+        &self,
+        record: &crate::contracts::DrainIntentRecord,
+    ) -> Result<(), OrbitError> {
+        self.store
+            .record_drain_intent_for_workspace(&self.workspace_id, record)
+    }
+
     fn insert_job_run(
         &self,
         job_id: &str,
@@ -877,6 +889,19 @@ impl JobRunStoreBackend for SqliteJobRunStore {
     fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError> {
         self.store
             .read_job_run_state_for_workspace(&self.workspace_id, run_id)
+    }
+
+    fn read_run_state_json(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
+        self.store
+            .read_job_run_state_json_for_workspace(&self.workspace_id, run_id)
+    }
+
+    fn read_run_state_jsons(
+        &self,
+        run_ids: &[String],
+    ) -> Result<HashMap<String, Option<String>>, OrbitError> {
+        self.store
+            .read_job_run_state_jsons_for_workspace(&self.workspace_id, run_ids)
     }
 
     fn read_run_states(

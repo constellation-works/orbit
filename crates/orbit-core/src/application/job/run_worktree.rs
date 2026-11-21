@@ -93,6 +93,46 @@ impl OrbitRuntime {
         }
     }
 
+    /// The branch each listed task's run recorded on this machine, keyed by
+    /// task id, for a list page's rows in one batched store read. A run
+    /// another machine executed, a run without a recorded `worktree` step and
+    /// a state that cannot be read leave their task out: the list never reads
+    /// the claim journal per row.
+    pub fn local_run_branches<'a>(
+        &self,
+        rows: impl IntoIterator<Item = &'a TaskRow>,
+    ) -> std::collections::BTreeMap<String, String> {
+        let machine = self.automation_machine_identity();
+        let runs: Vec<(&str, String)> = rows
+            .into_iter()
+            .filter(|row| job_run_is_locally_navigable(machine, &row.task))
+            .filter_map(|row| {
+                row.task
+                    .job_run_id
+                    .clone()
+                    .map(|run_id| (row.task.id.as_str(), run_id))
+            })
+            .collect();
+        if runs.is_empty() {
+            return Default::default();
+        }
+        let run_ids: Vec<String> = runs.iter().map(|(_, run_id)| run_id.clone()).collect();
+        let states = match self.read_run_states(&run_ids) {
+            Ok(states) => states,
+            Err(error) => {
+                tracing::warn!(%error, "run states unreadable for task list branches");
+                return Default::default();
+            }
+        };
+        runs.into_iter()
+            .filter_map(|(task_id, run_id)| {
+                let state = states.get(&run_id)?.as_ref()?;
+                let branch = RecordedRunWorktree::of_state(state).branch?;
+                Some((task_id.to_string(), branch))
+            })
+            .collect()
+    }
+
     /// `job_run_worktree` for one task row: `branch` and `worktree_path` of
     /// the task's linked run on the machine that executed it, each `null`
     /// when it was not recorded, with `unrecorded` saying why. `None` when

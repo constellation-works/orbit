@@ -24,6 +24,7 @@ pub(crate) use declared_pair::validate_declared_worktree_pair;
 
 use fingerprint::GitWorktreeFingerprint;
 use rebase_recovery::RebaseRecoveryCheckpoint;
+pub(crate) use rebase_recovery::allocate_resolution_intent;
 
 /// A pipeline-declared linked-worktree assignment that has been validated
 /// against the runtime's registered primary checkout before provider setup.

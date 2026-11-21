@@ -1,7 +1,7 @@
 ---
 title: Orbit Core — Overview
 owner: codex
-last_updated: 2026-11-14
+last_updated: 2026-11-20
 last_validated: 2026-11-14
 status: Implemented
 stage: shipped
@@ -143,7 +143,7 @@ source scan, enforces the runtime direction.
 | Job review-admission hook | `crates/orbit-core/src/application/job/review_hook.rs` | [ORB-17924] |
 | Job-owned drain and pull-settlement ports | `crates/orbit-core/src/application/job/drain_port.rs`, implemented in `distributed/job_port.rs` and `pull_drain/job_port.rs` | [ORB-17937] |
 | Job-owned automation, admission and auto-concurrency ports | `crates/orbit-core/src/application/job/{automation,admission,auto_concurrency}_port.rs`, implemented in `automation/job_port.rs`, `admission/job_port.rs` and `workspace_auto/job_port.rs` | [ORB-17938] |
-| Run-owned audit writer, worker-exit evidence and definition reads, below `job/pipeline` | `crates/orbit-core/src/application/job/run/{audit_record,worker_exit,worker_scope,definition}.rs`; pipeline imports them | [ORB-24781] |
+| Run-owned audit writer, worker-exit evidence and definition reads, below `job/pipeline` | `crates/orbit-core/src/application/job/run/` (`audit_record.rs`, `worker_exit/`, `worker_scope.rs`, `definition.rs`); pipeline imports them | [ORB-24781], [ORB-25303] |
 | Automation-, review- and distributed-owned ports to the modules above them | `crates/orbit-core/src/application/automation/review_port.rs`, `review/distributed_port.rs` and `distributed/admission_port.rs`, implemented in `review/automation_port.rs`, `distributed/review_port.rs` and `admission/distributed_port.rs` | [ORB-17939] |
 | Distributed-owned experiment capture port | `crates/orbit-core/src/application/distributed/experiment_port.rs` (`DistributedExperimentPort`), implemented in `experiment/distributed_port.rs` over the capture in `experiment/overlay.rs` | [ORB-22416] |
 | Tag-instruction-owned experiment overlay port | `crates/orbit-core/src/application/tag_instructions.rs` (`TagInstructionExperimentPort`), implemented in `experiment/tag_instruction_port.rs` | [ORB-23019] |
@@ -310,7 +310,10 @@ moved the backlog forecast out of `task` to its own place in the order:
   `experiment_overlays_for_activity`. The `experiment -> tag_instructions`
   helper edge stays legal [ORB-23019]. `landing` sits above
   `distributed`, outside the order: it consumes authorized handoff requests and
-  calls down into `task`, `job` and `distributed`. The pure
+  calls down into `task`, `job` and `distributed`. [ORB-22624] placed
+  `visual_delivery` above `distributed` and routed review's and distributed's
+  visual reads through ports; [ORB-22807] removed visual review, so those
+  ports and `visual_delivery` are gone and this call-down is what remains. The pure
   handoff-to-claim read `landing_claim` lives in `task/handoff_claim.rs`, so
   task and job no longer resolve claims through landing. Review dispatches
   at the same acceptance and approval points through its own
@@ -423,7 +426,7 @@ edges leave or enter it from outside the order:
   any other path or inherent call into `codebase` and any reference from
   `codebase` back to the forecast.
 - **`routines` → forecast (downward).** The sweep clock in
-  `routines/sweep.rs` calls `record_scheduled_backlog_forecast`. `routines` is
+  `routines/sweep/tick.rs` calls `record_scheduled_backlog_forecast`. `routines` is
   outside the order, above `automation` and `auto_tasks` (next paragraph).
 
 Review has no edge into `codebase`. Selective-review retirement removed
@@ -508,7 +511,7 @@ record's lifecycle and the evidence about it: the job-run audit writer
 the `record_pipeline_audit` and `record_pipeline_diagnostic_step` methods that
 `gc`, `review`, `job/exec`, orphan adoption, upgrade resume and composition
 call), the persisted worker-exit record format and its readers
-(`worker_exit.rs`), the read side of a worker's containment scope
+(`worker_exit/`, split from `worker_exit.rs` [ORB-25303]), the read side of a worker's containment scope
 (`worker_scope.rs`: `WorkerScopeCgroup::from_recorded`, `counters` and
 `unit_result`) and the run-definition reads (`definition.rs`:
 `read_run_definition_snapshot`, `resolve_run_definition`,
@@ -517,7 +520,9 @@ worker execution) imports those and keeps what writes or changes state: the
 supervisor's exit observation and amendment, signal-sender capture, scope
 creation, placement and teardown, and the definition snapshot writer. The
 guard refuses a path, grouped tree or `super::` chain from production code
-under `job/run` into `job::pipeline`, and any call to an inherent method an
+under `job/run` into `job::pipeline`. A grouped tree runs to the semicolon
+that ends its `use` item, so a nested group ahead of `pipeline` cannot hide
+it [ORB-24832]. The guard also refuses any call to an inherent method an
 `impl OrbitRuntime` block under `job/pipeline` defines. Row shapes, audit tool
 names, the exit-record JSON and the snapshot layout are unchanged;
 `job::pipeline::run_definition_snapshot_path` stays as a test-only re-export
@@ -633,5 +638,13 @@ the lower modules’ direct edges into `landing`.
 - [ORB-23421] — cut task's corpus back-edge through `task::TaskCorpusPort`, implemented by `agent_corpus`, re-pointed its blob reads at `task::base_revision`, and added `agent_corpus` to the guarded `task` upper modules.
 - [ORB-24042] — gave the delivery-leaf job ids one owner in `orbit-types`.
 - [ORB-24781] — moved the job-run audit writer, worker-exit evidence reads and run-definition reads from `job/pipeline` into `job/run`, so `run` sits below `pipeline`, and guarded the direction.
+- [ORB-24832] — made the `job/run` dependency guard run a grouped `use` tree to its semicolon, so a nested group ahead of `pipeline` cannot hide the import.
+- [ORB-25303] — split `job/run/worker_exit.rs` into the `worker_exit/` directory without changing the exit-record behavior.
+- [ORB-22808] — removed `task::TaskPrecedentDecisionPort` and the precedent consumer with decision assistance.
+- [ORB-22844] — stopped finding-verification steps from taking state claim, staleness, fingerprints and live holders through `task::TaskAutomationPort`.
+- [ORB-23015] — left the public `task_experiments` readout and the adapter's `experiment::validate_experiment_capture` call unchanged while the experiment back-edges were cut.
+- [ORB-23198] — added `job::JobDrainLeafPort` beside `JobAutoConcurrencyPort` so a reconciling auto-drain read records finished leaves terminal.
+- [ORB-24534] — moved request-time bundle export, import and reindex into `application/task_bundle`.
+- [ORB-24548] — kept `task` from naming `backlog_forecast`; `BacklogForecastHistory` and the budget override are reached directly from `backlog_forecast`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

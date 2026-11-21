@@ -224,7 +224,7 @@ impl OrbitRuntime {
                 source,
             }));
         }
-        if self.context.settings().default_crew().is_none() {
+        if self.admission_crew_settings().default_crew.is_none() {
             return Ok(None);
         }
         // A disabled default is not pinned onto the task: creation stays
@@ -297,6 +297,7 @@ impl OrbitRuntime {
     fn creation_weighted(&self, mut candidates: Vec<CrewCandidate>) -> Vec<CrewCandidate> {
         weighted_candidates(
             &mut candidates,
+            None,
             &self.provider_limit_policy().usage_pressure,
             || self.usage_pressure_read(chrono::Utc::now()),
         );

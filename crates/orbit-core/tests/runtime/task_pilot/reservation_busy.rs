@@ -48,7 +48,9 @@ impl BoundaryHolder {
                 || -> Result<(), std::io::Error> {
                     ready_tx.send(()).unwrap();
                     // Sender drop also releases the holder if an assertion panics.
-                    let _ = released.recv_timeout(Duration::from_secs(60));
+                    // No wall-clock bound: the two pipeline runs under this lock
+                    // may take as long as a slow host needs.
+                    let _ = released.recv();
                     Ok(())
                 },
             )

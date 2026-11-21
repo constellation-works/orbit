@@ -10,7 +10,7 @@
 
 use orbit_types::task::{Task, TaskType};
 use orbit_types::workflow::{
-    COMMIT_SUBJECT_BUDGET, ConventionTemplate, Placeholder, SUBJECT_ELLIPSIS,
+    COMMIT_SUBJECT_BUDGET, CommitType, ConventionTemplate, Placeholder, shorten_at_word,
 };
 
 use crate::context::PrConfig;
@@ -67,91 +67,49 @@ impl TaskValues<'_> {
         single_line(&self.render(template))
     }
 
-    /// Render a commit subject within [`COMMIT_SUBJECT_BUDGET`] characters.
-    /// The title is shortened first, with an ellipsis, so the template's own
-    /// text (the task marker included) survives; a subject still over budget
-    /// without its title is cut around the complete bracketed task marker,
-    /// reserving space for it, so delivery readers never lose the marker.
-    /// The flag says whether the title was shortened, so the caller can keep
-    /// it in the body.
-    pub(super) fn render_subject(&self, template: &ConventionTemplate) -> (String, bool) {
+    /// Render a commit subject within [`COMMIT_SUBJECT_BUDGET`] characters,
+    /// leaving room for ` (#<pr_number>)` when one is given. The title is cut
+    /// at a word boundary, never with an ellipsis, so the template's own text
+    /// (the task marker included) survives. A subject still over budget is
+    /// returned as rendered; the caller's grammar check then refuses it. The
+    /// flag says whether the title was shortened, so the caller can keep it
+    /// in the body.
+    pub(super) fn render_subject(
+        &self,
+        template: &ConventionTemplate,
+        pr_number: Option<u64>,
+    ) -> (String, bool) {
+        let budget = COMMIT_SUBJECT_BUDGET.saturating_sub(
+            pr_number
+                .map(|number| format!(" (#{number})").chars().count())
+                .unwrap_or(0),
+        );
         let subject = self.render_line(template);
-        if subject.chars().count() <= COMMIT_SUBJECT_BUDGET {
+        if subject.chars().count() <= budget || !template.uses(&Placeholder::Title) {
             return (subject, false);
         }
-        let title = self.task.title.trim();
-        if template.uses(&Placeholder::Title) {
-            let title_chars = title.chars().count();
-            for keep in (0..title_chars).rev() {
-                let mut shortened = title.chars().take(keep).collect::<String>();
-                shortened.push(SUBJECT_ELLIPSIS);
-                let candidate = single_line(&template.render(|placeholder| {
-                    if *placeholder == Placeholder::Title {
-                        shortened.clone()
-                    } else {
-                        self.value(placeholder)
-                    }
-                }));
-                if candidate.chars().count() <= COMMIT_SUBJECT_BUDGET {
-                    return (candidate, true);
-                }
+        let without_title = single_line(&template.render(|placeholder| {
+            if *placeholder == Placeholder::Title {
+                String::new()
+            } else {
+                self.value(placeholder)
             }
-        }
-        let shortened = template.uses(&Placeholder::Title) && !title.is_empty();
-        // Reserve the complete marker: cut the other text around it rather
-        // than cutting the whole subject, which could delete the marker
-        // a commit subject template is required to carry.
-        let marker = format!("[{}]", self.task.id);
-        if let Some(start) = subject.find(&marker) {
-            let suffix = &subject[start..];
-            let suffix_chars = suffix.chars().count();
-            let marker_chars = marker.chars().count();
-            if marker_chars >= COMMIT_SUBJECT_BUDGET {
-                return (marker, shortened);
+        }));
+        let room = budget.saturating_sub(without_title.chars().count());
+        let (title, _) = shorten_at_word(&single_line(self.task.title.trim()), room);
+        let candidate = single_line(&template.render(|placeholder| {
+            if *placeholder == Placeholder::Title {
+                title.clone()
+            } else {
+                self.value(placeholder)
             }
-            if suffix_chars <= COMMIT_SUBJECT_BUDGET.saturating_sub(1) {
-                // Add a separator only when the ellipsis leaves room for it.
-                let keep = COMMIT_SUBJECT_BUDGET
-                    .saturating_sub(suffix_chars)
-                    .saturating_sub(2);
-                let mut cut: String = subject[..start].chars().take(keep).collect();
-                cut = cut.trim_end().to_string();
-                cut.push(SUBJECT_ELLIPSIS);
-                if suffix_chars < COMMIT_SUBJECT_BUDGET.saturating_sub(1) {
-                    cut.push(' ');
-                }
-                cut.push_str(suffix);
-                return (cut, shortened);
-            }
-            let keep = COMMIT_SUBJECT_BUDGET
-                .saturating_sub(marker_chars)
-                .saturating_sub(1);
-            let mut cut = marker.clone();
-            cut.push_str(
-                &suffix[marker.len()..]
-                    .chars()
-                    .take(keep)
-                    .collect::<String>(),
-            );
-            cut.push(SUBJECT_ELLIPSIS);
-            return (cut, shortened);
-        }
-        let mut cut = subject
-            .chars()
-            .take(COMMIT_SUBJECT_BUDGET.saturating_sub(1))
-            .collect::<String>();
-        cut.push(SUBJECT_ELLIPSIS);
-        (cut, shortened)
+        }));
+        (candidate, true)
     }
 }
 
 pub(super) fn conventional_commit_type(task_type: TaskType) -> &'static str {
-    match task_type {
-        TaskType::Feature => "feat",
-        TaskType::Bug => "fix",
-        TaskType::Refactor => "refactor",
-        TaskType::Chore => "chore",
-    }
+    CommitType::for_task_type(task_type).as_str()
 }
 
 pub(super) fn single_line(text: &str) -> String {

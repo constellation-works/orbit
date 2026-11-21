@@ -99,6 +99,141 @@ fn doctor_returns_the_cli_report_rows_with_remediation() {
     );
 }
 
+/// The OS can refuse a doctor worker thread. The report must still hold every
+/// check, in the same order, instead of unwinding the request.
+#[cfg(unix)]
+#[test]
+fn doctor_report_is_complete_and_ordered_when_workers_cannot_start() {
+    isolated(
+        "doctor::doctor_report_is_complete_and_ordered_when_workers_cannot_start",
+        || {
+            let fixture = Fixture::new();
+            let expected = orbit_cmd::run_doctor_report(&fixture.runtime, false)
+                .iter()
+                .map(|row| row.check_name.clone())
+                .collect::<Vec<_>>();
+
+            let refusal = orbit_cmd::DoctorWorkerSpawnRefusal::install();
+            let degraded = orbit_cmd::run_doctor_report(&fixture.runtime, false)
+                .iter()
+                .map(|row| row.check_name.clone())
+                .collect::<Vec<_>>();
+            assert!(refusal.refused() > 0, "the spawn failure must be exercised");
+            assert_eq!(degraded, expected);
+        },
+    );
+}
+
+/// The permission repair still visits every eligible directory when the OS
+/// refuses its scan workers, and leaves excluded target directories alone.
+#[cfg(unix)]
+#[test]
+fn permission_repair_visits_the_same_directories_when_workers_cannot_start() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use orbit_cmd::DoctorCommands;
+
+    isolated(
+        "doctor::permission_repair_visits_the_same_directories_when_workers_cannot_start",
+        || {
+            let prepare = |fixture: &Fixture| {
+                let wide = fixture.global.join("tasks/workspaces/worker-spawn-refusal");
+                let mut eligible = Vec::new();
+                for index in 0..70 {
+                    let child = wide.join(format!("ORB-{index:05}"));
+                    let nested = child.join("artifacts");
+                    fs::create_dir_all(&nested).expect("child directories");
+                    let writable = index % 7 == 0;
+                    for directory in [&child, &nested] {
+                        let mode = if writable { 0o777 } else { 0o700 };
+                        fs::set_permissions(directory, fs::Permissions::from_mode(mode))
+                            .expect("pin directory mode");
+                        if writable {
+                            eligible.push(directory.to_path_buf());
+                        }
+                    }
+                }
+                let excluded = wide.join("ORB-00040/target");
+                fs::create_dir_all(&excluded).expect("excluded target");
+                fs::set_permissions(&excluded, fs::Permissions::from_mode(0o777))
+                    .expect("pin excluded mode");
+                (eligible, excluded)
+            };
+
+            let ordinary = Fixture::new();
+            let (ordinary_eligible, ordinary_excluded) = prepare(&ordinary);
+            let ordinary_repaired = ordinary
+                .runtime
+                .repair_state_directory_permissions()
+                .expect("ordinary permission repair");
+            assert_eq!(ordinary_eligible.len(), 20);
+            assert!(ordinary_repaired >= ordinary_eligible.len());
+            for path in &ordinary_eligible {
+                assert_eq!(
+                    fs::metadata(path)
+                        .expect("repaired directory")
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o700,
+                    "ordinary repair tightens {path:?}"
+                );
+            }
+            assert_eq!(
+                fs::metadata(&ordinary_excluded)
+                    .expect("excluded target")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o777
+            );
+
+            let refused = Fixture::new();
+            let (refused_eligible, refused_excluded) = prepare(&refused);
+            let refusal = orbit_cmd::DoctorWorkerSpawnRefusal::install();
+            let repaired = refused
+                .runtime
+                .repair_state_directory_permissions()
+                .expect("repair falls back to the calling thread");
+            assert!(refusal.refused() > 0, "the spawn failure must be exercised");
+            assert_eq!(repaired, ordinary_repaired);
+            let relative_eligible = |root: &std::path::Path, paths: &[PathBuf]| {
+                paths
+                    .iter()
+                    .map(|path| {
+                        path.strip_prefix(root)
+                            .expect("fixture-relative path")
+                            .to_path_buf()
+                    })
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                relative_eligible(&refused.global, &refused_eligible),
+                relative_eligible(&ordinary.global, &ordinary_eligible)
+            );
+            for path in &refused_eligible {
+                assert_eq!(
+                    fs::metadata(path)
+                        .expect("repaired directory")
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o700,
+                    "fallback repair tightens {path:?}"
+                );
+            }
+            assert_eq!(
+                fs::metadata(&refused_excluded)
+                    .expect("excluded target")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o777
+            );
+        },
+    );
+}
+
 /// The poll's peek never runs doctor; a plain read reuses the last report;
 /// only an explicit refresh runs it again.
 #[test]

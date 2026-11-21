@@ -1,8 +1,8 @@
 ---
 title: Distributed Drain — Vision
 owner: claude
-last_updated: 2026-10-31
-last_validated: 2026-10-28
+last_updated: 2026-11-16
+last_validated: 2026-11-16
 status: Draft
 feature: distributed-drain
 doc_role: vision
@@ -32,7 +32,7 @@ when the executor declares `review_gate`; the executor's own switch is diagnosti
    runs. A later heartbeat could improve diagnosis, but automatic reassignment would still need
    the current attempt fencing and external-side-effect reconciliation contracts.
    The owner side of this question, failover when the owner itself is down, is proposed in
-   [owner-failover](../owner-failover/1_overview.md). It keeps manual recovery: takeover is
+   [owner-failover](../owner-failover/1_overview.md), proposed by [ORB-20620]. It keeps manual recovery: takeover is
    operator-triggered, and claims never cross an ownership epoch.
 2. **Crew assignment and execution eligibility.** Per-executor eligibility is shipped:
    [ORB-13941] added crew filtering, [ORB-14005] added OS filtering, and [ORB-18316]
@@ -51,7 +51,9 @@ when the executor declares `review_gate`; the executor's own switch is diagnosti
 5. **Federated run inspection.** `orbit run` on the owner cannot see follower runs. With
    `job_run_machine` on the task, a read-only `execute`-class run lookup routed to that destination is
    the obvious shape; whether the dashboard should
-   aggregate it is a separate question.
+   aggregate it is a separate question. [ORB-24160] did ship host-local lookup of
+   retained runs whose workspace was removed, plus an explicit holding-host diagnostic;
+   it does not fetch run records from another host.
 6. **Bounded request receipt retention.** V1 compacts settled receipts to permanent tombstones and
    stops each refill pass at its first idle response. A future retired-namespace/sequence protocol
    could bound storage while rejecting every old request; random IDs and age-based deletion cannot.
@@ -130,5 +132,6 @@ throughput and time spent waiting on locks, CI, and landing in the shipped imple
 - [ORB-17304] — implemented scarcity-aware admission against the live executor census.
 - [ORB-18316] — added task placement by required machine capability labels.
 - [ORB-20620] — proposed owner failover, linked from open questions 1 and 4.
+- [ORB-24160] — located retained run records on their execution host after workspace removal.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

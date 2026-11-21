@@ -3,7 +3,7 @@
 //!
 //! The `env_set` / `ORBIT_*` run-state resolution that used to live here served
 //! the v1 executor transport and was deleted with it in [ORB-10395]; v2 dispatch
-//! builds its child environment in `crate::activity_job::cli_runner`.
+//! builds its child environment in the CLI runner.
 //!
 //! Parent-environment admission of `ORBIT_*` names is the explicit allowlist in
 //! `orbit_common::security::child_env`, not a prefix wildcard. This module

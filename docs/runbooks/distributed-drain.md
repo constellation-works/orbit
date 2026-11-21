@@ -10,7 +10,7 @@ paths:
   - "crates/orbit-web/src/api/distributed.rs"
 related_features: [distributed-drain, federated-mcp, host-registry, remote-access]
 related_artifacts: [ORB-15639, ORB-14260, ORB-14194, ORB-13908, ORB-13941, ORB-14149, ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
-last_validated: 2026-10-25
+last_validated: 2026-11-20
 ---
 
 # Set Up and Recover a Single-Owner Distributed Drain
@@ -432,7 +432,13 @@ entry's `os` is that OS. A portable criterion, a gate on an unnamed item, an
 `os` that differs from the gate, an unconfirmed path or line, and a
 `cfg(unix)` or `cfg(not(windows))` gate that does not determine one OS are
 still rejected. The rejection tells the pilot to leave `required_os` empty,
-and the repair pilot re-answers. When every
+and the repair pilot re-answers. A tag-triggered repository validation is
+the other admitted citation: when the workspace guide ties a tag the task
+carries to a required CodeQL run (the tag is backtick-quoted after `tagged`;
+other words on the line name no trigger) and states only Linux can produce
+it, the pilot cites both guide lines and apply confirms them in the pinned source
+before admitting `os: linux`; an explicit owner/external-evidence route
+for that check, and any mere platform mention, admit no such finding. When every
 `required_os` entry names one OS and the task carries no `os:` tag, the pilot's
 atomic apply adds that tag, so tag routing sends the task to a host of that OS
 and a follower of another OS sees it as `host_os_mismatch`. An `os:` tag the
@@ -660,8 +666,11 @@ supply own `context_files` yourself. Empty context holds no context lock.
 Distributed pull admission, an explicit ship and a single-slot local drain
 admit selector-free backlog tasks on the next pass. A local drain or ship with
 more than one slot waits for this host's task pilot to prepare one
-(`awaiting_footprint`), then runs it only alone (`awaiting_exclusive_slot`). Undeclared edit conflicts are handled at
-landing by rebase and conflict repair. Operator task-scope reservation still
+(`awaiting_footprint`), then runs it only alone (`awaiting_exclusive_slot`),
+unless an operator tagged it `readiness-waived`: that waiver admits it like
+ready work, beside other editing work, with no file lock or whole-tree
+reservation. Undeclared edit conflicts are handled at landing by rebase and
+conflict repair. Operator task-scope reservation still
 requires a declared surface. A live task-pilot preparation (its reservation
 from prepare, then its checkpoint) still holds its tasks until that run settles.
 
@@ -947,11 +956,11 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   commands on the base and replays each selector on the base, outside the agent
   sandbox in a detached worktree, pinning each passing log beside theirs. A
   failing replay fails the claim with its output (the owner blocks the task); an
-  empty list, a selector outside that grammar, or a run that executes no test or
-  prints a skip is refused. A candidate that also changes the base is refused for
-  this outcome. A supplied report stays authoritative: one that is malformed or
-  fails verification is refused, never replaced by the selectors, and a summary
-  alone is refused.
+  empty list, more than 16 selectors, a selector outside that grammar, or a run
+  that executes no test or prints a skip is refused. A candidate that also
+  changes the base is refused for this outcome. A supplied report stays
+  authoritative: one that is malformed or fails verification is refused, never
+  replaced by the selectors, and a summary alone is refused.
 - Before a follower receives a claim, the owner excludes tasks whose immutable
   `required_tools` cannot be satisfied in a remote claimed implementer. The
   pull receipt names the required tool and restriction in `deferred_conflicts`:
@@ -1335,8 +1344,8 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
     `breaker_cooldown_seconds` default in the workspace catalog.
   - `orbit run show <drain-run>` prints the breaker on a `Breaker:` line:
     open or half-open, the failure count, the failure classes newest first,
-    and when it half-opens (JSON `pipeline_state.pull_breaker`: `failures`,
-    `failure_classes`, `opened_at`, `half_open_at`; absent while closed).
+    and when it half-opens (JSON `pull_breaker`: `failures`,
+    `failure_classes`, `opened_at`, `half_open_at`; null while closed).
     The refusal is the `Requests held: circuit_open: …` line, and
     `orbit run readiness` on the follower prints
     `Pull drain requests held: circuit_open: …` (JSON
@@ -1691,7 +1700,7 @@ records what was kept under `interrupted_review` (`orbit run show <leaf-run>
 worker the orphan reconciler finalizes.
 
 - The host that stopped the leaf commits the reviewer's edits as one
-  reviewer-authored commit, `review: partial reviewer repairs preserved`. The
+  reviewer-authored commit, `<type>: partial reviewer repairs preserved [<task>]`. The
   commit carries the `Orbit-Review-Run`, `Orbit-Review-Step` and
   `Orbit-Review-Attempt` trailers, and its parent is the reviewed candidate
   head. It is kept at `refs/orbit/candidates/<task>/<run>-review`. A cancel
@@ -1864,6 +1873,15 @@ one. From then on:
     3600 seconds), whichever comes first.
     A cycle is one landing poll that rechecks the same failed job against the
     accepted base ancestry.
+    When those cycles end (the cycle limit, not the deadline), the landing
+    reads the base once more: if the same check passed on a base-branch push run at a commit containing the
+    candidate's base, with no same-check failure there or on the landing tip,
+    the base is proven green. The failure is then reclassified **candidate**,
+    recorded as `ci_base_suspect_reclassified` with the base run id, base SHA
+    and check, and the task returns to the backlog for its repair run instead
+    of holding. A missing pass, a red tip or an unreadable base keeps the hold.
+    A hold at the `max_wait_seconds` deadline never reclassifies, even when a
+    same-check base pass exists; only the cycle-limit read above can.
     Its hold evidence names the check, signature and missing rerun or base
     result for operator review. A log that cites no repository file, or cites
     a file the candidate changed, is classified as before.
@@ -1946,7 +1964,10 @@ one. From then on:
   Transient, flaky and unattributed classification reruns share one durable rerun
   budget per head across owner completion and claimed landing. Inspect `ci_check_rerun_reserved`
   first: it stores the complete exact failed-job authorization before sending
-  `gh run rerun <run> --failed`. A later `ci_check_rerun` means the request
+  `gh run rerun <run> --failed`. Its note is one line naming the checks, PR, run
+  and attempt; the complete plan, provider authentication included, is the
+  entry's `decision` (`kind: ci_rerun_reserved`) in `orbit task show --json`
+  history. Entries written before that carry the plan as a JSON note instead. A later `ci_check_rerun` means the request
   received a definite accepted reply. An absent reply record is ambiguous,
   not permission to resend. Restart and concurrent observations consume the
   same reservation without another request, repair charge or worker.
@@ -2274,8 +2295,8 @@ three are safe; none strands a claim, and none fails a task that never ran.
   (`release_held` in `pull_settlements`): it reaches the owner only once the
   leaf is seen to stop, so a second executor never starts the task beside a
   first that is still running. Stop that leaf by hand on its host.
-- The MCP stop control takes the same option: `orbit.workflow` action `auto` with
-  `mode: "stop"` and `force: true` stops admissions, then force-cancels each
+- The MCP stop control takes the same option: `orbit.workflow.auto` with
+  `action: "stop"` and `force: true` stops admissions, then force-cancels each
   live drain as above (a local drain's task runs included). It fails, naming
   the leaves, when any leaf could not be confirmed stopped.
 - A drain that is still queued, or whose worker is gone, is cancelled at once;
@@ -2460,6 +2481,16 @@ pull request, merge commit and verified head. Live owner jobs, unresolved
 merge intents, unapproved handoffs and changed heads keep their existing
 fences, and operator-revoked handoffs keep their existing settlement route.
 
+### External merges of stopped native deliveries
+
+The clock tick or owner drain admission pass can also settle a blocked or
+stalled native delivery. Orbit matches a merged PR's number and URL,
+published head and target branch against the stopped completion run's
+publication checkpoints. This works when the REST quota is exhausted and
+the forge can still list merged PRs. The task history records the PR, merge
+time and merge commit under `external_merge_settled`. A closed, unmerged PR
+leaves the task where it was.
+
 ## Migration recipe: leftover epic, child, review, and reservations
 
 Epic execution is retired. Hierarchy remains for reading; admission ignores
@@ -2614,6 +2645,115 @@ unregistered workspace ids. Each replicated workspace still needs its own
 routine, or a pass from that workspace, before its run audit and run state
 are pruned. A delivery- or state-triggered copy of the job stays owner work
 and is listed `owner-only`.
+
+## Drain intent (standing drain phase 1)
+
+Each workspace records one drain intent in its store, beside its drain runs
+([scope](../design/standing-drain/1_scope.md)):
+
+- `off`: the default. No drain has been started or stopped by hand since the
+  intent existed.
+- `paused`: the last hand action was a stop. `orbit run auto --stop`, the
+  dashboard's Stop, the desktop control's Stop and the `orbit.workflow` auto
+  stop record it, with who stopped it (the acting identity), from which surface,
+  the reason if one was given, and when. A stop records the pause even when no
+  drain was live. Only the `orbit.workflow` auto stop (and the desktop control,
+  which uses the same handler) accepts `force`, which also cancels live drains
+  in flight; the force setting does not change whether the pause is recorded.
+  `orbit run auto` has no `--force` flag, the dashboard's Stop takes none, and
+  `orbit run cancel --force` does not record a pause.
+- `on`: the last hand action was a start. `orbit run auto` from the CLI, the
+  dashboard or MCP records it, and so does `orbit run auto --pull` on a replica.
+  A routine-submitted run records nothing.
+
+Recording the intent changes no drain behaviour. Only the opt-in keeper
+([phase 2](#standing-drain-keeper-phase-2)) reads it, and only while
+`workflow.standing_drain.enabled` is set; with the keeper off (the default) nothing
+starts, extends or refuses a drain because of it, on any workspace or host, and
+no attention item is raised. If the write fails, the stop or start still
+succeeds and the failure is logged.
+
+Where to read it:
+
+- `orbit run readiness --json` has a `drain_intent` object: `intent` (`off`,
+  `on` or `paused`), and, once recorded, `by`, `source`, `at` and `reason`. An
+  unreadable row reports `intent: "unknown"` with `error`. The human output
+  prints a `Drain intent:` line.
+- The dashboard's Auto-drain card shows a pause, with who and when, in every
+  phase. While no drain is live it also shows `Intent on` or `Intent off`.
+- `orbit doctor` on the owner host has a `standing-drain` row (`skipped` on a
+  replica). It names the intent and reports the time over the last 7 UTC days,
+  today included, when `backlog` or `proposed` work existed but no auto drain
+  held an admission window. It also gives the same time summed per waiting
+  task (task-hours), the hours drains admitted, and one figure per UTC day. This
+  daily series is the idle-with-work figure a perf review can read
+  (`orbit doctor --json`, row `standing-drain`).
+
+The idle figure is rebuilt on each read from task status histories and drain
+runs. A drain's admission window runs from its start until its deadline, an
+admissions stop, a cancel or its end, whichever comes first. The figure counts
+every `backlog` and `proposed` task as waiting, including those held by unmet
+dependencies or pilot refusals, so it is a ceiling on idle time with admissible
+work.
+
+## Standing drain keeper (phase 2)
+
+The keeper is off by default on every workspace and host. Turning it on
+(`workflow.standing_drain.enabled = true`) and choosing its flags, including
+`approve_proposed`, is the operator's (Daniel's) decision. No agent session sets
+it on a live host, for a test or otherwise; QA uses a disposable home. Keys and
+defaults: [CONFIG.md](../CONFIG.md#workflowstanding_drain--the-opt-in-drain-keeper).
+
+While it is enabled, each clock tick on the workspace's owner host checks, after
+the clock's upgrade resume, whether to submit one drain. It submits only when all
+of these hold:
+
+- the drain intent is `on` (a hand start set it), never `paused` or `off`;
+- this checkout is the owner (a replica never submits);
+- no `workspace_auto_pipeline` run is pending or running, and the newest one is not `held`;
+- a `backlog` or `proposed` task is waiting;
+- `min_resubmit_interval` (default 10 min) has passed since the newest drain ended;
+- the crash breaker is closed: no `max_failed_resubmits` (default 3) keeper drains
+  ended `failed` or `interrupted` within one hour of each other since the last hand
+  start. The breaker latches: once tripped it stays open however much time passes,
+  until a hand start. Upgrade interruptions do not count.
+
+The drain goes through `orbit run auto`'s own submission path and admission
+ladder. Its window, concurrency, `complete`, `approve_proposed` and `auto_fix`
+come from config, never from the previous run. Its trigger names the routine
+`standing-drain-keeper`, so `orbit run history` shows that name, and a keeper
+submission leaves the drain intent unchanged. A window end or a crash does not
+pause, so the keeper resubmits after the interval. A pending host shutdown holds
+it like every other clock submission.
+
+Audit events (`orbit audit` tool names):
+
+- `drain.keeper.submit`: `run_id`, `window_seconds`, `concurrency` (`null` uses the
+  job default), `complete`, `approve_proposed`, `auto_fix`.
+- `drain.keeper.skip`: the same flags plus `reason`, one of `intent_off`,
+  `intent_paused`, `drain_live`, `drain_held`, `min_resubmit_interval`, `no_work`,
+  `breaker_open`, or `submit_refused` (a refused submission, recorded as a failure
+  with the error). A skip is recorded when its reason differs from the keeper's
+  previous decision, not on every tick.
+
+Where to read it while it is enabled:
+
+- `orbit run readiness --json` → `drain_keeper`: `enabled`, `flags`,
+  `min_resubmit_interval_seconds`, `breaker` (`open`, `failed_in_last_hour` (the failures
+  inside the hour that tripped it, once open), `threshold`) and `last_decision`. The human output adds a
+  `Standing-drain keeper:` line. With the keeper off, `drain_keeper` is
+  `{"enabled": false}` and no line is printed.
+- The owner's `orbit doctor` `standing-drain` row adds the effective flags, the
+  breaker and the last decision.
+- Attention: `drain_paused` (medium) when the intent has been `paused` for over
+  12 hours while work waits, and `drain_breaker_open` (high) while the breaker is
+  open. Neither kind is ever raised while the keeper is off.
+
+To pause the keeper, stop the drain (`orbit run auto --stop`); it stays paused
+until someone starts a drain by hand. To close an open breaker, find why the
+keeper's drains failed (`orbit run history`), then start a drain by hand. To turn
+the keeper off, set `workflow.standing_drain.enabled = false`; the next tick stops
+submitting. A live keeper drain keeps running until its window ends or it is stopped.
 
 ## Scheduled host shutdown or reboot
 

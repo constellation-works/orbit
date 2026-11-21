@@ -35,7 +35,7 @@ codegen-units = 1
 strip = "symbols"
 
 [workspace.package]
-version = "0.50.0"
+version = "0.52.0"
 edition = "2024"
 license = "MIT"
 # MSRV [ORB-10010]: edition 2024 requires >= 1.85; the highest `rust-version`
@@ -68,12 +68,14 @@ base64 = "0.23"
 cel = { version = "0.15", default-features = false, features = ["chrono"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 chrono = { version = "0.4", features = ["serde"] }
-chrono-tz = "0.10"
 # `string` lets a command or argument be built from an owned `String`, which
 # the plugin-derived `orbit <ns> <verb>` groups need: their names come from
 # installed manifests at startup, not from literals in this source tree.
 clap = { version = "4.5", features = ["derive", "env", "string", "wrap_help"] }
-croner = "3"
+# Default features off: the `chrono` backend feature is replaced by
+# orbit-automation's own `CronDateTime` adapter over its chrono types, so croner
+# carries no time-library edge of its own [ORB-25521].
+croner = { version = "4.0.3", default-features = false }
 flate2 = "1"
 fs2 = "0.4"
 futures-core = "0.3"
@@ -91,7 +93,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net
 tower-http = { version = "0.6", features = ["compression-gzip"] }
 jsonschema = { version = "0.18", default-features = false }
 libc = "0.2"
-rusqlite = { version = "0.41", features = ["bundled", "chrono", "fallible_uint", "trace"] }
+rusqlite = { version = "0.41", features = ["bundled", "fallible_uint", "trace"] }
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 # Native lease-listener TLS; select ring explicitly rather than a process default.
 rustls = { version = "0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
@@ -117,8 +119,12 @@ zstd = "0.14.3"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tz = { package = "tz-rs", version = "0.7", default-features = false, features = ["alloc"] }
+# The lockfile keeps the same IANA release (2025b) as chrono-tz 0.10.4.
+tzdb_data = "0.2.2"
 url = "2"
 wait-timeout = "0.2"
 predicates = "3"
 tempfile = "3"
+time = "0.3.47"
 tower = { version = "0.5", features = ["util"] }

@@ -134,3 +134,86 @@ pub struct RoutinePauseRecord {
     /// Who paused it (actor label), when recorded.
     pub actor: Option<String>,
 }
+
+/// Whether a routine's circuit breaker lets the sweep fire it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutineBreakerState {
+    /// Fires normally. A closed row only keeps the floor below which older
+    /// failures no longer count toward a trip.
+    Closed,
+    /// Tripped: the sweep fires the routine only for one trial.
+    Open,
+}
+
+impl RoutineBreakerState {
+    /// Stable string form persisted in the `routine_breakers.state` column.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Closed => "closed",
+            Self::Open => "open",
+        }
+    }
+
+    /// Inverse of [`Self::as_str`]; `None` for unknown values.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "closed" => Some(Self::Closed),
+            "open" => Some(Self::Open),
+            _ => None,
+        }
+    }
+}
+
+/// Host-local circuit-breaker state of one routine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoutineBreakerRecord {
+    /// Routine this breaker guards.
+    pub routine_name: String,
+    /// Source workspace name the routine was loaded from when last written.
+    pub source_workspace: String,
+    /// Closed or open.
+    pub state: RoutineBreakerState,
+    /// Error class (failure code or kind) of the failures that tripped it.
+    pub error_class: Option<String>,
+    /// Run of the newest failure that tripped or re-opened it, when one ran.
+    pub last_run_id: Option<String>,
+    /// RFC 3339 time of the latest trip or re-open.
+    pub tripped_at: Option<String>,
+    /// Trips since the breaker last closed; it sets the trial backoff.
+    pub trips: u32,
+    /// RFC 3339 time the next trial is allowed by backoff.
+    pub next_trial_at: Option<String>,
+    /// Orbit build identity on this host at the latest trip; a different
+    /// build allows a trial at once.
+    pub orbit_build: Option<String>,
+    /// RFC 3339 time the current trial was admitted; its first fire decides
+    /// whether the breaker closes or re-opens.
+    pub trial_started_at: Option<String>,
+    /// Why the current trial was admitted: `backoff`, `version` or `bypass`.
+    pub trial_reason: Option<String>,
+    /// RFC 3339 time an operator asked for one fire now.
+    pub bypass_requested_at: Option<String>,
+    /// Fires created at or before this RFC 3339 time never count toward a
+    /// new trip (set when the breaker closes or is reset).
+    pub floor_at: Option<String>,
+    /// RFC 3339 time of the last write.
+    pub updated_at: String,
+}
+
+/// One recorded breaker transition or operator action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoutineBreakerEvent {
+    /// Routine the event belongs to.
+    pub routine_name: String,
+    /// `tripped`, `trial`, `closed`, `reopened`, `reset` or `bypass`.
+    pub event: String,
+    /// Who acted: `sweep` for the scheduler, else the operator label.
+    pub actor: String,
+    /// Error class, trial reason or other short detail.
+    pub detail: Option<String>,
+    /// Run the event refers to, when one did.
+    pub run_id: Option<String>,
+    /// RFC 3339 time it was recorded.
+    pub at: String,
+}

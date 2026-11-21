@@ -25,16 +25,6 @@ impl GuardedModes for WorkflowVerb {
                 })
                 .err()
                 .map(Err),
-            // A resident cycle is a managed run whose mandate is to dispatch
-            // and land; its grant is checked on the host, under its cycle guard.
-            WorkflowVerb::Ship | WorkflowVerb::Land
-                if ctx
-                    .orbit_host
-                    .as_ref()
-                    .is_some_and(|host| host.scope_is_resident_cycle()) =>
-            {
-                None
-            }
             WorkflowVerb::Ship | WorkflowVerb::Land | WorkflowVerb::RunResume => {
                 ensure_not_managed(ctx).err().map(Err)
             }
@@ -65,6 +55,7 @@ impl GuardedModes for WorkflowVerb {
                     input.clone(),
                     "run",
                     &["workspace", "view", "id", "log_offset", "limit", "model"],
+                    "omit `view` to use the default full run record",
                 )),
                 Ok(false) => None,
                 Err(error) => Some(Err(error)),
@@ -178,6 +169,7 @@ fn bounded_run_list(ctx: &ToolContext, input: Value) -> Result<Value, OrbitError
         run_input,
         "runs",
         &["workspace", "view", "offset", "limit", "status", "model"],
+        "omit `view` to use the default run listing",
     )?;
     if !include_catalog {
         return Ok(runs);
@@ -202,6 +194,7 @@ fn bounded_run_list(ctx: &ToolContext, input: Value) -> Result<Value, OrbitError
         catalog_input,
         "jobs",
         &["workspace", "view", "offset", "limit", "model"],
+        "omit `view` to use the default run listing",
     )?;
     Ok(json!({"workspace": runs["workspace"], "runs": runs, "catalog": catalog}))
 }

@@ -1,11 +1,12 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_types::workflow::MergeMessage;
 use serde_json::{Value, json};
 
 use super::super::input::{optional_string, required_string, valid_expected_remote_sha};
 use super::super::process::{execute, run_vcs_process, succeeded};
-use super::super::{BASE_MODIFIED_REFUSAL, SLOW_TIMEOUT_MS};
+use super::super::{BASE_MODIFIED_REFUSAL, MERGE_IN_PROGRESS_REFUSAL, SLOW_TIMEOUT_MS};
 
 /// GitHub's reason for refusing a merge because another merge moved the base
 /// between its mergeability check and the mutation (F2026-10-071). The `sha`
@@ -28,6 +29,9 @@ pub(in crate::executor::automation::vcs::operations) fn pr_merge(
             )));
         }
     };
+    // [ORB-25009] Orbit composes every squash and merge commit message; a
+    // request without one would let the forge write its default.
+    let message = merge_message(input, strategy)?;
     // `--auto` queues GitHub's own auto-merge, which still waits for every
     // required check and branch protection. There is deliberately no
     // administrative bypass (`--admin`) in this surface.
@@ -46,6 +50,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_merge(
             selector,
             workspace_path,
             strategy,
+            message.as_ref(),
             reviewed_head,
             report_base_modified,
             input
@@ -60,6 +65,14 @@ pub(in crate::executor::automation::vcs::operations) fn pr_merge(
         selector.to_string(),
         strategy_flag.to_string(),
     ];
+    if let Some(message) = &message {
+        args.extend([
+            "--subject".to_string(),
+            message.title.clone(),
+            "--body".to_string(),
+            message.body.clone(),
+        ]);
+    }
     if auto {
         args.push("--auto".to_string());
     }
@@ -83,14 +96,17 @@ pub(in crate::executor::automation::vcs::operations) fn pr_merge(
 ///
 /// [ORB-14205] With `report_base_modified`, the provider's base-modification
 /// refusal returns `{"merged": false, "refusal": "base_modified"}` with the
-/// raw output, so the caller can decide whether to ask again. Every other
-/// failure, and that one without the opt-in, stays an error unless
+/// raw output, so the caller can decide whether to ask again. The exact
+/// merge-in-progress refusal is a distinct value permitting reads, never a
+/// second mutation. Other failures, including a base-modification refusal
+/// without its opt-in, stay errors unless
 /// `report_ambiguous` opts into reporting an uncertain server response. That
 /// outcome permits the completion caller one read, never a second mutation.
 fn pr_merge_reviewed(
     selector: &str,
     workspace_path: &str,
     strategy: &str,
+    message: Option<&MergeMessage>,
     reviewed_head: &str,
     report_base_modified: bool,
     report_ambiguous: bool,
@@ -107,25 +123,38 @@ fn pr_merge_reviewed(
             "reviewed PR merge requires an exact 40- or 64-character reviewed_head_sha".into(),
         ));
     }
-    let result = run_vcs_process(
-        "gh",
-        vec![
-            "api".to_string(),
-            format!("repos/{{owner}}/{{repo}}/pulls/{selector}/merge"),
-            "--method".to_string(),
-            "PUT".to_string(),
+    let mut args = vec![
+        "api".to_string(),
+        format!("repos/{{owner}}/{{repo}}/pulls/{selector}/merge"),
+        "--method".to_string(),
+        "PUT".to_string(),
+        "-f".to_string(),
+        format!("sha={reviewed_head}"),
+        "-f".to_string(),
+        format!("merge_method={strategy}"),
+    ];
+    // `-f` sends the raw string: a leading `@` is never read as a file.
+    if let Some(message) = message {
+        args.extend([
             "-f".to_string(),
-            format!("sha={reviewed_head}"),
+            format!("commit_title={}", message.title),
             "-f".to_string(),
-            format!("merge_method={strategy}"),
-        ],
-        Some(Path::new(workspace_path)),
-        SLOW_TIMEOUT_MS,
-    )?;
+            format!("commit_message={}", message.body),
+        ]);
+    }
+    let result = run_vcs_process("gh", args, Some(Path::new(workspace_path)), SLOW_TIMEOUT_MS)?;
     if report_base_modified && is_base_modified_refusal(&result) {
         return Ok(json!({
             "merged": false,
             "refusal": BASE_MODIFIED_REFUSAL,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }));
+    }
+    if result.exit_code.is_some() && is_exact_merge_refusal(&result, "Merge already in progress") {
+        return Ok(json!({
+            "merged": false,
+            "refusal": MERGE_IN_PROGRESS_REFUSAL,
             "stdout": result.stdout,
             "stderr": result.stderr,
         }));
@@ -156,15 +185,42 @@ fn pr_merge_reviewed(
     }))
 }
 
+/// The Orbit-composed `commit_title` and `commit_message` a squash or merge
+/// request must carry; `None` for a rebase, which writes no new message.
+fn merge_message(input: &Value, strategy: &str) -> Result<Option<MergeMessage>, OrbitError> {
+    if strategy == "rebase" {
+        return Ok(None);
+    }
+    let title = optional_string(input, "commit_title")
+        .map(str::trim)
+        .filter(|title| !title.is_empty());
+    let body = optional_string(input, "commit_message");
+    match (title, body) {
+        (Some(title), Some(body)) => Ok(Some(MergeMessage {
+            title: title.to_string(),
+            body: body.to_string(),
+        })),
+        _ => Err(OrbitError::InvalidInput(format!(
+            "a {strategy} merge requires the Orbit-composed commit_title and commit_message; \
+             the forge default message is never used"
+        ))),
+    }
+}
+
 /// True only for a completed `gh api` failure whose whole diagnostic is the
 /// provider's base-modification refusal with HTTP 405: stderr is exactly
 /// `gh: <reason> (HTTP 405)` and the response body, when present, is a JSON
 /// error naming the same reason and status. Other 405s (policy, queue,
 /// protection), other statuses, timeouts, and anything ambiguous do not match.
 fn is_base_modified_refusal(result: &orbit_exec::ExecutionResult) -> bool {
+    is_exact_merge_refusal(result, BASE_MODIFIED_REASON)
+}
+
+/// Match only one whole HTTP 405 diagnostic and a consistent optional body.
+fn is_exact_merge_refusal(result: &orbit_exec::ExecutionResult, reason: &str) -> bool {
     if result.success
         || result.timed_out
-        || result.stderr.trim() != format!("gh: {BASE_MODIFIED_REASON} (HTTP 405)")
+        || result.stderr.trim() != format!("gh: {reason} (HTTP 405)")
     {
         return false;
     }
@@ -175,7 +231,7 @@ fn is_base_modified_refusal(result: &orbit_exec::ExecutionResult) -> bool {
     let Ok(Value::Object(body)) = serde_json::from_str::<Value>(body) else {
         return false;
     };
-    body.get("message").and_then(Value::as_str) == Some(BASE_MODIFIED_REASON)
+    body.get("message").and_then(Value::as_str) == Some(reason)
         && body
             .get("status")
             .is_none_or(|status| status.as_str() == Some("405") || status.as_u64() == Some(405))

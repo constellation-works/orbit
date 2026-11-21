@@ -455,6 +455,13 @@
 #memory-body { padding: 0; }
 .memory-row .meta .memory-usage { white-space: nowrap; }
 .memory-detail-wrap { display: flex; flex-direction: column; }
+/* .property-row aligns its items to the start, so the disclosure would size to
+   its nowrap summary's full width and overflow the card; stretch it into the
+   value column so the summary's ellipsis applies. */
+.knowledge-meta-card .memory-reason {
+  justify-self: stretch;
+  min-width: 0;
+}
 .knowledge-meta-card .memory-reason summary {
   cursor: pointer;
   overflow: hidden;

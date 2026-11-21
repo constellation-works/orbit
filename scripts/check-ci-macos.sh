@@ -335,10 +335,19 @@ def workspace_test_executables() -> dict[str, list[TestBinary]]:
         return {}
     names = {pkg["id"]: pkg["name"] for pkg in packages}
     executables: dict[str, list[TestBinary]] = {}
+    # Workspace units this build compiled or reused. The JSON message format
+    # hides Cargo's progress, so this line is the step log's only record of
+    # how much of a restored workspace cache a change invalidated.
+    units = {"rebuilt": 0, "fresh": 0}
+    rebuilt_packages: set[str] = set()
     for line in build.splitlines():
         if not line.startswith("{"):
             continue
         message = json.loads(line)
+        if message.get("reason") == "compiler-artifact" and message.get("package_id") in names:
+            units["fresh" if message.get("fresh") else "rebuilt"] += 1
+            if not message.get("fresh"):
+                rebuilt_packages.add(names[message["package_id"]])
         if message.get("reason") != "compiler-artifact" or not message.get("executable"):
             continue
         if not message.get("profile", {}).get("test"):
@@ -349,6 +358,8 @@ def workspace_test_executables() -> dict[str, list[TestBinary]]:
             executables.setdefault(name, []).append(
                 TestBinary(message["executable"], target.get("name", ""), target.get("kind", []))
             )
+    print(f"check-ci-macos: workspace units rebuilt={units['rebuilt']} fresh={units['fresh']} "
+          f"rebuilt_packages={','.join(sorted(rebuilt_packages)) or 'none'}")
     return executables
 
 

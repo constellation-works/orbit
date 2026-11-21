@@ -4,6 +4,7 @@ use orbit_automation::{
     AutomationError, DeferredReason,
     delivery::{digest, recovery::HISTORY_REPLAY_COMMIT_LIMIT},
 };
+use orbit_types::plugin::is_full_commit_id;
 use orbit_types::workflow::automation::recovery::{HistoryMapping, HistoryReplayRecord, refusal};
 use orbit_types::workflow::automation::*;
 use std::collections::BTreeMap;
@@ -39,15 +40,10 @@ impl<'a> Source<'a> {
                 refusal::HISTORY_CONTRACT_DRIFT.into(),
             ));
         }
-        if source
-            .git(&[
-                "merge-base",
-                "--is-ancestor",
-                &old_observed.commit,
-                &head.commit,
-            ])
-            .is_ok()
-        {
+        if matches!(
+            source.is_ancestor(&old_observed.commit, &head.commit),
+            Ok(true)
+        ) {
             return Err(AutomationError::Refused(
                 refusal::HISTORY_NOT_DIVERGED.into(),
             ));
@@ -64,14 +60,7 @@ impl<'a> Source<'a> {
                 }))
         {
             if !matches!(source.revision(&boundary.commit), Ok(actual) if actual == *boundary)
-                || source
-                    .git(&[
-                        "merge-base",
-                        "--is-ancestor",
-                        &boundary.commit,
-                        &head.commit,
-                    ])
-                    .is_err()
+                || !matches!(source.is_ancestor(&boundary.commit, &head.commit), Ok(true))
             {
                 return Err(AutomationError::Refused(
                     refusal::HISTORY_BOUNDARY_UNREACHABLE.into(),
@@ -80,15 +69,10 @@ impl<'a> Source<'a> {
         }
 
         let base_commit = source.git(&["merge-base", &old_observed.commit, &head.commit])?;
-        if source
-            .git(&[
-                "merge-base",
-                "--is-ancestor",
-                &state.covered.commit,
-                &base_commit,
-            ])
-            .is_err()
-        {
+        if !matches!(
+            source.is_ancestor(&state.covered.commit, &base_commit),
+            Ok(true)
+        ) {
             return Err(AutomationError::Refused(
                 refusal::HISTORY_BOUNDARY_UNREACHABLE.into(),
             ));
@@ -382,7 +366,7 @@ impl<'a> Source<'a> {
 
         let mut trees = Vec::with_capacity(commits.len());
         for (commit, line) in commits.iter().zip(lines) {
-            if is_object_name(line) {
+            if is_full_commit_id(line) {
                 trees.push(Some(line.to_owned()));
                 continue;
             }
@@ -662,14 +646,9 @@ fn missing_orbit_tree(commit: &str) -> AutomationError {
     )))
 }
 
-fn is_object_name(line: &str) -> bool {
-    let len = line.len();
-    (len == 40 || len == 64) && line.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
 fn object_and_type(line: &str) -> Option<(&str, &str)> {
     let (name, kind) = line.split_once(' ')?;
-    if is_object_name(name) && !kind.is_empty() && !kind.contains(' ') {
+    if is_full_commit_id(name) && !kind.is_empty() && !kind.contains(' ') {
         Some((name, kind))
     } else {
         None

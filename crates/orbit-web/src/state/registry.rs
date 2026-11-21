@@ -1,5 +1,8 @@
 use super::*;
 
+use orbit_cmd::registry_runtime;
+use orbit_types::workspace::WorkspaceRegistry;
+
 /// Where a refresh reloads the servable workspace set from. Present only in the
 /// registry-backed mode built by [`crate::serve::build_state`].
 /// [`DashboardState::single`] leaves it `None`, making
@@ -160,11 +163,13 @@ impl RegistrySource {
                     orbit_dir: checkout.orbit_dir.clone(),
                     binding,
                     active,
+                    checkout_role: checkout.role,
+                    owner_machine_id: workspace.owner_machine_id.clone(),
                 }
             })
             .collect();
         self.report_unavailable(unavailable);
-        let default_workspace = crate::default_workspace_selection(
+        let default_workspace = default_workspace_selection(
             &registry,
             self.workspace_selector.as_deref(),
             self.cwd.as_deref(),
@@ -195,4 +200,103 @@ impl RegistrySource {
             failure.warn();
         }
     }
+}
+
+/// Best-effort default for `cwd` when serving globally: the `Active` registered
+/// workspace whose repo root or path override is the longest prefix of `cwd`,
+/// if the server was launched inside one. The match is lexical
+/// (`Path::starts_with`) and does not touch the filesystem. An `Invalid`
+/// checkout candidate is never eligible, but excluding it does not exclude its
+/// descendants: a `cwd` beneath an invalid checkout still matches an eligible
+/// enclosing root or path override if one exists, and yields `None` only when no
+/// eligible enclosing root or override contains it. `None` is no hint, not "All
+/// workspaces"; see `default_workspace_selection` for what the browser does
+/// next.
+pub(crate) fn default_workspace_for_cwd(
+    registry: &WorkspaceRegistry,
+    cwd: &Path,
+) -> Option<String> {
+    workspace_registry::local_workspaces(registry)
+        .filter(|(workspace, _)| workspace.status == WorkspaceStatus::Active)
+        .filter_map(|(workspace, checkout)| {
+            std::iter::once(&checkout.repo_root)
+                .chain(&checkout.path_overrides)
+                .filter(|candidate| cwd.starts_with(candidate))
+                .map(|candidate| candidate.as_os_str().len())
+                .max()
+                .map(|prefix_len| (workspace, prefix_len))
+        })
+        .max_by_key(|(_, prefix_len)| *prefix_len)
+        .map(|(workspace, _)| workspace.id.clone())
+}
+
+/// Precedence logic for the registry's default-workspace hint. An explicit
+/// `workspace_selector` (the `--workspace` flag) always wins over `cwd` when
+/// given, even when it resolves to nothing: the result is then `None`, not a
+/// cwd-based default. An explicit but unresolved bare name never reaches the
+/// path match, so it cannot preselect the cwd's workspace. Only an absent
+/// selector (no `--workspace` flag) falls back to the cwd match
+/// ([`default_workspace_for_cwd`]).
+///
+/// A selector first resolves as a registered name or logical `ws_*` ID to an
+/// `Active` workspace. Otherwise a path-shaped selector
+/// ([`registry_runtime::selector_looks_like_path`]) is resolved through
+/// [`resolve_selector_path`] and matched the way a cwd is. That is what
+/// `orbit web connect` forwards for a remote workspace directory.
+///
+/// The result is only a hint, and `None` is not an "All workspaces" choice.
+/// This function checks registry status only. `RegistrySource::load` then keeps
+/// the hint only when the workspace's runtime binding succeeds, and the browser
+/// decides what opens (see `build_state`).
+pub(crate) fn default_workspace_selection(
+    registry: &WorkspaceRegistry,
+    workspace_selector: Option<&str>,
+    cwd: Option<&Path>,
+) -> Option<String> {
+    match workspace_selector {
+        Some(selector) => workspace_registry::resolve_logical_workspace(registry, selector)
+            .ok()
+            .filter(|workspace| workspace.status == WorkspaceStatus::Active)
+            .map(|workspace| workspace.id.clone())
+            .or_else(|| {
+                if !registry_runtime::selector_looks_like_path(selector) {
+                    return None;
+                }
+                let path = resolve_selector_path(Path::new(selector), cwd);
+                default_workspace_for_cwd(registry, &path)
+            }),
+        None => cwd.and_then(|cwd| default_workspace_for_cwd(registry, cwd)),
+    }
+}
+
+/// Normalize a path-shaped `--workspace <selector>` value so it can be
+/// prefix-matched against eligible registered roots. Those roots are canonical
+/// absolute paths after the pipeline's canonicalization (see
+/// `orbit-runtime/src/builder.rs`).
+///
+/// Relative paths are resolved against `cwd` before canonicalization. `cwd` is
+/// `None` when the process has no usable working directory (`build_state`
+/// passes `current_dir().ok()`). A relative selector then stays relative and
+/// cannot prefix-match an absolute root, so it yields no hint. If
+/// canonicalization fails (the path may not exist, or symlink resolution
+/// errors), the absolute lexical path is returned so it can still be matched
+/// component-wise by [`default_workspace_for_cwd`]. A nonexistent descendant of
+/// an eligible root (e.g. `/registered/missing` under `/registered`) therefore
+/// still selects that root. Only a path lexically outside every eligible root
+/// misses. An `Invalid` checkout candidate is not eligible, but excluding it
+/// does not exclude its descendants: a path beneath an invalid checkout still
+/// matches an eligible enclosing root or path override if one exists, and misses
+/// only when no eligible enclosing root or override contains it. Lexical
+/// matching does not resolve `..` components, so a nonexistent
+/// `/registered/../other` still matches `/registered` as written.
+fn resolve_selector_path(selector: &Path, cwd: Option<&Path>) -> PathBuf {
+    let absolute = if selector.is_absolute() {
+        selector.to_path_buf()
+    } else {
+        match cwd {
+            Some(cwd) => cwd.join(selector),
+            None => selector.to_path_buf(),
+        }
+    };
+    absolute.canonicalize().unwrap_or(absolute)
 }

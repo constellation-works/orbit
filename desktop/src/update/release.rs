@@ -156,7 +156,7 @@ impl Releases {
         current: Version,
         bundle: &str,
         keys: &[TrustedReleaseKey],
-        today: chrono::NaiveDate,
+        today: time::Date,
     ) -> Result<Option<Verified>, CheckError> {
         let url = format!(
             "https://api.github.com/repos/{REPOSITORY}/releases?per_page={RELEASES_PER_CHECK}"

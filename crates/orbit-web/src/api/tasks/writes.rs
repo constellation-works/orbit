@@ -252,6 +252,7 @@ pub(in crate::api) async fn update_task_action(
         upsert_artifacts: Vec::new(),
         trusted_artifact_origin: None,
         discard_candidate: false,
+        finding_acceptance: None,
         allow_drop_system_tags: body.allow_drop_system_tags,
         not_before,
     };

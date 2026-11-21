@@ -93,7 +93,7 @@ export function frictionTools({ segGroup, windowKey, payload, rerender, onChange
   };
   const picker = el("div", { class: "mx-seg mx-seg-wrap", role: "group", "aria-label": "Metric families" }, FAMILIES.map((family) => {
     const on = filters.families.includes(family.key);
-    const button = el("button", { class: on ? "mx-seg-btn on" : "mx-seg-btn", type: "button", "aria-pressed": on ? "true" : "false", title: on ? `Remove ${family.label}` : `Add ${family.label}` }, [
+    const button = el("button", { class: on ? "mx-seg-btn on" : "mx-seg-btn", type: "button", "aria-pressed": on ? "true" : "false", "aria-description": on ? `Remove ${family.label}` : `Add ${family.label}` }, [
       el("span", { class: `mx-swatch mx-s-${family.swatch}`, "aria-hidden": "true" }),
       family.label,
     ]);

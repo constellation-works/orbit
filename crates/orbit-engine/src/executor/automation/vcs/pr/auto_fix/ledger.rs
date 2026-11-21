@@ -3,10 +3,9 @@ use std::collections::BTreeSet;
 use orbit_common::OrbitError;
 use orbit_types::task::TaskDecision;
 use orbit_types::workflow::{
-    PR_AUTO_FIX_BASE_RED_EVENT, PR_AUTO_FIX_READ_DEFERRED_EVENT, PrAutoFixBaseRed,
-    PrAutoFixBlocker, PrAutoFixReadDeferral,
+    PR_AUTO_FIX_BASE_RED_EVENT, PR_AUTO_FIX_HEAD_FAILURE_EVENT, PR_AUTO_FIX_READ_DEFERRED_EVENT,
+    PrAutoFixBaseRed, PrAutoFixBlocker, PrAutoFixHeadFailure, PrAutoFixReadDeferral,
 };
-use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
@@ -58,14 +57,21 @@ pub(super) fn repair_ledger_runs<H: RuntimeHost + ?Sized>(
 pub(in crate::executor::automation::vcs::pr) fn record_landed_repair<H: RuntimeHost + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
+    pr_number: &str,
     evidence: &Value,
 ) -> Result<(), OrbitError> {
+    let pr = if !pr_number.is_empty() {
+        pr_number
+    } else {
+        evidence["pr_number"].as_str().unwrap_or_default()
+    };
     let head = evidence["failed_head"]
         .as_str()
-        .ok_or_else(|| verdict::stopped("", "missing failed head"))?;
+        .ok_or_else(|| verdict::stopped(pr, "missing failed head"))?;
     retain(
         host,
         auto_fix,
+        pr,
         &format!("auto-fix/{}/landed-{head}.json", auto_fix.run_id),
         evidence,
     )?;
@@ -89,7 +95,11 @@ pub(in crate::executor::automation::vcs::pr) fn reserve_base_refresh<H: RuntimeH
             orbit_types::workflow::handoff::HandoffDelivery::PullRequest { number } => {
                 number.to_string()
             }
-            _ => return Err(verdict::stopped("", "base refresh requires a pull request")),
+            _ => {
+                return Err(verdict::stopped_without_pr(
+                    "base refresh requires a pull request",
+                ));
+            }
         },
         head_sha: evidence["failed_head"].as_str().unwrap_or_default().into(),
         head_branch: candidate.source_branch.clone(),
@@ -104,7 +114,9 @@ pub(in crate::executor::automation::vcs::pr) fn reserve_base_refresh<H: RuntimeH
             &request.pr_number,
             "the base refresh was already reserved; no second branch rewrite is allowed",
         )),
-        PrBaseUpdateAdmission::Refused(why) => Err(verdict::stopped(&request.pr_number, &why)),
+        PrBaseUpdateAdmission::Refused(why) => {
+            Err(verdict::stopped(&request.pr_number, &why.to_string()))
+        }
     }
 }
 
@@ -116,12 +128,16 @@ pub(in crate::executor::automation::vcs::pr) fn record_base_path<H: RuntimeHost 
     event: &str,
     evidence: &Value,
 ) -> Result<(), OrbitError> {
-    append_history_note(host, auto_fix, event, &history_note(evidence)?, None)
+    let note = serde_json::to_string(evidence)
+        .map_err(|error| OrbitError::Execution(error.to_string()))?;
+    append_history_note(host, auto_fix, event, &note, None, &|entry| {
+        entry.note.as_deref() == Some(note.as_str())
+    })
 }
 
-/// Persist the inherited-failure hold beside its unchanged diagnostic note.
-/// The record's field order preserves historical note bytes and exact
-/// note-based deduplication, including against decision-less entries.
+/// Persist the inherited-failure hold: a one-line note and the full record as
+/// the decision. A hold already recorded for the same failed head, landed
+/// base and failing checks, in any storage shape, is not recorded again.
 pub(in crate::executor::automation::vcs::pr) fn record_base_red<H: RuntimeHost + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
@@ -131,14 +147,32 @@ pub(in crate::executor::automation::vcs::pr) fn record_base_red<H: RuntimeHost +
         host,
         auto_fix,
         PR_AUTO_FIX_BASE_RED_EVENT,
-        &history_note(record)?,
+        &record.history_note(),
         Some(TaskDecision::PrAutoFixBaseRed(record.clone())),
+        &|entry| PrAutoFixBaseRed::from_entry(entry).is_some_and(|held| held.same_hold(record)),
     )
 }
 
-/// Record one throttled-read wait. The note stays the record's JSON; the
-/// decision is that record. An identical note is not written again, so a
-/// resume does not rewrite a decision-less history entry.
+/// Persist the failure an admitted check repair was handed: a one-line note
+/// and the full record as the decision, once per identical record.
+pub(in crate::executor::automation::vcs::pr) fn record_head_failure<H: RuntimeHost + ?Sized>(
+    host: &H,
+    auto_fix: &admission::AutoFix,
+    record: &PrAutoFixHeadFailure,
+) -> Result<(), OrbitError> {
+    append_history_note(
+        host,
+        auto_fix,
+        PR_AUTO_FIX_HEAD_FAILURE_EVENT,
+        &record.history_note(),
+        Some(TaskDecision::PrAutoFixHeadFailure(record.clone())),
+        &|entry| PrAutoFixHeadFailure::from_entry(entry).is_some_and(|seen| seen == *record),
+    )
+}
+
+/// Record one throttled-read wait: a one-line note and the record as the
+/// decision. An identical record is not written again, so a resume does not
+/// rewrite a decision-less history entry.
 pub(in crate::executor::automation::vcs::pr) fn record_read_deferral<H: RuntimeHost + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
@@ -148,13 +182,10 @@ pub(in crate::executor::automation::vcs::pr) fn record_read_deferral<H: RuntimeH
         host,
         auto_fix,
         PR_AUTO_FIX_READ_DEFERRED_EVENT,
-        &history_note(deferral)?,
+        &deferral.history_note(),
         Some(TaskDecision::PrAutoFixReadDeferred(deferral.clone())),
+        &|entry| PrAutoFixReadDeferral::from_entry(entry).is_some_and(|seen| seen == *deferral),
     )
-}
-
-fn history_note(value: &impl Serialize) -> Result<String, OrbitError> {
-    serde_json::to_string(value).map_err(|error| OrbitError::Execution(error.to_string()))
 }
 
 fn append_history_note<H: RuntimeHost + ?Sized>(
@@ -163,12 +194,13 @@ fn append_history_note<H: RuntimeHost + ?Sized>(
     event: &str,
     note: &str,
     decision: Option<TaskDecision>,
+    already_recorded: &dyn Fn(&orbit_types::task::TaskHistoryEntry) -> bool,
 ) -> Result<(), OrbitError> {
     for task in &auto_fix.task_ids {
         if host
             .get_task_history(task)?
             .iter()
-            .any(|entry| entry.event == event && entry.note.as_deref() == Some(note))
+            .any(|entry| entry.event == event && already_recorded(entry))
         {
             continue;
         }
@@ -199,6 +231,7 @@ pub(super) fn record_check_annotations<H: RuntimeHost + ?Sized>(
     retain(
         host,
         auto_fix,
+        pr_number,
         &format!("auto-fix/{}/check-annotations-{head}.json", auto_fix.run_id),
         &json!({"pr": pr_number, "failed_head": head, "checks": annotations}),
     )
@@ -231,10 +264,18 @@ pub(in crate::executor::automation::vcs::pr) fn attach_evidence<H: RuntimeHost +
 fn retain<H: RuntimeHost + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
+    pr_number: &str,
     path: &str,
     evidence: &Value,
 ) -> Result<(), OrbitError> {
-    attach_evidence(host, auto_fix, "", "missing owning run", path, evidence)
+    attach_evidence(
+        host,
+        auto_fix,
+        pr_number,
+        "missing owning run",
+        path,
+        evidence,
+    )
 }
 
 /// Record a head this run published on the pull request.

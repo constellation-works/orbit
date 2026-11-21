@@ -14,6 +14,7 @@
 # Usage:
 #   scripts/audit_panics.sh           # human-readable table
 #   scripts/audit_panics.sh --json    # machine-readable JSON
+#   scripts/audit_panics.sh --json --sites  # JSON plus the per-crate blast-radius sites
 #
 # Members and package names come from Cargo.toml (Python >= 3.11).
 set -euo pipefail

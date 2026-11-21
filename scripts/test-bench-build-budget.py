@@ -57,6 +57,10 @@ if tool == "cargo" and args[:2] == ["check", "-p"]:
         orbit_jobs=os.environ.get("ORBIT_CARGO_JOBS"),
         lock_dir=os.environ.get("ORBIT_BUILD_BUDGET_DIR"),
         slots=os.environ.get("ORBIT_BUILD_SLOTS"),
+        held=os.environ.get("ORBIT_BUILD_BUDGET_HELD"),
+        admitted_locks=sorted(os.listdir(os.environ["ORBIT_BUILD_BUDGET_DIR"]))
+        if os.environ.get("ORBIT_BUILD_BUDGET_DIR") and os.path.isdir(os.environ["ORBIT_BUILD_BUDGET_DIR"])
+        else None,
     )
     record()
     block = os.environ.get("BENCH_BLOCK")
@@ -200,6 +204,21 @@ def scenario_existing_root(root, script):
     return errors
 
 
+def scenario_invalid_process_count(root, script):
+    errors = []
+    for index, value in enumerate(("0", "00", "abc", "-1", "1.5", "+1")):
+        case, work, events, env = make_fixture(root, script, f"processes-{index}")
+        env["ORBIT_BUILD_BUDGET_BENCH_PROCESSES"] = value
+        result = run(script, env)
+        if result.returncode == 0:
+            errors.append(f"process count {value!r} was accepted")
+        if "positive integer" not in result.stderr:
+            errors.append(f"process count {value!r} was not named in the refusal")
+        if read_events(events) or work.exists():
+            errors.append(f"process count {value!r} ran work before refusing")
+    return errors
+
+
 def scenario_root_symlink(root, script):
     case, work, events, env = make_fixture(root, script, "root-symlink")
     target = case / "operator-data"
@@ -322,9 +341,12 @@ def scenario_archive_failure(root, script):
     return errors
 
 
-def scenario_fresh_run(root, script):
-    case, work, events, env = make_fixture(root, script, "fresh-run", allow_rm=True)
+def scenario_fresh_run(root, script, processes="1", inherited=None):
+    name = "fresh-run-" + processes + ("-nested-" + "-".join(sorted(inherited)).lower() if inherited else "")
+    case, work, events, env = make_fixture(root, script, name, allow_rm=True)
+    env.update(inherited or {})
     env["ORBIT_BUILD_BUDGET_BENCH_RESULT"] = "comparison.tsv"
+    env["ORBIT_BUILD_BUDGET_BENCH_PROCESSES"] = processes
     result = run(script, env)
     recorded = read_events(events)
     cargo = [event for event in recorded if event["tool"] == "cargo" and event["args"][:2] == ["check", "-p"]]
@@ -340,6 +362,12 @@ def scenario_fresh_run(root, script):
         )
     if len(cargo) != 2:
         errors.append("fresh benchmark did not execute both bounded fake arms")
+    if inherited:
+        # A caller's HELD=1 or BUDGET=0 must not turn the budgeted arm into an unbudgeted one.
+        budgeted = [event for event in cargo if event.get("orbit_jobs") is not None]
+        if len(budgeted) != 1 or budgeted[0].get("held") != "1" or not budgeted[0].get("admitted_locks"):
+            errors.append("budgeted arm skipped admission under an inherited budget variable: "
+                          + repr(budgeted))
     if len({event.get("target") for event in cargo}) != 2:
         errors.append("benchmark arms did not use separate private targets")
     if any(event.get("unsafe") for event in recorded if event["tool"] == "rm"):
@@ -1193,12 +1221,19 @@ def main():
     scratch.mkdir(parents=True, exist_ok=True)
     scenarios = (
         ("existing-root", scenario_existing_root),
+        ("invalid-process-count", scenario_invalid_process_count),
         ("root-symlink", scenario_root_symlink),
         ("internal-tree-symlink", lambda root, path: scenario_internal_symlink(root, path, "tree")),
         ("internal-target-symlink", lambda root, path: scenario_internal_symlink(root, path, "target")),
         ("result-escape", scenario_result_escape),
         ("archive-failure", scenario_archive_failure),
         ("fresh-run", scenario_fresh_run),
+        # A zero-padded count is its decimal value, one job per arm [ORB-25854].
+        ("fresh-run-zero-padded", lambda root, path: scenario_fresh_run(root, path, "01")),
+        ("fresh-run-budget-disabled", lambda root, path: scenario_fresh_run(
+            root, path, "1", {"ORBIT_BUILD_BUDGET": "0"})),
+        ("fresh-run-budget-held", lambda root, path: scenario_fresh_run(
+            root, path, "1", {"ORBIT_BUILD_BUDGET_HELD": "1"})),
         ("cancellation", scenario_cancellation),
         ("cancellation-spawn-window", scenario_cancellation_spawn_window),
         ("cancellation-flag-clear", scenario_cancellation_flag_clear),

@@ -94,10 +94,12 @@ impl OrbitRuntime {
         let expected = match profile {
             AutoTaskScheduleProfile::Unconditional => None,
             AutoTaskScheduleProfile::Observed { expected_schedule } => {
-                // The readable fallback is inspection only; the write below
-                // still needs the validated checkout-local definition.
+                // Refuse an unpermitted write before any comparison, and
+                // compare against the checkout-local catalog the write edits.
+                self.ensure_coordination_task_write_permitted()
+                    .map_err(AutoTaskScheduleError::Write)?;
                 let Some(current) = self
-                    .auto_task_show(name)
+                    .find_validated_auto_task(name)
                     .map_err(AutoTaskScheduleError::Read)?
                 else {
                     return Ok(AutoTaskScheduleOutcome::NotFound);

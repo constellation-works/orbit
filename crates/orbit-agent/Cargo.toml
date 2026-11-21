@@ -19,9 +19,10 @@ test = false
 orbit-common = { path = "../orbit-common" }
 orbit-types = { path = "../orbit-types" }
 chrono = { workspace = true }
-chrono-tz.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+tz.workspace = true
+tzdb_data.workspace = true
 
 [dev-dependencies]
 jsonschema.workspace = true

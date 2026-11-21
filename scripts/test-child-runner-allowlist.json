@@ -1,0 +1,422 @@
+[
+  {
+    "path": "crates/orbit-cli/tests/output/help_goldens.rs",
+    "function": "plugin_help_wraps_and_aligns_in_a_pty_and_stays_flat_when_piped",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Parent opens a PTY, spawns the orbit binary on the slave, and reads the master under its own deadline. run_child_test would take the child's stdio."
+  },
+  {
+    "path": "crates/orbit-cli/tests/output/help_goldens.rs",
+    "function": "read_help_on_pty",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Same PTY helper: the parent must own the master and the child's lifetime while it reads help."
+  },
+  {
+    "path": "crates/orbit-cli/tests/output/help_goldens.rs",
+    "function": "footer_example_blocks_keep_one_layout_on_narrow_terminals",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Narrow-terminal layout check spawns the CLI on a slave PTY and reads the master itself."
+  },
+  {
+    "path": "crates/orbit-cli/tests/output/table_rendering.rs",
+    "function": "run_cli_on_terminal_at_width_with_operator",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Renders the CLI on a slave PTY at a chosen width; the parent reads the master, so a capturing runner cannot own the child."
+  },
+  {
+    "path": "crates/orbit-cli/tests/process/run_observation/agent_invoke.rs",
+    "function": "run_logs_follow_emits_live_output_once_and_stops_at_terminal",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Long-lived orbit run logs --follow is owned by ChildGuard and read live, then stopped. It must not be waited to completion."
+  },
+  {
+    "path": "crates/orbit-cli/tests/process/run_observation.rs",
+    "function": "linux_start_identity_without_ps_matches_pre_change_owner_tokens",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Test-binary re-exec uses Command::timeout then a raw .output(). Baselined hand-rolled wait with its own 10s bound."
+  },
+  {
+    "path": "crates/orbit-cli/tests/process/run_observation.rs",
+    "function": "cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Live orbit job inside ReapOnDrop; the test signals the worker. run_child_test would own the process group."
+  },
+  {
+    "path": "crates/orbit-cli/tests/process/server_readiness.rs",
+    "function": "server_child",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Ignored holder child stays alive until stdin releases it. A blocking runner cannot hold that child."
+  },
+  {
+    "path": "crates/orbit-cli/tests/process/update/integrity.rs",
+    "function": "resuming_candidate_script",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Short orbit update --contract --json of the installed binary, used to embed a contract in a fixture script."
+  },
+  {
+    "path": "crates/orbit-cli/tests/process/worktree_resolution.rs",
+    "function": "doctor_orphan_task_store_repair_deletes_only_confirmed_absent_checkouts",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Isolated --exact child via the StdCommand alias, then assert_child_test_passed. Classic hand-rolled runner, baselined until migrated."
+  },
+  {
+    "path": "crates/orbit-cli/tests/support/secret_sinks.rs",
+    "function": "seeded_secrets_stay_out_of_persistence_logs_and_children",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "process_group(0) then supervise_child with a 120s bound. The test uses that supervisor, not run_child_test."
+  },
+  {
+    "path": "crates/orbit-cli/tests/task/auto_task_lifecycle_cli.rs",
+    "function": "doctor_scans_all_consumer_pages_and_warns_on_a_later_read_failure",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Isolated --exact child waited with .output() and assert_child_test_passed. Baselined until it moves to run_child_test."
+  },
+  {
+    "path": "crates/orbit-cli/tests/task/review_after_landing_cli.rs",
+    "function": "in_isolated_child",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Isolated --exact child waited with .output() and assert_child_test_passed. Baselined until it moves to run_child_test."
+  },
+  {
+    "path": "crates/orbit-cli/tests/task/review_after_landing_cli.rs",
+    "function": "in_isolated_child_with_provider_paths",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Same isolated child as in_isolated_child, with extra provider-path environment. Baselined raw .output()."
+  },
+  {
+    "path": "crates/orbit-cli/tests/tool/application_authority.rs",
+    "function": "application_host_route_refuses_changed_inputs_and_revoked_consent",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "pre_exec dup2 of host fds, then .output(). run_child_test does not expose pre_exec."
+  },
+  {
+    "path": "crates/orbit-cli/tests/tool/application_callbacks.rs",
+    "function": "application_callbacks_refuse_changed_artifact_and_second_pin_and_read_schema_4_sessions",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "pre_exec dup2 of host fds, then .output(). run_child_test does not expose pre_exec."
+  },
+  {
+    "path": "crates/orbit-cli/tests/tool/github_broker_sandbox.rs",
+    "function": "github_reads_from_a_confined_worker_run_on_the_host",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Isolated --ignored --exact sandbox fixture waited with .output() and assert_child_test_passed."
+  },
+  {
+    "path": "crates/orbit-cli/tests/tool/github_broker_sandbox.rs",
+    "function": "cli",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Helper runs the installed orbit binary (CARGO_BIN_EXE_orbit) and waits with .output() for its CLI result."
+  },
+  {
+    "path": "crates/orbit-cli/tests/tool/plugin_broker_sandbox.rs",
+    "function": "cli_and_mcp_reach_host_backends_with_authoritative_identity",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Isolated sandbox fixture waited with .output() and assert_child_test_passed."
+  },
+  {
+    "path": "crates/orbit-cli/tests/tool/plugin_broker_sandbox.rs",
+    "function": "cli",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Linux helper runs the installed orbit binary and waits with .output() for its CLI result."
+  },
+  {
+    "path": "crates/orbit-cli/tests/tool/plugin_broker_sandbox.rs",
+    "function": "start",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "orbit mcp serve with piped stdin and stdout owned by ChildGuard so the test can speak MCP. The server must stay alive."
+  },
+  {
+    "path": "crates/orbit-cli/tests/workspace/generation_root.rs",
+    "function": "task_list_with_tilde_orbit_root_registers_its_participant_under_home",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Spawns task list and polls generation participants until a 10s deadline, so the child must stay alive."
+  },
+  {
+    "path": "crates/orbit-cli/tests/workspace/teardown_retry.rs",
+    "function": "isolated_child",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Isolated --exact child waited with .output() and assert_child_test_passed. Baselined until migrated."
+  },
+  {
+    "path": "crates/orbit-common/src/fs/io/tests/lock.rs",
+    "function": "start_fifo_reader",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Returns the live child of an ignored lock-holder test. The parent coordinates FIFO stages, so the runner cannot wait it out."
+  },
+  {
+    "path": "crates/orbit-common/src/process/tests/ancestry.rs",
+    "function": "native_cpu_time_agrees_with_getrusage",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Ignored Mach calibration child; the parent keeps the child's stdout as evidence. Raw .output()."
+  },
+  {
+    "path": "crates/orbit-common/tests/common/jsonl_exit_flush.rs",
+    "function": "warn_then_exit_in",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Ignored child; the parent asserts status.code() and the feed written under HOME. Raw .output()."
+  },
+  {
+    "path": "crates/orbit-common/tests/common/mechanisms/sqlite.rs",
+    "function": "start",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "External writer kept alive against a control directory. A wait-to-completion runner cannot return it."
+  },
+  {
+    "path": "crates/orbit-common/tests/common/test_env.rs",
+    "function": "reexec_guard_rejects_missing_ignored_and_failed_children",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Contract test of assert_child_test_passed. It must observe libtest's raw zero-test success; run_child_test would hide that."
+  },
+  {
+    "path": "crates/orbit-core/src/application/job/pipeline/worker/tests/usage/tree.rs",
+    "function": "spawn_child_tree",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "process_group(0) and OwnedChild; the parent polls a ready file, then kills the group including a grandchild."
+  },
+  {
+    "path": "crates/orbit-core/src/application/job/pipeline/worker/tests/usage/tree.rs",
+    "function": "hold_with_grandchild",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Grandchild stays alive until a ready file, then the parent joins it. The measurement needs the live process."
+  },
+  {
+    "path": "crates/orbit-core/src/application/plugin/tests/fixture.rs",
+    "function": "enter_isolated_child",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Isolated --exact fixture waited with .output(). Baselined until it moves to run_child_test."
+  },
+  {
+    "path": "crates/orbit-core/src/application/pull_drain/tests/drain.rs",
+    "function": "isolated_pull_test",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Isolated child; the parent inspects stdout and stderr itself. Baselined raw .output()."
+  },
+  {
+    "path": "crates/orbit-core/src/application/task/tests/mod.rs",
+    "function": "enter_isolated_child",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Isolated --exact fixture waited with .output() and assert_child_test_passed."
+  },
+  {
+    "path": "crates/orbit-core/tests/runtime/actor_identity.rs",
+    "function": "agent_envelopes_never_fall_back_to_human_attribution",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Loop of ignored children with different actor env, one syntactic .output(), then assert_child_test_passed."
+  },
+  {
+    "path": "crates/orbit-core/tests/runtime/admission_audit/artifact_health.rs",
+    "function": "run_isolated_child_fixture",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Stdio goes to files, then the parent polls try_wait for 120s. Hand-rolled deadline, not run_child_test."
+  },
+  {
+    "path": "crates/orbit-core/tests/runtime/admission_audit/isolation.rs",
+    "function": "isolated_diagnostics_reach_the_test_command",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Seeds inherited authority and a scrub marker, then reads the child's streams to prove isolation."
+  },
+  {
+    "path": "crates/orbit-core/tests/runtime/admission_audit/plugin_build.rs",
+    "function": "enter_fake_git_commit_child",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Prepends a fake git to PATH, then waits on the isolated child with .output()."
+  },
+  {
+    "path": "crates/orbit-core/tests/runtime/admission_audit/plugin_conformance.rs",
+    "function": "nested_seatbelt_defers_conformance_rows_without_pass_credit",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Re-executes the conformance table under a forced seatbelt refusal and reads the deferral text from .output()."
+  },
+  {
+    "path": "crates/orbit-core/tests/runtime/admission_audit/plugin_fixture.rs",
+    "function": "enter_isolated_child",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Isolated fixture waited with .output(). Baselined until it moves to run_child_test."
+  },
+  {
+    "path": "crates/orbit-core/tests/runtime/admission_audit/plugin_install.rs",
+    "function": "enter_fake_git_install_child",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Prepends a fake git to PATH, then waits on the isolated install child with .output()."
+  },
+  {
+    "path": "crates/orbit-core/tests/runtime/admission_audit/task_support.rs",
+    "function": "enter_isolated_child",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Isolated fixture waited with .output() and assert_child_test_passed."
+  },
+  {
+    "path": "crates/orbit-core/tests/runtime/admission_forecast.rs",
+    "function": "two_admitter_processes_cannot_fill_one_gap_twice",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Racer child with a rendezvous file. The parent waits for ready while both processes fill one gap, so the child must stay concurrent."
+  },
+  {
+    "path": "crates/orbit-core/tests/runtime/dispatch_admission/lock_busy_pass.rs",
+    "function": "spawn",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Lock holder via OwnedChild. The parent waits for ready and reads the pid, so the child must stay alive."
+  },
+  {
+    "path": "crates/orbit-core/tests/runtime/distributed_drain/claimed_host_evidence/deferred.rs",
+    "function": "a_nested_seatbelt_conformance_deferral_settles_on_its_host_replay",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Re-executes the conformance table under a forced seatbelt refusal and reads the deferral text from .output()."
+  },
+  {
+    "path": "crates/orbit-core/tests/runtime/upgrade_resume.rs",
+    "function": "run_isolated_test",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Isolated --exact child waited with .output(). Baselined hand-rolled runner; this change does not rewrite it."
+  },
+  {
+    "path": "crates/orbit-core/tests/runtime/worker_exit_diagnostic.rs",
+    "function": "reconciliation_keeps_worker_provenance_without_a_supervisor_exit_row",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Signalled worker in its own process group via OwnedChild. The parent reads the running pid, so the child must stay alive."
+  },
+  {
+    "path": "crates/orbit-core/tests/sandbox_profile_goldens.rs",
+    "function": "run_child",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Renderer logs go to files and the parent polls try_wait under its own deadline. The child is not waited by run_child_test."
+  },
+  {
+    "path": "crates/orbit-engine/src/activity_job/cli_runner/supervisor/tests/spawn.rs",
+    "function": "stdin_provider",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Escaped stdin holder must stay alive until a ready file appears. A blocking runner would wait the holder out."
+  },
+  {
+    "path": "crates/orbit-engine/tests/engine/admission_audit/commit/git_ops.rs",
+    "function": "commit_child_environment_excludes_parent_secrets",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Isolated environment child waited with .output() so the parent can compare the captured env."
+  },
+  {
+    "path": "crates/orbit-exec/src/linux_sandbox/tests/descriptor.rs",
+    "function": "descriptor_inheritance_preserves_the_command_exec_error_pipe",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Isolated descriptor child waited with .output() and assert_child_test_passed. The subject is the exec-error pipe."
+  },
+  {
+    "path": "crates/orbit-exec/tests/sandbox/linux_sandbox.rs",
+    "function": "a_deferred_bwrap_test_reports_its_deferral_past_output_capture",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Re-executes itself as the deferring child and asserts the captured deferral text from .output()."
+  },
+  {
+    "path": "crates/orbit-exec/tests/sandbox_profile_goldens.rs",
+    "function": "run_child",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Renderer logs go to files and the parent polls try_wait under its own deadline."
+  },
+  {
+    "path": "crates/orbit-exec/tests/signal_fanout.rs",
+    "function": "sigterm_with_default_disposition_exits_the_supervisor",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Supervisor helper stays alive until a marker, then the parent sends SIGTERM. run_child_test would own that wait."
+  },
+  {
+    "path": "crates/orbit-runtime/src/recovery_authority/tests/worker.rs",
+    "function": "worker_process_binding_survives_descendants_and_forged_environment",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Grandchild re-exec with a forged run id, waited with .output() and assert_child_test_passed."
+  },
+  {
+    "path": "crates/orbit-runtime/src/recovery_authority/tests/worker.rs",
+    "function": "worker_process_binding_survives_descendants_and_forged_environment",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Live child with piped stdio so the parent can bind the worker pid before the child exits."
+  },
+  {
+    "path": "crates/orbit-runtime/src/recovery_authority/tests/worker.rs",
+    "function": "worker_process_binding_survives_descendants_and_forged_environment",
+    "call": ".output()",
+    "ordinal": 1,
+    "reason": "Second isolated re-exec after the namespace binding, waited with .output() and assert_child_test_passed."
+  },
+  {
+    "path": "crates/orbit-runtime/src/tests/mod.rs",
+    "function": "run_isolated_test",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Isolated --exact child waited with .output(). Baselined until it moves to run_child_test."
+  },
+  {
+    "path": "crates/orbit-store/src/fs/tests/lock.rs",
+    "function": "sigkilled_holder_releases_lock",
+    "call": ".spawn()",
+    "ordinal": 0,
+    "reason": "Lock-holder child stays alive until ready, then the parent SIGKILLs it. A blocking runner cannot hold the lock."
+  },
+  {
+    "path": "crates/orbit-tools/tests/tools/plugin_source_admission.rs",
+    "function": "enter_fake_git_child",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Fake git and curl on PATH, then the isolated child is waited with .output() and assert_child_test_passed."
+  },
+  {
+    "path": "crates/orbit-web/src/api/tests/test_support.rs",
+    "function": "run_isolated_child",
+    "call": ".output()",
+    "ordinal": 0,
+    "reason": "Isolated fixture's non-terminal branch waits with .output(). Baselined until it moves to run_child_test."
+  }
+]

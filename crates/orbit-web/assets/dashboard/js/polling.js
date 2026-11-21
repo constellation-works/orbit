@@ -78,11 +78,11 @@ function syncNotifyButton() {
   const enabled = notificationsEnabled();
   const blocked = Notification.permission === "denied";
   button.setAttribute("aria-pressed", String(enabled));
-  button.title = blocked
+  button.setAttribute("aria-description", blocked
     ? "Notifications are blocked for this site in the browser's settings"
     : enabled
       ? "Notifying when a drain ends or a task is held while this tab is in the background. Click to stop."
-      : "Notify me when a drain ends or a task is held while this tab is in the background";
+      : "Notify me when a drain ends or a task is held while this tab is in the background");
 }
 
 /// The opt-in for background notifications. Permission is asked for only when

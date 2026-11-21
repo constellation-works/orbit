@@ -17,8 +17,8 @@ use orbit_types::workflow::{
     REVIEW_EVIDENCE_FINDINGS_EVENT, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT,
     REVIEW_GATE_ARTIFACT, ReviewCertificate, ReviewEvidenceCarried, ReviewEvidenceHold,
     ReviewEvidenceKind, ReviewEvidenceRequirement, ReviewEvidenceRerequestReason,
-    ReviewExternalEvidence, ReviewGateHistoryNote, ReviewValidation, SEATBELT_DEFERRAL_PREFIX,
-    ValidationOutcome, ValidationRole, is_reserved_review_artifact,
+    ReviewExternalEvidence, ReviewGateHistoryEvent, ReviewGateHistoryNote, ReviewValidation,
+    SEATBELT_DEFERRAL_PREFIX, ValidationOutcome, ValidationRole, is_reserved_review_artifact,
 };
 use serde_json::{Value, json};
 
@@ -561,11 +561,15 @@ pub(crate) fn hold_is_current(
     }) {
         return Ok(false);
     }
+    let holds_evidence = |entry: &orbit_types::task::TaskHistoryEntry| {
+        ReviewGateHistoryEvent::from_event(&entry.event)
+            == Some(ReviewGateHistoryEvent::AwaitingEvidence)
+    };
     Ok(history
         .iter()
         .rev()
-        .find(|entry| entry.to_status.is_some() || entry.event == "review_awaiting_evidence")
-        .is_some_and(|entry| entry.event == "review_awaiting_evidence"))
+        .find(|entry| entry.to_status.is_some() || holds_evidence(entry))
+        .is_some_and(holds_evidence))
 }
 
 /// Called under the task write lock after an artifact update. All requirements

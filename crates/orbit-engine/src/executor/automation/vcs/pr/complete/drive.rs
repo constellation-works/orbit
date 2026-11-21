@@ -77,13 +77,13 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         &mut diagnostic,
     );
     let result = result.map_err(|error| {
-        super::super::super::landing::checks::rerun_diagnostic::append_ci_rerun_diagnostic(
+        super::super::super::checks::rerun_diagnostic::append_ci_rerun_diagnostic(
             error,
             diagnostic.as_ref(),
         )
     });
     if let Some(auto_fix) = auto_fix {
-        super::super::super::landing::checks::rerun_diagnostic::record_ci_rerun_outcome(
+        super::super::super::checks::rerun_diagnostic::record_ci_rerun_outcome(
             host,
             &auto_fix.task_ids,
             &auto_fix.run_id,
@@ -103,9 +103,7 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
     task_ids: &[String],
     auto_fix: Option<&AutoFix>,
     hold_check: Option<&CompletionHoldCheck>,
-    diagnostic: &mut Option<
-        super::super::super::landing::checks::rerun_diagnostic::CiRerunDiagnostic,
-    >,
+    diagnostic: &mut Option<super::super::super::checks::rerun_diagnostic::CiRerunDiagnostic>,
 ) -> Result<Delivery, OrbitError> {
     let max_wait_seconds = bounded_u64(
         input,

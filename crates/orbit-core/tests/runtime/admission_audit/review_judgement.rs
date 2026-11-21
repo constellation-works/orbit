@@ -80,7 +80,13 @@ fn the_minutes_limit_refuses_new_starts_but_not_an_admitted_reviewer() {
 
     let error = gated.admit().expect_err("the candidate had its one review");
     assert!(
-        matches!(error, DispatchError::DeterministicActionRefused { .. }),
+        matches!(
+            error,
+            DispatchError::DeliveryRefused {
+                refusal: orbit_types::workflow::DeliveryRefusal::ReviewBudgetExhausted,
+                ..
+            }
+        ),
         "a spent review is a decision a retry would only repeat: {error}"
     );
     assert!(

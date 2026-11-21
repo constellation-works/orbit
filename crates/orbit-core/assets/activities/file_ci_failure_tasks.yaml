@@ -123,12 +123,13 @@ spec:
     it; because that gap is retryable, the sweep reports `deferred` (stage
     `collection_or_investigation`, with the full retryable errors and audit)
     and records one `pipeline.run.deferred` audit row instead of failing,
-    so a later sweep retries the read. A registration, dedupe-lookup, or
+    so a later sweep retries the read. A registration (other than a
+    run-scoped `checkout_evidence` gap, which defers), dedupe-lookup, or
     task-creation failure still fails the activity with a bounded
     `retryable_error` payload. A snapshot in which nothing was complete enough
     to file fails the same way, unless every gap is a run-scoped collection
-    error, which collection's sweep history degrades or escalates after three
-    consecutive sweeps. That snapshot succeeds as `deferred` instead and
+    error or checkout-SHA gap, which collection's sweep history degrades or
+    escalates after three consecutive sweeps. That snapshot succeeds as `deferred` instead and
     records one `pipeline.run.deferred` audit row that Incidents lists as
     `deferred`, never as a failure. Errors collection already reported as persistent
     (`persistent_retryable_errors`) never block filing; the audit carries

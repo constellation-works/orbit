@@ -397,6 +397,10 @@ impl PipelineWorkerSupervisor {
                 let output = read_pipeline_worker_log_tail(&mut worker_log_reader);
                 let worker_exit =
                     WorkerExit::observe(child_pid, &status, scope.as_ref(), output.as_deref());
+                crate::application::job::run::worker_exit::lifecycle::record_worker_reap(
+                    &mut worker_log_reader,
+                    &worker_exit,
+                );
                 log_best_effort(
                     "audit worker exit",
                     run_id,
@@ -862,6 +866,7 @@ impl PipelineWorkerSupervisor {
                 status,
                 arguments,
                 error_message,
+                workspace_id: None,
             },
         )
     }

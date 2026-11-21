@@ -333,7 +333,7 @@ export function buildAttentionCallout(attention, options = {}) {
   if (pr) actions.appendChild(link(pr.number ? `Open PR #${pr.number}` : "Open pull request", pr.url, false));
   if (attention.retry && typeof options.onRetry === "function") {
     const retry = el("button", { class: "attention-action", type: "button", text: "Retry landing…" });
-    retry.title = "Go to Retry landing in the delivery panel, which asks for a reason";
+    retry.setAttribute("aria-description", "Go to Retry landing in the delivery panel, which asks for a reason");
     retry.addEventListener("click", (event) => {
       event.stopPropagation();
       options.onRetry(attention.claim);

@@ -147,7 +147,7 @@ fn regression_draws_add_cost_time_and_count_prior_fallbacks() {
             let high = sized_risk_forecast(&WIDE, Duration::hours(1), false, true);
             let low = sized_risk_forecast(&["file:safe.rs"], Duration::hours(1), false, true);
             assert!(high["model_version"].as_u64().unwrap() > 7);
-            assert_eq!(high["inputs"]["admission_factors"]["regression_rework"], 2);
+            assert_eq!(high["inputs"]["admission_factors"]["regression_rework"], 3);
             assert_eq!(high["coverage"]["risk_prior_fallbacks"], 0);
             for metric in ["time_to_drain_hours", "usd", "tokens"] {
                 assert!(
@@ -610,7 +610,7 @@ fn stored_forecasts_keep_their_assumptions_after_fix_metadata_changes() {
             let server = fixture.server(false);
             let live = json_ok(server.get(ENDPOINT));
             assert_eq!(live["served_from"], "live");
-            assert_eq!(live["model_version"], 19);
+            assert_eq!(live["model_version"], 21);
             assert_eq!(live["stored"]["recorded"], true);
             let rows = fixture.runtime.backlog_forecasts(10).unwrap();
             assert_eq!(rows.len(), 2);
@@ -631,7 +631,7 @@ fn stored_forecasts_keep_their_assumptions_after_fix_metadata_changes() {
             forecast_tick(&fixture, Utc::now() - Duration::minutes(5), false);
             let rows = fixture.runtime.backlog_forecasts(10).unwrap();
             assert_eq!(rows.len(), 1);
-            assert_eq!(rows[0].model_version, 19);
+            assert_eq!(rows[0].model_version, 21);
             let server = fixture.server(false);
             let stored = json_ok(server.get(ENDPOINT));
             assert_eq!(stored["served_from"], "stored");
@@ -654,7 +654,7 @@ fn stored_forecasts_keep_their_assumptions_after_fix_metadata_changes() {
             // keeps the hourly write rule.
             let refreshed = json_ok(server.get(&format!("{ENDPOINT}&refresh=1")));
             assert_eq!(refreshed["served_from"], "live");
-            assert_eq!(refreshed["model_version"], 19);
+            assert_eq!(refreshed["model_version"], 21);
             let support = &refreshed["inputs"]["regression_rework"];
             assert_eq!(support["recovered_footprints"], 1, "{support}");
             assert_eq!(support["missing_fix_history"], 0);
@@ -779,6 +779,136 @@ fn rework_calibration_waits_for_the_horizon_and_keeps_mature_snapshots() {
                 .find(|row| row["model_version"] == 9)
                 .unwrap();
             assert_eq!(version["regression_rework"]["followups"]["n"], 1);
+        },
+    );
+}
+
+/// `count` regressed origins, `count` clean tasks and `count` measured
+/// fixes.
+fn workspace_pool_history(fixture: &Fixture, count: usize) -> Vec<String> {
+    let now = Utc::now();
+    (0..count)
+        .map(|index| {
+            let origin = completed(fixture, now - Duration::days(2) - Duration::hours(1));
+            edit_task(fixture, &origin, |task| {
+                task.context_files = vec!["file:risky.rs".into()]
+            });
+            let safe = completed(fixture, now - Duration::days(2));
+            edit_task(fixture, &safe, |task| {
+                task.context_files = vec!["file:safe.rs".into()]
+            });
+            measured_fix(fixture, &origin, &[&format!("file:fix-{index}.rs")]);
+            origin
+        })
+        .collect()
+}
+
+/// A done fix of `origin` with no invocation of its own.
+fn unmeasured_fix(fixture: &Fixture, origin: &str, tags: &[&str], spawned: bool) -> String {
+    let mut relations = vec![link(origin)];
+    if spawned {
+        relations.push(TaskRelation {
+            relation_type: TaskRelationType::SpawnedFrom,
+            target: origin.into(),
+            regression: None,
+        });
+    }
+    fixture
+        .runtime
+        .add_task(orbit_core::application::task::TaskAddParams {
+            title: "Unmeasured fix".into(),
+            complexity: orbit_types::task::TaskComplexity::Medium,
+            status: Some(TaskStatus::Done),
+            context_files: vec!["file:unmeasured.rs".into()],
+            tags: tags.iter().map(|tag| (*tag).into()).collect(),
+            relations,
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+        .to_string()
+}
+
+#[test]
+fn a_large_workspace_pool_reports_adjusted_totals_with_its_gaps_bounded() {
+    isolated(
+        "backlog_rework::a_large_workspace_pool_reports_adjusted_totals_with_its_gaps_bounded",
+        || {
+            let fixture = Fixture::new();
+            let origins = workspace_pool_history(&fixture, 10);
+            // Repaired by the origin's landing review in its own worktree:
+            // the spend is inside the origin's measured delivery.
+            unmeasured_fix(&fixture, &origins[0], &["defect-record"], true);
+            // Repaired by hand: real rework with no measured cost.
+            unmeasured_fix(&fixture, &origins[1], &[], false);
+            // Not a regression of completed work.
+            measured_fix(&fixture, "ORB-404404", &["file:foreign.rs"]);
+            let id = backlog_task(&fixture, "Origin", &["file:risky.rs"], &[], &[]);
+            // No origin shares its crew: it samples the workspace pool.
+            edit_task(&fixture, &id, |task| task.crew = Some("alpha".into()));
+            let server = fixture.server(false);
+            let forecast = json_ok(server.get(ENDPOINT));
+            let support = &forecast["inputs"]["regression_rework"];
+            // Measured fixes with a link, the excluded one included; only the
+            // ten with a completed origin form bundles.
+            assert_eq!(support["history_fixes"], 11, "{support}");
+            assert_eq!(support["history_bundles"], 10, "{support}");
+            assert_eq!(support["recovered_in_origin_review"], 1, "{support}");
+            assert_eq!(support["missing_fix_history"], 1, "{support}");
+            assert_eq!(
+                support["missing_by_reason"],
+                json!({"footprint_unrecoverable": 0, "unmeasured_delivery": 1, "origin_completion_missing": 0})
+            );
+            assert_eq!(support["excluded"]["origin_absent"], 1, "{support}");
+            let row = prediction(&forecast, &id);
+            assert_eq!(row["regression_bundle_basis"], "workspace", "{row}");
+            assert_eq!(row["regression_history_gaps"], 1);
+            let scenario = &forecast["forecast"];
+            assert_eq!(
+                scenario["regression_rework"]["available"], true,
+                "{scenario}"
+            );
+            assert!(scenario["unavailable"].is_null(), "{scenario}");
+            assert!(scenario["time_to_drain_hours"]["p50"].as_f64().is_some());
+            assert!(scenario["usd"]["p50"].as_f64().is_some());
+            assert_eq!(
+                scenario["regression_rework"]["bounded_gap"],
+                json!({
+                    "tasks": 1,
+                    "gaps": 1,
+                    "drawn_fixes": 10,
+                    "gap_share": 0.091,
+                    "max_gap_share": 0.1,
+                    "by_reason": {"footprint_unrecoverable": 0, "unmeasured_delivery": 1, "origin_completion_missing": 0},
+                })
+            );
+            assert_eq!(forecast["coverage"]["regression_history_bounded"], 1);
+            assert_eq!(forecast["coverage"]["regression_history_missing"], 0);
+        },
+    );
+}
+
+#[test]
+fn a_pool_of_only_unmeasured_fixes_stays_withheld() {
+    isolated(
+        "backlog_rework::a_pool_of_only_unmeasured_fixes_stays_withheld",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            for _ in 0..10 {
+                let origin = completed(&fixture, now - Duration::days(2));
+                unmeasured_fix(&fixture, &origin, &[], false);
+            }
+            backlog_task(&fixture, "Origin", &["file:risky.rs"], &[], &[]);
+            let server = fixture.server(false);
+            let forecast = json_ok(server.get(ENDPOINT));
+            let support = &forecast["inputs"]["regression_rework"];
+            assert_eq!(support["history_bundles"], 0, "{support}");
+            assert_eq!(support["missing_fix_history"], 10, "{support}");
+            let scenario = &forecast["forecast"];
+            assert_unavailable_with_baseline(scenario);
+            assert!(scenario["usd"]["p50"].is_null());
+            assert!(scenario["regression_rework"]["bounded_gap"].is_null());
         },
     );
 }

@@ -1,7 +1,7 @@
 ---
 title: Model Ranking — Design
 owner: claude
-last_updated: 2026-11-11
+last_updated: 2026-11-16
 last_validated: 2026-11-11
 status: Accepted
 feature: model-ranking
@@ -9,7 +9,7 @@ doc_role: design
 type: design
 summary: "Design: per-model implementer ranking from six attributed measures, each compared with the same-mix fleet expectation and divided by a frozen noise scale, shrunk, bootstrapped into tie bands and ordered by score within a band, with cost used for exact score ties."
 tags: [model-ranking, agent-scorecards]
-paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-types/src/workflow/final_recovery.rs", "crates/orbit-engine/src/executor/automation/vcs/landing/checks/**"]
+paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-cli/src/command/agents.rs", "crates/orbit-types/src/workflow/final_recovery.rs", "crates/orbit-engine/src/executor/automation/vcs/checks/**"]
 related_features: [agent-scorecards, task-pilot, granted-tools]
 related_artifacts: [ORB-23297, ORB-23066, ORB-23277, ORB-21789, ORB-17779]
 ---
@@ -286,6 +286,12 @@ evidence and masks the run's crew and model names. The audit is the disabled-by-
 and skips decisions judged by its own family. Until R2 records seasons, every decision
 counts in `season-0`.
 
+ORB-25349's audit reported season-0 suspended at 6 disagreements in 20 judgments
+(30%). ORB-25350's [draft fault-rubric proposal](specs/recovery-fault-rubric.md)
+reviews the five new disagreements and proposes common evidence requirements,
+ordering and a separate reassessment record. It does not amend the shipped prompts,
+recorded decisions or ranking, or lift the suspension.
+
 ### 5.3 Tool-call errors by model
 
 Tool audit events already carry a class (`FailureClass`):
@@ -400,6 +406,8 @@ change starts a new season (§4.2).
 
 ## Task References
 
+- [ORB-25349] — records the season-0 fault-audit suspension at 6/20 disagreements
+- [ORB-25350] — proposes evidence requirements, common fault ordering and reassessment
 - [ORB-23297] — designs the model ranking (this document)
 - [ORB-23300] — R1: records implementer-caused CI failures by cause
 - [ORB-23303] — the dashboard Rank tab and per-tier value chart

@@ -17,8 +17,11 @@
 
 use chrono::{DateTime, Duration, Local, TimeZone, Timelike, Utc};
 use croner::Cron;
+use croner::parser::CronParser;
 use orbit_common::OrbitError;
 use orbit_types::workflow::MissedRunPolicy;
+
+use super::cron_instant::CronInstant;
 
 /// How far past its scheduled slot a fire still counts as "natural" for
 /// `missed_run: skip` at the default 60-second sweep cadence. Two sweep
@@ -92,10 +95,72 @@ pub fn truncate_to_minute<Tz: TimeZone>(value: DateTime<Tz>) -> DateTime<Tz> {
 
 /// Parse and validate a routine cron expression (standard 5-field form,
 /// evaluated in host-local time by the caller's choice of `Tz`).
+///
+/// The accepted step forms are the ones stored definitions have always used:
+/// `*/n`, `a-b/n` and the single-start `a/n` (from `a` to the field's end).
+/// A step with no start at all (`/n`) stays refused.
 pub fn parse_cron(expression: &str) -> Result<Cron, OrbitError> {
-    expression.parse::<Cron>().map_err(|error| {
-        OrbitError::InvalidInput(format!("invalid cron expression '{expression}': {error}"))
-    })
+    let invalid = |reason: &dyn std::fmt::Display| {
+        OrbitError::InvalidInput(format!("invalid cron expression '{expression}': {reason}"))
+    };
+    let fields: Vec<&str> = expression.split_whitespace().collect();
+    // Croner only honors `+` as the very first character of the weekday field
+    // (parser.rs strips that one leading `+`, then rejects any other `+` as an
+    // illegal character). When the expression holds a `+` anywhere else, no
+    // startless-step correction yields a valid cron: fixing one step would leave
+    // the misplaced plus behind. Skip the suggestion so croner's
+    // illegal-character error names the plus.
+    let weekday_index = if fields.len() == 5 {
+        4
+    } else if fields.len() >= 6 {
+        5
+    } else {
+        usize::MAX
+    };
+    let leading_weekday_plus = fields
+        .get(weekday_index)
+        .is_some_and(|field| field.starts_with('+'));
+    let misplaced_plus = expression.matches('+').count() > usize::from(leading_weekday_plus);
+    let startless_step = fields
+        .iter()
+        .flat_map(|field| field.split(','))
+        // Croner's weekday AND modifier is stripped before component parsing, so a
+        // startless `+/n` otherwise reaches sloppy_ranges as `/n` and becomes `*/n`.
+        .find(|item| item.strip_prefix('+').unwrap_or(item).starts_with('/'))
+        .filter(|_| !misplaced_plus);
+    if let Some(item) = startless_step {
+        // Keep the weekday AND modifier in the suggestion: plain `*/n` drops it and
+        // turns the day-of-month AND into an OR.
+        let (modifier, step) = match item.strip_prefix('+') {
+            Some(step) => ("+", step),
+            None => ("", item),
+        };
+        return Err(invalid(&format_args!(
+            "step '{item}' has no starting point; use '{modifier}*{step}' for a wildcard step"
+        )));
+    }
+    CronParser::builder()
+        .sloppy_ranges(true)
+        .build()
+        .parse(expression)
+        .map_err(|error| invalid(&error))
+}
+
+/// The next occurrence strictly after `start`.
+fn find_next<Tz: TimeZone>(cron: &Cron, start: &DateTime<Tz>) -> Result<DateTime<Tz>, OrbitError> {
+    cron.find_next_occurrence(&CronInstant(start.clone()), false)
+        .map(|found| found.0)
+        .map_err(|error| OrbitError::InvalidInput(format!("cron evaluation failed: {error}")))
+}
+
+/// The latest occurrence at or before `start`.
+fn find_previous<Tz: TimeZone>(
+    cron: &Cron,
+    start: &DateTime<Tz>,
+) -> Result<DateTime<Tz>, OrbitError> {
+    cron.find_previous_occurrence(&CronInstant(start.clone()), true)
+        .map(|found| found.0)
+        .map_err(|error| OrbitError::InvalidInput(format!("cron evaluation failed: {error}")))
 }
 
 /// The next scheduled occurrence strictly after `now`, pinned to its minute.
@@ -108,9 +173,7 @@ pub fn next_occurrence<Tz: TimeZone>(
     cron: &Cron,
     now: &DateTime<Tz>,
 ) -> Result<DateTime<Tz>, OrbitError> {
-    let next = cron
-        .find_next_occurrence(now, false)
-        .map_err(|error| OrbitError::InvalidInput(format!("cron evaluation failed: {error}")))?;
+    let next = find_next(cron, now)?;
 
     // croner carries `now`'s sub-minute component into the occurrence it
     // returns, which would move the projection on every poll within the same
@@ -181,9 +244,7 @@ pub fn due_decision_with_grace<Tz: TimeZone>(
     natural_slot_grace: Duration,
 ) -> Result<DueDecision<Tz>, OrbitError> {
     // Latest scheduled slot at or before now.
-    let previous = cron
-        .find_previous_occurrence(now, true)
-        .map_err(|error| OrbitError::InvalidInput(format!("cron evaluation failed: {error}")))?;
+    let previous = find_previous(cron, now)?;
     // croner carries `now`'s sub-minute component into the occurrence it
     // returns, which would make the slot different on every sweep within the
     // same minute — breaking the (name, slot) idempotency key. 5-field cron
@@ -219,7 +280,9 @@ pub fn due_decision_with_grace<Tz: TimeZone>(
 /// Slots strictly after `lower_bound` and at or before `through` (when
 /// `include_through`) that are already outside `natural_slot_grace`, oldest
 /// first. At most `limit` slots. [`MissedSlotWalk::more`] is set when another
-/// qualifying slot remains, so a caller can avoid jumping the cursor past it.
+/// qualifying slot remains, so a caller can avoid jumping the cursor past it;
+/// with `limit` 0 the page is empty and `more` alone reports whether any
+/// qualifying slot exists.
 pub fn missed_slots_through<Tz: TimeZone>(
     cron: &Cron,
     lower_bound: &DateTime<Tz>,
@@ -232,13 +295,10 @@ pub fn missed_slots_through<Tz: TimeZone>(
     let mut cursor = lower_bound.clone();
     let mut slots = Vec::new();
     let mut more = false;
-    if limit == 0 {
-        return Ok(MissedSlotWalk { slots, more });
-    }
+    // A zero limit still looks for the first qualifying slot, so `more`
+    // tells a due slot apart from an empty interval.
     loop {
-        let next = cron.find_next_occurrence(&cursor, false).map_err(|error| {
-            OrbitError::InvalidInput(format!("cron evaluation failed: {error}"))
-        })?;
+        let next = find_next(cron, &cursor)?;
         let next = truncate_to_minute(next);
         if next <= cursor {
             return Err(OrbitError::InvalidInput(

@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Release checklist: versioning, bumps, tagging, CI, promotion and hotfixes"
-last_validated: 2026-10-29
+last_validated: 2026-11-16
 ---
 
 # Releasing Orbit
@@ -12,7 +12,7 @@ How to cut an Orbit release. Follow the checklist top to bottom. Plugin, npm, si
 
 - `agent-main` is the dev branch. Releases are prepared and tagged here.
 - `main` is the production branch. It only receives release merges and hotfixes.
-- Every release ends with a fast-forward promotion of the tagged release commit to `main` and a check that the two agree, in the same session.
+- Every release ends with a pull request that merges the tagged release commit into `main` with a merge commit, and a check that `main` holds exactly that commit, in the same session.
 
 ## Before you start
 
@@ -55,7 +55,7 @@ The lists above are the definition. Two records carry it from the task to the re
 - **`breaking-change` tag.** The implementer adds it to a task whose change is breaking, and the reviewer confirms it. A landed task with the tag makes the release a minor bump.
 - **`Breaking:` note.** The task's execution summary has one line starting `Breaking:` with the migration as a phrase, for example `Breaking: orbit run ship-sweep removed → use orbit run auto drains or orbit run ship`. It becomes the task's Breaking Changes bullet.
 
-`scripts/release-breaking-changes.py` reads both for the landed tasks in a range. It also detects mechanical signals: a raised `SUPPORTED_SCHEMA_VERSION` or `SUPPORTED_LAYOUT_VERSION`; a command, flag or possible value gone from the CLI help goldens; a non-additive change in the MCP `tools/list` snapshot (tool or property removed or renamed, type changed, enum value removed, property newly required, or a required, enum or whole properties-map constraint relaxed inside a surviving `oneOf` branch); a field added to a `deny_unknown_fields` type in `orbit-types` or `orbit-store`; a new `DEPRECATED_CONFIG_KEYS` entry; or a removed seeded routine, activity or job asset. The bump is **minor** when any landed task carries the tag or any signal fires, otherwise **patch**. A signal on an untagged task is listed as *detected, untagged*.
+`scripts/release-breaking-changes.py` reads both for the landed tasks in a range. It also detects mechanical signals: a raised `SUPPORTED_SCHEMA_VERSION` or `SUPPORTED_LAYOUT_VERSION`; a command, flag or possible value gone from the CLI help goldens; a non-additive change in the MCP `tools/list` snapshot (tool or property removed or renamed, type changed, enum value removed, property newly required, or a required, enum or whole properties-map constraint relaxed inside a surviving `oneOf` branch, or an edited conditional `if` that moves previously valid input into a stricter `then` or `else` branch); a field added to a `deny_unknown_fields` type in `orbit-types` or `orbit-store`; a new `DEPRECATED_CONFIG_KEYS` entry; or a removed seeded routine, activity or job asset. The bump is **minor** when any landed task carries the tag or any signal fires, otherwise **patch**. A signal on an untagged task is listed as *detected, untagged*.
 
 The detector can't see hidden flags, output-shape changes or new validation, so the tag is still needed for those.
 
@@ -251,35 +251,44 @@ git push origin v<X.Y.Z>      # branch first, so CI resolves the tag against a p
 
 ### 10b. Promote to `main`
 
-After release CI is green, fast-forward `main` to the release commit. A fast-forward adds no merge commit to either branch, so the tag stays reachable from `main` and `agent-main` needs no back-merge. [10c](#10c-confirm-main-and-agent-main-agree) only checks the result.
+After release CI is green, promote the tagged commit to `main` through a pull request. `main` takes changes only through pull requests, so this step never pushes `main` directly. Run the gate first. It pushes one branch, at the tagged commit, and nothing else:
 
 ```sh
-git fetch origin
-tag=v<X.Y.Z>
+git fetch origin &&
+tag=v<X.Y.Z> &&
 release=$(git rev-parse --verify "refs/tags/$tag^{commit}") &&
-git merge-base --is-ancestor "$release" origin/agent-main &&   # release must be on agent-main
-git merge-base --is-ancestor origin/main "$release" &&         # main must fast-forward to it
-git push origin "$release:refs/heads/main"
+git merge-base --is-ancestor "$release" origin/agent-main &&
+test "$(git merge-tree --write-tree origin/main "$release" | head -n 1)" = "$(git rev-parse "$release^{tree}")" &&
+git push origin "$release:refs/heads/promote/$tag"
 ```
 
-The `^{commit}` suffix peels the annotated tag to the commit it validated. Promote that commit, never `origin/agent-main`: development work that landed on `agent-main` after the tag was cut has not been through the release's checks or artifacts, so it waits for the next release. The chain stops at the first failing command, so nothing is pushed unless both ancestry checks pass.
+The gate checks that the release is on `agent-main`, and that merging `main` into the release yields exactly the release's tree. So `main` holds nothing the release lacks. `git merge-tree --write-tree` needs Git 2.38 or later.
 
-Why a fast-forward: the `agent-main` ruleset says "This branch must not contain merge commits". The old flow merged `agent-main` into `main` with a promotion-PR merge commit, then back-merged `main` into `agent-main` with `git merge --no-ff`. That back-merge (v0.28.1, `02b2e0aa2`) only landed because the pusher bypassed the rule. GitHub offers no PR merge method that fast-forwards, so promote with a direct push. A direct push to `main` needs the same release-operator rights the old `gh pr merge --admin` step already used. If the push is refused, don't push anything else to `agent-main`. Ask a repository admin to push, or to adjust the `main` ruleset for the release operator.
+Then run `gh pr create --base main --head promote/v<X.Y.Z>`, and have a release operator merge the PR with **Create a merge commit**. [10c](#10c-confirm-main-and-agent-main-agree) checks the result.
 
-If the first `is-ancestor` fails, the tag is missing or is not on `agent-main`: stop and find out why before pushing anything. If the second fails, `main` holds commits the release lacks, which is the case after a [hotfix](#hotfix-flow) whose back-merge was skipped. Don't force-push `main`. Complete the [hotfix back-merge](#hotfix-flow) first. The existing tag can never fast-forward `main` past those commits, so release again from the merged `agent-main` with a new tag.
+Promote the tagged commit, never the `agent-main` tip. The tag is the commit that release CI and the artifacts validated. Development work that landed on `agent-main` after the tag was cut has not been through those checks, so it waits for the next release. v0.50.0 is the exception: it promoted the tip at promotion time (`da9501ec7a`, nine commits past its tag).
 
-Never promote with a squash or rebase PR: it rewrites SHAs, so the release tag isn't reachable from `main`.
+Why a merge commit: `main`'s ruleset requires a pull request and refuses non-fast-forward pushes, so a direct push cannot move `main`. The merge commit keeps the tagged commit reachable from `main` as the PR's second parent. Squash and rebase merges rewrite the SHA, so they drop that link; never use them for a promotion. `agent-main` never receives the merge, so it needs no back-merge and keeps its no-merge-commits ruleset. Restoring fast-forward promotion needs a ruleset and history change by a repository admin. Until that happens, this is the flow.
+
+If the gate stops, nothing is pushed. A failed `is-ancestor` means the tag is missing or not on `agent-main`: find out why first. A failed tree test means `main` holds content the release lacks, usually a [hotfix](#hotfix-flow) that is not on `agent-main` yet. Back-port it first. Don't force-push anything.
 
 ### 10c. Confirm `main` and `agent-main` agree
 
-Do this in the same session:
+Do this in the same session, after the PR merges:
 
 ```sh
-git fetch origin
-git merge-base --is-ancestor origin/main origin/agent-main && echo in-sync
+git fetch origin &&
+promoted=$(git rev-parse --verify 'origin/main^2') &&
+git merge-base --is-ancestor "$promoted" origin/agent-main &&
+git diff --quiet "$promoted" origin/main &&
+echo "promoted $promoted"
 ```
 
-`in-sync` means `main` is the release commit or another ancestor of `agent-main`, so the next promotion is again a fast-forward. `agent-main` may be ahead of `main` by development commits landed since the tag; that is expected. If it prints nothing, `main` holds commits `agent-main` lacks. Follow the [hotfix back-merge](#hotfix-flow), and never force-push either branch to make them match.
+`origin/main^2` is the PR head that the merge brought in. The check passes when that commit came from `agent-main` and `main`'s tree is exactly its tree. For a release, `promoted` must equal the tagged commit, `git rev-parse "refs/tags/$tag^{commit}"`. A different commit means the wrong head was merged: stop and tell the operator. Don't force-push `main`.
+
+Nothing printed means `main` holds content the promoted commit lacks, usually a hotfix that reached `main` after the gate ran or was never back-ported. Don't revert `main` or force-push either branch. Back-port the hotfix to `agent-main` ([hotfix flow](#hotfix-flow), step 4). The next promotion's gate refuses until that lands.
+
+`agent-main` may be ahead of `main` by development commits landed since the tag; that is expected. `main` never becomes an ancestor of `agent-main`: each promotion merge is a commit `agent-main` lacks, so an ancestry check cannot pass. The tree check above is what confirms `main`.
 
 The `agent-main` ruleset is a repository ruleset (Settings → Rules), not classic branch protection. It blocks deletion and merge commits and requires the `Check / Clippy / Test` and `Test shard 1/3`, `Test shard 2/3`, and `Test shard 3/3` checks before merge. The `qa-sweep` auto-task picks up CI failures. Read it with `gh api repos/constellation-works/orbit/rules/branches/agent-main`. If `agent-main` goes missing from origin, an admin restores it with `git push origin origin/main:refs/heads/agent-main` and checks the ruleset again.
 
@@ -334,27 +343,28 @@ Tags, GitHub Releases, and npm versions are immutable. Fix forward.
 
 ## Hotfix flow
 
-Use this for a critical fix on a released `main` that can't wait for the next cycle.
+Use this for a critical fix on a released `main` that can't wait for the next cycle. `main` takes changes only through pull requests, so every step below lands through one.
 
-1. Branch from `main`:
-
-   ```sh
-   git checkout -b hotfix/<slug> main
-   ```
-
-2. Open a PR against `main` with the smallest possible fix. No refactors.
-3. Cut a patch release on `main` with checklist steps 1–10, using `main` as the branch: `git push origin main && git push origin v<X.Y.Z+1>`. Skip 10b, because the fix is already on `main`.
-4. Back-merge in the same session, so the next promotion doesn't overwrite the fix and `main` is an ancestor of `agent-main` again. Fetch and merge the remote `main` revision (`origin/main`), not the local `main` branch. `git fetch` moves remote-tracking refs only, so a hotfix another operator landed on `origin/main` is absent from a local `main` that is still the previous release. Merging that stale branch reports success, pushes, and leaves the hotfix off `agent-main`, so the next promotion stays refused. The ancestor check must exit 0 before the push; it proves every fetched `main` commit reached `agent-main`. Don't force-push.
+1. Branch from the remote `main`, after a fetch:
 
    ```sh
    git fetch origin
-   git checkout agent-main
-   git merge --ff-only origin/agent-main
-   git merge --no-ff origin/main
-   git merge-base --is-ancestor origin/main HEAD   # must exit 0 before the push
-   git push origin agent-main
+   git checkout -b hotfix/<slug> origin/main
    ```
 
-   This is the one release step that must create a merge commit on `agent-main`. The ruleset refuses it unless the pusher can bypass it, so the push needs a repository admin or a release operator with bypass rights. A "Bypassed rule violations" notice on the push is expected here. When the fix can wait for the next cycle, prefer landing it on `agent-main` by an ordinary PR and releasing through 10b, which needs no bypass.
+2. Open a PR against `main` with the smallest possible fix. No refactors.
+3. Cut a patch release from `main` with checklist steps 1–10. Land the version bump and CHANGELOG section on `main` through a PR as well, then tag the merged commit and push the tag: `git tag -a v<X.Y.Z+1> <merged-commit>` and `git push origin v<X.Y.Z+1>`. Skip 10b, because the fix is already on `main`.
+4. Back-port to `agent-main` before the next promotion. Stage what `main` has beyond the last promotion on a branch cut from `agent-main`, and land it with an ordinary PR. The 10b gate refuses to promote until `agent-main` holds it. Use `origin/main` after the fetch: a local `main` can be behind the remote.
 
-5. Resolve conflicts with in-flight `agent-main` work in the back-merge. Don't rebase agent branches onto the new tip.
+   ```sh
+   git fetch origin &&
+   slug=<slug> &&
+   git checkout -b "backport/$slug" origin/agent-main &&
+   git merge --squash origin/main &&
+   git commit -m "fix: back-port $slug from main" &&
+   git push origin "backport/$slug"
+   ```
+
+   `--squash` stages the changes `main` has beyond the last promotion and creates no merge commit. Open a PR from `backport/<slug>` into `agent-main`, and merge it with squash or rebase. `agent-main` takes no merge commits, so the back-port needs no bypass. Don't force-push.
+
+5. Resolve conflicts with in-flight `agent-main` work in the back-port. Don't rebase agent branches onto the new tip. If the 10b gate later reports a conflict on the version files or CHANGELOG, stop and raise it with the human. The hotfix release and the next release both bump those files, so resolving the conflict changes which commit gets promoted. That is a decision, not a step.

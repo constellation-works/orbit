@@ -86,3 +86,15 @@ Steady window `2026-10-24T07:23:59Z` through `2026-11-07T07:23:59Z`, capped at t
 Durable source evidence: task histories and comments retrieved with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts`, and run history with `orbit run history --no-reconcile --json`; the original records remain authoritative.
 
 2 of these occurrence(s) are already recorded in the rows above (ORB-18010, ORB-18052); they are not re-added.
+
+### ORB-25348 owner scan, 2026-11-17
+
+Steady window `2026-11-03T04:24:28Z` through `2026-11-17T04:24:28Z` (prior cursor `2026-11-15T14:46:06Z`, prior pass ORB-24998). Durable sources: task histories/comments read with `orbit.task.show` fields `pilot_warnings,history,comments,relations,job_run_id,job_run_machine,artifacts` and run history `orbit run history --no-reconcile --json` in ORB-25348; original records remain authoritative.
+
+This slice counts 3 occurrences across 3 tasks; route `run_failure`, disposition `too_early:ORB-24347` (done fix landed 2026-11-14T06:22Z, under 3 days before this scan; no occurrence after the prior cursor). Change vs prior pass: held (prior 3). New since cursor: 0.
+
+| Date (UTC) | Task | Run | Matched signature and source | Outcome |
+| --- | --- | --- | --- | --- |
+| 2026-11-09T01:59:44Z | ORB-23280 | jrun-20261109-0159-t1 | final_recovery escalated: run cancelled by operator (RUN_CANCELLED), manual salvage requested; source ORB-23280 history:final_recovery_decided | forced done 2026-11-09T02:10Z |
+| 2026-11-14T02:23:45Z | ORB-24325 | jrun-20261114-0221-t1 | final_recovery escalated: worker_terminated interrupted run, manual salvage; source ORB-24325 history:final_recovery_decided | operator requeued; delivered PR #9251 done 2026-11-14T04:21Z |
+| 2026-11-14T02:21:30Z | ORB-24331 | jrun-20261114-0220-t1 | final_recovery escalated: worker_terminated (systemd shutdown) interrupted run; source ORB-24331 history:final_recovery_decided | operator requeued; done 2026-11-14T03:09Z |

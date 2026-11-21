@@ -3,7 +3,7 @@
 // The form is a native modal <dialog>: it paints in the top layer, so opening,
 // resizing or dismissing it never changes the board's or dock's layout, and
 // dismissing it never cancels a request already sent.
-import { captureWorkspaceVisit, getHost, getServingHost, getWorkspace, onWorkspaceChange, taskHref, withHost } from './common.js';
+import { captureWorkspaceVisit, getHost, getServingHost, getWorkspace, labelEscClose, onWorkspaceChange, taskHref, withHost } from './common.js';
 
 const STORAGE = 'orbit.proposed-task.v1';
 const $ = name => document.getElementById(`task-create-${name}`);
@@ -30,7 +30,19 @@ export function initTaskCreate({ getWorkspaces }) {
     $('submit').disabled = pending || foreign || Boolean(saved?.receipt) || Boolean(storageError);
     $('submit').textContent = pending ? 'Creating…' : saved ? 'Retry saved submission' : 'Create proposed task';
     $('form').setAttribute('aria-busy', String(pending));
-    $('cancel').textContent = saved ? 'Close' : 'Cancel';
+    // Before a receipt the control discards the draft, so it stays Cancel.
+    // Once the task is saved it only closes the dialog, which Esc also does.
+    const cancel = $('cancel');
+    if (saved) {
+      cancel.classList.remove('action', 'cancel');
+      labelEscClose(cancel, 'Close new task (Esc)');
+    } else {
+      cancel.classList.remove('esc-close');
+      cancel.classList.add('action', 'cancel');
+      cancel.textContent = 'Cancel';
+      cancel.removeAttribute('aria-label');
+      cancel.removeAttribute('title');
+    }
     $('success').hidden = !saved?.receipt || foreign;
     $('new').hidden = !saved?.receipt || foreign;
     if (foreign) {
@@ -83,7 +95,7 @@ export function initTaskCreate({ getWorkspaces }) {
   $('panel').addEventListener('keydown', event => {
     if (event.key !== 'Tab' || event.altKey || event.ctrlKey || event.metaKey) return;
     const controls = [...$('panel').querySelectorAll('select, input, textarea, button, a[href]')]
-      .filter(node => !node.disabled && !node.closest('[hidden]') && node.getClientRects().length);
+      .filter(node => !node.matches(":disabled") && !node.closest('[hidden]') && node.getClientRects().length);
     if (!controls.length) return;
     const active = document.activeElement;
     // Shift+Tab also leaves from the focusable feedback line when every field above it is disabled.

@@ -103,6 +103,9 @@ pub struct AutoTaskUpdateParams {
     /// The tool chokepoint admits a caller that supplies it only under
     /// operator authority.
     pub granted_tools: Option<Vec<String>>,
+    /// Append the bundled contract the effective body omits, preserving
+    /// every other field. Cannot be combined with another edit.
+    pub adopt_bundled_contract: bool,
 }
 
 /// Present-field template patch, merged with the latest definition under the
@@ -381,6 +384,11 @@ impl OrbitRuntime {
             entry.apply(&mut definition);
             definition.validate()?;
         }
+        // The same load-time checks discovery runs, so a definition the
+        // scheduler and `auto_task_list` refuse is refused here too.
+        validate_schedule(&definition.schedule)?;
+        orbit_automation::auto_tasks::loader::check_auto_task_conditions(&definition)
+            .map_err(OrbitError::InvalidInput)?;
         Ok(definition)
     }
 
@@ -399,6 +407,7 @@ impl OrbitRuntime {
                 || params.template.is_some()
                 || params.enabled.is_some()
                 || params.granted_tools.is_some()
+                || params.adopt_bundled_contract
             {
                 return Err(OrbitError::InvalidInput(
                     "waive_batch cannot be combined with a definition edit".into(),
@@ -415,6 +424,49 @@ impl OrbitRuntime {
             )
             .map_err(orbit_automation::automation_error_to_orbit)?;
             return Ok(definition);
+        }
+
+        if params.adopt_bundled_contract {
+            if params.description.is_some()
+                || params.schedule.is_some()
+                || params.dedupe.is_some()
+                || params.template.is_some()
+                || params.enabled.is_some()
+                || params.granted_tools.is_some()
+                || params.waive_batch.is_some()
+            {
+                return Err(OrbitError::InvalidInput(
+                    "adopt_bundled_contract cannot be combined with a definition edit".into(),
+                ));
+            }
+            let bundled =
+                super::settings::bundled_run_failure_definition(self.workspace_base_branch())
+                    .ok_or_else(|| {
+                        OrbitError::InvalidInput(format!(
+                            "auto-task '{name}' has no bundled contract to adopt"
+                        ))
+                    })?;
+            let current = self.require_validated_auto_task(name)?;
+            if current.name != super::settings::RUN_FAILURE_PATTERNS_NAME {
+                return Err(OrbitError::InvalidInput(format!(
+                    "auto-task '{name}' has no bundled contract to adopt"
+                )));
+            }
+            // A body that already carries the contract is returned as loaded:
+            // adopting it must not write an edit stamp or a settings entry.
+            let mut probe = current.clone();
+            if !super::settings::adopt_bundled_run_failure_contract(&mut probe, &bundled) {
+                return Ok(current);
+            }
+            return self.try_edit_auto_task(name, |definition| {
+                if definition.name != super::settings::RUN_FAILURE_PATTERNS_NAME {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "auto-task '{name}' has no bundled contract to adopt"
+                    )));
+                }
+                super::settings::adopt_bundled_run_failure_contract(definition, &bundled);
+                Ok(())
+            });
         }
 
         if let Some(schedule) = &params.schedule {
@@ -460,11 +512,21 @@ impl OrbitRuntime {
         definition: &AutoTaskDefinition,
         waived: bool,
     ) -> Result<Vec<String>, OrbitError> {
-        match self.validate_required_tools(&definition.template.required_tools) {
-            Ok(warnings) => Ok(warnings),
-            Err(error) if waived => Ok(vec![error.to_string()]),
-            Err(error) => Err(error),
+        let mut warnings = match self.validate_required_tools(&definition.template.required_tools) {
+            Ok(warnings) => warnings,
+            Err(error) if waived => vec![error.to_string()],
+            Err(error) => return Err(error),
+        };
+        if let Some(stale) = self.stale_auto_task_contract(definition) {
+            warnings.push(format!(
+                "stale contract: '{}' omits {} (missing: {}); {}",
+                definition.name,
+                stale.contract,
+                stale.missing.join(", "),
+                stale.remediation
+            ));
         }
+        Ok(warnings)
     }
 
     /// Mint one task from a definition on demand — the manual counterpart to a
@@ -645,15 +707,7 @@ impl OrbitRuntime {
                     .join("; ")
             )));
         }
-        let mut names = std::collections::BTreeSet::new();
-        for loaded in &collection.definitions {
-            if !names.insert(&loaded.definition.name) {
-                return Err(OrbitError::InvalidInput(format!(
-                    "auto-task '{}' has more than one definition file",
-                    loaded.definition.name
-                )));
-            }
-        }
+        // Discovery already refuses two files sharing one name, as load errors.
         Ok(collection)
     }
 

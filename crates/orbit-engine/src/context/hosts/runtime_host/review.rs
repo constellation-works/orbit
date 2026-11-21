@@ -135,6 +135,19 @@ macro_rules! review_methods {
             request: &ReviewReportCorrectionRequest,
         ) -> Result<Option<String>, OrbitError>;
 
+        /// [ORB-25667] For a reviewer whose envelope declared failure: the
+        /// external checks its persisted report names, when that report is a
+        /// valid incomplete verdict for the open attempt on the admitted
+        /// candidate, with no open finding, whose records would establish the
+        /// candidate once only those checks pass. The engine then hands the
+        /// attempt to the gate's settlement, which decides the evidence hold
+        /// as for any report; `None` keeps the reviewer step failed. Hosts
+        /// without review evidence have nothing to settle.
+        fn review_report_evidence_hold(
+            &self,
+            request: &ReviewReportCorrectionRequest,
+        ) -> Result<Option<String>, OrbitError>;
+
         // ── Owner landing consumer [ORB-12499] ─────────────────────────────
 
         /// Read the owner's authorized handoff for a landing attempt. Hosts without
@@ -162,7 +175,8 @@ macro_rules! review_methods {
         /// attempt. `event` is restricted by the owner store to
         /// `ci_check_rerun`, `ci_base_suspect`, `ci_check_rerun_reserved`,
         /// `ci_infrastructure_retry_backoff`, `ci_infrastructure_retry_exhausted`,
-        /// `ci_failure_recorded` or `ci_failure_reclassified`.
+        /// `ci_failure_recorded`, `ci_failure_reclassified` or
+        /// `ci_base_suspect_reclassified`.
         fn record_handoff_landing_history(
             &self,
             handoff_id: &str,

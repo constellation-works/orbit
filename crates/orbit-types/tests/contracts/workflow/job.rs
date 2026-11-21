@@ -68,3 +68,36 @@ fn run_owner_equivalence_pairs_pid_with_its_start_time_token() {
     assert!(run.is_owned_by(4242, None));
     assert!(!run.is_owned_by(4242, Some("v1:99")));
 }
+
+#[test]
+fn persisted_retrying_runs_can_be_cancelled_or_interrupted() {
+    let state: JobRunState = serde_json::from_str("\"retrying\"").unwrap();
+    assert!(!state.is_terminal());
+    for (event, expected) in [
+        (RunEvent::Cancel, JobRunState::Cancelled),
+        (RunEvent::Interrupt, JobRunState::Interrupted),
+    ] {
+        let next = state
+            .try_transition(event)
+            .expect("a sleeping retry must remain recoverable");
+        assert_eq!(next, expected);
+        assert!(next.is_terminal());
+    }
+}
+
+#[test]
+fn skipped_runs_are_terminal_and_reject_further_events() {
+    assert!(JobRunState::Skipped.is_terminal());
+    for event in [
+        RunEvent::Start,
+        RunEvent::Complete,
+        RunEvent::Fail,
+        RunEvent::Timeout,
+        RunEvent::Cancel,
+        RunEvent::Abandon,
+        RunEvent::Interrupt,
+        RunEvent::Hold,
+    ] {
+        assert!(JobRunState::Skipped.try_transition(event).is_err());
+    }
+}

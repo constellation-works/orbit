@@ -157,7 +157,7 @@ fn names_success(query: &JobRunQuery) -> bool {
 pub(in crate::driver::sqlite::job_run_store) const JOB_RUN_COLUMNS: &str = "run_id, job_id, attempt, state, scheduled_at, \
      started_at, finished_at, duration_ms, created_at, pid, pid_start_time, input_json, \
      retry_source_run_id, knowledge_metrics_json, resolved_crew, \
-     COALESCE(crew_model, implementer_model), executed_on_json, build_json";
+     crew_model, executed_on_json, build_json";
 
 /// Probe the existing per-job created index once per requested ID, then
 /// hydrate only that run. A window over all history would scan old runs to
@@ -259,7 +259,7 @@ pub(super) fn job_run_filter_sql(
     }
     if query.terminal_only {
         conditions.push(
-            "state IN ('success', 'failed', 'timeout', 'cancelled', 'interrupted', 'held')"
+            "state IN ('success', 'failed', 'timeout', 'skipped', 'cancelled', 'interrupted', 'held')"
                 .to_string(),
         );
     }

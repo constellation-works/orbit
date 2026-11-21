@@ -42,7 +42,7 @@ This choice determines the whole integration. Do not revive the deleted v1 execu
 | An interactive-capable coding-agent CLI that receives an Orbit task envelope | `direct_agent` / `agent_cli` through the v2 CLI-agent path | provider identity, model and effort where supported, prompt bytes on stdin, tool authority, response envelope, provider state grant | shell command data from task input |
 | A deterministic program or script step | `local_shell` deterministic action | static `command` + `args` (or the selected definition's `command`/`args` defaults when the activity names no program) or explicit `shell` + `script`, fixed env, cwd, timeout, exit/output report | model, prompt, agent tool authority, registry/workspace identity variables |
 
-`local_shell` is the supported v2 successor to the old `cli_command` spelling. Its parser accepts that legacy spelling for existing definitions, but new assets use `local_shell`. It shares process supervision and optional sandbox selection with the agent runner; it is not an agent adapter. See [the local-shell reference](../design/executors/specs/local-shell.md) for the activity shape.
+`local_shell` is the supported v2 successor to the old `cli_command` spelling. Set `executor_type: local_shell`; the old `cli_command` value is no longer accepted. After changing that value, the existing `command`, `args`, `env` and `timeout_seconds` fields remain available as step defaults. It shares process supervision and optional sandbox selection with the agent runner; it is not an agent adapter. See [the local-shell reference](../design/executors/specs/local-shell.md) for the activity shape.
 
 ## Source and symbol map
 
@@ -72,6 +72,16 @@ Verify the seams against the current checkout before editing. These are the auth
 6. Choose the sandbox posture deliberately. Shipped CLI agent assets opt in to the OS sandbox marker that becomes macOS `sandbox-exec` or Linux Bubblewrap when supported. The provider's own approval flag cannot grant filesystem access the enclosing sandbox denies. Do not use a provider's native sandbox flag as a substitute for Orbit's boundary. If the CLI's default login lives in the macOS login keychain, add it to `provider_reads_macos_login_keychain` and teach `macos_keychain_auth_diagnostic` that CLI's auth-failure wording; a state-directory write grant does not make the keychain readable.
 7. State MCP and shell-tool reach precisely. If the provider has no MCP client, do not add one by implication: the execution envelope must direct the agent to the `orbit` binary supplied on its `PATH`, and tests must retain whatever provider shell capability this route needs. Tool grants and caller-role gates remain enforced by `orbit tool run`.
 8. Declare `host_os` when the executor cannot run on every Orbit host. It sits on the asset beside `sandbox` and is a non-empty subset of `linux`, `macos` and `windows`. Omit it to leave the executor unrestricted; an empty list or an unknown name is refused at load and the error names the asset. Admission intersects the declaration with the task's `os:` tags and does not change what those tags mean. An explicit crew this host cannot run waits for a host that can; it is not redrawn. Admission draws and `workflow.default_crew` skip a crew this host's OS excludes; creation-time pool draws keep one a host serving the workspace can run (a registered host with a claim in this workspace in the last seven days), as [CONFIG.md](../CONFIG.md) describes. Copy a new shipped declaration onto an installed default only when that install still omits `host_os`. Muse declares no `host_os`: Muse runs on macOS and Linux, so it stays unrestricted and its sandbox marker is translated per host at seed time.
+
+On a nonzero CLI exit, completion diagnostics inspect the retained raw stdout
+protocol before reducing it to assistant text. Known authentication, quota,
+usage-limit, capacity and refusal frames keep their typed handling. Other
+provider-owned error prose (including Codex `error` and `turn.failed`) is
+bounded and redacted under `provider error:`, ahead of the stderr tail. It is
+diagnostic context and does not acquire classification from quoted failure
+markers. Assistant/tool text and Orbit response envelopes are not provider
+error evidence. A startup banner alone therefore cannot hide an error frame
+that the capture retained.
 
 ### Worked configuration: Antigravity
 

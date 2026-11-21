@@ -5,6 +5,7 @@ use orbit_types::task::{Task, TaskReferenceIndex, TaskStatus};
 use serde::Serialize;
 
 use super::super::unknown_footprint::FootprintWait;
+use super::shared_base_repair::SharedBaseRepairWait;
 use crate::application::job::PublishedResume;
 use crate::runtime::task::locks::TaskLockOverlap;
 
@@ -37,6 +38,9 @@ pub(crate) struct BacklogTaskExclusion {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum BacklogTaskExclusionReason {
     ContextLockConflict,
+    /// All eligible automatic crews are excluded by a recorded model refusal
+    /// in this host's provider context.
+    ProviderModelAccessHold,
     /// The task carries the reserved `no-drain` tag: no automatic drain,
     /// pull-drain follower or automatic admission pass admits it. An
     /// explicit `orbit run ship <id>` still runs it, and removing the tag
@@ -141,9 +145,9 @@ pub(crate) enum BacklogTaskExclusionReason {
     ProviderBackoff,
     /// The task's `not_before` is still ahead. No dispatcher starts it until
     /// then: the hold lifts by itself on the first admission pass after that
-    /// time, with no timer. `detail` names the time. An operator's
-    /// `orbit run ship --ignore-schedule` records a `schedule_overridden`
-    /// event for that time, which lifts it early.
+    /// time, with no timer. `detail` names the time. An operator's explicit
+    /// ship records a `schedule_overridden` event for that time, which lifts
+    /// it early.
     Scheduled,
     /// Every crew the task may run as belongs to a provider whose latest usage
     /// reading on this host is exhausted, or at or above the configured
@@ -221,4 +225,9 @@ pub(crate) struct BacklogSnapshot {
     /// own selectors are reserved at admission; an agent edit they make
     /// later takes the footprint locks first.
     pub(crate) published_resumes: BTreeMap<String, PublishedResume>,
+    /// Lock-conflict exclusions that are a proven circular wait between a
+    /// CI-failure sweep repair and a red PR task holding a selector its
+    /// recovery added, by repair task [ORB-25510]. Their exclusions' `detail`
+    /// already says so; readiness also reports the structured evidence.
+    pub(crate) shared_base_waits: BTreeMap<String, SharedBaseRepairWait>,
 }

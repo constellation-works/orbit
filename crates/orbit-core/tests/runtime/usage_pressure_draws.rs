@@ -641,11 +641,76 @@ fn parked_members_stay_out_and_low_pressure_floors_without_gating() {
     );
 }
 
+/// A crew whose account has used up a window that has not reset is left out of
+/// a usage-pressure draw while another member has quota, though it is not gated
+/// (`claude:100` gates only on an exhausted flag) and would otherwise hold a
+/// floor ticket. A pool whose every member is exhausted draws as it did, and
+/// a member the run allowlist excludes never counts as the member with quota.
+fn an_exhausted_account_is_left_out_of_a_usage_pressure_draw() {
+    substitute_worker();
+    let fx = Fixture::new(&config("[]", "[]", ""));
+    let task = fx.task("exhausted.txt", TaskComplexity::Hard, None, &[]);
+    assert_eq!(
+        task.crew_source
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("default")
+    );
+    fx.configure(&config(
+        r#"["opus", "sol"]"#,
+        "[]",
+        "crew_selection = \"usage_pressure\"\nprovider_limit_overrides = [\"claude:100\"]",
+    ));
+    // The first ticket of the pool: `opus` unless it holds none.
+    orbit_core::test_support::with_crew_draw_quantile(0.0, || {
+        fx.week("claude", 0.0, Duration::hours(6));
+        let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+        assert_eq!(admitted["crew"], "opus", "control: {admitted}");
+
+        fx.week("claude", 100.0, Duration::days(3));
+        let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+        assert_eq!(admitted["crew"], "sol", "{admitted}");
+        let pool = admitted["crew_selection"]["eligible_pool"]
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            pool.iter()
+                .map(|member| &member["name"])
+                .collect::<Vec<_>>(),
+            ["sol"],
+            "the exhausted member holds no ticket: {admitted}"
+        );
+
+        // A crew the run allowlist excludes is no alternative: the only
+        // allowed crew keeps its floor ticket though `sol` has quota.
+        let admitted = fx.admit(json!({ "task_ids": [task.id], "allowed_crews": ["opus"] }));
+        assert_eq!(
+            admitted["crew"], "opus",
+            "an excluded crew with quota must not empty the allowlist: {admitted}"
+        );
+        // An allowed alternative with quota still wins over the exhausted one.
+        let admitted = fx.admit(json!({
+            "task_ids": [task.id],
+            "allowed_crews": ["opus", "sol"]
+        }));
+        assert_eq!(admitted["crew"], "sol", "{admitted}");
+
+        fx.week("codex", 100.0, Duration::days(3));
+        let admitted = fx.admit(json!({ "task_ids": [task.id] }));
+        assert_eq!(
+            admitted["crew"], "opus",
+            "with every member exhausted the draw is unchanged: {admitted}"
+        );
+    });
+}
+
 crate::scenario_table!(
     usage_pressure_draw_scenarios,
     static_selection_draws_and_records_as_before,
     usage_pressure_weighs_the_admission_draw_and_redraws_a_pool_assignment,
     a_redraw_keeps_the_automatic_source_and_never_moves_an_explicit_crew,
     a_complexity_rerate_of_a_pool_task_draws_with_usage_pressure,
-    parked_members_stay_out_and_low_pressure_floors_without_gating
+    parked_members_stay_out_and_low_pressure_floors_without_gating,
+    an_exhausted_account_is_left_out_of_a_usage_pressure_draw
 );

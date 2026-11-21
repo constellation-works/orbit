@@ -286,8 +286,9 @@ fn throttled_infrastructure_log_read_defers_then_retries() {
                 .filter(|entry| entry.event == "pr_auto_fix_read_deferred")
                 .collect::<Vec<_>>();
             assert_eq!(deferred.len(), 1);
-            let note: Value = serde_json::from_str(deferred[0].note.as_deref().unwrap()).unwrap();
-            assert_eq!(note["retry_after_seconds"], 10);
+            let record = orbit_types::workflow::PrAutoFixReadDeferral::from_entry(deferred[0])
+                .expect("the wait is a typed decision");
+            assert_eq!(record.retry_after_seconds, Some(10));
             assert!(pr_auto_fix_attempts(&history, "42").is_empty());
         },
     );

@@ -285,14 +285,15 @@ fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
             continue;
         }
         assert!(!success, "{label}");
-        let provider = failed_provider(message.as_deref().unwrap())
-            .expect("the failure names its provider")
-            .to_string();
-        let limit = typed_limit(message.as_deref(), &provider);
+        // Pin the provider from the case table. Deriving it from the failure
+        // text would make `typed_limit`'s provider check, and the observation
+        // comparison below, agree with a misattributed name.
+        let provider = case.provider.as_str();
+        let limit = typed_limit(message.as_deref(), provider);
         let [observation] = limits.as_slice() else {
             panic!("{label}: one observation per limit failure: {limits:?}");
         };
-        assert_eq!(observation.provider, provider, "{label}");
+        assert_eq!(observation.provider.as_str(), provider, "{label}");
         assert!(observation.exhausted, "{label}");
         assert_eq!(observation.source, ProviderLimitSource::Error, "{label}");
         assert_eq!(observation.resets_at, limit.resets_at, "{label}");
@@ -319,8 +320,9 @@ fn usage_limits_are_typed_only_from_text_the_failed_provider_wrote() {
                 );
             }
             "codex" => {
+                // `<+05>-5` is UTC+5, so 15:42 local on 2026-10-09 is 10:42 UTC.
                 let expected = Utc
-                    .with_ymd_and_hms(2026, 10, 9, 15, 42, 0)
+                    .with_ymd_and_hms(2026, 10, 9, 10, 42, 0)
                     .single()
                     .unwrap();
                 assert_eq!(limit.resets_at, Some(expected), "{label}");
@@ -393,6 +395,8 @@ fn an_antigravity_error_result_on_exit_zero_is_a_usage_limit() {
 /// `rate_limit_info` names the window and its epoch reset, and fails the turn
 /// even on exit 0.
 fn reported_resets_and_windows_are_read_from_the_providers_own_words() {
+    let offset = *Local::now().offset();
+    assert_ne!(offset.local_minus_utc(), 0);
     let before = Local::now().date_naive();
     let (_, message, _, _) = dispatch(
         0,
@@ -407,10 +411,31 @@ fn reported_resets_and_windows_are_read_from_the_providers_own_words() {
     );
     let limit = typed_limit(message.as_deref(), "codex");
     let after = Local::now().date_naive();
-    let local = limit
-        .resets_at
-        .expect("codex said when it resets")
-        .with_timezone(&Local);
+    let resets_at = limit.resets_at.expect("codex said when it resets");
+    let expected_before = before
+        .and_hms_opt(15, 42, 0)
+        .unwrap()
+        .and_local_timezone(offset)
+        .single()
+        .unwrap()
+        .with_timezone(&Utc);
+    let expected_after = after
+        .and_hms_opt(15, 42, 0)
+        .unwrap()
+        .and_local_timezone(offset)
+        .single()
+        .unwrap()
+        .with_timezone(&Utc);
+    assert!(
+        resets_at >= expected_before && resets_at <= expected_after,
+        "UTC instant must honor host offset {offset}: {resets_at} not in {expected_before}..={expected_after}"
+    );
+    assert_eq!(
+        (resets_at.hour(), resets_at.minute()),
+        (10, 42),
+        "{message:?}"
+    );
+    let local = resets_at.with_timezone(&Local);
     assert_eq!((local.hour(), local.minute()), (15, 42), "{message:?}");
     assert!(local.date_naive() >= before && local.date_naive() <= after);
     assert_eq!(limit.model, None, "the limit names no model");
@@ -538,10 +563,11 @@ fn provider_limit_contracts_1() {
     crate::git_fixture::isolated_with_timezone(
         module_path!(),
         "provider_limit_contracts_1",
-        Some("UTC"),
+        Some("<+05>-5"),
         || {
-            assert_eq!(std::env::var("TZ").as_deref(), Ok("UTC"));
-            assert_eq!(Local::now().offset().local_minus_utc(), 0);
+            assert_eq!(std::env::var("TZ").as_deref(), Ok("<+05>-5"));
+            assert_eq!(Local::now().offset().local_minus_utc(), 5 * 3600);
+            assert_ne!(Local::now().offset().local_minus_utc(), 0);
             crate::git_fixture::run_scenarios(&[
                 (
                     "usage_limits_are_typed_only_from_text_the_failed_provider_wrote",
@@ -567,4 +593,49 @@ fn provider_limit_contracts_1() {
         },
     );
     assert_eq!(std::env::var_os("TZ"), parent_timezone);
+}
+
+#[test]
+fn muse_subscription_quota_is_a_limit_for_leaf_and_pilot() {
+    crate::git_fixture::isolated_with_timezone(
+        module_path!(),
+        "muse_subscription_quota_is_a_limit_for_leaf_and_pilot",
+        Some("UTC"),
+        || {
+            for (activity, reset, exit_code) in [
+                ("implement_one", Some("2026-11-20T08:00:00Z"), 1),
+                ("task_pilot", None, 0),
+            ] {
+                let suffix = reset.map_or(String::new(), |at| format!("; resets at {at}"));
+                let reason = format!(
+                    "API error 429: rate_limit_error: Subscription quota exhausted{suffix}"
+                );
+                let stdout = json!({"payload_type":"run.terminal.failed", "payload":{"kind":"run_terminal", "terminal":"failed", "text":reason}}).to_string();
+                let fake = FakeProvider::new("muse", &stdout, "", exit_code, "");
+                let audit = tempfile::tempdir().unwrap();
+                let host = CapacityHost::new(&fake.path, audit.path());
+                let outcome = dispatch_v2_activity(V2DispatchInput {
+                    activity_name: activity,
+                    spec: &ActivityV2Spec::AgentLoop(agent_spec(Provider::Muse)),
+                    fs_profile: None,
+                    input: json!({"prompt":"implement"}),
+                    audit: outcome_writer(activity),
+                    run_id: activity,
+                    host: Some(&host),
+                })
+                .unwrap();
+                assert!(!outcome.success);
+                let limit = typed_limit(outcome.message.as_deref(), "muse");
+                assert_eq!(limit.resets_at, reset.map(|at| at.parse().unwrap()));
+                let limits = host.limits.lock().unwrap();
+                let [observation] = limits.as_slice() else {
+                    panic!("expected one observation: {limits:?}");
+                };
+                assert_eq!(observation.provider, "muse");
+                assert_eq!(observation.source, ProviderLimitSource::Error);
+                assert!(observation.exhausted && observation.gating);
+                assert_eq!(observation.resets_at, limit.resets_at);
+            }
+        },
+    );
 }

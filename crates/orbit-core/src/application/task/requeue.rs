@@ -37,7 +37,10 @@
 //! the run, the task and its unchanged specification, the checkpoints
 //! authenticate the pull request open and unmerged at the recorded head, and
 //! every required check on that head has passed. Anything else is refused
-//! with nothing written, naming the exit that applies.
+//! with nothing written, naming the exit that applies. A block-triage option
+//! whose rewrite changes that specification discards the candidate instead,
+//! including when the checks are not green. A live run is still refused, and
+//! that refusal is judged on the unchanged task.
 //!
 //! A requeue waits for the task's run to stop: final recovery blocks the task
 //! before the run's failure handoff publishes, and a requeue in between would
@@ -74,7 +77,7 @@ use super::TaskRecordUpdateParams as StoreTaskUpdateParams;
 use super::helpers::{self, SYSTEM_ACTOR_LABEL};
 use crate::OrbitRuntime;
 use crate::application::task::{TaskJobPort, TaskRecords};
-use orbit_types::workflow::SourceRepairBinding;
+use orbit_types::workflow::{HeldCandidate, SourceRepairBinding};
 
 /// Status event of an operator's requeue of a blocked task.
 pub(crate) const OPERATOR_REQUEUED_EVENT: &str = "operator_requeued";
@@ -337,6 +340,31 @@ impl OrbitRuntime {
         discard: bool,
         actor: Option<&str>,
     ) -> Result<Value, OrbitError> {
+        self.requeue_blocked_task_by(id, reason, discard, actor, "operator requeue")
+    }
+
+    /// A resident cycle's requeue. `agent_actor` is the trusted agent identity
+    /// of the cycle's run: the task's history entry and comment name it, never
+    /// the host's process actor, and the comment reads `resident requeue` so a
+    /// person's requeue stays distinguishable.
+    pub(crate) fn requeue_blocked_task_as_resident(
+        &self,
+        id: &str,
+        reason: &str,
+        discard: bool,
+        agent_actor: &str,
+    ) -> Result<Value, OrbitError> {
+        self.requeue_blocked_task_by(id, reason, discard, Some(agent_actor), "resident requeue")
+    }
+
+    fn requeue_blocked_task_by(
+        &self,
+        id: &str,
+        reason: &str,
+        discard: bool,
+        actor: Option<&str>,
+        comment_label: &str,
+    ) -> Result<Value, OrbitError> {
         let reason = redact_all(reason.trim());
         if reason.is_empty() {
             return Err(OrbitError::InvalidInput(
@@ -356,7 +384,12 @@ impl OrbitRuntime {
         } else {
             self.authenticate_operator_requeue(&task, receipt.as_ref())?
         };
-        let kept = if discard || resume.is_some() {
+        let held = if discard || resume.is_some() {
+            None
+        } else {
+            self.held_candidate_requeue(&task)?
+        };
+        let kept = if discard || resume.is_some() || held.is_some() {
             None
         } else {
             self.kept_claim_requeue(&task)?
@@ -376,6 +409,19 @@ impl OrbitRuntime {
                     || (local == Some(kept.machine_id.as_str())
                         && task.job_run_id == kept.candidate.source_run_id))
         });
+        // A candidate its stopped run held is offered by admission on any
+        // host when it reached a durable ref, and on its holding host
+        // otherwise.
+        let held_owner_local = held.as_ref().is_some_and(|held| {
+            held.durable_ref.is_some()
+                || held.machine_id.as_deref() == self.automation_machine_identity()
+        });
+        let held_status_note = held.as_ref().map(|held| {
+            format!(
+                "requeued onto the candidate its stopped run held (head {} on {}): {reason}",
+                held.head_sha, held.branch
+            )
+        });
         let task = self.with_task_write_locked(id, || {
             let current = self.get_task(id)?;
             self.ensure_requeueable(&current)?;
@@ -390,7 +436,7 @@ impl OrbitRuntime {
                 at: now,
                 by: actor.clone(),
                 message: format!(
-                    "operator requeue{}: {reason}",
+                    "{comment_label}{}: {reason}",
                     if discard { " (candidate discarded)" } else { "" }
                 ),
                 operation_id: None,
@@ -452,6 +498,9 @@ impl OrbitRuntime {
                             Vec::new(),
                         )
                     }
+                    (None, None) if held_status_note.is_some() => {
+                        (held_status_note.clone().unwrap_or_default(), None, Vec::new())
+                    }
                     (None, None) => (format!("requeued: {reason}"), None, Vec::new()),
                 }
             };
@@ -506,12 +555,27 @@ impl OrbitRuntime {
                 "owner_local": owner_local,
                 "host_local": !kept.candidate.durable(),
             })),
+            (None, None) if held.is_some() => held.as_ref().map(|held| {
+                json!({
+                    "source": "held",
+                    "pull_request": null,
+                    "branch": held.branch,
+                    "head_sha": held.head_sha,
+                    "durable_ref": held.durable_ref,
+                    "machine_id": held.machine_id,
+                    "source_run_id": held.run_id,
+                    "owner_local": held_owner_local,
+                    "host_local": held.durable_ref.is_none(),
+                })
+            }),
             (None, None) => None,
         };
         let next_step = match (&resume, &kept) {
             _ if discard => "The next run implements fresh.".to_string(),
             (Some(_), _) => "The next run adopts this candidate and pull request without \
-                             re-implementing, then validates, reviews and lands it afresh."
+                             re-implementing, then validates it and lands it through the normal \
+                             gates. Any fresh independent review follows the next run's selected \
+                             review policy, which may be off."
                 .to_string(),
             (None, Some(kept)) if !owner_local => {
                 let claimed = if kept.candidate.durable() {
@@ -522,7 +586,9 @@ impl OrbitRuntime {
                 format!(
                     "The next owner-local run implements fresh. {claimed} the candidate at {} \
                      kept from run '{}' on machine '{}', \
-                     then validates, reviews and lands it afresh.{}",
+                     then validates it and lands it through the normal gates. Any fresh \
+                     independent review follows the next run's selected review policy, which \
+                     may be off.{}",
                     kept.candidate.head_sha,
                     kept.candidate.source_run_id.as_deref().unwrap_or("unknown"),
                     kept.machine_id,
@@ -539,9 +605,34 @@ impl OrbitRuntime {
                 kept.machine_id
             ),
             (None, Some(_)) => "The next run, claimed or local, continues this candidate \
-                                instead of implementing fresh, then validates, reviews and \
-                                lands it afresh."
+                                instead of implementing fresh, then validates it and lands it \
+                                through the normal gates. Any fresh independent review follows \
+                                the next run's selected review policy, which may be off."
                 .to_string(),
+            (None, None) if held.is_some() => {
+                let held = held.as_ref();
+                if held.is_some_and(|held| held.durable_ref.is_some()) {
+                    "The next run, claimed or local, continues the candidate its stopped \
+                     run held instead of implementing fresh, then validates it and lands it \
+                     through the normal gates. Any fresh independent review follows the next \
+                     run's selected review policy, which may be off."
+                        .to_string()
+                } else if held_owner_local {
+                    "The next run on this host continues the candidate its stopped run \
+                     held instead of implementing fresh, then validates it and lands it \
+                     through the normal gates. Any fresh independent review follows the next \
+                     run's selected review policy, which may be off."
+                        .to_string()
+                } else {
+                    format!(
+                        "The candidate is only on {}: a run there continues the candidate \
+                         its stopped run held instead of implementing fresh, and a run on \
+                         another host implements fresh.",
+                        held.and_then(|held| held.machine_id.as_deref())
+                            .unwrap_or("the host that held it")
+                    )
+                }
+            }
             (None, None) => {
                 "The next run starts from the backlog; no published or kept candidate was \
                  recorded."
@@ -638,35 +729,74 @@ impl OrbitRuntime {
     /// than the latest claim settlement. The run id matches only together
     /// with the machine, the same linkage admission uses.
     fn stopped_run_holds_candidate(&self, task: &Task) -> Result<bool, OrbitError> {
-        use orbit_types::workflow::{CANDIDATE_HELD_EVENT, HeldCandidate};
+        Ok(self.stopped_run_held_candidate(task)?.is_some())
+    }
+
+    /// The candidate `task`'s stopped run held, while the task is still
+    /// linked to that run. The run id matches only together with the
+    /// machine, the same linkage admission uses.
+    fn stopped_run_held_candidate(
+        &self,
+        task: &Task,
+    ) -> Result<Option<(HeldCandidate, chrono::DateTime<Utc>)>, OrbitError> {
+        use orbit_types::workflow::CANDIDATE_HELD_EVENT;
 
         let history = self.get_task_history(&task.id)?;
-        let Some(held) = history
+        let Some(entry) = history
             .iter()
             .rev()
             .find(|entry| entry.event == CANDIDATE_HELD_EVENT)
-            .and_then(HeldCandidate::from_entry)
         else {
-            return Ok(false);
+            return Ok(None);
+        };
+        let Some(held) = HeldCandidate::from_entry(entry) else {
+            return Ok(None);
         };
         if task.job_run_id.as_deref() != Some(held.run_id.as_str()) {
-            return Ok(false);
+            return Ok(None);
         }
         // Run ids are unique only per machine.
-        Ok(task
+        if !task
             .job_run_machine
             .as_ref()
-            .is_none_or(|origin| held.machine_id.as_deref() == Some(origin.machine_id.as_str())))
+            .is_none_or(|origin| held.machine_id.as_deref() == Some(origin.machine_id.as_str()))
+        {
+            return Ok(None);
+        }
+        Ok(Some((held, entry.at)))
+    }
+
+    /// The held candidate a requeue reports as resumed: the one admission
+    /// offers while the task's specification is unchanged and no operator
+    /// discarded it since it was held. A retired hold resumes nothing, as
+    /// in `held_candidate_offer`.
+    fn held_candidate_requeue(&self, task: &Task) -> Result<Option<HeldCandidate>, OrbitError> {
+        let Some((held, held_at)) = self.stopped_run_held_candidate(task)? else {
+            return Ok(None);
+        };
+        if !task.spec_digest_matches(&held.task_spec_digest) {
+            return Ok(None);
+        }
+        let history = self.get_task_history(&task.id)?;
+        if history.iter().any(|entry| {
+            entry.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT && entry.at >= held_at
+        }) {
+            return Ok(None);
+        }
+        Ok(Some(held))
     }
 
     /// Whether rewriting the specification of blocked `task` to `description`
-    /// and `acceptance_criteria` (either may be `None`: unchanged) is what
-    /// strands a candidate the task's failed run published or kept: the
-    /// unchanged task still returns to backlog onto that candidate, the
-    /// rewritten one is refused as no longer implemented by it. A decision
-    /// answer that rewrites then discards the candidate with the rewrite
-    /// instead of being refused. A candidate that was already unresumable, or
-    /// that the rewrite leaves implementing the task, is not reported.
+    /// and `acceptance_criteria` (either may be `None`: unchanged) strands a
+    /// candidate the task's failed run published or kept.
+    ///
+    /// A bound candidate is stranded by any specification change, including
+    /// when required checks are not green or the candidate is already
+    /// unresumable for another settled reason. The answer discards it instead
+    /// of being refused for the rewrite. A live run is not stranded: the
+    /// answer stays refused because the run has not stopped, judged on the
+    /// unchanged task. A rewrite that leaves the specification unchanged, or
+    /// that no bound candidate implements, is not reported.
     pub(crate) fn rewrite_strands_candidate(
         &self,
         task: &Task,
@@ -683,6 +813,13 @@ impl OrbitRuntime {
         if rewritten.spec_digest() == task.spec_digest() {
             return Ok(false);
         }
+        // Discarding a live run would race a handoff that may still publish.
+        if self.unsettled_run(task)?.is_some() {
+            return Ok(false);
+        }
+        if self.preserved_candidate_bound(task)? {
+            return Ok(true);
+        }
         match self.authenticate_published_backlog_return(task) {
             Ok(_) => {}
             Err(OrbitError::InvalidInput(_)) => return Ok(false),
@@ -693,6 +830,59 @@ impl OrbitRuntime {
             Err(OrbitError::InvalidInput(_)) => Ok(true),
             Err(error) => Err(error),
         }
+    }
+
+    /// Whether a preserved candidate is still bound to `task`: a failure-handoff
+    /// receipt, a pipeline publication the failure handoff kept, or a kept
+    /// claim that has not been discarded. A live run can still be bound; the
+    /// caller decides whether that run may be discarded.
+    pub(crate) fn preserved_candidate_bound(&self, task: &Task) -> Result<bool, OrbitError> {
+        if self.handoff_receipt(task)?.is_some() {
+            return Ok(true);
+        }
+        if self.pipeline_publication_kept(task)? {
+            return Ok(true);
+        }
+        // Admission offers a held candidate instead of the kept claim, and a
+        // plain requeue does not refuse that hold for a specification change.
+        if self.stopped_run_holds_candidate(task)? {
+            return Ok(false);
+        }
+        let Some(kept) = self.stores().tasks().kept_claim_candidate(
+            &task.id,
+            self.automation_machine_identity().unwrap_or_default(),
+        )?
+        else {
+            return Ok(false);
+        };
+        Ok(!matches!(
+            kept.fresh.as_ref().map(|(reason, _)| *reason),
+            Some(CandidateFreshReason::Discarded)
+        ))
+    }
+
+    /// Whether `task`'s current run pushed its own pull request and the
+    /// failure handoff kept that publication (`candidate_preserved`).
+    fn pipeline_publication_kept(&self, task: &Task) -> Result<bool, OrbitError> {
+        if !self.run_published_through_pipeline(task)? {
+            return Ok(false);
+        }
+        let Some(run_id) = task.job_run_id.as_deref() else {
+            return Ok(false);
+        };
+        let Some(state) = self.stored_run_state(run_id)? else {
+            return Ok(false);
+        };
+        let Some(checkpoint) = state.failure_activity_checkpoint.as_ref() else {
+            return Ok(false);
+        };
+        let output = &checkpoint.output;
+        Ok(checkpoint.activity_name == "pr_failure_handoff"
+            && matches!(
+                output.get("decision").and_then(Value::as_str),
+                Some("review_completion_failure" | "landing_review_failure")
+            )
+            && output.get("candidate_preserved").and_then(Value::as_bool) == Some(true))
     }
 
     /// Authenticate a plain blocked/review-to-backlog status update without a

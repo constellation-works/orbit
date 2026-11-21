@@ -1,8 +1,8 @@
 ---
 type: design
 summary: Spec for idempotent owner-side task admission, request receipts, execution claims, and lifecycle invariants.
-last_validated: 2026-11-05
-last_updated: 2026-11-11
+last_validated: 2026-11-16
+last_updated: 2026-11-16
 title: Spec — orbit.task.pull
 owner: claude
 status: Draft
@@ -18,6 +18,8 @@ related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941, ORB-1
 ready, valid, conflict-free task in its canonical order and atomically records the reservation,
 attempt identity, `in-progress` transition, history, and request receipt. Retries replay the same
 receipt. The internal store foundation implements admission receipts, claims and replay.
+[ORB-15332] and [ORB-17641] removed unused compaction and accounting helpers;
+[ORB-19424] restored them behind an operational caller.
 Operational admission-receipt compaction and storage accounting are available on the owner
 through `orbit doctor admission-receipts [--compact]` ([ORB-19424]). The retention
 requirements below remain the contract.
@@ -114,7 +116,7 @@ the first fungible task while opus-assigned and `os:macos` tasks queued.
     sorts last; the screen still decides whether it is offered.
   - *Usage pressure* is the highest weekly usage pressure the requester reported for a member
     of the task's crew pool; higher sorts first. It is the lowest-precedence key above age, it
-    applies under every affinity reach including `off`, and a requester that reported no
+    applies under the fixed band reach, and a requester that reported no
     pressure (owner-local admission included) leaves every candidate at the shared neutral
     value, so it reorders nothing.
 - **Degenerate cases.** If the census holds only the requester, every candidate ties on both
@@ -131,8 +133,8 @@ the first fungible task while opus-assigned and `os:macos` tasks queued.
   in force and the census machine ids it was ordered against. A same-request replay returns the
   stored receipt, whatever the census has become.
 - **Limitation.** The census tracks liveness, not free capacity. A fungible high-priority task
-  can wait while the only other executor that could run it is saturated. `priority` mode is the
-  escape hatch: it bounds that wait to one priority.
+  can wait while the only other executor that could run it is saturated. The former `priority`
+  escape hatch was retired by [ORB-22808]; operators cannot narrow the fixed band reach.
 
 ## Class and routing
 
@@ -666,7 +668,7 @@ cannot perform a fresh landing mutation.
 Execution provenance is optional on persisted records for backward reading. Run origin is
 captured from the trusted runtime backend at insertion and is not updated by run upserts.
 The shared run JSON projection exposes `executed_on`, and task show exposes
-`job_run_host`; both use null when historical identity is unknown.
+`job_run_machine` (reading legacy `job_run_host`); both use null when historical identity is unknown.
 Artifact origin is supplied separately from artifact bytes and actor attribution. Task run
 location must accompany a trusted run binding; changing a legacy/unqualified link does not
 infer a location from a matching local run ID.
@@ -888,13 +890,17 @@ moved is refused at commit as `no_diff_expected_changed`, before the index is to
 no pull-request route for code, while the owner's own pipeline still commits such a change
 [ORB-14247]. Both claimed leaves support it, and the PR leaf skips branch
 preparation, rebase, push and PR creation. No before-PR reviewer runs because no PR exists.
-The owner resolves its live base independently, requires candidate and tested HEAD to equal
-that base, and rechecks the report, its underlying evidence and logs at acceptance and completion.
+The owner resolves its live base independently and requires it to contain the base
+the run synchronized onto [ORB-15074]. Candidate and tested HEAD equal that synchronized
+base, with no commits or pending changes of their own; advancement of the live base
+alone does not refuse the handoff. Acceptance and completion recheck the report,
+its underlying evidence and logs.
 An already-landed checkpoint also retains scope, criteria and covering-commit ancestry/marker checks,
 including a covering sibling task. The executor's branch need not exist on the owner.
 `NoDiff` completes through the same authorized `review → done` landing boundary without an
-external merge. A review-only completion contract still waits for owner approval, and a moved
-base or changed evidence refuses completion. The legacy `AlreadyLanded` delivery variant still
+external merge. A review-only completion contract still waits for owner approval; a
+base that no longer contains the synchronized revision, or changed evidence,
+refuses completion. The legacy `AlreadyLanded` delivery variant still
 reads persisted handoffs; claimed leaves use `NoDiff` for this case.
 
 [ORB-13625] delivered the follower half. The owner's `orbit.task.pull` input is
@@ -948,5 +954,10 @@ see the caller-side implementation status in design §3.
 - [ORB-17641] — removed the unused admission receipt accounting API.
 - [ORB-19393] — verified base-merge chains, bounded inherited recovery and reconciliation of externally merged handoffs.
 - [ORB-19424] — connected admission receipt compaction and separate logical storage accounting to `orbit doctor admission-receipts [--compact]`.
+- [ORB-14149] — classified model-capacity failures without retrying the unavailable model.
+- [ORB-22407] — enabled evidence-bearing already-landed and no-diff claimed handoffs.
+- [ORB-22808] — fixed admission-affinity reach at the band and deprecated the old setting.
+- [ORB-24115] — added the internal late effort report for settled claims.
+- [ORB-15074] — accepted a clean NoDiff handoff when the live base advanced beyond its synchronized base.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

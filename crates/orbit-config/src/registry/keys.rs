@@ -739,7 +739,7 @@ pub fn immutable_key_note(key: &str) -> Option<&'static str> {
 }
 
 /// Dotted prefix of the one table only the global `config.toml` may carry.
-pub const GLOBAL_ONLY_KEY_PREFIX: &str = "machine.";
+pub(crate) const GLOBAL_ONLY_KEY_PREFIX: &str = "machine.";
 
 /// Whether `key` is one of the three `[machine]` identity keys, which are
 /// written together by `orbit init` and never unset one at a time.

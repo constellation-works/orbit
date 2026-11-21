@@ -28,6 +28,10 @@ pub(in crate::application) trait SourceGit {
 
     /// [`Self::git`] without trimming stdout, for NUL-delimited path output.
     fn git_preserving_output(&self, args: &[&str]) -> Result<String, AutomationError>;
+
+    /// Whether `older` is an ancestor of `newer`. A missing object is false;
+    /// a source deadline or other operational error propagates.
+    fn is_ancestor(&self, older: &str, newer: &str) -> Result<bool, AutomationError>;
 }
 
 /// The state-scheduler operations task steps call, implemented by

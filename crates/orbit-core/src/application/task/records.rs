@@ -162,6 +162,72 @@ impl TaskRecordService<'_> {
                 "injected task record update failure".to_string(),
             ));
         }
+        let has_changes = params.has_document_changes()
+            || params.has_history_changes()
+            || params.has_artifact_changes();
+        // The status compare-and-set guards the whole multi-part write, not
+        // only its history commit. Its artifact, document and history commits
+        // each take the task's write lock; holding that (re-entrant) lock
+        // across all three keeps a concurrent status change from landing
+        // between the pre-check and the history commit, so a CAS failure
+        // leaves no companion edit behind. Lock order is unchanged: every
+        // commit inside already takes this lock, boundary first.
+        let written = if params.expected_status.is_some() && has_changes {
+            let mut outcome = None;
+            self.store.with_task_write_lock(id, &mut || {
+                outcome = Some(self.commit_parts(id, &params));
+                Ok(())
+            })?;
+            outcome.ok_or_else(|| {
+                OrbitError::Execution("task record write did not run under its lock".into())
+            })??
+        } else {
+            self.commit_parts(id, &params)?
+        };
+
+        let row = match written {
+            Some(row) => row,
+            None => self
+                .store
+                .get_task_row(id, false)?
+                .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.to_string()))?,
+        };
+        if has_changes {
+            self.index_task(&row.task);
+        }
+        Ok(row)
+    }
+
+    /// The artifact, document and history commits of one record write, in
+    /// that order, after its status pre-check. Returns the row the last
+    /// document or history commit holds.
+    fn commit_parts(
+        &self,
+        id: &str,
+        params: &TaskRecordUpdateParams,
+    ) -> Result<Option<TaskRow>, OrbitError> {
+        // Evaluate the CAS before any artifact, document or history change
+        // lands. The history commit re-evaluates it under its own lock, which
+        // stays authoritative.
+        if let Some(expected) = &params.expected_status {
+            let row = self
+                .store
+                .get_task_row(id, false)?
+                .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.to_string()))?;
+            if !expected.contains(&row.task.status) {
+                return Err(OrbitError::InvalidInput(format!(
+                    "task '{id}' status changed to '{}' before this write; \
+                     expected one of [{}]",
+                    row.task.status,
+                    expected
+                        .iter()
+                        .map(|status| status.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+        }
+
         // A work-starting write the claim footprint guard will refuse must
         // refuse before any companion artifact, document or history write:
         // the store's in-lock guard stays authoritative, and this pre-flight
@@ -233,6 +299,10 @@ impl TaskRecordService<'_> {
         }
 
         if params.has_history_changes() {
+            #[cfg(test)]
+            if let Some(checkpoint) = BEFORE_HISTORY_COMMIT.with(std::cell::RefCell::take) {
+                checkpoint();
+            }
             written = Some(
                 self.history.update_task_history(
                     id,
@@ -255,21 +325,7 @@ impl TaskRecordService<'_> {
                 )?,
             );
         }
-
-        let row = match written {
-            Some(row) => row,
-            None => self
-                .store
-                .get_task_row(id, false)?
-                .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.to_string()))?,
-        };
-        if params.has_document_changes()
-            || params.has_history_changes()
-            || params.has_artifact_changes()
-        {
-            self.index_task(&row.task);
-        }
-        Ok(row)
+        Ok(written)
     }
 
     pub(crate) fn delete(&self, id: &str) -> Result<bool, OrbitError> {
@@ -299,6 +355,10 @@ thread_local! {
     /// Fails this thread's next [`TaskRecordService::update`] before it writes
     /// anything, as a store error would. Production builds do not have it.
     pub(super) static FAIL_NEXT_UPDATE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Runs once on this thread between a record write's document commit
+    /// and its history commit, so a test can interleave a concurrent writer.
+    pub(super) static BEFORE_HISTORY_COMMIT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 impl crate::OrbitRuntime {

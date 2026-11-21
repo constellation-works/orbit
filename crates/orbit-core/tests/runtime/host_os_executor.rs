@@ -739,9 +739,8 @@ fn activity_defaults_and_unrestricted_crews_remain_consistent() {
     );
 }
 
-/// Public init loads the shipped declarations: no shipped executor carries
-/// a `host_os` restriction (Muse runs on macOS and Linux), the seeded muse
-/// sandbox is translated for this host, and operator choices survive refresh.
+/// Public init loads the shipped declarations: the seeded muse sandbox is
+/// translated for this host, and operator choices survive refresh.
 fn init_seeds_host_os_and_preserves_operator_constraints() {
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
@@ -764,21 +763,12 @@ fn init_seeds_host_os_and_preserves_operator_constraints() {
         .get_executor_def("muse")
         .unwrap()
         .expect("muse seeded");
-    assert_eq!(muse.host_os, None, "shipped muse is unrestricted");
     let expected_sandbox = match std::env::consts::OS {
         "linux" => Some(orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap),
         "macos" => Some(orbit_types::workflow::ExecutorSandboxKind::MacosSandboxExec),
         _ => muse.sandbox,
     };
     assert_eq!(muse.sandbox, expected_sandbox, "seeded muse sandbox");
-    for def in &defs {
-        assert!(
-            def.host_os.is_none(),
-            "{} declared host_os {:?}",
-            def.name,
-            def.host_os
-        );
-    }
 
     let mut customized = muse;
     customized.host_os = Some(BTreeSet::from([HostOs::Linux, HostOs::Macos]));
@@ -796,10 +786,15 @@ fn init_seeds_host_os_and_preserves_operator_constraints() {
         "an operator-set host_os is not overwritten"
     );
 
-    customized.host_os = None;
+    // Narrow the operator restriction and reseed. The shipped muse declaration
+    // is unrestricted, which differs from this operator value, so a refresh
+    // that overwrote the operator choice would surface as `None`.
+    // (Clearing to `None` is not asserted: with an unrestricted shipped
+    // declaration it cannot tell preservation from overwrite.)
+    customized.host_os = Some(BTreeSet::from([HostOs::Linux]));
     store
         .upsert_executor_def(&customized)
-        .expect("clear host_os");
+        .expect("narrow operator host_os");
     seed();
     assert_eq!(
         store
@@ -807,8 +802,8 @@ fn init_seeds_host_os_and_preserves_operator_constraints() {
             .unwrap()
             .expect("muse present")
             .host_os,
-        None,
-        "clearing host_os keeps the shipped unrestricted declaration"
+        customized.host_os,
+        "an updated operator host_os survives refresh"
     );
 }
 
@@ -1351,6 +1346,41 @@ fn effective_os_readouts_follow_configuration_and_filter_before_the_limit() {
     );
 }
 
+/// A live default-crew edit that names a macOS-only crew added after open is
+/// refused by a long-lived Linux runtime exactly as by a freshly opened one.
+fn a_live_default_crew_edit_is_limited_like_a_fresh_runtime() {
+    let (root, linux) = runtime_on(HostOs::Linux, POOL);
+    assert_eq!(
+        linux.resolve_crew_for_task(None, None).unwrap().name,
+        "sol",
+        "the startup default runs on Linux"
+    );
+    let edited = format!(
+        "{}\n[crews.muse-new]\nmodel = \"muse-spark-1.3\"\nprovider = \"muse\"\n",
+        POOL.replace("default_crew = \"sol\"", "default_crew = \"muse-new\"")
+    );
+    std::fs::write(root.path().join("repo/.orbit/config.toml"), edited).unwrap();
+
+    let live = linux
+        .resolve_crew_for_task(None, None)
+        .expect_err("the long-lived runtime must refuse the macOS-only default");
+    assert!(
+        matches!(&live, OrbitError::PolicyDenied(message) if message.contains("waits for a macos host (crew muse-new)")),
+        "{live}"
+    );
+    let fresh = OrbitRuntime::from_roots(
+        &root.path().join("home/.orbit"),
+        &root.path().join("repo/.orbit"),
+    )
+    .expect("reopen runtime")
+    .with_host_os(Some(HostOs::Linux));
+    declare_muse_macos(&fresh);
+    let reopened = fresh
+        .resolve_crew_for_task(None, None)
+        .expect_err("a freshly opened runtime refuses the same default");
+    assert_eq!(live.to_string(), reopened.to_string());
+}
+
 crate::scenario_table!(
     a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it_scenarios,
     a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it,
@@ -1362,5 +1392,6 @@ crate::scenario_table!(
     an_excluded_default_crew_is_not_pinned,
     a_supported_explicit_run_crew_survives_discovery_and_replay,
     init_seeds_host_os_and_preserves_operator_constraints,
-    activity_defaults_and_unrestricted_crews_remain_consistent
+    activity_defaults_and_unrestricted_crews_remain_consistent,
+    a_live_default_crew_edit_is_limited_like_a_fresh_runtime
 );

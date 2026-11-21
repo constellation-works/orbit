@@ -42,6 +42,11 @@ pub enum RuntimeNeed {
     PipelineWorker,
     /// Read an existing workspace without stale-run reconciliation on open.
     ReadOnly,
+    /// Audit an existing workspace with a write-free open: no store or
+    /// registry is created or migrated, and no layout upgraded, before the
+    /// report runs (STD-01 §R31). A missing or outdated store fails the open
+    /// and the report names the setup step.
+    Inspection,
     /// Inspect host plugins without treating an unregistered cwd as a workspace.
     PluginReadOnly,
     /// Host-scoped read without treating an unregistered cwd as a workspace
@@ -372,6 +377,12 @@ pub(super) fn dispatch_workspace(command: Commands, context: DispatchContext<'_>
         Commands::Workspace(WorkspaceCommand {
             command: WorkspaceSubcommand::Sync(args),
         }) => args.execute_without_runtime(context.root_override, context.workspace_selector),
+        Commands::Workspace(WorkspaceCommand {
+            command: WorkspaceSubcommand::Rebind(args),
+        }) => args.execute_workspace_rebind_without_runtime(
+            context.root_override,
+            context.workspace_selector,
+        ),
         Commands::Workspace(command) => command.execute(context.runtime()?),
         _ => dispatch_mismatch("Workspace"),
     }

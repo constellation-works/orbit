@@ -182,6 +182,31 @@ impl TaskV2Store {
         self.candidate_keys(filter, limit, true)
     }
 
+    pub(crate) fn observe_task_candidate_key_pages(
+        &self,
+        pages: &[(TaskListFilter, usize)],
+    ) -> Result<Option<Vec<Result<TaskCandidateKeys, OrbitError>>>, OrbitError> {
+        if pages.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+        let pages: Vec<_> = pages
+            .iter()
+            .map(|(filter, limit)| (filter.normalized(), *limit))
+            .collect();
+        if pages.iter().any(|(filter, _)| !filter.is_fully_indexed()) {
+            return Ok(None);
+        }
+        let Some(unsettled) = self.validate_index_with_proofs(false)? else {
+            return Ok(None);
+        };
+        Ok(Some(
+            pages
+                .iter()
+                .map(|(filter, limit)| self.indexed_candidate_keys(filter, *limit, &unsettled))
+                .collect(),
+        ))
+    }
+
     fn candidate_keys(
         &self,
         filter: &TaskListFilter,
@@ -202,9 +227,19 @@ impl TaskV2Store {
         }) else {
             return Ok(None);
         };
+        self.indexed_candidate_keys(&filter, limit, &unsettled)
+            .map(Some)
+    }
+
+    fn indexed_candidate_keys(
+        &self,
+        filter: &TaskListFilter,
+        limit: usize,
+        unsettled: &[String],
+    ) -> Result<TaskCandidateKeys, OrbitError> {
         let selection = self.registry.indexed_task_selection(
             &self.workspace_id,
-            &filter.index_filter(unsettled.clone()),
+            &filter.index_filter(unsettled.to_vec()),
             filter.terminal_last,
             (limit < usize::MAX).then_some(limit),
         )?;
@@ -214,7 +249,7 @@ impl TaskV2Store {
             self.registry
                 .indexed_task_selection(
                     &self.workspace_id,
-                    &filter.without_cursor().index_filter(unsettled),
+                    &filter.without_cursor().index_filter(unsettled.to_vec()),
                     filter.terminal_last,
                     Some(0),
                 )?
@@ -238,11 +273,11 @@ impl TaskV2Store {
                 })
             })
             .collect::<Result<Vec<_>, OrbitError>>()?;
-        Ok(Some(TaskCandidateKeys {
+        Ok(TaskCandidateKeys {
             items,
             total: selection.total,
             total_without_cursor,
-        }))
+        })
     }
 
     pub(crate) fn query_task_rows(

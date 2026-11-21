@@ -29,7 +29,7 @@ use crate::context::{
     ActorIdentity, OrbitExecutionAssets, OrbitHostStore, OrbitPolicyContext, OrbitRuntimeSettings,
     OrbitStores,
 };
-use crate::{HostLifetime, WorkspaceRuntimeBinding};
+use crate::{HostLifetime, OrbitRuntimeRoots, WorkspaceRuntimeBinding};
 use orbit_store::skill_store::SkillCatalog;
 
 /// Job-run partition used when an explicit `--root` data directory is opened
@@ -64,19 +64,37 @@ pub(crate) enum StateAccess {
 /// Runtime builder. Global root provides activities, jobs, executors, policies,
 /// config, global skills, and SQLite. Shared root provides existing workspace
 /// state. Local root is carried for per-worktree artifact phases.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_context_from_roots(
-    global_root: &Path,
-    workspace_root: &Path,
-    local_root: &Path,
+    roots: &OrbitRuntimeRoots,
     binding: Option<&WorkspaceRuntimeBinding>,
     runtime_config: &ResolvedConfig,
     _host_lifetime: HostLifetime,
     access: StateAccess,
     task_prefix: Option<&str>,
 ) -> Result<OrbitContext, OrbitError> {
+    let global_root = roots.global_root.as_path();
+    let workspace_root = roots.shared_root.as_path();
+    let local_root = roots.local_root.as_path();
     let write_free = access == StateAccess::WriteFree;
     let persistence = &runtime_config.persistence;
+
+    // The host's GitHub quota guard reserves come from the machine config; the
+    // guard itself is on only in the `orbit` binary.
+    orbit_tools::github_quota::configure_host_policy(
+        orbit_tools::github_quota::GithubQuotaPolicy {
+            agent_reserve_percent: runtime_config
+                .snapshot
+                .machine_github_quota_agent_reserve_percent,
+            background_reserve_percent: runtime_config
+                .snapshot
+                .machine_github_quota_background_reserve_percent,
+            refresh_interval: std::time::Duration::from_secs(u64::from(
+                runtime_config
+                    .snapshot
+                    .machine_github_quota_refresh_interval_seconds,
+            )),
+        },
+    );
 
     // Every footprint-overlap check this handle makes (reservations, claims,
     // owner admission) applies the owner's `workflow.lock_modes`.

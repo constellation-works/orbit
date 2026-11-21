@@ -99,8 +99,12 @@ impl OrbitRuntime {
             AutoTaskToggleProfile::Unconditional => None,
             AutoTaskToggleProfile::Checked { expected_enabled } => Some(expected_enabled),
             AutoTaskToggleProfile::Observed { expected_enabled } => {
+                // Refuse an unpermitted write before any comparison, and
+                // compare against the checkout-local catalog the write edits.
+                self.ensure_coordination_task_write_permitted()
+                    .map_err(AutoTaskToggleError::Write)?;
                 let Some(current) = self
-                    .auto_task_show(name)
+                    .find_validated_auto_task(name)
                     .map_err(AutoTaskToggleError::Read)?
                 else {
                     return Ok(AutoTaskToggleOutcome::NotFound);

@@ -68,9 +68,9 @@ impl OrbitRuntime {
             return Ok(None);
         }
         let key = purpose.config_key();
-        let settings = self.context.settings();
-        let registry = settings.crews();
-        let pool = canonical_crew_pool(settings.purpose_crews().pool(purpose), registry, key)?;
+        let crew_settings = self.admission_crew_settings();
+        let registry = &crew_settings.crews;
+        let pool = canonical_crew_pool(crew_settings.purpose_crews.pool(purpose), registry, key)?;
         let mut enabled = Vec::with_capacity(pool.entries.len());
         for entry in &pool.entries {
             enabled.extend(self.pool_entry_candidate(&entry.name, entry.weight, None)?);

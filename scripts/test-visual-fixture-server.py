@@ -726,13 +726,11 @@ class VisualFixtureServerTest(unittest.TestCase):
         shutil.copy(ROOT / "scripts/visual-fixture-front.mjs", script_dir / "visual-fixture-front.mjs")
         shutil.copy(ROOT / "crates/orbit-web/src/tests/dashboard_static.mjs", helper_dir / "dashboard_static.mjs")
         (script_dir / "visual-fixture-server.sh").chmod(0o755)
-        (repo / "crates/orbit-web/src/lib.rs").write_text(
-            'pub(crate) const DASHBOARD_CSS: &str = concat!(\n'
+        (repo / "crates/orbit-web/src/assets.rs").write_text(
+            'pub(super) const DASHBOARD_CSS: &str = concat!(\n'
             '    include_str!("../assets/dashboard/css/base.css"),\n'
             '    include_str!("../assets/dashboard/css/app.css"),\n'
             ');\n'
-        )
-        (repo / "crates/orbit-web/src/assets.rs").write_text(
             'pub(super) const DASHBOARD_CSP: &str = concat!(\n'
             '    "default-src \'self\'; ",\n'
             '    "script-src \'self\'"\n'

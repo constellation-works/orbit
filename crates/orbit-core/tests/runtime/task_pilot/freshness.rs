@@ -123,17 +123,12 @@ fn explicit_assessment_survives_selector_apply_promotion_and_administrative_edit
     assert_pilot_routine_stays_fresh(&workspace, &routine, "fresh");
 }
 
-fn routine_reuse_obeys_configured_material_source_and_consumer_policy() {
+/// Metadata edits, source moves, a changed freshness policy and another
+/// consumer never re-pilot a task whose explicit evidence is on record: every
+/// branch must stay fresh.
+fn routine_reuse_ignores_metadata_source_policy_and_consumer_changes() {
     for change in ["material", "source", "policy", "consumer"] {
-        let mut workspace = Workspace::new();
-        let config = workspace.repo.join(".orbit/config.toml");
-        let mut contents = std::fs::read_to_string(&config).unwrap();
-        contents.push_str("\n[workflow.task_pilot_freshness]\nmaterial_fields = [\"title\", \"selectors\", \"tags\"]\nsource_sensitivity = \"context_files\"\n");
-        std::fs::write(config, contents).unwrap();
-        workspace.runtime = runtime_at(
-            &workspace.runtime.global_root(),
-            &workspace.repo.join(".orbit"),
-        );
+        let workspace = Workspace::new();
         let task = workspace.task(change);
         apply_explicit_pilot_assessment(&workspace, &task, false);
         let mut routine = pilot_routine();
@@ -704,7 +699,7 @@ fn held_warning_keeps_one_decision_until_explicit_decision_repilot() {
 crate::scenario_table!(
     explicit_assessment_freshness_scenarios,
     explicit_assessment_survives_selector_apply_promotion_and_administrative_edits,
-    routine_reuse_obeys_configured_material_source_and_consumer_policy,
+    routine_reuse_ignores_metadata_source_policy_and_consumer_changes,
     newer_unready_explicit_evidence_is_fresh_without_releasing_active_pilot_holds,
     admission_reuses_an_explicit_assessment_off_the_scan_page,
     automatic_discovery_repilots_previously_piloted_tasks_after_a_meaning_edit,

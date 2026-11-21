@@ -195,7 +195,7 @@ function headerLine() {
   const age = relativeTime(built);
   const text = `Profiles built ${age ?? "earlier"} · drives machine.auto_concurrency · read-only`;
   const meta = el("p", { class: "fc-meta", text, title: built ? `Built ${formatDateTime(built)}` : null });
-  const refresh = el("button", { class: "fc-refresh", type: "button", title: "Read the resource forecast again", "aria-label": "Refresh resource forecast" }, [
+  const refresh = el("button", { class: "fc-refresh", type: "button", "aria-description": "Read the resource forecast again", "aria-label": "Refresh resource forecast" }, [
     el("span", { class: "visually-hidden", text: "Refresh" }),
   ]);
   refresh.addEventListener("click", () => {
@@ -410,7 +410,7 @@ function missLine(label, worst, format) {
     el("div", { class: "rf-setting-label", text: `${label} at +${offset}m` }),
     el("div", { class: "mono rf-miss-text" }, [
       `${format(miss.error, true)} · forecast ${format(miss.forecast)}, measured ${format(miss.measured)} · ${formatDateTime(miss.minute_at)} · `,
-      runLink(String(miss.run_id), null),
+      runLink(String(miss.run_id), miss.workspace_id),
     ]),
   ]);
 }
@@ -456,7 +456,7 @@ function decisionRow(drain, showWorkspace, showPull) {
   const shadow = Number(drain.shadow_passes) > 0;
   const enforce = Number(drain.enforce_passes) > 0;
   const cells = [
-    el("th", { scope: "row" }, [runLink(String(drain.run_id), null)]),
+    el("th", { scope: "row" }, [runLink(String(drain.run_id), drain.workspace_id)]),
     showWorkspace ? el("td", { text: String(drain.workspace_id || "—") }) : null,
     el("td", { text: drainMode(drain) }),
     el("td", { class: "num", text: String(Number(drain.shadow_passes ?? 0) + Number(drain.enforce_passes ?? 0)) }),

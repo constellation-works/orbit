@@ -184,6 +184,15 @@ fn validate_git_directory(
     metadata: &fs::Metadata,
     directories: &mut DirectoryIdentities,
 ) -> Result<(), OrbitError> {
+    validate_git_directory_with_pinned(path, metadata, directories, None)
+}
+
+fn validate_git_directory_with_pinned(
+    path: &Path,
+    metadata: &fs::Metadata,
+    directories: &mut DirectoryIdentities,
+    pinned: Option<&DirectoryIdentities>,
+) -> Result<(), OrbitError> {
     if !metadata.is_dir() {
         return Err(OrbitError::PolicyDenied(format!(
             "Git protection refuses non-directory metadata traversal `{}`",
@@ -191,6 +200,15 @@ fn validate_git_directory(
         )));
     }
     let identity = (metadata.dev(), metadata.ino());
+    if let Some(pinned) = pinned
+        && let Some(previous) = pinned.get(path)
+        && *previous != identity
+    {
+        return Err(OrbitError::PolicyDenied(format!(
+            "Git protection refuses replaced metadata directory `{}`",
+            path.display()
+        )));
+    }
     if let Some(previous) = directories.insert(path.to_path_buf(), identity)
         && previous != identity
     {
@@ -268,6 +286,26 @@ impl ObjectLinks {
         }
     }
 
+    /// Add the names another scan of the same store counted, as if this scan
+    /// had seen them next: counts add up and a temporary name is preferred.
+    fn absorb(&mut self, other: ObjectLinks) {
+        for (key, inode) in other.inodes {
+            match self.inodes.entry(key) {
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    slot.insert(inode);
+                }
+                std::collections::hash_map::Entry::Occupied(mut slot) => {
+                    let entry = slot.get_mut();
+                    entry.names_seen += inode.names_seen;
+                    if inode.reported_is_temp && !entry.reported_is_temp {
+                        entry.reported = inode.reported;
+                        entry.reported_is_temp = true;
+                    }
+                }
+            }
+        }
+    }
+
     /// A name of some inode that lives outside the store, if any.
     fn first_escape(&self) -> Option<OrbitError> {
         self.inodes
@@ -310,10 +348,20 @@ fn scan_git_tree(
     directories: &mut DirectoryIdentities,
     links: &mut ObjectLinks,
 ) -> Result<(), GitTreeScanError> {
+    scan_git_tree_with_pinned(root, scope, directories, links, None)
+}
+
+fn scan_git_tree_with_pinned(
+    root: &Path,
+    scope: ScanScope,
+    directories: &mut DirectoryIdentities,
+    links: &mut ObjectLinks,
+    pinned: Option<&DirectoryIdentities>,
+) -> Result<(), GitTreeScanError> {
     #[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
     run_scan_hook(GitScanStage::ReadDirectory, root).map_err(|error| scan_error(root, error))?;
     let metadata = fs::symlink_metadata(root).map_err(|error| scan_error(root, error))?;
-    validate_git_directory(root, &metadata, directories)?;
+    validate_git_directory_with_pinned(root, &metadata, directories, pinned)?;
     for entry in fs::read_dir(root).map_err(|error| scan_error(root, error))? {
         let entry = entry.map_err(|error| scan_error(root, error))?;
         let path = entry.path();
@@ -332,13 +380,102 @@ fn scan_git_tree(
             }
         }
         if metadata.is_dir() {
-            validate_git_directory(&path, &metadata, directories)?;
-            let child = match scope {
-                ScanScope::Root if entry.file_name() == "objects" => ScanScope::ObjectStore,
-                ScanScope::ObjectStore => ScanScope::ObjectStore,
-                ScanScope::Root | ScanScope::Metadata => ScanScope::Metadata,
-            };
-            scan_git_tree(&path, child, directories, links)?;
+            validate_git_directory_with_pinned(&path, &metadata, directories, pinned)?;
+            match scope {
+                ScanScope::Root if entry.file_name() == "objects" => {
+                    scan_object_store(&path, directories, links)?;
+                }
+                ScanScope::ObjectStore => {
+                    scan_git_tree_with_pinned(
+                        &path,
+                        ScanScope::ObjectStore,
+                        directories,
+                        links,
+                        pinned,
+                    )?;
+                }
+                ScanScope::Root | ScanScope::Metadata => {
+                    scan_git_tree_with_pinned(
+                        &path,
+                        ScanScope::Metadata,
+                        directories,
+                        links,
+                        pinned,
+                    )?;
+                }
+            }
+        }
+    }
+    // read_dir may have opened an older directory after a concurrent rename.
+    // Never accept its contents as validation of the replacement at this path.
+    let metadata = fs::symlink_metadata(root).map_err(|error| scan_error(root, error))?;
+    validate_git_directory_with_pinned(root, &metadata, directories, pinned)?;
+    Ok(())
+}
+
+/// Most threads one object-store scan uses.
+const MAX_OBJECT_SCAN_THREADS: usize = 8;
+
+/// One entry directly under `objects/`, in `read_dir` order.
+enum ObjectStoreEntry {
+    /// A file with several names; recorded in the store's link counts.
+    Linked(PathBuf, fs::Metadata),
+    /// A fan-out, `pack` or `info` directory, scanned as its own subtree.
+    Directory(PathBuf, fs::Metadata),
+    /// The scan stops here, as the sequential walk would.
+    Failed(GitTreeScanError),
+}
+
+/// What one subtree scan found: its outcome, the directory identities it
+/// newly pinned (not already in the shared set) and the object names it counted.
+struct SubtreeScan {
+    result: Result<(), GitTreeScanError>,
+    directories: DirectoryIdentities,
+    links: ObjectLinks,
+}
+
+/// Scan `objects/` as [`scan_git_tree`] would, with its subdirectories (the
+/// loose-object fan-out holds nearly every metadata entry) spread over a few
+/// threads. Each subtree runs the same sequential scan against the identities
+/// pinned so far; the results are folded back in `read_dir` order, so the
+/// first refusal, the pinned identities and the link counts are the ones the
+/// sequential walk would have produced.
+fn scan_object_store(
+    root: &Path,
+    directories: &mut DirectoryIdentities,
+    links: &mut ObjectLinks,
+) -> Result<(), GitTreeScanError> {
+    // The interleaving seam is per thread; keep its scans on this one.
+    #[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
+    if scan_hook_installed() {
+        return scan_git_tree(root, ScanScope::ObjectStore, directories, links);
+    }
+    let metadata = fs::symlink_metadata(root).map_err(|error| scan_error(root, error))?;
+    validate_git_directory(root, &metadata, directories)?;
+    let entries = list_object_store(root);
+    let subtrees = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            ObjectStoreEntry::Directory(path, metadata) => Some((path.as_path(), metadata)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut scans = scan_subtrees(&subtrees, directories).into_iter();
+    for entry in entries {
+        match entry {
+            ObjectStoreEntry::Linked(path, metadata) => links.record(&path, &metadata),
+            ObjectStoreEntry::Directory(..) => {
+                let Some(scan) = scans.next() else {
+                    return Err(GitTreeScanError::Denied(OrbitError::PolicyDenied(format!(
+                        "Git protection lost a subtree scan under `{}`",
+                        root.display()
+                    ))));
+                };
+                directories.extend(scan.directories);
+                links.absorb(scan.links);
+                scan.result?;
+            }
+            ObjectStoreEntry::Failed(error) => return Err(error),
         }
     }
     // read_dir may have opened an older directory after a concurrent rename.
@@ -346,6 +483,218 @@ fn scan_git_tree(
     let metadata = fs::symlink_metadata(root).map_err(|error| scan_error(root, error))?;
     validate_git_directory(root, &metadata, directories)?;
     Ok(())
+}
+
+/// Inspect the entries directly under `objects/`, stopping at the first one
+/// the scan refuses, exactly where the sequential walk would stop.
+fn list_object_store(root: &Path) -> Vec<ObjectStoreEntry> {
+    let mut entries = Vec::new();
+    let listing = match fs::read_dir(root) {
+        Ok(listing) => listing,
+        Err(error) => {
+            entries.push(ObjectStoreEntry::Failed(scan_error(root, error)));
+            return entries;
+        }
+    };
+    for entry in listing {
+        let path = match entry {
+            Ok(entry) => entry.path(),
+            Err(error) => {
+                entries.push(ObjectStoreEntry::Failed(scan_error(root, error)));
+                break;
+            }
+        };
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                entries.push(ObjectStoreEntry::Failed(scan_error(&path, error)));
+                break;
+            }
+        };
+        if metadata.is_dir() {
+            entries.push(ObjectStoreEntry::Directory(path, metadata));
+        } else if !metadata.is_file() {
+            entries.push(ObjectStoreEntry::Failed(
+                metadata_entry_refusal(&path, false).into(),
+            ));
+            break;
+        } else if metadata.nlink() > 1 {
+            entries.push(ObjectStoreEntry::Linked(path, metadata));
+        }
+    }
+    entries
+}
+
+/// Scan each subtree against the shared identities pinned so far, on up
+/// to [`MAX_OBJECT_SCAN_THREADS`] threads. Results come back in input order.
+/// Each subtree collects only identities not already pinned, so retained
+/// pins grow with the directories in that subtree, not with the shared set.
+/// Once a subtree fails, later ones are skipped: the fold stops at that
+/// failure and never reads them.
+fn scan_subtrees(
+    subtrees: &[(&Path, &fs::Metadata)],
+    pinned: &DirectoryIdentities,
+) -> Vec<SubtreeScan> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let scan_one = |path: &Path, metadata: &fs::Metadata| {
+        let mut directories = DirectoryIdentities::new();
+        let mut links = ObjectLinks::default();
+        let result =
+            validate_git_directory_with_pinned(path, metadata, &mut directories, Some(pinned))
+                .map_err(GitTreeScanError::from)
+                .and_then(|()| {
+                    scan_git_tree_with_pinned(
+                        path,
+                        ScanScope::ObjectStore,
+                        &mut directories,
+                        &mut links,
+                        Some(pinned),
+                    )
+                });
+        directories.retain(|path, identity| pinned.get(path) != Some(identity));
+        SubtreeScan {
+            result,
+            directories,
+            links,
+        }
+    };
+    let threads = scan_thread_count(subtrees.len());
+    if threads <= 1 {
+        let mut scans = Vec::with_capacity(subtrees.len());
+        for (path, metadata) in subtrees {
+            let scan = scan_one(path, metadata);
+            let failed = scan.result.is_err();
+            scans.push(scan);
+            if failed {
+                break;
+            }
+        }
+        return scans;
+    }
+    let next = AtomicUsize::new(0);
+    let first_failure = AtomicUsize::new(usize::MAX);
+    let work = || {
+        let mut done = Vec::new();
+        loop {
+            let index = next.fetch_add(1, Ordering::Relaxed);
+            let Some((path, metadata)) = subtrees.get(index) else {
+                return done;
+            };
+            if index > first_failure.load(Ordering::Relaxed) {
+                continue;
+            }
+            let scan = scan_one(path, metadata);
+            if scan.result.is_err() {
+                first_failure.fetch_min(index, Ordering::Relaxed);
+            }
+            done.push((index, scan));
+        }
+    };
+    let mut finished = std::thread::scope(|scope| {
+        // The OS may refuse a thread; a worker that cannot be created leaves
+        // its subtrees to the others. The calling thread works the same queue,
+        // so every subtree is scanned even when no worker could start.
+        let workers = (1..threads)
+            .filter_map(|_| spawn_scan_worker(scope, work).ok())
+            .collect::<Vec<_>>();
+        let mut finished = work();
+        for worker in workers {
+            finished.extend(
+                worker
+                    .join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+            );
+        }
+        finished
+    });
+    finished.sort_by_key(|(index, _)| *index);
+    // Every index up to the first failure was scanned, so the prefix is
+    // contiguous; anything past it is dropped.
+    let cutoff = first_failure.load(Ordering::Relaxed);
+    finished
+        .into_iter()
+        .take_while(|(index, _)| *index <= cutoff)
+        .map(|(_, scan)| scan)
+        .collect()
+}
+
+/// Threads to scan `subtrees` on, the calling thread included.
+fn scan_thread_count(subtrees: usize) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    if worker_spawn_refused_for_test() {
+        return subtrees.min(MAX_OBJECT_SCAN_THREADS);
+    }
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
+        .clamp(1, MAX_OBJECT_SCAN_THREADS)
+        .min(subtrees)
+}
+
+/// Start one scoped scan worker, reporting the OS refusing the thread instead
+/// of panicking as `Scope::spawn` does.
+fn spawn_scan_worker<'scope, 'env, T: Send + 'scope>(
+    scope: &'scope std::thread::Scope<'scope, 'env>,
+    work: impl FnOnce() -> T + Send + 'scope,
+) -> io::Result<std::thread::ScopedJoinHandle<'scope, T>> {
+    #[cfg(any(test, feature = "test-support"))]
+    if refuse_worker_spawn_for_test() {
+        return Err(io::Error::from(io::ErrorKind::WouldBlock));
+    }
+    std::thread::Builder::new()
+        .name("orbit-git-scan".into())
+        .spawn_scoped(scope, work)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static REFUSED_SPAWNS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Per-thread seam that makes every scan worker spawn attempt fail the way an
+/// exhausted thread limit does, without placing load on the host. While held,
+/// an object-store scan takes its threaded path, and so attempts a spawn, only
+/// with two or more object-store subdirectories. With zero or one subdirectory
+/// it scans on the calling thread, attempts no spawn, and `refused` stays at
+/// zero. Outside the seam the thread count is also capped by the host's
+/// available parallelism.
+#[cfg(any(test, feature = "test-support"))]
+pub struct GitWorkerSpawnRefusal;
+
+#[cfg(any(test, feature = "test-support"))]
+impl GitWorkerSpawnRefusal {
+    pub fn install() -> Self {
+        REFUSED_SPAWNS.with(|slot| slot.set(Some(0)));
+        Self
+    }
+
+    /// Worker spawns refused since [`Self::install`].
+    pub fn refused(&self) -> usize {
+        REFUSED_SPAWNS.with(|slot| slot.get().unwrap_or(0))
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Drop for GitWorkerSpawnRefusal {
+    fn drop(&mut self) {
+        REFUSED_SPAWNS.with(|slot| slot.set(None));
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn worker_spawn_refused_for_test() -> bool {
+    REFUSED_SPAWNS.with(|slot| slot.get().is_some())
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn refuse_worker_spawn_for_test() -> bool {
+    REFUSED_SPAWNS.with(|slot| {
+        slot.get().is_some_and(|count| {
+            slot.set(Some(count + 1));
+            true
+        })
+    })
 }
 
 fn metadata_error(path: &Path, error: std::io::Error) -> OrbitError {
@@ -386,6 +735,11 @@ impl Drop for GitScanHookGuard {
     fn drop(&mut self) {
         SCAN_HOOK.with(|slot| slot.replace(self.0.take()));
     }
+}
+
+#[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]
+fn scan_hook_installed() -> bool {
+    SCAN_HOOK.with(|slot| slot.borrow().is_some())
 }
 
 #[cfg(all(any(test, feature = "test-support"), target_os = "linux"))]

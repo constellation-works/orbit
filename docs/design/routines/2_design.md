@@ -1,7 +1,7 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-11-14
+last_updated: 2026-11-20
 last_validated: 2026-10-19
 status: Accepted
 feature: routines
@@ -71,7 +71,11 @@ routines start collapsed behind a keyboard- and touch-operable disclosure;
 filtering opens it to show matching paused entries. Group counts include the
 total catalogue and summarize blocked, stalled and repeatedly failing routines
 even when their cards are collapsed or filtered out. The failure warning
-and next-hour timeline always cover the full catalogue. Filter and
+and next-hour timeline always cover the full catalogue. An open breaker contributes
+at most its next eligible trial to the timeline. Trials appear separately from
+scheduled fires. The routine and auto-task timing editors display an existing
+condition's scope and predicate as read-only and preserve the condition settings
+until the operator explicitly replaces the trigger. Filter and
 disclosure choices survive status refreshes and reset on workspace or host
 changes. Filtering is refused only while a trigger editor is on
 screen: close it first. An open editor whose routine is filtered out
@@ -185,9 +189,9 @@ conflict so delayed or duplicate submissions cannot overwrite newer state.
 
 Delivery thresholds, preparation eligibility, immutable batches and separate
 successful-coverage checkpoints are implemented on the existing clock. The
-[automation-trigger operations guide](../automation-triggers/5_operations.md#configuration-and-migration)
+[automation-trigger operations guide](../automation-triggers/references/operations.md#configuration-and-migration)
 documents the supported schema-v1 configuration; its
-[state preparation section](../automation-triggers/5_operations.md#state-preparation-orb-11331)
+[state preparation section](../automation-triggers/references/operations.md#state-preparation-orb-11331)
 covers state consumers. The broader
 [automation-trigger design](../automation-triggers/2_design.md#1-current-implementation-and-gaps)
 separately identifies deferred multi-member coordination, automatic policy/host
@@ -352,7 +356,7 @@ Optional `freshness` resolves each key from the routine, then
 does not change the default material fingerprint. `context_files` and `any` are
 the other source sensitivities. These fields guard preparation/apply drift;
 a certified `description` or `criteria` change queues a fresh routine pilot for an already assessed task unless a live execution claim or an unresolved failed pilot holds it; changes to the other fields never queue one through the routine (an `--approve-proposed` drain still repilots a stale assessment automatically). See
-[State preparation](../automation-triggers/5_operations.md#state-preparation-orb-11331)
+[State preparation](../automation-triggers/references/operations.md#state-preparation-orb-11331)
 for all material fields, stale-source checks during apply, limits and rollback.
 
 Inspect `orbit routine list`, `orbit routine show <name> --format json`, and
@@ -397,12 +401,12 @@ for new definitions; `integrated_qa_v1` is retired compatibility data.
 `missed_run` applies to cron slots, not delivery or state eligibility.
 
 The supported ownership/migration rules are in
-[Configuration and migration](../automation-triggers/5_operations.md#configuration-and-migration).
+[Configuration and migration](../automation-triggers/references/operations.md#configuration-and-migration).
 A routine job must return `coverage_evidence` in a persisted step result matching
 its frozen `input.automation` and admitted run; ordinary job success alone is
-insufficient. See [Evidence submission](../automation-triggers/5_operations.md#evidence-submission)
+insufficient. See [Evidence submission](../automation-triggers/references/operations.md#evidence-submission)
 for the exact receipt fields and validation, and
-[Inspection and recovery](../automation-triggers/5_operations.md#inspection-and-recovery)
+[Inspection and recovery](../automation-triggers/references/operations.md#inspection-and-recovery)
 for persisted debt and failure reasons. Auto-tasks use the same delivery object
 under `schedule.deliveries_landed`, creating tasks instead of submitting jobs.
 
@@ -608,9 +612,11 @@ After the pilot write the task is archived, with a system comment naming the cov
 commits and the assessment, only when every cited commit exists and at least one is an
 ancestor of the base branch that relates to the finding. The commits the finding itself
 names (any commit in its description, and the landed commit of a `regression_from` target)
-never count, since they are on the base branch by construction. When one is known, a
-covering commit must descend from all of them, and when the task declared path selectors
-it must touch one of those paths. An `--approve-proposed` drain applies the same rule.
+never count, since they are on the base branch by construction. A target with no recorded
+delivery names no commit. A pinned delivery definition that cannot be read or parsed is not
+that case: the proof is refused and the finding stays proposed, so a citation of the culprit
+itself cannot close it. When one is known, a covering commit must descend from all of
+them, and when the task declared path selectors it must touch one of those paths. An `--approve-proposed` drain applies the same rule.
 Without that proof (no commit cited, an unknown SHA, none on the base branch, or only
 commits unrelated to the finding) the task stays proposed with that reason. The routine is a scheduling surface only: an
 operator-triggered run of the job behaves identically to a scheduled fire.
@@ -947,7 +953,7 @@ diagnostics without persisting state or dispatching work.
   and exhaustion requires attention. Verified before-PR review certificates may
   exclude review obligations; tags, task completion and no-diff work cannot create
   landings or coverage. See
-  [Delivery identity and source gaps](../automation-triggers/5_operations.md#delivery-identity-and-source-gaps).
+  [Delivery identity and source gaps](../automation-triggers/references/operations.md#delivery-identity-and-source-gaps).
 - **State:** initialization inventories current eligible members in bounded pages,
   persisting scan continuation, material fingerprints, first-seen/change times
   and withheld reasons. Preparation best-effort fetches the configured branch on
@@ -970,7 +976,7 @@ diagnostics without persisting state or dispatching work.
   Timing edits affect pending work while active budgets stay captured. Kind, owner,
   target or branch edits report `definition_changed`; restore the original
   definition to settle it rather than deleting state. See
-  [State preparation](../automation-triggers/5_operations.md#state-preparation-orb-11331)
+  [State preparation](../automation-triggers/references/operations.md#state-preparation-orb-11331)
   for stale-source supersession, per-member reconciliation and capacity limits.
 
 ---
@@ -1000,11 +1006,64 @@ member working sets survive reboot and disablement. There is no automatic
 cross-host transfer. Run history remains ordinary job history, not cron fire rows;
 status merges those automation runs with retained cron history. For source pins,
 recovery and rollback limits see the
-[operations guide](../automation-triggers/5_operations.md#rollback-and-limits).
+[operations guide](../automation-triggers/references/operations.md#rollback-and-limits).
 
 Toggle resolution, in order: `enabled: false` (this checkout's definition) → local
 pause (this host only). `orbit routine list` shows both columns plus computed
 next-due, so "why didn't this fire?" is one command.
+
+### 4.1 Circuit breaker
+
+A routine that keeps failing the same way stops firing until it is fixed. The
+sweep keeps one breaker per routine in `routine_breakers` (state, error class,
+last run id, trip count, next trial time, the Orbit build it tripped under) and
+logs every transition to `routine_breaker_events` (`tripped`, `trial`,
+`reopened`, `closed`, `reset`, `bypass`, with the actor).
+
+- **Error class.** A fire's class is its failed step's typed failure code, else
+  its run state (`failed`, `timeout`, `interrupted`); a cron fire that never
+  produced a run counts as `dispatch_failed`, `timed_out` or `fire_error`. The
+  message never counts. Cron fires come from `routine_fires`; state, delivery
+  and condition routines from the job runs they triggered.
+- **Trip.** When the newest three fires since the last reset all failed with the
+  same class, the sweep opens the breaker and skips the routine with reason
+  `breaker_open`. One `routine_tripped` attention item per open breaker points
+  at the reset.
+- **Half-open trial.** An open breaker lets one fire through after its backoff
+  (15 minutes, doubling per failed trial, capped at 4 hours), at the first sweep
+  after the host's Orbit version or commit changes, or once after an operator
+  bypass. While that fire runs the routine is skipped as
+  `breaker_trial_in_flight`. A successful trial closes the breaker; a failed
+  one re-opens it with the longer backoff.
+- **Operator controls.** `orbit routine breaker reset <name>` closes the breaker
+  (older failures no longer count); `orbit routine breaker bypass <name>` lets
+  one fire through on the next sweep. A cron routine fires then even between
+  its slots, under an unscheduled slot key (report reason `breaker_bypass`)
+  that leaves its cursor alone, so no scheduled slot is consumed or skipped;
+  once the breaker closes, those slots fire or skip by `missed_run` as usual.
+  Other trigger kinds are evaluated at once. The dashboard routine details offer the
+  same two actions through the governed `routine.breaker` operation. Both are
+  recorded as breaker events; the dashboard action is also audited.
+  Both select the routine through the selection every routine edit uses, so a
+  routine a replica lists as owner-only is refused naming its owner, and the
+  dashboard refuses a routine of another source workspace (`workspace_mismatch`).
+- **Status.** `orbit routine list`, `orbit routine show` and the dashboard show a
+  tripped routine as `tripped` with its error class and next trial time instead
+  of a failure streak; `orbit routine show` lists the breaker events. In status
+  JSON, `breaker` keeps its existing fields (`state`, `tripped`, `error_class`,
+  `last_run_id`, `tripped_at`, `trips`, `next_trial_at`, `trial_started_at`,
+  `trial_reason`, `bypass_requested_at`) and adds two server-computed trial
+  fields derived from the same observed-fire check the scheduler uses (cron
+  fires and automation-admitted runs for state-, delivery- and
+  condition-triggered routines): `trial_phase` (`none` when closed or a
+  finished trial awaits the next sweep, `armed` when a trial is upcoming or
+  admitted with no non-ignored fire yet, `in_flight` while the trial fire or
+  run is executing) and `trial_expected_at` (the expected fire instant for an
+  armed cron trial — `next_trial_at` during backoff, `next_due` after
+  scheduled admission, or current time for a bypass — and `null` when
+  `trial_phase` is not `armed` or the routine waits for an event). The
+  dashboard Next hour timeline renders breaker trials solely from
+  `trial_phase` and `trial_expected_at`.
 
 ---
 

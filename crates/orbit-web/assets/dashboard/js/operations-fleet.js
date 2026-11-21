@@ -1,16 +1,11 @@
 import { el, getHost, getServingHost } from './common.js';
-import { FLEET_CACHE_MS, fetchFleetDrains, peekFleetDrains, replaceFleetDrains } from './fleet-drains.js';
+import { FLEET_CACHE_MS, fetchFleetDrains, peekFleetDrains } from './fleet-drains.js';
 import { $, operationsState, selectedWorkspace } from './operations-shared.js';
 
 export function loadFleetSnapshot({ refreshWhenStale, onPartial = null }) {
   const seen = peekFleetDrains();
   if (seen && (!refreshWhenStale || seen.fresh)) return Promise.resolve(seen.payload);
   return fetchFleetDrains({ onPartial });
-}
-
-export function paintAggregateFleet(payload) {
-  const body = $("fleet-drains-body");
-  if (body) replaceFleetDrains(body, payload, operationsState.context.selectFleetScope);
 }
 
 const LIVE_DRAIN_PHASES = ["draining", "pulling", "winding_down"];
@@ -50,7 +45,10 @@ export function paintRailDrainReading({ phase = "idle", used = null, ceiling = n
 function railDrainReadingFromFleet(payload) {
   const rows = (payload?.items || []).filter(row => row.workspace_id && !row.error && !row.pending);
   const workspace = selectedWorkspace();
-  if (!workspace) return { liveCount: rows.filter(row => LIVE_DRAIN_PHASES.includes(row.phase)).length };
+  if (!workspace) {
+    const live = rows.filter(row => LIVE_DRAIN_PHASES.includes(row.phase));
+    return { liveCount: new Set(live.map(row => row.workspace_id)).size };
+  }
   const host = getHost() || getServingHost()?.name;
   const row = rows.find(row => row.workspace_id === workspace.id && (row.host_selector == null || row.host_selector === host));
   return row ? { phase: row.phase, used: row.slots_used, ceiling: row.slots_ceiling, held: Boolean(row.holds?.length) } : null;
@@ -64,7 +62,6 @@ export function repaintRailDrainFromFleet() {
 function paintFleetSurfaces(payload) {
   const reading = railDrainReadingFromFleet(payload);
   if (reading) paintRailDrainReading(reading);
-  paintAggregateFleet(payload);
 }
 
 let fleetRefreshStarted = false;

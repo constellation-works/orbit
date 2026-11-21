@@ -24,7 +24,22 @@ fn command(fixture: &WorkCheckout) -> assert_cmd::Command {
     command
 }
 fn run(fixture: &WorkCheckout, args: &[&str]) -> Output {
+    if args.first() == Some(&"doctor") {
+        settle_stores(fixture);
+    }
     command(fixture).args(args).output().expect("orbit command")
+}
+/// Bare `doctor` audits stores a writable command created and never creates
+/// them itself (STD-01 §R31), so a fixture that audits first creates them the
+/// way any first command does.
+fn settle_stores(fixture: &WorkCheckout) {
+    let global = fixture.home.join(".orbit");
+    if !global.join("orbit.db").exists() || !global.join("tasks/index.sqlite").exists() {
+        command(fixture)
+            .args(["task", "list"])
+            .output()
+            .expect("create stores");
+    }
 }
 fn run_ok(fixture: &WorkCheckout, args: &[&str]) -> Output {
     let out = run(fixture, args);
@@ -32,6 +47,7 @@ fn run_ok(fixture: &WorkCheckout, args: &[&str]) -> Output {
     out
 }
 fn doctor(fixture: &WorkCheckout, extra: &[&str]) -> Output {
+    settle_stores(fixture);
     let mut cmd = command(fixture);
     cmd.args(["doctor", "--json"]).args(extra);
     cmd.output().expect("doctor report")
@@ -190,6 +206,241 @@ fn doctor_admission_receipts_reports_storage_and_compacts() {
         assert_eq!(v, 0, "{report}");
     }
 }
+/// STD-01 §R31: launching bare `doctor` observes the registry before it
+/// audits. A registry that is gone stays gone and one that needs migration
+/// stays at its recorded schema, while the report names the setup step. A
+/// registry this binary cannot read keeps the store's upgrade guidance.
+#[test]
+fn bare_doctor_startup_neither_creates_nor_migrates_the_task_registry() {
+    if in_child("doctor::bare_doctor_startup_neither_creates_nor_migrates_the_task_registry") {
+        return;
+    }
+    let f = WorkCheckout::new();
+    run_ok(&f, &["workspace", "init", "--name", "doctor-startup"]);
+    // Opening a writable runtime is what creates the stores doctor audits.
+    run_ok(&f, &["task", "list"]);
+    let tasks = global_dir(&f).join("tasks");
+    let registry = tasks.join("index.sqlite");
+    let ledger = |path: &std::path::Path| -> Vec<String> {
+        let conn = Connection::open(path).expect("open registry");
+        let mut stmt = conn
+            .prepare("SELECT key FROM schema_meta WHERE key LIKE 'migration.%' ORDER BY key")
+            .expect("prepare ledger query");
+        let keys = stmt.query_map([], |row| row.get(0)).expect("query ledger");
+        keys.collect::<Result<_, _>>().expect("ledger rows")
+    };
+
+    // A registry whose ledger lags this binary: it needs a writable migration.
+    let applied = ledger(&registry);
+    assert!(applied.len() > 1, "{applied:?}");
+    Connection::open(&registry)
+        .expect("open registry")
+        .execute(
+            "DELETE FROM schema_meta WHERE key = ?1",
+            [applied.last().expect("newest ledger row")],
+        )
+        .expect("downgrade registry ledger");
+    let lagging = ledger(&registry);
+    assert_eq!(lagging.len(), applied.len() - 1);
+    let out = command(&f)
+        .args(["doctor", "--json"])
+        .output()
+        .expect("doctor");
+    let parsed = rows(&out);
+    let runtime = row(&parsed, "runtime");
+    assert_eq!(runtime["status"], "error", "{runtime}");
+    msg_has(runtime, "requires a writable migration");
+    fix_has(runtime, "orbit task list");
+    assert_eq!(
+        ledger(&registry),
+        lagging,
+        "bare doctor must not migrate the registry"
+    );
+
+    // A workspace layout older than this binary stays as inspected.
+    let marker = f.work.join(".orbit/state/layout.version");
+    assert!(
+        marker.is_file(),
+        "workspace init records the layout version"
+    );
+    fs::write(&marker, "0\n").expect("age the layout marker");
+    let _ = command(&f)
+        .args(["doctor", "--json"])
+        .output()
+        .expect("doctor");
+    assert_eq!(
+        read_str(&marker).trim(),
+        "0",
+        "bare doctor must not upgrade the workspace layout"
+    );
+
+    // A registry that is gone.
+    drop(fs::remove_file(&registry));
+    for suffix in ["-wal", "-shm"] {
+        drop(fs::remove_file(tasks.join(format!("index.sqlite{suffix}"))));
+    }
+    let out = command(&f)
+        .args(["doctor", "--json"])
+        .output()
+        .expect("doctor");
+    let report =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(
+        report.contains("orbit task list"),
+        "the report names the setup that creates the registry: {report}"
+    );
+    assert!(
+        !registry.exists(),
+        "bare doctor must not create the registry"
+    );
+
+    // A registry newer than this binary reads: a writable open cannot migrate
+    // it, so the report must keep the upgrade guidance and not name the
+    // migration step.
+    Connection::open(&registry)
+        .expect("create registry")
+        .execute_batch("PRAGMA user_version = 9")
+        .expect("stamp unsupported registry version");
+    let out = command(&f)
+        .args(["doctor", "--json"])
+        .output()
+        .expect("doctor");
+    let report =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{report}");
+    assert!(
+        report.contains("Upgrade the selected Orbit executable"),
+        "the report keeps the store's upgrade guidance: {report}"
+    );
+    assert!(
+        !report.contains("orbit task list"),
+        "an unsupported registry cannot be migrated by a writable open: {report}"
+    );
+
+    // An empty, unledgered registry stamped v6 is not the recognized additive
+    // v6 shape, so a writable open refuses it too: bare doctor gives the same
+    // unsupported guidance and leaves the file as it was.
+    Connection::open(&registry)
+        .expect("open registry")
+        .execute_batch("PRAGMA user_version = 6")
+        .expect("stamp unrecognized v6");
+    let out = command(&f)
+        .args(["doctor", "--json"])
+        .output()
+        .expect("doctor");
+    let report =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{report}");
+    assert!(
+        report.contains("Upgrade the selected Orbit executable"),
+        "an unrecognized v6 keeps the unsupported-schema guidance: {report}"
+    );
+    assert!(
+        !report.contains("orbit task list"),
+        "an unrecognized v6 must not be pointed at a writable migration: {report}"
+    );
+    let stamped = Connection::open(&registry).expect("reopen registry");
+    let version: i64 = stamped
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("read user_version");
+    assert_eq!(version, 6, "bare doctor leaves the registry as it was");
+}
+
+#[test]
+fn bare_doctor_classifies_writable_open_remedy_independently_of_registry_path() {
+    if in_child(
+        "doctor::bare_doctor_classifies_writable_open_remedy_independently_of_registry_path",
+    ) {
+        return;
+    }
+    let f = WorkCheckout::new();
+    let root = f
+        .temp
+        .path()
+        .join("the database is read-only")
+        .join(".orbit");
+    command(&f)
+        .arg("--root")
+        .arg(&root)
+        .args([
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            "phrase-path",
+            "--task-prefix",
+            "PP",
+        ])
+        .assert()
+        .success();
+    command(&f)
+        .arg("--root")
+        .arg(&root)
+        .args(["task", "list"])
+        .assert()
+        .success();
+
+    let tasks = root.join("tasks");
+    let registry = tasks.join("index.sqlite");
+    let ledger = |path: &std::path::Path| -> Vec<String> {
+        let conn = Connection::open(path).expect("open registry");
+        let mut stmt = conn
+            .prepare("SELECT key FROM schema_meta WHERE key LIKE 'migration.%' ORDER BY key")
+            .expect("prepare ledger query");
+        let keys = stmt.query_map([], |row| row.get(0)).expect("query ledger");
+        keys.collect::<Result<_, _>>().expect("ledger rows")
+    };
+
+    // A supported lagging registry under this path still receives writable-open
+    // remediation.
+    let applied = ledger(&registry);
+    assert!(applied.len() > 1, "{applied:?}");
+    Connection::open(&registry)
+        .expect("open registry")
+        .execute(
+            "DELETE FROM schema_meta WHERE key = ?1",
+            [applied.last().expect("newest ledger row")],
+        )
+        .expect("downgrade registry ledger");
+    let out = command(&f)
+        .arg("--root")
+        .arg(&root)
+        .args(["doctor", "--json"])
+        .output()
+        .expect("doctor on lagging registry");
+    let parsed = rows(&out);
+    let runtime = row(&parsed, "runtime");
+    assert_eq!(runtime["status"], "error", "{runtime}");
+    msg_has(runtime, "requires a writable migration");
+    fix_has(runtime, "orbit task list");
+
+    // An unsupported pre-ledger v9 registry under a path containing the
+    // diagnostic phrase must keep only the store's upgrade guidance.
+    drop(fs::remove_file(&registry));
+    for suffix in ["-wal", "-shm"] {
+        drop(fs::remove_file(tasks.join(format!("index.sqlite{suffix}"))));
+    }
+    Connection::open(&registry)
+        .expect("create v9 registry")
+        .execute_batch("PRAGMA user_version = 9")
+        .expect("stamp unsupported registry version");
+    let out = command(&f)
+        .arg("--root")
+        .arg(&root)
+        .args(["doctor", "--json"])
+        .output()
+        .expect("doctor on v9 registry");
+    let report =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{report}");
+    assert!(
+        report.contains("Upgrade the selected Orbit executable"),
+        "the report keeps the store's upgrade guidance: {report}"
+    );
+    assert!(
+        !report.contains("orbit task list"),
+        "an unsupported registry under a phrase-bearing path must not suggest writable migration: {report}"
+    );
+}
 /// ORB-16351: `clock-unit: ok` requires an enabled, active systemd timer.
 #[cfg(target_os = "linux")]
 #[test]
@@ -200,6 +451,7 @@ fn doctor_clock_unit_requires_an_enabled_active_systemd_timer() {
     for mode in ["disabled", "inactive", "enabled"] {
         let f = WorkCheckout::new();
         install_matching_sweep_unit(&f.home);
+        settle_stores(&f);
         let bin = write_substitute_systemctl(f.temp.path());
         let path_var = {
             let mut e = vec![bin.clone()];
@@ -271,6 +523,14 @@ fn doctor_warns_about_selected_root_skill_links_without_changing_discovery_entri
     let home_target = f.home.join("missing-skill");
     link(&home_target, &home_link);
     let invoke = |args: &[&str]| {
+        if args.first() == Some(&"doctor") {
+            command(&f)
+                .arg("--root")
+                .arg(&global)
+                .args(["task", "list"])
+                .output()
+                .expect("create stores");
+        }
         command(&f)
             .arg("--root")
             .arg(&global)
@@ -424,6 +684,117 @@ fn doctor_unknown_check_suggests_listing_valid_checks() {
 }
 
 #[test]
+fn search_index_doctor_checks_local_coverage_on_owner_and_replica() {
+    if in_child("doctor::search_index_doctor_checks_local_coverage_on_owner_and_replica") {
+        return;
+    }
+    let scratch = std::env::var_os("HOME").expect("isolated test home");
+    let owner = WorkCheckout::new_in(scratch.as_ref());
+    let replica = WorkCheckout::new_in(scratch.as_ref());
+    let orbit_dir = |fixture: &WorkCheckout| fixture.work.join(".orbit");
+    for (fixture, name) in [(&owner, "coverage-owner"), (&replica, "coverage-replica")] {
+        command(fixture)
+            .current_dir(&fixture.home)
+            .arg("--root")
+            .arg(orbit_dir(fixture))
+            .args([
+                "init",
+                "--non-interactive",
+                "--machine-name",
+                name,
+                "--task-prefix",
+                "DC",
+            ])
+            .assert()
+            .success();
+    }
+    let cli = |fixture: &WorkCheckout, args: &[&str]| {
+        let root = orbit_dir(fixture);
+        let mut cmd = vec!["--root", root.to_str().unwrap()];
+        cmd.extend(args);
+        run_ok(fixture, &cmd)
+    };
+    let json = |fixture: &WorkCheckout, args: &[&str]| -> Value {
+        serde_json::from_slice(&cli(fixture, args).stdout).unwrap()
+    };
+    let coverage = |fixture| {
+        cli(fixture, &["task", "list"]);
+        json(fixture, &["doctor", "--check", "search-index", "--json"])
+    };
+    let rebuild = |fixture| json(fixture, &["search", "reindex", "--json"]);
+
+    cli(&owner, &["workspace", "init", "--name", "coverage"]);
+    let registration = json(&owner, &["workspace", "show", "--json"]);
+    let owner_id = registration["workspace"]["owner_machine_id"]
+        .as_str()
+        .unwrap();
+    let task = json(
+        &owner,
+        &[
+            "task",
+            "add",
+            "--title",
+            "Coverage marker",
+            "--complexity",
+            "low",
+            "--json",
+        ],
+    );
+    let index = orbit_dir(&owner).join("state/semantic.db");
+    fs::rename(&index, index.with_extension("old")).expect("set aside the generated search index");
+    let missing = coverage(&owner);
+    assert_eq!(missing["status"], "warning", "{missing}");
+    msg_has(&missing, "0 indexed tasks / 1 stored tasks");
+    fix_has(&missing, "orbit search reindex");
+    assert_eq!(rebuild(&owner)["tasks"], 1);
+    assert_eq!(coverage(&owner)["status"], "ok");
+    let found = json(
+        &owner,
+        &["search", "Coverage marker", "--kind", "task", "--json"],
+    );
+    assert_eq!(found["results"][0]["id"], task["id"]);
+
+    cli(
+        &replica,
+        &[
+            "workspace",
+            "init",
+            "--name",
+            "coverage",
+            "--role",
+            "replica",
+            "--owner",
+            owner_id,
+        ],
+    );
+    // Give the replica an existing local bundle and its registry entry.
+    let owner_tasks = orbit_dir(&owner).join("tasks");
+    let replica_tasks = orbit_dir(&replica).join("tasks");
+    let partition = "workspaces/ws_coverage";
+    let task_id = task["id"].as_str().unwrap();
+    mkdir(&replica_tasks.join(partition));
+    fs::rename(
+        owner_tasks.join(partition).join(task_id),
+        replica_tasks.join(partition).join(task_id),
+    )
+    .unwrap();
+    fs::copy(
+        owner_tasks.join("index.sqlite"),
+        replica_tasks.join("index.sqlite"),
+    )
+    .unwrap();
+    assert_eq!(rebuild(&replica)["tasks"], 1);
+    let rebuilt = coverage(&replica);
+    assert_eq!(rebuilt["status"], "ok", "{rebuilt}");
+    msg_has(&rebuilt, "1 indexed tasks / 1 stored tasks");
+    assert!(rebuilt["remediation"].is_null(), "{rebuilt}");
+    assert_eq!(
+        json(&replica, &["task", "list", "--json"]),
+        serde_json::json!([])
+    );
+}
+
+#[test]
 fn default_doctor_checks_schema_and_deep_detects_corrupt_data() {
     if in_child("doctor::default_doctor_checks_schema_and_deep_detects_corrupt_data") {
         return;
@@ -477,12 +848,16 @@ fn default_doctor_checks_schema_and_deep_detects_corrupt_data() {
         .unwrap_or_default();
     let named = names.split(", ").any(|n| n == "database");
     assert!(named, "audit must name database: {failed}");
+    // The report only observes, so the writable commands above installed the
+    // job definitions it can now see; compare the table with a report taken
+    // in that same state.
+    let settled_rows = rows(&doctor(&f, &["--deep"]));
     let table = run(&f, &["doctor", "--deep", "--format", "table"]);
     assert_eq!(table.status.code(), Some(1));
     let stdout = utf8(table.stdout);
     let (_, findings) = stdout.split_once("Findings:").expect("CLI findings");
     // An `info` row is a fact about the setup, not a finding.
-    for d in deep_rows
+    for d in settled_rows
         .iter()
         .filter(|d| d["status"] != "ok" && d["status"] != "info")
     {
@@ -510,10 +885,18 @@ fn permission_remediation_repairs_legacy_state_and_preserves_excluded_trees() {
     doctor(&f, &[]);
     let global = f.home.join(".orbit");
     let workspace = f.work.join(".orbit");
+    // A store wide enough that the scan splits its task directories across
+    // threads; the writable and excluded trees sit in different runs.
+    let wide = global.join("tasks/workspaces/wide");
+    for index in 0..80 {
+        mkdir(&wide.join(format!("ORB-{index:05}")));
+    }
     let legacy = [
         global.clone(),
         global.join("tasks"),
         global.join("tasks/workspaces/legacy/artifacts/files/validation/claim-legacy"),
+        wide.join("ORB-00003/artifacts"),
+        wide.join("ORB-00077/artifacts/files"),
         global.join("state/logs/legacy"),
         global.join("frictions/legacy"),
         workspace.clone(),
@@ -530,6 +913,7 @@ fn permission_remediation_repairs_legacy_state_and_preserves_excluded_trees() {
         global.join("state/worktrees/run/nested"),
         global.join("tasks/target"),
         global.join("tasks/target/nested"),
+        wide.join("ORB-00040/target"),
         workspace.join("state/worktrees"),
         workspace.join("state/worktrees/run/nested"),
         workspace.join("state/legacy/target"),
@@ -791,10 +1175,14 @@ fn terminal_findings_preserve_messages_commands_and_one_line_rows() {
     for message in [ERROR_MESSAGE, WARNING_MESSAGE] {
         has(&collapsed, message);
     }
-    has(findings, "Fix: orbit index refresh");
+    has(findings, "  Fix: orbit index refresh");
     has(
         findings,
-        "Fix: orbit auto-task recover\n  delivery-code-review",
+        "  Fix: orbit auto-task recover\n    delivery-code-review",
+    );
+    assert!(
+        !findings.lines().any(|l| l.starts_with("Fix:")),
+        "Fix must share the finding's indent, not column 0: {findings}"
     );
     assert!(!findings.contains("database"), "{findings}");
     for line in findings.lines().filter(|l| !l.starts_with("Table details")) {
@@ -803,12 +1191,12 @@ fn terminal_findings_preserve_messages_commands_and_one_line_rows() {
     has(&collapsed, "--format plain or --json");
     let narrow = render_fixture("narrow");
     assert!(
-        !narrow.lines().any(|l| l == format!("Fix: {FIX}")),
+        !narrow.lines().any(|l| l == format!("  Fix: {FIX}")),
         "over-width action must wrap: {narrow}"
     );
     has(
         &narrow,
-        "Fix: orbit auto-task recover\n  delivery-code-review",
+        "  Fix: orbit auto-task recover\n    delivery-code-review",
     );
     for line in narrow
         .lines()
@@ -822,7 +1210,7 @@ fn terminal_findings_preserve_messages_commands_and_one_line_rows() {
     let wide = render_fixture("wide");
     has(&wide, ERROR_MESSAGE);
     assert!(
-        wide.lines().any(|l| l == format!("Fix: {FIX}")),
+        wide.lines().any(|l| l == format!("  Fix: {FIX}")),
         "sufficient width keeps action on one line: {wide}"
     );
     assert!(!wide.contains("Table details shortened"), "{wide}");
@@ -885,10 +1273,11 @@ fn doctor_lists_a_retired_config_key_and_the_fix_removes_only_that_key() {
         .into_iter()
         .filter(|r| r["status"] == "warning")
         .collect();
+    // `[task]` has no registered keys left, so the unknown table is reported whole.
     for key in [
         "workflow.system_crew",
         "lease.enabled",
-        "task.approval",
+        "task",
         "workflow.future",
         "future",
     ] {
@@ -1284,6 +1673,23 @@ fn doctor_reports_git_protection_refusals_with_their_fix() {
     fs::hard_link(&object, object.with_file_name("tmp_obj_Ab12Cd")).expect("temp leftover");
     let paired = rows(&doctor(&f, &[]));
     expect_status(&paired, "git-protection", "ok");
+    // The fan-out directories are scanned concurrently: names of one inode
+    // split across two of them still add up to every name being in the store,
+    // while a fan-out object aliased outside `.git` is still refused.
+    let split = git.join("objects/62/tmp_obj_Ef34Gh");
+    mkdir(split.parent().unwrap());
+    fs::hard_link(&object, &split).expect("cross fan-out name");
+    expect_status(&rows(&doctor(&f, &[])), "git-protection", "ok");
+    let outside_object = f.temp.path().join("outside-object");
+    put(&outside_object, "loose object");
+    let escaped = git.join("objects/63/9e7b14c3a0f2d5e6b7c8d9e0f1a2b3c4d5e6f7a");
+    mkdir(escaped.parent().unwrap());
+    fs::hard_link(&outside_object, &escaped).expect("escaped object");
+    let escape = rows(&doctor(&f, &[]));
+    let refused = row(&escape, "git-protection");
+    assert_eq!(refused["status"], "warning", "{refused}");
+    msg_has(refused, &escaped.display().to_string());
+    fs::remove_file(&escaped).expect("remove escaped object");
     // A hook aliased to a file outside `.git` stays refused.
     let outside = f.temp.path().join("outside-hook");
     put(&outside, "#!/bin/sh\n");
@@ -1512,6 +1918,7 @@ fn doctor_keeps_a_missing_cli_an_error_on_a_host_the_executor_supports() {
     ] {
         let f = routed_crew_fixture(crew, provider);
         let launcher = pin_missing_launcher(&f, provider);
+        settle_stores(&f);
         let mut cmd = command(&f);
         cmd.env("PATH", f.temp.path()).args(["doctor", "--json"]);
         let out = cmd.output().expect("doctor");
@@ -1841,4 +2248,164 @@ fn broken_script_only_refuses_jobs_that_reference_it() {
     has(&error, &manifest.display().to_string());
     has(&error, "repair that manifest");
     has(&error, "orbit script revoke broken");
+}
+
+fn job_run_state(db: &std::path::Path, run_id: &str) -> (String, Option<String>) {
+    Connection::open(db)
+        .expect("open orbit.db")
+        .query_row(
+            "SELECT state, finished_at FROM job_runs WHERE run_id = ?1",
+            [run_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("job run row")
+}
+
+/// STD-01 §R31: a bare report must not reconcile the stale run it reports.
+#[cfg(unix)]
+#[test]
+fn bare_doctor_reports_a_stale_run_without_reconciling_it() {
+    if in_child("doctor::bare_doctor_reports_a_stale_run_without_reconciling_it") {
+        return;
+    }
+    let f = WorkCheckout::new();
+    run_ok(&f, &["workspace", "init", "--name", "doctor-readonly"]);
+    let runtime =
+        orbit_core::OrbitRuntime::from_roots(&f.home.join(".orbit"), &f.work.join(".orbit"))
+            .expect("runtime");
+    let workspace_id = runtime.workspace_id().expect("workspace id");
+    drop(runtime);
+    let mut gone = std::process::Command::new("true").spawn().expect("spawn");
+    let dead_pid = gone.id();
+    gone.wait().expect("wait");
+    let db = f.home.join(".orbit/orbit.db");
+    let run_id = "jrun-stale-doctor";
+    let started = (chrono::Utc::now() - chrono::Duration::minutes(10)).to_rfc3339();
+    Connection::open(&db)
+        .expect("open orbit.db")
+        .execute(
+            "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_auto_pipeline',1,'running','{}',?3,?3,?3,?4)",
+            rusqlite::params![run_id, workspace_id, started, dead_pid],
+        )
+        .expect("seed stale run");
+    let before = job_run_state(&db, run_id);
+    assert_eq!(before.0, "running");
+
+    let report = rows(&doctor(&f, &[]));
+    let job_runs = row(&report, "job-runs");
+    assert_eq!(job_runs["status"], "warning", "{job_runs}");
+    msg_has(job_runs, run_id);
+    assert_eq!(
+        job_run_state(&db, run_id),
+        before,
+        "a bare doctor leaves the stale run as it found it"
+    );
+    let again = rows(&doctor(&f, &[]));
+    msg_has(row(&again, "job-runs"), run_id);
+}
+
+fn reservation_release(
+    db: &std::path::Path,
+    reservation_id: &str,
+) -> (Option<String>, Option<String>) {
+    Connection::open(db)
+        .expect("open orbit.db")
+        .query_row(
+            "SELECT released_at, release_reason FROM task_reservations WHERE reservation_id = ?1",
+            [reservation_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("reservation row")
+}
+
+/// [ORB-25811] The read-only host surface (`orbit attention`) runs the full
+/// doctor sweep on a same-generation checkout that is not write-free. Its
+/// pull-drain rows (`pull-protocol`, `pull-gates`) must observe a stale pull
+/// drain, not finalize it: its state, finished time and task reservations stay
+/// as stored. The bare report, which is write-free, is checked as well.
+#[cfg(unix)]
+#[test]
+fn read_only_doctor_sweep_leaves_a_stale_pull_drain_and_its_reservations_as_found() {
+    if in_child(
+        "doctor::read_only_doctor_sweep_leaves_a_stale_pull_drain_and_its_reservations_as_found",
+    ) {
+        return;
+    }
+    let f = WorkCheckout::new();
+    run_ok(&f, &["workspace", "init", "--name", "doctor-pull-observe"]);
+    let runtime =
+        orbit_core::OrbitRuntime::from_roots(&f.home.join(".orbit"), &f.work.join(".orbit"))
+            .expect("runtime");
+    let workspace_id = runtime.workspace_id().expect("workspace id");
+    drop(runtime);
+    let mut gone = std::process::Command::new("true").spawn().expect("spawn");
+    let dead_pid = gone.id();
+    gone.wait().expect("wait");
+    let db = f.home.join(".orbit/orbit.db");
+    let run_id = "jrun-stale-pull-doctor";
+    let reservation_id = "reservation-jrun-stale-pull-doctor";
+    let started = (chrono::Utc::now() - chrono::Duration::minutes(10)).to_rfc3339();
+    let orbit_dir = std::fs::canonicalize(&f.work)
+        .expect("canonical checkout")
+        .join(".orbit");
+    let conn = Connection::open(&db).expect("open orbit.db");
+    conn.execute(
+        "INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'workspace_pull_pipeline',1,'running','{}',?3,?3,?3,?4)",
+        rusqlite::params![run_id, workspace_id, started, dead_pid],
+    )
+    .expect("seed stale pull run");
+    conn.execute(
+        "INSERT INTO task_reservations (reservation_id, workspace_orbit_dir, workspace_id, task_ids_json, files_json, actor, created_at, expires_at, owner_run_id) VALUES (?1, ?2, ?3, '[]', '[\"src/pull.rs\"]', 'fixture', ?4, '2099-01-01T00:00:00+00:00', ?5)",
+        rusqlite::params![
+            reservation_id,
+            orbit_dir.to_string_lossy(),
+            workspace_id,
+            started,
+            run_id
+        ],
+    )
+    .expect("seed pull-owned reservation");
+    drop(conn);
+    let before = job_run_state(&db, run_id);
+    assert_eq!(before.0, "running");
+    assert_eq!(reservation_release(&db, reservation_id), (None, None));
+
+    let report = rows(&doctor(&f, &[]));
+    for check in ["pull-protocol", "pull-gates"] {
+        assert_eq!(row(&report, check)["status"], "ok", "bare {check}");
+    }
+    assert_eq!(
+        job_run_state(&db, run_id),
+        before,
+        "bare report leaves the stale pull drain as it found it"
+    );
+    assert_eq!(
+        reservation_release(&db, reservation_id),
+        (None, None),
+        "bare report keeps the pull drain's reservation active"
+    );
+
+    // `orbit attention` opens the checkout read-only (same generation) and
+    // runs the same sweep; the stale run must appear in its output. It needs
+    // the operator capability, which the test sets as the other attention tests do.
+    let attention = command(&f)
+        .env("ORBIT_OPERATOR", "1")
+        .args(["attention", "--kind", "host_unhealthy", "--json"])
+        .output()
+        .expect("attention command");
+    let stdout = String::from_utf8_lossy(&attention.stdout).into_owned();
+    assert!(
+        stdout.contains(run_id),
+        "attention did not reach the doctor sweep naming the stale run: {attention:?}"
+    );
+    assert_eq!(
+        job_run_state(&db, run_id),
+        before,
+        "attention leaves the stale pull drain as it found it"
+    );
+    assert_eq!(
+        reservation_release(&db, reservation_id),
+        (None, None),
+        "attention keeps the pull drain's reservation active"
+    );
 }

@@ -4,7 +4,7 @@ use orbit_automation::review::{validation_limitations, validation_role_counts};
 use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskArtifact, TaskStatus};
 use orbit_types::workflow::{
-    FindingDisposition, ReviewCertificate, ReviewValidation, ReviewVerdict,
+    FindingDisposition, REVIEW_GATE_ARTIFACT, ReviewCertificate, ReviewValidation, ReviewVerdict,
 };
 
 use crate::OrbitRuntime;
@@ -53,50 +53,45 @@ fn comment_lead(certificate: &ReviewCertificate, delivery: &Delivery) -> String 
 }
 
 /// The task comment a settlement posts [ORB-13989]: the verdict, every
-/// finding with what the reviewer changed for it, then the evidence.
+/// finding with what the reviewer changed for it, the one-line consequence,
+/// then only the evidence lines that carry information [ORB-25129]. The full
+/// certificate is the `review-gate.json` artifact.
 pub(in crate::application::review::gate) fn verdict_comment(
     certificate: &ReviewCertificate,
     delivery: &Delivery,
 ) -> String {
-    let assurance = certificate
-        .assurance
-        .map(|assurance| assurance.as_str().to_string())
-        .unwrap_or_else(|| "none".to_string());
-    let reviewer_commit = if certificate.repair_commits.is_empty() {
-        "none".to_string()
-    } else {
-        certificate
-            .repair_commits
-            .iter()
-            .map(|commit| {
-                format!(
-                    "`{}` `{}` by {}",
-                    commit.commit,
-                    one_line(&commit.subject),
-                    commit.author
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
+    let lead = match certificate.assurance {
+        Some(assurance) => format!(
+            "{} (assurance: {})",
+            comment_lead(certificate, delivery),
+            assurance.as_str()
+        ),
+        None => comment_lead(certificate, delivery),
     };
-    format!(
-        "{} (assurance: {}).\n\n\
-         {}\n\n\
-         - Reviewer: crew `{}` ({} / {}){}\n\
-         - Implementation: `{}` on base `{}` ({} commit(s), unchanged by review)\n\
-         - Reviewer commit: {}\n\
-         - Final candidate: `{}`\n\
-         - Selectors widened for reviewer-changed paths: {}\n\
-         - Validation on final candidate: {} record(s) [{}], complete: {}\n\
-         - Owner-required checks: {}\n\
-         - Not established by this review: {}\n\
-         - Required checks retained from earlier report revisions: {}\n\
-         - Reviewer runtime: {}s of {} min\n\
-         - Escalation: {}\n\n\
-         {}",
-        comment_lead(certificate, delivery),
-        assurance,
-        finding_lines(&certificate.findings),
+    let findings = finding_lines(&certificate.findings);
+    let consequence = format!(
+        "{} Full certificate: `{REVIEW_GATE_ARTIFACT}`.",
+        verdict_consequence(certificate, delivery)
+    );
+    // A blank line keeps the consequence out of the last finding's list item.
+    let mut comment = if findings.is_empty() {
+        format!("{lead}.\n{consequence}")
+    } else {
+        format!("{lead}.\n\n{findings}\n\n{consequence}")
+    };
+    for line in evidence_lines(certificate) {
+        comment.push('\n');
+        comment.push_str(&line);
+    }
+    comment
+}
+
+/// The evidence block. A default that a reader would not act on has no line:
+/// no reviewer commit, no widened selectors, no owner checks configured, no
+/// limitation, no retained check and no escalation.
+fn evidence_lines(certificate: &ReviewCertificate) -> Vec<String> {
+    let mut lines = vec![format!(
+        "- Reviewer: crew `{}` ({} / {}){}",
         certificate.reviewer.crew,
         certificate.reviewer.provider,
         certificate.reviewer.model,
@@ -105,27 +100,75 @@ pub(in crate::application::review::gate) fn verdict_comment(
         } else {
             ""
         },
-        certificate.reviewed_candidate.commit,
-        certificate.base.commit,
+    )];
+    lines.push(format!(
+        "- Implementation: `{}` on base `{}` ({} commit(s), unchanged by review)",
+        short_commit(&certificate.reviewed_candidate.commit),
+        short_commit(&certificate.base.commit),
         certificate.implementation_commits.len(),
-        reviewer_commit,
-        certificate.final_candidate.commit,
-        if certificate.selectors_widened.is_empty() {
-            "none".to_string()
-        } else {
+    ));
+    if !certificate.repair_commits.is_empty() {
+        let commits = certificate
+            .repair_commits
+            .iter()
+            .map(|commit| {
+                format!(
+                    "`{}` `{}` by {}",
+                    short_commit(&commit.commit),
+                    one_line(&commit.subject),
+                    commit.author
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("- Reviewer commit: {commits}"));
+    }
+    if certificate.final_candidate.commit != certificate.reviewed_candidate.commit {
+        lines.push(format!(
+            "- Final candidate: `{}`",
+            short_commit(&certificate.final_candidate.commit)
+        ));
+    }
+    if !certificate.selectors_widened.is_empty() {
+        lines.push(format!(
+            "- Selectors widened for reviewer-changed paths: {}",
             certificate.selectors_widened.join(", ")
-        },
-        certificate.validation.len(),
-        validation_roles(&certificate.validation),
+        ));
+    }
+    lines.push(format!(
+        "- Validation on final candidate: {}, complete: {}",
+        validation_tally(&certificate.validation),
         certificate.validation_complete,
-        required_commands_line(certificate.required_validation_commands.as_deref()),
-        limitations_line(&certificate.validation),
-        retained_line(certificate),
-        certificate.consumed.seconds,
-        certificate.budget.minutes,
-        certificate.escalation.as_deref().unwrap_or("none"),
-        verdict_consequence(certificate, delivery),
-    )
+    ));
+    if let Some(checks) = owner_checks_line(certificate.required_validation_commands.as_deref()) {
+        lines.push(format!("- Owner-required checks: {checks}"));
+    }
+    if let Some(limitations) = limitations_line(&certificate.validation) {
+        lines.push(format!("- Not established by this review: {limitations}"));
+    }
+    if let Some(retained) = retained_line(certificate) {
+        lines.push(format!(
+            "- Required checks retained from earlier report revisions: {retained}"
+        ));
+    }
+    lines.push(format!(
+        "- Reviewer runtime: {}s of {} min",
+        certificate.consumed.seconds, certificate.budget.minutes
+    ));
+    if let Some(escalation) = certificate
+        .escalation
+        .as_deref()
+        .filter(|escalation| !escalation.trim().is_empty())
+    {
+        lines.push(format!("- Escalation: {escalation}"));
+    }
+    lines
+}
+
+/// A commit id shortened for a task comment; the `review-gate.json` artifact
+/// keeps the full id.
+fn short_commit(commit: &str) -> &str {
+    commit.get(..12).unwrap_or(commit)
 }
 
 /// What the verdict means for delivery, in one paragraph.
@@ -205,10 +248,10 @@ fn landing_consequence(
 
 /// Every finding of the attempt with its disposition and, for a fix, what
 /// the reviewer changed and where; any other finding names the paths it
-/// cites.
+/// cites. Empty when the attempt has no findings.
 fn finding_lines(findings: &[orbit_types::workflow::ReviewFinding]) -> String {
     if findings.is_empty() {
-        return "Findings: none.".to_string();
+        return String::new();
     }
     let mut lines = String::from("Findings:");
     for finding in findings {
@@ -362,65 +405,81 @@ fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// The classification breakdown of a validation set, so a reader sees which
+/// The record count with the classification breakdown, so a reader sees which
 /// records were required checks and which were controls or exclusions
 /// without opening the certificate.
-fn validation_roles(records: &[ReviewValidation]) -> String {
+fn validation_tally(records: &[ReviewValidation]) -> String {
+    let count = format!("{} record(s)", records.len());
     let counts = validation_role_counts(records);
     if counts.is_empty() {
-        return "none".to_string();
+        return count;
     }
-    counts
+    let roles = counts
         .into_iter()
         .map(|(role, count)| format!("{count} {}", role.as_str()))
         .collect::<Vec<_>>()
-        .join(", ")
+        .join(", ");
+    format!("{count} [{roles}]")
 }
 
-/// The failed diagnostics a certificate does not cover, on one line.
-fn limitations_line(records: &[ReviewValidation]) -> String {
+/// The owner-required checks, or `None` when none are configured: that is the
+/// default, and the review validation section of the PR body still names it.
+fn owner_checks_line(commands: Option<&[String]>) -> Option<String> {
+    match commands {
+        Some([]) => None,
+        commands => Some(required_commands_line(commands)),
+    }
+}
+
+/// The failed diagnostics a certificate does not cover, on one line; `None`
+/// when every diagnostic passed.
+fn limitations_line(records: &[ReviewValidation]) -> Option<String> {
     let limitations = validation_limitations(records);
     if limitations.is_empty() {
-        "none".to_string()
-    } else {
+        return None;
+    }
+    Some(
         limitations
             .iter()
             .map(|limitation| one_line(limitation))
             .collect::<Vec<_>>()
-            .join("; ")
-    }
+            .join("; "),
+    )
 }
 
 /// Earlier report revisions' required checks, with their observed outcomes
-/// and, for one the final report retired, the reason it gave.
-fn retained_line(certificate: &ReviewCertificate) -> String {
+/// and, for one the final report retired, the reason it gave. `None` when no
+/// earlier revision retained a check.
+fn retained_line(certificate: &ReviewCertificate) -> Option<String> {
     if certificate.retained_obligations.is_empty() {
-        return "none".to_string();
+        return None;
     }
-    certificate
-        .retained_obligations
-        .iter()
-        .map(|obligation| {
-            let validation = &obligation.validation;
-            let id = validation.record_id();
-            let retired = id.and_then(|id| {
-                certificate
-                    .retired_validation
-                    .iter()
-                    .find(|retired| retired.id.trim() == id)
-            });
-            format!(
-                "{}`{}` {}{}",
-                id.map(|id| format!("{id} ")).unwrap_or_default(),
-                one_line(&validation.command),
-                validation.outcome.as_str(),
-                retired
-                    .map(|retired| format!(" (retired: {})", one_line(&retired.reason)))
-                    .unwrap_or_default()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
+    Some(
+        certificate
+            .retained_obligations
+            .iter()
+            .map(|obligation| {
+                let validation = &obligation.validation;
+                let id = validation.record_id();
+                let retired = id.and_then(|id| {
+                    certificate
+                        .retired_validation
+                        .iter()
+                        .find(|retired| retired.id.trim() == id)
+                });
+                format!(
+                    "{}`{}` {}{}",
+                    id.map(|id| format!("{id} ")).unwrap_or_default(),
+                    one_line(&validation.command),
+                    validation.outcome.as_str(),
+                    retired
+                        .map(|retired| format!(" (retired: {})", one_line(&retired.reason)))
+                        .unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
 }
 
 /// Write a gate artifact under the executor run's authority. A claimed leaf

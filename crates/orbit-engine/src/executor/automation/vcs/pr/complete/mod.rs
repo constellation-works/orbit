@@ -68,6 +68,12 @@
 //! SHA. At most `BASE_MODIFIED_MERGE_ATTEMPTS` requests are made, within the
 //! unchanged wait budget.
 //!
+//! The exact "Merge already in progress" HTTP 405 instead permits at most
+//! three read-only observations, with ordinary poll waits and the original
+//! deadline. It never resends the merge or enters repair; only the same strict
+//! merged evidence as server-error reconciliation below completes delivery.
+//! Its observation counter is independent of base-modification retries.
+//!
 //! A completed synchronous HTTP 500/502/503/504 server error with an exact
 //! provider diagnostic may instead be an uncertain landing. Completion makes
 //! one read-only status observation within the original deadline, accepting

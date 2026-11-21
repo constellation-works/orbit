@@ -177,6 +177,7 @@ fn task_list_page_json(
     let detail_riskiness = riskiness.clone();
     let projection = TaskListProjection::new(runtime)
         .with_delivery_attention(attention)
+        .with_run_branches(runtime.local_run_branches(page.items.iter()))
         .with_riskiness(riskiness);
     let items = page
         .items

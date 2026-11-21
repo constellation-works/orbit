@@ -38,8 +38,12 @@ To do it yourself, run this in the repository:
 
 ```bash
 orbit workspace init --mcp
+orbit task list
 orbit doctor
 ```
+
+`orbit task list` creates the databases that `orbit doctor` only observes;
+without it, `orbit doctor` prints a single `runtime` error row on a new machine.
 
 [Set up by hand](/getting-started/install/#set-up-by-hand) explains each step.
 

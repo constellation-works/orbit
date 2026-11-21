@@ -18,6 +18,17 @@ pub const JSON_RPC_INVALID_PARAMS_CODE: i64 = -32602;
 const UNKNOWN_INTERNAL_DRAIN_OPERATION_RPC_MESSAGE: &str = "unknown internal drain operation";
 
 impl OrbitError {
+    /// Whether this is a store refusal from an observation-only open whose
+    /// remedy is one ordinary writable open (for example `orbit task list`).
+    /// An unsupported or corrupt store is a store error too, but a writable
+    /// open cannot repair it.
+    ///
+    /// Answered from the variant alone, so a formatted path or diagnostic
+    /// quoting read-only text never triggers writable-open remediation.
+    pub fn owes_writable_store_open(&self) -> bool {
+        matches!(self, Self::StoreWritableOpenOwed(_))
+    }
+
     /// Stable machine-readable code shared by Orbit error surfaces.
     pub fn wire_code(&self) -> &str {
         match self {
@@ -58,12 +69,14 @@ impl OrbitError {
             }
             OrbitError::ForceOverridable(_) => "force_overridable",
             OrbitError::InvalidInput(_)
+            | OrbitError::TaskDeliveryUnavailable(_)
             | OrbitError::InvalidInputDiagnostic { .. }
             | OrbitError::ClaimRefused { .. } => const { RemoteToolCode::InvalidInput.as_str() },
             OrbitError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
             OrbitError::SensitiveInput { .. } => "sensitive_input",
             OrbitError::SkillValidation(_) | OrbitError::JobValidation(_) => "validation_failed",
-            OrbitError::SourceRepairRunStateRefused { .. } => "validation_failed",
+            OrbitError::SourceRepairRunStateRefused { .. }
+            | OrbitError::SourceRepairOperatorDecisionRefused { .. } => "validation_failed",
             OrbitError::SourceRepairAuthorityRefused(code) => {
                 if code.reports_as_execution() {
                     "execution_failed"
@@ -95,7 +108,11 @@ impl OrbitError {
             OrbitError::OutcomeUnknown { .. } => "outcome_unknown",
             OrbitError::RemoteTool { code, .. } => code.as_str(),
             OrbitError::DeliveryRefused { refusal, .. } => refusal.error_code(),
+            OrbitError::ProviderModelAccessHold(_) => {
+                orbit_types::workflow::PROVIDER_MODEL_ACCESS_HOLD_CODE
+            }
             OrbitError::Execution(_)
+            | OrbitError::FootprintUnavailable(_)
             | OrbitError::UpgradeAdmissionRefused(_)
             | OrbitError::PrivateVcs(_)
             | OrbitError::ForgeUnavailable(_)
@@ -103,7 +120,7 @@ impl OrbitError {
             | OrbitError::ExecutionTimeout { .. } => "execution_failed",
             OrbitError::ProcessTimeout { .. } => "process_timeout",
             OrbitError::TaskBundleCorrupt { .. } => "task_bundle_corrupt",
-            OrbitError::Store(_) => "store_error",
+            OrbitError::Store(_) | OrbitError::StoreWritableOpenOwed(_) => "store_error",
             // [ORB-15088] Retryable, unlike `internal_error`: a pull follower
             // retries an owner read that lost only to a lock-wait deadline and
             // never mistakes it for a failure of its candidate.
@@ -111,6 +128,9 @@ impl OrbitError {
                 LOCK_BUSY_ERROR_CODE
             }
             OrbitError::WorkspaceError(_) => "workspace_error",
+            OrbitError::WorkspaceRebindHostStoreRequired { .. } => {
+                "workspace_rebind_host_store_required"
+            }
             OrbitError::Io(_) => "io_error",
             OrbitError::Migration(_) => "migration_failed",
             OrbitError::StorageAccessDenied { .. } => "storage_access_denied",
@@ -132,6 +152,9 @@ impl OrbitError {
     /// Structured error details shared by Orbit error surfaces.
     pub fn wire_details(&self) -> serde_json::Map<String, serde_json::Value> {
         let mut fields = serde_json::Map::new();
+        if let Self::WorkspaceRebindHostStoreRequired { path } = self {
+            fields.insert("path".to_string(), serde_json::json!(path));
+        }
         if let Some((host, path, _)) = self.host_configuration_details() {
             fields.insert("host".to_string(), serde_json::json!(host));
             fields.insert("path".to_string(), serde_json::json!(path));
@@ -277,6 +300,9 @@ impl OrbitError {
             return Some(orbit_types::workflow::StepFailureCode::OwnerRouteUnavailable);
         }
         match self {
+            Self::FootprintUnavailable(_) => {
+                Some(orbit_types::workflow::StepFailureCode::FootprintUnavailable)
+            }
             Self::RemoteTool { code, .. } => {
                 Some(orbit_types::workflow::StepFailureCode::parse(code.as_str()))
             }
@@ -591,7 +617,10 @@ impl OrbitError {
             Self::SourceRepairAuthorityRefused(code) if !code.reports_as_execution() => {
                 Some(code.message().into())
             }
-            Self::SourceRepairRunStateRefused { message, .. } => Some(message.as_str().into()),
+            Self::SourceRepairRunStateRefused { message, .. }
+            | Self::SourceRepairOperatorDecisionRefused { message } => {
+                Some(message.as_str().into())
+            }
             _ => None,
         }
     }
@@ -654,7 +683,7 @@ impl OrbitError {
     pub fn storage_layer(&self) -> Option<StorageLayer> {
         match self {
             Self::Io(_) => Some(StorageLayer::Io),
-            Self::Store(_) => Some(StorageLayer::Store),
+            Self::Store(_) | Self::StoreWritableOpenOwed(_) => Some(StorageLayer::Store),
             Self::Migration(_) => Some(StorageLayer::Migration),
             Self::StorageAccessDenied { layer, .. } | Self::StorageLockBusy { layer, .. } => {
                 Some(*layer)

@@ -10,10 +10,13 @@ use super::published_owner::{next, save_run};
 use super::*;
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_types::task::{
-    CANDIDATE_DISCARDED_EVENT, DecisionAction, DecisionBinding, DecisionGate, DecisionRequest,
-    DecisionRewrite, TaskRelationType, decision_option_answers,
+    ACCEPT_FINDINGS_ANSWER_ID, CANDIDATE_DISCARDED_EVENT, DecisionAction, DecisionBinding,
+    DecisionGate, DecisionRequest, DecisionRewrite, FINDING_ACCEPTANCE_EVENT,
+    RecordedReviewFinding, RecordedReviewSettlement, ReviewSettlementGate, TaskRelationType,
+    decision_option_answers,
 };
 use orbit_types::task::{DecisionOptionInput, DecisionRequestState};
+use orbit_types::workflow::{FindingDisposition, ReviewVerdict};
 use std::sync::Arc;
 
 use super::failed_publication::{escalated_completion_fixture, escalated_handoff_fixture};
@@ -483,6 +486,243 @@ fn a_held_run_without_a_review_decision_refuses_the_split() {
     );
 }
 
+fn plant_open_low_finding(f: &Fixture) {
+    let settlement = RecordedReviewSettlement {
+        gate: ReviewSettlementGate::BeforeLanding,
+        attempt_id: "attempt-open-low".into(),
+        verdict: ReviewVerdict::Reject,
+        reviewer_crew: None,
+        reviewer_model: None,
+        reviewed_commit: Some(f.head.clone()),
+        final_commit: Some(f.head.clone()),
+        runtime_seconds: None,
+        findings: vec![RecordedReviewFinding {
+            severity: "low".into(),
+            disposition: FindingDisposition::Open,
+            paths: std::collections::BTreeSet::new(),
+            line: "`low-1` [low, open] one low finding remains open".into(),
+        }],
+    };
+    f.runtime
+        .apply_task_automation_update(
+            &f.task,
+            orbit_engine::TaskAutomationUpdate {
+                append_history: vec![settlement.history_entry(Utc::now(), "system")],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
+
+fn offered(f: &Fixture, request: &DecisionRequest) -> DecisionRequest {
+    f.runtime
+        .get_task_decision_requests(&f.task)
+        .unwrap()
+        .into_iter()
+        .find(|candidate| candidate.id == request.id)
+        .expect("the block request is still open")
+}
+
+fn assert_rewrite_says_the_candidate_is_discarded(request: &DecisionRequest) {
+    let rewrite = request
+        .answers
+        .iter()
+        .find(|answer| answer.id == "1")
+        .expect("the rewrite option");
+    assert!(
+        rewrite.label.contains("candidate is discarded"),
+        "the offer label says the candidate is discarded: {}",
+        rewrite.label
+    );
+    assert!(
+        rewrite.consequence.contains("candidate is discarded"),
+        "the offer consequence says the candidate is discarded: {}",
+        rewrite.consequence
+    );
+}
+
+/// Published failure handoff, open low finding, rewrite plus requeue. Accepting
+/// the finding keeps the specification and resumes the same candidate.
+fn an_open_finding_on_a_green_handoff_is_accepted_and_the_candidate_resumes() {
+    let (f, _) = escalated_handoff_fixture(None, None);
+    plant_open_low_finding(&f);
+    let before = f.runtime.get_task(&f.task).unwrap();
+    let request = raise_block_triage(&f);
+    let offered = offered(&f, &request);
+    assert_rewrite_says_the_candidate_is_discarded(&offered);
+    let accept = offered
+        .answers
+        .iter()
+        .find(|answer| answer.id == ACCEPT_FINDINGS_ANSWER_ID)
+        .expect("accepting the open finding is offered");
+    assert!(accept.option.as_ref().is_some_and(|option| {
+        option.rewrite.is_none() && option.action == Some(DecisionAction::Requeue)
+    }));
+    assert!(
+        accept
+            .consequence
+            .contains("description and acceptance criteria stay unchanged"),
+        "{}",
+        accept.consequence
+    );
+
+    answer(&f, &request, ACCEPT_FINDINGS_ANSWER_ID).unwrap();
+
+    let task = f.runtime.get_task(&f.task).unwrap();
+    assert_eq!(task.status, TaskStatus::Backlog);
+    assert_eq!(task.description, before.description);
+    assert_eq!(task.acceptance_criteria, before.acceptance_criteria);
+    assert_eq!(recorded_by_anyone(&f, CANDIDATE_DISCARDED_EVENT), 0);
+    assert_eq!(recorded_by_anyone(&f, FINDING_ACCEPTANCE_EVENT), 1);
+    let note = f
+        .runtime
+        .get_task_history(&f.task)
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.event == FINDING_ACCEPTANCE_EVENT)
+        .unwrap()
+        .note
+        .unwrap();
+    assert!(
+        note.contains("without changing the description or acceptance criteria")
+            && note.contains("low-1"),
+        "{note}"
+    );
+    assert_next_run_resumes_the_published_candidate(&f);
+}
+
+/// The same acceptance on a pipeline-published escalation, not a failure handoff.
+fn an_open_finding_on_a_green_pipeline_publication_is_accepted_and_the_candidate_resumes() {
+    let (mut f, _, _) = escalated_completion_fixture();
+    super::escalated_publication::green_forge(&mut f);
+    plant_open_low_finding(&f);
+    let before = f.runtime.get_task(&f.task).unwrap();
+    let request = raise_block_triage(&f);
+    let offered = offered(&f, &request);
+    assert_rewrite_says_the_candidate_is_discarded(&offered);
+    assert!(
+        offered
+            .answers
+            .iter()
+            .any(|answer| answer.id == ACCEPT_FINDINGS_ANSWER_ID)
+    );
+
+    answer(&f, &request, ACCEPT_FINDINGS_ANSWER_ID).unwrap();
+
+    let task = f.runtime.get_task(&f.task).unwrap();
+    assert_eq!(task.status, TaskStatus::Backlog);
+    assert_eq!(task.description, before.description);
+    assert_eq!(task.acceptance_criteria, before.acceptance_criteria);
+    assert_eq!(recorded_by_anyone(&f, CANDIDATE_DISCARDED_EVENT), 0);
+    assert_eq!(recorded(&f, "published_owner_requeued"), 1);
+    assert_next_run_resumes_the_published_candidate(&f);
+}
+
+/// Required checks are red, so a preserving requeue is refused. The rewrite
+/// option used to be refused for its own specification change; it now says
+/// the candidate is discarded and answering discards it.
+fn a_rewrite_of_a_red_pipeline_publication_discards_instead_of_refusing() {
+    let (mut f, _, _) = escalated_completion_fixture();
+    let forge = super::escalated_publication::green_forge(&mut f);
+    forge.set(&f.head, &["Test"], &[], &["Check"]);
+    plant_open_low_finding(&f);
+    let request = raise_block_triage(&f);
+    let offered = offered(&f, &request);
+    assert_rewrite_says_the_candidate_is_discarded(&offered);
+    assert!(
+        offered
+            .answers
+            .iter()
+            .all(|answer| answer.id != ACCEPT_FINDINGS_ANSWER_ID),
+        "a candidate that cannot resume is not offered for acceptance: {:?}",
+        offered.answers
+    );
+
+    answer(&f, &request, "1").unwrap();
+
+    let task = f.runtime.get_task(&f.task).unwrap();
+    assert_eq!(task.status, TaskStatus::Backlog);
+    assert_eq!(task.description, "Repair only the remaining compiler error");
+    assert_eq!(recorded_by_anyone(&f, CANDIDATE_DISCARDED_EVENT), 1);
+    assert_eq!(recorded_by_anyone(&f, FINDING_ACCEPTANCE_EVENT), 0);
+}
+
+/// A held failure handoff that cannot be resumed still discards when the
+/// option rewrites the specification, instead of refusing for that rewrite.
+fn a_rewrite_of_a_held_handoff_discards_instead_of_refusing_on_the_specification() {
+    let (mut f, _) = escalated_handoff_fixture(None, None);
+    park_source(&mut f, JobRunState::Held, false);
+    let forge = delivery_forge(&f);
+    f.runtime = f
+        .runtime
+        .clone()
+        .with_task_pr_forge(Arc::new(forge.clone()));
+    let request = raise_block_triage(&f);
+    assert_rewrite_says_the_candidate_is_discarded(&offered(&f, &request));
+
+    answer(&f, &request, "1").unwrap();
+
+    let task = f.runtime.get_task(&f.task).unwrap();
+    assert_eq!(task.status, TaskStatus::Backlog);
+    assert_eq!(task.description, "Repair only the remaining compiler error");
+    assert_eq!(recorded_by_anyone(&f, CANDIDATE_DISCARDED_EVENT), 1);
+    assert_eq!(
+        forge
+            .closed
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(number, _)| *number)
+            .collect::<Vec<_>>(),
+        [17]
+    );
+}
+
+/// A live failure handoff is not discarded. The refusal names the live run,
+/// not the specification change the option itself would make.
+fn a_running_handoff_rewrite_refuses_because_the_run_is_live() {
+    let (mut f, _) = escalated_handoff_fixture(None, None);
+    park_source(&mut f, JobRunState::Running, false);
+    let request = raise_block_triage(&f);
+    let offered = offered(&f, &request);
+    let rewrite = offered
+        .answers
+        .iter()
+        .find(|answer| answer.id == "1")
+        .unwrap();
+    assert!(
+        !rewrite.label.contains("candidate is discarded"),
+        "a live run is not offered as a discard: {}",
+        rewrite.label
+    );
+    let history = f.runtime.get_task_history(&f.task).unwrap().len();
+    let description = f.runtime.get_task(&f.task).unwrap().description;
+
+    let error = answer(&f, &request, "1").unwrap_err().to_string();
+
+    assert!(
+        error.contains("is still running, so it cannot be repaired")
+            && error.contains("orbit run cancel"),
+        "{error}"
+    );
+    assert!(
+        !error.contains("specification changed") && !error.contains("task specification"),
+        "the refusal is not the option's own rewrite: {error}"
+    );
+    let task = f.runtime.get_task(&f.task).unwrap();
+    assert_eq!(task.status, TaskStatus::Blocked);
+    assert_eq!(task.description, description);
+    assert_eq!(f.runtime.get_task_history(&f.task).unwrap().len(), history);
+    assert_eq!(
+        f.runtime
+            .get_decision_request(&request.id)
+            .unwrap()
+            .unwrap()
+            .state,
+        DecisionRequestState::Open
+    );
+}
+
 crate::scenario_table!(
     decision_answer_scenarios,
     a_rewrite_answer_discards_the_candidate_it_invalidates,
@@ -491,5 +731,10 @@ crate::scenario_table!(
     a_held_review_decision_split_applies_the_rewrite,
     a_held_review_decision_requeue_resumes_the_candidate,
     a_running_delivery_refuses_the_split_without_filing_it,
-    a_held_run_without_a_review_decision_refuses_the_split
+    a_held_run_without_a_review_decision_refuses_the_split,
+    an_open_finding_on_a_green_handoff_is_accepted_and_the_candidate_resumes,
+    an_open_finding_on_a_green_pipeline_publication_is_accepted_and_the_candidate_resumes,
+    a_rewrite_of_a_red_pipeline_publication_discards_instead_of_refusing,
+    a_rewrite_of_a_held_handoff_discards_instead_of_refusing_on_the_specification,
+    a_running_handoff_rewrite_refuses_because_the_run_is_live
 );

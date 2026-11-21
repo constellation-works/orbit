@@ -48,6 +48,13 @@ impl OrbitRuntime {
         self.kernel.record_provider_limit(observation)
     }
 
+    pub fn record_provider_usage_reading(
+        &self,
+        observations: &[ProviderLimitObservation],
+    ) -> Result<(), OrbitError> {
+        self.kernel.record_provider_usage_reading(observations)
+    }
+
     pub fn review_baseline_commands(&self) -> &[String] {
         self.kernel.review_baseline_commands()
     }

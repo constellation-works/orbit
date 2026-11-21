@@ -1,7 +1,7 @@
 ---
 title: Path Leases — Overview
 owner: claude
-last_updated: 2026-11-08
+last_updated: 2026-11-20
 last_validated: 2026-11-06
 status: Draft
 stage: parked
@@ -25,12 +25,7 @@ related_artifacts: []
 > `orbit-auth` remain, exercised by their tests through a test-only policy seam. The rest of this
 > document describes the design as shipped before the withdrawal.
 
-> **Status: Committed scope shipped.** Lease storage and request, renew, release, show, list and
-> check operations are shipped through MCP and CLI, with a loopback REST surface and Orbit Web
-> notices/SSE. Lease-token administration, the `orbit-auth` credential crate and the authenticated
-> Unix intake socket are also implemented, as is the lease listener (`orbit lease listen`, run as the
-> listener user) with its request and rate limits. Native TLS and the configured listener limits
-> are implemented; preemption and signed webhooks remain later work.
+> **Status: committed scope shipped; the user-facing surfaces were withdrawn.** Lease storage, the hard-lease queue, durable notices, the loopback REST routes and Orbit Web notices/SSE are implemented. The `orbit-auth` credential crate, the authenticated Unix intake socket and the lease listener (native TLS, request and rate limits) are implemented too. [ORB-22808] withdrew the `orbit lease` CLI (including token administration and `orbit lease listen`) and the `orbit.lease.*` MCP tools on 2026-11-08, so none of this is reachable until those surfaces return. Preemption and signed webhooks remain later work.
 
 Orbit already keeps parallel drain tasks from editing the same files: an in-progress or review
 task holds a lock on its declared footprint, and admission defers a candidate that overlaps it.
@@ -103,8 +98,8 @@ Full definitions: [references/glossary.md](./references/glossary.md).
 | SSE streaming pattern (exists, for logs) | [crates/orbit-web/src/api/log.rs](../../../crates/orbit-web/src/api/log.rs) | — |
 | Hard/advisory modes, lease lifetime and notices | implemented by [ORB-18405], [ORB-18551] and [ORB-18554], [2_design.md §2–§6](./2_design.md#2-the-lease-record) | — |
 | Lease queue, expansion and `--no-wait` behavior | implemented by [ORB-18553], [2_design.md §6](./2_design.md#6-surfaces) | — |
-| MCP, CLI, loopback REST and notices/SSE | implemented by [ORB-18406], [ORB-18411], [ORB-18551] and [ORB-18552]; [2_design.md §6](./2_design.md#6-surfaces) | — |
-| Principals, lease tokens and the lease listener | token administration (`orbit lease token create\|list\|revoke`), the intake socket, native TLS and configured listener limits are implemented; preemption and signed webhooks remain later work, [2_design.md §7](./2_design.md#7-authority-and-authentication) | ORB-18410, ORB-18412, ORB-18413, ORB-18421 |
+| MCP, CLI, loopback REST and notices/SSE | MCP and CLI, exposed by [ORB-18406] and withdrawn in [ORB-22808]; loopback REST and notices/SSE, implemented by [ORB-18411], [ORB-18551] and [ORB-18552] and still present; [2_design.md §6](./2_design.md#6-surfaces) | — |
+| Principals, lease tokens and the lease listener | token administration (`orbit lease token create\|list\|revoke`) was withdrawn in [ORB-22808]; the intake socket, native TLS and configured listener limits remain implemented; preemption and signed webhooks remain later work, [2_design.md §7](./2_design.md#7-authority-and-authentication) | ORB-18410, ORB-18412, ORB-18413, ORB-18421 |
 | Listener user and intake socket | intake socket and the listener's startup checks implemented ([crates/orbit-web/src/lease/intake/mod.rs](../../../crates/orbit-web/src/lease/intake/mod.rs)); creating the user is the host's, [2_design.md §7.1–§7.2](./2_design.md#71-the-listener-user) | ORB-18410, ORB-18430 |
 | Security review and repairs | [ORB-18414] reviewed the listener; [ORB-18774], [ORB-18775] and [ORB-18776] delivered renewal ceilings, secret redaction and token resource bounds | [ORB-18414], [ORB-18774], [ORB-18775], [ORB-18776] |
 | Dashboard Leases view | implemented by [ORB-18555]; disabled-workspace off-state by [ORB-20477] | [ORB-18555], [ORB-20477] |
@@ -134,5 +129,6 @@ Decisions: [4_decisions.md](./4_decisions.md). Open questions and prior work:
 - [ORB-18554] — delivered landing release and expiry notices.
 - [ORB-18555] — delivered the dashboard Leases view.
 - [ORB-20477] — corrected the dashboard Leases view off-state for disabled workspaces.
+- [ORB-22808] — withdrew the `lease.*` config keys, the `orbit lease` CLI and the `orbit.lease.*` MCP tools; the lease machinery stays unreachable.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

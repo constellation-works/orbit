@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Boundary-First Testing: integration, golden and e2e by default; unit tests by exception"
-last_validated: 2026-11-14
+last_validated: 2026-11-15
 ---
 # Boundary-First Testing
 
@@ -885,6 +885,593 @@ ruleset are unchanged. The hosted after column (per-job durations, runner
 minutes and wall time against this baseline) is owed by the pull request's own
 run and the following PR runs.
 
+### Test jobs extract the transfer directly (2026-11-15)
+
+ORB-24987 follows the 2026-11-15 watch (ORB-24986). Re-measured with
+`scripts/ci-p90.py` logic over the latest 20 completed PR `ci.yml` runs
+(43700415794 back to 43673874744): 15 executed the Check job, 5 skipped it and
+none was cancelled. The executed durations were 209, 274, 276, 281, 306, 346,
+360, 394, 419, 454, 456, 463, 478, 494 and 495 s: nearest-rank p90 rank 14/15 =
+494 s, median 394 s. Queue wait sat outside the elapsed time: the Check job
+started 18–30 s after its run was created, the build and guardrails jobs
+started with it, and every test job started 1–3 s after `Test build`
+completed.
+
+The binding path in 14 runs was `Test build`, then the slowest test job; in
+the fifteenth (43683986725, an `agent-main` promotion) `CI guardrails` ended
+last. In the six runs over 450 s, read from their step logs:
+
+| Phase | Seconds |
+|---|---|
+| `Test build` setup (checkout, toolchain, caches) | 40–51 |
+| Folded workspace build (`workflow-test-list-build`) | 175–233 |
+| Archive, pack (`-T0`), four uploads, partition proof | 7–9, 11.7–14.0, about 7, 7–11 |
+| Slowest test job, from the build's completion | 170–184 |
+| of which setup (Bubblewrap 10–12) | 30–35 |
+| of which download, unpack, nextest extraction | 4–16, 9.5–12.5, 6–7 |
+| of which nextest Summary | 97–118 |
+
+Each test job re-encoded the decoded transfer at level 1 for nextest's
+decoder (`unpack`), and nextest then decoded and extracted it again. Now
+`ci-repack-nextest.py extract` decodes the parts once and writes the tar
+members under the checkout's `target/`, admitting only regular files and
+directories under `target/` through tarfile's `data` filter, and the shard runs
+nextest from the extraction's metadata, as the partition guard and shard 1's
+sandbox gates already list it. On a local 795 MB workspace archive (601 MB
+transfer, 362 members) the old path took 3.1 s to unpack plus 2.5 s for
+nextest's extraction, the new one 2.1 s, with byte-identical files; a count
+partition selected the same 355 tests either way. Scaled to the hosted
+16–19 s, this saves about 10–12 s per test job on the critical path,
+projecting p90 about 484 s. That is a projection, not a measurement.
+
+**The budget is not restored by this pass.** The remaining time is the folded
+build, which is CPU-bound on the 4-vCPU runner whenever a change reaches
+`orbit-core`. Measured locally at `-j4` against a touched `orbit-core`: the
+folded Clippy lint costs about 5% (85.6 s against 80.9 s mean), and removing
+`orbit-core`'s self dev-dependency lets its unit-test harness start beside
+its library (start 0.2 s instead of 32.4 s) but saves only about 4.6 s (74.7
+and 74.3 s against 66.9 and 72.9 s, alternating arms), because the four slots
+stay saturated, as the twelfth pass found. The remaining levers are
+operator decisions: a larger `Test build` runner, or overlapping the test
+jobs' 30–35 s setup with the build again, which ORB-24733 gave up for about
+45 runner-minutes per PR. Count partitions also stay uneven (116–172 s in
+run 43685213958). No test was retired, skipped, retried or weakened; job
+names, `NEXTEST_PARTITIONS`, the partition proof and the ruleset are
+unchanged. The hosted after column is the operator's `scripts/ci-p90.py` run
+once the latest 20 completed PR runs carry this workflow.
+
+### Transfer packing reuses its first staging range (2026-11-16)
+
+ORB-25272 profiles base `5bc27a8b91244d6954550f5e5a60cb1889947f97` against
+ORB-25269's frozen 20-PR cohort: 16 executed Checks (14 success, two failure),
+four skipped, none cancelled or missing; nearest-rank p90 **577 s**, maximum
+**611 s**. Failed runs 43813288222 and 43805666690 remain in that denominator.
+The cold outlier 43806023942 (AMD EPYC 9V74, four CPUs, workspace cache miss)
+spent 368 s in list-build, 11 s archiving and 14.188 s packing before its last
+partition's 111.458 s nextest run. The warm p90 run 43807148127 (Intel Xeon
+6975P-C, four CPUs, 6,270 unchanged inputs and eight changed) spent 132/8/10.810 s
+in those build phases; its last shard ran nextest for 203.966 s with 47.9%
+whole-host I/O wait. This distinguishes the cold build and warm shard tail;
+it does not identify a defective test. Pre-Check scheduling/dependency delay
+was 18–81 s, separate from elapsed Check time. The task's
+`ci-path/pre-edit-profile.md` and `ci-path/cohort.json` retain the source pins,
+guardrail phases, transfer observations, all failed/outlier identities and
+queue limitations.
+
+The bounded change removes one redundant transfer copy. Previously the
+packer encoded a complete staging file, then copied all four byte ranges
+into four more staging files. It now copies ranges 2–4 first and truncates
+its own encoded staging file to range 1. The input archive is never truncated.
+Compression, balanced part sizes, file bytes, no-replace link publication,
+rollback and extraction are unchanged. For the measured 620,798,455-byte
+transfer, split-copy reads and writes each fall from 620,798,455 to
+465,598,841 bytes: **155,199,614 bytes (25%) avoided in each direction**.
+Staging files fall from five to four. A one-part transfer needs no split copy.
+
+The controlled fixture is one full-workspace archive built at the base:
+837,086,237 compressed bytes, 53 binaries and 362 files. The build took
+223 s for list-build and 4 s for archiving; those are fixture preparation,
+not a build-speed comparison. Every packing arm uses those identical input
+bytes, Python 3.14.4, zstd 1.5.7 `-3 --long=29 -T0`, four parts, and CPUs 0–3
+on one shared 32-thread Ryzen AI MAX+ 395 Linux host. Cargo used four jobs,
+Rust 1.98.1, nextest 0.9.136, incremental/debug off, symbol stripping and no
+compiler-object cache. The CI profile's six nextest slots are unchanged;
+packing runs no tests. OS caches stay warm without eviction; each arm runs
+alone. This is a local transfer fixture, not a hosted runner or cold-cache
+comparison. Whole CLI wall includes Python startup; cProfile attributes the
+split phase. All measurements, including warmups and controls, are retained:
+
+| Sequential sample | Base CLI / split wall (s) | Candidate CLI / split wall (s) |
+|---|---:|---:|
+| Warmup | 6.519 / 0.2121 | 6.205 / 0.2022 |
+| Pair 1 | 6.413 / 0.2243 | 7.165 / 0.1920 |
+| Pair 2 | 7.976 / 0.2245 | 7.031 / 0.2134 |
+| Pair 3 | 8.319 / 0.2272 | 6.080 / 0.1926 |
+| Repeated unchanged base controls | 6.971 / 0.2237; 7.087 / 0.2232 | — |
+
+The three paired split reductions are 0.0323/0.0111/0.0346 s; split medians
+are 0.2245 → 0.1926 s, with spreads 0.0029/0.0214 s. Whole-packer medians
+are 7.976/7.031 s but spreads are 1.906/1.085 s and pair 1 is slower on the
+candidate. The unchanged controls differ by 0.116 s overall and 0.0005 s in
+the split. Thus the operation reduction and small split-phase saving are
+measured; a whole-packer or hosted saving of that median difference is not
+established. `ci-path/measurements.json` and `ci-path/measure.py` retain every
+sample, command, exit status, script hash and per-part byte hash.
+
+No tests or negative cases are removed or added. The existing transfer
+boundary carriers retain repeated-binary compression, every member's bytes
+and execute bits, missing/truncated parts, unavailable/failed codecs, unsafe
+paths/links and no-replace failures. Manual CLI QA also verifies late
+publication collision rollback and the zero-copy one-part case. All 362
+extracted files match the original archive, all four part hashes match the
+base, and the twelve-way exact-once proof passes. Workflow carriers retain
+all required jobs, failure propagation and sandbox/Landlock gates; the cache
+changed-input guard and protected-SSH requirement are unchanged.
+
+**This does not close the 177 s p90 deficit.** The next remaining lanes are
+cold compilation and the warm shard I/O tail. The already-landed extraction
+repair and ineffective core self-dependency/lint experiments are not repeated.
+Runner class, cost and setup overlap remain unchanged. After publication,
+once the latest 20 completed PR `ci.yml` runs carry this candidate, the
+operator should run `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`
+under the [hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff).
+Retain full heads, run IDs and job timestamps; report full-job nearest-rank
+p90, median, maximum, failures and skipped/cancelled/missing Checks, plus
+pre-Check delay and awaited-job queue delay separately. Preserve unavailable
+queue timestamps as uncertainty. Hosted compliance is **not run, owed after
+publication**, not established by this fixture.
+
+### Long serial carriers split across partitions (2026-11-16)
+
+ORB-25328 follows the ORB-25327 watch: 20 completed PR `ci.yml` runs, 18
+executed Checks and two cancelled; nearest-rank p90 **578 s**, median 472 s,
+maximum 591 s. Over all 18 executed runs (`Test build` step logs, base
+`81d47425e`), the workspace cache restored with 1–50 changed inputs, the
+folded list-build took 62–319 s, archive 5–11 s, pack 10–15 s, the four
+uploads 6–27 s and the partition proof plus job tail 7.9–17.3 s. The last test job
+ended 101–227 s after the build, the first 56–133 s after it. The build
+lane is the CPU-bound compile already described above; this pass takes the
+test-job tail.
+
+Every per-test `PASS` line of all twelve test jobs in four runs (43833954392,
+43834344202, 43841072481, 43836366170; three full, one affected scope that
+included `orbit-engine`) shows one test setting a partition floor:
+`pr_landing::ci_rerun::dependency_adapter_refuses_incomplete_or_forged_evidence`
+took **100.4–129.4 s** in partition 9 every time, and that partition's
+nextest Summary (100–129 s) is essentially that one test. It runs 62
+independent fresh-fixture rows (31 forged-evidence cases under the grouped
+and raw log forms) serially in one isolated child. Partition 7's largest
+carrier, `task_delivery::source_repair::cancelled_source_repair_scenarios`,
+ran 29 independent scenario rows serially in 39.9–71.1 s.
+
+Each is now thirteen carriers (`…_01` to `…_13`) over the same rows, row
+bodies, assertions, fixtures and isolation; no row is removed, retried,
+skipped or weakened, and the CI priority filter covers every carrier by
+prefix. Thirteen is one more than `NEXTEST_PARTITIONS`: nextest's `count:`
+partitioning assigns round-robin by sorted name within each binary, so twelve
+extra names leave every other test in `orbit-engine::engine` and
+`orbit-core::runtime` in its current partition (checked with
+`cargo nextest list --partition count:k/12`), and the thirteen carriers
+spread across all twelve partitions (eleven hold one carrier and one holds
+two). The deterministic work proxy is the longest serial unit: 62 rows
+become at most 3 per log form (6 rows), and 29 scenario rows at most 3.
+
+Local measurements (shared 32-thread host, `taskset -c 0-3`, `--profile ci`,
+six slots, same binary per arm, three repetitions; Summary seconds):
+
+| Carrier | Before | After (6 slots) | After (1 slot, summed work) |
+|---|---|---|---|
+| dependency adapter | 29.99, 28.79, 26.74 | 8.86, 8.75, 8.64 (longest carrier ≤ 6.1) | 26.60 |
+| cancelled source repair | 10.24, 10.32, 10.10 | 4.45, 3.95, 3.91 | 11.46 |
+
+Serial summed work is unchanged for the first and 12% higher for the second
+(twelve more child startups). The task's `ci-budget/replay.py` replays the
+four runs' hosted per-test durations: it re-derives every split binary's
+observed partition membership (0 mismatches) and reproduces each observed
+maximum partition Summary exactly, then assigns the carriers and list-schedules
+each partition on six slots with priority carriers first. The last
+partition's nextest time moves by −14.1, −8.8, −3.3 and +1.2 s (at the
+measured 1.12 overhead: −13.9, −8.4, −2.8, +1.4 s; at a pessimistic 1.6:
+−12.6, −7.0, −1.8, +2.5 s). This is a projection of one phase from four
+runs, not a hosted measurement or a p90. Partitions 7 and 8 stay load-bound
+(about 670–690 summed test seconds over six slots), so the remaining
+test-tail lever is uneven count partitions, and the larger one is still the
+build. **The 400 s budget is not restored by this pass.** After publication,
+once the latest 20 completed PR `ci.yml` runs carry this revision, the
+operator runs `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`
+under the [hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff),
+reporting coverage, gaps (skipped, cancelled, missing) and queue time
+separately.
+
+### Partition proof overlaps the uploads (2026-11-18)
+
+ORB-25680 follows the ORB-25678 watch: the latest 20 completed PR `ci.yml`
+runs, 18 executed Checks (15 success, three failure), two skipped, none
+cancelled or missing; nearest-rank p90 **528 s**, median 348 s, maximum
+552 s. In three broad warm runs (44266480859, 44276039854, 44275501415: both
+caches restored; full, 11 and 19 affected crates) the folded list-build took
+217, 251 and 290 s.
+
+**The folded build.** The fixture replays run 44275501415's selection: the
+19-crate `affected:` scope through `ci-guardrails.sh --test-archive` at base
+`8e1a03f76`, Rust 1.98.1, the `ci.yml` profile environment,
+`ORBIT_COMPILER_CACHE=0` and build-budget admission (4 Cargo jobs), on a
+shared 32-thread host. Dependencies and workspace units are warm, then
+`crates/orbit-common/src/lib.rs` is touched so every workspace unit rebuilds,
+as a change low in the graph does hosted. Cargo's unit timings: 76 workspace
+units, 457.9 summed unit-seconds, a 137.4 s makespan (list-build phase 138 s),
+and 102 idle slot-seconds. Between 45 and 80 s only about two of the four slots
+are busy. The critical chain is `orbit-common` → `orbit-store` (rmeta) →
+`orbit-engine` (rmeta) → `orbit-runtime` (rmeta) → the `orbit-core` library
+(31.6 s to rmeta, 11 s more for codegen, from the artifact times) → the
+`orbit-core` library's unit-test harness (58 s), which ends the build. That
+harness starts only when the whole `orbit-core` rlib exists. Every other crate's
+harness starts before its own library finishes (`orbit-store`'s at 17.5 s,
+while its library ran to 24.3 s), but `orbit-core`'s self dev-dependency
+(`orbit-core = { path = ".", features = ["test-support"] }`) gives Cargo an
+edge from every `orbit-core` test target to that library. The integration
+tests call `orbit_core::test_support`, so the edge cannot go without moving
+tests or splitting the crate; this pass leaves it. The post-`orbit-core` tail
+holds about 229 slot-seconds over four slots, so even without the edge the
+fixture's floor is about 121 s.
+
+No unit was built twice: each workspace (package, target, mode) appears once
+in the timings, and the archive step's fingerprint log reports no dirty unit.
+Two other levers were measured and not taken. Compiling non-test libraries
+with plain rustc instead of `clippy-driver` took 5.5 s off the `orbit-core`
+library (49.3 → 43.8 s) and 138 → 129 s in one run. That pass is the only lint
+of `test-support`-only library code, though: unit-test harnesses allow
+`unwrap`/`expect` crate-wide, and production Clippy does not compile it.
+`cargo nextest archive --zstd-level 1` (the pack step re-encodes the archive
+anyway, to byte-identical transfer parts) cut archive CPU from 8.2–11.5 to
+4.9–6.8 user-seconds. Pinned to four CPUs, though, it moved the archive's wall
+time only from 5.26–5.82 s to 4.10–5.18 s.
+
+**The change.** Since ORB-24733 every test job `needs:` the whole build job, so
+the partition proof that followed the four uploads sat on the path to every
+test job. The proof reads only the original archive, never the transfer
+parts. `Start the shard coverage proof` now launches
+`ci-guardrails.sh --test-partitions` in the background right after the pack.
+The four part uploads and `Upload test build timings` run meanwhile. `Prove
+the shards cover every test` still follows the last upload, blocks on the
+lock the proof holds until it exits, prints the proof's output and exits
+with its status (or fails if none was recorded). Hosted step spans from the
+three runs:
+
+| Run | Pack | Four uploads | Timings upload | Proof | Proof time the overlap can hide |
+|---|---|---|---|---|---|
+| 44266480859 | 12.65 s | 16.78 s | 1.80 s | 7.18 s | 7.18 s |
+| 44276039854 | 16.51 s | 9.63 s | 1.36 s | 9.80 s | 9.80 s |
+| 44275501415 | 12.99 s | 7.86 s | 0.89 s | 11.04 s | 8.75 s |
+
+The job's serial tail goes from pack + uploads + proof + timings to pack + max(uploads + timings, proof). These are projections from logged spans, not a
+hosted measurement. A local replay runs each revision's own `run:` bodies
+from `Pack nextest archive for transfer` through both the timings upload and the
+proof, on the fixture's archive, pinned to four CPUs, sequentially and
+alternating. Each upload is stood in for by reading its file, then 2 s (the
+hosted per-part span). The tail took 21.52, 24.13, 22.09 and 21.93 s before and 17.36,
+17.39, 16.53 and 17.20 s after. The proof's 5.2–5.9 s left the serial path,
+and the wait step returned in 0.01 s. A failing proof still fails the wait step
+with the proof's own output, and a proof killed before it records a status
+fails it with `the shard coverage proof ended without an exit status`.
+
+What runs is unchanged: the same affected or full selection, the folded
+all-targets Clippy lint and the workflow selector guard (the list-build is
+untouched), the same archive and the exact-once partition proof over it
+(still a failure of `Test build` and so of every test job's first step and
+the Check job's wait), shard 1's sandbox and Landlock gate, and every test.
+No test was retired, skipped, retried or weakened. **Hosted compliance remains
+open.** The largest measured lever is still the `orbit-core` chain above.
+After publication, once the latest 20 completed PR `ci.yml` runs carry this
+revision, the operator runs
+`python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` under the
+[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff). They
+report executed, failed, skipped, cancelled and missing counts, nearest-rank
+p90, median and maximum, and Check's queue wait and awaited jobs' queue
+overlap separately from elapsed time. They also report each `Test build` run's
+proof and upload step spans, so the overlap is measured, not projected.
+
+### Dependency self-test shares guard runs (2026-11-20)
+
+ORB-25843 follows the ORB-25789 watch: 14 executed PR Check jobs in the latest 20
+completed PR runs (five skipped, one cancelled, none missing), nearest-rank p90
+**504 s**, median 414 s, maximum 576 s. In ten of the 14 the CI guardrails job ran
+the fixture self-tests (289–447 s) and in four it ended last, setting the Check's
+end. `test-check-dependency-direction.py` took 295–372 s hosted and equalled the
+exclusive self-test wall to within a few seconds, against about 48 s locally after
+ORB-22450. It reduces the work inside that self-test; no check, job identity,
+runner, guard or production harness behavior changes, and the guard pool's
+longest-processing-time-first order and the `CI_SELF_TESTS=changed` input
+selection are untouched.
+
+Conditions for every local figure: base `fc7d3ce4e`, one checkout, a shared
+32-logical-CPU AMD Ryzen AI MAX+ 395 Linux host (load average 8–12 at the start),
+pinned with `taskset -c 0-3`, Rust 1.98.1, Python 3.14.4, bash 5.3.9, ripgrep
+14.1.1, runs in sequence and alternating arms with no synthetic load. The lane
+was `CI_SELF_TESTS=all scripts/ci-guardrails.sh --guards` (a pull request that
+touches `scripts/` selects every self-test; build-budget admission sets the pool
+width); the self-test alone ran under `chrt --idle 0` as the hosted pool runs it.
+This host is not a hosted 4-vCPU runner.
+
+**Where the time went.** One guard run costs the same whatever a case writes: a
+trace of a run over a clean tree showed 214 `execve` calls (185 succeeded: 97 Python
+and 88 ripgrep children), about 2.2–2.4 s serial, 1.65 s of it Python. The 52 cases made
+**158 guard runs** (counted by a `bash` shim and by the suite's own counter);
+their serial wall summed to 319 s, up to 16 s per case. Two kinds of run were
+avoidable. Each case ran its accepted batches (27 `check_files` and 8 `check_rows`
+calls) alone, though a batch that must stay quiet cannot hide another's hit. And
+related cases ran the same guard detector chain once per case: the five `task`
+port cases (codebase, resident, notice, agent corpus and experiment) each ran the
+direct-path, grouped-tree, `super::` and inherent-call detectors in separate runs.
+
+**The change.** A case now hands its accepted and rejected `check_rows` and
+`check_files` batches to `scripts/dependency_guard_batches.py` instead of running
+the guard (the concurrent runner only; named cases or unittest options still run
+every batch at once). One final case, `test_deferred_batches_report_as_expected`,
+runs them in few trees:
+
+- Accepted batches share one tree per compatible group, by file path; a hit
+  anywhere fails the run by file, and a failing group reruns each batch alone to
+  name its case.
+- Rejected batches run in waves. The guard stops a detector chain at its first
+  hit, so a row behind another row's hit is not reported in that run. Each wave
+  removes the rows the guard reported and runs the rest again without the rows
+  that hid them. A row never reported when a wave reports nothing new fails, and
+  is rerun alone to name its case. Rows must be reported by their own path and,
+  for `mod.rs` rows that a group appends to one file, by their own line span, a
+  stricter check than the former path substring.
+- A group never holds two files at one path with differing contents, or a method
+  one batch defines in a shared file and another batch names, because the guard
+  derives inherent methods from every defining module.
+
+The exact-row cases, the `check_files` cases that assert a rejection, the
+fail-closed cases (they remove a path and need a tree of their own) and the
+Cargo-metadata edge cases still run alone. The guard, every row and every assertion are unchanged, and no row is
+retired, skipped or made conditional.
+
+**Candidate evidence (informational; not hosted compliance).**
+
+| Measure | Base | Candidate |
+|---|---:|---:|
+| Guard runs per self-test (deterministic; `bash` shim and suite counter) | **158** | **51** |
+| Guard child executions, at about 185 successful `execve` per run | about 29,200 | about 9,400 |
+| Self-test alone, runs 1 / 2 / 3 (s) | 120.5 / 106.3 / 86.4 | 46.7 / 34.7 / 36.3 |
+| Self-test alone, median (spread) (s) | 106.3 (34.1) | 36.3 (12.0) |
+| Lane wall, runs 1 / 2 / 3 (s) | 207.3 / 228.3 / 215.5 | 182.8 / 185.4 / 162.9 |
+| Lane wall, median (spread) (s) | 215.5 (21.0) | 182.8 (22.5) |
+| Self-test inside the lane, runs 1 / 2 / 3 (s) | 153.2 / 177.1 / 166.6 | 75.1 / 87.1 / 73.6 |
+| Self-test inside the lane, median (spread) (s) | 166.6 (23.9) | 75.1 (13.5) |
+
+The lane's longest local member is `test-qa-full-sweep.py` (168–201 s); hosted it runs in
+`CI QA guardrails`, so the hosted core lane is not bounded by it. The lane figures
+overlap by one spread, so only the self-test's own wall and the run count are
+clear evidence; the lane wall and the hosted time are not predicted from them.
+
+Guard mutations fail the same cases on both arms: a silent `super_chains_into`
+(23 cases), a silent `inherent_calls_into` (22), a dead task direct-path pattern (6),
+a dead task grouped-tree pattern (6), and two over-rejecting patterns that fail the
+accepted rows (4 and 2 cases). The sets of failing case names were identical.
+
+**`test-pr-state-workflows.py`.** Profiled the same way, it is 40 cases in one
+process: 69.9–78.6 s serial (CPU about 31 s), 362 `bash` launches, and 25.1 s and
+8.2 s in two cases whose fixture sleeps are their assertion
+(`test_slow_step_past_the_removed_cap_completes` proves no step cap remains;
+`test_bubblewrap_apt_failure_reports_elapsed_package_seconds` sleeps 2 s per
+attempt), with every other case under 6.1 s. It showed no repeated launch or setup
+to remove. Its cases patch `time`, `subprocess` and `os.kill` process-wide, so
+threads would be unsafe, and a process split would add CPU in a CPU-bound pool without
+shortening it. It is left unchanged; hosted, it ran 181–208 s beside the dependency
+self-test. Re-measure after this lane lands before choosing the next lever: the
+cold-cache runs (576 s and 504 s) and the 8–10 crate list-build and slowest
+partition remain outside this change.
+
+**Hosted compliance remains open.** After publication, once the latest 20 completed
+PR `ci.yml` runs carry this revision, the operator runs
+`python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` under the
+[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff). They
+report executed, failed, skipped, cancelled and missing Check counts, nearest-rank
+p90, median and maximum, the CI guardrails job's elapsed time and the tally of runs
+in which it was the last awaited job, which runs executed the self-tests, and the
+cache (`hit` or `miss`) and scope (`full` or `affected`) strata, with every gap
+kept as uncertainty, never zero. No local figure here claims the budget is restored.
+
+### Shard download attempts bounded at one minute (2026-11-20)
+
+ORB-25825 follows the ORB-25782 audit. In push run 44317809505 (job 134854277098,
+`Test partition 2`), the first `Download nextest archive` attempt logged all four
+digests and `Download artifact has finished successfully` 12.8 s after it started
+(14:00:34.57). The step ended only at the three-minute cap (14:03:21.76), so 167 s sat
+after the action had nothing left to do. Attempt 2 then took 29.5 s. That shard
+set the run's Check to 624 s. The earlier ORB-25511 incident (run 44227650517) was
+a different shape: one part's digest arrived 647 s in.
+
+**Measured before editing.** The shard `Download nextest archive` step of every
+shard job in the 20 most recent completed full-scope `ci.yml` runs (44671366238 back
+to 44666154537, 2026-11-20; 180 pull-request and 60 push shard jobs, 12 per run),
+read from the hosted job logs: step elapsed is the next step's first log line minus
+the step's group line, and the lag is that next line minus the action's own
+`finished successfully` line.
+
+| Measure over 240 first attempts | min | p50 | p90 | p99 | max |
+|---|---:|---:|---:|---:|---:|
+| Step elapsed (s) | 1.95 | 4.57 | 11.21 | 22.24 | **31.81** |
+| Lag after the action's success line (s) | 0.00 | 0.02 | 0.02 | 0.07 | 0.20 |
+
+All 240 downloaded four parts on the first attempt (no retry), three took over 20 s
+(22.2, 30.9 and 31.8 s) and none took over 60 s. The post-completion lag was at most
+0.2 s, so the 167 s case occurred 1 time in 240 jobs here and once in the audit's
+24 runs (about 1 in 290 shard jobs). The per-job rows with run and job IDs are
+attached to the task as `nextest-download-measure.json`.
+
+**The change.** Each of the three attempts has `timeout-minutes: 1` instead of 3
+(the runner takes whole minutes; fractional values were not relied on). One minute is
+about twice the measured maximum (31.8 s) and the 29.5 s retry in the incident, so a
+healthy transfer is not cut and retried. The worst-case stalled attempt now costs
+60 s, not 180 s, and the three attempts together cost at most 180 s, not 540 s, still
+below the 45-minute shard timeout. The incident's 180 s + 29.5 s would be about
+60 s + 30 s. Nothing else changed: three attempts, a fresh directory each, digest
+verification, extraction that requires every part, the last attempt failing the
+shard and Check, and every shard downloading every part. The 155 s single-stream
+transfer that justified the old cap predates the four-part transfer, whose parts
+run in parallel; a transfer that exceeds a minute is retried on fresh streams, as
+the 647 s part was.
+
+**Loopback replay.** The pinned `actions/download-artifact` v8.0.2 (commit
+`9000827ccba6bdab643e8b6fd33ac0654aef8333`) ran against a local Results API serving a
+four-part archive, with the workflow's step definitions and a 1/20 time scale (a workflow
+minute replays in 3 s). A held part and a process that stays alive after printing its
+success line (emulated with a preload that keeps the event loop open after that line)
+each ended at the step's bound, and the next attempt succeeded:
+
+| Replay (x20 = workflow seconds) | Base (3 min) | Candidate (1 min) |
+|---|---:|---:|
+| Hang after success line, then normal retry | 9.18 s (x20: 184 s) | 3.14 s (x20: 63 s) |
+| Held part, then normal retry | 9.17 s (x20: 183 s) | 3.15 s (x20: 63 s) |
+| Three stalled attempts (job fails) | not run | 9.02 s (x20: 180 s) |
+
+Every timeout ended within 0.01 s of its bound. Retries still downloaded all four parts
+into a new directory, extraction still failed on a missing part even though the part
+sat in the earlier directory, three digest mismatches still failed the job, and the
+exhausted case failed it. The replay runs on a laptop, so the time scale cannot show
+that a hosted runner cancels the step at the bound; it shows the bound is the only
+thing that ends such an attempt. Success-path overhead: 10 sequential base/candidate
+pairs of the download step took a median 0.178 s and 0.183 s (+0.005 s), with spreads
+of 0.113 s and 0.236 s; the change adds no step, sleep or transfer.
+
+**Hosted compliance remains open.** This repairs the post-download stall and the
+stalled-attempt cost; it claims no restored budget. After publication, once the latest 20
+completed PR `ci.yml` runs carry this revision, the operator runs
+`python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` under the
+[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff), and reads each
+shard's first-download step elapsed against the 31.8 s maximum above: a first attempt
+that times out at one minute while healthy would show as repeated attempts.
+
+### Thirteenth count partition (2026-11-20)
+
+ORB-26069 follows the ORB-26068 watch: the latest 20 completed PR `ci.yml`
+runs (44694679925 to 44709039226), 15 executed Checks (14 success, one
+failure), five skipped, none cancelled or missing; nearest-rank p90 **476 s**,
+median 393 s, maximum 523 s, seven of 15 over 400 s. In every executed run
+the last awaited job was a test partition or shard. The binding path was
+`Test build` followed by the last partition, which ran 11–45 s past the
+median partition on the eleven runs selecting 2,775 or more tests.
+
+Conditions for every local figure: base `4070823a4`, one checkout, a shared
+32-logical-CPU AMD Ryzen AI MAX+ 395 Linux host (load average 5–9), Rust
+1.98.1, nextest 0.9.136, the `ci.yml` environment, build-budget admission and
+sequential runs with no synthetic load. One full archive (4,238 selected
+tests, built with `ci-guardrails.sh --test-archive`) served every run. Each
+partition ran as the shard step runs it (`--profile ci`, extracted
+`--binaries-metadata`, `--no-fail-fast`), pinned with `taskset -c 0-3`, with
+the base `.config/nextest.toml` passed as `--config-file` to both arms. This
+host is not a hosted 4-vCPU runner.
+
+**The imbalance is load, not order.** Partition 8 took 44.0 s in both base
+runs against a 33.8 s median. Its summed test time was 261 s, 43.6 s over six
+slots, within 0.4 s of its wall; every partition ended within 1.5 s of its
+summed time over six slots, so no slot sat idle and no priority order can
+shorten it. Its carriers were `same_pr_publication_scenarios` (18.0 s),
+`validation_repairs_and_logs` (13.8 s), `resume_lifecycle_contracts_0`
+(12.5 s), `local_candidate_contracts_1` (12.2 s) and
+`every_selected_window_hides_credential_fragments` (9.2 s), all started at
+once except the fourth. Hosted, the same base's full push run 44710096272
+shows the same shape: every partition whose `cpu-util` line was read ran
+82–97% CPU-busy, and each nextest Summary was within 4.1 s of its summed
+per-test time over six slots (the per-test `PASS` lines of the ten jobs whose
+log was read whole; shard 1 runs a second nextest command and partition 6's
+log was read incompletely). There partition 5 was
+slowest (693 test-seconds, Summary 116.4 s, a 79.7 s
+`bounded_nextest_retry_observes_results_and_never_resends_unknown_replies`)
+against 58.4 s for partition 2.
+
+**The change.** `NEXTEST_PARTITIONS` is 13 and `Test partition 13` runs
+partition 13 with the shard steps; the Check job awaits it. Count partitions
+assign round-robin by sorted name within each binary, so the two 13-carrier
+families split in the 2026-11-16 pass now land one per partition instead of
+two in one. The priority set, test bodies, group caps, profile and
+`check-nextest-partitions.py` are unchanged. The proof at 13 covers all 4,238
+tests exactly once, and the cohort's eight-crate `affected:` archive's 2,777
+tests exactly once. The union of both assignments equals the unpartitioned
+listing. The per-test assignment before and after is the task artifact
+`ci-budget/partition-assignment.json.gz`.
+
+Replaying measured durations over each listing (load = summed test time over
+six slots, or the longest test if larger). Hosted durations come from run
+44710096272's `PASS` lines, with 47 unlogged tests scaled from local (×2.65):
+
+| Selection (crates) | Hosted 12 | Hosted 13 | Local 12 | Local 13 |
+|---|---:|---:|---:|---:|
+| full | 115.5 | 91.8 | 43.6 | 34.1 |
+| 11 (core and engine) | 114.2 | 91.0 | 41.2 | 33.1 |
+| 8 (core, no engine) | 79.5 | 68.7 | 32.2 | 26.0 |
+| 7 (no core) | 42.2 | 38.2 | 17.5 | 15.4 |
+| 5 (always-run plus `orbit-cli`) | 33.9 | 30.6 | 14.8 | 12.8 |
+
+The slowest partition's load in seconds. On the full selection, 14 count
+partitions were worse than 13 (hosted 103.4, local 35.6); 15 and 16 were
+2–10 s lower hosted at two and three more runners. `slice:` and `hash:` at
+12 and 13 were all worse than `count:` at 13 (hosted 97.7–114.0) and would
+also change the proof's partition form.
+
+**Measured walls, same archive, CPUs and profile (seconds).**
+
+| Arm | Run | Slowest | Median | Spread to median | Fastest | Sum of partition walls |
+|---|---|---:|---:|---:|---:|---:|
+| Base, 12 partitions | 1 | 44.0 (p8) | 33.8 | 10.2 | 26.5 | 411.2 |
+| Base, 12 partitions | 2 | 44.0 (p8) | 33.8 | 10.2 | 26.5 | 412.3 |
+| Candidate, 13 partitions | 1 | 37.5 (p1) | 31.4 | 6.1 | 28.2 | 410.2 |
+| Candidate, 13 partitions | 2 | 36.0 (p1) | 31.5 | 4.5 | 27.8 | 407.6 |
+
+The work moved, not shrank: the summed walls agree within 1%. The
+deterministic figure is the slowest partition's summed test time (261 → 222
+local test-seconds; 693 → 551 hosted on the replay). The thirteenth runner
+adds one runner's setup and archive download per run beside the others; its
+queue time falls inside the Check job's elapsed time.
+
+**Same-selection list-build spread.** Runs 44697311622 (40 s) and
+44697034246 (184 s) both restored workspace cache
+`...-b84d66ec12d8d72f2c8f690165c36faa935ada51` and both tested the same
+eight crates. Their restore lines differ: `changed_inputs` 1 against 5. The
+first head changed only `crates/orbit-core/tests/runtime/resident_metrics.rs`;
+the second changed two files under `crates/orbit-core/src/` and three
+`orbit-core` test files. Reproduced locally with that scope, touching the
+same paths on a warm target (two runs each, `taskset -c 0-3`):
+
+| Change | Workspace units rebuilt / fresh | Rebuilt packages | List-build |
+|---|---:|---|---:|
+| none | 0 / 46 | none | 0 s |
+| test file only | 9 / 37 | `orbit-cli`, `orbit-core` | 29–30 s |
+| library and test files | 20 / 26 | `orbit-cli`, `orbit-cmd`, `orbit-core`, `orbit-web` | 85–86 s |
+
+Locally the library change costs 2.9× the test-only change; hosted it was
+4.6×. The rest may come from the runners' CPUs (EPYC 9V45 against 7763), which
+is unconfirmed. The bulk of the spread comes from what each change
+invalidated, not from the cache or a serialization. Rebuilding
+`orbit-core`'s dependents after a library change is required. `orbit-cli`'s
+eight units rebuild whenever its identity build script reruns, which it is
+designed to do. Nothing avoidable was found, and the cache identity is
+unchanged. The list-build now prints
+`check-ci-macos: workspace units rebuilt=N fresh=M rebuilt_packages=…`
+from Cargo's JSON messages, so the next watch can attribute list-build time
+per run ([DEVELOPMENT.md](../DEVELOPMENT.md)).
+
+No test, check, assertion or required check name changed, and none was
+retired. The shard-1 sandbox gate, the always-run set, the archive digest
+verification and `scripts/check-nextest-partitions.py` are unchanged.
+
+**Hosted compliance remains open.** These are local and replayed figures,
+not a hosted measurement or a p90, and the build still binds on broad
+selections. **The 400 s budget is not restored by this pass.** After
+publication, once the latest 20 completed PR `ci.yml` runs carry this
+revision, the operator runs
+`python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` under the
+[hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff). They
+report executed, failed, skipped, cancelled and missing Check counts,
+nearest-rank p90, median and maximum, queue wait separately, the tally of
+last-awaited jobs (now including `Test partition 13`), the `rebuilt=` lines
+of `Test build`, and the selection and cache strata, with every gap kept as
+uncertainty, never zero.
+
 ## Why
 
 On 2026-10-03, unit tests under `crates/*/src/**` were about 295k lines and 7,675 test functions, more lines than the production code they covered. Crate-root integration tests were 37k lines. Most unit tests pinned internals, so a refactor that kept behaviour unchanged still broke dozens of them, and each break cost an agent tokens to repair a test rather than find a bug. A review of all of them kept 180 (2.3%).
@@ -1287,6 +1874,7 @@ Cargo links each top-level `crates/<crate>/tests/<name>.rs` file and each `crate
 - Fixtures that mutate Orbit state still run in an isolated child process ([DEVELOPMENT.md](../DEVELOPMENT.md#safe-mutable-cli-fixtures)).
 - Waits and process guards follow STD-03 §R17 to §R20. Size them for a loaded host, not an idle one ([DEVELOPMENT.md](../DEVELOPMENT.md#fixtures-on-a-loaded-host)).
 - Shell fixtures must not poll markers by forking `sleep` in `while`/`until` loops. Use a FIFO/pipe handshake or an in-process wait with a deadline. `make ci-fast` scans Rust strings in test paths, including scripts assembled across literals. A necessary bounded exception belongs in `test-shell-waits-allowlist.json` in the scripts directory with its path, exact loop header and a reason; unused exceptions fail the guard.
+- A test that builds a `Command` from `std::env::current_exe()` or `env!("CARGO_BIN_EXE_*")` and waits with `.output()`, `.status()`, `.spawn()`, `.wait()`, or `.wait_with_output()` must use `orbit_common::test_env::run_child_test` (or `run_child_test_within`). `make ci-guards` scans Rust test sources for that raw wait. A necessary exception belongs in `scripts/test-child-runner-allowlist.json` with its path, function, call, ordinal and a reason; unused exceptions fail the guard.
 - A refusal fixture asserts the exact authorization cause, such as the refusal kind and the tool, grant or ceiling it names. A bare failure lets a bootstrap or sandbox error pass as the policy refusal.
 
 - `orbit-engine`'s `claimed_base_ref_preserves_valid_refs_and_propagates_invalid_modes` (criterion 1, combinatorial pure ref selection) covers explicit modes, defaulting and claim ship-mode fallback together. The public claim action rejects invalid sync input during observation, before the red-base hold path, so it cannot expose the helper's former silent error-to-local fallback.

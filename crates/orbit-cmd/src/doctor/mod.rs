@@ -52,8 +52,10 @@ mod host_workspaces;
 mod permissions;
 mod report;
 mod retired_config;
+mod scan_workers;
 mod script_grants;
 mod seeding;
+mod standing_drain;
 mod system;
 mod task;
 mod worker_containment;
@@ -71,6 +73,8 @@ pub use report::{
     provider_limit_findings, run_doctor_report,
 };
 pub use retired_config::RetiredConfigKeyRepair;
+#[cfg(feature = "test-support")]
+pub use scan_workers::DoctorWorkerSpawnRefusal;
 pub(crate) use system::{collect_lock_files, disk_space_check, process_is_alive};
 use task::*;
 use workspace::*;

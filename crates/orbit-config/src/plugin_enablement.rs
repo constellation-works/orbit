@@ -25,7 +25,7 @@ use crate::ConfigRoots;
 use crate::config_toml::read_config_toml;
 
 /// The reserved workspace table that holds per-plugin toggles.
-pub const PLUGIN_ENABLEMENT_TABLE: &str = "plugin_enablement";
+pub(crate) const PLUGIN_ENABLEMENT_TABLE: &str = "plugin_enablement";
 
 /// Dotted config-store key for one plugin's workspace toggle.
 pub fn plugin_enablement_key(namespace: &str) -> String {

@@ -1,6 +1,6 @@
 use super::super::*;
 use super::AutoDrainRequest;
-use crate::application::job::{JobDrainPort, ReviewAdmissionHook};
+use crate::application::job::{JobAdmissionPort, JobDrainPort, ReviewAdmissionHook};
 use crate::runtime::run_input::recorded_task_ids;
 
 /// [ORB-10544] Cap on the run history scanned by the in-flight ship guard.
@@ -49,8 +49,13 @@ pub struct ShipRunRequest<'a> {
     pub strict_containment: bool,
     /// Run-scoped `--review` request [ORB-16572].
     pub review: Option<orbit_types::workflow::ReviewLayer>,
-    /// CLI-only `--ignore-schedule` operator override.
-    pub ignore_schedule: bool,
+    /// An operator's explicit ship (the CLI and the dashboard's Ship): the
+    /// named tasks bypass the drain's readiness gates — a pending
+    /// `not_before`, unassessed complexity, no `context_files` — and their
+    /// gate's wait on another in-flight task's context locks, and the ship
+    /// records which it overrode. Host, crew and live-run refusals still
+    /// apply. Ignored without task ids.
+    pub operator_override: bool,
 }
 
 impl Default for ShipRunRequest<'_> {
@@ -66,7 +71,7 @@ impl Default for ShipRunRequest<'_> {
             trigger: JobRunTrigger::cli(),
             strict_containment: false,
             review: None,
-            ignore_schedule: false,
+            operator_override: false,
         }
     }
 }
@@ -174,11 +179,14 @@ impl OrbitRuntime {
     /// the run's `--review` request, refused here, before any run exists,
     /// on the local route, against the other workspace layer, or without a
     /// reviewer crew. A named `backlog` task whose `not_before` is still
-    /// ahead is refused with [`OrbitError::TaskScheduled`];
-    /// `ignore_schedule` is the CLI-only operator override: once every
-    /// other check passes, it records a `schedule_overridden` history
-    /// event for each such task before the run is submitted. The tool and
-    /// dashboard surfaces always pass `false` for both CLI-only flags.
+    /// ahead is refused with [`OrbitError::TaskScheduled`] unless
+    /// `operator_override` is set: an operator's explicit ship (CLI and
+    /// dashboard; the tool surface passes `false`) overrides the drain's
+    /// readiness gates. Once every other check passes, it records a
+    /// `schedule_overridden` event for each task scheduled ahead and a
+    /// `readiness_overridden` event naming the gates each task failed,
+    /// before the run is submitted, and marks the run input so its listing
+    /// step skips those gates and its gate does not wait on context locks.
     pub fn submit_ship_run(
         &self,
         request: ShipRunRequest<'_>,
@@ -194,16 +202,18 @@ impl OrbitRuntime {
             trigger,
             strict_containment,
             review,
-            ignore_schedule,
+            operator_override,
         } = request;
-        if ignore_schedule && task_ids.is_empty() {
-            return Err(OrbitError::InvalidInput(
-                "`--ignore-schedule` starts named scheduled tasks; pass the task ids to ship"
-                    .to_string(),
-            ));
-        }
+        // The override names its own work; a discovery ship is drain policy.
+        let operator_override = operator_override && !task_ids.is_empty();
         self.validate_strict_worker_containment(strict_containment)?;
         self.require_workspace_claim("orbit.workflow.ship", claim_token)?;
+        // [ORB-25745] A duplicate of a task a live run already carries is refused
+        // as that run, before the claim ledger's entry refusal below can name the
+        // task's execution claim instead: a run past admission holds that claim too.
+        if let Some(conflict) = self.in_flight_ship_run_for_tasks(task_ids)? {
+            return Err(conflict);
+        }
         // [ORB-12500] Explicit shipment converges on the same admission
         // decision the drain, the retained sweep and pull admission make: a
         // replica serves no owner coordination, and a task a live claim is
@@ -228,6 +238,9 @@ impl OrbitRuntime {
         if strict_containment {
             input["__worker_containment_strict"] = json!(true);
         }
+        if operator_override {
+            input[crate::application::job::OPERATOR_READINESS_OVERRIDE_INPUT] = json!(true);
+        }
         self.admit_review_request(
             &mut input,
             review,
@@ -244,14 +257,19 @@ impl OrbitRuntime {
             // run was accepted, reported `submitted`, and then failed or
             // no-oped at the gate. Refuse it here, naming the status and the
             // way back into the backlog. A task scheduled ahead is refused
-            // the same way unless the operator overrides its schedule.
+            // the same way unless an operator's ship overrides its schedule.
             let task = self.ensure_task_can_enter_workflow_honouring_schedule(
                 task_id,
                 crate::application::workflow::SHIP_WORKFLOW_ALIAS,
-                !ignore_schedule,
+                !operator_override,
             )?;
-            if ignore_schedule && let Some(hold) = self.schedule_hold(&task)? {
-                overridden.push((task.id.clone(), hold.not_before));
+            if operator_override {
+                let hold = self.schedule_hold(&task)?;
+                let gates =
+                    JobAdmissionPort::operator_overridden_gates(self, &task, hold.is_some());
+                if !gates.is_empty() {
+                    overridden.push((task.id.clone(), hold.map(|hold| hold.not_before), gates));
+                }
             }
             // A task whose effective OS requirement this host cannot satisfy is
             // never started here; it would only fail on a platform it cannot
@@ -308,14 +326,26 @@ impl OrbitRuntime {
                 )));
             }
         }
-        if let Some(conflict) = self.in_flight_ship_run_for_tasks(task_ids)? {
-            return Err(conflict);
+        // Preview the same exclusions as dispatch without reserving an owner
+        // wave. A mixed request still reaches the worker with all IDs so its
+        // audit records every omission.
+        if !task_ids.is_empty() {
+            let preview = JobAdmissionPort::preview_named_ship(self, &input)?;
+            if preview["task_ids"].as_array().is_some_and(Vec::is_empty) {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "named ship has no dispatchable tasks: {}; resolve the listed holds and retry",
+                    preview["excluded"]
+                )));
+            }
         }
         // The worker starts as soon as the run is submitted, so the override
         // is on record before then.
         let overrider = actor.unwrap_or(&self.actor().label).to_string();
-        for (task_id, not_before) in &overridden {
-            self.record_schedule_override(task_id, *not_before, &overrider)?;
+        for (task_id, not_before, gates) in &overridden {
+            if let Some(not_before) = not_before {
+                self.record_schedule_override(task_id, *not_before, &overrider)?;
+            }
+            JobAdmissionPort::record_readiness_override(self, task_id, gates, &overrider)?;
         }
         self.submit_pipeline_run_with_trigger(workflow_job_id, input, None, actor, trigger)
     }
@@ -389,13 +419,17 @@ impl OrbitRuntime {
             request.review,
             self.automatic_delivery_ship_mode() == crate::application::workflow::ShipMode::Local,
         )?;
-        self.submit_pipeline_run_with_trigger(
+        let trigger = request.trigger.kind;
+        let submitted = self.submit_pipeline_run_with_trigger(
             workflow_job_id,
             input,
             None,
             request.actor,
             request.trigger,
-        )
+        )?;
+        // [ORB-25965] A hand start lifts a pause; it changes nothing else.
+        self.record_drain_start_intent(trigger);
+        Ok(submitted)
     }
 
     fn validate_strict_worker_containment(&self, strict: bool) -> Result<(), OrbitError> {

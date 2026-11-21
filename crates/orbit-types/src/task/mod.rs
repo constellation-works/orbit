@@ -1,8 +1,7 @@
 //! Domain contracts for this Orbit types module.
 
 mod artifacts;
-mod context_creation;
-mod context_widening;
+mod context;
 mod decision;
 mod epic;
 mod error;
@@ -29,21 +28,21 @@ mod ui_requirement;
 mod work_class;
 pub use error::TaskError;
 pub use resolves::{
-    RESOLVES_SIDE_EFFECT_PENDING_EVENT, RESOLVES_TARGET_NOTE_PREFIX, named_friction_targets,
-    pending_resolves_entries, resolves_relation_targets,
+    RESOLVES_SIDE_EFFECT_PENDING_EVENT, RESOLVES_TARGET_NOTE_PREFIX, ResolvesSideEffectRecord,
+    ResolvesSideEffectState, named_friction_targets, pending_resolves_entries,
+    resolves_relation_targets,
 };
 
-pub use context_creation::{
-    CONTEXT_CREATION_AUTHORIZED_EVENT, CONTEXT_CREATION_GRANT_VERSION, ContextCreationGrant,
-    ContextCreationState, MAX_CONTEXT_CREATION_SELECTORS, context_files_sha256,
-};
-pub use context_widening::{
-    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep,
+pub use context::{
+    CONTEXT_CREATION_AUTHORIZED_EVENT, CONTEXT_CREATION_GRANT_VERSION, CONTEXT_FILES_PRUNED_EVENT,
+    CONTEXT_FILES_WIDENED_EVENT, ContextCreationGrant, ContextCreationState, ContextFilesWidening,
+    ContextWideningStep, LegacyContextPruningRecord, MAX_CONTEXT_CREATION_SELECTORS,
+    context_files_sha256,
 };
 pub use decision::{
-    AGENT_DECISION_MAX_OPTIONS, AGENT_DECISION_MIN_OPTIONS, AgentDecisionOptionInput,
-    AgentDecisionRequestError, CREW_ASSIGNED_EVENT, CREW_REDRAWN_EVENT, CiFailureIdentity,
-    CiFailureIdentityError, CiFailureSource, CodeScanningAlertEvidence,
+    ACCEPT_FINDINGS_ANSWER_ID, AGENT_DECISION_MAX_OPTIONS, AGENT_DECISION_MIN_OPTIONS,
+    AgentDecisionOptionInput, AgentDecisionRequestError, CREW_ASSIGNED_EVENT, CREW_REDRAWN_EVENT,
+    CiFailureIdentity, CiFailureIdentityError, CiFailureSource, CodeScanningAlertEvidence,
     CodeScanningAlertEvidenceError, CrewAssignmentField, CrewAssignmentState,
     DECISION_ANSWERED_EVENT, DECISION_DIGEST_EXPIRY_WINDOW_HOURS, DECISION_MODEL_CONFIRMED_EVENT,
     DECISION_REOPENED_EVENT, DECISION_REQUESTED_EVENT, DECISION_TOKEN_CONSUMED_EVENT,
@@ -82,8 +81,9 @@ pub use host_labels::{
 pub use light_delivery::{
     DEFAULT_LIGHT_DELIVERY_PATHS, GuardOutcome, LIGHT_DELIVERY_APPLIED_EVENT,
     LIGHT_DELIVERY_IGNORED_EVENT, LIGHT_DELIVERY_PATHS_KEY, LIGHT_DELIVERY_TAGS,
-    LightDeliveryDecision, LightDeliveryJudgement, MAX_REVIEW_SKIP_TAGS, REVIEW_SKIP_TAGS_KEY,
-    ReviewSkipProfile, SKIP_REVIEW_TAG, SKIP_VALIDATION_TAG,
+    LightDeliveryDecision, LightDeliveryJudgement, LightDeliveryReplayKey, MAX_REVIEW_SKIP_TAGS,
+    REVIEW_SKIP_TAGS_KEY, RecordedLightDeliveryDecision, RecordedLightDeliveryOutcome,
+    RecordedLightDeliveryReason, ReviewSkipProfile, SKIP_REVIEW_TAG, SKIP_VALIDATION_TAG,
 };
 pub use schedule::{
     NOT_BEFORE_FIELD, SCHEDULE_OVERRIDDEN_EVENT, SCHEDULED_HOLD_PREFIX, format_not_before,
@@ -107,13 +107,14 @@ pub use model::{
     CANDIDATE_RESUME_EVENT, CI_FAILURE_KEY_TAG_PREFIX, CLAIM_CANDIDATE_KEPT_EVENT, CrewSource,
     DEFAULT_TASK_LIST_LIMIT, DELIVERY_JOB_TAG_PREFIX, DERIVED_EXECUTION_SUMMARY_PREFIX,
     DependencyDeadEnd, DispatchAffinity, EXECUTION_SUMMARY_DERIVED_EVENT, ExecutionLocation,
-    ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, MAX_TASK_ARTIFACT_CONTENT_BYTES,
-    NEUTRAL_PRESSURE_MILLI, NO_AUTO_APPROVE_TAG, NO_DIFF_EXPECTED_TAG, NO_DRAIN_TAG,
-    OrchestratorModelSource, RedrawReason, ResolvedTaskDependency, ResolvedTaskRelation,
-    TASK_REFERENCE_NOT_VERIFIABLE_HERE, Task, TaskArtifact, TaskComment, TaskComplexity,
-    TaskCreateStatus, TaskHistoryEntry, TaskOrigin, TaskPriority, TaskReferenceIndex, TaskStatus,
-    TaskType, UNSET_BUCKET, UnsatisfiableTaskDependency, archived_task_completed_before_archive,
-    artifact_presentation, automatic_dispatch_cmp, automatic_dispatch_cmp_with_affinity,
+    ExternalRef, FINDING_ACCEPTANCE_EVENT, GITHUB_PR_EXTERNAL_REF_SYSTEM,
+    MAX_TASK_ARTIFACT_CONTENT_BYTES, NEUTRAL_PRESSURE_MILLI, NO_AUTO_APPROVE_TAG,
+    NO_DIFF_EXPECTED_TAG, NO_DRAIN_TAG, OrchestratorModelSource, RedrawReason,
+    ResolvedTaskDependency, ResolvedTaskRelation, TASK_REFERENCE_NOT_VERIFIABLE_HERE, Task,
+    TaskArtifact, TaskComment, TaskComplexity, TaskCreateStatus, TaskHistoryEntry, TaskOrigin,
+    TaskPriority, TaskReferenceIndex, TaskStatus, TaskType, UNSET_BUCKET,
+    UnsatisfiableTaskDependency, archived_task_completed_before_archive, artifact_presentation,
+    automatic_dispatch_cmp, automatic_dispatch_cmp_with_affinity,
     automatic_dispatch_cmp_with_expiry, complexity_bucket, complexity_bucket_ord,
     delivery_job_selection, deserialize_required_tools, image_bytes_match_media_type,
     inline_safe_artifact_media_type, is_inline_image_media_type, is_system_identity_tag,
@@ -137,11 +138,12 @@ pub use mutation_proposal::{
 pub use os_requirement::{
     ExecutorOsLimit, HostOs, OS_TAG_PREFIX, TaskOsRequirement, validate_os_tags,
 };
+pub use pilot_summary::PilotCommentView;
 pub use plan::{TaskPlan, TaskPlanCheckpoint, TaskPlanSuccessCriterion};
 pub use readiness::{
-    ReadinessGap, ReadinessGapCode, ReadinessSeverity, ReadinessStage, TaskReadiness,
-    backlog_footprint_warning, declares_no_footprint, readiness_gaps, task_readiness,
-    task_readiness_json,
+    READINESS_WAIVED_TAG, ReadinessGap, ReadinessGapCode, ReadinessSeverity, ReadinessStage,
+    TaskReadiness, backlog_footprint_warning, declares_no_footprint, footprint_rule_applies,
+    readiness_gaps, task_readiness, task_readiness_json, waives_readiness,
 };
 pub use receipt::CommentReceipt;
 pub use regression::{

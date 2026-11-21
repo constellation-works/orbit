@@ -149,7 +149,8 @@ pub fn resolve_lease_client_address(
     let peer = peer.to_canonical();
     let trusted = match policy {
         LeaseClientAddressPolicy::BehindProxy(trusted) if trusted.contains(peer) => trusted,
-        _ => return Ok(peer),
+        LeaseClientAddressPolicy::Direct => return Ok(peer),
+        LeaseClientAddressPolicy::BehindProxy(_) => return Ok(peer),
     };
     let mut entries = Vec::new();
     for value in forwarded_for {

@@ -71,7 +71,8 @@ impl OrbitRuntime {
         else {
             return Ok(());
         };
-        let record = ResidentComment::parse(message).map_err(|error| invalid(error.to_string()))?;
+        let record = ResidentComment::parse_for_write(message)
+            .map_err(|error| invalid(error.to_string()))?;
         if record.mandate() != task.id.as_str() {
             return Err(invalid(
                 "resident record `mandate` must match the assignment task",
@@ -121,7 +122,8 @@ impl OrbitRuntime {
         let initial_message = serde_json::to_string(&record)
             .map_err(|error| invalid(format!("serialize checkpoint: {error}")))?;
         let ResidentComment::Checkpoint(checkpoint) =
-            ResidentComment::parse(&initial_message).map_err(|error| invalid(error.to_string()))?
+            ResidentComment::parse_for_write(&initial_message)
+                .map_err(|error| invalid(error.to_string()))?
         else {
             return Err(invalid("checkpoint requires a resident.checkpoint record"));
         };

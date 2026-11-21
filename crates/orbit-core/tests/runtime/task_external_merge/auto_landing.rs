@@ -1,0 +1,484 @@
+//! The owner merges a delivered pull request its authorised run left behind
+//! [ORB-25966]: a `completion: done` run that ended held or without merging,
+//! whose checks then went green with no decision open, lands on the owner's
+//! next pass. Anything else carries a typed follow-up instead of sitting.
+
+use orbit_core::application::task::{LANDING_FOLLOW_UP_EVENT, LandingFollowUp};
+use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_store::contracts::JobRunStepParams;
+use orbit_types::task::TaskHistoryEntry;
+use orbit_types::workflow::handoff::{
+    LANDING_CHECKS_OBSERVED_EVENT, LandingChecksObservationState, RecordedLandingChecksObservation,
+};
+use orbit_types::workflow::{JobRunState, JobTargetType};
+
+use super::*;
+
+crate::scenario_table!(
+    auto_landing,
+    a_held_authorised_run_whose_checks_went_green_is_merged_by_the_owner_tick,
+    a_held_absent_runs_delivery_is_not_merged_until_a_required_check_passes,
+    a_succeeded_authorised_run_with_a_passed_observation_is_merged,
+    a_delivery_without_completion_authority_records_who_merges_it,
+    a_stopped_authorised_run_is_not_reported_as_unauthorised,
+    an_authorised_conflicting_pull_request_records_its_follow_up_once,
+    two_open_delivery_pull_requests_record_one_ambiguity_follow_up,
+    alternating_blockers_on_one_head_record_each_code_once,
+    a_retargeted_pull_request_is_not_merged_and_lands_once_restored,
+    second_read_rerun_or_changed_head_waits_while_forge_refusal_records_reason
+);
+
+/// A finished delivery run of `task` that carried `completion`.
+fn delivery_run(
+    fx: &Fixture,
+    task: &str,
+    completion: &str,
+    state: JobRunState,
+    code: Option<&str>,
+) {
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        fx.runtime.sqlite_store().unwrap(),
+        fx.runtime.workspace_id().unwrap(),
+    );
+    let run = jobs
+        .insert_job_run(
+            "task_pr_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({ "task_ids": [task], "completion": completion })),
+            None,
+        )
+        .unwrap();
+    jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .unwrap();
+    jobs.complete_job_run_step(
+        &run.run_id,
+        &JobRunStepParams {
+            step_index: 0,
+            target_type: JobTargetType::Activity,
+            target_id: "pr_complete".into(),
+            started_at: Utc::now(),
+            finished_at: Utc::now(),
+            duration_ms: Some(1),
+            exit_code: None,
+            agent_response_json: None,
+            state,
+            lock_wait_ms: None,
+            error_code: code.map(str::to_string),
+            error_message: None,
+        },
+    )
+    .unwrap();
+    jobs.finalize_job_run(&run.run_id, state, Utc::now(), Some(1))
+        .unwrap();
+}
+
+/// The watch's `passed` observation of the scripted pull request.
+fn observe_passed(fx: &Fixture, task: &str) {
+    let note = RecordedLandingChecksObservation::settled(
+        LandingChecksObservationState::Passed,
+        LAND_PR.to_string(),
+        Some(LAND_HEAD.to_string()),
+        None,
+    )
+    .to_note()
+    .unwrap();
+    fx.runtime
+        .apply_task_automation_update(
+            task,
+            TaskAutomationUpdate {
+                append_history: vec![
+                    TaskHistoryEntry::new(
+                        Utc::now(),
+                        "owner-landing",
+                        LANDING_CHECKS_OBSERVED_EVENT,
+                    )
+                    .with_note(Some(note)),
+                ],
+                ..TaskAutomationUpdate::default()
+            },
+        )
+        .unwrap();
+}
+
+fn follow_ups(fx: &Fixture, task: &str) -> Vec<LandingFollowUp> {
+    fx.runtime
+        .get_task_history(task)
+        .unwrap()
+        .iter()
+        .filter(|entry| entry.event == LANDING_FOLLOW_UP_EVENT)
+        .map(|entry| serde_json::from_str(entry.note.as_deref().unwrap()).unwrap())
+        .collect()
+}
+
+fn a_held_authorised_run_whose_checks_went_green_is_merged_by_the_owner_tick() {
+    // ORB-24422: the run held after its checks retrigger; the checks passed later.
+    let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Mergeable);
+    delivery_run(
+        &fx,
+        &task,
+        "done",
+        JobRunState::Held,
+        Some("delivery_check_runs_absent"),
+    );
+    tick(&fx, false, false);
+    assert_eq!(
+        forge.merges(),
+        vec![(LAND_PR, LAND_HEAD.to_string())],
+        "the sweep tick merges the green pull request once"
+    );
+    fx.assert_done(&task, "the owner settles the merged task");
+    assert!(
+        follow_ups(&fx, &task).is_empty(),
+        "a merged task owes nothing"
+    );
+}
+
+fn a_held_absent_runs_delivery_is_not_merged_until_a_required_check_passes() {
+    // ORB-25993: a mergeable head with no required check run has no check
+    // evidence; the sweep must not ask the forge to merge it.
+    let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Mergeable);
+    delivery_run(
+        &fx,
+        &task,
+        "done",
+        JobRunState::Held,
+        Some("delivery_check_runs_absent"),
+    );
+    forge.report_no_required_checks(true);
+    for _ in 0..2 {
+        tick(&fx, false, false);
+    }
+    assert!(
+        forge.merges().is_empty(),
+        "no required check has passed, so the sweep makes no merge call"
+    );
+    fx.assert_status(&task, TaskStatus::Review, "waits for check evidence");
+    forge.report_no_required_checks(false);
+    tick(&fx, false, false);
+    assert_eq!(
+        forge.merges(),
+        vec![(LAND_PR, LAND_HEAD.to_string())],
+        "the same delivery merges once a required check passes"
+    );
+    fx.assert_done(&task, "the owner settles the merged task");
+}
+
+fn a_succeeded_authorised_run_with_a_passed_observation_is_merged() {
+    // ORB-25385: checks observed passed, no run left to merge.
+    let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Mergeable);
+    delivery_run(&fx, &task, "done", JobRunState::Success, None);
+    observe_passed(&fx, &task);
+    let landed = fx.runtime.land_completion_authorized_tasks().unwrap();
+    assert_eq!(landed.len(), 1, "{landed:?}");
+    assert_eq!(
+        (landed[0].pull_request, landed[0].task_id.as_str()),
+        (LAND_PR, task.as_str())
+    );
+    assert_eq!(forge.merges().len(), 1);
+    fx.assert_done(&task, "landed and settled");
+}
+
+fn a_delivery_without_completion_authority_records_who_merges_it() {
+    let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Mergeable);
+    delivery_run(&fx, &task, "review", JobRunState::Success, None);
+    observe_passed(&fx, &task);
+    for _ in 0..2 {
+        assert!(
+            fx.runtime
+                .land_completion_authorized_tasks()
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert!(forge.merges().is_empty(), "no authority, no merge");
+    fx.assert_status(&task, TaskStatus::Review, "left for the operator");
+    let recorded = follow_ups(&fx, &task);
+    assert_eq!(recorded.len(), 1, "recorded once: {recorded:?}");
+    assert_eq!(
+        (
+            recorded[0].code.as_str(),
+            recorded[0].owner.as_str(),
+            recorded[0].pull_request
+        ),
+        ("completion_not_authorized", "operator", LAND_PR)
+    );
+}
+
+fn a_stopped_authorised_run_is_not_reported_as_unauthorised() {
+    // ORB-25995: a `completion: done` run that failed after a passed
+    // observation had authority; it must not be told to merge by hand.
+    for (state, code) in [
+        (JobRunState::Failed, None),
+        (JobRunState::Held, Some("review_budget_exhausted")),
+    ] {
+        let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Mergeable);
+        delivery_run(&fx, &task, "done", state, code);
+        observe_passed(&fx, &task);
+        assert!(
+            fx.runtime
+                .land_completion_authorized_tasks()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(forge.merges().is_empty(), "a stopped run is not landed");
+        assert!(
+            follow_ups(&fx, &task).is_empty(),
+            "{state:?}: no missing-authority follow-up: {:?}",
+            follow_ups(&fx, &task)
+        );
+    }
+}
+
+fn an_authorised_conflicting_pull_request_records_its_follow_up_once() {
+    let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Conflicting);
+    delivery_run(&fx, &task, "done", JobRunState::Success, None);
+    for _ in 0..2 {
+        assert!(
+            fx.runtime
+                .land_completion_authorized_tasks()
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert!(forge.merges().is_empty(), "a conflict never merges");
+    fx.assert_status(&task, TaskStatus::Review, "conflict stays review");
+    let recorded = follow_ups(&fx, &task);
+    assert_eq!(recorded.len(), 1, "recorded once: {recorded:?}");
+    assert_eq!(recorded[0].code, "pull_request_conflicting");
+}
+
+fn two_open_delivery_pull_requests_record_one_ambiguity_follow_up() {
+    // ORB-25997: two open pull requests deliver the task, so the sweep must not
+    // pick one, and must leave the operator a reason instead of only logging.
+    const SECOND_PR: u64 = LAND_PR + 1;
+    let fx = Fixture::new();
+    let task = fx.add_task("Ambiguous land", TaskStatus::Review, &[LAND_PR, SECOND_PR]);
+    fx.forge
+        .script_land(&task, &fx.base.clone(), &[], MergeabilityAnswer::Mergeable);
+    fx.forge.0.lock().unwrap().open.insert(
+        SECOND_PR,
+        ForgePullRequest {
+            number: SECOND_PR,
+            head_branch: format!("orbit/{task}-5a5a5a5a"),
+            body: format!("Delivers {task}.\n\nOrbit run jrun-2"),
+            author: BOT.into(),
+        },
+    );
+    delivery_run(&fx, &task, "done", JobRunState::Success, None);
+    for _ in 0..2 {
+        assert!(
+            fx.runtime
+                .land_completion_authorized_tasks()
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert!(
+        fx.forge.merges().is_empty(),
+        "an ambiguous delivery never merges"
+    );
+    fx.assert_status(&task, TaskStatus::Review, "left for the operator");
+    let recorded = follow_ups(&fx, &task);
+    assert_eq!(recorded.len(), 1, "recorded once: {recorded:?}");
+    assert_eq!(recorded[0].code, "ambiguous_delivery_pull_requests");
+    assert_eq!(recorded[0].owner, "operator");
+    assert!(
+        recorded[0].detail.contains(&LAND_PR.to_string())
+            && recorded[0].detail.contains(&SECOND_PR.to_string()),
+        "names both pull requests: {}",
+        recorded[0].detail
+    );
+}
+
+fn a_retargeted_pull_request_is_not_merged_and_lands_once_restored() {
+    // ORB-26002: retargeting the PR after candidate selection preserves the
+    // head SHA; neither the second read in auto_land_one nor the final merge
+    // read in merge_delivery_pull_request may issue a merge against another branch.
+    for bases in [
+        // Retargeted between Read #1 (candidate selection) and Read #2 (auto_land_one).
+        vec!["other-branch"],
+        // Retargeted between Read #2 (auto_land_one) and Read #3 (merge_delivery_pull_request).
+        vec!["stable", "other-branch"],
+    ] {
+        let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Mergeable);
+        let stable = fx.base.clone();
+        let scripted: Vec<&str> = std::iter::once(stable.as_str())
+            .chain(
+                bases
+                    .iter()
+                    .map(|b| if *b == "stable" { stable.as_str() } else { *b }),
+            )
+            .collect();
+        forge.script_base_answers(&scripted, "other-branch");
+        delivery_run(
+            &fx,
+            &task,
+            "done",
+            JobRunState::Held,
+            Some("delivery_check_runs_absent"),
+        );
+
+        tick(&fx, false, false);
+        assert!(
+            forge.merges().is_empty(),
+            "retargeted PR must never receive a merge request ({bases:?})"
+        );
+        fx.assert_status(&task, TaskStatus::Review, "retargeted PR stays in review");
+        let recorded = follow_ups(&fx, &task);
+        assert_eq!(
+            recorded.len(),
+            1,
+            "recorded follow-up ({bases:?}): {recorded:?}"
+        );
+        assert_eq!(recorded[0].code, "merge_refused");
+        assert!(
+            recorded[0].detail.contains("other-branch"),
+            "detail names the changed target: {}",
+            recorded[0].detail
+        );
+
+        // Retargeting back to the stable eligible branch lets the next sweep land it.
+        forge.script_base_answers(&[], &stable);
+        tick(&fx, false, false);
+        assert_eq!(
+            forge.merges(),
+            vec![(LAND_PR, LAND_HEAD.to_string())],
+            "restored target lands on the next sweep ({bases:?})"
+        );
+        fx.assert_done(&task, "restored target settles to done");
+    }
+}
+
+fn alternating_blockers_on_one_head_record_each_code_once() {
+    // ORB-25996: a failed check, then green checks awaiting the pre-landing
+    // review, then the failed check again on the same head. Each code is
+    // written once per head; a new head writes its own.
+    let fx = Fixture::with_config("[review]\ntiming = \"before_landing\"\n");
+    let task = fx.add_task("Alternating blockers", TaskStatus::Review, &[LAND_PR]);
+    fx.forge
+        .script_land(&task, &fx.base.clone(), &[], MergeabilityAnswer::Mergeable);
+    delivery_run(&fx, &task, "done", JobRunState::Success, None);
+    let owner_pass = || fx.runtime.land_completion_authorized_tasks().unwrap();
+
+    fx.forge.report_failed_checks(&["Check"]);
+    assert!(owner_pass().is_empty());
+    fx.forge.report_failed_checks(&[]);
+    assert!(owner_pass().is_empty());
+    fx.forge.report_failed_checks(&["Check"]);
+    assert!(owner_pass().is_empty());
+    assert!(fx.forge.merges().is_empty(), "a blocked head never merges");
+    fx.assert_status(&task, TaskStatus::Review, "blocked stays in review");
+    let recorded = follow_ups(&fx, &task);
+    assert_eq!(
+        recorded
+            .iter()
+            .map(|entry| (entry.code.as_str(), entry.head_sha.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("required_checks_failed", Some(LAND_HEAD)),
+            ("review_not_settled", Some(LAND_HEAD)),
+        ],
+        "each code is recorded once on the head: {recorded:?}"
+    );
+
+    let moved = "5a".repeat(20);
+    fx.forge.move_head(&moved);
+    fx.forge.report_failed_checks(&["Check"]);
+    assert!(owner_pass().is_empty());
+    let recorded = follow_ups(&fx, &task);
+    assert_eq!(
+        recorded
+            .iter()
+            .map(|entry| (entry.code.as_str(), entry.head_sha.as_deref()))
+            .collect::<Vec<_>>(),
+        [
+            ("required_checks_failed", Some(LAND_HEAD)),
+            ("review_not_settled", Some(LAND_HEAD)),
+            ("required_checks_failed", Some(moved.as_str())),
+        ],
+        "a new head records its own follow-up: {recorded:?}"
+    );
+}
+
+fn second_read_rerun_or_changed_head_waits_while_forge_refusal_records_reason() {
+    // ORB-26001: a pending rerun or moved head on the second blockers read in
+    // merge_delivery_pull_request must leave the merge unissued without
+    // recording `merge_refused`; a newly discovered conflict records
+    // `pull_request_conflicting`; an actual forge refusal records `merge_refused`
+    // with the forge's reason.
+
+    // 1. Pending rerun between Read #1 and Read #2 waits and lands once green.
+    let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Mergeable);
+    forge.script_pending_checks(&[&[], &["Test"]], &["Test"]);
+    delivery_run(&fx, &task, "done", JobRunState::Success, None);
+    tick(&fx, false, false);
+    assert!(
+        forge.merges().is_empty(),
+        "pending rerun on second read leaves merge unissued"
+    );
+    fx.assert_status(&task, TaskStatus::Review, "pending rerun waits in review");
+    assert!(
+        follow_ups(&fx, &task).is_empty(),
+        "pending rerun on second read records no follow-up: {:?}",
+        follow_ups(&fx, &task)
+    );
+    forge.script_pending_checks(&[], &[]);
+    tick(&fx, false, false);
+    assert_eq!(forge.merges(), vec![(LAND_PR, LAND_HEAD.to_string())]);
+    fx.assert_done(&task, "lands once rerun finishes");
+
+    // 2. Head moved between Read #1 and Read #2 leaves merge unissued with no
+    //    `merge_refused`, then evaluates and lands the new head on the next tick.
+    let moved = "5a".repeat(20);
+    let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Mergeable);
+    forge.script_head_answers(&[LAND_HEAD, &moved], &moved);
+    delivery_run(&fx, &task, "done", JobRunState::Success, None);
+    tick(&fx, false, false);
+    assert!(
+        forge.merges().is_empty(),
+        "changed head on second read leaves merge unissued"
+    );
+    fx.assert_status(&task, TaskStatus::Review, "changed head waits in review");
+    assert!(
+        follow_ups(&fx, &task).is_empty(),
+        "changed head on second read records no merge_refused follow-up: {:?}",
+        follow_ups(&fx, &task)
+    );
+    tick(&fx, false, false);
+    assert_eq!(forge.merges(), vec![(LAND_PR, moved)]);
+    fx.assert_done(&task, "new green head lands on the next pass");
+
+    // 3. Conflict discovered on Read #2 records `pull_request_conflicting`, not `merge_refused`.
+    let (fx, forge, task) = mergeability_land(
+        &[
+            MergeabilityAnswer::Mergeable,
+            MergeabilityAnswer::Conflicting,
+        ],
+        MergeabilityAnswer::Conflicting,
+    );
+    delivery_run(&fx, &task, "done", JobRunState::Success, None);
+    tick(&fx, false, false);
+    assert!(forge.merges().is_empty(), "conflicting PR never merges");
+    let recorded = follow_ups(&fx, &task);
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(recorded[0].code, "pull_request_conflicting");
+
+    // 4. Actual forge refusal from merge_pull_request still records `merge_refused` with its reason.
+    let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Mergeable);
+    forge.refuse_merge(Some("Required status check \"ci\" is expected"));
+    delivery_run(&fx, &task, "done", JobRunState::Success, None);
+    tick(&fx, false, false);
+    assert!(forge.merges().is_empty());
+    fx.assert_status(&task, TaskStatus::Review, "forge refusal stays in review");
+    let recorded = follow_ups(&fx, &task);
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(recorded[0].code, "merge_refused");
+    assert!(
+        recorded[0]
+            .detail
+            .contains("Required status check \"ci\" is expected"),
+        "forge refusal quotes its reason: {}",
+        recorded[0].detail
+    );
+}

@@ -193,9 +193,13 @@ fn dependency_only_hold_expires_from_its_original_start_after_throttled_log_read
                 "the later Waiting observation uses the original 900s clock, got {}ms",
                 clock.get() - START_MS
             );
-            let deferred = notes(&host, "pr_auto_fix_read_deferred");
+            let deferred = host
+                .history(TASK_ID)
+                .iter()
+                .filter_map(orbit_types::workflow::PrAutoFixReadDeferral::from_entry)
+                .collect::<Vec<_>>();
             assert_eq!(deferred.len(), 1, "{deferred:?}");
-            assert_eq!(deferred[0]["retry_after_seconds"], json!(400));
+            assert_eq!(deferred[0].retry_after_seconds, Some(400));
             let held = notes(&host, "pr_auto_fix_ci_rerun_hold");
             assert_eq!(held.len(), 1, "{:?}", host.history(TASK_ID));
             assert!(

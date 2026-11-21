@@ -162,7 +162,12 @@ fn classify_rustup(args: &[String]) -> Option<Install> {
         "install" | "update" => profiled(plus, tail),
         "default" => {
             let parsed = parse_flags(tail);
-            if parsed.help || parsed.positionals.is_empty() {
+            // `rustup default none` unsets the default and installs nothing.
+            let installs_nothing = parsed
+                .positionals
+                .iter()
+                .all(|toolchain| toolchain.eq_ignore_ascii_case("none"));
+            if parsed.help || installs_nothing {
                 None
             } else {
                 Some(Install::Profiled {
@@ -173,29 +178,40 @@ fn classify_rustup(args: &[String]) -> Option<Install> {
                 })
             }
         }
-        "run" => {
-            let parsed = parse_flags(tail);
-            if parsed.help {
-                return None;
-            }
-            let toolchain = parsed.positionals.first()?.clone();
-            Some(Install::Profiled {
-                profile_flag: parsed.profile,
-                components: parsed.components,
-                toolchains: vec![toolchain],
-                plus,
-            })
-        }
+        "run" => classify_run(plus, tail),
         "component" => classify_component(tail),
         "toolchain" => {
             let (sub, sub_tail) = tail.split_first()?;
             match sub.as_str() {
-                "install" => profiled(plus, sub_tail),
+                "install" | "add" | "update" => profiled(plus, sub_tail),
                 _ => None,
             }
         }
         _ => None,
     }
+}
+
+/// `rustup run [--install] <TOOLCHAIN> <COMMAND>...`: only the options before
+/// the toolchain positional are rustup's. Everything after it belongs to the
+/// child command, so its `--version`, `-h`, `--profile` or `-c` say nothing
+/// about the install.
+fn classify_run(plus: Option<String>, tail: &[String]) -> Option<Install> {
+    let toolchain_at = match tail.iter().position(|arg| arg == "--") {
+        Some(separator) if tail[..separator].iter().all(|arg| arg.starts_with('-')) => {
+            separator + 1
+        }
+        _ => tail.iter().position(|arg| !arg.starts_with('-'))?,
+    };
+    if parse_flags(&tail[..toolchain_at.min(tail.len())]).help {
+        return None;
+    }
+    let toolchain = tail.get(toolchain_at)?.clone();
+    Some(Install::Profiled {
+        profile_flag: None,
+        components: Vec::new(),
+        toolchains: vec![toolchain],
+        plus,
+    })
 }
 
 fn classify_component(tail: &[String]) -> Option<Install> {
@@ -280,6 +296,11 @@ fn parse_flags(args: &[String]) -> ParsedFlags {
                 push_components(&mut parsed.components, value);
                 index += 1;
             }
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("-c").filter(|_| !arg.starts_with("--")) {
+            push_components(&mut parsed.components, value);
+            index += 1;
             continue;
         }
         if let Some(value) = arg.strip_prefix("--default-toolchain=") {
@@ -424,7 +445,11 @@ fn auto_writes_rust_docs(
     if !auto_install_enabled(env, home) {
         return false;
     }
+    // `+toolchain` and `RUSTUP_TOOLCHAIN` take precedence, so rustup never reads
+    // the toolchain file when either is set.
+    let selected_explicitly = plus.is_some() || env_value(env, "RUSTUP_TOOLCHAIN").is_some();
     let file_profile = match nearest_toolchain_file(workspace) {
+        OverrideFile::Unusable if selected_explicitly => None,
         OverrideFile::Unusable => return false,
         OverrideFile::Parsed(spec) => Some(spec),
         OverrideFile::None => None,

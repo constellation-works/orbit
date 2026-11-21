@@ -91,6 +91,9 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
             UnrepairableFailure::ProviderUnavailable => {
                 "the provider could not be used on this host; the candidate was not judged"
             }
+            UnrepairableFailure::MuseModelAccessRefused => {
+                "Muse refused access to the selected model"
+            }
             UnrepairableFailure::ProviderRefusal => {
                 "the provider's content policy refused the turn; the candidate was not judged"
             }
@@ -100,6 +103,10 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
             }
             UnrepairableFailure::OwnerSignoffRequired => {
                 "recorded owner approval is still missing; another agent cannot record it"
+            }
+            UnrepairableFailure::FootprintUnavailable => {
+                "the resumed published delivery's deferred footprint stayed held past its \
+                 wait; no editor started and the candidate was not judged"
             }
         });
     }
@@ -125,6 +132,12 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
     if let types::FinalRecoveryBudget::Replay(decision, fault) =
         std::mem::replace(budget, types::FinalRecoveryBudget::Spent)
     {
+        // A replayed current-policy requeue of the unchanged publication
+        // holds a transient completion observation as a fresh one does.
+        let completion_requeue = matches!(
+            error,
+            DispatchError::CompletionObservationUnavailable { .. }
+        ) && matches!(decision, FinalRecoveryDecision::Requeue { .. });
         let application = FinalRecoveryApplication {
             task_id,
             failed_step_id: step.id.clone(),
@@ -138,7 +151,12 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
             completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
             infrastructure: None,
         };
-        return settlement::conclude(job, ctx, step, activity, &application, None, None);
+        let verdict = settlement::conclude(job, ctx, step, activity, &application, None, None);
+        return if completion_requeue {
+            verdict.held_for_completion_observation()
+        } else {
+            verdict
+        };
     }
     // [ORB-14668] A candidate conflict recovery found already on the pinned
     // base is settled from the host-certified evidence, re-observed here,
@@ -250,6 +268,52 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
         return settlement::conclude(job, ctx, step, activity, &application, None, None);
     }
 
+    // [ORB-25864] GitHub rate-limited the automation account's read. The
+    // quota is shared by every pipeline on the host and resets within the
+    // hour; no agent can outlast it, and the candidate was not judged. The
+    // unchanged publication is requeued, not escalated: the next run's
+    // completion waits for the reset within its own fresh budget. A claimed
+    // leaf's task is its owner's, as above.
+    if let DispatchError::DeterministicActionFailed { action, message } = error
+        && orbit_types::workflow::is_github_rate_limit_failure(action, message)
+        && ctx.input.get("claimed").and_then(Value::as_bool) != Some(true)
+    {
+        let application = FinalRecoveryApplication {
+            task_id,
+            failed_step_id: step.id.clone(),
+            decision: FinalRecoveryDecision::Requeue {
+                reason: format!(
+                    "provider-rate-limit: GitHub rate-limited a read of step `{}` before the \
+                     automation account's quota reset; requeue the unchanged publication, whose \
+                     next completion waits for the reset within its own budget",
+                    step.id
+                ),
+            },
+            fault: FaultAttribution::new(
+                RecoveryFault::Infrastructure,
+                format!(
+                    "run {} step `{}` was rate-limited by GitHub: {}",
+                    ctx.run_id,
+                    step.id,
+                    bounded_recovery_text(
+                        "error",
+                        &ctx.run_id,
+                        error_message,
+                        MAX_RECOVERY_ERROR_MESSAGE_BYTES,
+                    )
+                ),
+            ),
+            resume_step_index: None,
+            preserved_steps: Vec::new(),
+            repair_commit: None,
+            resume_context: None,
+            workspace_path: worktree.workspace_path.into(),
+            completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
+            infrastructure: None,
+        };
+        return settlement::conclude(job, ctx, step, activity, &application, None, None);
+    }
+
     // Read-only completion transport failures spend the same durable final
     // recovery budget, but need neither an agent nor a replacement candidate.
     // The single retry waits out a short outage first; the cumulative
@@ -337,7 +401,44 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
                         == Some("done"),
                     infrastructure: None,
                 };
-                return settlement::conclude(job, ctx, step, activity, &application, None, None);
+                return settlement::conclude(job, ctx, step, activity, &application, None, None)
+                    .held_for_completion_observation();
+            }
+            Ok(CompletionObservationAdmission::Stopped { reason }) => {
+                // The worker is gone, so the in-worker retry cannot run. Requeue
+                // the unchanged publication under current policy. This is not a
+                // candidate change and it does not ask for a manual inspect.
+                let application = FinalRecoveryApplication {
+                    task_id,
+                    failed_step_id: step.id.clone(),
+                    decision: FinalRecoveryDecision::Requeue {
+                        reason: format!(
+                            "stopped-run: {reason}; requeue the unchanged publication under current policy"
+                        ),
+                    },
+                    fault: FaultAttribution::unknown(format!(
+                        "run {} step `{}` could not observe completion of an unchanged publication \
+                         after the run stopped: {}",
+                        ctx.run_id,
+                        step.id,
+                        bounded_recovery_text(
+                            "error",
+                            &ctx.run_id,
+                            error_message,
+                            MAX_RECOVERY_ERROR_MESSAGE_BYTES,
+                        )
+                    )),
+                    resume_step_index: None,
+                    preserved_steps: Vec::new(),
+                    repair_commit: None,
+                    resume_context: None,
+                    workspace_path: worktree.workspace_path.into(),
+                    completion_done: ctx.input.get("completion").and_then(Value::as_str)
+                        == Some("done"),
+                    infrastructure: None,
+                };
+                return settlement::conclude(job, ctx, step, activity, &application, None, None)
+                    .held_for_completion_observation();
             }
             Ok(CompletionObservationAdmission::Unavailable) => {
                 "host has no authenticated completion prefix".to_string()
@@ -548,7 +649,7 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
         completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
         infrastructure: None,
     };
-    settlement::conclude(
+    let verdict = settlement::conclude(
         job,
         ctx,
         step,
@@ -556,7 +657,19 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
         &application,
         resume_index,
         downgrade.as_deref(),
-    )
+    );
+    // A recovery agent cannot be dispatched for a completion observation
+    // (the branch above intercepts it), but a requeue decided on this path
+    // for one holds the same way.
+    if matches!(
+        error,
+        DispatchError::CompletionObservationUnavailable { .. }
+    ) && matches!(decision, FinalRecoveryDecision::Requeue { .. })
+    {
+        verdict.held_for_completion_observation()
+    } else {
+        verdict
+    }
 }
 
 /// Whether `error` is a `worktree_setup` failure caused by a dependency

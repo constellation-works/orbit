@@ -292,9 +292,14 @@ pub(super) const REPILOT: TaskOperation = TaskOperation {
     verb: TaskVerb::Repilot,
     cli_path: &["repilot"],
     tool_name: "orbit.task.repilot",
-    tool_description: "Explicitly request one new pilot assessment for a proposed or backlog task. Only the first assessment is automatic; requirements edits do not request another pilot. When the latest assessment holds promotion, the pilot re-checks its holding findings and keeps the fields the task's changes leave untouched, falling back to a full assessment when the repository moved at its footprint, the scope changed beyond a bounded edit, or the prior assessment is too old or was itself a re-check; `full` forces a full assessment. Requires operator authority on the owner. Refuses pending or running pilots, live delivery, human crews and replica checkouts. Never promotes or dispatches the task.",
+    tool_description: "Explicitly request one new pilot assessment for a proposed or backlog task. Eligible tasks can also receive an automatic re-pilot after edits to their description or acceptance criteria. When the latest assessment holds promotion, the pilot re-checks its holding findings and keeps the fields the task's changes leave untouched, falling back to a full assessment when the repository moved at its footprint, the scope changed beyond a bounded edit, or the prior assessment is too old or was itself a re-check; `full` forces a full assessment. Requires operator authority on the owner. Refuses pending or running pilots, live delivery, human crews and replica checkouts. Never promotes or dispatches the task.",
     cli_about: "Explicitly request one new pilot assessment",
-    cli_help: CliHelp::NONE,
+    cli_help: CliHelp {
+        long_about: Some(
+            "Explicitly request one new pilot assessment for a proposed or backlog task. Eligible tasks can also receive an automatic re-pilot after edits to their description or acceptance criteria.",
+        ),
+        ..CliHelp::NONE
+    },
     effect: Effect::Write,
     params: &[&[
         HOST_PARAM,
@@ -351,47 +356,47 @@ pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
         mcp_only(
             "subject",
             ParamType::Enum(BLOCK_TRIAGE_SUBJECT_VALUES),
-            "what is triaged: pilot_warning (the default and only subject), a proposed task's pilot warning hold",
+            "Triage subject, only pilot_warning (default); a proposed task's pilot warning hold",
         ),
         mcp_only(
             "id",
             ParamType::String,
-            "propose and report: the pilot-held task",
+            "Pilot-held task ID, for propose and report",
         ),
         free_text(mcp_only(
             "summary",
             ParamType::String,
-            "propose and report: one or two plain-language sentences naming the decision needed, readable without opening the code",
+            "Decision needed in one or two plain sentences, for propose and report; readable without opening the code",
         )),
         free_text(mcp_only(
             "reason",
             ParamType::String,
-            "report: the exact action only a human outside Orbit can take",
+            "Exact action only a human outside Orbit can take, for report",
         )),
         mcp_only(
             "options",
             ParamType::Array,
-            "propose: two or three {summary, consequence, rewrite, action} objects; rewrite is {description?, acceptance_criteria?} with the field's complete new value; action is {kind: requeue | re_pilot | change_crew (crew) | split (title, description, acceptance_criteria) | reject | archive}; every option needs a rewrite, an action or both",
+            "Two or three decision options for propose; each is a {summary, consequence, rewrite, action} object; rewrite is {description?, acceptance_criteria?} with the field's complete new value; action is {kind: requeue | re_pilot | change_crew (crew) | split (title, description, acceptance_criteria) | reject | archive}; every option needs a rewrite, an action or both",
         ),
         mcp_only(
             "recommended",
             ParamType::Integer,
-            "propose: 1-based index of the recommended option",
+            "1-based index of the recommended option, for propose",
         ),
         mcp_only(
             "source_revision",
             ParamType::String,
-            "inspection proof: the pinned commit id the caller inspected, or null in a non-Git workspace; supply with observed_revision and observed_tree",
+            "Pinned commit id inspected (null if non-Git); supply with observed_revision and observed_tree",
         ),
         mcp_only(
             "observed_revision",
             ParamType::String,
-            "inspection proof: `git rev-parse HEAD` in the inspection checkout",
+            "Value of `git rev-parse HEAD` in the inspection checkout; inspection proof",
         ),
         mcp_only(
             "observed_tree",
             ParamType::String,
-            "inspection proof: `git rev-parse 'HEAD^{tree}'` in the inspection checkout",
+            "Value of `git rev-parse 'HEAD^{tree}'` in the inspection checkout; inspection proof",
         ),
     ]],
     at_least_one_of: &[],

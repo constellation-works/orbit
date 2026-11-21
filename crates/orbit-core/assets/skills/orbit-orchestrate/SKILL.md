@@ -34,7 +34,9 @@ Inspect → deduplicate → author → prepare → promote → dispatch → veri
   `orbit.attention` (`orbit attention`) on the owning host for the workspaces
   you supervise. Clear each `pilot_warning` and `pilot_hold`: repair the task
   (criteria, context, dependencies; `required_tools` is set only at filing, so
-  re-file to change it) and re-pilot, or record on the task why it stays.
+  re-file to change it), then re-pilot only if the hold stays, or record on the
+  task why it stays. A `context_files` edit by you on a proposed or backlog task
+  re-pilots it on its own.
   Treat an empty result as clear only when `degraded` is empty and the read
   reached the owner: a federated read that misses the owner can return
   nothing. A caller holding neither the agent nor the operator capability
@@ -120,6 +122,7 @@ implementation with the old candidate discarded. See
 | Author or diagnose version 3 auto-task jobs, waits and accepted results | [Auto-task workflows](references/workflows.md#version-3-auto-task-workflows) |
 | Diagnose task-pilot start prerequisites and unreachable evidence | [Task-pilot readiness holds](references/workflows.md#task-pilot-readiness-holds) |
 | Diagnose a specific failed, held, or stuck run | [Run debugging](references/run-debugging.md) |
+| Recognise an agent step an Orbit upgrade stopped mid-run (`upgrade_pending`) | [Upgrade-refused agent steps](references/run-debugging.md#upgrade-refused-agent-steps) |
 | Choose checkpoint resume or a whole-run replay from step zero | [Whole-run replay](references/run-debugging.md#whole-run-replay-from-step-zero) |
 | Tell a corrected agent reply from a clean one | [Response-correction rounds](references/run-debugging.md#bounded-response-correction-rounds) |
 | Tell what a held delivery-refusal code means | [Delivery-refusal holds](references/run-debugging.md#delivery-refusal-holds) |
@@ -127,6 +130,7 @@ implementation with the old candidate discarded. See
 | Diagnose a failed local required-validation command and its replay evidence | [Local validation replay](references/run-debugging.md#local-required-validation-replay) |
 | Find or answer a human decision request on held work | [Decision requests](references/run-debugging.md#decision-requests-on-held-work) |
 | Match an observed failure to a remedy | [Common failures](references/common-failures.md) |
+| Reconcile an open PR that predates the drain | [Stalled pull requests](references/loop.md#reconcile-stalled-pull-requests) |
 | Route CI findings, recover delivery and verify deployment | [Recovery](references/recovery.md) |
 | Salvage an incomplete or stopped candidate instead of starting over | [Salvage an incomplete candidate](references/recovery.md#salvage-an-incomplete-candidate) |
 | Work through typical orchestration decisions | [Walkthroughs](references/walkthroughs.md) |

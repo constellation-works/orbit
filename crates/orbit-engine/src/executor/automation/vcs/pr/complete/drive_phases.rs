@@ -62,11 +62,14 @@ pub(super) enum DispatchFlow {
     WaitPoll(Option<String>),
 }
 
-/// Outcome of a dispatch sub-phase.
-pub(super) enum SubFlow {
-    ContinuePoll,
-    Deliver(Box<Delivery>),
-    WaitPoll,
+/// Outcome of the shared red-base step.
+pub(super) enum RedBaseStep {
+    /// The evidence read was throttled; the caller repolls.
+    Deferred,
+    /// The failure is inherited from the base; wait with this reason.
+    Red(String),
+    /// No red-base hold; the caller continues its ordinary path.
+    Clear,
 }
 
 /// Mutable poll state shared by the phases, owned by one driver.
@@ -78,7 +81,7 @@ pub(super) struct PollDriver<'a, H: RuntimeHost + ?Sized> {
     pub(super) task_ids: &'a [String],
     pub(super) auto_fix: Option<&'a AutoFix>,
     pub(super) diagnostic:
-        &'a mut Option<super::super::super::landing::checks::rerun_diagnostic::CiRerunDiagnostic>,
+        &'a mut Option<super::super::super::checks::rerun_diagnostic::CiRerunDiagnostic>,
     pub(super) max_wait_seconds: u64,
     pub(super) poll_interval_seconds: u64,
     pub(super) completion_started_ms: u64,
@@ -145,6 +148,86 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         }
     }
 
+    /// Defer a throttled read, sleep for its wait, and signal the caller
+    /// to repoll with its own flow enum.
+    pub(super) fn repoll_after_throttled_read(
+        &self,
+        auto_fix: &AutoFix,
+        deferred: &super::super::super::checks::DeferredLogRead,
+    ) -> Result<(), OrbitError> {
+        let wait_ms = defer_throttled_read(
+            self.host,
+            auto_fix,
+            self.pr_number,
+            deferred,
+            self.observation_budget,
+            self.mutated,
+        )?;
+        sleep(Duration::from_millis(wait_ms));
+        Ok(())
+    }
+
+    /// The shared red-base step: classify `failed` against the base,
+    /// record an inherited hold, and defer a throttled read for a repoll.
+    pub(super) fn red_base_step(
+        &self,
+        auto_fix: &AutoFix,
+        status: &PullRequestStatus,
+        failed: &[(Option<String>, String)],
+    ) -> Result<RedBaseStep, OrbitError> {
+        let reason = match red_base_wait(
+            self.host,
+            auto_fix,
+            self.input,
+            self.workspace_path,
+            self.pr_number,
+            status,
+            failed,
+            self.observation_budget,
+        ) {
+            Ok(reason) => reason,
+            Err(deferred) => {
+                self.repoll_after_throttled_read(auto_fix, &deferred)?;
+                return Ok(RedBaseStep::Deferred);
+            }
+        };
+        let Some(reason) = reason else {
+            return Ok(RedBaseStep::Clear);
+        };
+        auto_fix::record_base_red(
+            self.host,
+            auto_fix,
+            &PrAutoFixBaseRed::for_failed_head(
+                status
+                    .head_sha
+                    .clone()
+                    .ok_or_else(|| stopped(self.pr_number, "missing failed head"))?,
+                reason.clone(),
+            ),
+        )?;
+        Ok(RedBaseStep::Red(reason))
+    }
+
+    /// The budget-expiry error once the wait budget is spent, if any.
+    fn expired(&self, base_red_reason: Option<&str>) -> Option<OrbitError> {
+        if self.waited_seconds < self.max_wait_seconds {
+            return None;
+        }
+        if let Some(reason) = base_red_reason {
+            return Some(hold_auto_fix_stop(
+                stopped(self.pr_number, reason),
+                DeliveryRefusal::BaseChecksPending,
+            ));
+        }
+        Some(merge_wait_timeout(
+            self.pr_number,
+            self.waited_seconds,
+            self.max_wait_seconds,
+            self.base_race.as_deref(),
+            &self.unreported,
+        ))
+    }
+
     /// Run the poll loop until a phase delivers or fails.
     pub(super) fn run(mut self) -> Result<Delivery, OrbitError> {
         loop {
@@ -204,7 +287,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
             )
         }
         .map_err(observed)?;
-        let has_failures = !super::super::super::landing::checks::failed_checks(&status).is_empty();
+        let has_failures = !super::super::super::checks::failed_checks(&status).is_empty();
         if self
             .diagnostic
             .as_ref()
@@ -213,7 +296,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
             *self.diagnostic = None;
         }
         if let Some(auto_fix) = auto_fix {
-            super::super::super::landing::checks::rerun_diagnostic::observe_ci_rerun_head(
+            super::super::super::checks::rerun_diagnostic::observe_ci_rerun_head(
                 host,
                 &auto_fix.task_ids,
                 &auto_fix.run_id,
@@ -389,47 +472,13 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         if matches!(state, PrMergeState::Conflict)
             && let Some(auto_fix) = auto_fix
         {
-            let failed = super::super::super::landing::checks::failed_checks(&status);
-            if !failed.is_empty()
-                && let Some(reason) = {
-                    match red_base_wait(
-                        host,
-                        auto_fix,
-                        input,
-                        workspace_path,
-                        pr_number,
-                        &status,
-                        &failed,
-                        observation_budget,
-                    ) {
-                        Ok(reason) => reason,
-                        Err(deferred) => {
-                            let wait_ms = defer_throttled_read(
-                                host,
-                                auto_fix,
-                                pr_number,
-                                &deferred,
-                                observation_budget,
-                                mutated,
-                            )?;
-                            sleep(Duration::from_millis(wait_ms));
-                            return Ok(ObserveFlow::ContinuePoll);
-                        }
-                    }
+            let failed = super::super::super::checks::failed_checks(&status);
+            if !failed.is_empty() {
+                match self.red_base_step(auto_fix, &status, &failed)? {
+                    RedBaseStep::Deferred => return Ok(ObserveFlow::ContinuePoll),
+                    RedBaseStep::Red(reason) => base_red_reason = Some(reason),
+                    RedBaseStep::Clear => {}
                 }
-            {
-                auto_fix::record_base_red(
-                    host,
-                    auto_fix,
-                    &PrAutoFixBaseRed::for_failed_head(
-                        status
-                            .head_sha
-                            .clone()
-                            .ok_or_else(|| stopped(pr_number, "missing failed head"))?,
-                        reason.clone(),
-                    ),
-                )?;
-                base_red_reason = Some(reason);
             }
         }
         Ok(ObserveFlow::Ready(Box::new(ObservedPoll {
@@ -518,15 +567,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                                     waited_seconds,
                                     last_poll,
                                 )?;
-                                let wait_ms = defer_throttled_read(
-                                    host,
-                                    auto_fix,
-                                    pr_number,
-                                    &deferred,
-                                    observation_budget,
-                                    mutated,
-                                )?;
-                                sleep(Duration::from_millis(wait_ms));
+                                self.repoll_after_throttled_read(auto_fix, &deferred)?;
                                 return Ok(RecoveryFlow::ContinuePoll);
                             }
                             None => {
@@ -665,46 +706,19 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
     }
 
     /// Phase 3: act on the classified merge state.
-    fn wait_for_next_poll(&mut self, base_red_reason: Option<&str>) -> Result<(), OrbitError> {
-        let host = self.host;
-        let _ = host;
-        let pr_number = self.pr_number;
-        let max_wait_seconds = self.max_wait_seconds;
-        let poll_interval_seconds = self.poll_interval_seconds;
-        if self.waited_seconds >= max_wait_seconds {
-            if let Some(reason) = base_red_reason {
-                return Err(hold_auto_fix_stop(
-                    stopped(pr_number, reason),
-                    DeliveryRefusal::BaseChecksPending,
-                ));
-            }
-            return Err(merge_wait_timeout(
-                pr_number,
-                self.waited_seconds,
-                max_wait_seconds,
-                self.base_race.as_deref(),
-                &self.unreported,
-            ));
+    pub(super) fn wait_for_next_poll(
+        &mut self,
+        base_red_reason: Option<&str>,
+    ) -> Result<(), OrbitError> {
+        if let Some(error) = self.expired(base_red_reason) {
+            return Err(error);
         }
-        let remaining_seconds = max_wait_seconds.saturating_sub(self.waited_seconds);
-        let sleep_seconds = poll_interval_seconds.min(remaining_seconds);
+        let remaining_seconds = self.max_wait_seconds.saturating_sub(self.waited_seconds);
+        let sleep_seconds = self.poll_interval_seconds.min(remaining_seconds);
         sleep(Duration::from_secs(sleep_seconds));
         self.waited_seconds = self.waited_seconds.saturating_add(sleep_seconds);
-
-        if self.waited_seconds >= max_wait_seconds {
-            if let Some(reason) = base_red_reason {
-                return Err(hold_auto_fix_stop(
-                    stopped(pr_number, reason),
-                    DeliveryRefusal::BaseChecksPending,
-                ));
-            }
-            return Err(merge_wait_timeout(
-                pr_number,
-                self.waited_seconds,
-                max_wait_seconds,
-                self.base_race.as_deref(),
-                &self.unreported,
-            ));
+        if let Some(error) = self.expired(base_red_reason) {
+            return Err(error);
         }
         Ok(())
     }

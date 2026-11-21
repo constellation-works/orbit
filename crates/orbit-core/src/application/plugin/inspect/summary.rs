@@ -11,6 +11,7 @@ use orbit_types::plugin::{
     InstalledPlugin, PluginBuildRecord, PluginDisabledLayer, PluginExecutionKind, PluginGrant,
     PluginSandbox, PluginStatus, plugin_tool_name,
 };
+use serde_json::{Value, json};
 
 use super::super::panels::{PluginLinkSummary, PluginPanelSummary, web_summaries};
 use super::profile::permission_rows;
@@ -100,6 +101,128 @@ pub struct PluginSummary {
     /// For a [`PluginStatus::Disabled`] plugin, the layer that switched it
     /// off — the reason the effective state is what it is.
     pub disabled_by: Option<PluginDisabledLayer>,
+}
+
+/// Surface-specific presentation of a [`PluginSummary`] JSON record.
+#[derive(Debug, Clone, Copy)]
+pub enum PluginSummaryJsonProfile<'a> {
+    /// Filesystem paths remain usable by CLI callers.
+    Cli,
+    /// Display paths abbreviate the home directory; host metadata comes from
+    /// the build serving the HTTP response.
+    Http {
+        /// Home directory to abbreviate, when known.
+        home: Option<&'a Path>,
+        /// Version of the HTTP server build.
+        host_orbit_version: &'a str,
+    },
+}
+
+impl PluginSummaryJsonProfile<'_> {
+    fn display_path(self, value: &str) -> String {
+        if let Self::Http {
+            home: Some(home), ..
+        } = self
+        {
+            let path = Path::new(value);
+            if path == home {
+                return "~".to_string();
+            }
+            if let Ok(rest) = path.strip_prefix(home) {
+                return format!("~/{}", rest.display());
+            }
+        }
+        value.to_string()
+    }
+}
+
+/// Project a plugin record for CLI output or the HTTP API.
+///
+/// Both profiles share plugin data; HTTP additionally carries display paths,
+/// the effective enable flag and the serving build's version. Session
+/// authorization capabilities belong to the HTTP handler.
+pub fn plugin_summary_json(
+    summary: &PluginSummary,
+    profile: PluginSummaryJsonProfile<'_>,
+) -> Value {
+    let mut value = json!({
+        "name": summary.name,
+        "version": summary.version,
+        "status": summary.status.as_str(),
+        "source": profile.display_path(&summary.source),
+        "install_path": profile.display_path(&summary.install_path),
+        "manifest_digest": summary.manifest_digest,
+        "publisher": summary.publisher,
+        "description": summary.description,
+        "first_party": summary.first_party,
+        "pinned": summary.pinned,
+        "host_enabled": summary.host_enabled,
+        "workspace_toggle": summary.workspace_toggle,
+        "disabled_by": summary.disabled_by.map(PluginDisabledLayer::as_str),
+        "permissions": summary
+            .permissions
+            .iter()
+            .map(|permission| json!({
+                "grant": permission.grant.as_str(),
+                "requested": permission.requested,
+                "granted": permission.granted,
+                "granted_roots": permission.granted_roots,
+            }))
+            .collect::<Vec<_>>(),
+        "granted": summary.granted,
+        "unsandboxed": summary.unsandboxed,
+        "programs": summary
+            .programs
+            .iter()
+            .map(|program| json!({
+                "name": program.name,
+                "path": program.path.as_ref().map(|path| profile.display_path(&path.to_string_lossy())),
+                "granted": program.granted(),
+                "problem": program.problem,
+                "resolves_to": program.resolves_to.as_ref().map(|path| profile.display_path(&path.to_string_lossy())),
+            }))
+            .collect::<Vec<_>>(),
+        "certified_orbit_version": summary.certified_orbit_version,
+        "build": summary.build,
+        "diagnostic": summary.diagnostic,
+        "panels": summary
+            .panels
+            .iter()
+            .map(|panel| json!({
+                "id": panel.id,
+                "title": panel.title,
+                "tool": panel.tool,
+                "render": panel.render.as_str(),
+                "group": panel.group.as_str(),
+                "refresh_ms": panel.refresh_ms,
+            }))
+            .collect::<Vec<_>>(),
+        "links": summary
+            .links
+            .iter()
+            .map(|link| json!({ "title": link.title, "url": link.url }))
+            .collect::<Vec<_>>(),
+        "tools": summary
+            .tools
+            .iter()
+            .map(|tool| json!({
+                "name": tool.name,
+                "advertised_name": tool.advertised_name,
+                "execution_kind": tool.execution_kind.as_str(),
+                "agent_callable": tool.agent_callable,
+                "mcp_scope": tool.mcp_scope,
+                "active": tool.active,
+            }))
+            .collect::<Vec<_>>(),
+    });
+    if let PluginSummaryJsonProfile::Http {
+        host_orbit_version, ..
+    } = profile
+    {
+        value["enabled"] = json!(summary.status == PluginStatus::Active);
+        value["host_orbit_version"] = json!(host_orbit_version);
+    }
+    value
 }
 
 pub fn list_plugins(runtime: &OrbitRuntime) -> Result<Vec<PluginSummary>, OrbitError> {

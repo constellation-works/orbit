@@ -40,6 +40,36 @@ pub(super) fn provider_reported_failure(provider: &str, stdout: &[u8]) -> bool {
     stdout_frames(stdout).any(|frame| provider_failure(provider, &frame).is_some())
 }
 
+/// The last provider-owned failure's prose when no typed diagnostic matched.
+/// Generic errors (notably Codex `error` / `turn.failed`) must not disappear
+/// just because their message is outside the known auth/limit vocabulary.
+pub(super) fn provider_failure_diagnostic(provider: &str, stdout: &[u8]) -> Option<String> {
+    stdout_frames(stdout)
+        .filter_map(|frame| {
+            let failure = provider_failure(provider, &frame)?;
+            let sources = [Some(failure), failure.get("error")];
+            let cause = failure
+                .as_str()
+                .into_iter()
+                .chain(sources.into_iter().flatten().flat_map(|source| {
+                    ["message", "result", "text", "error"]
+                        .into_iter()
+                        .filter_map(|key| source.get(key).and_then(Value::as_str))
+                }))
+                .chain(
+                    failure
+                        .get("errors")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str),
+                )
+                .find(|text| !text.trim().is_empty())?;
+            Some(format!("{provider}: {cause}"))
+        })
+        .last()
+}
+
 /// Claude's exact formatting-only terminal, never quoted assistant/tool content.
 /// Unlike diagnostic frame readers, this requires a complete JSON stream with
 /// the terminal as its last value and no earlier provider failure or result.
@@ -48,15 +78,18 @@ pub(super) fn claude_structured_output_exhaustion(provider: &str, stdout: &[u8])
     if provider != "claude" {
         return None;
     }
-    let mut frames = serde_json::Deserializer::from_slice(stdout).into_iter::<Value>();
-    let mut terminal = frames.next()?.ok()?;
-    for frame in frames {
-        if provider_failure(provider, &terminal).is_some()
-            || terminal.get("type").and_then(Value::as_str) == Some("result")
+    let raw = serde_json::Deserializer::from_slice(stdout).into_iter::<Value>();
+    let mut frames: Vec<Value> = Vec::new();
+    for item in raw {
+        frames.push(item.ok()?);
+    }
+    let terminal = frames.last()?.clone();
+    for earlier in &frames[..frames.len().saturating_sub(1)] {
+        if provider_failure(provider, earlier).is_some()
+            || earlier.get("type").and_then(Value::as_str) == Some("result")
         {
             return None;
         }
-        terminal = frame.ok()?;
     }
     if terminal.get("schemaVersion").is_some()
         || terminal.get("type").and_then(Value::as_str) != Some("result")
@@ -70,12 +103,46 @@ pub(super) fn claude_structured_output_exhaustion(provider: &str, stdout: &[u8])
     }
     // A contradictory terminal is not proof of a formatting-only failure.
     // In particular Claude's errors array must not hide a second terminal
-    // cause behind the expected first formatting error.
-    if ["api_error_status", "error", "stop_reason"]
+    // cause behind the expected first formatting error. Preserve the observed
+    // `tool_use` stop reason, but reject every other non-null stop reason.
+    if ["api_error_status", "error"]
         .iter()
         .any(|key| terminal.get(*key).is_some_and(|value| !value.is_null()))
+        || terminal
+            .get("stop_reason")
+            .is_some_and(|value| !value.is_null() && value.as_str() != Some("tool_use"))
     {
         return None;
+    }
+    // A `tool_use` stop reason alone is not evidence of a formatting-only
+    // failure: the retry budget was spent on an assistant tool attempt, so
+    // require that attempt in the stream. A bare single-frame terminal keeps
+    // the ORB-24697 naming path with its stderr tail as secondary detail.
+    if terminal.get("stop_reason").and_then(Value::as_str) == Some("tool_use") {
+        let has_tool_attempt = frames[..frames.len().saturating_sub(1)]
+            .iter()
+            .any(|frame| {
+                frame.get("type").and_then(Value::as_str) == Some("assistant")
+                    && (frame
+                        .pointer("/message/content")
+                        .and_then(Value::as_array)
+                        .is_some_and(|content| {
+                            content.iter().any(|item| {
+                                item.get("type").and_then(Value::as_str) == Some("tool_use")
+                            })
+                        })
+                        || frame
+                            .get("content")
+                            .and_then(Value::as_array)
+                            .is_some_and(|content| {
+                                content.iter().any(|item| {
+                                    item.get("type").and_then(Value::as_str) == Some("tool_use")
+                                })
+                            }))
+            });
+        if !has_tool_attempt {
+            return None;
+        }
     }
     let errors = terminal.get("errors").filter(|value| !value.is_null());
     let error_messages = match errors {

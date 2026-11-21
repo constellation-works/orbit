@@ -3,7 +3,7 @@ summary: "Agent Families — Vision"
 type: design
 title: "Agent Families — Vision"
 owner: human
-last_updated: 2026-08-09
+last_updated: 2026-11-16
 last_validated: 2026-10-29
 status: Draft
 feature: agent-families
@@ -49,7 +49,7 @@ The distinction between family and crew also lets future workflows ask two diffe
 
 ## Task References
 
-- ORB-00042: Onboard Grok (xAI) as a first-class supported agent family.
-- ORB-00058: Introduce per-task crew override for agent model selection.
+- [ORB-00042] — Onboard Grok (xAI) as a first-class supported agent family.
+- [ORB-00058] — Introduce per-task crew override for agent model selection.
 
 Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

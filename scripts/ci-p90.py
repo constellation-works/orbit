@@ -28,7 +28,7 @@ from datetime import datetime
 CHECK = "Check / Clippy / Test"
 # Jobs the Check job awaits (.github/workflows/ci.yml), including both guardrails jobs.
 AWAITED = ("Test build", "Test shard 1/3", "Test shard 2/3", "Test shard 3/3", "Test extra partition",
-           "Test partition 2", *(f"Test partition {k}" for k in range(6, 13)),
+           "Test partition 2", *(f"Test partition {k}" for k in range(6, 14)),
            "CI guardrails", "CI QA guardrails")
 
 

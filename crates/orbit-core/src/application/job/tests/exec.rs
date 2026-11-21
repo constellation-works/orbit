@@ -457,6 +457,7 @@ fn detached_worker_persists_unrecognized_audit_step_outcomes_as_failed() {
         step_id: "implement".into(),
         lock_wait_ms: None,
         outcome: "not-a-state".into(),
+        error_diagnostic: None,
         error_message: None,
     });
     emit(V2AuditEventKind::StepStarted {
@@ -466,6 +467,7 @@ fn detached_worker_persists_unrecognized_audit_step_outcomes_as_failed() {
         step_id: "check".into(),
         lock_wait_ms: None,
         outcome: "finished".into(),
+        error_diagnostic: None,
         error_message: None,
     });
     emit(V2AuditEventKind::StepStarted {

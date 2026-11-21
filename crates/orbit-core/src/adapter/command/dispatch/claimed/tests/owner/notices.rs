@@ -220,6 +220,24 @@ fn claimed_follower_posts_shows_and_closes_its_notice_on_the_owner_through_the_b
         "an internal field never crosses the broker"
     );
 
+    // A notice's `id` names a notice, not a task, so a `task_id` alias gets the
+    // accepted fields and never the task recovery [ORB-25666].
+    let before = notice.owner.calls();
+    let error = notice
+        .forwarded(&broker, SHOW, json!({"task_id": notice.claimed}))
+        .unwrap_err();
+    assert!(
+        error.contains("does not accept `task_id`")
+            && error.contains("accepted fields")
+            && !error.contains("pass the task as `id`"),
+        "{error}"
+    );
+    assert_eq!(
+        notice.owner.calls(),
+        before,
+        "a refused notice read never reaches the owner"
+    );
+
     // A run whose task is not the claimed task carries no notice call.
     let before = notice.owner.calls();
     let mut other = notice.fixture.run("agent_implement");

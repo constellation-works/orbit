@@ -1163,6 +1163,17 @@ fn the_backstop_offers_only_its_decisions_and_names_the_retained_candidate() {
     );
     let comments = recovery_comments(&runtime, &task.id);
     let comment = &comments.last().expect("decision comment").message;
+    // The ask, with the candidate it names, lives in the decision request.
+    let comment = format!(
+        "{comment}\n{}",
+        runtime
+            .list_decision_requests(None, Some(&task.id), false)
+            .expect("decision requests")
+            .iter()
+            .filter_map(|request| request.human_action.as_deref())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
     for named in [
         failed_run_id.as_str(),
         target.as_str(),

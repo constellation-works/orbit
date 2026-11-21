@@ -37,7 +37,9 @@ impl Deadline {
             .map(Self)
             .ok_or_else(|| error("missing completion deadline"))
     }
-    fn remaining_uncapped(self) -> Result<u64, OrbitError> {
+    /// Time to the absolute deadline, without one read's cap: a wait between
+    /// reads is bounded by the deadline itself.
+    pub(super) fn remaining_uncapped(self) -> Result<u64, OrbitError> {
         self.0
             .checked_sub(now_ms()?)
             .filter(|ms| *ms > 0)
@@ -45,6 +47,28 @@ impl Deadline {
     }
     pub(super) fn remaining(self) -> Result<u64, OrbitError> {
         Ok(self.remaining_uncapped()?.min(DEFAULT_TIMEOUT_MS))
+    }
+    pub(super) fn expired_error(self) -> OrbitError {
+        expired()
+    }
+    /// Remaining per-read budget after an admission step that began with
+    /// `pre_timeout` ms and spent `elapsed_ms` wall-clock ms. Checks both the
+    /// elapsed wall clock and the completion clock so neither a slow probe nor
+    /// a shifted test clock lets the original operation spawn past expiry.
+    pub(super) fn remaining_after(
+        self,
+        pre_timeout: u64,
+        elapsed_ms: u64,
+    ) -> Result<u64, OrbitError> {
+        if elapsed_ms >= pre_timeout {
+            return Err(expired());
+        }
+        let post_admit = self.remaining()?;
+        let remaining = post_admit.min(pre_timeout.saturating_sub(elapsed_ms));
+        if remaining == 0 {
+            return Err(expired());
+        }
+        Ok(remaining)
     }
     /// Run one read bounded by the completion deadline. A read killed because
     /// the deadline arrived is the typed expiry, not a failure of the read; a
@@ -57,14 +81,24 @@ impl Deadline {
         label: &str,
     ) -> Result<orbit_exec::ExecutionResult, OrbitError> {
         let timeout = self.remaining()?;
-        let result = process::run_vcs_process(program, args, Some(workspace), timeout)?;
+        let result = process::run_vcs_process_within(
+            program,
+            args,
+            Some(workspace),
+            timeout,
+            |admit_elapsed_ms| self.remaining_after(timeout, admit_elapsed_ms),
+        )?;
         probe(label, timeout);
         // A timeout below the per-read cap was set by the deadline itself; at
         // the cap, only an arrived deadline explains the kill.
         if result.timed_out && (timeout < DEFAULT_TIMEOUT_MS || self.remaining().is_err()) {
             return Err(expired());
         }
-        let result = process::succeeded(result, label)?;
+        let result = if program == "gh" {
+            process::succeeded_read(result, label)?
+        } else {
+            process::succeeded(result, label)?
+        };
         self.remaining()?;
         Ok(result)
     }

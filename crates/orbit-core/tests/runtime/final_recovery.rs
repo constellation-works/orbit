@@ -21,7 +21,7 @@ use orbit_store::contracts::JobRunStoreBackend;
 use orbit_types::workflow::{
     FinalRecoveryCheckpointOutcome, FinalRecoveryDecision, JobRunState, PipelineState,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use tempfile::TempDir;
 
 mod recorded_decision;
@@ -274,6 +274,130 @@ impl Fixture {
             .as_str()
             .unwrap()
             .to_string()
+    }
+
+    /// A task blocked by a stopped delivery run, plus the distinct
+    /// blocked-task recovery run that would apply a backstop decision to it.
+    /// With `publish`, the failed run pushed and opened its pull request
+    /// before it stopped. Returns `(task, publisher, recovery, episode)`.
+    fn blocked_backstop_episode(&self, publish: bool) -> (String, String, String, Value) {
+        let task = self.task();
+        let publisher = self.pipeline_run(&task, "task_pr_pipeline");
+        if publish {
+            let mut state = self.state(&publisher);
+            state.record_pipeline_output("push", json!({ "branch": "orbit/backstop-fixture" }));
+            state.record_pipeline_output("pr_open", json!({ "pr_number": "17" }));
+            self.jobs.write_run_state(&publisher, &state).unwrap();
+        }
+        let mut run = self.runtime.show_job_run_observed(&publisher).unwrap();
+        run.state = JobRunState::Failed;
+        run.pid = None;
+        run.finished_at = Some(Utc::now());
+        self.runtime
+            .sqlite_store()
+            .unwrap()
+            .upsert_job_run_for_workspace(&self.runtime.workspace_id().unwrap(), &run, None)
+            .unwrap();
+        RuntimeHost::apply_task_automation_update(
+            &self.runtime,
+            &task,
+            orbit_engine::blocked_workflow_failure_update(
+                "task_pr_pipeline",
+                &publisher,
+                Some("STEP_FAILED"),
+                Some("delivery failed after publication"),
+            ),
+        )
+        .unwrap();
+        assert_eq!(self.status(&task), "blocked");
+        let view = self
+            .runtime
+            .blocked_recovery_view(Utc::now())
+            .unwrap()
+            .into_iter()
+            .find(|view| view.episode.task_id == task)
+            .expect("blocked episode");
+        let observed = self
+            .runtime
+            .final_recovery_revision(&self.runtime.get_task(&task).unwrap())
+            .unwrap();
+        let episode = orbit_core::application::task::BlockedRecoveryInput {
+            task_id: task.clone(),
+            episode_key: view.episode.key(),
+            block_source: "run_failed".to_string(),
+            failed_run_id: Some(publisher.clone()),
+            observed,
+        }
+        .to_json();
+        let recovery = self
+            .jobs
+            .insert_job_run(
+                "blocked_task_recovery_pipeline",
+                1,
+                Utc::now(),
+                Some(episode.clone()),
+                None,
+            )
+            .unwrap()
+            .run_id;
+        (task, publisher, recovery, episode)
+    }
+
+    /// Apply a backstop decision through the registered
+    /// `apply_blocked_task_recovery` deterministic action.
+    fn apply_backstop(&self, recovery: &str, episode: &Value, result: Value) -> Value {
+        use orbit_tools::{ReservationOwnerContext, ToolContext};
+        RuntimeHost::run_deterministic(
+            &self.runtime,
+            "apply_blocked_task_recovery",
+            &json!({}),
+            &json!({
+                "prepared": { "episode": episode, "recovery": { "base_ref": "main" } },
+                "result": result,
+            }),
+            ToolContext {
+                reservation_owner: Some(ReservationOwnerContext {
+                    owner_run_id: recovery.to_string(),
+                    owner_metadata: None,
+                }),
+                ..ToolContext::default()
+            },
+        )
+        .unwrap()
+    }
+
+    fn history_events(&self, task: &str) -> Vec<String> {
+        self.runtime
+            .run_tool("orbit.task.show", json!({ "id": task }))
+            .unwrap()["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|entry| entry["event"].as_str().map(str::to_string))
+            .collect()
+    }
+
+    /// The task's comments and the human actions of its decision requests,
+    /// where an escalation's ask lives.
+    fn comments_text(&self, task: &str) -> String {
+        let requests = self
+            .runtime
+            .list_decision_requests(None, Some(task), false)
+            .unwrap();
+        self.runtime
+            .run_tool("orbit.task.show", json!({ "id": task }))
+            .unwrap()["comments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|comment| comment["message"].as_str())
+            .chain(
+                requests
+                    .iter()
+                    .filter_map(|request| request.human_action.as_deref()),
+            )
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -896,6 +1020,193 @@ fn assert_admission_refused(
     }
 }
 
+/// ORB-25253 (F2026-11-322): a stopped publisher plus a distinct blocked-task
+/// recovery run returning `requeue` must not requeue: the recovery run cannot
+/// preserve the publisher, so the task stays blocked with no preservation or
+/// requeued evidence and the operator route named. A `rerun_ci` decision is
+/// refused the same way, before any forge rerun, while an unpublished
+/// backstop requeue still requeues.
+fn backstop_requeue_of_an_unpreservable_published_episode_stays_blocked() {
+    let fixture = fixture("[\"sol\"]");
+    let fault = [
+        ("fault", json!("implementer")),
+        (
+            "fault_evidence",
+            json!("fixture: the publisher failed after opening its pull request"),
+        ),
+    ];
+
+    // Published episode, `requeue` decision.
+    let (task, publisher, recovery, episode) = fixture.blocked_backstop_episode(true);
+    let mut fields: Vec<(&str, Value)> = vec![
+        ("decision", json!("requeue")),
+        ("reason", json!("the failure is fixed")),
+    ];
+    fields.extend(fault.iter().map(|(name, value)| (*name, value.clone())));
+    let result = backstop_result(&fields);
+    let applied = fixture.apply_backstop(&recovery, &episode, result);
+    assert_eq!(applied["outcome"], "escalated", "{applied}");
+    assert_eq!(fixture.status(&task), "blocked");
+    let events = fixture.history_events(&task);
+    assert!(
+        !events
+            .iter()
+            .any(|event| event == "published_owner_requeued"),
+        "no unauthenticated publisher preservation is recorded: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| event == "final_recovery_requeued"),
+        "no requeued source evidence is recorded: {events:?}"
+    );
+    let comments = fixture.comments_text(&task);
+    assert!(
+        comments.contains("backstop requeue refused")
+            && comments.contains(&publisher)
+            && comments.contains("orbit task requeue")
+            && comments.contains("source_repair"),
+        "the supported operator route is named: {comments}"
+    );
+
+    // Published episode, `rerun_ci` decision: refused before a forge rerun.
+    let (task, publisher, recovery, episode) = fixture.blocked_backstop_episode(true);
+    let mut fields: Vec<(&str, Value)> = vec![
+        ("decision", json!("rerun_ci")),
+        (
+            "head_sha",
+            json!("0123456789abcdef0123456789abcdef01234567"),
+        ),
+        ("reason", json!("rerun the failed checks")),
+    ];
+    fields.extend(fault.iter().map(|(name, value)| (*name, value.clone())));
+    let applied = fixture.apply_backstop(&recovery, &episode, backstop_result(&fields));
+    assert_eq!(applied["outcome"], "escalated", "{applied}");
+    assert_eq!(fixture.status(&task), "blocked");
+    let comments = fixture.comments_text(&task);
+    assert!(
+        comments.contains("backstop rerun_ci refused") && comments.contains(&publisher),
+        "rerun_ci is refused at the same gate: {comments}"
+    );
+    assert!(
+        !comments.contains("requested reruns for failed checks"),
+        "no needless forge rerun runs first: {comments}"
+    );
+
+    // Unpublished episode: the ordinary backstop requeue still requeues.
+    let (task, _publisher, recovery, episode) = fixture.blocked_backstop_episode(false);
+    let mut fields: Vec<(&str, Value)> = vec![
+        ("decision", json!("requeue")),
+        ("reason", json!("the failure is fixed")),
+    ];
+    fields.extend(fault.iter().map(|(name, value)| (*name, value.clone())));
+    let applied = fixture.apply_backstop(&recovery, &episode, backstop_result(&fields));
+    assert_eq!(applied["outcome"], "requeued", "{applied}");
+    assert_eq!(fixture.status(&task), "backlog");
+}
+
+/// ORB-25266: a stopped delivery holding only a `pr_failure_handoff`
+/// `no_candidate` checkpoint — a worktree-step failure with no checkout that
+/// pushed nothing and opened no pull request — is unpublished, so a backstop
+/// `requeue` still requeues. A failure-handoff checkpoint with any other
+/// decision stays fail-closed and escalates.
+fn backstop_requeue_with_no_candidate_failure_receipt_still_requeues() {
+    let fixture = fixture("[\"sol\"]");
+    let fault = [
+        ("fault", json!("implementer")),
+        (
+            "fault_evidence",
+            json!("fixture: the worktree step failed before any publication"),
+        ),
+    ];
+    let requeue_fields = || {
+        let mut fields: Vec<(&str, Value)> = vec![
+            ("decision", json!("requeue")),
+            ("reason", json!("the worktree failure is fixed")),
+        ];
+        fields.extend(fault.iter().map(|(name, value)| (*name, value.clone())));
+        fields
+    };
+
+    // `no_candidate` with no `push`/`pr_open` and no task pull request:
+    // the backstop must not treat the receipt as a publication.
+    let (task, publisher, recovery, episode) = fixture.blocked_backstop_episode(false);
+    let mut state = fixture.state(&publisher);
+    state.record_failure_activity(
+        "pr_failure_handoff".to_string(),
+        "worktree".to_string(),
+        json!({
+            "phase": "failure_handoff",
+            "decision": "no_candidate",
+            "failed_step_id": "worktree",
+        }),
+    );
+    fixture.jobs.write_run_state(&publisher, &state).unwrap();
+    let applied = fixture.apply_backstop(&recovery, &episode, backstop_result(&requeue_fields()));
+    assert_eq!(applied["outcome"], "requeued", "{applied}");
+    assert_eq!(fixture.status(&task), "backlog");
+    assert!(
+        !fixture
+            .comments_text(&task)
+            .contains("backstop requeue refused"),
+        "a no_candidate receipt is not an unpreservable publication: {}",
+        fixture.comments_text(&task)
+    );
+
+    // A failure-handoff publication with no `push`/`pr_open` still escalates.
+    let (task, publisher, recovery, episode) = fixture.blocked_backstop_episode(false);
+    let mut state = fixture.state(&publisher);
+    state.record_failure_activity(
+        "pr_failure_handoff".to_string(),
+        "complete_pr".to_string(),
+        json!({
+            "phase": "failure_handoff",
+            "decision": "blocked_failure_pr",
+            "failed_step_id": "complete_pr",
+        }),
+    );
+    fixture.jobs.write_run_state(&publisher, &state).unwrap();
+    let applied = fixture.apply_backstop(&recovery, &episode, backstop_result(&requeue_fields()));
+    assert_eq!(applied["outcome"], "escalated", "{applied}");
+    assert_eq!(fixture.status(&task), "blocked");
+    assert!(
+        fixture
+            .comments_text(&task)
+            .contains("backstop requeue refused")
+            && fixture.comments_text(&task).contains(&publisher),
+        "a failure-handoff publication stays refused: {}",
+        fixture.comments_text(&task)
+    );
+
+    // An unknown failure-handoff decision stays fail-closed and escalates.
+    let (task, publisher, recovery, episode) = fixture.blocked_backstop_episode(false);
+    let mut state = fixture.state(&publisher);
+    state.record_failure_activity(
+        "pr_failure_handoff".to_string(),
+        "worktree".to_string(),
+        json!({
+            "phase": "failure_handoff",
+            "failed_step_id": "worktree",
+        }),
+    );
+    fixture.jobs.write_run_state(&publisher, &state).unwrap();
+    let applied = fixture.apply_backstop(&recovery, &episode, backstop_result(&requeue_fields()));
+    assert_eq!(applied["outcome"], "escalated", "{applied}");
+    assert_eq!(fixture.status(&task), "blocked");
+}
+
+/// The agent-step envelope `decision_result` extracts a decision from.
+fn backstop_result(fields: &[(&str, Value)]) -> Value {
+    let mut result = json!({
+        "response_envelope_valid": true,
+        "response_result_fields": fields.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+    });
+    for (name, value) in fields {
+        result[*name] = value.clone();
+    }
+    result
+}
+
 fn shipped_disallow_list(activity: &str) -> Vec<String> {
     use orbit_types::workflow::ActivityV2Spec;
 
@@ -933,4 +1244,10 @@ crate::scenario_table!(
 crate::scenario_table!(
     a_resume_after_another_recorded_decision_is_refused_and_keeps_checkpoints_scenarios,
     a_resume_after_another_recorded_decision_is_refused_and_keeps_checkpoints,
+);
+
+crate::scenario_table!(
+    backstop_requeue_of_an_unpreservable_published_episode_scenarios,
+    backstop_requeue_of_an_unpreservable_published_episode_stays_blocked,
+    backstop_requeue_with_no_candidate_failure_receipt_still_requeues,
 );

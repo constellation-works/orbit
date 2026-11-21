@@ -16,6 +16,9 @@ const REJECT_STATUSES = new Set(["proposed", "review", "backlog"]);
 // Ship dispatches a task through the pipeline, which admits it out of backlog —
 // so backlog is the only status where the control means anything.
 export const SHIP_STATUSES = new Set(["backlog"]);
+// Run pilot assesses a proposed or backlog task; the server's explicit pilot
+// accepts both (`pilot_assessable_status`).
+const PILOT_STATUSES = new Set(["proposed", "backlog"]);
 // Rows whose quick-action cell links the delivery pull request, when the task
 // has one and the cell holds nothing else.
 export const PULL_REQUEST_LINK_STATUSES = new Set(["review", "in-progress"]);
@@ -30,7 +33,7 @@ export function buildActionsRow(task, detail, context, { includeLifecycle = true
     const btn = el("button", {
       class: "action ship",
       text: shipped ? "shipping" : "ship",
-      title: shipped
+      "aria-description": shipped
         ? "A ship run is already in flight for this task"
         : "Dispatch this task through the pipeline with its own crew",
     });
@@ -53,7 +56,7 @@ export function buildActionsRow(task, detail, context, { includeLifecycle = true
   if (includeLifecycle && APPROVE_STATUSES.has(task.status)) {
     const reviewNeedsWorkspace = task.status === "review" && isAggregateView();
     const btn = el("button", { class: "action approve", text: "approve",
-      ...(reviewNeedsWorkspace ? { title: aggregateRefusalTitle("Approve", "approve") } : {}),
+      ...(reviewNeedsWorkspace ? { "aria-description": aggregateRefusalTitle("Approve", "approve") } : {}),
     });
     btn.disabled = !mutable || reviewNeedsWorkspace;
     btn.addEventListener("click", (e) => {
@@ -73,7 +76,7 @@ export function buildActionsRow(task, detail, context, { includeLifecycle = true
     actions.appendChild(btn);
   }
   if (includeLifecycle && task.status === "review" && taskPullRequestNumber(task)) appendFixPrControls(actions, task, detail, context, mutable);
-  if (includeLifecycle && task.status === "proposed") appendPilotControls(actions, task, detail, context, mutable);
+  if (includeLifecycle && PILOT_STATUSES.has(task.status)) appendPilotControls(actions, task, detail, context, mutable);
   if (includeLifecycle && escalationTriage(task)) appendTriageControls(actions, task, detail, context, mutable);
   if (includeLifecycle && (task.status === "blocked" || task.why_stuck)) appendRecoveryControls(actions, task, detail, context, mutable);
   if (includeLifecycle && task.status !== "archived") {

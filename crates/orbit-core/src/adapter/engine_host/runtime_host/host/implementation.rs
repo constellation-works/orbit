@@ -327,6 +327,13 @@ impl RuntimeHost for OrbitRuntime {
         crate::application::review::review_report_correction(self, request)
     }
 
+    fn review_report_evidence_hold(
+        &self,
+        request: &orbit_engine::ReviewReportCorrectionRequest,
+    ) -> Result<Option<String>, OrbitError> {
+        crate::application::review::review_report_evidence_hold(self, request)
+    }
+
     fn handoff_landing_context(
         &self,
         handoff_id: &str,
@@ -644,6 +651,13 @@ impl RuntimeHost for OrbitRuntime {
         observation: &ProviderLimitObservation,
     ) -> Result<(), OrbitError> {
         invocation::record_provider_limit(self, observation)
+    }
+
+    fn record_provider_usage_reading(
+        &self,
+        observations: &[ProviderLimitObservation],
+    ) -> Result<(), OrbitError> {
+        invocation::record_provider_usage_reading(self, observations)
     }
 
     fn activity_implementer_identity(

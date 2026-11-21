@@ -21,7 +21,7 @@ related_artifacts: [ORB-11333, ORB-11528, ORB-11545, ORB-13989, ORB-13992, ORB-1
 **Shipped.** [ORB-11333] implements an automatic code review that is
 independent of who implemented the work. Before-PR review admits a fresh,
 separately configured reviewer that checks the implementation commit, fixes
-what it finds as one second commit (`review: <summary>`) under its own
+what it finds as one second commit (`<type>: <summary> [<task id>]`) under its own
 identity, and comments every finding with what changed for it [ORB-13989].
 The verdict is `accept` (no fixes), `accept_with_fixes` (owner validation
 reruns on the reviewer commit before the PR opens, and the PR body gains a
@@ -125,7 +125,7 @@ a second time.
 | Selective risk/path rules (removed; history and legacy fields) | [Design §3.3](./2_design.md#33-selective-before-landing-review-orb-20087) | [ORB-20087], [ORB-22808] (removed) |
 | Operating a blocked review | [Review gate runbook](../../runbooks/review-gate.md) | [ORB-13989] |
 | What a validation record establishes | [Design §4](./2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545) | [ORB-11528], [ORB-11545] |
-| After-landing scheduling and coverage consumers | [Delivery automation operations](../automation-triggers/5_operations.md) | [ORB-11331] |
+| After-landing scheduling and coverage consumers | [Delivery automation operations](../automation-triggers/references/operations.md) | [ORB-11331] |
 | `[operation]` key reference | [CONFIG.md](../../CONFIG.md) | [ORB-11333] |
 
 ## Task References

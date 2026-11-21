@@ -2,6 +2,7 @@
 use super::input::{bind_recovery_context, validate_bound_recovery_context};
 use super::observation::{RecoveryObservation, recovery_base_ref};
 use super::*;
+use crate::activity_job::workspace::allocate_resolution_intent;
 use crate::activity_job::workspace::generated_paths::conflicted_generated_paths;
 use crate::context::{
     STEP_RECOVERY_DECISION_SCHEMA_VERSION, StepRecoveryDecisionRequest, StepRecoveryDecisionSlot,
@@ -78,6 +79,14 @@ pub(super) fn dispatch_recovery(
         "attempt": attempt,
         "max_attempts": max_attempts,
     });
+    if matches!(
+        recovery.name.as_str(),
+        STEP_FAILURE_RECOVERY_ACTIVITY | PR_CONFLICT_RECOVERY_ACTIVITY
+    ) && let StepFailure::Error(error) = failure
+        && let Some(diagnostic) = error.error_diagnostic()
+    {
+        input["error_diagnostic"] = super::input::bounded_recovery_input(&ctx.run_id, diagnostic);
+    }
     if let StepFailure::Error(DispatchError::RecoverableVcsConflict(conflict)) = failure
         && let Some(object) = input.as_object_mut()
     {
@@ -172,6 +181,16 @@ pub(super) fn dispatch_recovery(
     }
     let slot = allocate_recovery_decision(step, ctx, recovery, attempt, &mut input)
         .map_err(|error| ("decision", error.to_string()))?;
+    // A conflict leaf states an unchanged keep-side or delete resolution of
+    // a modify/delete conflict in this invocation's own slot; the boundary
+    // guard verifies it before adopting the path [F2026-11-277].
+    if recovery.name == PR_CONFLICT_RECOVERY_ACTIVITY
+        && input.get("recovery_kind").and_then(Value::as_str) == Some("vcs_conflict")
+        && let Some(binding) = allocate_resolution_intent(&input, &ctx.run_id, &step.id, attempt)
+            .map_err(|error| ("resolution_intent", error.to_string()))?
+    {
+        input["resolution_intent"] = binding;
+    }
     // Observed before the provider runs, so an absent decision can be judged
     // against what the failure saw [ORB-14268].
     let observation = slot.as_ref().map(|slot| {

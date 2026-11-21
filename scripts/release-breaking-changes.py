@@ -47,7 +47,10 @@ SEEDED_ASSET_DIRS = tuple(f"crates/orbit-core/assets/{kind}/"
 # CLI and tool-input types elsewhere are read only from input the user writes.
 PERSISTED_TYPE_ROOTS = ("crates/orbit-types/src/", "crates/orbit-store/src/")
 
-TASK_ID = re.compile(r"\[([A-Z][A-Z0-9]*-\d+)\]")
+# One id of a bracketed list: `[ORB-1]`, `[ORB-1] [ORB-2]`, or the older
+# comma-separated `[ORB-1, ORB-2]`.
+BRACKETED_IDS = re.compile(r"\[([A-Z][A-Z0-9]*-\d+(?:,\s*[A-Z][A-Z0-9]*-\d+)*)\]")
+TASK_ID_VALUE = re.compile(r"^[A-Z][A-Z0-9]*-\d+$")
 VERSION_TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 BREAKING_LINE = re.compile(r"^\s*(?:[-*]\s+)?(?:\*\*)?Breaking:(?:\*\*)?\s*(.+?)\s*$")
 
@@ -83,7 +86,10 @@ class Git:
         if tree.returncode != 0 or not tree_id:
             return {}
         if tree_id not in self._trees:
-            listing = self.run("ls-tree", "-r", "--name-only", rev, "--", directory).stdout
+            # --full-tree: the pathspec and the output stay root-relative even
+            # when --repo names a subdirectory of the repository.
+            listing = self.run("ls-tree", "-r", "--name-only", "--full-tree",
+                               rev, "--", directory).stdout
             self._trees[tree_id] = {path: self.show(rev, path)
                                     for path in listing.splitlines() if path}
         return self._trees[tree_id]
@@ -214,6 +220,13 @@ def detect_help_removals(git, parent, commit, changed):
     return found
 
 
+def is_always_true(schema):
+    """Whether a JSON Schema accepts every JSON instance."""
+    return (schema is True or schema == {}
+            or (isinstance(schema, dict) and set(schema) == {"required"}
+                and schema["required"] == []))
+
+
 def schema_facts(schema, path, facts):
     """Flatten the structural facts of a JSON schema; descriptions are skipped."""
     if isinstance(schema, bool):
@@ -246,13 +259,39 @@ def schema_facts(schema, path, facts):
         facts.setdefault("properties_keywords", {})[path] = properties
         for name, child in properties.items():
             schema_facts(child, f"{path}.{name}", facts)
-    for key in ("items", "additionalProperties"):
+    # `then`/`else` carry the conditional contract (for example the
+    # request_id-mode requirements of a tool) and `propertyNames` its key
+    # enum; all three constrain instances like any inline schema. Per JSON
+    # Schema, `then` and `else` apply only when `if` is present. `if` is a
+    # selector, not a constraint: editing it moves instances between
+    # branches, so it has no monotonic breaking direction. Record all arms
+    # under `conditionals` so `detect_mcp_changes` can judge `if` edits,
+    # and flatten only reachable arms (`then` unless `if` is `false`,
+    # `else` unless `if` is always true) so edits inside unreachable arms
+    # never emit spurious signals.
+    has_if = isinstance(schema.get("if"), (dict, bool))
+    if has_if:
+        facts.setdefault("conditionals", {})[path] = {
+            key: schema[key] for key in ("if", "then", "else") if key in schema}
+    if isinstance(schema.get("propertyNames"), (dict, bool)):
+        facts.setdefault("property_names", {})[path] = schema["propertyNames"]
+    subkeys = ["items", "additionalProperties", "propertyNames"]
+    if has_if:
+        cond_if = schema["if"]
+        if cond_if is not False:
+            subkeys.append("then")
+        if not is_always_true(cond_if):
+            subkeys.append("else")
+    for key in subkeys:
         if isinstance(schema.get(key), (dict, bool)):
             schema_facts(schema[key], f"{path}[{key}]", facts)
     for key in ("anyOf", "oneOf", "allOf"):
         branches = schema.get(key) or []
-        if key in schema and key in ("anyOf", "oneOf") and isinstance(branches, list):
-            facts.setdefault("alternatives", {})[(path, key)] = branches
+        if key in schema and isinstance(branches, list):
+            if key in ("anyOf", "oneOf"):
+                facts.setdefault("alternatives", {})[(path, key)] = branches
+            else:
+                facts.setdefault("allof_branches", {})[path] = branches
         for index, child in enumerate(branches):
             schema_facts(child, f"{path}{{{key}{index}}}", facts)
 
@@ -280,6 +319,121 @@ def schema_without_required(schema):
         return {key: schema_without_required(value) for key, value in schema.items()
                 if key != "required"}
     return schema
+
+
+def schema_without_top_required(schema):
+    """Drop `required` at the schema's own instance level, keeping nested ones.
+
+    Only the schema's own `required` and that of its `allOf` children apply to
+    the same instance; a `required` under `properties`, `items` and the like
+    constrains a nested object and must keep counting as a constraint.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    stripped = {key: value for key, value in schema.items() if key != "required"}
+    if isinstance(stripped.get("allOf"), list):
+        stripped["allOf"] = [schema_without_top_required(child) for child in stripped["allOf"]]
+    return stripped
+
+
+# Weakening `required` inside these keywords can reject an instance the
+# stronger schema accepted: a `oneOf` branch can pick up a second match, a
+# weaker schema under `not` rejects more, and a weaker `if` moves instances
+# onto the other branch. `contains` joins them only beside `maxContains`: a
+# weaker `contains` matches more items and can exceed that cap.
+_NONMONOTONIC_REQUIRED_KEYWORDS = frozenset({"oneOf", "not", "if"})
+
+# Literal JSON values, not subschemas. Their objects are compared by exact
+# equality, so `{"required": ["b"]}` never stands in for `{"required": ["b", "d"]}`.
+_LITERAL_VALUE_KEYWORDS = frozenset({"const", "enum", "default", "examples"})
+
+
+def _string_list_set(value):
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return set(value)
+    return None
+
+
+def nested_required_subset_only(target, source, under_nonmonotonic=False):
+    """Whether `target` adds no constraint beyond a nested `required` subset.
+
+    Equal schemas match. So does a schema whose `required` names are a subset
+    of `source`'s at the same object, with every other keyword unchanged.
+    That weakening cannot reject an instance `source` accepts under
+    `properties`, `items`, `allOf` or `anyOf`. A difference inside `oneOf`,
+    `not` or `if`, or inside `contains` beside `maxContains`, is not treated as
+    redundant. Literal values (`const`, `enum`, `default`, `examples`) match
+    only when exactly equal.
+    """
+    if _json_value_key(target) == _json_value_key(source):
+        return True
+    if isinstance(target, list) and isinstance(source, list):
+        if len(target) != len(source):
+            return False
+        return all(nested_required_subset_only(left, right, under_nonmonotonic)
+                   for left, right in zip(target, source))
+    if not isinstance(target, dict) or not isinstance(source, dict):
+        return False
+    target_required = _string_list_set(target.get("required", []))
+    source_required = _string_list_set(source.get("required", []))
+    if target_required is None or source_required is None:
+        return False
+    if under_nonmonotonic:
+        if target_required != source_required:
+            return False
+    elif not target_required <= source_required:
+        return False
+    target_keys = set(target) - {"required"}
+    source_keys = set(source) - {"required"}
+    if target_keys != source_keys:
+        return False
+    max_contains = "maxContains" in target_keys
+    for key in target_keys:
+        if key in _LITERAL_VALUE_KEYWORDS:
+            if _json_value_key(target[key]) != _json_value_key(source[key]):
+                return False
+            continue
+        nonmonotonic = (under_nonmonotonic
+                        or key in _NONMONOTONIC_REQUIRED_KEYWORDS
+                        or (key == "contains" and max_contains))
+        if not nested_required_subset_only(target[key], source[key], nonmonotonic):
+            return False
+    return True
+
+
+def drop_guaranteed_nested_required(schema, guaranteed):
+    """Drop nested `required` names `guaranteed(prop_path)` already imposes.
+
+    `guaranteed` receives a tuple of property names from this schema down to
+    the nested object. Top-level `required` stays for the caller. Schemas
+    under `oneOf`, `not` or `if` stay intact: removing a name there can hide
+    a constraint the enclosing requirement does not cover.
+    """
+    def walk(node, prop_path):
+        if not isinstance(node, dict):
+            return node
+        result = {}
+        for key, value in node.items():
+            if key == "required" and prop_path and isinstance(value, list):
+                covered = guaranteed(prop_path)
+                kept = [name for name in value if name not in covered]
+                if kept:
+                    result[key] = kept
+                continue
+            if key == "properties" and isinstance(value, dict):
+                result[key] = {
+                    name: walk(child, prop_path + (name,)) if isinstance(child, dict) else child
+                    for name, child in value.items()
+                }
+                continue
+            if key in ("allOf", "anyOf") and isinstance(value, list):
+                result[key] = [walk(child, prop_path) if isinstance(child, dict) else child
+                               for child in value]
+                continue
+            result[key] = value
+        return result
+
+    return walk(schema, ())
 
 
 def schema_required_names(schema):
@@ -327,7 +481,7 @@ def schema_same_except_enums(before, after):
     return _json_value_key(before) == _json_value_key(after)
 
 
-def match_schema_alternatives(before, after):
+def match_schema_alternatives(before, after, allow_single_remainder=True):
     """Map unchanged, tightened or edited old alternatives to their new positions."""
     matches, old_left, new_left = {}, set(range(len(before))), set(range(len(after)))
     before_json = [_json_value_key(branch) for branch in before]
@@ -403,7 +557,7 @@ def match_schema_alternatives(before, after):
     # property name. Pair that remainder after the stronger identity matches;
     # extra inserted branches stay unmatched, and multiple leftovers remain
     # ambiguous rather than being paired by position.
-    if len(old_left) == len(new_left) == 1:
+    if allow_single_remainder and len(old_left) == len(new_left) == 1:
         matches[next(iter(new_left))] = next(iter(old_left))
     return matches
 
@@ -422,36 +576,156 @@ def under_unmatched_alternative(path, unmatched):
     return any(path.startswith(prefix) for prefix in unmatched)
 
 
-def alternative_path_map(before, after):
-    """Pair anyOf/oneOf branches by content; track inserted and removed branches.
+def _pair_location_applicators(group_after, group_before, before_alts, keyword, path_map):
+    """Pair same-keyword applicators at one instance location by identity then branch overlap."""
+    assignments = {}
+    used_before = set()
+    for ap_idx, (parent, _) in enumerate(group_after):
+        baseline_parent = remap_alternative_path(parent, path_map)
+        if (baseline_parent, keyword) in before_alts:
+            assignments[ap_idx] = baseline_parent
+            used_before.add(baseline_parent)
 
-    Returns (path_map, unmatched, removed): `path_map` translates a surviving
-    current branch prefix to its baseline prefix, `unmatched` holds inserted
-    current branch prefixes, and `removed` holds (baseline prefix, keyword)
-    pairs with no surviving counterpart (outermost only).
+    unpaired_after = [
+        (ap_idx, parent, branches)
+        for ap_idx, (parent, branches) in enumerate(group_after)
+        if ap_idx not in assignments
+    ]
+    unpaired_before = [
+        (bp_idx, bp, branches)
+        for bp_idx, (bp, branches) in enumerate(group_before)
+        if bp not in used_before
+    ]
+    if len(unpaired_after) == 1 and len(unpaired_before) == 1:
+        ap_idx = unpaired_after[0][0]
+        assignments[ap_idx] = unpaired_before[0][1]
+    elif unpaired_after and unpaired_before:
+        candidates = []
+        for ap_idx, _, new_branches in unpaired_after:
+            for bp_idx, bp, old_branches in unpaired_before:
+                matches = match_schema_alternatives(
+                    old_branches, new_branches, allow_single_remainder=False)
+                if not matches:
+                    continue
+                exact_count = sum(
+                    1 for new_i, old_i in matches.items()
+                    if _json_value_key(old_branches[old_i]) == _json_value_key(new_branches[new_i])
+                )
+                full_exact = exact_count == len(old_branches) == len(new_branches)
+                unmatched_count = (
+                    (len(old_branches) - len(matches))
+                    + (len(new_branches) - len(matches))
+                )
+                candidates.append((
+                    full_exact, exact_count, len(matches), -unmatched_count,
+                    -ap_idx, -bp_idx, ap_idx, bp,
+                ))
+        used_ap = set()
+        for *_, ap_idx, bp in sorted(candidates, reverse=True):
+            if ap_idx not in used_ap and bp not in used_before:
+                assignments[ap_idx] = bp
+                used_ap.add(ap_idx)
+                used_before.add(bp)
+    return assignments
+
+
+def alternative_path_map(before, after):
+    """Pair anyOf/oneOf/allOf branches by content; track inserted and removed alternatives.
+
+    Returns (path_map, unmatched, removed, paired): `path_map` translates a
+    surviving current branch prefix to its baseline prefix (and maps newly
+    inserted `allOf` branches to non-colliding synthetic prefixes),
+    `unmatched` holds inserted `anyOf`/`oneOf` current branch prefixes,
+    `removed` holds (baseline prefix, keyword) pairs for `anyOf`/`oneOf` with
+    no surviving counterpart (outermost only), and `paired` holds the
+    (current, baseline) applicator identities `(parent, keyword)` that the
+    comparison treats as the same `anyOf`/`oneOf`. Sibling applicators of one
+    keyword at the same flattened instance location stay distinct: each is a
+    separate conjunct, so only its own counterpart counts as surviving.
     """
     path_map, unmatched = {}, set()
     matched_baseline = set()
+    paired = set()
     alternatives = after.get("alternatives", {})
-    for (parent, keyword), new_branches in sorted(
-            alternatives.items(), key=lambda item: (item[0][0].count("{"), item[0][0])):
-        if under_unmatched_alternative(parent, unmatched):
-            old_branches = []
+    before_alts = before.get("alternatives", {})
+    allof_after = after.get("allof_branches", {})
+    allof_before = before.get("allof_branches", {})
+
+    def loc_path(raw):
+        return re.sub(r"\{allOf(?:_new_)?\d+\}", "", raw)
+
+    # Group by non-allOf nesting depth so all allOf wrappers at a depth resolve
+    # before sibling anyOf/oneOf applicators at the same instance location pair.
+    depths = {}
+    for parent, branches in sorted(allof_after.items(), key=lambda item: (item[0].count("{"), item[0])):
+        depths.setdefault(loc_path(parent).count("{"), {"allOf": [], "alts": []})["allOf"].append(
+            (parent, branches))
+    for (parent, keyword), branches in sorted(
+            alternatives.items(), key=lambda item: (item[0][0].count("{"), item[0][0], item[0][1])):
+        depths.setdefault(loc_path(parent).count("{"), {"allOf": [], "alts": []})["alts"].append(
+            (parent, keyword, branches))
+
+    for depth in sorted(depths):
+        for parent, new_branches in depths[depth]["allOf"]:
             baseline_parent = remap_alternative_path(parent, path_map)
-        else:
-            baseline_parent = remap_alternative_path(parent, path_map)
-            old_branches = before.get("alternatives", {}).get((baseline_parent, keyword), [])
-        matches = match_schema_alternatives(old_branches, new_branches)
-        for new_index in range(len(new_branches)):
-            current = f"{parent}{{{keyword}{new_index}}}"
-            if new_index in matches:
-                baseline = f"{baseline_parent}{{{keyword}{matches[new_index]}}}"
-                path_map[current] = baseline
-                matched_baseline.add(baseline)
-            else:
-                unmatched.add(current)
+            old_branches = ([] if under_unmatched_alternative(parent, unmatched)
+                            else allof_before.get(baseline_parent, []))
+            matches = match_schema_alternatives(old_branches, new_branches)
+            for new_index in range(len(new_branches)):
+                current = f"{parent}{{allOf{new_index}}}"
+                if new_index in matches:
+                    path_map[current] = f"{baseline_parent}{{allOf{matches[new_index]}}}"
+                else:
+                    # Keep newly added allOf branches in location aggregation while
+                    # preventing raw-path collisions against before's {allOf0}..{allOfN}.
+                    path_map[current] = f"{baseline_parent}{{allOf_new_{new_index}}}"
+
+        groups = {}
+        for parent, keyword, new_branches in depths[depth]["alts"]:
+            if under_unmatched_alternative(parent, unmatched):
+                for new_index in range(len(new_branches)):
+                    unmatched.add(f"{parent}{{{keyword}{new_index}}}")
+                continue
+            parent_loc = loc_path(remap_alternative_path(parent, path_map))
+            groups.setdefault((parent_loc, keyword), []).append((parent, new_branches))
+
+        for (parent_loc, keyword), group_after in sorted(groups.items()):
+            group_before = [
+                (bp, branches)
+                for (bp, kw), branches in sorted(before_alts.items())
+                if kw == keyword and loc_path(bp) == parent_loc
+            ]
+            assignments = _pair_location_applicators(
+                group_after, group_before, before_alts, keyword, path_map)
+            for ap_idx, (parent, new_branches) in enumerate(group_after):
+                if ap_idx in assignments:
+                    baseline_parent = assignments[ap_idx]
+                    old_branches = before_alts[(baseline_parent, keyword)]
+                    paired.add(((parent, keyword), (baseline_parent, keyword)))
+                    matches = match_schema_alternatives(old_branches, new_branches)
+                    # A single-remainder match between disjoint branches can
+                    # hide a removal when another conjunct's branch flattens
+                    # to the same location. Keep that removal separate.
+                    if len(group_before) > 1 or len(group_after) > 1:
+                        strong = match_schema_alternatives(
+                            old_branches, new_branches, allow_single_remainder=False)
+                        matches = {new_i: old_i for new_i, old_i in matches.items()
+                                   if new_i in strong or not schemas_disjoint(
+                                       old_branches[old_i], new_branches[new_i])}
+                else:
+                    baseline_parent = remap_alternative_path(parent, path_map)
+                    matches = {}
+                for new_index in range(len(new_branches)):
+                    current = f"{parent}{{{keyword}{new_index}}}"
+                    if new_index in matches:
+                        baseline = f"{baseline_parent}{{{keyword}{matches[new_index]}}}"
+                        path_map[current] = baseline
+                        matched_baseline.add(baseline)
+                    else:
+                        unmatched.add(current)
+
     branch_content = {}
-    for (parent, keyword), branches in before.get("alternatives", {}).items():
+    for (parent, keyword), branches in before_alts.items():
         for old_index, branch in enumerate(branches):
             branch_content[f"{parent}{{{keyword}{old_index}}}"] = (parent, keyword, branch)
     surviving_content = set()
@@ -459,13 +733,15 @@ def alternative_path_map(before, after):
         if baseline in branch_content:
             parent, keyword, branch = branch_content[baseline]
             surviving_content.add((parent, keyword, _json_value_key(branch)))
-    surviving_applicators = {
-        (remap_alternative_path(parent, path_map), keyword)
+    paired_current = {current for current, _ in paired}
+    paired_baseline = {baseline for _, baseline in paired}
+    new_applicator_locs = {
+        loc_path(remap_alternative_path(parent, path_map))
         for parent, keyword in alternatives
-        if keyword in ("anyOf", "oneOf")
-        and not under_unmatched_alternative(parent, unmatched)
+        if (keyword in ("anyOf", "oneOf")
+            and (parent, keyword) not in paired_current
+            and not under_unmatched_alternative(parent, unmatched))
     }
-    before_applicators = set(before.get("alternatives", {}))
     removed = []
     for baseline in sorted(branch_content,
                            key=lambda path: (path.count("{"), path)):
@@ -474,40 +750,20 @@ def alternative_path_map(before, after):
             continue
         if under_unmatched_alternative(baseline, {path for path, _ in removed}):
             continue
-        # Removing the whole anyOf/oneOf keyword relaxes the schema. It is not
-        # equivalent to removing a branch while an applicator still constrains
-        # the same location. Count either keyword here: replacing anyOf with
-        # oneOf (or vice versa) can still tighten the accepted schema.
-        if (parent, keyword) not in surviving_applicators:
-            survivors_here = {
-                survivor_keyword
-                for survivor_parent, survivor_keyword in surviving_applicators
-                if survivor_parent == parent
-            }
-            # A relaxation inside an outer oneOf branch is not necessarily
-            # additive: widening that branch can make a formerly valid input
-            # match two outer branches, so the outer oneOf then rejects it.
-            # Test the parent path, not the baseline branch path: the removed
-            # keyword itself must not count as the enclosing oneOf, while a
-            # oneOf nested inside an outer anyOf branch stays additive.
+        # Removing a whole unpaired anyOf/oneOf relaxes the schema unless it
+        # sits inside an outer oneOf or an unpaired new applicator sits at the
+        # same instance location (such as replacing anyOf with oneOf).
+        parent_loc = loc_path(parent)
+        if (parent, keyword) not in paired_baseline:
             inside_outer_oneof = re.search(r"\{oneOf\d+\}", parent) is not None
-            if not survivors_here:
-                if not inside_outer_oneof:
-                    continue
-            # A sibling keyword that already constrained this location before
-            # still constrains it, so deleting this whole keyword only relaxes
-            # the schema. A survivor keyword that is new here is a replacement
-            # (anyOf <-> oneOf), which can tighten the schema, so report it.
-            elif (not inside_outer_oneof
-                  and any((parent, survivor_keyword) in before_applicators
-                          for survivor_keyword in survivors_here)):
+            if not inside_outer_oneof and parent_loc not in new_applicator_locs:
                 continue
         # Deduping identical branches changes nothing for anyOf and only
         # admits input for oneOf, so an identical survivor keeps it additive.
         if (parent, keyword, _json_value_key(branch)) in surviving_content:
             continue
         removed.append((baseline, keyword))
-    return path_map, unmatched, removed
+    return path_map, unmatched, removed, paired
 
 
 def _schema_type_names(schema):
@@ -674,6 +930,17 @@ def detect_mcp_changes(git, parent, commit, changed):
     def inside_oneof(path):
         return re.search(r"\{oneOf\d+\}", path) is not None
 
+    def location(raw):
+        return re.sub(r"\{allOf(?:_new_)?\d+\}", "", raw)
+
+    def effective_top_required(schema):
+        if not isinstance(schema, dict):
+            return set()
+        names = set(schema["required"]) if isinstance(schema.get("required"), list) else set()
+        for child in schema.get("allOf") or []:
+            names.update(effective_top_required(child))
+        return names
+
     def constrains_instances(schema):
         if isinstance(schema, bool):
             return not schema
@@ -681,6 +948,7 @@ def detect_mcp_changes(git, parent, commit, changed):
             return True
         annotations = {"title", "description", "default", "examples", "deprecated",
                        "readOnly", "writeOnly", "$comment", "$schema", "$id"}
+        has_if = isinstance(schema.get("if"), (dict, bool))
         for key, value in schema.items():
             if key in annotations:
                 continue
@@ -689,19 +957,74 @@ def detect_mcp_changes(git, parent, commit, changed):
                     return True
             elif key == "required" and value == []:
                 continue
-            elif key in ("items", "additionalProperties") and not constrains_instances(value):
+            elif key in ("items", "additionalProperties", "propertyNames") and not constrains_instances(value):
                 continue
+            elif key == "allOf" and isinstance(value, list):
+                if any(constrains_instances(child) for child in value):
+                    return True
+            elif key in ("if", "then", "else"):
+                if not has_if:
+                    continue
+                if key == "if":
+                    continue
+                cond_if = schema["if"]
+                if key == "then" and cond_if is False:
+                    continue
+                if key == "else" and is_always_true(cond_if):
+                    continue
+                if constrains_instances(value):
+                    return True
+            elif key == "anyOf" and isinstance(value, list):
+                if value and not any(not constrains_instances(child) for child in value):
+                    return True
+                if not value:
+                    return True
+            elif key == "oneOf" and isinstance(value, list):
+                if len(value) == 1:
+                    if constrains_instances(value[0]):
+                        return True
+                else:
+                    return True
             else:
                 # Treat other validation and unknown keywords conservatively.
                 return True
         return False
+
+    def constrains_beyond_required(schema, already_required, nested_guaranteed=None):
+        """Whether `schema` rejects an instance the enclosing schema accepted.
+
+        `already_required` is the top-level names already demanded. When
+        `nested_guaranteed` is set, it maps a property-name tuple to names
+        the enclosing schema already requires on that nested object; a
+        nested `required` entry those names cover is not a new demand.
+        """
+        if schema is False:
+            return True
+        if not isinstance(schema, dict):
+            return False
+        if effective_top_required(schema) - already_required:
+            return True
+        stripped = schema_without_top_required(schema)
+        if nested_guaranteed is not None:
+            stripped = drop_guaranteed_nested_required(stripped, nested_guaranteed)
+        return constrains_instances(stripped)
+
+    def expand_type_names(type_json):
+        names = json.loads(type_json)
+        items = set(names) if isinstance(names, list) else {names}
+        if "number" in items:
+            items.add("integer")
+        return frozenset(items)
 
     for name in sorted(old):
         if name not in new:
             report(f"tool `{name}` removed")
             continue
         before, after = old[name], new[name]
-        path_map, unmatched, removed = alternative_path_map(before, after)
+        path_map, unmatched, removed, paired = alternative_path_map(before, after)
+        paired_current = {current for current, _ in paired}
+        paired_baseline = {baseline for _, baseline in paired}
+        paired_to_baseline = dict(paired)
         for baseline, keyword in removed:
             report(f"`{name}` `{baseline}` {keyword} alternative removed")
         for current in sorted(unmatched, key=lambda path: (path.count("{"), path)):
@@ -717,9 +1040,10 @@ def detect_mcp_changes(git, parent, commit, changed):
                     branch = new_branches[new_index]
                 except (ValueError, IndexError):
                     continue
-                baseline_parent = remap_alternative_path(parent, path_map)
-                old_branches = before.get("alternatives", {}).get(
-                    (baseline_parent, keyword), [])
+                paired_baseline_pair = paired_to_baseline.get((parent, keyword))
+                if not paired_baseline_pair:
+                    continue
+                old_branches = before.get("alternatives", {}).get(paired_baseline_pair, [])
                 if not old_branches:
                     continue
                 if any(not schemas_disjoint(branch, old) for old in old_branches):
@@ -735,113 +1059,68 @@ def detect_mcp_changes(git, parent, commit, changed):
         after_closed = translated_facts(
             {path: True for path in after.get("closed_objects", set())}, path_map, unmatched)
         after_boolean = translated_facts(after.get("boolean", {}), path_map, unmatched)
-        before_boolean = before.get("boolean", {})
-        # Tightening an existing location to `false` rejects every instance
-        # it accepted before (witness: any previously valid value there).
-        # `additionalProperties: false` is the parent's closed-object fact,
-        # already reported below, so its child path is not reported again.
-        for path, value in sorted(after_boolean.items()):
-            if value is not False or path.endswith("[additionalProperties]"):
-                continue
-            if before_boolean.get(path) is False:
-                continue
-            if path in before.get("schema_nodes", set()) or path in before_boolean:
-                report(f"`{name}` `{path}` schema tightened to false")
-        # Relaxing `false` only admits input, except inside oneOf where a
-        # widened branch can steal the single match a valid input had.
-        for path, value in sorted(before_boolean.items()):
-            if value is not False or path.endswith("[additionalProperties]"):
-                continue
-            if not inside_oneof(path):
-                continue
-            if after_boolean.get(path) is False:
-                continue
-            if path in after_nodes or path in after_boolean:
-                report(f"`{name}` `{path}` boolean schema relaxed "
-                       "inside oneOf alternative")
-        for path in sorted(after_closed):
-            if (path in before.get("schema_nodes", set())
-                    and path not in before.get("closed_objects", set())):
-                report(f"`{name}` `{path}` additionalProperties closed")
         after_properties_keywords = translated_facts(
             after.get("properties_keywords", {}), path_map, unmatched)
-        # New constraints at existing locations are tightenings too, even
-        # when no old keyword existed to drive the old/new comparison loops.
-        # Keep newly declared optional properties additive, as before: only
-        # compare locations already represented in the baseline snapshot.
-        for keyword, values in (("type", after_types), ("enum", after_enums),
-                                ("const", after_consts)):
-            for path in sorted(values):
-                if (path in before.get("schema_nodes", set())
-                        and path not in before.get(keyword, {})):
-                    report(f"`{name}` `{path}` {keyword} constraint added")
-        for path, value in sorted(before.get("const", {}).items()):
-            if path in after_consts and after_consts[path] != value:
-                report(f"`{name}` `{path}` const constraint changed")
-            elif path not in after_consts and path in after_nodes and inside_oneof(path):
-                report(f"`{name}` `{path}` const constraint removed inside oneOf alternative")
-        for path in sorted(after_properties_keywords):
-            if (path in before.get("schema_nodes", set())
-                    and path not in before.get("properties_keywords", {})
-                    and any(constrains_instances(child)
-                            for child in after_properties_keywords[path].values())):
-                # A child can constrain a formerly arbitrary key.
-                report(f"`{name}` `{path}` properties constraint added")
-        for path in sorted(before.get("closed_objects", set())):
-            if path not in after_closed and path in after_nodes and inside_oneof(path):
-                report(f"`{name}` `{path}` additionalProperties relaxed inside oneOf alternative")
-        for path, names in sorted(before.get("properties", {}).items()):
-            if path not in after_properties:
-                # Replacing a schema with `true` drops its properties fact
-                # but keeps a node; inside oneOf that relaxation can steal
-                # the single match, like removing the keyword itself.
-                if names and path in after_nodes and inside_oneof(path):
-                    report(f"`{name}` `{path}` properties constraint removed "
-                           "inside oneOf alternative")
-                continue
-            if path not in after_properties_keywords:
-                if names and inside_oneof(path):
-                    report(f"`{name}` `{path}` properties constraint removed "
-                           "inside oneOf alternative")
-                if names and path in after_closed:
-                    report(f"`{name}` `{path}` properties removed from closed object")
-                continue
-            for prop in sorted(names - after_properties[path]):
-                report(f"`{name}` property `{path}.{prop}` removed or renamed")
-        for path, kind in sorted(before.get("type", {}).items()):
-            if path not in after_types:
-                if path in after_nodes and inside_oneof(path):
-                    report(f"`{name}` `{path}` type constraint removed "
-                           "inside oneOf alternative")
-                continue
-            if after_types[path] != kind:
-                report(f"`{name}` `{path}` type {kind} → {after_types[path]}")
-        for path, values in sorted(before.get("enum", {}).items()):
-            if path not in after_enums:
-                if path in after_nodes and inside_oneof(path):
-                    report(f"`{name}` `{path}` enum constraint removed "
-                           "inside oneOf alternative")
-                continue
-            for value in sorted(values - after_enums[path], key=repr):
-                report(f"`{name}` `{path}` enum value {_json_key_display(value)} removed")
-            # A widened enum usually only admits more input. Inside oneOf,
-            # that input can start matching another branch as well.
-            if inside_oneof(path):
-                for value in sorted(after_enums[path] - values, key=repr):
-                    report(f"`{name}` `{path}` enum value {_json_key_display(value)} added "
-                           "inside oneOf alternative")
-        # allOf branches all apply, so their required sets union at their
-        # instance location (branch renumbering is not a new constraint).
-        # anyOf/oneOf alternatives retain their positional branch paths:
-        # tightening an existing alternative can reject previously valid
-        # input, while requirements at a new branch path stay additive.
-        # A removed alternative rejects the inputs only it accepted.
-        # Inserted anyOf branches only admit input, but oneOf demands
-        # exactly one match, so an inserted oneOf alternative overlapping
-        # an existing one steals the single match a formerly valid input
-        # had; provably disjoint insertions stay additive.
-        def location(raw):
-            return re.sub(r"\{allOf\d+\}", "", raw)
+        after_property_names = translated_facts(
+            after.get("property_names", {}), path_map, unmatched)
+
+        def group_by_loc(mapping):
+            grouped = {}
+            for raw, value in mapping.items():
+                grouped.setdefault(location(raw), []).append((raw, value))
+            return grouped
+
+        def display_path_for(loc, *mappings):
+            for mapping in mappings:
+                matches = [raw for raw in mapping if location(raw) == loc]
+                if len(matches) == 1:
+                    return matches[0]
+            return loc
+
+        before_locs = {location(p) for p in before.get("schema_nodes", set())}
+        after_locs = {location(p) for p in after_nodes}
+        before_false_raws = {
+            p for p, value in before.get("boolean", {}).items()
+            if value is False and not p.endswith("[additionalProperties]")
+        }
+        before_false_locs = {location(p) for p in before_false_raws}
+
+        def guarded_arm(raw):
+            """Whether `raw` is a then/else arm that only some instances meet.
+
+            An arm rejects just the instances its own `if` selects it for, so
+            a sibling arm that merges into the same instance location keeps
+            judging the rest. An always-true `if` (for `then`) or an `if` of
+            false (for `else`) selects every instance, so that arm is not
+            guarded.
+            """
+            for arm, selects_all in (("[then]", is_always_true), ("[else]", lambda c: c is False)):
+                if raw.endswith(arm):
+                    cond = before.get("conditionals", {}).get(raw[:-len(arm)])
+                    return cond is not None and not selects_all(cond.get("if"))
+            return False
+
+        unguarded_false_locs = {
+            location(p) for p in before_false_raws if not guarded_arm(p)}
+        after_false_locs = {
+            location(p) for p, value in after_boolean.items()
+            if value is False and not p.endswith("[additionalProperties]")
+        }
+
+        before_types_loc = group_by_loc(before.get("type", {}))
+        after_types_loc = group_by_loc(after_types)
+        before_enums_loc = group_by_loc(before.get("enum", {}))
+        after_enums_loc = group_by_loc(after_enums)
+        before_consts_loc = group_by_loc(before.get("const", {}))
+        after_consts_loc = group_by_loc(after_consts)
+        before_closed_loc = group_by_loc({p: True for p in before.get("closed_objects", set())})
+        after_closed_loc = group_by_loc(after_closed)
+        before_props_loc = group_by_loc(before.get("properties", {}))
+        after_props_loc = group_by_loc(after_properties)
+        before_prop_kw_loc = group_by_loc(before.get("properties_keywords", {}))
+        after_prop_kw_loc = group_by_loc(after_properties_keywords)
+        before_pn_loc = group_by_loc(before.get("property_names", {}))
+        after_pn_loc = group_by_loc(after_property_names)
 
         def same_instance_location(left, right):
             left = location(left)
@@ -859,26 +1138,433 @@ def detect_mcp_changes(git, parent, commit, changed):
                 grouped.setdefault(location(raw), set()).update(req)
             return grouped
 
-        before_locations = {location(p) for p in before.get("schema_nodes", set())}
         before_required = required_by_location(before)
+
+        def unconditionally_required_in_conditionals(loc):
+            names = set()
+            for raw_path, cond in before.get("conditionals", {}).items():
+                if location(raw_path) != loc:
+                    continue
+                cond_if = cond.get("if")
+                then_req = effective_top_required(cond.get("then"))
+                else_req = effective_top_required(cond.get("else"))
+                if is_always_true(cond_if):
+                    names.update(then_req)
+                elif cond_if is False:
+                    names.update(else_req)
+                else:
+                    names.update(then_req & else_req)
+            return names
+
+        def selector_required(schema):
+            """The `if` as a required-names set, or None when it has any other shape."""
+            if (isinstance(schema, dict) and set(schema) == {"required"}
+                    and isinstance(schema["required"], list)):
+                return set(schema["required"])
+            return None
+
+        before_conditionals_loc = group_by_loc(before.get("conditionals", {}))
+        after_conditionals_raw = translated_facts(
+            after.get("conditionals", {}), path_map, unmatched)
+        after_conditionals_loc = group_by_loc(after_conditionals_raw)
+
+        def required_by_enclosing_location(loc, prop):
+            """Whether `prop` was already required wherever `loc` applies.
+
+            A then/else/anyOf/oneOf branch constrains the same instance as
+            its enclosing schema, so a property the enclosing schema already
+            required of every instance is not a new demand when the
+            requirement moves into the branch. Likewise, a property already
+            required by every reachable branch of a conditional at `loc` is
+            not newly required when moved to `loc`, and a property required by
+            an active `if` selector is already present in `then`.
+            """
+            if prop in unconditionally_required_in_conditionals(loc):
+                return True
+            # Each `then` arm is guarded by its own `if` only: a sibling
+            # conditional that selects `prop` says nothing about requests this
+            # arm judges. Every arm that newly demands `prop` must carry it.
+            demanding = [raw for raw, names in after_required_raw.items()
+                         if location(raw) == loc and prop in names]
+            if demanding and all(
+                    raw.endswith("[then]")
+                    and prop in (selector_required(
+                        after_conditionals_raw.get(raw[:-len("[then]")], {}).get("if"))
+                        or set())
+                    for raw in demanding):
+                return True
+            for outer, names in before_required.items():
+                if prop not in names or not loc.startswith(outer) or loc == outer:
+                    continue
+                suffix = loc[len(outer):]
+                if re.fullmatch(r"(?:\[(?:then|else)\]|\{(?:anyOf|oneOf)\d+\})+", suffix):
+                    return True
+            return False
+
+        for loc in sorted(before_locs | before_false_locs):
+            if loc in before_false_locs:
+                if (inside_oneof(loc)
+                        and (loc in after_locs or loc in after_false_locs)
+                        and loc not in after_false_locs):
+                    dpath = display_path_for(loc, before.get("boolean", {}))
+                    report(f"`{name}` `{dpath}` boolean schema relaxed "
+                           "inside oneOf alternative")
+                # A sibling arm that shares the location with a guarded false
+                # arm still has its own contract to compare.
+                if loc in unguarded_false_locs or loc not in before_locs:
+                    continue
+            if loc not in after_locs and loc not in after_false_locs:
+                if inside_oneof(loc):
+                    if loc in before_pn_loc and any(
+                            constrains_instances(pn) for _, pn in before_pn_loc[loc]):
+                        dpath = display_path_for(loc, before.get("property_names", {}))
+                        report(f"`{name}` `{dpath}[propertyNames]` propertyNames "
+                               "constraint removed inside oneOf alternative")
+                continue
+            if loc in after_false_locs and (
+                    loc not in before_false_locs
+                    or any(location(raw) == loc and raw not in before_false_raws
+                           for raw, value in after_boolean.items() if value is False)):
+                dpath = display_path_for(loc, before.get("schema_nodes", {}), after_boolean)
+                report(f"`{name}` `{dpath}` schema tightened to false")
+                continue
+
+            # type
+            old_t_entries = before_types_loc.get(loc, [])
+            new_t_entries = after_types_loc.get(loc, [])
+            old_types = None
+            for _, tjson in old_t_entries:
+                tset = expand_type_names(tjson)
+                old_types = tset if old_types is None else (old_types & tset)
+            new_types = None
+            for _, tjson in new_t_entries:
+                tset = expand_type_names(tjson)
+                new_types = tset if new_types is None else (new_types & tset)
+            if old_types is None and new_types is not None:
+                dpath = display_path_for(loc, after_types, before.get("schema_nodes", {}))
+                report(f"`{name}` `{dpath}` type constraint added")
+            elif old_types is not None and new_types is None:
+                if inside_oneof(loc):
+                    dpath = display_path_for(loc, before.get("type", {}))
+                    report(f"`{name}` `{dpath}` type constraint removed "
+                           "inside oneOf alternative")
+            elif old_types is not None and new_types is not None:
+                # Output consumers may still validate against the old schema;
+                # newly permitted output types can therefore break them too.
+                if not (old_types <= new_types) or (
+                        loc.startswith("outputSchema") and not (new_types <= old_types)):
+                    dpath = display_path_for(loc, before.get("type", {}), after_types)
+                    if len(old_t_entries) == 1 and len(new_t_entries) == 1:
+                        report(f"`{name}` `{dpath}` type {old_t_entries[0][1]} → {new_t_entries[0][1]}")
+                    else:
+                        change = "changed" if loc.startswith("outputSchema") else "narrowed"
+                        report(f"`{name}` `{dpath}` type constraint {change}")
+                elif new_types > old_types and inside_oneof(loc):
+                    dpath = display_path_for(loc, before.get("type", {}))
+                    report(f"`{name}` `{dpath}` type constraint relaxed "
+                           "inside oneOf alternative")
+
+            # enum and const
+            old_e_entries = before_enums_loc.get(loc, [])
+            new_e_entries = after_enums_loc.get(loc, [])
+            old_c_entries = before_consts_loc.get(loc, [])
+            new_c_entries = after_consts_loc.get(loc, [])
+            old_allowed = None
+            for _, eset in old_e_entries:
+                old_allowed = eset if old_allowed is None else (old_allowed & eset)
+            for _, cval in old_c_entries:
+                old_allowed = {cval} if old_allowed is None else (old_allowed & {cval})
+            new_allowed = None
+            for _, eset in new_e_entries:
+                new_allowed = eset if new_allowed is None else (new_allowed & eset)
+            for _, cval in new_c_entries:
+                new_allowed = {cval} if new_allowed is None else (new_allowed & {cval})
+            if old_allowed is None and new_allowed is not None:
+                kw = "const" if new_c_entries and not new_e_entries else "enum"
+                dpath = display_path_for(loc, after_consts if kw == "const" else after_enums,
+                                         before.get("schema_nodes", {}))
+                report(f"`{name}` `{dpath}` {kw} constraint added")
+            elif old_allowed is not None and new_allowed is None:
+                if inside_oneof(loc):
+                    kw = "const" if old_c_entries and not old_e_entries else "enum"
+                    dpath = display_path_for(loc, before.get("const" if kw == "const" else "enum", {}))
+                    report(f"`{name}` `{dpath}` {kw} constraint removed "
+                           "inside oneOf alternative")
+            elif old_allowed is not None and new_allowed is not None:
+                dropped = old_allowed - new_allowed
+                if dropped:
+                    if old_c_entries and (new_c_entries or not old_e_entries):
+                        dpath = display_path_for(loc, before.get("const", {}), after_consts)
+                        report(f"`{name}` `{dpath}` const constraint changed")
+                    else:
+                        dpath = display_path_for(loc, before.get("enum", {}), after_enums)
+                        for value in sorted(dropped, key=repr):
+                            report(f"`{name}` `{dpath}` enum value {_json_key_display(value)} removed")
+                if inside_oneof(loc) and new_allowed > old_allowed:
+                    dpath = display_path_for(loc, before.get("enum", {}), before.get("const", {}))
+                    for value in sorted(new_allowed - old_allowed, key=repr):
+                        report(f"`{name}` `{dpath}` enum value {_json_key_display(value)} added "
+                               "inside oneOf alternative")
+
+            # additionalProperties: false (closed_objects)
+            old_closed = before_closed_loc.get(loc, [])
+            new_closed = after_closed_loc.get(loc, [])
+            if not old_closed and new_closed:
+                dpath = display_path_for(loc, after_closed, before.get("schema_nodes", {}))
+                report(f"`{name}` `{dpath}` additionalProperties closed")
+            elif old_closed and not new_closed and inside_oneof(loc):
+                dpath = display_path_for(loc, {p: True for p in before.get("closed_objects", set())})
+                report(f"`{name}` `{dpath}` additionalProperties relaxed "
+                       "inside oneOf alternative")
+            elif old_closed and new_closed:
+                old_allowed_props = set.intersection(
+                    *(before.get("properties", {}).get(raw, set()) for raw, _ in old_closed))
+                new_allowed_props = set.intersection(
+                    *(after_properties.get(raw, set()) for raw, _ in new_closed))
+                if old_allowed_props - new_allowed_props:
+                    dpath = display_path_for(loc, after_closed, before.get("schema_nodes", {}))
+                    report(f"`{name}` `{dpath}` properties removed from closed object")
+
+            # properties & properties_keywords
+            old_kw_entries = before_prop_kw_loc.get(loc, [])
+            new_kw_entries = after_prop_kw_loc.get(loc, [])
+            old_prop_names = set().union(*(names for _, names in before_props_loc.get(loc, [])))
+            new_prop_names = set().union(*(names for _, names in after_props_loc.get(loc, [])))
+            if not old_kw_entries and any(
+                    constrains_instances(child)
+                    for _, props in new_kw_entries for child in props.values()):
+                dpath = display_path_for(loc, after_properties_keywords, before.get("schema_nodes", {}))
+                report(f"`{name}` `{dpath}` properties constraint added")
+            if old_kw_entries and not new_kw_entries:
+                if old_prop_names and inside_oneof(loc):
+                    dpath = display_path_for(loc, before.get("properties", {}))
+                    report(f"`{name}` `{dpath}` properties constraint removed "
+                           "inside oneOf alternative")
+                if old_prop_names and new_closed:
+                    dpath = display_path_for(loc, before.get("properties", {}))
+                    report(f"`{name}` `{dpath}` properties removed from closed object")
+            elif old_kw_entries and new_kw_entries:
+                for prop in sorted(old_prop_names - new_prop_names):
+                    raw_owner = next(
+                        (raw for raw, names in before_props_loc.get(loc, []) if prop in names),
+                        loc)
+                    report(f"`{name}` property `{raw_owner}.{prop}` removed or renamed")
+
+            # propertyNames
+            old_pn_entries = before_pn_loc.get(loc, [])
+            new_pn_entries = after_pn_loc.get(loc, [])
+            if not old_pn_entries and any(constrains_instances(pn) for _, pn in new_pn_entries):
+                dpath = display_path_for(loc, after_property_names, before.get("schema_nodes", {}))
+                report(f"`{name}` `{dpath}[propertyNames]` propertyNames constraint added")
+            elif (any(constrains_instances(pn) for _, pn in old_pn_entries)
+                  and not new_pn_entries and inside_oneof(loc)):
+                dpath = display_path_for(loc, before.get("property_names", {}))
+                report(f"`{name}` `{dpath}[propertyNames]` propertyNames constraint removed "
+                       "inside oneOf alternative")
+
+            # Newly added anyOf/oneOf applicator at an existing non-false location.
+            # Applicators pair by identity, not location: an independent sibling of
+            # the same keyword is a new conjunct even where one already constrained
+            # `loc`. Only when a baseline applicator at `loc` lost its counterpart
+            # is the addition a replacement (anyOf <-> oneOf), which the removals
+            # from alternative_path_map already report.
+            replaced_here = any(
+                location(bp) == loc and (bp, bkw) not in paired_baseline
+                for bp, bkw in before.get("alternatives", {}))
+            if not replaced_here:
+                for kw in ("anyOf", "oneOf"):
+                    for ap, akw in after.get("alternatives", {}):
+                        if (akw != kw or (ap, akw) in paired_current
+                                or under_unmatched_alternative(ap, unmatched)):
+                            continue
+                        remapped_ap = remap_alternative_path(ap, path_map)
+                        if location(remapped_ap) != loc:
+                            continue
+                        branches = after["alternatives"][(ap, akw)]
+                        if kw == "anyOf":
+                            if not branches or all(constrains_instances(b) for b in branches):
+                                report(f"`{name}` `{loc}` anyOf constraint added")
+                        elif not (len(branches) == 1 and not constrains_instances(branches[0])):
+                            report(f"`{name}` `{loc}` oneOf constraint added")
+
+        def conditional_edit_demands(path, old_cond, new_cond):
+            """Branches that newly judge instances an edited `if` moves to them.
+
+            An instance valid before met its old branch. After the edit it
+            meets the branch its new selector picks, so the move rejects it
+            when the destination demands more than the source did: a
+            required name neither the source nor the enclosing schema
+            required, or non-required constraints the source did not carry.
+            A nested `required` set that is a subset of the source arm's set
+            at the same position is not a new demand.
+            """
+            old_if = old_cond.get("if")
+            new_if = new_cond.get("if")
+            old_true = is_always_true(old_if)
+            new_true = is_always_true(new_if)
+            if old_true and new_true:
+                return []
+            if old_if is False and new_if is False:
+                return []
+            if old_true:
+                moves = [("then", "else")]
+            elif old_if is False:
+                moves = [("else", "then")]
+            elif new_true:
+                moves = [("else", "then")]
+            elif new_if is False:
+                moves = [("then", "else")]
+            else:
+                old_names = selector_required(old_if)
+                new_names = selector_required(new_if)
+                if old_names is not None and new_names is not None:
+                    if new_names == old_names:
+                        return []
+                    if new_names > old_names:
+                        moves = [("then", "else")]
+                    elif new_names < old_names:
+                        moves = [("else", "then")]
+                    else:
+                        moves = [("then", "else"), ("else", "then")]
+                else:
+                    moves = [("then", "else"), ("else", "then")]
+            enclosing = before_required.get(location(path), set())
+            demands = []
+            for source_key, target_key in moves:
+                source = old_cond.get(source_key, True)
+                target = new_cond.get(target_key, True)
+                if target is True or target == {}:
+                    continue
+                guaranteed = set(enclosing)
+                if target_key == "then":
+                    new_if_req = selector_required(new_if)
+                    if new_if_req is not None:
+                        guaranteed.update(new_if_req)
+                extra = sorted(effective_top_required(target) - effective_top_required(source) - guaranteed)
+                target_rest = schema_without_top_required(target)
+                source_rest = schema_without_top_required(source)
+                stricter = (constrains_instances(target_rest)
+                            and not nested_required_subset_only(target_rest, source_rest))
+                if extra or stricter or target is False:
+                    demands.append((target_key, extra))
+            return demands
+
         translated_after = dict(after)
         translated_after["required"] = translated_facts(after.get("required", {}), path_map, unmatched)
-        after_locations = {location(p) for p in after_nodes}
+        after_required_raw = translated_after["required"]
         after_required = required_by_location(translated_after)
+
+        for loc in sorted(set(before_conditionals_loc) | set(after_conditionals_loc)):
+            if loc in unguarded_false_locs:
+                continue
+            old_list = list(before_conditionals_loc.get(loc, []))
+            new_list = list(after_conditionals_loc.get(loc, []))
+            paired = []
+            used_old = set()
+            used_new = set()
+            for new_idx, (new_raw, new_cond) in enumerate(new_list):
+                for old_idx, (old_raw, old_cond) in enumerate(old_list):
+                    if old_idx not in used_old and new_raw == old_raw:
+                        paired.append((old_raw, old_cond, new_raw, new_cond))
+                        used_old.add(old_idx)
+                        used_new.add(new_idx)
+                        break
+            rem_old = [i for i in range(len(old_list)) if i not in used_old]
+            rem_new = [i for i in range(len(new_list)) if i not in used_new]
+            if len(rem_old) == 1 and len(rem_new) == 1:
+                old_raw, old_cond = old_list[rem_old[0]]
+                new_raw, new_cond = new_list[rem_new[0]]
+                paired.append((old_raw, old_cond, new_raw, new_cond))
+                used_old.add(rem_old[0])
+                used_new.add(rem_new[0])
+
+            enclosing = before_required.get(loc, set()) | unconditionally_required_in_conditionals(loc)
+
+            def nested_required_on_enclosing(prop_path, at=loc):
+                path = at + "".join(f".{part}" for part in prop_path)
+                return before_required.get(path, set())
+
+            for old_raw, old_cond, new_raw, new_cond in paired:
+                if _json_value_key(old_cond["if"]) != _json_value_key(new_cond["if"]):
+                    for target_key, extra in conditional_edit_demands(old_raw, old_cond, new_cond):
+                        needs = (" and now requires " + ", ".join(f"`{item}`" for item in extra)
+                                 if extra else "")
+                        report(f"`{name}` `{old_raw}` conditional `if` edited: instances it moves "
+                               f"into `{target_key}` meet a stricter branch{needs}")
+                    if inside_oneof(loc) and loc in after_locs:
+                        # A selector only decides which arm judges an instance, so
+                        # editing it matters only when some arm constrains instances.
+                        if (not (is_always_true(old_cond["if"]) and is_always_true(new_cond["if"]))
+                                and (constrains_instances(old_cond) or constrains_instances(new_cond))):
+                            report(f"`{name}` `{old_raw}` conditional `if` edited "
+                                   "inside oneOf alternative")
+                new_if = new_cond["if"]
+                if "then" not in old_cond and "then" in new_cond and new_if is not False:
+                    already = enclosing | (selector_required(new_if) or set())
+                    if constrains_beyond_required(
+                            new_cond["then"], already, nested_required_on_enclosing):
+                        report(f"`{name}` `{old_raw}` conditional `then` branch added")
+                if "else" not in old_cond and "else" in new_cond and not is_always_true(new_if):
+                    if constrains_beyond_required(
+                            new_cond["else"], enclosing, nested_required_on_enclosing):
+                        report(f"`{name}` `{old_raw}` conditional `else` branch added")
+                if inside_oneof(loc) and loc in after_locs:
+                    old_if = old_cond["if"]
+                    if ("then" in old_cond and "then" not in new_cond
+                            and old_if is not False and constrains_instances(old_cond["then"])):
+                        report(f"`{name}` `{old_raw}` conditional `then` removed "
+                               "inside oneOf alternative")
+                    if ("else" in old_cond and "else" not in new_cond
+                            and not is_always_true(old_if) and constrains_instances(old_cond["else"])):
+                        report(f"`{name}` `{old_raw}` conditional `else` removed "
+                               "inside oneOf alternative")
+
+            if loc in before_locs and loc in after_locs:
+                for new_idx, (new_raw, new_cond) in enumerate(new_list):
+                    if new_idx in used_new:
+                        continue
+                    new_if = new_cond["if"]
+                    then_adds = (
+                        "then" in new_cond and new_if is not False
+                        and constrains_beyond_required(
+                            new_cond["then"], enclosing | (selector_required(new_if) or set()),
+                            nested_required_on_enclosing))
+                    else_adds = (
+                        "else" in new_cond and not is_always_true(new_if)
+                        and constrains_beyond_required(
+                            new_cond["else"], enclosing, nested_required_on_enclosing))
+                    if then_adds or else_adds:
+                        report(f"`{name}` `{loc}` conditional constraint added")
+
+            if inside_oneof(loc) and loc in after_locs:
+                for old_idx, (old_raw, old_cond) in enumerate(old_list):
+                    if old_idx in used_old:
+                        continue
+                    old_if = old_cond["if"]
+                    then_had = ("then" in old_cond and old_if is not False
+                                and constrains_instances(old_cond["then"]))
+                    else_had = ("else" in old_cond and not is_always_true(old_if)
+                                and constrains_instances(old_cond["else"]))
+                    if then_had or else_had:
+                        report(f"`{name}` `{old_raw}` conditional constraint removed "
+                               "inside oneOf alternative")
+
         removed_properties = []
         for path, names in before.get("properties", {}).items():
             if path in after_properties:
                 removed_properties.append((path, names - after_properties[path]))
         for loc, required in sorted(after_required.items()):
-            if loc not in before_locations or loc not in after_locations:
+            if loc in unguarded_false_locs or loc not in before_locs or loc not in after_locs:
                 continue
             for prop in sorted(required - before_required.get(loc, set())):
+                if required_by_enclosing_location(loc, prop):
+                    continue
                 report(f"`{name}` property `{loc}.{prop}` newly required")
         # Dropping a requirement normally only admits more input. In a oneOf
         # branch it can create a second match and reject a formerly valid one.
         for loc, required in sorted(before_required.items()):
-            if (not inside_oneof(loc) or loc not in before_locations
-                    or loc not in after_locations):
+            if (not inside_oneof(loc) or loc not in before_locs
+                    or loc not in after_locs):
                 continue
             for prop in sorted(required - after_required.get(loc, set())):
                 if any(prop in names and same_instance_location(path, loc)
@@ -1185,6 +1871,21 @@ def next_versions(base):
             {"minor": f"{major}.{minor + 1}.0", "patch": f"{major}.{minor}.{patch + 1}"})
 
 
+def commit_task_ids(subject, trailer_ids):
+    """Every task id a commit names, in first-seen order: the subject's
+    bracketed ids (each `[ID]`, or an older `[ID, ID]` list), then its
+    `Orbit-Task` trailer values, which carry the ids a bundle subject had no
+    room for."""
+    ids = []
+    candidates = [part.strip() for group in BRACKETED_IDS.findall(subject)
+                  for part in group.split(",")]
+    candidates += [value.strip() for value in trailer_ids.split(",")]
+    for candidate in candidates:
+        if TASK_ID_VALUE.match(candidate) and candidate not in ids:
+            ids.append(candidate)
+    return ids
+
+
 def survey(repo, revision_range, orbit, offline):
     git = Git(repo)
     revision_range = revision_range or default_range(git)
@@ -1192,23 +1893,31 @@ def survey(repo, revision_range, orbit, offline):
         raise SystemExit("release-breaking-changes: --range must be A..B")
     base, head = revision_range.split("..", 1)
     head = head or "HEAD"
-    log = git.run("log", "--no-merges", "--reverse", "--pretty=%H%x09%s",
+    log = git.run("log", "--no-merges", "--reverse",
+                  "--pretty=%H%x1f%s%x1f%(trailers:key=Orbit-Task,valueonly,separator=%x2C)%x1e",
                   f"{base}..{head}").stdout
     commits, tasks, signals = [], {}, []
-    for line in log.splitlines():
-        sha, _, subject = line.partition("\t")
-        ids = TASK_ID.findall(subject)
+    for record in log.split("\x1e"):
+        record = record.strip("\n")
+        if not record:
+            continue
+        sha, _, rest = record.partition("\x1f")
+        subject, _, trailer_ids = rest.partition("\x1f")
+        ids = commit_task_ids(subject, trailer_ids)
         task_id = ids[-1] if ids else None
-        commits.append({"commit": sha[:10], "subject": subject, "task": task_id})
-        key = task_id or sha[:10]
-        task = tasks.setdefault(key, {"id": task_id, "title": None, "commits": [],
-                                      "tags": [], "tagged": False, "signals": [],
-                                      "breaking_notes": [], "subject": subject})
-        task["commits"].append(sha[:10])
-        for found in detect_commit(git, sha):
+        commits.append({"commit": sha[:10], "subject": subject, "task": task_id,
+                        "tasks": ids})
+        found_signals = detect_commit(git, sha)
+        for found in found_signals:
             found.update(commit=sha[:10], task=task_id, subject=subject)
             signals.append(found)
-            task["signals"].append(found)
+        for key in ids or [sha[:10]]:
+            task = tasks.setdefault(key, {"id": key if ids else None, "title": None,
+                                          "commits": [], "tags": [], "tagged": False,
+                                          "signals": [], "breaking_notes": [],
+                                          "subject": subject})
+            task["commits"].append(sha[:10])
+            task["signals"].extend(found_signals)
 
     source, unread = "commit-subjects", []
     if not offline:
@@ -1232,7 +1941,7 @@ def survey(repo, revision_range, orbit, offline):
     for task in tasks.values():
         if not task["title"]:
             subject = re.sub(r"\s*\(#\d+\)\s*$", "", task["subject"])
-            task["title"] = TASK_ID.sub("", subject).strip() or None
+            task["title"] = BRACKETED_IDS.sub("", subject).strip() or None
 
     breaking = [task for task in tasks.values() if task["tagged"] or task["signals"]]
     bump = "minor" if breaking else "patch"

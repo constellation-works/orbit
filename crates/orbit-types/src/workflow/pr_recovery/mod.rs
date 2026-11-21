@@ -1,25 +1,35 @@
 //! Durable ledgers for delivery PR recovery.
 
 mod auto_fix;
+mod base_suspect_reclassified;
 mod base_update;
 mod ci_failure;
 mod ci_rerun;
 mod completion;
+mod failure_handoff;
 mod infrastructure;
 
 pub use auto_fix::{
     PR_AUTO_FIX_ADMITTED_EVENT, PR_AUTO_FIX_BASE_RED_EVENT, PR_AUTO_FIX_BUDGET,
-    PR_AUTO_FIX_CHECK_REPAIR_MARKER, PR_AUTO_FIX_CREWS_KEY, PR_AUTO_FIX_NO_EDIT_RERUN_EVENT,
-    PR_AUTO_FIX_PUSHED_EVENT, PR_AUTO_FIX_READ_DEFERRED_EVENT, PrAutoFixAttempt, PrAutoFixBaseRed,
-    PrAutoFixBlocker, PrAutoFixClaim, PrAutoFixDecision, PrAutoFixNoEditRerun, PrAutoFixPush,
+    PR_AUTO_FIX_CHECK_REPAIR_MARKER, PR_AUTO_FIX_CREWS_KEY, PR_AUTO_FIX_HEAD_FAILURE_EVENT,
+    PR_AUTO_FIX_NO_EDIT_RERUN_EVENT, PR_AUTO_FIX_PUSHED_EVENT, PR_AUTO_FIX_READ_DEFERRED_EVENT,
+    PrAutoFixAttempt, PrAutoFixBaseRed, PrAutoFixBlocker, PrAutoFixClaim, PrAutoFixDecision,
+    PrAutoFixFailedCheck, PrAutoFixHeadFailure, PrAutoFixNoEditRerun, PrAutoFixPush,
     PrAutoFixReadDeferral, PrAutoFixReadReset, decide_pr_auto_fix, is_pr_auto_fix_check_repair,
     pr_auto_fix_attempts, pr_auto_fix_no_edit_reruns, pr_auto_fix_pushes,
 };
+pub use base_suspect_reclassified::{
+    CI_BASE_SUSPECT_RECLASSIFIED_EVENT, CiBaseSuspectReclassification,
+};
 pub use base_update::{
     PR_BASE_UPDATE_BUDGET_SPENT, PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission,
-    PrBaseUpdateReservation, decide_pr_base_update, pr_base_update_reservations,
+    PrBaseUpdateRefusal, PrBaseUpdateReservation, decide_pr_base_update,
+    pr_base_update_reservations,
 };
 pub use completion::{PR_COMPLETION_MUTATION_STARTED_EVENT, pr_completion_has_mutation_provenance};
+pub use failure_handoff::{
+    FailureHandoffHistoryNote, FailureHandoffStep, RecordedCandidateConflict,
+};
 pub use infrastructure::{
     PR_CANDIDATE_WORKFLOW_FAILED_EVENT, PR_CANDIDATE_WORKFLOW_FAILURE_MARKER,
     PR_INFRASTRUCTURE_RESERVED_EVENT, PrFailedWorkflowRun, PrInfrastructureAdmission,
@@ -38,6 +48,6 @@ pub use ci_rerun::{
     CiBaseSuspectLegacy, CiBaseSuspectRecord, CiCheckRerunEvent, CiCheckRerunJob,
     CiCheckRerunRecord, CiInfrastructureRetryBackoffClass, CiInfrastructureRetryBackoffField,
     CiInfrastructureRetryBackoffRecord, CiInfrastructureRetryPolicy, CiRerunAdmission, CiRerunPlan,
-    CiRerunRoot, ci_handoff_step_matches, ci_handoff_step_signature, ci_rerun_is_infrastructure,
-    decide_ci_rerun_with_policy,
+    CiRerunRefusal, CiRerunRoot, ci_handoff_step_matches, ci_handoff_step_signature,
+    ci_rerun_is_infrastructure, decide_ci_rerun_with_policy,
 };

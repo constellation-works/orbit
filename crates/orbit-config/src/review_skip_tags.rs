@@ -13,13 +13,12 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::fs::path_filter::PathFilter;
 use orbit_common::security::redaction::redact_home_dir;
-use orbit_types::task::{LIGHT_DELIVERY_TAGS, MAX_REVIEW_SKIP_TAGS, ReviewSkipProfile};
+use orbit_types::task::{
+    LIGHT_DELIVERY_TAGS, MAX_REVIEW_SKIP_TAGS, REVIEW_SKIP_TAGS_KEY, ReviewSkipProfile,
+};
 use orbit_types::workflow::normalize_instruction_tag;
 
 use crate::tag_instructions::repository_path;
-
-/// The dotted config path of the review-skip table.
-pub const REVIEW_SKIP_TAGS_KEY: &str = "workflow.review_skip_tags";
 
 /// The admitted review-skip table, keyed by normalized tag.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

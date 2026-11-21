@@ -98,10 +98,9 @@ pub(crate) fn resolve_cli_executor(
 /// therefore never borrow an agent executor's identity, and an agent activity
 /// can never be pointed at a shell definition.
 ///
-/// A definition written before [ORB-11294] spells this family `cli_command`;
-/// `ExecutorType` accepts that spelling as an alias, so a legacy bundled or
-/// user-authored `local-shell` definition loads unchanged and its `command`,
-/// `args`, `env`, and `timeout_seconds` keep working as the step's defaults.
+/// Definitions must use the canonical `local_shell` spelling. Older
+/// definitions using `cli_command` must update that value before loading; their
+/// `command`, `args`, `env`, and `timeout_seconds` fields remain valid defaults.
 pub(crate) fn resolve_local_shell_executor(
     runtime: &OrbitRuntime,
     executor: &str,

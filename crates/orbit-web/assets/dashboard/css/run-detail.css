@@ -726,3 +726,8 @@ td.run-event-detail pre {
 }
 
 .run-agent-effort { display: block; color: var(--muted); font-size: 11px; white-space: normal; overflow-wrap: anywhere; }
+
+.run-failure-message { padding: 0; border: 0; background: none; font-family: var(--font-sans); max-height: none; }
+.run-failure-diagnostic { min-width: 0; }
+.run-failure-diagnostic summary { cursor: pointer; color: var(--fg-dim); }
+.run-failure-diagnostic pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 24em; overflow-y: auto; }

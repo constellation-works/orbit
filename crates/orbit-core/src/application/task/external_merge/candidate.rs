@@ -1,3 +1,4 @@
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
@@ -14,8 +15,9 @@ use orbit_types::workflow::handoff::{
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskJobPort;
 use crate::application::task::pr_closure::unsettled_claim_reason;
-use crate::runtime::task_pr_forge::MergedPullRequest;
+use crate::runtime::task_pr_forge::{ForgePullRequest, MergedPullRequest};
 
 use super::model::SETTLEABLE_STATUSES;
 
@@ -472,22 +474,41 @@ impl OrbitRuntime {
         }
     }
 
-    /// The newest of `merged` that delivered the candidate into its target
-    /// branch.
+    /// A stopped native run's exact publication, or the newest recorded
+    /// delivery that proves itself through the existing claim/author checks.
     pub(super) fn delivery_merge(
         &self,
         candidate: &Candidate,
         merged: &[MergedPullRequest],
-        authors: &[String],
-    ) -> Option<MergedPullRequest> {
+        authors: &OnceCell<Vec<String>>,
+    ) -> Result<Option<MergedPullRequest>, OrbitError> {
         let task = &candidate.task;
-        merged
+        let recorded = candidate.pr_numbers();
+        let mut matching = merged
             .iter()
-            .filter(|merged| {
-                candidate
-                    .requeued_handoff
-                    .is_none_or(|number| merged.pull.number == number)
-            })
+            .filter(|merged| recorded.contains(&merged.pull.number))
+            .peekable();
+        if matching.peek().is_none() {
+            return Ok(None);
+        }
+        if candidate.revoked.is_none()
+            && candidate.requeued_handoff.is_none()
+            && let Some(proof) = self.stopped_publication_identity(task)?
+        {
+            let number = proof.number.parse::<u64>().map_err(|_| {
+                super::refusal::refused(&task.id, "publication PR number is invalid")
+            })?;
+            return Ok(matching
+                .find(|merged| {
+                    merged.pull.number == number
+                        && Some(merged.url.as_str()) == proof.url.as_deref()
+                        && merged.pull.head_branch == proof.branch
+                        && merged.head_sha == proof.head
+                        && merged.base_branch == proof.base_branch
+                })
+                .cloned());
+        }
+        Ok(matching
             .filter(|merged| {
                 names_delivery(
                     &self
@@ -501,6 +522,12 @@ impl OrbitRuntime {
                 )
             })
             .filter(|merged| {
+                let authors: &[String] = if candidate.follower_prs.contains_key(&merged.pull.number)
+                {
+                    &[]
+                } else {
+                    authors.get_or_init(|| self.settlement_authors(&self.paths().repo_root))
+                };
                 self.delivers_candidate(
                     candidate,
                     merged.pull.number,
@@ -510,7 +537,51 @@ impl OrbitRuntime {
                 )
             })
             .max_by_key(|merged| merged.pull.number)
-            .cloned()
+            .cloned())
+    }
+
+    /// What differs between a stopped native run's authenticated publication
+    /// and the open pull request the owner is about to merge, or `None` when
+    /// they are the same revision or the task has no such publication. The
+    /// checks are the ones [`Self::delivery_merge`] applies after the merge,
+    /// so a pull request this refuses is one settlement would reject.
+    pub(super) fn stopped_publication_mismatch(
+        &self,
+        candidate: &Candidate,
+        pull: &ForgePullRequest,
+        base_branch: Option<&str>,
+        head_sha: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        if candidate.revoked.is_some() || candidate.requeued_handoff.is_some() {
+            return Ok(None);
+        }
+        let Some(proof) = self.stopped_publication_identity(&candidate.task)? else {
+            return Ok(None);
+        };
+        let mut differs = Vec::new();
+        if proof.number != pull.number.to_string() {
+            differs.push(format!(
+                "number #{} (published #{})",
+                pull.number, proof.number
+            ));
+        }
+        if proof.branch != pull.head_branch {
+            differs.push(format!(
+                "branch {} (published {})",
+                pull.head_branch, proof.branch
+            ));
+        }
+        if proof.head != head_sha {
+            differs.push(format!("head {head_sha} (published {})", proof.head));
+        }
+        if base_branch != Some(proof.base_branch.as_str()) {
+            differs.push(format!(
+                "base {} (published {})",
+                base_branch.unwrap_or("unknown"),
+                proof.base_branch
+            ));
+        }
+        Ok((!differs.is_empty()).then(|| differs.join(", ")))
     }
 
     /// The branch the task's own delivery targets: the base its linked run

@@ -7,8 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use chrono::{DateTime, Duration, Utc};
-use chrono_tz::{Europe::Berlin, Tz, UTC};
+use chrono::{DateTime, Duration, Local, TimeZone, Utc};
 use orbit_automation::AutomationError;
 use orbit_automation::auto_tasks::schedule::{
     AutoTaskDueDecision, decide_due, next_scheduled_slot, validate_schedule,
@@ -21,8 +20,8 @@ use orbit_automation::members::{
     MemberAdmission, MemberEvaluation, MemberHost, MemberOutcome, MemberPage, evaluate,
 };
 use orbit_automation::routines::due::{
-    DueDecision, due_decision_with_grace, natural_slot_grace_for_cadence, next_occurrence,
-    parse_cron, truncate_to_minute,
+    DueDecision, due_decision_with_grace, missed_slots_through, natural_slot_grace_for_cadence,
+    next_occurrence, parse_cron, truncate_to_minute,
 };
 use orbit_automation::routines::loader::{RoutineCatalogLookup, RoutineSource, collect_routines};
 use orbit_automation::routines::sweep::{
@@ -74,17 +73,26 @@ fn at(value: &str) -> DateTime<Utc> {
 /// Re-exec only the requested test, without the enclosing managed run's authority.
 /// The shared child-test hang guard kills and reaps the child on overrun.
 fn isolated(test: &str) -> bool {
+    isolated_in_zone(test, "UTC")
+}
+
+/// [`isolated`], with the child's host-local zone (`TZ`) set to `zone`.
+fn isolated_in_zone(test: &str, zone: &str) -> bool {
     if std::env::var("ORBIT_AUTOMATION_TEST_CHILD").as_deref() == Ok(test) {
         return false;
     }
     let fixture = tempfile::tempdir_in(test_env::canonical_temp_dir()).unwrap();
-    run_child(test, fixture.path());
+    run_child_in_zone(test, fixture.path(), zone);
     true
 }
 
 /// Run one isolated child of `test` with `dir` as its working directory, so
 /// successive children can share a fixture root.
 fn run_child(test: &str, dir: &Path) {
+    run_child_in_zone(test, dir, "UTC");
+}
+
+fn run_child_in_zone(test: &str, dir: &Path, zone: &str) {
     let home = dir.join("home");
     std::fs::create_dir_all(&home).unwrap();
     let mut command = Command::new(std::env::current_exe().unwrap());
@@ -97,7 +105,7 @@ fn run_child(test: &str, dir: &Path) {
         .env("HOME", &home)
         .env("USERPROFILE", &home)
         .env_remove("ORBIT_HOME")
-        .env("TZ", "UTC")
+        .env("TZ", zone)
         .env("ORBIT_AUTOMATION_TEST_CHILD", test);
     let logs = tempfile::tempdir().unwrap();
     let output = test_env::run_child_test(&mut command, test, logs.path());
@@ -111,9 +119,23 @@ fn run_child(test: &str, dir: &Path) {
 
 #[test]
 fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
+    // Cron is evaluated in host-local time, so the DST rows run in a child
+    // whose host zone is Berlin's rule (as a POSIX TZ string, so no system
+    // zoneinfo is needed); the UTC rows evaluate in `Utc`.
+    if isolated_in_zone(
+        "due_decisions_respect_dst_cadence_and_collapse_downtime",
+        BERLIN_POSIX_TZ,
+    ) {
+        return;
+    }
+    assert_host_zone_is_berlin();
+    enum Zone {
+        Utc,
+        Berlin,
+    }
     struct Case {
         name: &'static str,
-        zone: Tz,
+        zone: Zone,
         cron: &'static str,
         policy: MissedRunPolicy,
         cadence: u64,
@@ -125,7 +147,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
     let cases = [
         Case {
             name: "delayed five-minute poll remains natural",
-            zone: UTC,
+            zone: Zone::Utc,
             cron: "5 * * * *",
             policy: Skip,
             cadence: 300,
@@ -135,7 +157,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         },
         Case {
             name: "inclusive cadence grace",
-            zone: UTC,
+            zone: Zone::Utc,
             cron: "5 * * * *",
             policy: Skip,
             cadence: 300,
@@ -145,7 +167,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         },
         Case {
             name: "real downtime skips",
-            zone: UTC,
+            zone: Zone::Utc,
             cron: "5 * * * *",
             policy: Skip,
             cadence: 300,
@@ -155,7 +177,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         },
         Case {
             name: "real downtime catches up once",
-            zone: UTC,
+            zone: Zone::Utc,
             cron: "5 * * * *",
             policy: CatchUpOnce,
             cadence: 300,
@@ -165,7 +187,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         },
         Case {
             name: "week collapses to latest cron slot",
-            zone: UTC,
+            zone: Zone::Utc,
             cron: "0 22 * * *",
             policy: CatchUpOnce,
             cadence: 60,
@@ -175,7 +197,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         },
         Case {
             name: "consumed slot never refires",
-            zone: UTC,
+            zone: Zone::Utc,
             cron: "0 22 * * *",
             policy: CatchUpOnce,
             cadence: 60,
@@ -185,7 +207,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         },
         Case {
             name: "fold first occurrence fires",
-            zone: Berlin,
+            zone: Zone::Berlin,
             cron: "30 2 * * *",
             policy: Skip,
             cadence: 60,
@@ -197,7 +219,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         // wall-clock 02:30 must not fire the already-consumed daily schedule.
         Case {
             name: "fold second occurrence does not duplicate",
-            zone: Berlin,
+            zone: Zone::Berlin,
             cron: "30 2 * * *",
             policy: Skip,
             cadence: 60,
@@ -206,21 +228,22 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
             fire: None,
         },
         Case {
-            // Croner's backward search resolves a fixed wall time in the gap
-            // to the last real minute before it. Guard that real slot and its
-            // consumption rather than constructing a nonexistent local time.
-            name: "fixed spring gap resolves to a real preceding minute",
-            zone: Berlin,
+            // A fixed wall time inside the spring gap runs at the first real
+            // instant after it (03:00 CEST), as classic cron does, and the
+            // forward projection below names the same slot. Guard that real
+            // slot and its consumption rather than a nonexistent local time.
+            name: "fixed spring gap resolves to the first real minute after it",
+            zone: Zone::Berlin,
             cron: "30 2 * * *",
             policy: CatchUpOnce,
             cadence: 60,
             lower: "2025-03-29T01:30:00Z",
             now: "2025-03-30T01:30:45Z",
-            fire: Some(("2025-03-30T00:59:00Z", true)),
+            fire: Some(("2025-03-30T01:00:00Z", true)),
         },
         Case {
             name: "spring gap crosses directly to the next real slot",
-            zone: Berlin,
+            zone: Zone::Berlin,
             cron: "*/30 * * * *",
             policy: CatchUpOnce,
             cadence: 60,
@@ -230,7 +253,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         },
         Case {
             name: "consumed spring boundary cannot invent a gap slot",
-            zone: Berlin,
+            zone: Zone::Berlin,
             cron: "*/30 * * * *",
             policy: CatchUpOnce,
             cadence: 60,
@@ -240,7 +263,7 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         },
         Case {
             name: "day after spring gap fires",
-            zone: Berlin,
+            zone: Zone::Berlin,
             cron: "30 2 * * *",
             policy: Skip,
             cadence: 60,
@@ -250,66 +273,260 @@ fn due_decisions_respect_dst_cadence_and_collapse_downtime() {
         },
     ];
     for case in cases {
-        let cron = parse_cron(case.cron).unwrap();
-        let lower = at(case.lower).with_timezone(&case.zone);
-        let now = at(case.now).with_timezone(&case.zone);
-        let actual = due_decision_with_grace(
-            &cron,
-            case.policy,
-            &lower,
-            &now,
-            natural_slot_grace_for_cadence(case.cadence).unwrap(),
-        )
-        .unwrap_or_else(|error| panic!("{}: {error}", case.name));
-        let expected = if case.name == "real downtime skips" {
-            DueDecision::RecordSkip {
-                slot: at("2026-09-07T01:05:00Z").with_timezone(&case.zone),
-            }
-        } else {
-            case.fire
-                .map_or(DueDecision::NotDue, |(slot, is_catch_up)| {
-                    DueDecision::Fire {
-                        slot: at(slot).with_timezone(&case.zone),
-                        is_catch_up,
-                    }
-                })
+        let row = DueRow {
+            name: case.name,
+            cron: case.cron,
+            policy: case.policy,
+            cadence: case.cadence,
+            lower: case.lower,
+            now: case.now,
+            fire: case.fire,
+            skip: (case.name == "real downtime skips").then_some("2026-09-07T01:05:00Z"),
         };
-        assert_eq!(actual, expected, "{}", case.name);
-        let consumed = match &actual {
-            DueDecision::Fire { slot, .. } | DueDecision::RecordSkip { slot } => Some(*slot),
-            DueDecision::NotDue => None,
-        };
-        if let Some(slot) = consumed {
-            assert_eq!(
-                due_decision_with_grace(
-                    &cron,
-                    case.policy,
-                    &slot,
-                    &now,
-                    natural_slot_grace_for_cadence(case.cadence).unwrap()
-                )
-                .unwrap(),
-                DueDecision::NotDue,
-                "{}: consuming the latest slot must collapse every older slot",
-                case.name,
-            );
+        match case.zone {
+            Zone::Utc => row.check(&Utc),
+            Zone::Berlin => row.check(&Local),
         }
     }
     let cron = parse_cron("*/30 * * * *").unwrap();
     assert_eq!(
-        next_occurrence(&cron, &at("2025-03-30T00:59:45Z").with_timezone(&Berlin))
+        next_occurrence(&cron, &at("2025-03-30T00:59:45Z").with_timezone(&Local))
             .unwrap()
             .with_timezone(&Utc),
         at("2025-03-30T01:00:00Z"),
         "the spring projection jumps from 01:59 to the real 03:00 slot",
     );
+    assert_eq!(
+        next_occurrence(
+            &parse_cron("30 2 * * *").unwrap(),
+            &at("2025-03-30T00:30:45Z").with_timezone(&Local),
+        )
+        .unwrap()
+        .with_timezone(&Utc),
+        at("2025-03-30T01:00:00Z"),
+        "a fixed slot in the spring gap projects to the slot the due path fires",
+    );
+    // croner 4's strict default refuses the single-start step `a/n` that
+    // croner 3 accepted, so stored definitions using it must still parse
+    // [ORB-25521]; a step with no start stays refused as before.
+    let single_start = parse_cron("5/20 * * * *").expect("stored `a/n` steps still parse");
+    assert_eq!(
+        next_occurrence(
+            &single_start,
+            &at("2026-09-07T00:26:00Z").with_timezone(&Utc)
+        )
+        .unwrap(),
+        at("2026-09-07T00:45:00Z"),
+        "`5/20` steps from minute 5 to the field's end",
+    );
+    assert!(
+        parse_cron("/20 * * * *").is_err(),
+        "a startless step stays invalid"
+    );
     for slot in ["2025-10-26T00:30:00Z", "2025-10-26T01:30:00Z"] {
-        let slot = at(slot).with_timezone(&Berlin);
+        let slot = at(slot).with_timezone(&Local);
         assert_eq!(
             truncate_to_minute(slot + Duration::seconds(45)),
             slot,
             "fold slot retains its offset"
         );
+    }
+}
+
+#[test]
+fn cron_validation_rejects_startless_weekday_steps_and_keeps_supported_steps() {
+    if isolated("cron_validation_rejects_startless_weekday_steps_and_keeps_supported_steps") {
+        return;
+    }
+
+    let invalid_cron = "0 9 1 * +/2";
+    let auto_task_error = validate_schedule(&AutoTaskSchedule::cron(invalid_cron))
+        .expect_err("auto-task validation rejects a startless weekday step");
+    assert!(
+        matches!(auto_task_error, OrbitError::InvalidInput(ref message) if message.starts_with("invalid cron expression")),
+        "auto-task validation reports an invalid-cron error: {auto_task_error}"
+    );
+
+    let root = std::env::current_dir().unwrap().join(".orbit");
+    let routines_dir = root.join("routines");
+    std::fs::create_dir_all(&routines_dir).unwrap();
+    std::fs::write(
+        routines_dir.join("startless.yaml"),
+        format!(
+            "schemaVersion: 1\nname: startless\nenabled: true\ntrigger:\n  cron: '{invalid_cron}'\ntarget: job:fixture\n"
+        ),
+    )
+    .unwrap();
+    let collection = collect_routines(
+        &[RoutineSource {
+            workspace: "fixture".into(),
+            orbit_dir: root,
+        }],
+        &|_, _| RoutineCatalogLookup {
+            resolves: true,
+            error: None,
+        },
+    );
+    assert!(collection.routines.is_empty());
+    assert_eq!(
+        collection.errors.len(),
+        1,
+        "the invalid routine is rejected"
+    );
+    assert!(
+        collection.errors[0]
+            .message
+            .contains("invalid cron expression"),
+        "routine validation reports an invalid-cron error: {:?}",
+        collection.errors
+    );
+
+    for cron in [
+        "0 9 1 * +*/2",
+        "*/15 * * * *",
+        "0-30/5 * * * *",
+        "5/20 * * * *",
+    ] {
+        parse_cron(cron).unwrap_or_else(|error| panic!("valid cron '{cron}' is rejected: {error}"));
+        validate_schedule(&AutoTaskSchedule::cron(cron))
+            .unwrap_or_else(|error| panic!("valid auto-task cron '{cron}' is rejected: {error}"));
+    }
+}
+
+#[test]
+fn cron_misplaced_plus_never_suggests_illegal_correction() {
+    // A `+` is only legal at the very start of the whole weekday field. Any
+    // other `+` must not be "corrected" to a `+*/n` suggestion that croner
+    // still rejects; the error must name the illegal plus or offer a fix the
+    // public validator accepts. The valid weekday AND step beside a misplaced
+    // plus is the case that once slipped through: its suggestion fixes only
+    // the weekday step and leaves the other plus behind.
+    for cron in [
+        "+/2 * * * *",
+        "0 9 1 * 1,+/2",
+        "+/2 9 1 * +/3",
+        "+/2 * * * /3",
+        "0 9 1 * +/2,+/3",
+    ] {
+        let error = match parse_cron(cron) {
+            Ok(value) => panic!("misplaced plus '{cron}' is rejected, got {value:?}"),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+        if let Some(suggestion) = extract_wildcard_suggestion(&message) {
+            let item = extract_startless_item(&message)
+                .unwrap_or_else(|| panic!("suggestion without a step in: {message}"));
+            let fixed = cron.replacen(item, suggestion, 1);
+            parse_cron(&fixed).unwrap_or_else(|error| {
+                panic!("suggestion '{suggestion}' for '{cron}' still fails: {error}")
+            });
+        } else {
+            assert!(
+                message.contains("illegal character '+'")
+                    || message.contains("illegal character `+'"),
+                "misplaced plus '{cron}' names the illegal plus: {message}",
+            );
+        }
+        validate_schedule(&AutoTaskSchedule::cron(cron))
+            .expect_err("auto-task validation rejects a misplaced plus");
+    }
+
+    let error = match parse_cron("0 9 1 * +/2") {
+        Ok(value) => panic!("startless weekday AND step is rejected, got {value:?}"),
+        Err(error) => error,
+    };
+    assert!(
+        error.to_string().contains("'+*/2'"),
+        "weekday AND position still suggests '+*/2': {error}",
+    );
+    parse_cron("0 9 1 * +*/2")
+        .unwrap_or_else(|error| panic!("suggested weekday AND form is rejected: {error}"));
+}
+
+fn extract_startless_item(message: &str) -> Option<&str> {
+    let start = message.find("step '")? + "step '".len();
+    let end = message[start..].find('\'')?;
+    Some(&message[start..start + end])
+}
+
+fn extract_wildcard_suggestion(message: &str) -> Option<&str> {
+    let start = message.find("use '")? + "use '".len();
+    let end = message[start..].find('\'')?;
+    Some(&message[start..start + end])
+}
+
+/// Berlin's 2025 rule: CET (+01) with CEST (+02) from 02:00 on the last
+/// Sunday of March to 03:00 on the last Sunday of October.
+const BERLIN_POSIX_TZ: &str = "CET-1CEST,M3.5.0,M10.5.0/3";
+
+/// The DST rows mean nothing if the child's host zone silently fell back to
+/// UTC, so prove the zone first.
+fn assert_host_zone_is_berlin() {
+    for (instant, hours) in [("2025-01-15T12:00:00Z", 1), ("2025-07-15T12:00:00Z", 2)] {
+        assert_eq!(
+            at(instant).with_timezone(&Local).offset().local_minus_utc(),
+            hours * 3600,
+            "host-local zone must follow {BERLIN_POSIX_TZ} at {instant}",
+        );
+    }
+}
+
+/// One due-decision row evaluated in zone `Tz`, with every time given in UTC.
+struct DueRow {
+    name: &'static str,
+    cron: &'static str,
+    policy: MissedRunPolicy,
+    cadence: u64,
+    lower: &'static str,
+    now: &'static str,
+    fire: Option<(&'static str, bool)>,
+    skip: Option<&'static str>,
+}
+
+impl DueRow {
+    fn check<Tz: TimeZone>(&self, zone: &Tz) {
+        let cron = parse_cron(self.cron).unwrap();
+        let grace = natural_slot_grace_for_cadence(self.cadence).unwrap();
+        let lower = at(self.lower).with_timezone(zone);
+        let now = at(self.now).with_timezone(zone);
+        let actual = due_decision_with_grace(&cron, self.policy, &lower, &now, grace)
+            .unwrap_or_else(|error| panic!("{}: {error}", self.name));
+        let expected = match (self.skip, self.fire) {
+            (Some(slot), _) => DueDecision::RecordSkip { slot: at(slot) },
+            (None, Some((slot, is_catch_up))) => DueDecision::Fire {
+                slot: at(slot),
+                is_catch_up,
+            },
+            (None, None) => DueDecision::NotDue,
+        };
+        assert_eq!(in_utc(actual.clone()), expected, "{}", self.name);
+        let consumed = match actual {
+            DueDecision::Fire { slot, .. } | DueDecision::RecordSkip { slot } => Some(slot),
+            DueDecision::NotDue => None,
+        };
+        if let Some(slot) = consumed {
+            let again = due_decision_with_grace(&cron, self.policy, &slot, &now, grace).unwrap();
+            assert_eq!(
+                in_utc(again),
+                DueDecision::NotDue,
+                "{}: consuming the latest slot must collapse every older slot",
+                self.name,
+            );
+        }
+    }
+}
+
+/// A decision with its slot reported in UTC, as the stores record it.
+fn in_utc<Tz: TimeZone>(decision: DueDecision<Tz>) -> DueDecision<Utc> {
+    match decision {
+        DueDecision::NotDue => DueDecision::NotDue,
+        DueDecision::Fire { slot, is_catch_up } => DueDecision::Fire {
+            slot: slot.with_timezone(&Utc),
+            is_catch_up,
+        },
+        DueDecision::RecordSkip { slot } => DueDecision::RecordSkip {
+            slot: slot.with_timezone(&Utc),
+        },
     }
 }
 
@@ -642,6 +859,92 @@ fn scheduler_ticks_collapse_catch_up_and_wait_for_terminal_overlap() {
         );
         assert!(cursors.definitions["catchup"].pending.is_none());
     }
+}
+
+/// `name.yaml` beside `name.yml` were two definitions of one auto-task: the
+/// enabled alias fired on the cursor the disabled canonical file owns
+/// [ORB-25602]. Both are refused, by file name, and the rest still fire.
+#[test]
+fn two_files_defining_one_auto_task_name_are_both_refused() {
+    if isolated("two_files_defining_one_auto_task_name_are_both_refused") {
+        return;
+    }
+    let root = std::env::current_dir().unwrap().join(".orbit");
+    let dir = root.join("auto_tasks");
+    std::fs::create_dir_all(&dir).unwrap();
+    let body = |name: &str, enabled: bool| {
+        format!(
+            "schemaVersion: 1\nname: {name}\nenabled: {enabled}\nschedule:\n  every_minutes: 60\n\
+             dedupe: always\ntemplate:\n  title: {name} fixture\n"
+        )
+    };
+    std::fs::write(dir.join("twin.yaml"), body("twin", false)).unwrap();
+    std::fs::write(dir.join("twin.yml"), body("twin", true)).unwrap();
+    std::fs::write(dir.join("single.yaml"), body("single", true)).unwrap();
+    let host = AutoHost {
+        root,
+        minted: Cell::new(0),
+        skip_version: RefCell::new(None),
+        blocked: RefCell::new(None),
+    };
+
+    for (now, minted) in [("2026-10-01T00:00:00Z", 0), ("2026-10-01T01:00:00Z", 1)] {
+        let outcome =
+            run_auto_task_scheduler_at(&host, at(now), SchedulerOptions::default()).unwrap();
+        let reported = outcome
+            .reports
+            .iter()
+            .map(|report| (report.name.as_str(), report.action))
+            .collect::<Vec<_>>();
+        assert_eq!(reported.len(), 1, "{now}: {reported:?}");
+        assert_eq!(reported[0].0, "single", "{now}");
+        assert_eq!(host.minted.get(), minted, "{now}: only `single` mints");
+
+        let mut refused = outcome
+            .errors
+            .iter()
+            .map(|error| {
+                assert!(
+                    error.message.contains("twin.yaml") && error.message.contains("twin.yml"),
+                    "{}",
+                    error.message
+                );
+                error.path.as_ref().unwrap().file_name().unwrap().to_owned()
+            })
+            .collect::<Vec<_>>();
+        refused.sort();
+        assert_eq!(refused, ["twin.yaml", "twin.yml"], "{now}");
+    }
+    let cursors = orbit_store::compose::auto_task::load_cursor_state(
+        &orbit_store::compose::auto_task::cursor_state_path(&host.state_dir()),
+    )
+    .unwrap();
+    assert!(!cursors.definitions.contains_key("twin"));
+}
+
+/// A zero-limit walk returned `more: false` without looking, so a due missed
+/// slot read as an empty interval [ORB-25602].
+#[test]
+fn a_zero_limit_missed_slot_walk_still_reports_a_due_slot() {
+    let cron = parse_cron("* * * * *").unwrap();
+    let now = at("2026-10-01T12:00:00Z");
+    let lower = at("2026-10-01T10:00:00Z");
+    let grace = Duration::seconds(90);
+
+    let due = missed_slots_through(&cron, &lower, &now, &now, grace, true, 0).unwrap();
+    assert!(due.slots.is_empty());
+    assert!(due.more, "a past-grace slot after the lower bound is due");
+
+    let empty = missed_slots_through(&cron, &lower, &lower, &now, grace, true, 0).unwrap();
+    assert!(empty.slots.is_empty());
+    assert!(!empty.more, "an empty interval has no further slot");
+
+    let page = missed_slots_through(&cron, &lower, &now, &now, grace, true, 2).unwrap();
+    assert_eq!(
+        page.slots,
+        [at("2026-10-01T10:01:00Z"), at("2026-10-01T10:02:00Z")]
+    );
+    assert!(page.more);
 }
 
 struct CoverageHost {

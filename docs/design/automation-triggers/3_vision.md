@@ -1,8 +1,8 @@
 ---
 title: Automation Triggers — Vision
 owner: codex
-last_updated: 2026-10-29
-last_validated: 2026-10-29
+last_updated: 2026-11-16
+last_validated: 2026-11-16
 status: Draft
 feature: automation-triggers
 doc_role: vision
@@ -21,7 +21,7 @@ Delivery triggers ([ORB-11330]) and bounded state preparation ([ORB-11331]) are
 implemented. The `execution_failed` state trigger still parses, but its
 `task_triage_pipeline` target was retired. The remaining proposals and
 alternatives below are not a description of currently shipped behavior; the
-current contract is in [Design](./2_design.md) and [Operations](./5_operations.md).
+current contract is in [Design](./2_design.md) and [Operations](./references/operations.md).
 Astra owns unresolved design formulation; workers may implement approved,
 bounded semantics but must escalate product/architecture choices that materially
 change the contract.
@@ -32,10 +32,10 @@ change the contract.
    authorized before/after direct receipts. Unprovable associations remain
    explicit debt; history replay requires exact patch mapping and renewed provider
    proof. These contracts are implemented in [Design](./2_design.md#3-delivery-identity-and-captured-coverage)
-   and [Operations](./5_operations.md). Future provider adapters must meet the
+   and [Operations](./references/operations.md). Future provider adapters must meet the
    same evidence bar; arbitrary first-parent commits do not count as deliveries.
 2. **Operational bounds.** The evaluator's scan and admission bounds and recovery
-   retention behavior are documented in [Operations](./5_operations.md).
+   retention behavior are documented in [Operations](./references/operations.md).
    Thresholds, maximum waits and review/QA capacity remain operator tuning values
    to check against real delivery rates. A busy repository may need more capacity
    rather than larger invisible backlogs; these values are not permission to
@@ -43,19 +43,19 @@ change the contract.
 3. **Coverage acceptance.** V1 requires schema-v2 structured evidence bound to
    the frozen batch and assigned executor run; Core validates it and Store retains
    an immutable receipt. Process success and unstructured summary prose are
-   insufficient. The evidence contract is in [Operations](./5_operations.md#evidence-submission);
+   insufficient. The evidence contract is in [Operations](./references/operations.md#evidence-submission);
    new coverage classes need their own contract. Review meaning stays with the
    [review gate](../review-gate/2_design.md).
 4. **Pilot freshness.** Shipped preparation consumers fingerprint configured
    material task fields and optional source selectors or revisions. Full-revision
    invalidation is a selectable source-sensitivity policy, not the universal
    rule. Review `freshness.material_fields` and `source_sensitivity` when tuning
-   source churn; the current options are in [Operations](./5_operations.md#state-preparation-orb-11331).
+   source churn; the current options are in [Operations](./references/operations.md#state-preparation-orb-11331).
 5. **Debt disposition.** Delivery auto-task consumers have audited settings
    adoption, action reissue, history replay, explicit waiver and reset operations.
    These keep waived, failed and exhausted work distinct from accepted coverage;
    state-member consumers still use the restore-definition path. See
-   [Operations](./5_operations.md#inspection-and-recovery). Automatic expiry would
+   [Operations](./references/operations.md#inspection-and-recovery). Automatic expiry would
    weaken the no-lost-coverage contract.
 6. **State layout and recovery proof.** The v1 implementation uses Store consumer
    checkpoints, keyed action admission, generation fences and transactional
@@ -139,8 +139,8 @@ against its actual adapter contract during implementation.
 - [ORB-11315] — formulates shared triggers and leaves these decisions for review.
 - [ORB-11330] — implements delivery triggers; the remaining proposals above
   are not shipped behavior.
-- [ORB-11331] — implements bounded state preparation; the remaining
-  multi-member coordination proposals above are not shipped behavior.
+- [ORB-11331] — implements bounded state preparation; the broader
+  coordination proposals above are not shipped behavior.
 - [ORB-11333] — implements the before-PR review gate this vision defers to.
 - [ORB-11314] — proposes mode defaults and scoped automation.
 - [ORB-11316] — proposes review timing, repair limits and coverage meaning.

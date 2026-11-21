@@ -5,13 +5,18 @@
 # never fails: an unreadable answer, an API error, a selection error or an
 # unexpected shape means `full`.
 #
-#   docs      every changed path is Markdown outside crates/ and plugin/.
+#   docs      every changed path is Markdown outside crates/, plugin/ and
+#             every prefix FILE_READERS declares in ci-test-affected.py.
 #             Markdown under crates/ is compiled in (include_str! assets),
-#             plugin/ is the generated skill mirror, orbit-cli's tests read
-#             the configuration reference page, and scripts/test-*
-#             self-tests execute or digest RELEASING.md, npm/README.md and
-#             docs/dev/qa/path-leases-listener-sudo.md, so each is not a
-#             docs-only run. A push also requires a successful
+#             plugin/ is the generated skill mirror, and a Cargo test reads
+#             docs/design/auto-tasks/1_overview.md and the configuration
+#             reference page, so those prefixes are not a docs-only run.
+#             scripts/test-* self-tests execute or digest RELEASING.md,
+#             npm/README.md and docs/dev/qa/path-leases-listener-sudo.md, and
+#             ci-guardrails.sh selects its self-tests for docs/standards/*,
+#             AGENTS.md and CLAUDE.md (the vendored-standards guard); none of
+#             these are FILE_READERS entries, so each is not a docs-only run
+#             either. A push also requires a successful
 #             completed full check on BEFORE; a previous push may have been
 #             replaced while pending. That check is `Check / Clippy / Test`
 #             unless DOCS_BEFORE_CHECKS lists one GitHub check name per line.
@@ -46,20 +51,50 @@ scripts=$(cd "$(dirname "$0")" && pwd)
 
 api() { gh api "$@" 2>/dev/null; }
 
+# Prefixes a Cargo test reads. docs_only fails closed (not docs) when this
+# list cannot be loaded, so a broken import runs the build and test jobs.
+cargo_read_markdown_prefixes() {
+  python3 - "$scripts/ci-test-affected.py" <<'PY'
+import importlib.util
+import sys
+spec = importlib.util.spec_from_file_location("ci_test_affected", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+for prefix, _readers in module.FILE_READERS:
+    print(prefix.as_posix())
+PY
+}
+
 docs_only() {
-  local seen=0 path
+  local seen=0 path prefixes prefix
+  # A failed load is not docs: skipping tests on an unknown reader list would
+  # hide the Cargo-read Markdown this predicate exists to keep.
+  if ! prefixes=$(cargo_read_markdown_prefixes); then
+    return 1
+  fi
   while IFS= read -r path; do
     [ -n "$path" ] || continue
     seen=1
     case "$path" in
       crates/* | plugin/*) return 1 ;;
-      # Read by a Cargo test (FILE_READERS in ci-test-affected.py).
-      website/src/content/docs/reference/config.md) return 1 ;;
       # Executed by test-release-promotion.py; copied and digested by the
       # test-qa-full-sweep.py self-test (check_npm_package.py RUNTIME_FILES).
       # test-path-leases-listener-sudo.py executes the listener-sudo recipe.
-      RELEASING.md | npm/README.md | docs/dev/qa/path-leases-listener-sudo.md) return 1 ;;
-      *.md) ;;
+      # ci-guardrails.sh also runs its self-tests for docs/standards/*,
+      # AGENTS.md and CLAUDE.md (test_ci_gates_reject_modified_vendored_standards).
+      # These are not FILE_READERS entries.
+      RELEASING.md | npm/README.md | docs/dev/qa/path-leases-listener-sudo.md | \
+        docs/standards/* | AGENTS.md | CLAUDE.md) return 1 ;;
+      *.md)
+        # Exact file or any Markdown under a directory prefix. Derived from
+        # FILE_READERS so a new Cargo-read page cannot stay docs-only.
+        while IFS= read -r prefix; do
+          [ -n "$prefix" ] || continue
+          case "$path" in
+            "$prefix" | "$prefix"/*) return 1 ;;
+          esac
+        done <<<"$prefixes"
+        ;;
       *) return 1 ;;
     esac
   done
@@ -101,7 +136,7 @@ if [ "${EVENT:-}" = pull_request ]; then
     paths=$(jq -r '.[] | .filename, (.previous_filename // empty)' <<<"$pages" 2>/dev/null)
     if [ "$listed" = "$count" ] && docs_only <<<"$paths"; then
       mode=docs
-      reason="all $count changed paths are Markdown outside crates/ and plugin/"
+      reason="all $count changed paths are Markdown outside crates/, plugin/ and Cargo-read paths"
     elif [ "$listed" = "$count" ]; then
       # Cargo metadata of this checkout (the merge ref) gives the crate graph.
       # The runner's stable toolchain reads it; the pinned one is not needed.
@@ -158,7 +193,7 @@ elif [ "${EVENT:-}" = push ]; then
       if [ -v DOCS_BEFORE_CHECKS ]; then
         if docs_parent_checks_succeeded; then
           mode=docs
-          reason="every path pushed since tested commit $BEFORE is Markdown outside crates/ and plugin/, and every configured parent check succeeded"
+          reason="every path pushed since tested commit $BEFORE is Markdown outside crates/, plugin/ and Cargo-read paths, and every configured parent check succeeded"
         fi
       else
         before_passed=$(api "repos/$GH_REPO/commits/$BEFORE/check-runs?check_name=Check%20%2F%20Clippy%20%2F%20Test&filter=latest" |
@@ -168,7 +203,7 @@ elif [ "${EVENT:-}" = push ]; then
         # checks do not establish a safe base for a Markdown-only delta.
         if [[ "$before_passed" =~ ^[1-9][0-9]*$ ]]; then
           mode=docs
-          reason="every path pushed since tested commit $BEFORE is Markdown outside crates/ and plugin/"
+          reason="every path pushed since tested commit $BEFORE is Markdown outside crates/, plugin/ and Cargo-read paths"
         fi
       fi
     fi

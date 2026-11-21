@@ -12,7 +12,9 @@ use super::super::git::{git_command_success, git_output};
 use super::super::worktree::{checkout_holding_branch, ensure_clean_checkout};
 use super::intent::LandingView;
 use super::observe::{observe_or_stop, resolve_landing_ref};
-use super::record::{complete, completion_hold_stop, record, stop, stop_for_repair};
+use super::record::{
+    complete, complete_or_hold_stale_evidence, completion_hold_stop, record, stop, stop_for_repair,
+};
 use super::run::LandingPass;
 
 /// Owner-local delivery: no origin, no pull request, and a fast-forward of the
@@ -206,7 +208,7 @@ pub(super) fn land_already_landed<H: RuntimeHost + ?Sized>(
         "verified": "landing_ref_contains_covering_commit",
         "external_merge": false,
     });
-    complete(host, context, observed, &evidence)
+    complete_or_hold_stale_evidence(host, context, observed, &evidence)
 }
 
 /// A verified clean base completes without an external merge. The Core host
@@ -238,7 +240,7 @@ pub(super) fn land_no_diff<H: RuntimeHost + ?Sized>(
     if let Some(held) = completion_hold_stop(host, context, &ChangedPaths::NoDiff, run_id)? {
         return Err(held);
     }
-    complete(
+    complete_or_hold_stale_evidence(
         host,
         context,
         observed,

@@ -5,13 +5,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use chrono::{DateTime, Utc};
 use orbit_common::fs::selector::Selector;
 use orbit_types::task::{
-    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, Task, TaskHistoryEntry, TaskRelationType,
-    TaskStatus, is_no_diff_expected,
+    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, LegacyContextPruningRecord, Task,
+    TaskHistoryEntry, TaskRelationType, TaskStatus, is_no_diff_expected,
 };
 use serde_json::{Value, json};
 
 use crate::application::statistics::SplitMix64;
-use crate::application::task::{CONTEXT_FILES_PRUNED_EVENT, pruned_selectors_from_note};
 
 use super::correction::{self, Correction};
 use super::model::{self, Delivery, Draw, Item, Script};
@@ -41,6 +40,15 @@ pub(super) fn max_generated() -> usize {
     MAX_GENERATED
 }
 
+/// The tag a fix record carries when its repair ran inside its origin's own
+/// delivery (typically that origin's landing review) rather than as a
+/// separate delivery.
+pub(super) const DEFECT_RECORD_TAG: &str = "defect-record";
+
+/// The largest share of a pool's fix observations that may be gaps while its
+/// adjusted totals are still reported, under a `bounded_gap` qualifier.
+pub(super) const MAX_BOUNDED_GAP_SHARE: f64 = 0.10;
+
 /// Each arrival source class's donor indexes.
 pub(super) type ArrivalPools = BTreeMap<&'static str, Vec<usize>>;
 
@@ -68,8 +76,10 @@ pub(super) struct ForecastDonor {
 }
 
 /// Why a regression fix in the delivery lookback cannot be drawn. Each is
-/// real rework whose evidence is incomplete, so it withholds support from
-/// every pool its origins would have joined instead of being dropped.
+/// real rework whose evidence is incomplete, so it counts against every pool
+/// its origins would have joined instead of being dropped: that pool is
+/// withheld unless its gaps are bounded (see
+/// [`RegressionRework::history_bounded`]).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum FixGap {
     /// The fix completed without a measured delivery.
@@ -151,6 +161,11 @@ pub(super) struct RegressionRework {
     pub(super) gaps: Vec<HistoryGap>,
     /// Per item, the gaps relevant to the pool it samples.
     pub(super) pool_gaps: Vec<Vec<usize>>,
+    /// Per item, the distinct drawable fixes in the pool it samples.
+    pub(super) pool_fixes: Vec<usize>,
+    /// Defect-record fixes repaired inside their origin's measured delivery:
+    /// their spend is already in that origin's history sample.
+    pub(super) in_origin_review: usize,
     /// Fix links that are not regression samples, by reason.
     pub(super) excluded_links: BTreeMap<&'static str, usize>,
     pub(super) known_origins: BTreeMap<String, BTreeSet<String>>,
@@ -227,6 +242,16 @@ impl RegressionRework {
                     .collect()
             })
             .collect();
+        self.pool_fixes = self
+            .pools
+            .iter()
+            .map(|pool| {
+                pool.iter()
+                    .flat_map(|bundle| self.bundles[*bundle].fixes.iter().map(|fix| fix.donor))
+                    .collect::<BTreeSet<usize>>()
+                    .len()
+            })
+            .collect();
         for item in items {
             let Some(task) = tasks.get(&item.task_id) else {
                 continue;
@@ -298,11 +323,12 @@ impl RegressionRework {
                     }));
                 continue;
             }
-            let reason = if history
-                .iter()
-                .any(|delivery| delivery.task_id == fix.id.as_str())
-            {
+            let measured = |id: &str| history.iter().any(|delivery| delivery.task_id == id);
+            let reason = if measured(fix.id.as_str()) {
                 FixGap::FootprintUnrecoverable
+            } else if repaired_in_origin(fix, &origins, &measured) {
+                self.in_origin_review += 1;
+                continue;
             } else {
                 FixGap::UnmeasuredDelivery
             };
@@ -310,9 +336,56 @@ impl RegressionRework {
         }
     }
 
-    /// The item's pool is drawable and no unsupported fix belongs to it.
+    /// The item's pool is drawable and either no unsupported fix belongs to
+    /// it or its gaps are bounded.
     pub(super) fn history_supported(&self, index: usize) -> bool {
-        !self.pools[index].is_empty() && self.pool_gaps[index].is_empty()
+        !self.pools[index].is_empty()
+            && (self.pool_gaps[index].is_empty() || self.history_bounded(index))
+    }
+
+    /// The item's pool holds gaps, but has at least
+    /// [`model::MIN_CELL_SAMPLES`] bundles and at most
+    /// [`MAX_BOUNDED_GAP_SHARE`] of its fix observations are gaps, so its
+    /// adjusted totals are reported with a `bounded_gap` qualifier instead of
+    /// withheld. The gaps are disclosed, never counted as zero rework.
+    pub(super) fn history_bounded(&self, index: usize) -> bool {
+        let gaps = self.pool_gaps[index].len();
+        gaps > 0
+            && self.pools[index].len() >= model::MIN_CELL_SAMPLES
+            && gaps as f64 / (gaps + self.pool_fixes[index]) as f64 <= MAX_BOUNDED_GAP_SHARE
+    }
+
+    /// The bounded-gap qualifier over `members`' bounded pools: the distinct
+    /// gaps and drawable fixes in them, the gaps' share and reasons; null
+    /// when no member samples a bounded pool.
+    pub(super) fn member_bounded_gap(&self, members: &[usize]) -> Value {
+        let bounded: Vec<usize> = members
+            .iter()
+            .copied()
+            .filter(|index| self.history_bounded(*index))
+            .collect();
+        if bounded.is_empty() {
+            return Value::Null;
+        }
+        let gaps: BTreeSet<usize> = bounded
+            .iter()
+            .flat_map(|index| self.pool_gaps[*index].iter().copied())
+            .collect();
+        let fixes = bounded
+            .iter()
+            .flat_map(|index| self.pools[*index].iter())
+            .flat_map(|bundle| self.bundles[*bundle].fixes.iter().map(|fix| fix.donor))
+            .collect::<BTreeSet<usize>>()
+            .len();
+        let share = gaps.len() as f64 / (gaps.len() + fixes) as f64;
+        json!({
+            "tasks": bounded.len(),
+            "gaps": gaps.len(),
+            "drawn_fixes": fixes,
+            "gap_share": (share * 1000.0).round() / 1000.0,
+            "max_gap_share": MAX_BOUNDED_GAP_SHARE,
+            "by_reason": self.gap_counts(gaps.into_iter()),
+        })
     }
 
     /// Gaps relevant to any of `members`' pools, counted once by reason.
@@ -352,6 +425,8 @@ impl RegressionRework {
             "missing_fix_history": self.gaps.len(),
             "missing_by_reason": self.gap_counts(0..self.gaps.len()),
             "recovered_footprints": self.donors.iter().filter(|donor| donor.recovered).count(),
+            "recovered_in_origin_review": self.in_origin_review,
+            "max_bounded_gap_share": MAX_BOUNDED_GAP_SHARE,
             "excluded": {
                 "origin_absent": self.excluded_links.get("origin_absent").copied().unwrap_or(0),
                 "origin_not_completed": self.excluded_links.get("origin_not_completed").copied().unwrap_or(0),
@@ -371,6 +446,21 @@ pub(super) struct ForecastGeneratedNode {
     pub(super) lag: f64,
     pub(super) script: Script,
     pub(super) hours: f64,
+}
+
+/// An unmeasured `defect-record` fix whose repair ran inside its origin's
+/// delivery: every simulating origin is the task it was spawned from, and
+/// each has a measured delivery, so the repair's spend is already inside
+/// that origin's history sample. Drawing it again would double count it.
+fn repaired_in_origin(fix: &Task, origins: &[String], measured: &dyn Fn(&str) -> bool) -> bool {
+    fix.tags.iter().any(|tag| tag == DEFECT_RECORD_TAG)
+        && origins.iter().all(|origin| {
+            measured(origin)
+                && fix.relations.iter().any(|link| {
+                    link.relation_type == TaskRelationType::SpawnedFrom
+                        && link.target.as_str() == origin.as_str()
+                })
+        })
 }
 
 fn usable_footprint(task: &Task) -> bool {
@@ -403,18 +493,18 @@ pub(super) fn recorded_fix_footprint(
 ) -> Vec<String> {
     let mut selectors: Vec<String> = Vec::new();
     for entry in history {
-        let recorded = if entry.event == CONTEXT_FILES_PRUNED_EVENT {
-            entry
-                .note
-                .as_deref()
-                .map(pruned_selectors_from_note)
-                .unwrap_or_default()
-        } else if entry.event == CONTEXT_FILES_WIDENED_EVENT && entry.at <= done {
-            ContextFilesWidening::from_entry(entry)
-                .map(|widening| widening.selectors)
-                .unwrap_or_default()
+        let recorded = if entry.event == CONTEXT_FILES_WIDENED_EVENT {
+            if entry.at <= done {
+                ContextFilesWidening::from_entry(entry)
+                    .map(|widening| widening.selectors)
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            }
         } else {
-            Vec::new()
+            LegacyContextPruningRecord::from_entry(entry)
+                .map(|record| record.selectors)
+                .unwrap_or_default()
         };
         for selector in recorded {
             if !selectors.contains(&selector) {

@@ -19,6 +19,19 @@
 .fc-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .fc-history { display: inline-flex; align-items: center; gap: 8px; }
 .fc-history .mx-select { min-height: 44px; }
+/* R39: the source line and its controls stay on one row. The row keeps its full
+   size while it fits; when its natural width outgrows it, fitForecastHeaderRow
+   adds `fc-header-compact`: the History label becomes the select's accessible name
+   (it already has one), and the source line truncates, its full text in its tooltip. The
+   select and Refresh keep their size so every History option stays legible. */
+.fc-header.fc-header-row { flex-wrap: nowrap; }
+.fc-header-row .fc-meta, .fc-header-row .fc-history .fc-control-label { white-space: nowrap; }
+.fc-header-row .fc-tools { flex-wrap: nowrap; }
+.fc-header-row .fc-refresh { flex: none; }
+.fc-header-compact .fc-history .fc-control-label {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%);
+}
+.fc-header-compact .fc-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .fc-control-label { color: var(--fg-dim); font: 13px var(--font-sans); }
 .fc-refresh {
   display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px;
@@ -63,6 +76,7 @@
   font: inherit; text-decoration: underline; cursor: pointer;
 }
 .fc-link:hover { color: var(--accent-hover); }
+.fc-bounded-gap { color: var(--warn-fg); }
 .fc-subset strong { color: var(--fg); font-weight: 500; }
 
 /* Tasks: one line per task; the evidence is behind each row's icon. Wide

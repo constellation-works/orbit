@@ -7,7 +7,8 @@
 //! checks; `add` and `update` have a guarded write mode with its own input
 //! contract and schema conditionals, and `update` refuses an implementation
 //! activity's `blocked` status before any field check. The operator review
-//! verbs refuse a managed run before any field check.
+//! and recovery verbs refuse a managed run before any field check, except a
+//! resident cycle's `repilot` and `requeue`, which its cycle guard decides.
 
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::OperationInput;
@@ -88,7 +89,7 @@ impl GuardedModes for TaskVerb {
                 managed_run_refusal(ctx, "managed runs cannot request another task pilot")
             }
             TaskVerb::Requeue => {
-                managed_run_refusal(ctx, "managed runs cannot requeue blocked tasks")
+                managed_run_refusal(ctx, "managed agents cannot requeue blocked tasks")
             }
             TaskVerb::Show
             | TaskVerb::List
@@ -171,6 +172,7 @@ impl GuardedModes for TaskVerb {
                         "artifacts_offset",
                         "model",
                     ],
+                    "omit `view` to use the default full task record",
                 )),
                 Ok(false) => (input.get("snapshot") == Some(&Value::Bool(true)))
                     .then(|| snapshot(ctx, input.clone())),
@@ -192,6 +194,7 @@ impl GuardedModes for TaskVerb {
                         "priority",
                         "model",
                     ],
+                    "omit `view` to use the default task listing",
                 )),
                 Err(error) => Some(Err(error)),
             },

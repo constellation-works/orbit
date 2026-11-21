@@ -5,7 +5,7 @@ tags: [operations, health, doctor, dashboard, routines]
 paths: ["crates/orbit-cmd/src/doctor/mod.rs", "crates/orbit-core/src/application/job/run/reconcile.rs"]
 related_features: [orbit-core, activity-job, routines]
 related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986, ORB-11791, ORB-12109, ORB-12223, ORB-12244, ORB-12968]
-last_validated: 2026-11-14
+last_validated: 2026-11-19
 ---
 
 # Check Orbit Health
@@ -17,6 +17,20 @@ database recovery, or upgrade.
 
 Without repair flags, `orbit doctor` diagnoses workspace and host infrastructure, definition
 artifacts, routed provider CLIs and usage limits, MCP configuration, and the clock unit.
+A bare `orbit doctor` only observes: it does not reconcile stale job runs on open, so an
+orphaned run is reported by `job-runs` and left as it was found. It opens the workspace
+write-free: it never creates or migrates the store database or the task registry, and it
+upgrades no workspace layout, before it audits. A workspace whose stores were never created
+(`orbit init` and `orbit workspace init` do not create them), or whose stores exist but fail the
+open because a supported store still owes a writable migration, such as a ledger older than the
+binary, reports a `runtime` error row naming the setup step (run any ordinary command such as
+`orbit task list` once, then rerun `orbit doctor`); doctor leaves the stores as it found them. A
+store this binary cannot read, such as a registry schema newer than it supports, is not
+migratable that way: doctor fails with the store's own error, which says to upgrade the selected
+Orbit executable. A workspace whose job definitions are not
+installed yet reports `pull-protocol` and `pull-gates` as `skipped` and names `orbit init`.
+Only the `--fix-*` repairs, `--remove-graph`, and `doctor admission-receipts --compact` open the
+writable runtime.
 An `info` row is a fact about the setup, neither a pass nor a problem; like `ok`, it is
 left out of the findings section. Individual probes
 normally report a row on failure; runtime/store startup failures can prevent a report.
@@ -27,27 +41,27 @@ SQLite `PRAGMA quick_check`; it reads the entire store and can take much longer 
 | Check | What it reports | Status and next step |
 |---|---|---|
 | `config` | Effective global + workspace configuration | `ok` when valid; `warning` for ignored crew properties or lanes pointing at disabled crews (possibly several rows); `error` for selection/parse failures. Correct the named config field. |
-| `retired-config-keys` | Retired or deprecated registry keys still set in the global or workspace `config.toml` | `ok` when none are set; one `warning` per key, naming the key and the file that sets it. `orbit doctor --fix-retired-config-keys` backs up that file and removes the keys while migrating translated review values within the same layer. A legacy after-landing policy requires manual migration before any config write. A file that cannot be read is a `warning` and names the path. |
+| `retired-config-keys` | Retired or deprecated registry keys still set in the global or workspace `config.toml` | `ok` when none are set; one `warning` per key, naming the key and the file that sets it. `orbit doctor --fix-retired-config-keys` backs up that file and removes the keys while migrating translated review values within the same layer. A deprecated boolean `machine.worker_containment` is rewritten in place and its key kept. A legacy after-landing policy requires manual migration before any config write. A file that cannot be read is a `warning` and names the path. |
 | `retired-scripts` | A script manifest from a retired routine still in `.orbit/resources/scripts/` (today `ux_rules_runner.yaml`, recognised by its entry naming the routine's deleted `step.mjs` adapter) | `ok` when none remain; one `warning` per manifest, naming the file and whether its missing entry refuses jobs that reference the script. Delete the named manifest, then run `orbit script revoke <name>`. Doctor never deletes it. |
 | `database` | Store DB readability and schema-ledger version versus this binary; `--deep` adds `PRAGMA quick_check` | `ok` when readability and version match (and integrity passes with `--deep`); `warning` for an older schema or unreadable ledger; `error` for open/integrity failure or a newer schema. Follow the diagnostic; newer schemas need a newer binary. |
 | `disk-space` | Free space on the volume holding the local `.orbit` | `warning` below 1 GiB or 5%, or when the probe fails; `error` below 256 MiB or 1%. Free space on that volume. |
-| `search-index` | Lexical index chunk count and indexed-task count versus stored-task count | `ok` when task counts agree, including an empty workspace; `warning` on a count mismatch or read failure. A mismatch names `orbit search reindex`; this check does not inspect embeddings or prove freshness when counts agree. |
+| `search-index` | Lexical index chunk count and indexed-task count compared with the local tasks that `orbit search reindex` uses, including bundles stored on a replica | `ok` when task counts agree, including an empty workspace. A mismatch warns and recommends `orbit search reindex`. A read failure also warns. Matching counts establish coverage by count only. |
 | `stale-locks` | Immediate `*.lock` files in the workspace-local `state_dir` whose recorded holder PID is dead | `ok` with the number scanned when none are stale; otherwise `warning` with holder details and `orbit doctor --fix-stale-locks`. No recursive scan of task, learning, or ADR trees. |
 | `job-runs` | Orphaned `pending` or `running` runs with no live worker process | `warning` for orphans or inspection failures; otherwise `ok`. Follow the named run's resume/cancel guidance; see [stuck runs](./stuck-job-runs.md). |
 | `build-budget` | Running local and pull drains whose effective concurrency exceeds this checkout's host build slots | `ok` when no running drain exceeds the slots; `warning` for an excess or an inspection error. Set `ORBIT_BUILD_SLOTS` or edit the named `~/.orbit/cache/build-budget/slots` file, or lower `orbit run` concurrency. The concurrency warning applies when this checkout ships the build-budget wrapper; unreadable settings still warn. See [build budget](./build-budget.md). |
-| `pull-protocol` | The latest follower pull drain's typed protocol skew, including a failed terminal drain | `warning` when its request fingerprint differs from the owner's or inspection fails; otherwise `ok`. Deploy matching owner/follower builds, restart long-lived processes and start a new drain. A newer healthy window supersedes the warning. |
-| `pull-gates` | The latest follower pull drain's owner `workflow.required_validation_commands` and `review.baseline_commands`, recorded from the owner probe at submission, versus this replica's | `skipped` when no pull drain has run here; `warning` when either list differs (naming each list on both sides), the owner reported none (an older build) or inspection fails; otherwise `ok`. Claimed leaves already validate against the gates each claim captures, so copy the owner's values into this replica's `.orbit/config.toml` and start a new drain ([distributed drain](./distributed-drain.md)). |
+| `pull-protocol` | The latest follower pull drain's typed protocol skew, including a failed terminal drain | `skipped` when the pull drain job is not installed, so there is no pull history to inspect (run `orbit init`); `warning` when its request fingerprint differs from the owner's or inspection fails; otherwise `ok`, including a checkout that has the job and has never pulled. Deploy matching owner/follower builds, restart long-lived processes and start a new drain. A newer healthy window supersedes the warning. |
+| `pull-gates` | The latest follower pull drain's owner `workflow.required_validation_commands` and `review.baseline_commands`, recorded from the owner probe at submission, versus this replica's | `skipped` when the pull drain job is not installed, so no pull drain has run here (run `orbit init`); `warning` when either list differs (naming each list on both sides), the owner reported none (an older build) or inspection fails; otherwise `ok`. Claimed leaves already validate against the gates each claim captures, so copy the owner's values into this replica's `.orbit/config.toml` and start a new drain ([distributed drain](./distributed-drain.md)). |
 | `pull-settlements` | Replica leaf outcomes recorded locally but not delivered to the owner, including count and oldest age | `warning` while delivery is owed or inspection fails; otherwise `ok`, including workspaces that never pulled. Once the owner is reachable, `orbit run auto --stop` flushes pending delivery ([distributed drain](./distributed-drain.md#claim-inspection-and-manual-recovery)). |
 | `hosts` | Registered remote hosts, their reachability and version/protocol compatibility, plus missing entries for owners of local replica checkouts | `skipped` without a local machine identity; `error` for an invalid/conflicting registry, a remote identity mismatch, or incompatible/unknown version or protocol on a host this machine pulls from; `warning` for unreachable or other mismatched hosts, missing replica owners, or a legacy registry. Otherwise `ok`, including when no remote hosts are registered. Follow the diagnostic; `orbit host list` shows live state. |
 | `task-reservations` | Active reservations whose owner run or terminal task association proves inactivity | `warning` for conclusively stale reservations or inspection failure; otherwise `ok`. `orbit doctor --fix-stale-task-locks` rechecks before releasing; see below. |
-| `task-relations` | Relation/dependency targets in canonical task bundles that resolve to no registered task and so block a task-index rebuild (task reads then serve from a bundle scan) | `warning` for dangling targets or audit failure, naming each edge's source, relation type and target and marking edges the generated index no longer holds; otherwise `ok`. Drop the edge through `orbit.task.update` `relations` or restore the target; reads repair the index without a restart. |
+| `task-relations` | Relation/dependency targets in canonical task bundles that resolve to no registered task and so block a task-index rebuild (task reads then serve from a bundle scan) | `warning` for dangling targets or an audit failure, naming each edge's source, relation type and target and marking edges the generated index no longer holds; otherwise `ok`. The registry is opened read-only and the report never creates or migrates it. A pre-ledger registry at schema version 5 that already has task action keys is readable, so the audit runs. A missing registry, a ledger version older than this binary, or another pre-ledger shape (schema version 5 without task action keys, or a recognized version 6) is an audit failure: the reported error includes its own setup guidance (a missing registry says any writable Orbit command creates it; an older or legacy registry says to open it once from writable storage, then retry the observation), followed by the generic remediation to resolve the reported audit error and rerun `orbit doctor`. A pre-ledger schema newer than version 6 is refused: the audit message names an upgrade, and the report still does not write the registry. Drop the edge through `orbit.task.update` `relations` or restore the target; reads repair the index without a restart. |
 | `infra-blocked-tasks` | Tasks blocked by a missing provider launcher, distinguishing launchers that now resolve from ones still missing | `warning` for either group or classification failure; otherwise `ok`. Install a still-missing launcher, then use `orbit task recheck-blocked --confirm` to requeue cleared infrastructure blocks. |
 | `blocked-task-recovery` | Final-recovery backstop: pending, human-intervened, too-old, unattributed, and decided block episodes | `skipped` for claimed workers, replicas, or empty `workflow.purpose_crews.final_recovery`; `warning` on inspection failure or tasks still blocked after final recovery; otherwise `ok` (pending recovery alone does not warn). Read each named task's `final_recovery` comment before a manual decision. |
 | `automation-consumers` | Stalled/wedged delivery consumers and enabled definitions with an unresolvable branch or an owner this host cannot serve | `warning` for findings or inspection failure; otherwise `ok`. Follow the row's recover/reset, branch, ownership, or disable guidance; disabled definitions do not trigger branch/ownership findings. |
 | `review` | Before-PR and after-landing review switches, sources, crew/minutes, and next batch due | `error` if inspection fails or enabled review cannot run here: incompatible local ship route, missing crew, or an unhealthy after-landing consumer (missing, wrong owner, stalled, wedged, held, unresolved branch/crew, or remote-tracking lag beyond its wait budget). Otherwise `ok`, including disabled review. Fix the named review configuration/consumer; this probe does not fetch. |
 | `forge-remote` | Whether a workspace registered for PR delivery has a Git remote naming a network host (`git remote -v`, after `insteadOf` rewriting) | `skipped` when the workspace is not registered for PR delivery; `warning` when no remote names a network host, naming the remotes. Admission refuses such PR deliveries before any run starts. Run `orbit workspace ship-mode local`, add a remote on the forge host, or tag one task `delivery:task_local_pipeline`; otherwise `ok`. Any network host counts, since GitHub Enterprise hosts and SSH aliases are known only to `gh` and `ssh`. |
 | `host-shutdown` | Scheduled host shutdown/reboot, with mode and time (Linux logind's `/run/systemd/shutdown/scheduled`) | `warning` while a schedule is inside the fixed 180-minute hold and holds unattended admissions; `ok` when there is no schedule or it is further away (the row still names the time). Admissions resume once the schedule is beyond the horizon or clears; see [scheduled shutdown](./distributed-drain.md#scheduled-host-shutdown-or-reboot). |
-| `env-pass` | Operator-added `execution.env.pass` names, and crew `[crews.<name>] env` sources, this process's environment does not hold (unset or empty); names only, never values. The built-in defaults are not reported | `warning` naming each unset variable, and each crew with its unset source (drains exclude that crew and its activities are refused); otherwise `ok`. Agents inherit the launching shell's environment, so start drains from a login shell or export the variable in the service's environment, or drop the name from `execution.env.pass`. Drain and ship starts (CLI, MCP and dashboard) and `run job` report the same warning at start and record it on the run. |
+| `env-pass` | Operator-added `execution.env.pass` names that neither the evaluating process's environment nor a non-empty `~/.orbit/clock.env` value supplies (unset or empty); names only, never values. A name `clock.env` supplies counts as held for clock-started runs even when the evaluating process (a service or MCP process for `orbit attention`, which never loads `clock.env`) does not hold it. Crew `[crews.<name>] env` sources get no `clock.env` exception in this row: they are judged against the evaluating process's environment, and the managed-service check counts `clock.env` only for the sweep service. The built-in defaults are not reported, nor are the credential variables of a provider named in `execution.env.login_auth` (a declaration that the provider authenticates through its CLI login; no credential is read) | `warning` naming each still-unset variable, and each crew with its unset source (drains exclude that crew and its activities are refused); otherwise `ok`. Both outcomes name the judged environment (evaluating process, plus `clock.env` for `pass` names). Agents inherit the launching shell's environment, so start drains from a login shell or export the variable in the service's environment, put clock-needed names in `clock.env` (mode 600), or drop the name from `execution.env.pass`. Manual drain and ship starts (CLI, MCP and dashboard) and `run job` judge only their own launching environment and do not read `clock.env`. They report the same warning at start and record it on the run, so a name `clock.env` supplies can be `ok` here and still warn there. Timer-started runs read `clock.env` and do not warn for those names. |
 | `claude-worker-token` | macOS only, when a routed crew uses `claude`: the workspace's effective `execution.env.pass` names `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`), and, with the sweep clock installed, `~/.orbit/clock.env` holds one that the same `pass` names. A `clock.env` holding only a name the `pass` omits warns as a mismatch. A routed Claude crew whose `env` maps its own credential needs neither; the row checks that `clock.env` holds its source instead. Names only, never values | `warning` naming what is missing; `skipped` off macOS or with no routed Claude crew; otherwise `ok`. Without the token `claude` falls back to the Claude Desktop login, which the Desktop revokes mid-run, and Orbit refuses such activities; a drain started without the token excludes the Claude crews from its window rather than claim them. Add the name to `pass` and to `clock.env` (mode 600); see the orbit-setup macOS reference. |
 | `validation-env` | Required-validation PATH source, login-shell probe mode/fallback, `python3`/`git`/`make` locations and shadowing, and any of `python3`/`git`/`make`/`cargo` that implementer and reviewer agent sessions resolve to a different executable | `skipped` when `workflow.required_validation_commands` is empty; `warning` for probe/preflight/fallback, shadowing or agent-session resolution concerns; otherwise `ok`. Correct shell startup or `workflow.validation_env` as advised. A listed missing tool alone does not change the status, and this row does not execute validation commands. |
 | `mid-run-steering` | The resolved `workflow.mid_run_steering.enabled` and `max_rounds` ([mid-run steering](../CONFIG.md#workflowmid_run_steering--operator-comments-after-dispatch)) | Always `ok`; the row reports the values, including the default off. Enable steering with `orbit config set workflow.mid_run_steering.enabled true`. |
@@ -59,6 +73,7 @@ SQLite `PRAGMA quick_check`; it reads the entire store and can take much longer 
 | `unresolved-task-bundles` | Directories missing `task.yaml` that still hold bundle content (`events.jsonl`, `artifacts/`, …) | `warning` for retained unresolved data or scan failure; otherwise `ok`. Restore `task.yaml` or move the directory aside; reindex will not delete it. |
 | `artifacts-skills`, `artifacts-jobs`, `artifacts-activities`, `artifacts-auto-tasks`, `artifacts-routines` | One row per definition kind: missing shipped defaults, stale, forked, deprecated, residual, or faulty catalog content; the skills row also inspects provider discovery links. An auto-task file that differs from its bundled default only in operator settings is `stale` (`orbit workspace sync` moves the settings into the settings table); one with body edits is `forked`, naming the differing fields, and is preserved | `skipped` for no files/findings, `ok` for healthy content, `error` only for an unloadable/missing shipped default, `warning` for other findings. Each finding names its remedy; use `orbit workspace sync` for shipped-default convergence and the scoped repair/manual edit when advised. |
 | `workspace-convergence` | Every workspace registered on this host (the checkouts `orbit workspace sync --all` converges): a read-only `--check` of each against the defaults this binary ships, however many workspaces the host has | `ok` when all match; `warning` naming each workspace with pending managed-artifact changes (or one it cannot inspect); `skipped` with no host identity or no workspace data directory. Run `orbit workspace sync --all` on this host. |
+| `standing-drain` | The workspace's drain intent (`off`, `on`, or `paused` with who and when; see [standing drain](./distributed-drain.md#drain-intent-standing-drain-phase-1)) and, over the last 7 UTC days, the hours with no admission window while `backlog` or `proposed` work existed, its task-hours, and one figure per day | `skipped` on a replica checkout (the owner reports it); `warning` when the intent (for example, a row this binary cannot read) or the measure cannot be read; otherwise `ok`. Informational: nothing acts on it. |
 | `artifacts` | Fallback when the definition-artifact inspection itself fails | One `warning` replaces the per-kind rows. Resolve the runtime/store error and rerun doctor. |
 | `state-directory-permissions` | Unix group/world write bits on Orbit-owned state directories | `warning` for writable directories (`orbit doctor --fix-state-directory-permissions`); `error` for resolution/inspection failure; otherwise `ok`. `skipped` on non-Unix platforms. See scan and repair scope below. |
 | `git-protection` | The Linux/macOS sandbox's Git metadata scan on the registered checkout: symlinks, special files and hard links in `.git`, `objects/` excepted for Git's own `tmp_obj_*`, `tmp_pack_*` and `tmp_idx_*` names linked only inside the store | `skipped` on other platforms; `warning` naming the refused entry and the fix (delete a leftover temporary file, run `git fsck`) or the inspection failure; otherwise `ok`. A drain on a host with an OS-sandboxed executor runs the same scan before it is submitted and is refused with that message. |
@@ -123,7 +138,7 @@ Do not run a repair merely to collect health evidence.
 | `fix-stale-artifacts` | `ok`, number of deprecated Orbit-written artifacts retired |
 | `fix-orphan-task-stores` | `ok`, empty/populated partition and deleted bundle counts; requires `--confirm` |
 | `fix-automation-pins` | `ok`, reclaimed owned attempt pins and the in-flight, live-run, legacy and foreign-owner pins retained; `warning` when ownership was refused while owned pins exist or a pin could not be deleted (see [below](#release-leaked-automation-attempt-pins)) |
-| `fix-retired-config-keys` | `ok`, the retired and deprecated keys removed, their translated values written under the replacement keys in the same layer, and the original backup written beside each edited `config.toml`. Explicit modern values win. A run that finds none writes nothing; any legacy after-landing policy refuses before either config is changed or backed up |
+| `fix-retired-config-keys` | `ok`, the retired and deprecated keys removed, their translated values written under the replacement keys in the same layer (a deprecated boolean `machine.worker_containment` is rewritten in place and kept), and the original backup written beside each edited `config.toml`. Explicit modern values win. A run that finds none writes nothing; any legacy after-landing policy refuses before either config is changed or backed up |
 
 For an after-landing refusal, choose the intended consumer state with
 `orbit auto-task toggle delivery-code-review on` or `off`, set `review.timing`
@@ -144,10 +159,53 @@ $ orbit doctor --format table
 
 The command exits nonzero only when at least one check is `ERROR`; warnings and skips exit
 zero. `--json` emits an array of objects with `check`, `status`, `message`, `remediation`, and `duration_ms`
-fields; statuses are lowercase and `remediation` is `null` for healthy/skipped rows. Human
-output prints the same guidance as an `Action:` line and includes elapsed seconds on rows
-that take more than one second. Durations include unsuccessful and skipped probes; multiple
-rows emitted by a single probe share its duration, so row durations are not additive.
+fields; statuses are lowercase and `remediation` is nullable: a string when the row carries
+guidance, otherwise `null`. Healthy rows normally have `null`, but a skipped row can carry a
+string too. For example, a workspace without the pull-drain job reports `pull-protocol` and
+`pull-gates` as `skipped` with a remediation that names `orbit init`. In the full report, the array starts with the `resource-throttle` info row, whose `duration_ms` is `0`.
+Repair rows requested on the same invocation follow it, in the order the command runs them, and
+appear only when repair flags are passed. Then come the workspace probe rows, followed by the
+report probe rows, which begin with host-level checks such as `build-budget`. The full report's
+JSON array keeps this order, which differs from the table's. Human-readable rows are sorted by
+severity (`ERROR`, then `warning`, `ok`, `info` and `skipped`, the labels the table prints),
+retaining report order within each severity. Human output prints the same guidance as an
+`Action:` line and includes elapsed seconds on rows that take more than one second.
+
+A plain `orbit doctor`, with or without `--json`, has one degraded exception to that full
+report. If a misplaced global `[plugin_enablement]` table in the host config stops the runtime
+from opening, the command reads that table from the config file instead of failing with the
+bootstrap error. It then reports exactly two error rows, in this order: `plugin-enablement`,
+with the table's location and remediation, and `runtime`, whose message says no other check ran
+and carries the bootstrap error. In `--json`, the output is a two-element array with no
+`resource-throttle` row, no repair rows and no probe rows, and the command exits 1. On this
+path, `--check` can name only `plugin-enablement` or `runtime`. Repair flags and focused
+subcommands never take this path; they fail with the bootstrap error. Consumers should match
+rows by `check` name rather than by position.
+
+Each probe runs once per invocation, and its `duration_ms` is that invocation's wall time.
+A probe that emits several rows copies that one duration onto each row. For example, a
+`retired-config-keys` probe that finds two unknown keys produces two rows that both carry
+its duration. Row durations therefore repeat the same measurement and are not additive:
+summing them overcounts, including in serial mode. Durations include unsuccessful and
+skipped probes. When the host reports more than one available CPU, the CLI runs read-only
+probes on up to eight threads, dispatching the slow probes first. The calling thread is one
+of those threads and starts up to seven scan workers beside it. With one available CPU, or
+when the CPU-count query fails, it runs probes serially in report order, still invoking each
+probe once. Describe wall time per distinct probe invocation in both modes: in serial mode,
+elapsed time tracks the sum of those invocation durations plus command overhead. In parallel
+mode the invocations overlap, so elapsed time is at least the longest single probe duration
+and, apart from command overhead, at most the sum of the invocation durations.
+
+On a thread-limited host the operating system can refuse some or all of those scan workers.
+The command does not fail or fall back to report-order dispatch: the calling thread and any
+workers that did start share the same slow-first queue, so every probe still runs exactly
+once. With fewer successful spawns, fewer invocations overlap and elapsed time moves toward
+the sum of the invocation durations. When every spawn is refused, the calling thread runs
+the whole queue alone, one probe after another in slow-first order, so elapsed time tracks
+that sum plus command overhead, as in serial mode. In every case the rows are emitted in
+report order, not in the order the probes ran, so output order alone does not show which
+dispatch mode or how many threads a run used.
+
 Lock files flagged by `stale-locks`
 include holder diagnostics. Run `orbit doctor --fix-stale-locks` to clear a dead holder's
 record after acquiring the advisory lock and rechecking the holder. The repair preserves
@@ -398,7 +456,7 @@ repository is known not to need them. The row is a warning when ownership was re
 owned pins exist or a pin could not be deleted.
 
 Graph is retired under the "Retire and delete Orbit's code-graph subsystem" decision ([ORB-10491]) and is not inspected by ordinary health checks. To remove
-leftover state explicitly, run `orbit doctor --remove-graph`. This deletes only the current
+leftover state explicitly, run `orbit doctor --remove-graph`. That flag is a writable repair and opens the writable runtime, the same way the `--fix-*` repairs do. It deletes only the current
 worktree's `.orbit/graph` and the shared workspace's `.orbit/knowledge/graph`, and only when
 each path stays inside its resolved root. An intermediate symlink is not followed: a missing
 target is left alone, and a target that exists is reported and preserved, including files

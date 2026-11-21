@@ -249,4 +249,15 @@ impl CiJobLogAnswer {
             read_throttle: CiLogReadThrottle::decode(response.get("read_throttle").cloned()),
         }
     }
+
+    /// The provider's throttle beside an unreadable fallback, when it named
+    /// one. A throttle that could not be read is not wait evidence.
+    pub(in crate::executor::automation::vcs) fn known_fallback_throttle(
+        &self,
+    ) -> Option<&ProviderReadThrottle> {
+        match &self.read_throttle {
+            CiLogReadThrottle::Known(throttle) => Some(throttle),
+            CiLogReadThrottle::Absent | CiLogReadThrottle::Unreadable(_) => None,
+        }
+    }
 }

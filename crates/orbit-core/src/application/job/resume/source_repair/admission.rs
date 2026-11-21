@@ -45,6 +45,33 @@ pub(super) fn refuse(message: impl Into<String>) -> OrbitError {
     OrbitError::JobValidation(format!("source repair refused: {}", message.into()))
 }
 
+/// A refusal that waits on an operator decision (discard the candidate or
+/// select an explicit source). Reports exactly as the [`refuse`] text it
+/// carries; only [`hold_operator_source_repair_refusal`] classifies it.
+/// Integrity and authority refusals use [`refuse`] and stay failures.
+pub(super) fn refuse_operator_decision(message: impl Into<String>) -> OrbitError {
+    OrbitError::SourceRepairOperatorDecisionRefused {
+        message: format!("source repair refused: {}", message.into()),
+    }
+}
+
+/// Hold an operator-decision source-repair refusal without changing its text.
+///
+/// Only `owner_published_candidate` applies this. Shared helpers keep the
+/// refusal reporting as a job-validation error, so requeue, explicit source
+/// repair, handoff and completion stay failures.
+pub(super) fn hold_operator_source_repair_refusal(error: OrbitError) -> OrbitError {
+    match error {
+        OrbitError::SourceRepairOperatorDecisionRefused { message } => {
+            OrbitError::DeliveryRefused {
+                refusal: workflow::DeliveryRefusal::SourceRepairDecision,
+                message,
+            }
+        }
+        other => other,
+    }
+}
+
 /// A refusal caused by the run's state; reports exactly as the [`refuse`] text
 /// it carries, with the reason attached for callers to classify.
 pub(super) fn refuse_run_state(
@@ -698,7 +725,7 @@ impl OrbitRuntime {
             || run_owner_liveness(&source) != RunOwnerLiveness::Stopped
         {
             return Err(refuse(
-                "requires a conclusively stopped successful, cancelled or final-recovery-settled failed task PR pipeline",
+                "requires a conclusively stopped task PR pipeline in held, successful, cancelled or final-recovery-settled failed state",
             ));
         }
         if source
@@ -728,6 +755,17 @@ impl OrbitRuntime {
             return Err(refuse(
                 "successful publication is superseded by a newer task binding",
             ));
+        }
+        if source.state == JobRunState::Held {
+            if task.job_run_id.as_deref() != Some(source_id) {
+                return Err(refuse("held publication is no longer the task's bound run"));
+            }
+            self.require_current_requeue_source(
+                &task,
+                &source,
+                source_id,
+                &self.get_task_history(task_id)?,
+            )?;
         }
         // A generic resume leaves the task bound to the checkpoint owner, so a
         // resumed source is that owner's continuation. Any other binding,
@@ -759,12 +797,16 @@ impl OrbitRuntime {
                     task.status,
                     TaskStatus::InProgress | TaskStatus::Blocked | TaskStatus::Backlog
                 ))
-            && !(source.state == JobRunState::Failed
-                && matches!(task.status, TaskStatus::Backlog | TaskStatus::Blocked)
-                && self.repairable_published_source(&source, task_id)?)
+            && !matches!(
+                (source.state, task.status),
+                (
+                    JobRunState::Failed,
+                    TaskStatus::Backlog | TaskStatus::Blocked
+                ) | (JobRunState::Held, TaskStatus::Blocked)
+            )
         {
             return Err(refuse(
-                "task must remain in review (or this reserved admission's in-progress stage)",
+                "task status does not allow source repair for this run; inspect the task's current status and run binding",
             ));
         }
         let (source, task, mut binding) = self.observe_published_source(source, task, true)?;

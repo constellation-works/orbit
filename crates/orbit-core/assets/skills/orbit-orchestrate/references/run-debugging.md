@@ -62,7 +62,8 @@ Without `-s`, the object holds:
 - `recovery_attempts` (`state` is `unavailable`, `not_attempted` or
   `recorded`; see [Inspect recovery evidence](#inspect-recovery-evidence-before-falling-back-to-audit-files)),
   `tag_instructions`, `pull_claim` and `crew_window`, `claimed_leaves`,
-  `refused_settlements`, `catalog_layers` (each job or activity reference and
+  `refused_settlements`, `pull_occupancy` (`occupied` and `reviewing`),
+  `pull_breaker` (null while closed), `catalog_layers` (each job or activity reference and
   the layer that resolved it), `drain_summary`, `waiting_on_lock_holders`.
   Drain, claim and window fields are null or empty for a run that is not a
   pull drain or claimed leaf.
@@ -83,6 +84,14 @@ Without `-s`, the object holds:
 - `script_executions`: every script-step attempt, refusals included.
 - `worker_resource_limit`: present only when the resource watchdog recorded
   evidence for the run.
+
+The full MCP `orbit.workflow.run.show` / `orbit.workflow.run.observe` and
+HTTP run detail carry the same six pull-drain fields: `pull_claim`,
+`claimed_leaves`, `refused_settlements`, `crew_window`, `pull_occupancy` and
+`pull_breaker`. Unreadable sections are logged and remain null or empty;
+unknown occupancy is null. Recorded-only HTTP detail keeps the stored
+breaker but leaves the live sections empty. The bounded MCP view keeps its
+existing smaller profile.
 
 With `-s STEP --json` the object is `{"run_id", "job_id", "step",
 "step_output"}`. `step` holds the step's record fields and `step_output` its
@@ -168,11 +177,197 @@ An implementer response refused only for its shape (such as a bare file name in
 line) names the field, and no recovery event follows when the correction works. A
 response still malformed after it fails with the original refusal.
 
+An implementer that declares a task-level stop has two equivalent shapes:
+`blocker: {kind, evidence}` on a successful envelope (the preferred shape), and
+a `status: "failed"` envelope (exit 0) whose `error.code` names the stop and
+whose `error.message` gives non-empty evidence. The code names a stop when it is
+exactly `unresolved_policy_decision` or contains blocker, blocked, contradiction
+or unavailable as a whole word split on `_ . : -` (for example,
+`validation_blocker` or `live_fixture_unavailable`). The step boundary normalizes the
+second shape into the first: the step fails with the `[task_blocked_by_agent]`
+marker and `kind=<error.code>`, retry, step recovery and final recovery are
+skipped, the failure activity receives `error_code=task_blocked_by_agent`, the
+candidate is preserved uncommitted, and the run ends `held`, not `failed`.
+Codes Orbit already reserves — the typed holds (`owner_route_unavailable`,
+`owner_signoff_required`, `footprint_unavailable`), the provider classes,
+`validation_environment`/`validation_route_unavailable`, `transient_failure`,
+`stalled`, and `implementation_incomplete` (its continuation path) — keep
+their existing outcomes and are never re-read as a blocker kind. A malformed
+envelope (no well-formed `error.code`/`error.message`) is not a blocker and
+keeps its ordinary failure.
+
 Keep `error_code` and `error_message` from the run itself as the original
 workflow failure. A recovery attempt is secondary evidence: `succeeded` does
 not rewrite that original failure, and a failed `authorization`, `decision`,
 preparation, `dispatch`, or `activity` attempt explains why recovery did not
 complete.
+
+### Upgrade-refused agent steps
+
+An Orbit upgrade can refuse an agent's own `orbit` commands while a step runs. A
+command inside an Orbit-managed activity never starts or waits on a generation
+switch, so while an upgrade holds admission the command fails at once with
+`[upgrade_pending]`, and the agent is expected to report a blocker. A blocker
+whose kind names that refusal is classified as an upgrade refusal: its words
+include `upgrade` with `admission`, `pending` or `quiesce`, or `generation` with
+`switch` (for example `upgrade_pending`, `upgrade_admission_refused` or
+`orbit.generation_switch_pending`). This applies to any agent step, reviewers
+included, and step recovery can declare the same blocker. A malformed blocker (no
+well-formed kind, or empty evidence) is an ordinary result, not a stop.
+
+Recognise the outcome in `orbit run show <run_id> --json`:
+
+- On an owner run, `run.state` is `failed`. It is not `held`, which is the
+  `task_blocked_by_agent` stop, and not `interrupted`, which is the
+  `upgrade_quiesce` pause.
+- Match the refusal on its failure text, not on an error code. The text starts
+  `[upgrade_pending] kind=<kind>` on its first line, and the agent's evidence
+  follows on the lines after it. `run.error_message` carries that text, and so does
+  the `error_message` of the failing `steps` entry.
+- `steps_source` says where the top-level `steps` came from. A run whose record
+  holds only the job-level failure, the usual v2 case, reads `audit` when its audit
+  trail has step entries: those are rebuilt from the audit trail, so their
+  `error_code` is always null. Find the failing step's marker in `error_message`
+  instead. When the audit trail has no step entries, the record's own job-level
+  entries are shown and `steps_source` reads `record`. A `record` source keeps each
+  entry's stored `error_code`, which may also be null.
+- On an audit-sourced step, `error_code` and `agent_response_json` are always null.
+  `exit_code` is filled only when that step's checkpoint in the run's pipeline state
+  is a command result, so an earlier command step in the same run can carry its exit
+  code while the refused agent step keeps it null. `duration_ms` is computed from
+  `started_at` and `finished_at` when the audit recorded both. For an unfinished step
+  of a terminal run, `state` takes the run's terminal state and `outcome` reads
+  `interrupted`; a finished step with no recorded outcome reads `finished`. `outcome`
+  is null only for an unfinished step of a run that is not terminal, whose `state`
+  then reads `running`. `started_at`, `finished_at` and `lock_wait_ms` are null when
+  the audit recorded no value. `error_diagnostic` is the audit's structured value when
+  it recorded one. When it did not, and `error_message` carries a legacy
+  worktree-integrity message (the text `worktree integrity violation`, a backticked
+  failure code, then a JSON object), `error_diagnostic` is that parsed object,
+  redacted. Otherwise it is null. A legacy message also replaces `error_message` with
+  a readable message for its code and reason, even when the structured value is
+  present.
+- Fields that may be null: `run.error_code` is `upgrade_pending` only when the run
+  record kept that code, and is otherwise null. `root_cause` is null because the
+  owner run failed on its own.
+- The run is not reported as `upgrade_paused`, so `--failures` and the reliability
+  counts treat it as a failure.
+
+What happens to the step and the task:
+
+- The step is not retried. Neither step recovery nor final recovery runs, and the
+  candidate is kept.
+- A claimed leaf releases its claim as `transient`, with the candidate on the
+  release. A claimed PR leaf that already published its head reuses it, and an
+  unchanged published head needs no extra ref; a tip past it, or an unpublished
+  tip, is first pushed to a durable ref. An ordinary `upgrade_pending` refusal
+  carries neither `provider_limit` nor `owner_busy`, so the owner counts it
+  against the task's **2-in-24h release budget**:
+  - Within budget (fewer than 2 prior budgeted releases in 24h): the claim ends in
+    phase `revoked` (`last_event` `claim_released`), the task returns to the
+    owner's `backlog`, and its next claim resumes the kept candidate under the
+    placement rule below. The leaf's crew sits out the rest of that drain's
+    window.
+  - Budget exhausted (3rd+ budgeted release within 24h): the owner fails the
+    claim and moves the task to `blocked` instead of `backlog`, still keeping any
+    committed candidate in `claim_candidate_kept`. Identify this state on the owner
+    via `orbit task show <task-id>` (`orbit.task.show`) and
+    `orbit run settlements --json`: `status` is `blocked`; task history has a
+    `claim_release_budget_exhausted` event whose `note` starts
+    `release budget exhausted (2 in 24h): …`; a system comment starting
+    `Blocked: follower drains released this claim … times within 24h for failures
+    that were not the candidate's, and it failed again.` lists every counted
+    release's timestamp, failure class and reason; and on the settlement/claim,
+    `phase` is `failed` and `last_event` is `claim_release_budget_exhausted`
+    (`release.budget_exhausted: true` on the stored claim record). No next claim
+    can start until an operator returns the task to `backlog`.
+- An owner `task_pr_pipeline` run spends no claim release budget and never sets
+  the task to `blocked`: it commits what the agent left, pushes it to its durable
+  ref, `refs/orbit/candidates/<task-id>/<run-id>`, on `origin`, and opens no pull
+  request. Run finalization returns the task to the backlog with the history event
+  `upgrade_pending_requeued`.
+- That push can be refused. The hold still succeeds and the candidate stays on
+  the holding host. The evidence depends on who held it:
+  - Owner run: the task's `candidate_held` history entry. A host-local candidate
+    has no `durable_ref` in its `decision`, `carry_failure` holds the push
+    diagnostic, and the note reads `host-local: …`. The `## Orbit upgrade`
+    comment says the same in words, and names the holding machine when the host
+    has an identity. A pushed candidate instead reads `durable at …` and carries
+    `durable_ref`.
+  - Claimed leaf: the owner's `claim_candidate_kept` history entry, written when
+    the release settles. It has no `candidate_held` entry and no `## Orbit
+    upgrade` comment, so their absence does not mean the candidate is missing.
+    Its note reads `durable at <ref>` when pushed; names the pull request with
+    neither `durable at` nor `only on` when the leaf's published head was reused;
+    and reads `only on <machine> (pushing it failed: <diagnostic>)` when the
+    carry was rejected. A claimed PR leaf stopped before its normal commit step (the
+    pipeline commits before it prepares or synchronizes the branch) has one of three
+    outcomes. The leaf's `claim_candidate_carry` failure-hook output tells them apart;
+    owner history does not, because only the first writes an entry:
+    - Preservable edits (uncommitted changes in its worktree): `carry: durable` (or
+      `failed` when the push was rejected) with `partial: true`. The head is a
+      `Partial implementation candidate [<task-id>]` commit, carrying an
+      `Orbit-Partial-Candidate-Run: <run-id>` trailer; it moves no branch, index or
+      file. The note reads `durable at` or `only on` (the placement), then
+      `stopped at <step>`.
+    - Refused edits (a protected or non-regular path, or unmerged changes): no
+      partial commit is made, so the edits are not preserved. The hook reports
+      `carry: failed` with a `reason` and no branch or head. Three refusals apply,
+      and the `reason` names which one stopped it. Unmerged edits give `task
+      worktree '<path>' has unresolved merge conflicts`, and that check runs before
+      the path checks. An untracked protected path (`??` in `git status`) is refused
+      first, whatever its file type, while the candidate paths are listed: the reason
+      contains `task delivery refused protected untracked paths: […]`. Staging that
+      path removes it from that listing, so the next refusal applies instead. Other
+      protected or non-regular paths (staged or modified, or irregular) give
+      `partial candidate refused protected or non-regular paths: […]`. All three
+      refusals report no branch or head and write no `claim_candidate_kept` entry.
+      The reason also reaches the owner in the claim's release failure.
+    - No edits: `carry: none` with the reason `the leaf left no uncommitted
+      candidate`, and no branch or head.
+    - Refused and empty snapshots give the release no head to keep, and no
+      synchronized or prepared head exists yet, so neither writes a
+      `claim_candidate_kept` entry. Read the carry output, not the absence of
+      history. A kept entry from a pre-commit stop always names a `Partial
+      implementation candidate` head.
+    - A claimed-local leaf (`task_claimed_local_pipeline`) has no pre-commit hook
+      and keeps a candidate only from its own commit, so a stop before that commit
+      records no entry.
+- Placement decides where the next run can resume it:
+  - Durable: a run or claim on any host resumes the candidate from `origin`,
+    once the upgrade settles.
+  - Host-local: only a run on the holding host resumes it, and only while that
+    host's repository still has the commit. A claim on any other host is offered
+    no candidate (`not_durable`) and implements the task afresh. Pushing the
+    commit to `origin` by hand does not change this, because placement reads the
+    durable ref recorded in the history entry.
+- Owner requeues (`upgrade_pending_requeued`) and in-budget claimed releases
+  (`claim_released`) never set the task to `blocked`, so an operator does not move
+  them back as they must after a `task_blocked_by_agent` stop — check that the
+  upgrade has settled and that the next run or claim picks the candidate up. Only
+  a claimed release that exhausts the 2-in-24h release budget sets the task to
+  `blocked` (`claim_release_budget_exhausted`, claim `phase: failed`);
+  after confirming the upgrade has settled, an operator must move that task back
+  to `backlog` before a next claim can start. For a host-local candidate, expect a
+  resume only on the holding host; anywhere else the next run starts afresh.
+
+Three outcomes can look alike. The state and the code tell them apart:
+
+- `task_blocked_by_agent` ([above](#inspect-recovery-evidence-before-falling-back-to-audit-files)):
+  the run is `held`, and the task is blocked until an operator moves it back.
+- `upgrade_quiesce` ([Check Parent And Child Runs](#check-parent-and-child-runs)):
+  a worker yields at a step boundary, its checkpoint is kept, and the run is
+  `interrupted`. The clock resumes it once the generation settles.
+- `upgrade_pending` (this section): the step stops mid-run, the run is `failed`,
+  and the task returns to the backlog without an operator action on owner runs
+  (`upgrade_pending_requeued`) and in-budget claimed releases (`claim_released`),
+  or moves to `blocked` (`claim_release_budget_exhausted`) once a claimed release
+  exhausts its 2-in-24h budget.
+
+To avoid stopping a step at all, let long agent steps finish before the installed
+`orbit` is replaced, or install while no drain is live. A running step keeps going
+after the binary is replaced, and while the upgrade holds admission its `orbit`
+commands are refused.
 
 ### Tell a working agent from an abandoned wrapper
 
@@ -449,6 +644,10 @@ alone does not establish a code defect or an abandoned run.
      landing poll, not an instruction to restart it.
    - `ci_base_suspect`: `base`, `head`, `check`, `signature`, `run_id`, `job_id`,
      `run_attempt`, `pr_number`, `event`, `started_at`, `completed_at`, `reason`.
+   - `ci_base_suspect_reclassified`: `head`, `check`, `signature`, `from`
+     (`base-suspect`), `to` (`candidate`), `base_run_id`, `base_sha`,
+     `base_tip`, `pr_number`. Base observation ended with the base proven
+     green, so the landing requeued the candidate instead of holding it.
    - `ci_check_rerun`: `head`, `run_id`, `pr_number`, `event`, and `jobs[]`
      containing `check`, `classification`, `signature`, `job_id`,
      `run_attempt`, `started_at` and `completed_at` from the earlier attempt.
@@ -491,7 +690,7 @@ alone does not establish a code defect or an abandoned run.
 |---|---|
 | **Inherited** | The same emitted signature fails on the accepted base, or a moved base tip passes the same workflow/job. Untouched-file failures need the base-suspect procedure below unless matching base failure evidence establishes inheritance. Landing updates the PR branch onto the current base when admitted, then reads checks again; a still-red or unproven base waits without a repair agent. |
 | **Transient** | Emitted logs show runner or network failure. Landing reruns failed jobs within `workflow.ci_infrastructure_retry.max_attempts` (default 3), backing off exponentially from `workflow.ci_infrastructure_retry.backoff_seconds` (default 60). Exhaustion records a transient-class hold with the attempt count; no code repair runs. A set in which every failed job's provider-reported failed step matches `workflow.ci_infrastructure_retry.handoff_steps` (a dependency-handoff step, such as awaiting or downloading another job's artifact) is transient from the step names alone, with no log read, so a truncated or unreadable log cannot make it unknown or inconclusive; one failed job in any other step leaves the set to per-job classification. |
-| **Base-suspect** | The log cites only repository files the candidate did not change and the base does not establish the same failure. Wait for a successful same-check push run on the accepted base ancestry; even a pass predating the PR failure only permits one unchanged-head PR rerun. A passing rerun clears it. Candidate attribution needs the same signature repeated on that rerun. A matching base failure remains inherited. |
+| **Base-suspect** | The log cites only repository files the candidate did not change and the base does not establish the same failure. Wait for a successful same-check push run on the accepted base ancestry; even a pass predating the PR failure only permits one unchanged-head PR rerun. A passing rerun clears it. Candidate attribution needs the same signature repeated on that rerun. A matching base failure remains inherited. When the handoff landing's `max_base_ci_cycles` observations end, a same-check pass on a base-branch push run at a commit containing the candidate's base, with no same-check failure there or on the landing tip, proves the base green: the failure is reclassified `candidate` (`ci_base_suspect_reclassified`) and takes the candidate requeue route. A missing pass, a red tip or an unreadable base keeps the `delivery_base_checks_pending` hold. |
 | **Candidate** | A real diagnostic and readable base evidence do not explain the failure, or the unchanged-head PR rerun repeats the base-suspect signature after a same-check base pass. When the candidate set has no cause evidence (no aggregate, no changed-file citation, and no transient, inherited, unknown or inconclusive job), an eligible set on a head with no prior rerun first gets one unchanged-head classification rerun. It spends the shared once-per-head reservation before sending; a repeat failure returns the task to the backlog with the candidate kept, subject to the landing repair budget. Other candidate failures take the same immediate requeue route. |
 | **Workflow failed before jobs** | A workflow run on the pinned head completed with a non-success conclusion, its complete job listing is empty, and a required context from that workflow remains absent. Completion stops waiting on that poll. If the candidate diff changes the workflow file, `--auto-fix` admits the ordinary candidate repair directly, with the workflow path, run, attempt and readable provider diagnosis; no classification rerun comes first. Without `--auto-fix`, completion stops in review with that failed-check evidence. If the candidate does not change the file, completion uses the existing single cumulative infrastructure rerun for the PR and holds if it fails again, spending no agent repair. A workflow with no jobs that is queued or running stays pending. An absent context never passes, and this evidence never authorizes a merge. Final recovery receives the candidate-owned classification and excludes `rerun_ci`; repair or requeue the candidate through its admitted lane. |
 | **Unknown** | One failed job's log could not be read, including a truncated log without a selected diagnostic. The job is named in the evidence; it does not void the class decided by readable jobs. If no readable job decides, landing stays unclassified and stops in review without spending recovery. A cancelled or timed-out job is transient from its conclusion even without a log. |
@@ -526,9 +725,16 @@ landing does not edit or rebase the candidate to bypass a check.
 
 The `landing_waiting_for_base` note makes that wait visible. At the landing
 deadline, an unresolved base wait stops in review with the reason `the base
-never recovered before the landing deadline`. Base-suspect observations also
-have `max_base_ci_cycles` (default 3) per unchanged head/check/signature;
-exhaustion stops in review naming the check, signature and missing evidence.
+never recovered before the landing deadline`. A hold at the landing deadline
+never reclassifies. Base-suspect observations also have `max_base_ci_cycles`
+(default 3) per unchanged head/check/signature. At exhaustion, a same-check pass
+on a base-branch push run at a commit containing the candidate's base, with no
+same-check failure there or on the landing tip, proves the base green: the
+failure is reclassified `candidate` (`ci_base_suspect_reclassified`) and takes
+the candidate requeue route, returning the task to the backlog. Without that
+proof (no pass, a red tip or an unreadable base), exhaustion holds the candidate
+in review as `delivery_base_checks_pending`, naming the check, signature and
+missing evidence.
 CI retry evidence that stays unreadable (plan authentication or log reads) for
 the same cycle count escalates too: a same-check base pass sends a flaky
 failure to candidate repair (or requeue once its repair is spent). Candidate failures keep their
@@ -774,7 +980,8 @@ the human-readable detail in `error_message` and the `held` outcome in
 ### Codes and next steps
 
 Resolve the named refusal before starting a new delivery attempt. Apart from
-`delivery_forge_observation_unavailable`, these holds do not enable a generic
+`delivery_forge_observation_unavailable` (when the task stays in review) and a local `review_budget_exhausted`
+(after an operator review reset), these holds do not enable a generic
 `orbit job resume`. Under an `--auto-fix` drain, a `review` task held on one of
 the codes marked *auto-fix pass* below is handed back to its completion step
 by a later drain pass (or the dashboard's **Fix PR**), at most 3 times per pull
@@ -785,7 +992,7 @@ its reason, and the next step is yours.
 | Code | Decision | Next step |
 |---|---|---|
 | `delivery_head_changed` | The pull request reports a head different from the one this run published. | Compare the pull-request head against the published candidate, then start a new delivery attempt on the current head. |
-| `delivery_evidence_stale` | Pinned delivery identity is missing or cannot be confirmed, or merge evidence is contradictory. | *Auto-fix pass:* the next pass hands it back and completion re-reads its pins. When the pass reports it spent, re-establish the pinned identity and confirm the merge evidence, then start a new delivery attempt. |
+| `delivery_evidence_stale` | Pinned delivery identity is missing or cannot be confirmed, or merge evidence is contradictory. An owner landing of an already-landed or no-diff delivery also holds here, with the stop recorded and the candidate kept in review, when the task's scope (requirements, selectors, relations or comments) changed after the evidence was captured (`already_landed_unverified: task scope changed at scope.<field>`); revalidate against the current task, then hand off again. | *Auto-fix pass:* the next pass hands it back and completion re-reads its pins. When the pass reports it spent, re-establish the pinned identity and confirm the merge evidence, then start a new delivery attempt. |
 | `delivery_repair_dispatched` | A repair was already admitted for the blocked head, including a check repair held before execution because recovery was absent, and an in-budget check repair whose recovery ran and did not repair the head. | If a repair is running, let it finish. If none ran because the job lacked `step_failure_recovery`, configure recovery for future heads; if it ran and failed, inspect the recovery attempt. Then repair and publish a new head and start a new delivery attempt. |
 | `delivery_pr_draft` | The pull request is still a draft. | Mark the pull request ready for review, then start a new delivery attempt. |
 | `delivery_pr_closed` | The pull request closed without merging. | Reopen the pull request or open a new one, then start a new delivery attempt. |
@@ -795,11 +1002,13 @@ its reason, and the next step is yours.
 | `delivery_base_checks_pending` | Failed checks are inherited from, or suspected to affect, the base; the base's own result comes before candidate recovery. | Wait for the base's own check result; do not run candidate recovery first. *Auto-fix pass:* the next pass hands it back to completion, which reads the base again. |
 | `delivery_completion_budget_expired` | The completion budget expired before completion could be confirmed; the last observed pull-request state was unmerged and the task stays in review. A hold does not cancel auto-merge, and another actor may have merged since, so the forge is authoritative. | *Auto-fix pass:* the next pass hands it back to completion with a fresh budget. Otherwise, or once the pass reports it spent, check the forge for the current pull-request state, then start a new delivery attempt. |
 | `delivery_check_evidence_inconclusive` | An auto-fix stop whose check evidence could not be read conclusively; no repair agent runs. | *Auto-fix pass:* the next `--auto-fix` drain pass hands it back to completion, which rereads the pull-request status. Do not dispatch a repair on that evidence. When the pass reports it spent, read the failed jobs yourself. |
-| `delivery_forge_observation_unavailable` | Read-only forge reads kept failing with a transport error before any completion mutation. Nothing changed on the forge and the task stays in review. | Run `orbit job resume <run_id>`: it reads the forge again and continues completion from its checkpoints. *Auto-fix pass:* an `--auto-fix` drain pass also hands it back. |
+| `delivery_forge_observation_unavailable` | Read-only forge reads kept failing with a transport error before any completion mutation (after retries, with no final recovery, past the completion budget, or after repair provenance), or final recovery successfully applied a current-policy requeue or parked the requeue for a human for the unchanged publication. When final recovery requeued, the task returned to `backlog`; when parked, it is `blocked` for a human; otherwise nothing changed on the forge and the task stays in `review`. | When the task is in `review`, run `orbit job resume <run_id>`: it reads the forge again and continues completion from its checkpoints (*Auto-fix pass:* an `--auto-fix` drain pass also hands it back). When the task was requeued to `backlog`, do not resume this held run; let the next delivery attempt run the requeued task (or completion repair readmits it). When the task was parked to `blocked`, inspect and unblock or requeue the task for a human. The task's recorded requeue/park disposition is the authoritative next step. |
 | `delivery_origin_unavailable` | The origin could not be reached while admitting backlog tasks; the run is held without changing those tasks. | Wait for the origin to recover; a later normal admission retries the work. A task already in progress follows ordinary run failure handling instead. |
 | `delivery_check_repair_activity_absent` | An in-budget auto-fix check repair was admitted, and the job has no `step_failure_recovery` to run it. No repair agent runs, but the admission remains in the per-PR ledger and spends one repair attempt. | Adding `step_failure_recovery` and retrying the same head holds again as `delivery_repair_dispatched`; it does not run the repair. Configure recovery for future heads, repair and publish a new head, then start a new delivery attempt. A new head can receive another repair only while the per-PR budget remains; exhausting it still fails the run. |
 | `delivery_check_runs_absent` | The head this run pushed reported no workflow run at all, and no run of any required check, for five minutes. A workflow run the forge already reports for that head, including one `queued`, `pending`, `waiting`, `requested` or `in_progress`, is checks still pending: completion keeps its normal budget and does not re-request checks or take this hold. With no workflow run, completion re-requests hosted checks once (recorded as `pr_checks_retrigger_requested` in the task history; on GitHub by closing and reopening the pull request, which keeps its head, branch and reviews), and holds if no required check run has started five minutes later. The head is unchanged, no repair is spent and the task stays in review. A later completion attempt on the same head holds again without re-triggering. Pending, queued, failed or skipped required checks never take this path. | *Auto-fix pass:* once the unchanged head reports a required check run, the next pass hands the task back to completion. Until then the pass lists it under this code and spends no hand-back. If no check run appears, confirm the forge runs workflows for the repository (Actions enabled, workflow triggers, outages), then start the required checks on that head by hand or push a new head. |
 | `delivery_landing_repair_requeue` | A required check was classified as caused by the candidate. The claim already ended. The task returned to the backlog with the candidate kept, or it is blocked once the landing repair budget is spent. The landing run is held and is not a failure. | The next run repairs that candidate. Do not resume this held run, and do not hand it back to completion. |
+| `review_budget_exhausted` | Review admission found the candidate already reviewed (`review_candidate_reviewed`) or its minutes spent (`review_minutes_exhausted`); the early minutes preflight holds the same way. The run is held, outside failure counts, without retry, recovery or a failure handoff. The ledger, task status and recovery text are preserved; no new review is reserved. | Follow the message's exact recovery command. For a local run, record `orbit task review-reset <task-id> --lineage '<exact-lineage-key>' --reason '<decision>'`, then resume, or start a fresh delivery run. For a claimed leaf, requeue the task on its owner for a fresh claim; do not reset or resume that leaf. |
+| `delivery_source_repair_decision` | `candidate_resume` refused a published candidate that an operator must either inspect as explicit source repair or discard. The held reasons are no unique requeue binding, a publication that predates the current binding, a retained local branch that moved, a source that is not an exact owner-local single-task execution, and a source that is live, discarded, changed, or lacks an applied requeue. The run is held, outside failure counts, without retry, recovery or a failure handoff. The refusal message is unchanged. The task status is unchanged: nothing requeues, discards, or resumes. Untrusted preservation, a missing operator reservation, a changed remote or pull-request identity, a missing local identity, and other authority refusals still fail the run. | Follow the message: inspect explicit source repair for the publishing run, or discard the candidate with `orbit task update <task-id> --status backlog --discard-candidate` so the next run implements fresh. Do not resume this held run. |
 | `owner_signoff_required` | The implementer stopped because recorded owner approval is still missing; no agent can record it. The run is held, the task is blocked with the declared message, and the candidate is committed on the run's branch. The handoff tries to carry it to a durable ref and names it in a system comment and `candidate_held` history entry. No PR was opened. If the push fails, the comment says the candidate is host-local; a run on another host cannot fetch it. | Record the approval on the task, move it back to `backlog` (or `in-progress`), and start a new delivery run. A successful push lets that run resume the candidate from any host. If the comment says host-local, recover or push the named head before routing the run to another host. Do not resume this held run. |
 
 ## Check Git State For Workflow Failures

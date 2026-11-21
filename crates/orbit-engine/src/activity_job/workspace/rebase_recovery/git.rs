@@ -9,7 +9,8 @@ use orbit_types::workflow::{COMPLETE_PR_STEP_ID, COMPLETE_REVIEWED_PR_STEP_ID, S
 
 use super::super::DispatchError;
 use super::super::fingerprint::{
-    GitWorktreeFingerprint, git_command_error, git_output_raw, git_stdout_bytes, nul_paths,
+    GitWorktreeFingerprint, git_command_error, git_is_ancestor, git_output_raw, git_stdout_bytes,
+    nul_paths,
 };
 use super::super::recovery::safe_relative_path;
 
@@ -126,7 +127,7 @@ pub(super) fn completion_recovery_base_ref(prepared: &Value) -> Option<String> {
 pub(super) fn stopped_head_on_pin(root: &Path, onto: &str) -> Result<bool, DispatchError> {
     Ok(
         !git_output_raw(root, &["symbolic-ref", "--quiet", "HEAD"])?.success
-            && git_output_raw(root, &["merge-base", "--is-ancestor", onto, "HEAD"])?.success,
+            && git_is_ancestor(root, onto, "HEAD")?,
     )
 }
 

@@ -291,11 +291,12 @@ impl OrbitRuntime {
         request: &orbit_types::workflow::PrBaseUpdateReservation,
     ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
         use orbit_types::workflow::{
-            PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission, decide_pr_base_update,
+            PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission, PrBaseUpdateRefusal,
+            decide_pr_base_update,
         };
         if self.worker_invocation().is_some() {
             return Ok(PrBaseUpdateAdmission::Refused(
-                "base updates require the owning host".into(),
+                PrBaseUpdateRefusal::RequiresOwningHost,
             ));
         }
         let primary = task_ids
@@ -347,12 +348,12 @@ impl OrbitRuntime {
         now_ms: u64,
     ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError> {
         use orbit_types::workflow::{
-            CI_RERUN_RESERVED_EVENT, CiRerunAdmission, decide_ci_rerun_with_policy,
+            CiRerunAdmission, CiRerunRefusal, decide_ci_rerun_with_policy,
         };
         self.ensure_coordination_task_write_permitted()?;
         if self.worker_invocation().is_some() {
             return Ok(CiRerunAdmission::Refused(
-                "CI retry requires the owning host".into(),
+                CiRerunRefusal::RequiresOwningHost,
             ));
         }
         if let Some(handoff_id) = handoff_id {
@@ -424,7 +425,7 @@ impl OrbitRuntime {
             .with_task_write_lock(primary, &mut || {
                 if self.get_task(primary)?.status.is_terminal() {
                     decision = Some(CiRerunAdmission::Refused(
-                        "CI retry owning task is terminal".into(),
+                        CiRerunRefusal::OwningTaskTerminal,
                     ));
                     return Ok(());
                 }
@@ -438,27 +439,20 @@ impl OrbitRuntime {
                     self.apply_task_automation_update(
                         primary,
                         TaskAutomationUpdate {
-                            append_history: vec![TaskHistoryEntry {
-                                at: chrono::DateTime::from_timestamp_millis(
-                                    i64::try_from(now_ms).map_err(|_| {
+                            append_history: vec![
+                                plan.reservation_entry(
+                                    chrono::DateTime::from_timestamp_millis(
+                                        i64::try_from(now_ms).map_err(|_| {
+                                            OrbitError::InvalidInput(
+                                                "invalid CI retry clock".into(),
+                                            )
+                                        })?,
+                                    )
+                                    .ok_or_else(|| {
                                         OrbitError::InvalidInput("invalid CI retry clock".into())
                                     })?,
-                                )
-                                .ok_or_else(|| {
-                                    OrbitError::InvalidInput("invalid CI retry clock".into())
-                                })?,
-                                by: "system".into(),
-                                event: CI_RERUN_RESERVED_EVENT.into(),
-                                note: Some(
-                                    serde_json::to_string(plan).map_err(|error| {
-                                        OrbitError::Execution(error.to_string())
-                                    })?,
                                 ),
-                                from_status: None,
-                                to_status: None,
-                                operation_id: None,
-                                decision: None,
-                            }],
+                            ],
                             ..Default::default()
                         },
                     )?;

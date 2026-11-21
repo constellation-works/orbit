@@ -118,6 +118,7 @@ pub fn routine_statuses_with_providers(
     load_errors.append(&mut collection.errors);
 
     let pauses = store.routine_pauses()?;
+    let breakers = store.routine_breakers()?;
     // One query each for every routine's cursor and fire history, instead of
     // two store reads per routine on the dashboard's poll path.
     let routine_names: Vec<String> = collection
@@ -218,6 +219,15 @@ pub fn routine_statuses_with_providers(
             cron_fires.first().cloned(),
             automation_fires.first().cloned(),
         );
+        let breaker = breakers.get(&routine.definition.name).cloned();
+        let (breaker_trial_phase, breaker_trial_expected_at) = breaker_trial_status(
+            breaker.as_ref(),
+            &routine,
+            &cron_fires,
+            &automation_fires,
+            next_due.as_deref(),
+            now_utc,
+        );
         let (recent_fires, failure_streak) = fire_history(cron_fires, automation_fires);
         statuses.push(RoutineStatus {
             routine,
@@ -228,6 +238,9 @@ pub fn routine_statuses_with_providers(
             last_fire,
             recent_fires,
             failure_streak,
+            breaker,
+            breaker_trial_phase,
+            breaker_trial_expected_at,
             automation,
         });
     }

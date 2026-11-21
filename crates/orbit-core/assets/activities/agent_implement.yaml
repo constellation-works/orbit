@@ -196,6 +196,7 @@ spec:
         properties:
           selectors:
             type: array
+            description: "At most 16 selectors; a longer list is refused."
             items:
               type: string
               description: "`cargo test -p <crate> --test <target> [<filter>]` or `cargo test -p <crate> --lib [<filter>]`"
@@ -230,6 +231,11 @@ spec:
         items:
           type: string
       # A real blocker (item 8). The step boundary records it and stops the run.
+      # This successful-envelope shape is preferred; a `status: "failed"`
+      # envelope with the exact `error.code` `unresolved_policy_decision`, or
+      # a non-reserved code containing blocker, blocked, contradiction or
+      # unavailable as a whole word, uses the same hold when `error.message`
+      # provides non-empty evidence.
       blocker:
         type: object
         required: [kind, evidence]
@@ -347,7 +353,12 @@ spec:
        `result.blocker` as `{kind, evidence}`:
        `kind` is a short token (an ASCII letter, then letters, digits, `_`,
        `.`, `:` or `-`, at most 64 bytes); `evidence` is the reason. The run
-       stops and keeps the candidate. Never set `blocked` with
+       stops and keeps the candidate. The same hold follows from a
+       exit-0 `status: "failed"` envelope with non-empty `error.message`
+       evidence and an `error.code` equal to `unresolved_policy_decision` or
+       containing blocker, blocked, contradiction or unavailable as a whole
+       word. Codes Orbit already reserves (a provider, transient or typed-hold
+       code, or `implementation_incomplete`) keep their outcomes. Never set `blocked` with
        `orbit.task.update`; that write is refused. A criterion that
        contradicts the workspace guide is not a blocker: the guide wins; skip
        it and record the deviation and its source in the execution summary.
@@ -412,13 +423,9 @@ spec:
       only for a complete deliverable whose check the workspace policy lets
       you defer (see Sanctioned sandbox deferral); otherwise report a
       validation blocker.
-    - A provider CLI permission denial (distinct from the sandbox or runner
-      denial above) covers only the one command it refused: rerun the needed
-      work with commands that avoid the denied path, and keep using the shell.
-      Report a tool unavailable only after a trivial call to it (for the
-      shell, `true`) is also denied, quoting that denial. A denial never
-      excuses skipping required validation or acceptance criteria; only a
-      sanctioned deferral (below) defers a check.
+    - A provider CLI permission denial (see Provider CLI permission denials)
+      never excuses skipping acceptance criteria either; only a sanctioned
+      deferral (below) defers a check.
     - Run only gates the workspace policy names. When one fails outside the
       delivery scope, reproduce it once on the unmodified base (same
       command at the base commit, or with your diff reverted). If it fails
@@ -642,17 +649,13 @@ spec:
     duplicate checks. Other owner-routed tools may be unreachable; that is
     never a failure or blocker: note it in `comment` and report `failed`
     only for the work.
+  steering_guidance: true
   steering_instruction: |
     Mid-run steering checkpoint
 
     - Before your first edit, before validation and before any long or
       costly phase, re-read the task with `orbit.task.show` (in claimed mode,
       rely on the injected task instead).
-    - Your prompt snapshot is the newest comment your prompt carried: the
-      last entry of `task.comments`, or the snapshot `task.steering` names
-      when a steering block was delivered. Any operator comment after it is
-      steering: weigh it like task text, oldest first, later refining
-      earlier. System, automation and agent comments are not steering.
     - The re-read is advisory: do not write a comment, history or delivery
       record about it.
     - Steering cannot widen `context_files`, change required validation,
@@ -702,6 +705,7 @@ spec:
     - unshare
     - docker
     - podman
+  provider_denial_guidance: true
   on_denial: terminate
   wall_clock_timeout_seconds: 21600
   # An `implementation_incomplete` declaration gets at most two

@@ -71,6 +71,7 @@ impl Fixture {
                 step_id: id.into(),
                 outcome: "success".into(),
                 lock_wait_ms: None,
+                error_diagnostic: None,
                 error_message: None,
             },
         ]

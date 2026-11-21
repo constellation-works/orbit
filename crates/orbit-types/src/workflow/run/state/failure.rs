@@ -1,5 +1,6 @@
 //! Failure markers and claim failure classification.
 
+use super::super::MUSE_MODEL_ACCESS_REFUSED_ERROR_CODE;
 use super::super::failure_classification_text;
 use serde::{Deserialize, Serialize};
 
@@ -188,12 +189,29 @@ pub const OWNER_SIGNOFF_REQUIRED_ERROR_CODE: &str = "owner_signoff_required";
 /// closes the code. A handoff that sees only the step message matches this.
 const OWNER_SIGNOFF_REQUIRED_DIAGNOSTIC_TOKEN: &str = "error.code=owner_signoff_required;";
 
+/// Token a step failure carries when a resumed published delivery's deferred
+/// footprint was still held by another task when its wait expired. The
+/// editor never started and the published candidate was not judged, so the
+/// run holds and the task returns to admission instead of failing.
+///
+/// Keyed on the typed code alone: the run-stopped refusal from the same wait
+/// shares the `footprint_unavailable:` message prefix but carries no code,
+/// and cancellation is never a hold.
+pub const FOOTPRINT_UNAVAILABLE_ERROR_CODE: &str = "footprint_unavailable";
+
+/// Whether a step failure is the wait-expired deferred-footprint refusal.
+/// Only the typed `error_code` decides; `message` is never read, so the
+/// run-stopped refusal that shares its prefix stays a failure.
+#[must_use]
+pub fn is_footprint_unavailable(error_code: Option<&str>, _message: Option<&str>) -> bool {
+    error_code == Some(FOOTPRINT_UNAVAILABLE_ERROR_CODE)
+}
+
 /// The typed code a step failure carries beside its message.
 ///
-/// Parsed once where a step failure is ingested — from the declared
-/// envelope's `error.code` or from an `OrbitError` — and recorded on the
-/// step record, so recovery and classification branch on the code instead
-/// of recovering it from message text. Serializes as its plain code
+/// Assigned at the step boundary from a provider outcome, declared
+/// envelope or `OrbitError`. The step record retains it for recovery and
+/// classification. Serializes as its plain code
 /// string, so persisted and wire shapes keep the code's existing form.
 /// New named codes join this enum as their markers are converted; an
 /// arbitrary agent-declared code is preserved verbatim by
@@ -206,6 +224,11 @@ pub enum StepFailureCode {
     /// Recorded owner approval is still missing
     /// ([`OWNER_SIGNOFF_REQUIRED_ERROR_CODE`]). The run holds.
     OwnerSignoffRequired,
+    /// A resumed published delivery's deferred footprint stayed held past
+    /// its wait ([`FOOTPRINT_UNAVAILABLE_ERROR_CODE`]). The run holds.
+    FootprintUnavailable,
+    /// Muse's failed terminal refused access to the invoked model.
+    MuseModelAccessRefused,
     /// Any other agent- or host-declared code, preserved as declared.
     Other(String),
 }
@@ -218,6 +241,8 @@ impl StepFailureCode {
         match code {
             OWNER_ROUTE_UNAVAILABLE_ERROR_CODE => Self::OwnerRouteUnavailable,
             OWNER_SIGNOFF_REQUIRED_ERROR_CODE => Self::OwnerSignoffRequired,
+            FOOTPRINT_UNAVAILABLE_ERROR_CODE => Self::FootprintUnavailable,
+            MUSE_MODEL_ACCESS_REFUSED_ERROR_CODE => Self::MuseModelAccessRefused,
             other => Self::Other(other.to_string()),
         }
     }
@@ -228,6 +253,8 @@ impl StepFailureCode {
         match self {
             Self::OwnerRouteUnavailable => OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
             Self::OwnerSignoffRequired => OWNER_SIGNOFF_REQUIRED_ERROR_CODE,
+            Self::FootprintUnavailable => FOOTPRINT_UNAVAILABLE_ERROR_CODE,
+            Self::MuseModelAccessRefused => MUSE_MODEL_ACCESS_REFUSED_ERROR_CODE,
             Self::Other(code) => code,
         }
     }
@@ -256,6 +283,8 @@ impl From<String> for StepFailureCode {
         match code.as_str() {
             OWNER_ROUTE_UNAVAILABLE_ERROR_CODE => Self::OwnerRouteUnavailable,
             OWNER_SIGNOFF_REQUIRED_ERROR_CODE => Self::OwnerSignoffRequired,
+            FOOTPRINT_UNAVAILABLE_ERROR_CODE => Self::FootprintUnavailable,
+            MUSE_MODEL_ACCESS_REFUSED_ERROR_CODE => Self::MuseModelAccessRefused,
             _ => Self::Other(code),
         }
     }
@@ -508,6 +537,10 @@ impl ClaimFailureClass {
                 .is_some()
         {
             Some(Self::BaselineRed)
+        } else if is_footprint_unavailable(error_code, message) {
+            // The leaf never edited: its deferred footprint stayed held.
+            // Release the claim for a later admission, like other transients.
+            Some(Self::Transient)
         } else if typed(STALLED_ERROR_CODE, STALLED_MARKER)
             || typed(TRANSIENT_FAILURE_ERROR_CODE, TRANSIENT_FAILURE_MARKER)
             || super::super::is_forge_unavailable(error_code, message)

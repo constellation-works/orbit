@@ -3,10 +3,10 @@
 use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::identity::is_automation_actor;
 use orbit_types::task::{
-    DECISION_ANSWERED_EVENT, DecisionAction, DecisionAnswer, DecisionGate, DecisionOption,
-    DecisionRequest, DecisionRequestState, DecisionResolution, PilotAdmissionOperatorRecord,
-    PilotAdmissionVerdict, ReadinessGap, ReadinessStage, TaskHistoryEntry, TaskRelation,
-    TaskRelationType, TaskStatus, readiness_gaps,
+    ACCEPT_FINDINGS_ANSWER_ID, DECISION_ANSWERED_EVENT, DecisionAction, DecisionAnswer,
+    DecisionGate, DecisionOption, DecisionRequest, DecisionRequestState, DecisionResolution,
+    PilotAdmissionOperatorRecord, PilotAdmissionVerdict, ReadinessGap, ReadinessStage,
+    TaskHistoryEntry, TaskRelation, TaskRelationType, TaskStatus, readiness_gaps,
 };
 
 use super::super::TaskRecordUpdateParams;
@@ -98,12 +98,56 @@ impl OrbitRuntime {
                     .find(|candidate| candidate.id == request_id)
                     .ok_or_else(not_found)?;
                 ensure_request_answerable(&request, answer_id)?;
-                let lands_handoff = request
+                let chosen_option = request
                     .answers
                     .iter()
                     .find(|answer| answer.id == answer_id)
-                    .and_then(|answer| answer.option.as_ref())
-                    .is_some_and(|option| option.action == Some(DecisionAction::Land));
+                    .and_then(|answer| answer.option.as_ref());
+                let lands_handoff =
+                    chosen_option.is_some_and(|option| option.action == Some(DecisionAction::Land));
+                // A blocked task's reject option commits its status and this
+                // answer's resolution in one store update, so the resolution
+                // is composed before the apply step instead of after it.
+                let rejects_blocked = request.gate == DecisionGate::BlockTriage
+                    && chosen_option
+                        .is_some_and(|option| option.action == Some(DecisionAction::Reject));
+                let compose = || -> Result<_, OrbitError> {
+                    let now = chrono::Utc::now();
+                    let resolution = DecisionResolution {
+                        request_id: request.id.clone(),
+                        answer_id: answer_id.to_string(),
+                        answered_by: actor_label.clone(),
+                        provenance: provenance.clone(),
+                        note: note.clone(),
+                        answered_at: now,
+                        precedent: None,
+                        model: None,
+                        confirmation: None,
+                    };
+                    let entry = TaskHistoryEntry {
+                        at: now,
+                        by: actor_label.clone(),
+                        event: DECISION_ANSWERED_EVENT.to_string(),
+                        note: serde_json::to_string(&resolution).ok(),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: Some(request.id.clone()),
+                        decision: None,
+                    };
+                    let corpus_append =
+                        self.task_corpus_append_for_decision(&request, &resolution)?;
+                    Ok((resolution, entry, corpus_append))
+                };
+                let early = if rejects_blocked {
+                    let (_, entry, corpus_append) = compose()?;
+                    Some(
+                        std::iter::once(entry)
+                            .chain(corpus_append)
+                            .collect::<Vec<_>>(),
+                    )
+                } else {
+                    None
+                };
                 if !lands_handoff {
                     deferred = self.apply_decision_answer(
                         &request,
@@ -111,42 +155,25 @@ impl OrbitRuntime {
                         note.as_deref(),
                         &actor_label,
                         provenance.as_deref(),
+                        early.clone().unwrap_or_default(),
                     )?;
                 }
-                let now = chrono::Utc::now();
-                let resolution = DecisionResolution {
-                    request_id: request.id.clone(),
-                    answer_id: answer_id.to_string(),
-                    answered_by: actor_label.clone(),
-                    provenance: provenance.clone(),
-                    note: note.clone(),
-                    answered_at: now,
-                    precedent: None,
-                    model: None,
-                    confirmation: None,
-                };
-                let entry = TaskHistoryEntry {
-                    at: now,
-                    by: actor_label.clone(),
-                    event: DECISION_ANSWERED_EVENT.to_string(),
-                    note: serde_json::to_string(&resolution).ok(),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: Some(request.id.clone()),
-                    decision: None,
-                };
-                let corpus_append = self.task_corpus_append_for_decision(&request, &resolution)?;
-                if lands_handoff {
-                    self.land_handoff_decision(&request, &resolution, entry, corpus_append)?;
-                } else {
-                    self.stores().task_records().update(
-                        &task_id,
-                        TaskRecordUpdateParams {
-                            actor: actor_label.clone(),
-                            append_history: std::iter::once(entry).chain(corpus_append).collect(),
-                            ..Default::default()
-                        },
-                    )?;
+                if early.is_none() {
+                    let (resolution, entry, corpus_append) = compose()?;
+                    if lands_handoff {
+                        self.land_handoff_decision(&request, &resolution, entry, corpus_append)?;
+                    } else {
+                        self.stores().task_records().update(
+                            &task_id,
+                            TaskRecordUpdateParams {
+                                actor: actor_label.clone(),
+                                append_history: std::iter::once(entry)
+                                    .chain(corpus_append)
+                                    .collect(),
+                                ..Default::default()
+                            },
+                        )?;
+                    }
                 }
                 answered = self
                     .get_task_decision_requests(&task_id)?
@@ -169,7 +196,9 @@ impl OrbitRuntime {
     /// The gate's own write for one allowed answer, as the human. The
     /// caller holds the task's write lock and has already refused every
     /// stale or disallowed answer. An approval returns the effects it
-    /// deferred until that lock is released.
+    /// deferred until that lock is released. `resolution_history` is
+    /// non-empty only for a blocked task's reject option, which writes it in
+    /// its own status update; every other answer's caller records it after.
     fn apply_decision_answer(
         &self,
         request: &DecisionRequest,
@@ -177,6 +206,7 @@ impl OrbitRuntime {
         note: Option<&str>,
         actor_label: &str,
         provenance: Option<&str>,
+        resolution_history: Vec<TaskHistoryEntry>,
     ) -> Result<Option<DeferredApprovalEffects>, OrbitError> {
         let task_id = request.task_id.as_str();
         let via = provenance.unwrap_or("operator surface");
@@ -192,7 +222,13 @@ impl OrbitRuntime {
         ) && let Some(answer) = request.answers.iter().find(|answer| answer.id == answer_id)
             && let Some(option) = &answer.option
         {
-            return self.apply_option_answer(request, answer, option, note, actor_label, via);
+            return self.apply_option_answer(
+                request,
+                answer,
+                option,
+                (note, actor_label, via),
+                resolution_history,
+            );
         }
         match request.gate {
             DecisionGate::BlockTriage => {
@@ -274,17 +310,25 @@ impl OrbitRuntime {
                     }
                 };
                 // Requests raised before the offer was hold-aware still list
-                // `evaluated`. Refuse it before the comment: a successful
-                // apply is what appends `decision_answered`, and this verdict
-                // records no resolution for a duplicate or already-landed hold.
+                // `evaluated`, and older requests exist for stale holds.
+                // Refuse before the comment: a successful apply is what
+                // appends `decision_answered`, and these verdicts record no
+                // resolution for the hold.
                 if let Some(hold) = self.pilot_admission_hold(task_id)?
                     && !hold.accepts_decision_answer(verdict)
                 {
-                    return Err(OrbitError::decision_refused(
-                        DecisionRefusalCode::AnswerNotApplicable,
+                    let message = if matches!(hold, PilotAdmissionHold::StaleAssessment(_)) {
+                        format!(
+                            "`{answer_id}` does not resolve a stale pilot assessment, which needs a new pilot; nothing was applied"
+                        )
+                    } else {
                         format!(
                             "`{answer_id}` does not resolve a duplicate or already-landed pilot hold; nothing was applied and the request stays open"
-                        ),
+                        )
+                    };
+                    return Err(OrbitError::decision_refused(
+                        DecisionRefusalCode::AnswerNotApplicable,
+                        message,
                     ));
                 }
                 // The trusted human path records the typed resolution from
@@ -390,7 +434,9 @@ impl OrbitRuntime {
     /// Apply a one-click option as the human: its rewrite, then its action,
     /// then the move out of `blocked` (or the approval or re-pilot of a held
     /// proposed task), with one comment naming the option and the note. The
-    /// caller holds the task's write lock and records the resolution, so the
+    /// caller holds the task's write lock and records the resolution (a
+    /// blocked task's reject writes `resolution_history` with the status, and
+    /// its pull-request closure is returned as deferred effects), so the
     /// whole answer closes the request in one operation. Everything refusable
     /// is refused before the first write, including a source-repair refusal
     /// of the backlog return. A `split` files its follow-up only after that
@@ -400,9 +446,8 @@ impl OrbitRuntime {
         request: &DecisionRequest,
         answer: &DecisionAnswer,
         option: &DecisionOption,
-        note: Option<&str>,
-        actor_label: &str,
-        via: &str,
+        (note, actor_label, via): (Option<&str>, &str, &str),
+        resolution_history: Vec<TaskHistoryEntry>,
     ) -> Result<Option<DeferredApprovalEffects>, OrbitError> {
         let task_id = request.task_id.as_str();
         let task = self.get_task(task_id)?;
@@ -476,18 +521,38 @@ impl OrbitRuntime {
                 params.acceptance_criteria.as_deref(),
             )?;
         params.discard_candidate = discards;
+        if answer.id == ACCEPT_FINDINGS_ANSWER_ID {
+            if rewrites || !matches!(option.action, Some(DecisionAction::Requeue)) {
+                return Err(refuse(
+                    "accepting an open finding only resumes the reviewed candidate",
+                ));
+            }
+            let findings = self.open_review_finding_lines(&task)?;
+            if findings.is_empty() {
+                return Err(refuse("no open review finding remains to accept"));
+            }
+            params.finding_acceptance = Some(format!(
+                "accepted open review findings without changing the description or acceptance criteria: {}",
+                findings.join("; ")
+            ));
+        }
         // Source repair of the backlog return is refused before a split
         // files its follow-up. `add_task` commits on its own, so a later
         // refusal of the parent update would leave the follow-up behind.
         // A rewrite that strands the candidate discards it and skips this
-        // authentication, the same way the update does.
+        // authentication, the same way the update does. A live run is
+        // authenticated on the unchanged task: a failure handoff checks the
+        // specification before liveness, so a rewritten preview would refuse
+        // the answer for a change it made itself.
         if blocked && !discards && option_returns_blocked_task_to_backlog(&option.action) {
             let mut preview = task.clone();
-            if let Some(description) = &params.description {
-                preview.description.clone_from(description);
-            }
-            if let Some(criteria) = &params.acceptance_criteria {
-                preview.acceptance_criteria.clone_from(criteria);
+            if self.unsettled_run(&task)?.is_none() {
+                if let Some(description) = &params.description {
+                    preview.description.clone_from(description);
+                }
+                if let Some(criteria) = &params.acceptance_criteria {
+                    preview.acceptance_criteria.clone_from(criteria);
+                }
             }
             self.authenticate_published_backlog_return(&preview)?;
         }
@@ -562,6 +627,15 @@ impl OrbitRuntime {
                         answer.id, request.id
                     )
                 });
+                if blocked {
+                    let effects = self.reject_blocked_task_for_triage_decision(
+                        task_id,
+                        reason,
+                        Some(comment),
+                        resolution_history,
+                    )?;
+                    return Ok(Some(effects));
+                }
                 self.reject_task(task_id, reason, Some(comment))?;
                 return Ok(None);
             }

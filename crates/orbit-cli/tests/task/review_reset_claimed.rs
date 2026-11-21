@@ -164,13 +164,13 @@ fn claimed_leaf_review_escalation_requeues_onto_a_new_claim() {
     drop(probe);
 
     let shown = owner.orbit_json(&owner.repo, &["task", "show", &task_id, "--json"]);
-    let action = shown["comments"]
+    // The escalation's ask lives in its decision request, not the comment.
+    let action = shown["open_decisions"]
         .as_array()
-        .unwrap_or_else(|| panic!("task show has no comments: {shown}"))
+        .unwrap_or_else(|| panic!("task show has no open decisions: {shown}"))
         .iter()
-        .filter_map(|comment| comment["message"].as_str())
-        .find(|message| message.contains("human_action:"))
-        .unwrap_or_else(|| panic!("no human_action comment: {shown}"))
+        .find_map(|decision| decision["human_action"].as_str())
+        .unwrap_or_else(|| panic!("no human_action on a decision request: {shown}"))
         .to_string();
     // [ORB-16727] The reviewed revision named an owner review-reset and a
     // follower `job resume`, whose new run had no claim and was refused by

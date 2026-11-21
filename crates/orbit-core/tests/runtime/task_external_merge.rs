@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use crate::external_merge_fixture::*;
 pub(crate) use crate::external_merge_fixture::{Fixture, Handoff};
 
+mod auto_landing;
 mod pr_supersession;
 
 crate::scenario_table!(
@@ -189,7 +190,7 @@ fn external_merge_settlement_refuses_every_ineligible_status() {
             &[105],
         );
         if status == TaskStatus::Archived {
-            fx.runtime.archive_task(&task).unwrap();
+            fx.runtime.archive_task_as_operator(&task, false).unwrap();
         }
         fx.merge(105, &task, BOT, &fx.base.clone());
         let error = fx.settle_err(&task, "ineligible status refuses");
@@ -1022,6 +1023,7 @@ crate::scenario_table!(
     land_waits_out_unknown_mergeability_then_merges,
     land_refuses_unknown_mergeability_after_the_budget,
     land_refuses_a_conflicting_pull_request_immediately,
+    land_refuses_a_pull_request_retargeted_before_merge,
 );
 
 fn land_err(fx: &Fixture, task: &str, case: &str) -> String {
@@ -1115,4 +1117,34 @@ fn land_refuses_a_conflicting_pull_request_immediately() {
     assert_eq!(forge.reads(), 1, "a conflict is refused on the first read");
     assert!(forge.merges().is_empty(), "conflict never merges");
     fx.assert_status(&task, TaskStatus::Review, "conflict stays review");
+}
+
+fn land_refuses_a_pull_request_retargeted_before_merge() {
+    let _wait = virtual_mergeability_wait();
+    let (fx, forge, task) = mergeability_land(
+        &[MergeabilityAnswer::Unknown, MergeabilityAnswer::Mergeable],
+        MergeabilityAnswer::Mergeable,
+    );
+    let stable = fx.base.clone();
+    forge.script_base_answers(&[&stable, "other-branch"], "other-branch");
+    let message = land_err(
+        &fx,
+        &task,
+        "a pull request retargeted before merge is refused",
+    );
+    assert!(
+        message.contains("task_landing_refused") && message.contains("other-branch"),
+        "{message}"
+    );
+    assert!(forge.merges().is_empty(), "retargeted PR must never merge");
+    fx.assert_status(&task, TaskStatus::Review, "retargeted PR stays review");
+
+    forge.script_base_answers(&[], &stable);
+    let landed = fx
+        .runtime
+        .land_task_pull_request(&task, Some("operator"))
+        .expect("a stable eligible target still lands");
+    assert_eq!(landed.status, TaskStatus::Done);
+    assert_eq!(forge.merges(), vec![(LAND_PR, LAND_HEAD.to_string())]);
+    fx.assert_done(&task, "restored target lands and settles");
 }

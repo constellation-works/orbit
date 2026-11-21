@@ -294,10 +294,45 @@ impl VersionHits {
             "usd": adjusted["usd"],
             "adjusted": adjusted,
             "pre_regression_baseline": total_hits(&self.baseline_total),
+            "series": FORECAST_SERIES.iter().map(|(key, scores)| json!({"key": key, "scores": scores})).collect::<Vec<_>>(),
             "settled": self.settled,
             "not_drained": self.not_drained,
         })
     }
+}
+
+/// The whole-forecast series calibration scores, and what each measures.
+/// The baseline series can mature from snapshots whose adjusted totals were
+/// withheld, so forecast accuracy stays measurable while they are.
+const FORECAST_SERIES: [(&str, &str); 2] = [
+    (
+        "adjusted",
+        "regression-adjusted drain hours, tokens and USD; a snapshot that withheld them is unscored here",
+    ),
+    (
+        "pre_regression_baseline",
+        "drain hours, tokens and USD without simulated regression follow-up, stored whenever adjusted totals are withheld; scored against the same observed outcome, filed fixes included",
+    ),
+];
+
+/// The series whose stored quantiles `result` carries for at least one metric.
+fn scorable_forecast_series(result: &Value) -> Vec<&'static str> {
+    let carries = |quantiles: &Value| {
+        TOTALS
+            .iter()
+            .any(|key| quantiles[*key]["p50"].is_number() && quantiles[*key]["p90"].is_number())
+    };
+    FORECAST_SERIES
+        .iter()
+        .map(|(key, _)| *key)
+        .filter(|key| {
+            if *key == "adjusted" {
+                carries(result)
+            } else {
+                carries(&result[*key])
+            }
+        })
+        .collect()
 }
 
 /// Score `stored` (newest first) against the tasks' current records, their
@@ -503,6 +538,12 @@ pub(super) fn score_backlog_forecasts(
                 "tokens": result["tokens"],
                 "usd": result["usd"],
             },
+            "pre_regression_baseline": result.get("pre_regression_baseline").map(|baseline| json!({
+                "time_to_drain_hours": baseline["time_to_drain_hours"],
+                "tokens": baseline["tokens"],
+                "usd": baseline["usd"],
+            })),
+            "scorable_series": scorable_forecast_series(&result),
             "actual": actual,
             "residual": residual,
         }));
@@ -543,6 +584,51 @@ pub(super) fn score_backlog_forecasts(
         "by_model_version": by_model_version,
         "excluded": all_excluded.to_json(),
     })
+}
+
+/// The first model version that recovers a `defect-record` fix repaired
+/// inside its origin's measured delivery instead of counting it as a gap.
+const IN_ORIGIN_REPAIR_VERSION: u32 = 21;
+
+/// Whether `fix_id` is a `defect-record` fix spawned from every origin it
+/// regresses, each of which has measured invocations after the forecast.
+/// Hand repairs (no `defect-record` tag or no `spawned_from` link) and
+/// forecasts of earlier models keep their missing spend.
+fn repaired_in_measured_origin(
+    forecast: &StoredBacklogForecast,
+    fix_id: &str,
+    tasks: &HashMap<String, Task>,
+    runs: &HashMap<String, Vec<ForecastRun>>,
+) -> bool {
+    let Some(fix) = tasks.get(fix_id) else {
+        return false;
+    };
+    if forecast.model_version < IN_ORIGIN_REPAIR_VERSION
+        || !fix
+            .tags
+            .iter()
+            .any(|tag| tag == super::rework::DEFECT_RECORD_TAG)
+    {
+        return false;
+    }
+    let mut origins = fix
+        .relations
+        .iter()
+        .filter(|link| link.relation_type == TaskRelationType::RegressionFrom)
+        .peekable();
+    origins.peek().is_some()
+        && origins.all(|origin| {
+            let target = origin.target.as_str();
+            fix.relations.iter().any(|link| {
+                link.relation_type == TaskRelationType::SpawnedFrom
+                    && link.target.as_str() == target
+            }) && super::forecast_usage(
+                runs.get(target).map_or(&[][..], Vec::as_slice),
+                Some(forecast.forecast_at),
+            )
+            .invocations
+                > 0
+        })
 }
 
 /// One generation of actually filed fixes, including filings after the
@@ -603,11 +689,19 @@ fn rework_actuals(
             })
             .collect();
         let used = super::forecast_usage(&bounded, Some(forecast.forecast_at));
-        let draw = if used.invocations == 0
+        let unmeasured_done = used.invocations == 0
             && tasks
                 .get(id)
-                .is_some_and(|task| task.status == TaskStatus::Done)
+                .is_some_and(|task| task.status == TaskStatus::Done);
+        let draw = if unmeasured_done
+            && is_fix
+            && repaired_in_measured_origin(forecast, id, tasks, runs)
         {
+            // Model 21 recognises this repair as inside its origin's
+            // measured delivery: that spend is already in the origin's draw,
+            // so it adds nothing and erases nothing.
+            super::model::Draw::ZERO
+        } else if unmeasured_done {
             super::model::Draw::MISSING
         } else {
             super::model::Draw {

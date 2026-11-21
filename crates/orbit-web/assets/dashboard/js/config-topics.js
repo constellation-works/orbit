@@ -431,7 +431,7 @@ function drawerNode(payload, context) {
 function noticeNode(context) {
   if (!notice) return null;
   const shown = notice;
-  const dismiss = el('button', { class: 'settings-btn ghost', text: 'Dismiss', title: 'Dismiss this notice' }); dismiss.type = 'button';
+  const dismiss = el('button', { class: 'settings-btn ghost', text: 'Dismiss', "aria-description": 'Dismiss this notice' }); dismiss.type = 'button';
   dismiss.addEventListener('click', () => { if (notice === shown) { notice = null; context.rerender?.(); } });
   return el('div', { class: 'settings-callout', role: 'status' }, [el('span', { text: shown.text }), ' ', dismiss]);
 }
@@ -505,7 +505,7 @@ export function renderWorkflow(body, payload, context) {
   // collapses only its matches. Each keeps keyboard focus on its own button.
   // The text hides in a narrow pane (settings.css), so the label is also the name.
   const quiet = (cls, icon, label, onClick) => {
-    const button = el('button', { class: `settings-quiet ${cls}`, 'aria-label': label, title: label }, [settingsIcon(icon), el('span', { class: 'settings-quiet-label', text: label })]);
+    const button = el('button', { class: `settings-quiet ${cls}`, 'aria-label': label }, [settingsIcon(icon), el('span', { class: 'settings-quiet-label', text: label })]);
     button.type = 'button';
     button.addEventListener('click', () => {
       onClick(); context.rerender?.();

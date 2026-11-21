@@ -34,6 +34,17 @@ pub enum AttentionKind {
     /// with no checkpoint for twice its heartbeat, or three `incomplete`
     /// cycles in a row.
     ResidentStalled,
+    /// The `routine_tripped` source condition: a routine whose circuit
+    /// breaker opened on this host after repeated identical failures.
+    RoutineTripped,
+    /// The `drain_paused` source condition: with the standing-drain keeper
+    /// enabled, the workspace's drain intent has been paused for over 12
+    /// hours while work waits.
+    DrainPaused,
+    /// The `drain_breaker_open` source condition: with the standing-drain
+    /// keeper enabled, its crash breaker is open and it submits no drain until
+    /// a person starts one.
+    DrainBreakerOpen,
 }
 impl AttentionKind {
     /// Stable wire names, including kinds implemented by later source slices.
@@ -51,6 +62,9 @@ impl AttentionKind {
         "host_unhealthy",
         "notice_open",
         "resident_stalled",
+        "routine_tripped",
+        "drain_paused",
+        "drain_breaker_open",
     ];
     /// Kinds read when a call names none: the kinds this build derives.
     /// The others are accepted by name and report `degraded` until their
@@ -69,6 +83,9 @@ impl AttentionKind {
         "host_unhealthy",
         "notice_open",
         "resident_stalled",
+        "routine_tripped",
+        "drain_paused",
+        "drain_breaker_open",
     ];
     /// Kinds derived from one workspace's task, decision and review records,
     /// which only the workspace's owner host reports.
@@ -95,6 +112,9 @@ impl AttentionKind {
             Self::HostUnhealthy => "host_unhealthy",
             Self::NoticeOpen => "notice_open",
             Self::ResidentStalled => "resident_stalled",
+            Self::RoutineTripped => "routine_tripped",
+            Self::DrainPaused => "drain_paused",
+            Self::DrainBreakerOpen => "drain_breaker_open",
         }
     }
 }

@@ -2,10 +2,7 @@
 use std::{path::Path, time::Duration};
 
 use chrono::{DateTime, Utc};
-use orbit_common::{
-    OrbitError, SourceRepairAuthorityRefusal, security::redaction::redact_all,
-    security::release::sha256_hex, text::floor_char_boundary,
-};
+use orbit_common::{OrbitError, SourceRepairAuthorityRefusal, security::release::sha256_hex};
 use orbit_types::{
     task::{
         PublicationProofValue, PublicationPushCheckpoint, PublicationPushDecision,
@@ -16,79 +13,21 @@ use orbit_types::{
 };
 use serde_json::{Value, json};
 
+use super::super::pr_answers::identity;
 use super::super::{
     candidate_resume::source_repair::publication_admission,
     git::git_output,
     handoff::HandoffContext,
     operations,
-    remote_probe::{fixed_wait, remote_ref_output},
+    remote_probe::{exact_remote_ref_sha, fixed_wait, remote_ref_output},
 };
-use super::{PullRequestStatus, read_pr_status};
+use super::read_pr_status;
 use crate::context::{RuntimeHost, TaskAutomationUpdate};
 
-/// Compare before projecting/redacting evidence. Missing GraphQL merge metadata
-/// cannot establish absence of a merge; REST provisional merge SHAs are ignored.
-pub(in crate::executor::automation::vcs) fn mismatches(
-    binding: &SourceRepairBinding,
-    pr: &PullRequestStatus,
-    expected_head: &str,
-) -> Vec<Value> {
-    let raw = pr.provider_state();
-    if !pr.identity_metadata_readable {
-        return vec![
-            json!({"field":"observation", "expected":"pull_request object", "observed":{"presence":"invalid", "value":bounded_value(raw)}}),
-        ];
-    }
-    let checks = [
-        (
-            "number",
-            binding
-                .pull_request
-                .parse::<u64>()
-                .map_or_else(|_| json!(binding.pull_request), |number| json!(number)),
-            pr.number.map(|n| n.to_string()).as_deref() == Some(binding.pull_request.as_str()),
-        ),
-        (
-            "url",
-            json!(binding.pull_request_url),
-            pr.url.as_deref() == Some(binding.pull_request_url.as_str()),
-        ),
-        ("state", json!("OPEN"), pr.state.as_deref() == Some("OPEN")),
-        (
-            "headRefName",
-            json!(binding.branch),
-            pr.head_branch.as_deref() == Some(binding.branch.as_str()),
-        ),
-        (
-            "headRefOid",
-            json!(expected_head),
-            pr.head_sha.as_deref() == Some(expected_head),
-        ),
-        (
-            "baseRefName",
-            json!(binding.base_branch),
-            pr.base_branch.as_deref() == Some(binding.base_branch.as_str()),
-        ),
-        (
-            "autoMergeRequest",
-            Value::Null,
-            pr.auto_merge_enabled == Some(false),
-        ),
-        (
-            "mergeCommit",
-            Value::Null,
-            pr.merge_commit_absent && pr.merge_commit.is_none(),
-        ),
-        (
-            "mergedAt",
-            Value::Null,
-            pr.merged_at_absent && pr.merged_at.is_none(),
-        ),
-    ];
-    checks.into_iter().filter(|(_, _, matches)| !matches).map(|(field, expected, _)| {
-        json!({"field":field, "expected":bounded_value(&expected), "observed":observed(raw.get(field))})
-    }).collect()
-}
+// `mismatches` and its projections live in `pr_answers::identity`. This
+// re-export keeps `pr::source_identity::mismatches` compiling for concurrently
+// merging callers. Retire it with the ORB-25311 `pr` read-model shim.
+pub(in crate::executor::automation::vcs) use identity::mismatches;
 
 const OBSERVED: &str = "source_repair_publication_observed";
 const REFUSED: &str = "source_repair_publication_refused";
@@ -168,7 +107,7 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
             ("prepared_base_branch", binding.base_branch.as_str(), base),
         ] {
             if expected != observed {
-                differences.push(json!({"field":field, "expected":safe_text(expected), "observed":{"presence":"present", "value":safe_text(observed)}}));
+                differences.push(json!({"field":field, "expected":identity::redacted_bounded_text(expected), "observed":{"presence":"present", "value":identity::redacted_bounded_text(observed)}}));
             }
         }
         // Read immutable admission again after each provider observation. The
@@ -215,16 +154,15 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
             );
             remote = match probe {
                 Ok(probe) => {
-                    let sha = probe.stdout.lines().find_map(|line| {
-                        let (sha, name) = line.split_once('\t')?;
-                        (name == reference).then_some(sha)
-                    });
-                    json!({"reference":safe_text(&reference), "sha":sha.map(safe_text), "attempts":probe.attempts, "waited_ms":probe.waited_ms, "elapsed_ms":probe.elapsed_ms})
+                    let sha = exact_remote_ref_sha(&probe.stdout, &reference);
+                    json!({"reference":identity::redacted_bounded_text(&reference), "sha":sha.as_deref().map(identity::redacted_bounded_text), "attempts":probe.attempts, "waited_ms":probe.waited_ms, "elapsed_ms":probe.elapsed_ms})
                 }
-                Err(_) => json!({"reference":safe_text(&reference), "outcome":"unreadable"}),
+                Err(_) => {
+                    json!({"reference":identity::redacted_bounded_text(&reference), "outcome":"unreadable"})
+                }
             };
             if remote["sha"].as_str() != Some(published_head) {
-                differences.push(json!({"field":"remote_branch", "expected":safe_text(published_head), "observed":remote}));
+                differences.push(json!({"field":"remote_branch", "expected":identity::redacted_bounded_text(published_head), "observed":remote}));
             }
             let branch = git_output(&context.workspace_path, &["branch", "--show-current"])?;
             let origin = git_output(
@@ -255,9 +193,9 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
         }
         let settled = differences.is_empty();
         let observation = PublicationSettlingObservation {
-            run_id: serde_json::from_value(safe_text(&context.batch_id))
+            run_id: serde_json::from_value(identity::redacted_bounded_text(&context.batch_id))
                 .map_err(|error| OrbitError::Execution(error.to_string()))?,
-            published_head: serde_json::from_value(safe_text(published_head))
+            published_head: serde_json::from_value(identity::redacted_bounded_text(published_head))
                 .map_err(|error| OrbitError::Execution(error.to_string()))?,
             successful_push: push,
             reserved_delay_seconds: delay,
@@ -275,7 +213,7 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
             "admission":admission, "admission_binding_sha256":binding_hash,
             "published_head":observation.published_head, "successful_push":observation.successful_push,
             "remote_branch":remote,
-            "read":{"operation":operations::PR_STATUS, "selector":safe_text(&binding.pull_request), "started_at":started_at, "finished_at":finished_at,
+            "read":{"operation":operations::PR_STATUS, "selector":identity::redacted_bounded_text(&binding.pull_request), "started_at":started_at, "finished_at":finished_at,
                 "outcome":if read.is_ok() { "readable" } else { "unreadable" },
                 "failure_kind":read.as_ref().err().map(|error| if error.is_timeout() { "timeout" } else { "provider_read_failed" })},
             "mismatches":differences, "authority_refusal":authority_refusal,
@@ -380,7 +318,10 @@ fn admission_evidence(binding: &SourceRepairBinding) -> Result<Value, OrbitError
         "base_sha",
         "base_branch",
     ] {
-        admission.insert(key.into(), bounded_value(&binding[key]));
+        admission.insert(
+            key.into(),
+            identity::bounded_publication_value(&binding[key]),
+        );
     }
     Ok(Value::Object(admission))
 }
@@ -438,49 +379,13 @@ fn successful_push<H: RuntimeHost + ?Sized>(
         local_sha: proof_value(&json!(checkpoint.local_sha))?,
         remote_sha_before: proof_value(&checkpoint.remote_sha_before)?,
         force_with_lease: checkpoint.force_with_lease.as_bool(),
-        decision: serde_json::from_value(bounded_value(&checkpoint.decision))
+        decision: serde_json::from_value(identity::bounded_publication_value(&checkpoint.decision))
             .map_err(|error| OrbitError::Execution(error.to_string()))?,
     }))
 }
 
 /// Convert only the existing fixed-depth, redacted diagnostic projection.
 fn proof_value(value: &Value) -> Result<PublicationProofValue, OrbitError> {
-    serde_json::from_value(bounded_value(value))
+    serde_json::from_value(identity::bounded_publication_value(value))
         .map_err(|error| OrbitError::Execution(error.to_string()))
-}
-
-fn observed(value: Option<&Value>) -> Value {
-    match value {
-        Some(value) => json!({"presence":"present", "value":bounded_value(value)}),
-        None => json!({"presence":"missing"}),
-    }
-}
-
-/// Fixed-depth projection of hostile provider values. Objects/arrays are never
-/// copied wholesale; only a merge commit's oid can be useful identity evidence.
-fn bounded_value(value: &Value) -> Value {
-    match value {
-        Value::String(text) => safe_text(text),
-        Value::Object(object) => {
-            json!({"type":"object", "oid":object.get("oid").map(|oid| match oid { Value::String(s) => safe_text(s), _ => json!({"type":"invalid"}) })})
-        }
-        Value::Array(_) => json!({"type":"array"}),
-        other => other.clone(),
-    }
-}
-
-fn safe_text(text: &str) -> Value {
-    // Retain ordinary PR URLs, but no userinfo, query or fragment payloads in
-    // arbitrary text, including fields that were supposed to be branch names.
-    let safe = if text.contains("://") && text.contains(['@', '?', '#']) {
-        "[REDACTED_LOCATION]".into()
-    } else {
-        redact_all(text)
-    };
-    const FIELD_BYTES: usize = 512;
-    if safe.len() > FIELD_BYTES {
-        json!({"prefix":&safe[..floor_char_boundary(&safe, FIELD_BYTES)], "bytes":safe.len(), "truncated":true})
-    } else {
-        json!(safe)
-    }
 }

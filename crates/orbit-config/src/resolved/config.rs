@@ -9,8 +9,7 @@ use orbit_types::identity::{Crew, HumanCrew};
 
 use super::compatibility::{
     CompatibilityKeys, RETIRED_BACKEND_ENV, deprecated_keys_present,
-    reject_retired_backend_overrides, reject_stale_agent_tables, removed_keys_present,
-    validate_task_artifact_store_from_raw,
+    reject_retired_backend_overrides, removed_keys_present,
 };
 use super::crew::{
     IgnoredCrewProperty, crews_from_raw, explain_human_crew_reference, human_crews_from_raw,
@@ -296,15 +295,6 @@ impl ResolvedConfig {
                 ))
             })?;
 
-        if parsed.watch.is_some() {
-            return Err(OrbitError::InvalidInput(
-                "watch config is no longer supported; remove the [watch] section from config.toml"
-                    .to_string(),
-            ));
-        }
-
-        validate_task_artifact_store_from_raw(parsed.task.as_ref())?;
-        reject_stale_agent_tables(parsed.agent.as_ref())?;
         reject_retired_backend_overrides(
             &document,
             std::env::var(RETIRED_BACKEND_ENV).ok().as_deref(),

@@ -5,8 +5,9 @@ use rusqlite::Connection;
 use super::introspect::{add_column_if_missing, table_exists, table_has_column};
 
 pub(super) fn apply_flat_crew_model(conn: &Connection) -> Result<(), OrbitError> {
-    // ADR-0213: keep the legacy role columns nullable for existing databases;
-    // new reads fall back to implementer_model when crew_model is not populated.
+    // ADR-0213: keep the legacy role columns nullable for existing databases.
+    // v94 `job_run_crew_model_backfill` copies a legacy `implementer_model`
+    // into `crew_model`, so reads use `crew_model` alone.
     add_column_if_missing(conn, "job_runs", "crew_model", "TEXT")
 }
 
@@ -327,6 +328,25 @@ pub(super) fn apply_job_run_host_id_indexes(conn: &Connection) -> Result<(), Orb
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_job_run_allocations_host_run_id
          ON job_run_id_allocations(run_id);",
+    )
+    .map_err(sqlite_store_error)
+}
+
+/// v94 `job_run_crew_model_backfill`: copy a run's legacy `implementer_model`
+/// into `crew_model`, so reads no longer fall back to the legacy column.
+///
+/// Only rows with no `crew_model` and a recorded `implementer_model` change,
+/// so a rerun over a migrated table updates nothing. The legacy column stays.
+/// A table without both columns (a pre-consolidation shape) is left alone.
+pub(super) fn apply_job_run_crew_model_backfill(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_has_column(conn, "job_runs", "crew_model")?
+        || !table_has_column(conn, "job_runs", "implementer_model")?
+    {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "UPDATE job_runs SET crew_model = implementer_model \
+         WHERE crew_model IS NULL AND implementer_model IS NOT NULL",
     )
     .map_err(sqlite_store_error)
 }

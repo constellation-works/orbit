@@ -1,19 +1,35 @@
-//! Environment checks: `execution.env.pass` variables this process does not
-//! hold, and whether required validation resolves the same toolchain as agents.
+//! Environment checks: `execution.env.pass` variables runs do not receive,
+//! judged from this process plus `~/.orbit/clock.env`, and whether required
+//! validation resolves the same toolchain as agents.
+
+use std::collections::BTreeSet;
+
+use orbit_common::security::operator_env::clock_env_file_names;
 
 use crate::doctor::*;
 
-/// `execution.env.pass` variables this process does not hold [ORB-14777].
+/// `execution.env.pass` variables runs do not receive [ORB-14777, ORB-25291].
 ///
 /// Agents inherit the launching environment through the allowlist, so a
-/// pass-listed variable missing here (a dedicated worker token, say) silently
-/// leaves agents on another login. A warning, never an error: optional
-/// provider keys can legitimately be absent. Names only, never values.
+/// pass-listed variable missing there (a dedicated worker token, say) silently
+/// leaves agents on another login. Clock-started runs additionally read
+/// `~/.orbit/clock.env`, so a name that file supplies counts as held here even
+/// when this evaluating process (a service or MCP process for `orbit
+/// attention`, say, which never loads `clock.env`) does not hold it. A
+/// warning, never an error: optional provider keys can legitimately be absent.
+/// Names only, never values.
 ///
 /// A crew whose `[crews.<name>] env` reads an unset source is reported in the
 /// same row: drains exclude that crew and its activities are refused.
 pub(in crate::doctor) fn doctor_check_env_pass(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let unset = runtime.unset_env_pass_names();
+    // Judge the environment runs actually receive: names `clock.env` supplies
+    // count as held. Names only; values never leave the file.
+    let clock_held = clock_held_pass_names(runtime, &unset);
+    let effective_unset: Vec<String> = unset
+        .into_iter()
+        .filter(|name| !clock_held.contains(name))
+        .collect();
     // A `file:` source is reported below by the file's own state, so only
     // variable sources are asked about this environment.
     let crew_unset: Vec<_> = runtime
@@ -27,21 +43,24 @@ pub(in crate::doctor) fn doctor_check_env_pass(runtime: &OrbitRuntime) -> Worksp
     let crews = runtime.configured_crew_env_sources();
     let service_warnings =
         crate::service_environment::crew_source_environment_warnings(runtime, &crews);
-    if unset.is_empty() && crew_unset.is_empty() && service_warnings.is_empty() {
+    if effective_unset.is_empty() && crew_unset.is_empty() && service_warnings.is_empty() {
         return check(
             "env-pass",
             WorkspaceDoctorStatus::Ok,
             "every operator-added `execution.env.pass` variable and crew `env` source is set in \
-             this environment"
+             this process's environment or supplied by ~/.orbit/clock.env for clock-started runs \
+             (this row judges the evaluating process plus clock.env, not the drain launcher alone)"
                 .to_string(),
         );
     }
     let mut problems = service_warnings;
-    if !unset.is_empty() {
+    if !effective_unset.is_empty() {
         problems.push(format!(
-            "`execution.env.pass` names variables unset or empty in this environment: {}; \
-             agents started from it will not receive them",
-            unset.join(", ")
+            "`execution.env.pass` names variables unset or empty in this process's environment \
+             and not supplied by ~/.orbit/clock.env: {}; agents started from a process without \
+             them will not receive them (clock-started runs additionally read ~/.orbit/clock.env, \
+             whose names count as held here)",
+            effective_unset.join(", ")
         ));
     }
     if !crew_unset.is_empty() {
@@ -69,14 +88,30 @@ pub(in crate::doctor) fn doctor_check_env_pass(runtime: &OrbitRuntime) -> Worksp
         "env-pass",
         WorkspaceDoctorStatus::Warning,
         problems.join("; "),
-        "Export the variables before starting the drain or service (clock-started runs read \
-         them from ~/.orbit/clock.env). Drains inherit their launching process's environment: \
-         use a login shell for CLI starts, or set the variables in the service environment \
-         and restart it, or \
-         remove the names from `execution.env.pass` or the crew's `env`, then rerun \
-         `orbit doctor`."
+        "This row judges the evaluating process's environment plus ~/.orbit/clock.env (names \
+         there count as held for clock-started runs; values are never read). Export the missing \
+         variables before starting the drain or service (clock-started runs also read them from \
+         ~/.orbit/clock.env). Drains inherit their launching process's environment: use a login \
+         shell for CLI starts, or set the variables in the service environment and restart it, \
+         or remove the names from `execution.env.pass` or the crew's `env`, then rerun `orbit \
+         doctor`."
             .to_string(),
     )
+}
+
+/// Names in `names` that `~/.orbit/clock.env` supplies a non-empty value for.
+/// Names only, never values; a missing, empty or refused file counts as holding
+/// nothing here (refusals surface through the clock rows).
+fn clock_held_pass_names(runtime: &OrbitRuntime, names: &[String]) -> BTreeSet<String> {
+    if names.is_empty() {
+        return BTreeSet::new();
+    }
+    clock_env_file_names(&runtime.global_root(), names)
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
 }
 
 /// Where required validation finds the user's toolchain [ORB-13987].

@@ -133,13 +133,13 @@ Three things to know about what it seeded and how to finalize:
 
 - **Three shipped routines are seeded enabled when selected by the seeding
   policy:** `worktree-gc`, `task-pilot` and `crew-memory-dream`. The
-  `host-health` auto-task is also seeded enabled when selected. Every other shipped routine and
-  auto-task ships disabled until someone opts in. Seeded enabled does not
+  `host-health` auto-task is seeded disabled, like every other shipped
+  auto-task, until someone opts in with `orbit auto-task toggle host-health on`. Seeded enabled does not
   turn the experimental crew-memory feature on: `crew-memory-dream` mints
   nothing while `crew_memory.enabled` is false or no running memory-arm
   experiment applies. A host clock is still needed
   for unattended runs.
-  The `host-health` auto-task files a weekly host-health review on the workspace
+  When enabled, the `host-health` auto-task files a weekly host-health review on the workspace
   owner once the host clock is installed; `orbit auto-task toggle host-health
   off` turns it off, and `orbit routine disable <routine-name>` turns a routine
   off (operator only). → [automation.md](automation.md), [auto-tasks.md](auto-tasks.md)
@@ -240,8 +240,8 @@ auto_tasks = []
 - **`[enable]`** switches on routines and auto-tasks that an enabled plugin
   already seeded into this workspace. It applies after seeding. It never enables
   a shipped default. The three shipped routines seeded enabled—`worktree-gc`,
-  `task-pilot` and `crew-memory-dream`—and the `host-health` auto-task
-  are on without an opt-in only when the seeding policy selects them.
+  `task-pilot` and `crew-memory-dream`—are on without an opt-in only when the seeding policy selects them.
+  The `host-health` auto-task seeds disabled.
   `crew-memory-dream` still mints nothing while `crew_memory.enabled` is
   false or no running memory-arm experiment applies. Every other
   shipped routine and auto-task stays disabled unless someone opts in.
@@ -281,6 +281,10 @@ orbit workspace show
 orbit tool run orbit.task.list --input '{"workspace":"<workspace-id>"}'
 orbit doctor
 ```
+
+Run the `orbit.task.list` call before `orbit doctor`: registering a checkout does not create the
+host's task and workspace databases, and a write-free `orbit doctor` on a host without them
+prints only a `runtime` error row that asks for `orbit task list`.
 
 `orbit doctor` is the real check — it inspects config, database, disk, indexes,
 locks, and runs. Report its output. Distinguish failures affecting the requested workflow from optional capabilities

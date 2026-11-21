@@ -43,7 +43,7 @@ export function scheduleEditButton({ key, label, reason, onOpen }) {
   const button = el("button", { class: "field-edit schedule-edit", text: "edit" });
   button.type = "button";
   button.disabled = Boolean(reason) || editors.has(key);
-  button.title = reason || `Edit ${label}`;
+  if (reason) button.setAttribute("aria-description", reason);
   button.setAttribute("aria-label", `Edit ${label}`);
   button.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -162,8 +162,9 @@ function scheduleGuardFields(value) {
 export function routineDraft(trigger = {}) {
   const state = trigger.state || {};
   return {
+    condition: trigger.condition,
     guard: scheduleGuardFields(trigger),
-    kind: trigger.state ? "state" : trigger.deliveries_landed ? "deliveries_landed" : "cron",
+    kind: trigger.condition ? "condition" : trigger.state ? "state" : trigger.deliveries_landed ? "deliveries_landed" : "cron",
     cron: trigger.cron || "",
     missed_run: trigger.missed_run || "skip",
     state: {
@@ -187,8 +188,9 @@ export function routineDraft(trigger = {}) {
 /** An auto-task's schedule as an editor draft. */
 export function autoTaskDraft(schedule = {}) {
   return {
+    condition: schedule.condition,
     guard: scheduleGuardFields(schedule),
-    kind: schedule.deliveries_landed ? "deliveries_landed" : schedule.every_minutes != null ? "every_minutes" : "cron",
+    kind: schedule.condition ? "condition" : schedule.deliveries_landed ? "deliveries_landed" : schedule.every_minutes != null ? "every_minutes" : "cron",
     cron: schedule.cron || "",
     every_minutes: schedule.every_minutes ?? "",
     delivery: deliveryDraft(schedule.deliveries_landed),
@@ -206,6 +208,7 @@ function deliveryValue(draft) {
 
 /** The trigger a routine draft describes, or the first problem with it. */
 export function routineTriggerValue(draft) {
+  if (draft.kind === "condition") return { value: { ...draft.guard, condition: draft.condition, missed_run: draft.missed_run } };
   if (draft.kind === "cron") {
     const problem = cronProblem(draft.cron);
     return problem ? { problem } : { value: { ...draft.guard, cron: draft.cron.trim().split(/\s+/).join(" "), missed_run: draft.missed_run } };
@@ -231,6 +234,7 @@ export function routineTriggerValue(draft) {
 
 /** The schedule an auto-task draft describes, or the first problem with it. */
 export function autoTaskScheduleValue(draft) {
+  if (draft.kind === "condition") return { value: { ...draft.guard, condition: draft.condition } };
   if (draft.kind === "cron") {
     const problem = cronProblem(draft.cron);
     return problem ? { problem } : { value: { ...draft.guard, cron: draft.cron.trim().split(/\s+/).join(" ") } };
@@ -327,6 +331,9 @@ function buildEditor({ key, title, note, kinds, fields, value, preview, save, on
   // What the definition holds now, in the form's own shape: Save stays off
   // until the draft differs from it.
   editor.initial ??= JSON.stringify(value(editor.draft).value ?? null);
+  if (editor.draft.condition && !kinds.some(([kind]) => kind === "condition")) {
+    kinds = [...kinds, ["condition", "Condition"]];
+  }
   const root = el("div", { class: "schedule-editor" });
   root.dataset.editing = "schedule";
   // Each build owns a root, but the draft, pending flag and refusal live in the
@@ -352,7 +359,7 @@ function buildEditor({ key, title, note, kinds, fields, value, preview, save, on
       status.hidden = !status.textContent;
       const unchanged = !checked.problem && JSON.stringify(checked.value) === editor.initial;
       saveButton.disabled = editor.pending || Boolean(checked.problem) || unchanged;
-      saveButton.title = unchanged ? "No change to save" : "";
+      if (unchanged) saveButton.setAttribute("aria-description", "No change to save"); else saveButton.removeAttribute("aria-description");
       cancelButton.disabled = editor.pending;
     };
     const changed = () => {
@@ -389,7 +396,9 @@ function buildEditor({ key, title, note, kinds, fields, value, preview, save, on
     root.replaceChildren(...[
       el("div", { class: "schedule-editor-head" }, [el("strong", { text: title })]),
       labelled("Trigger", kindSelect),
-      ...fields(draft, changed),
+      ...(draft.kind === "condition"
+        ? [el("p", { class: "schedule-note", text: `${draft.condition.scope} condition (read-only): ${draft.condition.when}` })]
+        : fields(draft, changed)),
       note ? el("p", { class: "schedule-note", text: note }) : null,
       status,
       error,

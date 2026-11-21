@@ -4,6 +4,7 @@
 //! [ORB-17770].
 
 use chrono::{DateTime, Utc};
+use orbit_config::{ProviderLimitPolicy, ProviderLimitThreshold};
 use orbit_types::identity::Crew;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use serde::{Deserialize, Serialize};
@@ -148,6 +149,7 @@ pub struct CrewUsagePressure {
 /// crews' weekly pressure.
 pub(crate) struct UsagePressureRead {
     observations: Vec<ProviderLimitObservation>,
+    policy: ProviderLimitPolicy,
     now: DateTime<Utc>,
 }
 
@@ -155,6 +157,33 @@ impl UsagePressureRead {
     /// `crew`'s pressure at this read.
     pub(crate) fn crew(&self, crew: &Crew) -> UsagePressure {
         UsagePressure::for_crew(&self.observations, crew, self.now)
+    }
+
+    /// Whether `crew`'s account has used up a usage window that has not yet
+    /// reset: a gating reading that is exhausted (a usage-limit error) or at
+    /// 100% used, with a reset still ahead. An exhausted account has nothing
+    /// left to weigh, so a usage-pressure draw leaves it out while another
+    /// member can run. A provider the operator set to `off` is never
+    /// exhausted here, as it is not to the admission gate.
+    pub(crate) fn crew_exhausted(&self, crew: &Crew) -> bool {
+        self.observations.iter().any(|reading| {
+            reading.gating
+                && reading
+                    .resets_at
+                    .is_some_and(|resets_at| resets_at > self.now)
+                && (reading.exhausted || reading.used_percent.is_some_and(|used| used >= 100.0))
+                && reading_covers(
+                    &reading.provider,
+                    reading.account.as_deref(),
+                    reading.model.as_deref(),
+                    crew,
+                )
+                && matches!(
+                    self.policy
+                        .account_threshold(&reading.provider, reading.account.as_deref()),
+                    ProviderLimitThreshold::Percent(_)
+                )
+        })
     }
 }
 
@@ -170,6 +199,10 @@ impl OrbitRuntime {
                 );
                 Vec::new()
             });
-        UsagePressureRead { observations, now }
+        UsagePressureRead {
+            observations,
+            policy: self.provider_limit_policy(),
+            now,
+        }
     }
 }

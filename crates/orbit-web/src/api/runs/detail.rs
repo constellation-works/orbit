@@ -5,7 +5,8 @@ use std::collections::{HashMap, HashSet};
 
 use orbit_core::application::job::{
     JobRunProjectionEvidence, JobRunProjectionProfile, RecordedJobRun,
-    display_steps_with_agent_execution_to_json, project_job_run, run_display_steps,
+    display_steps_with_agent_execution_to_json, project_job_run, pull_drain_detail,
+    run_display_steps,
 };
 use orbit_core::runtime::audit::run::{RunAuditView, RunProviderProcess};
 use orbit_core::{JobRun, NotFoundKind, OrbitError, OrbitRuntime};
@@ -16,9 +17,9 @@ use serde_json::{Value, json};
 ///
 /// The view is computed at most once: whichever half asks first pays for
 /// the scan, and a failure is cached too, so an unreadable trail is not
-/// scanned twice. A run whose record steps are already activity-level
-/// never triggers the steps half, so it pays only for the scan the
-/// provider-process half needs. Nothing is cached across requests, so
+/// scanned twice. Successful activity-level record steps need no audit
+/// enrichment; failed steps share the scan for their structured diagnostic.
+/// The terminal diagnostic also comes from this view. Nothing is cached across requests, so
 /// provider-process liveness is still probed on every fetch.
 struct LazyRunAuditView<'a> {
     runtime: &'a OrbitRuntime,
@@ -121,71 +122,40 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
     // healthy long-running ship-pipeline implementation agent is
     // indistinguishable from a dead child without shell access to the host.
     let provider_processes = match audit_view.load_run_audit_view() {
-        Ok(view) => view.provider_processes,
+        Ok(view) => {
+            if let Some(diagnostic) = view.error_diagnostic {
+                full["error_diagnostic"] =
+                    orbit_common::security::redaction::redact_all_json(diagnostic);
+            }
+            view.provider_processes
+        }
         Err(error) => {
             tracing::warn!(run_id, section = "provider processes", %error, "run detail omitted a section");
             Vec::new()
         }
     };
 
-    // A claimed follower leaf names the owner task and claim it works for;
-    // every other run has none. The dashboard's cancel confirmation reads this,
-    // because cancelling a claimed leaf fails the claim on the owner. An
-    // unreadable admission is logged and shown as no claim, like `orbit run show`.
-    let pull_claim = runtime.pull_leaf_claim(run_id).unwrap_or_else(|error| {
-        tracing::warn!(run_id, %error, "pull admission unreadable; run detail shown without its claim");
-        None
-    });
-
-    // A pull drain's launched leaves that are still running: what a graceful
-    // cancel waits for, and what `force` would stop.
-    let claimed_leaves = or_warn(
-        runtime.pull_drain_claimed_leaves(run_id),
+    let pull = pull_drain_detail::read_run_pull_drain_evidence(
+        pull_drain_detail::RunPullDrainSource::Registered(runtime),
         run_id,
-        "claimed leaves",
+        state.as_ref(),
     );
-    // Unlike the running-leaf table, admission capacity includes launching
-    // and unsettled claims and other workspace leaves. An unreadable reading
-    // stays unknown rather than advertising an empty budget.
-    let pull_occupancy = or_warn(
-        runtime.pull_drain_occupancy(run_id),
-        run_id,
-        "pull occupancy",
-    )
-    .map(|occupancy| json!({ "occupied": occupancy.occupied, "reviewing": occupancy.reviewing }));
-    let pull_breaker = state
-        .as_ref()
-        .and_then(|state| state.pull_drain.pull_breaker.as_ref());
-    let refused_settlements = or_warn(
-        runtime.pull_drain_refused_settlements(run_id),
-        run_id,
-        "refused settlements",
-    );
+    for warning in &pull.warnings {
+        tracing::warn!(run_id, section = warning.section, error = %warning.error,
+            "run detail omitted a section");
+    }
 
-    // A pull drain's crew window: the crews it runs and those it excluded for
-    // its window, with why [ORB-13941]. Null for every other run.
-    let crew_window = runtime
-        .pull_drain_crew_window(run_id)
-        .unwrap_or_else(|error| {
-            tracing::warn!(run_id, %error, "pull drain crew window unreadable; run detail shown without it");
-            None
-        });
-
-    json!({
+    let mut detail = json!({
         "run": full,
-        "pull_claim": pull_claim,
-        "claimed_leaves": claimed_leaves,
-        "pull_occupancy": pull_occupancy,
-        "pull_breaker": pull_breaker,
-        "refused_settlements": refused_settlements,
-        "crew_window": crew_window,
         "steps": display_steps_with_agent_execution_to_json(&steps, state.as_ref(), &evidence),
         "steps_source": steps.source.as_str(),
         "provider_processes": provider_processes
             .iter()
             .map(RunProviderProcess::to_json)
             .collect::<Vec<_>>(),
-    })
+    });
+    pull.append_pull_drain_sections(&mut detail);
+    detail
 }
 
 /// Run detail for a run this host's store records under a workspace no
@@ -217,22 +187,23 @@ pub(super) fn recorded_run_detail_to_json(
     );
     super::tasks::add_tasks(&mut full, run, &titles);
     let steps = run_display_steps(run, Vec::new);
-    json!({
+    let pull = pull_drain_detail::read_run_pull_drain_evidence(
+        pull_drain_detail::RunPullDrainSource::Recorded,
+        run_id,
+        state,
+    );
+    let mut detail = json!({
         "run": full,
         "recorded_workspace": {
             "workspace_id": recorded.workspace_id,
             "registered": false,
         },
-        "pull_claim": Value::Null,
-        "claimed_leaves": [],
-        "pull_occupancy": Value::Null,
-        "pull_breaker": state.and_then(|state| state.pull_drain.pull_breaker.as_ref()),
-        "refused_settlements": [],
-        "crew_window": Value::Null,
         "steps": display_steps_with_agent_execution_to_json(&steps, state, &[]),
         "steps_source": steps.source.as_str(),
         "provider_processes": [],
-    })
+    });
+    pull.append_pull_drain_sections(&mut detail);
+    detail
 }
 
 /// Steps-free rows for `child_ids`, indexed by run id.

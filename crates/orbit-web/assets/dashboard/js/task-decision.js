@@ -5,6 +5,10 @@ import { captureWorkspaceVisit, el, fetchJson, formatDateTime, postJson } from '
 import * as taskShared from './task-shared.js';
 import { forgetTaskDetailLoad } from './task-data.js';
 
+// Long enough to read the recovery the refusal names, then gone on its own.
+// Quick-action errors use the same window. Dismiss clears it sooner.
+const DECISION_ANSWER_REFUSAL_MS = 180_000;
+
 function openDecisions(task) {
   return Array.isArray(task.open_decisions) ? task.open_decisions : [];
 }
@@ -35,7 +39,9 @@ export function disclosedDecisions(task) {
 // posts to the decisions API, which applies the option in core as the human
 // writer — the same apply step as `orbit decision answer` — and the detail
 // then re-reads the task, whose request now reads answered and drops out of
-// `open_decisions`. The option id stays the submitted key.
+// `open_decisions`. A refusal stays on this card, including after the detail
+// is rebuilt, until it is dismissed or it expires. The option id stays the
+// submitted key.
 export function buildDecisionCard(task, request, detail, context) {
   const card = el("div", { class: "decision-card" });
   card.dataset.key = `decision-${task.id}-${request.id}`;
@@ -64,6 +70,10 @@ export function buildDecisionCard(task, request, detail, context) {
   });
   note.placeholder = "note / evidence (optional)";
   card.appendChild(note);
+  card.dataset.decisionRefusalHost = request.id;
+  const refusalKey = decisionRefusalKey(task, request.id);
+  const refusal = taskShared.taskState.decisionAnswerRefusals.get(refusalKey);
+  if (refusal) card.appendChild(decisionRefusalNode(refusalKey, refusal, context));
   const list = el("div", { class: "decision-answers" });
   for (const answer of options) {
     const answerId = String(answer.id);
@@ -72,7 +82,7 @@ export function buildDecisionCard(task, request, detail, context) {
       class: answer.recommended ? "action decision-answer primary" : "action decision-answer",
       type: "button",
       text: answer.label,
-      title: `Answer ${request.id} with option ${answerId}`,
+      "aria-description": `Answer ${request.id} with option ${answerId}`,
     });
     btn.disabled = !mutable;
     btn.addEventListener("click", (e) => {
@@ -182,21 +192,113 @@ export function buildOpenDecisions(task, detail, context) {
 // One answer per request may be in flight: a second, contradictory POST
 // would race the first and let arrival order pick the recorded answer.
 const decisionAnswersInFlight = new Set();
+const decisionRefusalTimers = new Map();
+
+function decisionRefusalKey(task, requestId) {
+  return `${taskShared.taskDispatchIdentity(task)}:${requestId}`;
+}
+
+// Refusals recorded for this task. The detail hash includes this, so a
+// refresh rebuilds the card with the message instead of keeping a detail
+// that never received it. A successful answer deletes its entry first.
+export function decisionAnswerSignature(task) {
+  const prefix = `${taskShared.taskDispatchIdentity(task)}:`;
+  const parts = [];
+  for (const [key, message] of taskShared.taskState.decisionAnswerRefusals) {
+    if (!key.startsWith(prefix)) continue;
+    parts.push(`${key.slice(prefix.length)}=${message}`);
+  }
+  parts.sort();
+  return parts.join("\n");
+}
+
+function dismissDecisionRefusal(key, context) {
+  if (!taskShared.taskState.decisionAnswerRefusals.has(key)) return;
+  cancelDecisionRefusalExpiry(key);
+  taskShared.taskState.decisionAnswerRefusals.delete(key);
+  if (taskShared.taskState.decisionAnswerFocus === key) taskShared.taskState.decisionAnswerFocus = null;
+  taskShared.rerender(context);
+}
+
+function cancelDecisionRefusalExpiry(key) {
+  clearTimeout(decisionRefusalTimers.get(key));
+  decisionRefusalTimers.delete(key);
+}
+
+function scheduleDecisionAnswerRefusalExpiry(key, message, context) {
+  cancelDecisionRefusalExpiry(key);
+  const timer = setTimeout(() => {
+    if (decisionRefusalTimers.get(key) !== timer) return;
+    decisionRefusalTimers.delete(key);
+    if (taskShared.taskState.decisionAnswerRefusals.get(key) !== message) return;
+    taskShared.taskState.decisionAnswerRefusals.delete(key);
+    if (taskShared.taskState.decisionAnswerFocus === key) taskShared.taskState.decisionAnswerFocus = null;
+    taskShared.rerender(context);
+  }, DECISION_ANSWER_REFUSAL_MS);
+  decisionRefusalTimers.set(key, timer);
+}
+
+// The full refusal, on the card the operator just used. It is not truncated:
+// the message is the recovery path. Dismiss hides it before it expires.
+function decisionRefusalNode(key, message, context) {
+  const node = el("div", { class: "action-error decision-answer-refusal", role: "alert" });
+  node.dataset.message = message;
+  node.dataset.decisionRefusal = key.slice(key.lastIndexOf(":") + 1);
+  node.appendChild(el("p", { class: "decision-answer-refusal-text", text: message }));
+  const dismiss = el("button", {
+    class: "action",
+    type: "button",
+    text: "Dismiss",
+    "aria-description": "Hide this refusal",
+  });
+  dismiss.addEventListener("click", (event) => {
+    event.stopPropagation();
+    dismissDecisionRefusal(key, context);
+  });
+  node.appendChild(dismiss);
+  if (taskShared.taskState.decisionAnswerFocus === key) {
+    taskShared.taskState.decisionAnswerFocus = null;
+    requestAnimationFrame(() => node.scrollIntoView?.({ block: "nearest" }));
+  }
+  return node;
+}
+
+// A detail kept for an open draft is not rebuilt, so the card paints the
+// refusal here. The same message stays put; a cleared one goes.
+export function refreshDecisionAnswerFeedback(wrap, task, context) {
+  if (!wrap.querySelectorAll) return;
+  const identity = taskShared.taskDispatchIdentity(task);
+  for (const host of wrap.querySelectorAll("[data-decision-refusal-host]")) {
+    const requestId = host.dataset.decisionRefusalHost;
+    const key = `${identity}:${requestId}`;
+    const message = taskShared.taskState.decisionAnswerRefusals.get(key) || "";
+    const shown = host.querySelector(":scope > .decision-answer-refusal");
+    if ((shown ? shown.dataset.message : "") === message) continue;
+    if (shown) shown.remove();
+    if (!message) continue;
+    const node = decisionRefusalNode(key, message, context);
+    const list = host.querySelector(":scope > .decision-answers");
+    if (list) host.insertBefore(node, list);
+    else host.appendChild(node);
+  }
+}
 
 async function answerDecision(task, detail, requestId, answer, note, btnNode, context) {
   const visit = captureWorkspaceVisit();
   if (!taskShared.canMutateTask(task)) return;
-  const flightKey = `${taskShared.taskDispatchIdentity(task)}:${requestId}`;
+  const flightKey = decisionRefusalKey(task, requestId);
   if (decisionAnswersInFlight.has(flightKey)) return;
   decisionAnswersInFlight.add(flightKey);
   const requestPath = visit.path(
     taskShared.taskWorkspacePath(task, `/api/decisions/${encodeURIComponent(requestId)}/answer`),
   );
-  const prior = detail.querySelector(".action-error");
-  if (prior) prior.remove();
+  cancelDecisionRefusalExpiry(flightKey);
+  taskShared.taskState.decisionAnswerRefusals.delete(flightKey);
   // Disable every option on this card (and its note), not just the clicked
   // one, for the whole flight — the pattern the detail's other actions use.
   const card = btnNode.closest(".decision-card");
+  const prior = card ? card.querySelector(".decision-answer-refusal") : detail.querySelector(".decision-answer-refusal");
+  if (prior) prior.remove();
   const controls = card
     ? [...card.querySelectorAll(".decision-answer, .decision-note")]
     : [btnNode];
@@ -207,11 +309,23 @@ async function answerDecision(task, detail, requestId, answer, note, btnNode, co
     decisionAnswersInFlight.delete(flightKey);
     if (!visit.isCurrent()) return;
     for (const control of controls) control.disabled = false;
-    detail.prepend(taskShared.actionErrorNode(`decision answer: ${error.message || String(error)}`));
+    const refusalDetail = error && error.body && typeof error.body.detail === "string"
+      ? error.body.detail.trim()
+      : "";
+    const code = error && error.code ? error.code : "decision_answer_refused";
+    const baseMessage = `[${code}] ${error.message || String(error)}`;
+    const message = refusalDetail && refusalDetail !== baseMessage
+      ? `${baseMessage}\n\n${refusalDetail}`
+      : baseMessage;
+    taskShared.taskState.decisionAnswerRefusals.set(flightKey, message);
+    taskShared.taskState.decisionAnswerFocus = flightKey;
+    taskShared.rerender(context);
+    scheduleDecisionAnswerRefusalExpiry(flightKey, message, context);
     return;
   }
   decisionAnswersInFlight.delete(flightKey);
   if (!visit.isCurrent()) return;
+  taskShared.taskState.decisionAnswerRefusals.delete(flightKey);
   taskShared.taskState.taskActionNotice = `${task.id}: decision ${requestId} answered (${answer})`;
   forgetTaskDetailLoad(task);
   taskShared.notifyDecisionAnswered();

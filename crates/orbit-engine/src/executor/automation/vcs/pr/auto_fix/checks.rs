@@ -2,21 +2,20 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
-    DeliveryRefusal, PrAutoFixBaseRed, PrAutoFixBlocker, pr_auto_fix_no_edit_reruns,
+    DeliveryRefusal, PrAutoFixBaseRed, PrAutoFixBlocker, PrAutoFixHeadFailure,
+    pr_auto_fix_no_edit_reruns,
 };
 use serde_json::Value;
 
 use crate::context::RuntimeHost;
 
 use super::super::super::super::input::input_string_field;
-use super::super::super::freshness::commit_sha;
-use super::super::super::git::{
-    base_sync_mode_from_input, git_output, resolve_worktree_start_point,
-};
-use super::super::super::landing::checks::{
+use super::super::super::checks::{
     CheckReadGap, DeferredLogRead, HeadCheckEvidence, head_check_evidence, unmoved_red_base,
 };
-use super::super::answers::{CheckState, PullRequestStatus, RequiredChecks, read_required_checks};
+use super::super::super::git::{self, git_output};
+use super::super::RequiredChecks;
+use super::super::answers::{CheckState, PullRequestStatus, read_required_checks};
 use super::{admission, ledger, verdict};
 
 /// A required failure the base's own job already fails the same way, while
@@ -91,22 +90,14 @@ fn evaluate_red_base<H: RuntimeHost + ?Sized>(
     let base_name =
         input_string_field(input, "base").ok_or_else(|| "the input names no base".to_string())?;
     let workspace = Path::new(workspace_path);
-    let base_ref = resolve_worktree_start_point(
-        workspace,
-        &base_name,
-        base_sync_mode_from_input(input).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| format!("base '{base_name}' could not be resolved: {error}"))?;
-    let tip = commit_sha(workspace, &base_ref).map_err(|error| error.to_string())?;
-    let base = git_output(workspace, &["merge-base", head, &tip])
-        .map_err(|error| format!("the fork point of {head} could not be read: {error}"))?;
+    let (base, branch, tip) = git::resolve_pr_base(workspace, input, &base_name, Some(head))?;
     unmoved_red_base(
         host,
         workspace,
         head,
-        base.trim(),
+        base.as_deref().unwrap_or_default(),
         &tip,
-        base_name.strip_prefix("origin/").unwrap_or(&base_name),
+        &branch,
         &failed,
         deadline_ms,
     )
@@ -125,9 +116,7 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
     pr_number: &str,
     status: &PullRequestStatus,
     deadline_ms: u64,
-    observation: &mut Option<
-        super::super::super::landing::checks::rerun_diagnostic::CiRerunDiagnostic,
-    >,
+    observation: &mut Option<super::super::super::checks::rerun_diagnostic::CiRerunDiagnostic>,
 ) -> Result<CiRerunRecovery, OrbitError> {
     let Some(head) = status.head_sha.as_deref() else {
         return Ok(CiRerunRecovery::NotEligible);
@@ -140,7 +129,7 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
     if status.head_branch.is_none() {
         return Ok(CiRerunRecovery::NotEligible);
     }
-    let failed = super::super::super::landing::checks::failed_checks(status);
+    let failed = super::super::super::checks::failed_checks(status);
     if failed.is_empty() {
         return Ok(CiRerunRecovery::NotEligible);
     }
@@ -149,10 +138,8 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
         Err(_) => return Ok(CiRerunRecovery::NotEligible),
     };
     let workspace = Path::new(workspace_path);
-    let base_ref =
-        resolve_worktree_start_point(workspace, &base_name, base_sync_mode_from_input(input)?)?;
-    let tip = commit_sha(workspace, &base_ref)?;
-    let base = git_output(workspace, &["merge-base", head, &tip])?;
+    let (base, branch, tip) = git::resolve_pr_base(workspace, input, &base_name, Some(head))
+        .map_err(OrbitError::Execution)?;
     // A repair that made no edit already spent its auto-fix attempt for this
     // head. Rerun its failed checks once on the unchanged head instead of
     // admitting another repair. A recorded rerun send is not itself a rerun
@@ -160,61 +147,59 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
     // ambiguous send reply) and stops only on a later authenticated failed
     // attempt.
     if no_edit_repair_recorded(host, auto_fix, pr_number, head) {
-        match super::super::super::landing::checks::request_no_edit_repair_rerun(
+        match super::super::super::checks::request_no_edit_repair_rerun(
             host,
             workspace,
             &auto_fix.task_ids,
             status,
             &failed,
-            base.trim(),
-            base_name.strip_prefix("origin/").unwrap_or(&base_name),
+            base.as_deref().unwrap_or_default(),
+            &branch,
             deadline_ms,
         )? {
-            super::super::super::landing::checks::CiRerunStep::Backoff(reason) => {
+            super::super::super::checks::CiRerunStep::Backoff(reason) => {
                 return Ok(CiRerunRecovery::BackingOff(reason));
             }
-            super::super::super::landing::checks::CiRerunStep::Wait(reason)
-            | super::super::super::landing::checks::CiRerunStep::Unreadable(reason) => {
+            super::super::super::checks::CiRerunStep::Wait(reason)
+            | super::super::super::checks::CiRerunStep::Unreadable(reason) => {
                 return Ok(CiRerunRecovery::Waiting(reason));
             }
-            super::super::super::landing::checks::CiRerunStep::Acted(_) => {
+            super::super::super::checks::CiRerunStep::Acted(_) => {
                 return Ok(CiRerunRecovery::Retried);
             }
-            super::super::super::landing::checks::CiRerunStep::BudgetSpent(reason) => {
+            super::super::super::checks::CiRerunStep::BudgetSpent(reason) => {
                 return Ok(CiRerunRecovery::Stopped(reason));
             }
-            super::super::super::landing::checks::CiRerunStep::NotEligible => {}
+            super::super::super::checks::CiRerunStep::NotEligible => {}
         }
     }
-    match super::super::super::landing::checks::plan_ci_rerun(
+    match super::super::super::checks::plan_ci_rerun(
         host,
         workspace,
         &auto_fix.task_ids,
         None,
         status,
         &failed,
-        base.trim(),
+        base.as_deref().unwrap_or_default(),
         &tip,
-        base_name.strip_prefix("origin/").unwrap_or(&base_name),
+        &branch,
         deadline_ms,
         None,
         &auto_fix.run_id,
         observation,
     )? {
-        super::super::super::landing::checks::CiRerunStep::Backoff(reason) => {
+        super::super::super::checks::CiRerunStep::Backoff(reason) => {
             Ok(CiRerunRecovery::BackingOff(reason))
         }
-        super::super::super::landing::checks::CiRerunStep::NotEligible => {
-            Ok(CiRerunRecovery::NotEligible)
-        }
-        super::super::super::landing::checks::CiRerunStep::Wait(reason)
-        | super::super::super::landing::checks::CiRerunStep::Unreadable(reason) => {
+        super::super::super::checks::CiRerunStep::NotEligible => Ok(CiRerunRecovery::NotEligible),
+        super::super::super::checks::CiRerunStep::Wait(reason)
+        | super::super::super::checks::CiRerunStep::Unreadable(reason) => {
             // The shared bounded journal retains this observation; the caller
             // records the hold on the task and bounds it.
             Ok(CiRerunRecovery::Waiting(reason))
         }
-        super::super::super::landing::checks::CiRerunStep::Acted(_) => Ok(CiRerunRecovery::Retried),
-        super::super::super::landing::checks::CiRerunStep::BudgetSpent(reason) => {
+        super::super::super::checks::CiRerunStep::Acted(_) => Ok(CiRerunRecovery::Retried),
+        super::super::super::checks::CiRerunStep::BudgetSpent(reason) => {
             Ok(CiRerunRecovery::Stopped(reason))
         }
     }
@@ -316,7 +301,7 @@ pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<H: RuntimeH
         .head_branch
         .as_deref()
         .zip(dependency_base.as_deref());
-    let (evidence, annotations) = match head_check_evidence(
+    let (evidence, annotations, failures) = match head_check_evidence(
         host,
         Path::new(workspace_path),
         &auto_fix.task_ids,
@@ -332,7 +317,8 @@ pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<H: RuntimeH
         HeadCheckEvidence::Repair {
             evidence,
             annotations,
-        } => (evidence, annotations),
+            failures,
+        } => (evidence, annotations, failures),
         HeadCheckEvidence::Stop(reason) => {
             return CheckRepair::Ended(verdict::stopped(pr_number, &reason));
         }
@@ -367,7 +353,28 @@ pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<H: RuntimeH
             head_sha,
             PrAutoFixBlocker::FailedChecks,
         ) {
-            Ok(attempt) => verdict::check_repair_handoff(pr_number, head_sha, &attempt, &evidence),
+            Ok(attempt) => {
+                // [ORB-25510] Keep the failure this repair was handed on the
+                // task: a repair that does not fix the head holds the run in
+                // run state only, while the task keeps its locks in review.
+                if !failures.is_empty() {
+                    let record = PrAutoFixHeadFailure {
+                        pr_number: pr_number.to_string(),
+                        failed_head: head_sha.to_string(),
+                        base_branch: status.base_branch.clone(),
+                        run_id: auto_fix.run_id.clone(),
+                        checks: failures,
+                    };
+                    if let Err(error) = ledger::record_head_failure(host, auto_fix, &record) {
+                        tracing::warn!(
+                            pr_number,
+                            head_sha,
+                            "auto_fix: the repaired head's failure was not recorded: {error}"
+                        );
+                    }
+                }
+                verdict::check_repair_handoff(pr_number, head_sha, &attempt, &evidence)
+            }
             Err(stop) => stop,
         },
     )
@@ -392,20 +399,14 @@ pub(in crate::executor::automation::vcs::pr) fn base_tip_checks<H: RuntimeHost +
     let Some(base) = input_string_field(input, "base") else {
         return Ok(None);
     };
-    let Ok(sync) = base_sync_mode_from_input(input) else {
+    let Ok((_, branch, tip)) = git::resolve_pr_base(workspace, input, &base, None) else {
         return Ok(None);
     };
-    let Ok(base_ref) = resolve_worktree_start_point(workspace, &base, sync) else {
-        return Ok(None);
-    };
-    let Ok(tip) = commit_sha(workspace, &base_ref) else {
-        return Ok(None);
-    };
-    super::super::super::landing::checks::base_tip_check_evidence(
+    super::super::super::checks::base_tip_check_evidence(
         host,
         workspace,
         head,
-        base.strip_prefix("origin/").unwrap_or(&base),
+        &branch,
         &tip,
         &failed,
         deadline_ms,

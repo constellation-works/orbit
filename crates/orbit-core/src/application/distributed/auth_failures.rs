@@ -14,7 +14,7 @@ use orbit_common::OrbitError;
 use orbit_store::contracts::{JobRunOrder, JobRunQuery};
 use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::{
-    CrewPurpose, FINAL_RECOVERY_CREWS_KEY, JobRun, JobRunState, PipelineState,
+    ActivityCrewDraw, CrewPurpose, FINAL_RECOVERY_CREWS_KEY, JobRun, JobRunState, PipelineState,
     ProviderFailureClass, failed_account, failed_provider,
 };
 use serde::Serialize;
@@ -455,11 +455,20 @@ fn uses_recorded_crews(job: &str) -> bool {
 /// under the low complexity pool's key. Pilot apply can redraw `task.crew`,
 /// so this, not the task, names who wrote an assessment.
 pub(crate) fn pilot_run_crew(state: &PipelineState) -> Option<String> {
+    pilot_run_crew_from_draws(&state.activity_crew_draws)
+}
+
+/// [`pilot_run_crew`] for a reader that projected only the draws out of a
+/// run's serialized state (pilot attribution, which reads thousands of
+/// states per scan and parses only this and its apply steps' task refs).
+pub(crate) fn pilot_run_crew_from_draws(
+    draws: &BTreeMap<String, ActivityCrewDraw>,
+) -> Option<String> {
     [
         CrewPurpose::TaskPilot.config_key().to_string(),
         complexity_crews_key(TaskComplexity::Low),
     ]
     .iter()
-    .find_map(|key| state.activity_crew_draws.get(key))
+    .find_map(|key| draws.get(key))
     .map(|draw| draw.crew.clone())
 }

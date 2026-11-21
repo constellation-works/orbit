@@ -3,6 +3,7 @@
 use super::super::source_cache::SourceCache;
 use chrono::{DateTime, Utc};
 use orbit_automation::{AutomationError, DeferredReason};
+use orbit_common::OrbitError;
 use orbit_common::process::supervisor::{
     Outcome, Periodic, ProcessStopCause, Stdin, Stream, SupervisedChild, Supervision, Termination,
 };
@@ -151,9 +152,90 @@ impl<'a> Source<'a> {
             return Err(AutomationError::Deferred(DeferredReason::SourceDeadline));
         }
 
-        if self.elapsed() > SOURCE_DEADLINE {
-            return Err(AutomationError::Deferred(DeferredReason::SourceDeadline));
-        }
+        let remaining_source_before = SOURCE_DEADLINE
+            .checked_sub(self.elapsed())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or(AutomationError::Deferred(DeferredReason::SourceDeadline))?;
+
+        #[cfg(feature = "test-support")]
+        let frozen_clock = self.started.is_frozen();
+        #[cfg(not(feature = "test-support"))]
+        let frozen_clock = false;
+
+        // A provider read spends the host's GitHub quota as background work:
+        // a read the guard refuses defers this pass and runs nothing. Bound any
+        // rate-limit probe to what remains of this command and source budget,
+        // and re-check both before spawning the provider command.
+        let mut quota_request = gh_quota_request(program, args, env, self.root);
+        // The instant the request's finite budget runs out, so a throttle the
+        // child reports after the wait is recorded inside that budget.
+        let mut quota_deadline = None;
+        let effective_budget = if let Some(request) = quota_request.as_mut() {
+            if !frozen_clock {
+                let probe_budget = budget.min(remaining_source_before);
+                let probe_ms = u64::try_from(probe_budget.as_millis())
+                    .unwrap_or(u64::MAX)
+                    .max(1);
+                request.timeout_ms = Some(probe_ms);
+            }
+            let command_started = super::budget_now();
+            let wall_started = std::time::Instant::now();
+            quota_deadline = orbit_tools::github_quota::gh_request_deadline(request, wall_started);
+            let admitted = orbit_tools::github_quota::admit_gh_request(
+                orbit_tools::github_quota::GithubCaller::Background,
+                request,
+            );
+            let wall_elapsed = wall_started.elapsed();
+            let command_elapsed = super::budget_now()
+                .saturating_duration_since(command_started)
+                .max(wall_elapsed);
+            // A refusal the guard counted is delivered as decided, whatever
+            // the clocks read now; a refusal that met a spent budget came back
+            // uncounted as the typed timeout, so the deferral is that budget's.
+            let timed_out = match admitted {
+                Ok(()) => false,
+                Err(OrbitError::ProcessTimeout { .. }) => true,
+                Err(error) => {
+                    return Err(AutomationError::Deferred(
+                        DeferredReason::EvidenceUnavailable(format!(
+                            "{}: {error}",
+                            command_line(program, args)
+                        )),
+                    ));
+                }
+            };
+            if self.elapsed() >= SOURCE_DEADLINE
+                || (!frozen_clock && wall_elapsed >= remaining_source_before)
+            {
+                return Err(AutomationError::Deferred(DeferredReason::SourceDeadline));
+            }
+            if timed_out {
+                return Err(AutomationError::Deferred(
+                    if !frozen_clock && remaining_source_before <= budget {
+                        DeferredReason::SourceDeadline
+                    } else {
+                        DeferredReason::SourceBudget
+                    },
+                ));
+            }
+            let remaining_command_budget = budget.saturating_sub(command_elapsed);
+            if !frozen_clock && remaining_command_budget.is_zero() {
+                return Err(AutomationError::Deferred(DeferredReason::SourceBudget));
+            }
+            if frozen_clock {
+                budget
+            } else {
+                let remaining_source_after = SOURCE_DEADLINE
+                    .saturating_sub(self.elapsed())
+                    .min(remaining_source_before.saturating_sub(wall_elapsed));
+                if remaining_source_after.is_zero() {
+                    return Err(AutomationError::Deferred(DeferredReason::SourceDeadline));
+                }
+                remaining_command_budget.min(remaining_source_after)
+            }
+        } else {
+            budget
+        };
 
         let stdin = match input {
             None => Stdio::null(),
@@ -219,7 +301,7 @@ impl<'a> Source<'a> {
                 stdin: Stdin::Null,
                 stdout: Stream::Redirected,
                 stderr: Stream::Redirected,
-                timeout: self.supervision_timeout(budget),
+                timeout: self.supervision_timeout(effective_budget),
                 // The source clock, so a frozen or injected test clock does
                 // not start spending the wall-clock budget.
                 clock: Some(&super::budget_now),
@@ -246,11 +328,18 @@ impl<'a> Source<'a> {
             return Err(AutomationError::Deferred(DeferredReason::SourceBudget));
         }
         if !outcome.success {
+            let failure = failure_text(&mut diagnostics, &failure_fallback(&outcome));
+            if let Some(request) = &quota_request {
+                orbit_tools::github_quota::observe_gh_failure_by_deadline(
+                    request,
+                    &failure,
+                    quota_deadline,
+                );
+            }
             return Err(AutomationError::Deferred(
                 DeferredReason::EvidenceUnavailable(format!(
-                    "{}: {}",
+                    "{}: {failure}",
                     command_line(program, args),
-                    failure_text(&mut diagnostics, &failure_fallback(&outcome))
                 )),
             ));
         }
@@ -382,6 +471,39 @@ impl<'a> Source<'a> {
 
 /// Bytes of a child's stderr kept for a deferral reason.
 const FAILURE_TEXT_LIMIT: u64 = 4096;
+
+/// The request the host's GitHub quota guard reads for a `gh` command: the
+/// child inherits this process's environment plus `env`, in `root`. `None`
+/// for any other program.
+fn gh_quota_request(
+    program: &str,
+    args: &[&str],
+    env: &[(&str, &str)],
+    root: &Path,
+) -> Option<orbit_exec::ExecRequest> {
+    if program != "gh" {
+        return None;
+    }
+    let environment_mode = if env.is_empty() {
+        orbit_exec::EnvironmentMode::Inherit
+    } else {
+        let mut merged = std::env::vars().collect::<Vec<_>>();
+        for (key, value) in env {
+            merged.retain(|(name, _)| name != key);
+            merged.push(((*key).to_string(), (*value).to_string()));
+        }
+        orbit_exec::EnvironmentMode::ClearAndSet(merged)
+    };
+    Some(orbit_exec::ExecRequest {
+        program: program.to_string(),
+        args: args.iter().map(|arg| (*arg).to_string()).collect(),
+        current_dir: Some(root.to_string_lossy().into_owned()),
+        timeout_ms: None,
+        stdin_mode: orbit_exec::StdinMode::Null,
+        environment_mode,
+        debug: false,
+    })
+}
 
 fn command_line(program: &str, args: &[&str]) -> String {
     std::iter::once(program)

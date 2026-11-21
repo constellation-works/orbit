@@ -15,7 +15,7 @@
 use super::*;
 
 /// A provider that changes nothing and reports success.
-fn no_op_provider(prepared: &PreparedRebase) -> PathBuf {
+pub(super) fn no_op_provider(prepared: &PreparedRebase) -> PathBuf {
     let provider = prepared.fixture.root.path().join("codex");
     write_executable(&provider, &provider_script(""));
     provider
@@ -23,7 +23,7 @@ fn no_op_provider(prepared: &PreparedRebase) -> PathBuf {
 
 /// Commit `edits` in `repo` as one commit: `Some` writes a file, `None`
 /// removes it.
-fn commit_edits(repo: &Path, edits: &[(&str, Option<&str>)]) -> String {
+pub(super) fn commit_edits(repo: &Path, edits: &[(&str, Option<&str>)]) -> String {
     for (file, contents) in edits {
         match contents {
             Some(contents) => {
@@ -41,7 +41,7 @@ fn commit_edits(repo: &Path, edits: &[(&str, Option<&str>)]) -> String {
 
 /// A one-commit candidate applying `candidate`, stopped on its rebase onto a
 /// base advanced by one commit applying `base`.
-fn stopped_on(
+pub(super) fn stopped_on(
     run_id: &str,
     candidate: &[(&str, Option<&str>)],
     base: &[(&str, Option<&str>)],
@@ -75,7 +75,7 @@ fn assert_refused_untouched(
 
 /// Seed the common ancestor before setup, then stop on two textual sides.
 /// A custom driver may be selected by attribute or by `merge.default`.
-fn marker_free_stop(
+pub(super) fn marker_free_stop(
     run_id: &str,
     ancestor: &str,
     driver: Option<&str>,

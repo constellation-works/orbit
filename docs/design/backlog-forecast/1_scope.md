@@ -1,7 +1,7 @@
 ---
 title: "Scope: backlog forecast v2 from drain admission"
 owner: claude
-last_updated: 2026-11-08
+last_updated: 2026-11-20
 last_validated: 2026-11-08
 status: Draft
 stage: building
@@ -15,7 +15,7 @@ tags: [backlog-forecast, backlog-forecast-v2, analytics-metrics]
 
 # Scope: backlog forecast v2 from drain admission
 
-Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with six implementation tasks below. The per-task riskiness estimator shipped in [ORB-18690], [ORB-18686] shipped the admission factor, [ORB-18687] shipped review-mode sampling, [ORB-18688] shipped attempt outcomes and blocked returns, [ORB-18689] shipped enforce-mode resource fit as `MODEL_VERSION` **6**, [ORB-18853] keeps sub-second and same-instant blocked returns drawable as `MODEL_VERSION` **7**, [ORB-18856] counts censored blocked waits in return-wait totals as `MODEL_VERSION` **8**, [ORB-18691] ships one generation of regression rework and donor-based arrivals as `MODEL_VERSION` **9**, and [ORB-18859] stores retry-inclusive per-task work and spend as `MODEL_VERSION` **10** (see [Shipped so far](#shipped-so-far)). [ORB-20673] shifts each attempt by a residual correction as `MODEL_VERSION` **15**, [ORB-20728] counts one residual per distinct task as `MODEL_VERSION` **16**, [ORB-20729] applies that correction to the full-script total as `MODEL_VERSION` **17**, and [ORB-21949] fits it and scores task-level calibration on one forecast per task, withholding a cohort whose held-out p90 coverage drops, as `MODEL_VERSION` **18**. The explicitly listed residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) remain planned. “v2” names the feature revision; implementations increment `MODEL_VERSION` from the value they find.
+Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with six implementation tasks below. The per-task riskiness estimator shipped in [ORB-18690], [ORB-18686] shipped the admission factor, [ORB-18687] shipped review-mode sampling, [ORB-18688] shipped attempt outcomes and blocked returns, [ORB-18689] shipped enforce-mode resource fit as `MODEL_VERSION` **6**, [ORB-18853] keeps sub-second and same-instant blocked returns drawable as `MODEL_VERSION` **7**, [ORB-18856] counts censored blocked waits in return-wait totals as `MODEL_VERSION` **8**, [ORB-18691] ships one generation of regression rework and donor-based arrivals as `MODEL_VERSION` **9**, and [ORB-18859] stores retry-inclusive per-task work and spend as `MODEL_VERSION` **10** (see [Shipped so far](#shipped-so-far)). [ORB-20673] shifts each attempt by a residual correction as `MODEL_VERSION` **15**, [ORB-20728] counts one residual per distinct task as `MODEL_VERSION` **16**, [ORB-20729] applies that correction to the full-script total as `MODEL_VERSION` **17**, [ORB-21949] fits it and scores task-level calibration on one forecast per task, withholding a cohort whose held-out p90 coverage drops, as `MODEL_VERSION` **18**, and [ORB-25278] removes its cohort-center spread stretch and adds a held-out p50 check as `MODEL_VERSION` **20**, and [ORB-25806] recovers in-origin defect records and reports adjusted totals over a bounded share of fix-history gaps as `MODEL_VERSION` **21**. The explicitly listed residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) remain planned. “v2” names the feature revision; implementations increment `MODEL_VERSION` from the value they find.
 
 Bearing: Orbit records managed invocations, task status history, leaf occupancy, admission decisions and host resource profiles. The shared service is `crates/orbit-core/src/application/backlog_forecast/`, with sampling in `backlog_forecast/model.rs`, scenario aggregation in `backlog_forecast/simulation.rs`, synthetic bundles in `backlog_forecast/rework.rs`, and scoring in `backlog_forecast/scoring.rs`. It serves the owner sweep clock and `crates/orbit-web/src/api/diagnostics/backlog_forecast/`. The drain already owns the admission rules this forecast must reuse ([auto-concurrency](../auto-concurrency/2_design.md), [distributed drain](../distributed-drain/1_overview.md)).
 
@@ -68,24 +68,74 @@ with empty selectors made the whole workspace unavailable.
   current selectors nor history give a footprint) or
   `origin_completion_missing` (the origin is done but its durable done
   event is gone, so the detection lag is unknown; counted per link).
-- **Support policy.** A gap counts against the pools its origins would join:
-  the complexity × crew pool of an origin with that complexity and crew, and
-  every workspace pool. An item's rework is supported when it has a risk
-  probability, a nonempty pool and no gap in that pool. A gap outside the
-  pool an item samples no longer withholds its totals. A gap inside it does:
-  adjusted totals stay null with `pre_regression_baseline`. A gap is not
-  dropped from a pool it belongs to, because that would bias the bundle
-  toward the fixes whose evidence survived. No completed fix at all leaves
-  the pool empty and the rework unavailable, never zero.
+- **Support policy.** Revised by [ORB-25806] as model **21**, regression
+  rework factor revision **3**. Under model 14 to 20 any gap in a sampled
+  pool withheld that scenario's adjusted totals. Every gap also joins every
+  workspace pool, so in a large workspace, steady hand repairs kept the
+  adjusted totals null in every stored snapshot, and whole-backlog
+  calibration never scored one.
+  - *In-origin review repairs are recovered, not gaps.* A fix tagged
+    `defect-record` that has no measured delivery of its own is a record of
+    a defect repaired inside its origin's delivery, typically by that
+    origin's landing review in the origin's worktree. It is recovered when
+    every simulating origin is a task it was `spawned_from` and each of
+    those origins has a measured delivery. Its repair spend is then already
+    inside that origin's history sample, which the forecast draws as
+    ordinary initial work, so it is not drawn again as follow-up.
+    Otherwise it is an `unmeasured_delivery` gap like any other. The
+    support report counts it as `recovered_in_origin_review`. Scoring
+    applies the same rule to a model 21 or later snapshot's actuals: the
+    repair is counted as a follow-up but adds no spend of its own, so the
+    origin's measured tokens and USD are reported once and stay scorable.
+    A hand repair with no invocation keeps its missing actuals, and earlier
+    models keep their original scoring.
+  - *Gaps are bounded or withheld, never zero.* Every other gap (an
+    unmeasured hand or operator repair, an unrecoverable footprint, a
+    missing origin completion) still counts against the pools its origins
+    would join: the complexity × crew pool of an origin with that
+    complexity and crew, and every workspace pool. A gap is never dropped
+    from a pool it belongs to and never drawn as a zero-cost fix. A pool
+    holding gaps is *bounded* when it has at least five bundles and its
+    gaps are at most 10% (`max_bounded_gap_share`) of its fix observations
+    (gaps plus its distinct drawn fixes). A bounded pool reports adjusted
+    totals drawn from its measured bundles. The scenario's
+    `regression_rework.bounded_gap` then discloses the bounded members'
+    distinct `gaps`, `drawn_fixes`, `gap_share` (the fraction of those fix
+    observations that are gaps), `max_gap_share`, `by_reason` and `tasks`.
+    An unbounded pool with any gap still withholds the scenario's adjusted
+    totals with `pre_regression_baseline`.
+  - *Honest limitation.* A bounded forecast assumes the unmeasured fixes
+    cost what the measured bundles cost. Bundles of an origin with both
+    measured and hand-repaired fixes are drawn without the hand repairs. The
+    disclosed `gap_share` reports how many fix observations are unmeasured
+    (each bounded pool holds at most 10%), not how far their costs may differ
+    from the measured ones; that error is neither bounded nor estimated. No
+    proxy cost is invented for a hand repair.
+  - An item's rework is supported when it has a risk probability, a
+    nonempty pool, and either no gap in it or bounded gaps. A gap outside
+    the pool an item samples does not affect it. No completed fix at all,
+    or a pool whose every fix is unmeasured, leaves the pool empty and the
+    rework unavailable (`regression_history_missing`), never zero.
 - **Response.** `inputs.regression_rework` (and each scenario's
-  `regression_rework.support`) keeps `missing_fix_history`, now the
-  unsupported gap count, and adds `missing_by_reason`,
-  `recovered_footprints` and `excluded`. Each task prediction and stored
-  task adds `regression_history_gaps`, the gaps in its pool.
-  `unavailable.regression_history_missing` is true when a member's pool is
-  empty or holds a gap. The new `unavailable.regression_history_gaps`
-  counts the gaps relevant to the scenario's members by reason.
-  `coverage.regression_history_missing` counts those tasks.
+  `regression_rework.support`) keeps `missing_fix_history`, the count of all
+  recorded gaps with bounded ones included (not only the unsupported ones),
+  and adds `missing_by_reason`, `recovered_footprints` and `excluded`. Each
+  task prediction and stored task adds `regression_history_gaps`, the gaps in
+  its pool.
+  `unavailable.regression_history_missing` is true only when a member's
+  `history_supported` is false: its pool is empty or holds a gap that is not
+  bounded. A bounded gap pool leaves it false. The new
+  `unavailable.regression_history_gaps` counts the gaps relevant to the
+  scenario's members by reason.
+  `coverage.regression_history_missing` counts those tasks. Model 21 adds
+  `coverage.regression_history_bounded`, the tasks reported over bounded
+  gaps, along with `support.recovered_in_origin_review`,
+  `support.max_bounded_gap_share` and the scenario's
+  `regression_rework.bounded_gap`. It is null whenever any included member's
+  rework is unsupported (`regression_rework.available` is false), even when
+  another pool is bounded. It is present only when every included member's
+  rework is supported (a risk probability and a supported pool) and at least
+  one of those pools is bounded.
 - **Storage.** Stored model-13 rows stay readable and scored under their
   own version. While 14 was current, the default read served only a
   model-14 snapshot, so a fresh model-13 row was recomputed live, under
@@ -129,17 +179,23 @@ read serves the newest stored forecast instead of recomputing it.
 
 Residual correction [ORB-20673] counts one residual per distinct task as
 model version **16** [ORB-20728], applies to the full script as model
-version **17** [ORB-20729], and reads one documented forecast per task with
-a held-out p90 check as model version **18** [ORB-21949]. The simulation still resamples delivery
-history. Before a script is scheduled, a log-affine map learned from
-scored per-task residuals is applied once per metric to the script's
+version **17** [ORB-20729], reads one documented forecast per task with
+a held-out p90 check as model version **18** [ORB-21949], and shifts by
+the fitted p50 adjustment only, with a held-out p50 check, as model
+version **20** [ORB-25278]. The simulation still resamples delivery
+history. Before a script is scheduled, the map learned from scored
+per-task residuals is applied once per metric to the script's
 uncorrected full-script total, and its steps are scaled so their
 corrected sum equals that corrected total. Model 16 applied the map to
-each attempt step instead, so with non-zero spread the corrected steps
-did not sum to the correction of the total the residuals were trained
-on. Drain time, cost and tokens inherit the shift, including generated
-rework and arrival draws, because the schedule charges the corrected
-attempts.
+each attempt step instead, so the corrected steps did not sum to the
+correction of the total the residuals were trained on. Models 15–19
+also stretched each draw by `spread * (ln(x) - ln(center))`, where
+`center` was the cohort's median base p50 across tasks: a task whose
+own base p50 sat far from that center was shifted as if its median
+were a tail draw, up to the `±ln(10)` clamp, and small tasks were
+shrunk the other way. Model 20 drops that term. Drain time, cost and
+tokens inherit the shift, including generated rework and arrival
+draws, because the schedule charges the corrected attempts.
 
 - **Fit.** For each metric (work hours, tokens, USD) and complexity, training
   uses only stored forecasts of the current model version. A residual is
@@ -163,26 +219,36 @@ attempts.
   stored). Weight is `0.5` raised to `age_days / 14`: the half-life is
   **14 days**, and each task is weighted once. A residual older than **90
   days** is dropped. Both log adjustments, and the shift applied to a draw,
-  are clamped to `±ln(10)`. The map is
-  `ln(x') = ln(x) + q50 + spread * (ln(x) - ln(center))`. `spread` is
-  `(q90 - q50) / ln(base p90 / base p50)` when that log ratio exceeds 0.05,
-  otherwise 0, so a cohort with no stored spread is the multiplier
-  `exp(q50)`. `center` is the weighted median of the base p50.
+  are clamped to `±ln(10)`. From model 20 the map is
+  `ln(x') = ln(x) + q50`: every draw in the cohort is multiplied by
+  `exp(q50)`, so a task's corrected p50 is its base p50 times `exp(q50)`
+  however far that base p50 sits from the cohort center, with no
+  cross-task extrapolation toward or away from it. The payload keeps
+  `spread` at `0`, and keeps `center` (the weighted median of the base
+  p50) and `scale_ratio` (the weighted median base p90/p50) as cohort
+  diagnostics the map no longer uses.
 - **Minimum n.** `n` is the number of distinct tasks in the cohort. A cohort
   with fewer than **8** is reported and not applied (`withheld:
   "below_min_n"`), even when those tasks appear in many stored forecasts.
   Those draws stay uncorrected. `weight` is the sum of the kept residuals'
   weights, one per task.
-- **Held-out p90.** A cohort that meets the minimum is checked out of sample
-  before it is applied. Each kept task with a positive base p90 is held out
-  in turn: the cohort is refitted without it, and the task counts as a base
-  hit when its actual is at or under its base p90 and as a corrected hit
-  when it is at or under that base p90 mapped by the refitted terms. These
-  are unweighted task counts. When the corrected coverage is below both the
-  base coverage and the **90%** target, the cohort is not applied
-  (`withheld: "p90_holdout"`) and its draws stay uncorrected. A correction
-  that narrows an over-wide base toward 90% still applies; its `holdout`
-  shows the lower coverage.
+- **Held-out p90 and p50.** A cohort that meets the minimum is checked out
+  of sample before it is applied. Each kept task with a positive base p90
+  is held out in turn: the cohort is refitted without it, and the task
+  counts as a base hit when its actual is at or under its base p90 and as
+  a corrected hit when it is at or under that base p90 mapped by the
+  refitted terms. The same held-out task is also scored at the p50: its
+  base and corrected `ln(actual / p50)` errors are collected over the
+  cohort. These are unweighted task counts and unweighted error medians.
+  When the corrected p90 coverage is below both the base coverage and the
+  **90%** target, the cohort is not applied (`withheld: "p90_holdout"`)
+  and its draws stay uncorrected. When the held-out corrected p50 error
+  is worse than the base's — either `|median ln(actual / corrected p50)|`
+  exceeds the base's, or the median `|ln(actual / corrected p50)|` does —
+  the cohort is likewise not applied (`withheld: "p50_holdout"`). The p90
+  check is reported first when both fail. A correction that narrows an
+  over-wide base toward 90% still applies; its `holdout` shows the lower
+  coverage and the p50 figures.
 - **No leakage.** A task trains a forecast only when it is done, its
   complexity still matches the stored bucket, and its durable done time is
   strictly after that forecast's `forecast_at`, within 90 days, and not
@@ -199,23 +265,29 @@ attempts.
   memory. The fit is one pass over the forecasts scoring already loaded
   (the newest 60 rows, plus up to 60 mature snapshots per version). It is
   recomputed for each forecast. There is no incremental table and no
-  migration. A version bump starts with no correction: version 18 does not
-  inherit version 17's residuals, version 17 did not inherit version 16's,
-  version 16 did not inherit version 15's,
-  and version 15 did not inherit version 14's.
+  migration. A version bump starts with no correction: version 20 does
+  not inherit version 19's residuals, version 18 did not inherit version
+  17's, version 17 did not inherit version 16's, version 16 did not
+  inherit version 15's, and version 15 did not inherit version 14's.
 - **Earlier versions.** Scoring branches are unchanged apart from the task
   population below. Versions before 15 keep their own hour measure and hit
   rates under `calibration.by_model_version`. Model 15's correction rows
   stay scored under version 15 and do not train version 16; model 16's rows
-  likewise do not train version 17, nor model 17's version 18.
+  likewise do not train version 17, nor model 17's version 18, nor model
+  19's version 20.
 - **Payload.** `inputs.correction` reports `half_life_days`, `window_days`,
   `min_n`, `max_abs_log_adjust`, `population`
   (`first_not_started_forecast_per_task`), `p90_holdout_target` and one
   cohort per complexity and metric (`n`, `weight`, `applied`, `withheld`
-  (`null`, `below_min_n` or `p90_holdout`), `holdout` (`method:
-  "leave_one_out"`, `n`, `base_under_p90`, `corrected_under_p90`, or
-  `null` below the minimum), and the terms when `n > 0`). `n` counts
-  distinct tasks. `timing.correction_ms` is how long that pass took.
+  (`null`, `below_min_n`, `p90_holdout` or `p50_holdout`), `holdout`
+  (`method: "leave_one_out"`, `n`, `base_under_p90`,
+  `corrected_under_p90`, `base_under_p50`, `corrected_under_p50`,
+  `base_median_log_p50_error`, `corrected_median_log_p50_error`,
+  `base_median_abs_log_p50_error` and
+  `corrected_median_abs_log_p50_error` (each also under its
+  `*_p50_median_*` alias), or `null` below the minimum), and the terms
+  when `n > 0`). `n` counts distinct tasks. `timing.correction_ms` is
+  how long that pass took.
   `assumptions.residual_correction` is `per_metric_complexity_log_affine`.
 - **Survivorship.** Training uses only tasks that reached done inside the
   window. Work still in progress, rejected, or censored past the window is
@@ -322,7 +394,7 @@ A read-only, admission-faithful forecast: p50/p90 elapsed time to drain, USD and
 - **Risk.** One shared `task_riskiness_model` scores the initial cohort. Its probability is consumed unchanged. A missing estimate uses a shrunk, supported joint crew × complexity prior, else the supported workspace base rate (both at the configured risk minimum support). `risk_prior_fallbacks` counts those tasks; `risk_unestimated` counts missing supported priors. The original `riskiness` object stays null where the task API has no estimate. Predictions and stored tasks include it, `regression_probability` and `regression_probability_basis` (`estimate`, `crew_complexity`, `workspace`, `unsupported`), plus bundle sample count and basis.
 - **Bundles.** Completed fixes in the delivery lookback with invocation evidence and usable footprints supply distinct historical donors. Bundles group their `regression_from` links by original task, preserving multiplicity and non-negative original-done-to-filing delays. Origins may precede the delivery lookback. Matching origin complexity/crew bundles are preferred at five observations, else the workspace bundle pool; a nonempty pool below five remains drawable and is counted as thin. No ordinary delivery substitutes for missing fix history. A measured fix without usable invocation/footprint or origin-done evidence makes adjusted totals unavailable instead of silently shrinking its bundle; from model 14 that applies only to the pools the fix's origins join, after recovery from durable history and with non-sample links excluded (see [Shipped so far](#shipped-so-far)). Known initial fixes suppress their observed copies; shared multi-culprit donors count once per scenario.
 - **Admission.** After an initial task finishes, a Bernoulli draw selects a bundle with its risk probability. Fixes enter backlog after their detection delay, using donor priority/tags, latent locks and attempt scripts through the same admission and gap-fit pass. Conflict rows are frozen once and remapped for generated instances; instances of the same editing donor conflict. Future scheduled fixes keep an otherwise idle queue open. Detections beyond 90 days are counted and excluded from bounded spend. Only initial tasks generate new regression work.
-- **Response.** Both scenarios add `regression_rework` with `available`, `expected_followups`, follow-up count/work-hour/token/USD quantiles, `generation_limit: 1`, expected `detection_outside_horizon` and history support. Initial complexity rows exclude synthetic work; `arrival_work` separates exogenous work. Missing fix metrics propagate null. Unsupported priors or fix evidence null the adjusted scenario totals/probabilities and retain an explicit `pre_regression_baseline`; from model 14 the fix-evidence part is per sampled pool, with reasons. Coverage adds prior/missing-risk and missing/thin-regression-history counts.
+- **Response.** Both scenarios add `regression_rework` with `available`, `expected_followups`, follow-up count/work-hour/token/USD quantiles, `generation_limit: 1`, expected `detection_outside_horizon` and history support. Initial complexity rows exclude synthetic work; `arrival_work` separates exogenous work. Missing fix metrics propagate null. Unsupported priors or fix evidence null the adjusted scenario totals, probabilities and `schedulable_subset` quantiles (time, tokens and USD) and retain an explicit `pre_regression_baseline`, whose `schedulable_subset` still carries those subset quantiles. The adjusted scenario never keeps a subset quantile drawn without the regression follow-up it claims to include. The dashboard labels a subset figure taken from that baseline as the pre-regression baseline, which excludes regression follow-up work. From model 14 the fix-evidence part is per sampled pool, with reasons. Coverage adds prior/missing-risk and missing/thin-regression-history counts.
 - **Arrivals.** Gross seven-day filing rates remain. `adjusted_per_day` excludes `regression_from` filings (`excluded_regression_filings`). Arrivals sample a completed historical footprint donor by source class at five samples, else the workspace donor pool, including observed no-diff work; its measured delivery and resolved outcome pool supply the attempt script. Missing donor support makes the arrivals estimate unavailable. `arrivals.coverage` retains its delivery/metric counts and adds donor and class-fallback support. `arrival_conflicts` is `historical_footprint_donors`; `arrival_resources` is `donor_profile`.
 - **Storage/scoring.** Model-9 rework-inclusive totals stay `provisional` until their 90-day observation cutoff. Reads combine the newest 60 snapshots with up to 60 mature model-9-or-later snapshots per version. Actual first-generation fixes are matched by `regression_from` to the original cohort, including filings after it first emptied, deduplicated and charged only if absent from that cohort. Spend is bounded at the horizon; a crossing invocation has unknown tokens/USD. Each version reports aggregate rework count/hour/token/USD hit rates. Old versions retain their scoring semantics.
 
@@ -366,7 +438,7 @@ Build one dependency graph, resolving identifiers through the same registry-glob
 | Other out-of-workspace backlog/in-progress work | Model only if its remaining-phase history and execution location are available; otherwise unforecastable. Never simulate dispatching remote work on the selected host. |
 | Reference the shared index declares unverifiable here | Preserve the drain predicate's permissive treatment; count `unverifiable_dependencies` and disclose it. Do not invent a stricter local rule. |
 
-Shared support nodes are deduplicated. External work delays the workspace cohort and contributes any known lock/resource contention, but its own spend is not charged to workspace totals. Its uncertainty propagates to dependents. An unforecastable initial task makes the full-cohort time/cost/token totals unavailable; a separately labelled `schedulable_subset` may show a partial estimate with numerator and denominator, never masquerading as the full backlog.
+Shared support nodes are deduplicated. External work delays the workspace cohort and contributes any known lock/resource contention, but its own spend is not charged to workspace totals. Its uncertainty propagates to dependents. An unforecastable initial task makes the full-cohort time/cost/token totals unavailable; a separately labelled `schedulable_subset` may show a partial estimate with numerator and denominator, never masquerading as the full backlog. When regression follow-up is unsupported, the adjusted scenario's subset quantiles are null and that partial estimate remains only on `pre_regression_baseline`.
 
 ### One shared admission pass
 
@@ -494,14 +566,14 @@ Retain `backlog_forecasts` (introduced by store migration v62) and `BacklogForec
 
 Persist the additive response inputs and per-task predictions: snapshot status/dependencies/footprint hash, phase/review basis, start distributions, completion probabilities, riskiness estimator version and expected synthetic work. Store the factor manifest alongside numeric `model_version`; old rows lacking these fields remain readable under their original measure. Do not rewrite old predictions with today's risk, policy or task metadata.
 
-**Bump once per landed forecast factor**, in integration order: (1) dependencies/locks/footprint/reservations/dispatch, (2) review-mode cells, (3) outcome/return phases, (4) resource fit, (5) regression rework. The standalone task-riskiness feature versions its estimator independently; when consumed or recalibrated in forecasts it also bumps `model_version`. Record each factor's own revision in `inputs.admission_factors` so reordered implementations remain identifiable. Further changes to sampling, fallback, timing, risk priors or quantile/scoring meaning require another bump, including bug fixes that alter predictions. Model 15 is that bump for the residual correction. Model 16 [ORB-20728] recounts it by distinct task, one residual from the latest eligible forecast, so repeated snapshots cannot satisfy the minimum. Model 17 [ORB-20729] applies it to the full-script total and distributes it over the steps. Model 18 [ORB-21949] fits it on the first not-started forecast per task and withholds a cohort that lowers held-out p90 coverage. None adds an admission factor. Display-only changes do not. Never reuse a version for different enabled factors. Sequential hourly snapshots allow factor effects to be compared with support/changed-workload caveats, not claimed as causal ablations.
+**Bump once per landed forecast factor**, in integration order: (1) dependencies/locks/footprint/reservations/dispatch, (2) review-mode cells, (3) outcome/return phases, (4) resource fit, (5) regression rework. The standalone task-riskiness feature versions its estimator independently; when consumed or recalibrated in forecasts it also bumps `model_version`. Record each factor's own revision in `inputs.admission_factors` so reordered implementations remain identifiable. Further changes to sampling, fallback, timing, risk priors or quantile/scoring meaning require another bump, including bug fixes that alter predictions. Model 15 is that bump for the residual correction. Model 16 [ORB-20728] recounts it by distinct task, one residual from the latest eligible forecast, so repeated snapshots cannot satisfy the minimum. Model 17 [ORB-20729] applies it to the full-script total and distributes it over the steps. Model 18 [ORB-21949] fits it on the first not-started forecast per task and withholds a cohort that lowers held-out p90 coverage. Model 20 [ORB-25278] shifts by the fitted p50 adjustment only and withholds a cohort whose held-out p50 error worsens. Model 21 [ORB-25806] is regression rework factor revision 3: in-origin defect records and bounded fix-history gaps (see the Support policy under [Shipped so far](#shipped-so-far)); as a bump it starts the residual correction uncorrected. None adds an admission factor. Display-only changes do not. Never reuse a version for different enabled factors. Sequential hourly snapshots allow factor effects to be compared with support/changed-workload caveats, not claimed as causal ablations.
 
 Keep the newest-60-snapshot read for v1 scoring and recent v2 provisional diagnostics. For v2 horizon metrics also read up to the newest 60 mature snapshots per model version, with `forecast_at` at least 90 days old; otherwise hourly snapshots would age out of a 60-row window before they were ever scoreable. Cache these bounded maturity reads and report their window/counts. Partition calibration by model version/factor manifest and execution-host/mode. Keep v1 scoring unchanged: invocation-union hours and its original exclusions. For v2:
 
 - Per-task work/spend uses post-forecast episode/invocation usage, including failed/abandoned attempts. Score predicted first start/rank from durable admission timestamps, and completion probability as a binary outcome at the 90-day cutoff (Brier score plus observed frequency by probability band). Still-pending young cohorts are censored, not misses or successes.
 - A full drain requires every initial task and attributable synthetic follow-up counterpart to finish. A blocked task is pending; rejected/archived is an absorbing incomplete outcome. Do not call an empty active queue settled/done. Time-to-drain calibration uses completed, fully covered cohorts and also reports non-drain rate at the horizon, so successful cohorts alone cannot conceal survivorship.
 - Match actual follow-ups by `regression_from` to the snapshot's initial task set and sampled generation policy; score aggregate rework count/hours/cost, not fictional synthetic IDs. Include follow-ups filed after the original backlog first went empty. Rework-inclusive drain/spend calibration stays provisional until the 90-day observation cutoff, even if initial work finished early. Do not add a real initial fix twice. Exogenous-arrivals scenarios are not stored/scored canonically.
-- **Baseline calibration.** [ORB-21950] scores the pre-regression baseline independently while adjusted totals are withheld. `calibration.forecast_level.adjusted` names the existing whole-forecast hit rates for drain time, tokens and USD; the direct metric fields remain aliases for those adjusted rates. `calibration.forecast_level.pre_regression_baseline` independently scores the stored baseline quantiles for the same metrics, each with its own `n`, `under_p50` and `under_p90`. Both compare against the same observed outcome, including regression follow-ups within the 90-day window: baseline accuracy measures the prediction actually shown when adjusted totals are withheld, including the effect of omitted regression work. The dashboard labels both populations and shows their counts and rates. No baseline is substituted for an adjusted prediction, no baseline is fabricated for older rows that lack one, and missing quantiles leave that metric unscored with null rates at `n=0`. Settlement, non-drain handling, exclusions and model-version partitions are unchanged; initial completion does not settle a forecast early because later regression filings still count.
+- **Baseline calibration.** [ORB-21950] scores the pre-regression baseline independently while adjusted totals are withheld. `calibration.forecast_level.adjusted` names the existing whole-forecast hit rates for drain time, tokens and USD; the direct metric fields remain aliases for those adjusted rates. `calibration.forecast_level.pre_regression_baseline` independently scores the stored baseline quantiles for the same metrics, each with its own `n`, `under_p50` and `under_p90`. Both compare against the same observed outcome, including regression follow-ups within the 90-day window: baseline accuracy measures the prediction actually shown when adjusted totals are withheld, including the effect of omitted regression work. The dashboard labels both populations and shows their counts and rates. No baseline is substituted for an adjusted prediction, no baseline is fabricated for older rows that lack one, and missing quantiles leave that metric unscored with null rates at `n=0`. [ORB-25806] labels the two series: `forecast_level.series` lists each `key` with what it `scores`. Each `calibration.forecasts[]` entry also carries its stored `pre_regression_baseline` quantiles and `scorable_series`, the series whose quantiles it carries. A withheld snapshot therefore shows that it matures into the baseline series rather than the adjusted one. Settlement, non-drain handling, exclusions and model-version partitions are unchanged; initial completion does not settle a forecast early because later regression filings still count.
 - Validate critical-path and effective-parallelism diagnostics only when evidence from admission, phase, and lock release suffices; otherwise count `unscorable_schedule`. Attribute observed first-gate waits only when the admission records support them; do not manufacture them from invocation gaps.
 - Report p50/p90 coverage fractions and sample counts for each measure. Exclude deleted/re-scoped tasks with explicit reasons, including material dependency/footprint/complexity changes; missing actual metrics are unscorable. A genuine blocked or rejected outcome is **not** a metadata exclusion. If any initial task is excluded, no whole-cohort time/cost accuracy claim is made. Durable done time (legacy last-invocation-end fallback flagged separately) remains the completion source, never `updated_at`.
 
@@ -580,6 +652,7 @@ All six implementation tasks carry `backlog-forecast-v2` and depend on this scop
 | [ORB-20728] | Shipped: the residual correction keeps one residual per distinct task (the latest eligible forecast), so `n` and weight count independent tasks and a repeated snapshot cannot meet the minimum of 8 (model 16). |
 | [ORB-20729] | Shipped: the residual correction is applied to the full-script total and distributed over its steps, matching the full-task totals it is trained on (model 17). |
 | [ORB-21949] | Shipped: the correction and task-level calibration read one forecast per task (the first taken before work started), calibration reports per-complexity hit rates, and a cohort whose leave-one-out p90 coverage falls below the base and 90% is withheld (model 18). |
+| [ORB-25806] | Shipped: in-origin defect-record fixes recovered from the origin's measured delivery, adjusted totals reported over a disclosed `bounded_gap` of at most 10% of a pool's fix observations, and labeled calibration series (model 21, regression rework factor 3). |
 
 ## Task References
 
@@ -606,5 +679,6 @@ All six implementation tasks carry `backlog-forecast-v2` and depend on this scop
 - [ORB-20729] — applies the residual correction to the full-script total (model 17).
 - [ORB-21949] — fits and scores task-level calibration on the first not-started forecast per task (model 18).
 - [ORB-21950] — scores the pre-regression baseline calibration independently while adjusted totals are withheld.
+- [ORB-25806] — recovers in-origin defect records and bounds fix-history gaps so the adjusted forecast can be reported and scored (model 21).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

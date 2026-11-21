@@ -26,6 +26,7 @@
   color: var(--fg-mute);
   white-space: nowrap;
 }
+.notice-kind-warn { color: var(--warn-fg); font-weight: 600; }
 .notice-kind-incident { color: var(--state-pending); }
 .notice-kind-maintenance { color: var(--accent); }
 /* Heading row: the page hint on the left, the Post control on the right.
@@ -45,7 +46,7 @@
 .notice-group-heading {
   margin: 0;
   padding: 12px 16px 6px;
-  border-top: 1px solid var(--hair);
+  border-top: 1px solid var(--border-strong);
   color: var(--fg-mute);
   font: 600 11px var(--font-sans);
   letter-spacing: 0.06em;
@@ -73,7 +74,7 @@
 .notice-kind-partial { color: var(--state-pending); }
 .notice-coverage-banner .notice-banner-meta { overflow-wrap: anywhere; }
 
-/* The list: flat rows split by a hairline, on the panel's own edges.
+/* The list: flat rows split by a visible edge, on the panel's own edges.
    The dock is 320–440px, so a row is two lines at every width: the facts,
    then the title. Scope and time ellipsize; the title wraps. */
 #notices-panel > .body {
@@ -84,7 +85,7 @@
   overflow-x: hidden;
   overflow-y: auto;
 }
-.notice-row { border-bottom: 1px solid var(--hair); min-width: 0; }
+.notice-row { border-bottom: 1px solid var(--border-strong); min-width: 0; }
 .notice-row:last-child { border-bottom: 0; }
 /* Opening a row or switching the list rebuilds rows; that is not new data. */
 .notice-row.data-changed, .notice-row.data-new { animation: none; }
@@ -120,6 +121,8 @@
   border-radius: 50%;
   background: var(--fg-disabled);
 }
+.notice-severity-warn { color: var(--warn-fg); font-weight: 600; }
+.notice-severity-warn::before { background: var(--warn-fg); }
 .notice-severity-incident { color: var(--state-failed); font-weight: 600; }
 .notice-severity-incident::before { background: var(--state-failed); }
 .notice-severity-maintenance { color: var(--state-pending); }
@@ -131,7 +134,7 @@
   white-space: normal;
   overflow-wrap: anywhere;
 }
-.notice-incident .notice-title { color: var(--fg-strong); font-weight: 600; }
+.notice-warn .notice-title, .notice-incident .notice-title { color: var(--fg-strong); font-weight: 600; }
 .notice-ended .notice-title { color: var(--fg-dim); font-weight: 400; }
 .notice-scope {
   grid-area: scope;
@@ -251,7 +254,28 @@
 .notice-post-actions { display: flex; gap: 8px; margin-top: 8px; }
 
 @media (max-width: 760px) {
-  .notice-banner { padding: 6px 12px; }
   .notice-close-open { min-width: 44px; min-height: 36px; }
   .notice-group-heading, .notice-open-empty, .notice-coverage { padding-inline: 12px; }
+  /* Phones: each banner notice is one line above the content, so the banner
+     takes about 27px instead of a wrapped block of up to 109px. The chip keeps
+     the severity, the title ends in an ellipsis, and "Notices" opens the full
+     text. The metadata line is on that list too. An incident is an error the
+     operator must act on, so its title wraps in full (STD-07 §R14). */
+  .notice-banner { padding: 4px 12px; }
+  .notice-banner-row { flex-wrap: nowrap; gap: 8px; padding: 0; }
+  .notice-banner-row > .notice-chip,
+  .notice-banner-link { flex: 0 0 auto; white-space: nowrap; }
+  .notice-banner-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow-wrap: normal;
+  }
+  .notice-banner-meta { display: none; }
+  /* The link's tap target is taller than its line, with no visible space added. */
+  .notice-banner-link { padding: 6px 4px; margin: -6px -4px; }
+  .notice-banner-row.notice-incident { flex-wrap: wrap; }
+  .notice-banner-row.notice-incident .notice-banner-title { flex-basis: 100%; overflow: visible; text-overflow: clip; white-space: normal; }
 }

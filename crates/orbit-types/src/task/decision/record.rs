@@ -141,6 +141,9 @@ pub enum TaskDecision {
     /// A failed head held for an inherited base failure, recorded on
     /// `pr_auto_fix_base_red`.
     PrAutoFixBaseRed(crate::workflow::PrAutoFixBaseRed),
+    /// The failed checks, with signatures, an admitted check repair was
+    /// handed on one head, recorded on `pr_auto_fix_head_failure`.
+    PrAutoFixHeadFailure(crate::workflow::PrAutoFixHeadFailure),
     /// Code scanning alert evidence a per-alert sweep task was filed from,
     /// recorded on its `created` event.
     CodeScanningAlert(CodeScanningAlertEvidence),
@@ -171,6 +174,12 @@ pub enum TaskDecision {
     /// [`RecordedCrewAssignment::from_entry`], which decodes entries written
     /// before it from their note.
     CrewAssignment(RecordedCrewAssignment),
+    /// The complete failed-jobs retry plan a CI rerun reservation admitted,
+    /// recorded on the `ci_check_rerun_reserved` event; its note is one line
+    /// for people. Read it through
+    /// [`CiRerunPlan::from_reservation_entry`](crate::workflow::CiRerunPlan::from_reservation_entry),
+    /// which decodes entries written before it from their note.
+    CiRerunReserved(Box<crate::workflow::CiRerunPlan>),
 }
 
 /// Creation receipt of a task an auto-task job step minted.

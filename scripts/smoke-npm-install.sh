@@ -21,6 +21,7 @@
 # --local-package-check instead builds/inspects the unpublished local candidate.
 # --local-binary-check PATH runs functional checks on a built candidate without npm.
 # --dry-run-version-assertion only self-tests the version comparison predicate.
+# --dry-run-registry-isolation only self-tests the registry-isolation refusal.
 set -euo pipefail
 NPM_PKG="@orbit-tools/cli"
 
@@ -44,12 +45,108 @@ run_version_assertion_test() {
   echo "PASS: version assertion rejects a mismatched tag version"
 }
 
+# A refused `workspace init` must not leave a workspace or checkout in the
+# host registry. On failure print FAIL and the registry contents: a bare
+# non-zero exit hides which registration survived.
+assert_registry_isolated() {
+  local registry="$1"
+  local scratch out err status
+  mkdir -p "$(dirname "$registry")" 2>/dev/null || true
+  if ! scratch="$(mktemp -d "$(dirname "$registry")/registry-check.XXXXXX" 2>/dev/null)" || [[ -z "$scratch" || ! -d "$scratch" ]]; then
+    echo "FAIL: diagnostic scratch allocation failed" >&2
+    return 1
+  fi
+  out="$scratch/out"
+  err="$scratch/err"
+  status=0
+  node -e '
+const fs = require("fs");
+const path = process.argv[1];
+const registry = fs.existsSync(path) ? JSON.parse(fs.readFileSync(path, "utf8")) : {};
+const workspaces = registry.workspaces ?? [];
+const checkouts = registry.checkouts ?? [];
+if (workspaces.length || checkouts.length) {
+  console.error("registered workspaces: " + JSON.stringify(workspaces));
+  console.error("registered checkouts: " + JSON.stringify(checkouts));
+  process.exit(1);
+}
+' "$registry" >"$out" 2>"$err" || status=$?
+  if [[ "$status" -eq 0 ]]; then
+    rm -rf "$scratch"
+    return 0
+  fi
+  echo "FAIL: refused workspace init still registered a workspace" >&2
+  echo "--- stdout ---" >&2
+  cat "$out" >&2
+  echo "--- stderr ---" >&2
+  cat "$err" >&2
+  echo "--- registry ---" >&2
+  if [[ -f "$registry" ]]; then
+    cat "$registry" >&2
+  else
+    echo "(registry file missing: $registry)" >&2
+  fi
+  rm -rf "$scratch"
+  return 1
+}
+
+run_registry_isolation_test() {
+  local root scratch empty registered output status
+  root="$(cd "$(dirname "$0")/.." && pwd)"
+  scratch="${ORBIT_SCRATCH_DIR:-$root/.orbit/tmp}"
+  mkdir -p "$scratch"
+  scratch="$(mktemp -d "$scratch/npm-smoke-registry.XXXXXX")"
+  empty="$scratch/empty.json"
+  registered="$scratch/registered.json"
+  printf '%s\n' '{"workspaces":[],"checkouts":[]}' >"$empty"
+  printf '%s\n' '{"workspaces":[{"path":"/tmp/x"}],"checkouts":[]}' >"$registered"
+  status=0
+  output="$(assert_registry_isolated "$empty" 2>&1)" || status=$?
+  if [[ "$status" -ne 0 ]]; then
+    if [[ "$output" != *"diagnostic scratch allocation failed"* ]]; then
+      echo "FAIL: empty registry was reported as registered" >&2
+    fi
+    printf '%s\n' "$output" >&2
+    rm -rf "$scratch"
+    return 1
+  fi
+  status=0
+  output="$(assert_registry_isolated "$registered" 2>&1)" || status=$?
+  if [[ "$status" -eq 0 || "$output" != *"FAIL:"* || "$output" != *"/tmp/x"* ]]; then
+    echo "FAIL: registry isolation did not reject a registered workspace and report it" >&2
+    printf '%s\n' "$output" >&2
+    rm -rf "$scratch"
+    return 1
+  fi
+  status=0
+  output="$(
+    mktemp() { return 1; }
+    assert_registry_isolated "$empty" 2>&1
+  )" || status=$?
+  if [[ "$status" -eq 0 || "$output" != *"FAIL:"* || "$output" != *"diagnostic scratch allocation failed"* ]]; then
+    echo "FAIL: registry isolation did not reject scratch allocation failure" >&2
+    printf '%s\n' "$output" >&2
+    rm -rf "$scratch"
+    return 1
+  fi
+  rm -rf "$scratch"
+  echo "PASS: registry isolation rejects a registered workspace and reports it"
+}
+
 if [[ "$#" -eq 1 && "$1" == "--local-package-check" ]]; then
   "$(dirname "$0")/require-python.sh"
   exec python3 "$(dirname "$0")/check_npm_package.py"
 fi
 if [[ "$#" -eq 1 && "$1" == "--dry-run-version-assertion" ]]; then
   run_version_assertion_test
+  exit 0
+fi
+if [[ "$#" -eq 1 && "$1" == "--dry-run-registry-isolation" ]]; then
+  if ! command -v node >/dev/null 2>&1; then
+    echo "smoke-npm-install: required binary 'node' not on PATH" >&2
+    exit 2
+  fi
+  run_registry_isolation_test
   exit 0
 fi
 LOCAL_BINARY=""
@@ -60,7 +157,7 @@ if [[ "$#" -eq 2 && "$1" == "--local-binary-check" ]]; then
     exit 2
   fi
 elif [[ "$#" -ne 0 ]]; then
-  echo "usage: $0 [--local-package-check|--dry-run-version-assertion|--local-binary-check PATH]" >&2
+  echo "usage: $0 [--local-package-check|--dry-run-version-assertion|--dry-run-registry-isolation|--local-binary-check PATH]" >&2
   exit 2
 fi
 
@@ -298,12 +395,9 @@ if ! grep -q 'must not contain credentials' "$TMPDIR_ROOT/credential.err" \
   echo "FAIL: credential refusal was not redacted and free of workspace writes" >&2
   exit 1
 fi
-node -e '
-const fs = require("fs");
-const path = process.argv[1];
-const registry = fs.existsSync(path) ? JSON.parse(fs.readFileSync(path, "utf8")) : {};
-if ((registry.workspaces ?? []).length || (registry.checkouts ?? []).length) process.exit(1);
-' "$SMOKE_HOME/.orbit/workspaces.json"
+if ! assert_registry_isolated "$SMOKE_HOME/.orbit/workspaces.json"; then
+  exit 1
+fi
 echo "workspace init => rejected fake credentials before registration"
 
 WORKSPACE_DIR="$TMPDIR_ROOT/workspace"

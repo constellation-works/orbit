@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Materialize the agent plugin skill tree from Orbit's canonical embedded assets.
-# Every directory directly under assets/skills is a shipped skill, except a
-# leading-underscore name (an archived skill excluded from the catalog,
-# mirroring crates/orbit-core/src/application/skill.rs's own filter).
+# Every directory directly under assets/skills is mirrored unless its name starts
+# with `_`; the compiled binary separately embeds its explicit file list in
+# DEFAULT_SKILL_FILES (`crates/orbit-core/src/application/skill.rs`).
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,8 +10,12 @@ source_root="$repo_root/crates/orbit-core/assets/skills"
 target_root="$repo_root/plugin/skills"
 
 skill_dirs=()
+# Entry names are taken with parameter expansion, not `$(basename ...)`: command
+# substitution strips trailing newlines, which would alias `orbit<LF>` to `orbit`
+# and turn a newline-only name into an empty path (ORB-26165).
 for entry in "$source_root"/*/; do
-  name="$(basename "$entry")"
+  name="${entry%/}"
+  name="${name##*/}"
   [[ "$name" == _* ]] && continue
   if [[ ! -f "$entry/SKILL.md" ]]; then
     echo "sync-plugin-skills: canonical skill is missing: ${entry}SKILL.md" >&2
@@ -25,11 +29,11 @@ if [[ "${#skill_dirs[@]}" -eq 0 ]]; then
   exit 1
 fi
 
-target_skill_dirs=()
+target_entries=()
 if [[ -d "$target_root" ]]; then
-  for entry in "$target_root"/*/ "$target_root"/.[!.]*/ "$target_root"/..?*/; do
-    [[ -d "$entry" ]] || continue
-    target_skill_dirs+=("$(basename "$entry")")
+  for entry in "$target_root"/* "$target_root"/.[!.]* "$target_root"/..?*; do
+    [[ -e "$entry" || -L "$entry" ]] || continue
+    target_entries+=("${entry##*/}")
   done
 fi
 
@@ -46,7 +50,7 @@ if [[ "${1:-}" == "--check" ]]; then
       drifted=1
     fi
   done
-  for name in ${target_skill_dirs[@]+"${target_skill_dirs[@]}"}; do
+  for name in ${target_entries[@]+"${target_entries[@]}"}; do
     is_canonical=0
     for canonical_name in "${skill_dirs[@]}"; do
       if [[ "$name" == "$canonical_name" ]]; then
@@ -72,7 +76,7 @@ if [[ "$#" -ne 0 ]]; then
 fi
 
 mkdir -p "$target_root"
-for name in ${target_skill_dirs[@]+"${target_skill_dirs[@]}"}; do
+for name in ${target_entries[@]+"${target_entries[@]}"}; do
   is_canonical=0
   for canonical_name in "${skill_dirs[@]}"; do
     if [[ "$name" == "$canonical_name" ]]; then
@@ -81,7 +85,7 @@ for name in ${target_skill_dirs[@]+"${target_skill_dirs[@]}"}; do
     fi
   done
   if [[ "$is_canonical" -eq 0 ]]; then
-    rm -rf "$target_root/$name"
+    rm -rf -- "$target_root/$name"
   fi
 done
 for name in "${skill_dirs[@]}"; do

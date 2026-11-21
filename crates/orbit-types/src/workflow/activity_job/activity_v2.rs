@@ -58,6 +58,15 @@ pub struct AgentLoopSpec {
     /// instruction is byte-identical to `instruction` alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steering_instruction: Option<String>,
+    /// Opt into the engine's built-in operator-steering definition. Dispatch
+    /// inserts it immediately before [`Self::steering_instruction`] only when
+    /// `workflow.mid_run_steering` is enabled, so a disabled workspace stays
+    /// byte-identical. The text says what the prompt snapshot is, which
+    /// comments after it are steering, and the oldest-first order. The
+    /// activity's own checkpoint may name a different watermark or a per-task
+    /// scope; that local rule decides the snapshot.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub steering_guidance: bool,
     /// Which of the engine's built-in fleet-notice instructions this
     /// activity opts into. A non-empty [`Self::notice_instruction`] or
     /// [`Self::notice_posting_instruction`] replaces the matching built-in
@@ -79,6 +88,13 @@ pub struct AgentLoopSpec {
     /// untrusted-data handling above stays conditional on a brief.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notice_posting_instruction: Option<String>,
+    /// Opt into the engine's built-in provider CLI permission-denial
+    /// guidance, appended to the instruction on every dispatch. The text
+    /// says what a provider CLI denial covers and when a tool counts as
+    /// unavailable; each activity keeps its own instruction line naming
+    /// what else a denial never excuses.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub provider_denial_guidance: bool,
     /// Tool allowlist (§6). Custom activities keep this exact allowlist
     /// contract. An empty list with no `tool_disallow_list` is deprecated:
     /// asset load warns and enforcement keeps its legacy behaviour until the
@@ -135,8 +151,10 @@ pub struct AgentLoopSpec {
     /// authoritative.
     ///
     /// Distinct from [`AgentLoopSpec::require_completion_envelope`], which asks
-    /// only whether the invocation finished at all. Setting this implies the
-    /// completion check, since an absent envelope also fails validation.
+    /// whether the invocation finished with an accepted outcome, this flag asks
+    /// whether downstream templates can safely consume the structured response.
+    /// Setting this implies the completion check, since an absent envelope also
+    /// fails validation.
     #[serde(default)]
     pub require_response_envelope: bool,
     /// Require the CLI invocation to *terminate with* a well-formed Orbit
@@ -149,10 +167,20 @@ pub struct AgentLoopSpec {
     /// advance on work that never happened and defers the failure to whatever
     /// deterministic gate notices first, several steps downstream.
     ///
-    /// The check is content-blind: it reads the envelope *frame* only
-    /// (presence, `schemaVersion`, status token) and never `result` or `error`,
-    /// so an agent that declares `status: "failed"` satisfies it. Agent-loop
-    /// output remains advisory; only "did the contract complete" is enforced.
+    /// The check has two stages:
+    ///
+    /// 1. **Protocol frame completion**: stdout must end with a well-formed
+    ///    Orbit response envelope (presence, supported `schemaVersion`, and a
+    ///    recognized protocol status token). This stage never reads `result`
+    ///    or `error`.
+    /// 2. **Status outcome gate** ([ORB-10733]): under a required completion
+    ///    contract, an explicit `status: "failed"` or `status: "timeout"`
+    ///    outcome fails the step even if the provider exits 0. Only
+    ///    `status: "success"` may checkpoint the step.
+    ///
+    /// The envelope's `result` and `error` payloads remain advisory; only
+    /// [`AgentLoopSpec::require_response_envelope`] validates response content
+    /// for downstream consumers.
     ///
     /// Set to `false` only for an activity whose work is genuinely decorative —
     /// one whose non-completion should not stop the pipeline. Record why in the
@@ -619,9 +647,11 @@ impl Default for AgentLoopSpec {
         Self {
             instruction: String::new(),
             steering_instruction: None,
+            steering_guidance: false,
             fleet_notices: FleetNoticeGuidance::None,
             notice_instruction: None,
             notice_posting_instruction: None,
+            provider_denial_guidance: false,
             tools: Vec::new(),
             tool_disallow_list: None,
             on_denial: OnDenial::Terminate,

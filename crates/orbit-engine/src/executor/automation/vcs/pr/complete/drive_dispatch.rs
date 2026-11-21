@@ -1,7 +1,7 @@
 //! Dispatch sub-phases of the PR completion poll: blocked, conflict,
 //! mergeable and pending states.
 
-use std::{path::Path, time::Duration};
+use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::{DeliveryRefusal, PrAutoFixBaseRed, PrAutoFixBlocker};
@@ -11,15 +11,14 @@ use crate::context::RuntimeHost;
 
 use super::super::super::super::input::input_string_field;
 
-use super::super::super::landing::checks::CheckReadGap;
+use super::super::super::checks::CheckReadGap;
 use super::super::super::operations::BASE_MODIFIED_MERGE_ATTEMPTS;
 use super::super::super::push::push_batch_changes;
-use super::super::super::remote_probe::fixed_wait as sleep;
 use super::super::answers::{PullRequestStatus, ReviewedMergeOutcome, read_pr_status_before};
 use super::super::auto_fix::{
     self, BlockedStopReason, BlockedVerdict, CheckRepair, base_tip_checks, blocked_verdict,
-    defer_throttled_read, hold_auto_fix_stop, record_landed_repair, record_published_repair,
-    red_base_wait, repair_failed_checks, reserve_base_refresh, stopped,
+    hold_auto_fix_stop, record_landed_repair, record_published_repair, repair_failed_checks,
+    reserve_base_refresh, stopped,
 };
 use super::super::delivery::{PrMergeState, classify_pr_state};
 use super::conflict::{
@@ -28,7 +27,7 @@ use super::conflict::{
     refresh_conflicting_pr_branch,
 };
 use super::drive::{DeliveredMerge, Delivery};
-use super::drive_phases::{DispatchFlow, ObservedPoll, PollDriver, SubFlow};
+use super::drive_phases::{DispatchFlow, ObservedPoll, PollDriver, RedBaseStep};
 use super::mutation::{observation_failure, request_merge, resolved_capabilities};
 use super::reviewed::{ensure_pr_head_is_reviewed, merge_condition_sha};
 
@@ -44,11 +43,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
             infrastructure_wait,
             base_red_reason,
         } = observed;
-        let mut base_red_reason = base_red_reason;
         if base_red_reason.is_some() || infrastructure_wait {
             return Ok(DispatchFlow::WaitPoll(base_red_reason));
         }
-        let flow = match state {
+        Ok(match state {
             PrMergeState::Merged if self.watch_only => {
                 return Ok(DispatchFlow::Deliver(Box::new(Delivery::Watched(json!({
                     "merged": true,
@@ -91,7 +89,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                 });
             }
             PrMergeState::Blocked(reason) => {
-                self.dispatch_blocked(status, reason, pending_required, &mut base_red_reason)?
+                self.dispatch_blocked(status, reason, pending_required)?
             }
             PrMergeState::Conflict => self.dispatch_conflict(status)?,
             PrMergeState::Mergeable if self.watch_only => {
@@ -106,12 +104,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
             }
             PrMergeState::Mergeable => self.dispatch_mergeable(status)?,
             PrMergeState::Pending => self.dispatch_pending(status)?,
-        };
-        match flow {
-            SubFlow::ContinuePoll => Ok(DispatchFlow::ContinuePoll),
-            SubFlow::Deliver(delivery) => Ok(DispatchFlow::Deliver(delivery)),
-            SubFlow::WaitPoll => Ok(DispatchFlow::WaitPoll(base_red_reason)),
-        }
+        })
     }
 
     /// Shared landing evidence and truthful attribution for normal and reconciled reads.
@@ -148,69 +141,111 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         &self,
         previous: &PullRequestStatus,
         diagnostic: &str,
-    ) -> Result<SubFlow, OrbitError> {
-        let reconcile = || -> Result<Delivery, OrbitError> {
-            let repository = self
-                .merge_capabilities
+    ) -> Result<DispatchFlow, OrbitError> {
+        self.read_reconciled_merge(previous)
+            .and_then(|delivery| {
+                delivery.ok_or_else(|| {
+                    OrbitError::Execution(
+                        "reconciliation did not confirm matching MERGED evidence".into(),
+                    )
+                })
+            })
+            .map(|delivery| DispatchFlow::Deliver(Box::new(delivery)))
+            .map_err(|error| self.merge_reconciliation_error(diagnostic, error))
+    }
+
+    /// A distinct read counter, independent of base-modified mutation retries.
+    /// Reuse the ordinary poll wait and deadline without entering repair or
+    /// requesting another merge while GitHub's first merge is in flight.
+    fn poll_in_progress_merge(
+        &mut self,
+        previous: &PullRequestStatus,
+        diagnostic: &str,
+    ) -> Result<DispatchFlow, OrbitError> {
+        let polling = (|| {
+            for reads in 1..=BASE_MODIFIED_MERGE_ATTEMPTS {
+                if let Some(delivery) = self.read_reconciled_merge(previous)? {
+                    return Ok(DispatchFlow::Deliver(Box::new(delivery)));
+                }
+                if reads < BASE_MODIFIED_MERGE_ATTEMPTS {
+                    self.wait_for_next_poll(None)?;
+                }
+            }
+            Err(OrbitError::Execution(format!(
+                "merge still unconfirmed after {BASE_MODIFIED_MERGE_ATTEMPTS} read-only observations; the observation ceiling is reached"
+            )))
+        })();
+        polling.map_err(|error| self.merge_reconciliation_error(diagnostic, error))
+    }
+
+    fn merge_reconciliation_error(&self, diagnostic: &str, error: OrbitError) -> OrbitError {
+        OrbitError::Execution(format!(
+            "pr_complete: could not request {} merge on pull request #{}: {diagnostic}; \
+             read-only reconciliation was inconclusive: {error}; the task stays in review",
+            self.merge_capabilities
                 .as_ref()
-                .map(|capabilities| capabilities.repository.as_str())
-                .ok_or_else(|| OrbitError::Execution("missing repository identity".into()))?;
-            let suffix = format!("/{repository}/pull/{}", self.pr_number);
-            if previous.number_selector.as_deref() != Some(self.pr_number)
-                || !previous.url.as_deref().is_some_and(|url| {
-                    url.strip_suffix(&suffix)
-                        .is_some_and(|host| host.starts_with("https://"))
-                })
-                || self.pin.candidate_sha().is_none()
-                || self.pin.head().is_none()
-                || input_string_field(self.input, "base").is_none()
-                || previous.base_branch.is_none()
-            {
-                return Err(OrbitError::Execution(
-                    "missing or inconsistent pinned PR identity".into(),
-                ));
-            }
-            let status = read_pr_status_before(
-                self.host,
-                Path::new(self.workspace_path),
-                self.pr_number,
-                self.completion_deadline_ms,
-            )?;
-            if status.number_selector != previous.number_selector || status.url != previous.url {
-                return Err(OrbitError::Execution(
-                    "PR number or repository URL changed during reconciliation".into(),
-                ));
-            }
-            if !matches!(classify_pr_state(&status), PrMergeState::Merged)
-                || status.state.as_deref() != Some("MERGED")
-                || !status.merged_at.as_deref().is_some_and(|timestamp| {
-                    chrono::DateTime::parse_from_rfc3339(timestamp).is_ok()
-                })
-                || !status.exact_merge_commit.as_deref().is_some_and(|sha| {
-                    matches!(sha.len(), 40 | 64) && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
-                })
-                || status.base_branch != previous.base_branch
-                || status.head_branch != previous.head_branch
-            {
-                return Err(OrbitError::Execution(
-                    "reconciliation did not confirm matching MERGED evidence".into(),
-                ));
-            }
-            ensure_pr_head_is_reviewed(&status, self.pr_number, self.reviewed_head_sha.as_deref())?;
-            self.delivered_merge(&status)
-        };
-        match reconcile() {
-            Ok(delivery) => Ok(SubFlow::Deliver(Box::new(delivery))),
-            Err(error) => Err(OrbitError::Execution(format!(
-                "pr_complete: could not request {} merge on pull request #{}: {diagnostic}; \
-                 read-only reconciliation was inconclusive: {error}; the task stays in review",
-                self.merge_capabilities
-                    .as_ref()
-                    .map(|c| c.strategy.as_str())
-                    .unwrap_or("synchronous"),
-                self.pr_number,
-            ))),
+                .map(|c| c.strategy.as_str())
+                .unwrap_or("synchronous"),
+            self.pr_number,
+        ))
+    }
+
+    /// The same strict merged evidence for ambiguous and in-progress replies.
+    fn read_reconciled_merge(
+        &self,
+        previous: &PullRequestStatus,
+    ) -> Result<Option<Delivery>, OrbitError> {
+        let repository = self
+            .merge_capabilities
+            .as_ref()
+            .map(|capabilities| capabilities.repository.as_str())
+            .ok_or_else(|| OrbitError::Execution("missing repository identity".into()))?;
+        let suffix = format!("/{repository}/pull/{}", self.pr_number);
+        if previous.number_selector.as_deref() != Some(self.pr_number)
+            || !previous.url.as_deref().is_some_and(|url| {
+                url.strip_suffix(&suffix)
+                    .is_some_and(|host| host.starts_with("https://"))
+            })
+            || self.pin.candidate_sha().is_none()
+            || self.pin.head().is_none()
+            || input_string_field(self.input, "base").is_none()
+            || previous.base_branch.is_none()
+        {
+            return Err(OrbitError::Execution(
+                "missing or inconsistent pinned PR identity".into(),
+            ));
         }
+        let status = read_pr_status_before(
+            self.host,
+            Path::new(self.workspace_path),
+            self.pr_number,
+            self.completion_deadline_ms,
+        )?;
+        if status.number_selector != previous.number_selector || status.url != previous.url {
+            return Err(OrbitError::Execution(
+                "PR number or repository URL changed during reconciliation".into(),
+            ));
+        }
+        if !matches!(classify_pr_state(&status), PrMergeState::Merged) {
+            return Ok(None);
+        }
+        if status.state.as_deref() != Some("MERGED")
+            || !status
+                .merged_at
+                .as_deref()
+                .is_some_and(|timestamp| chrono::DateTime::parse_from_rfc3339(timestamp).is_ok())
+            || !status.exact_merge_commit.as_deref().is_some_and(|sha| {
+                matches!(sha.len(), 40 | 64) && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+            || status.base_branch != previous.base_branch
+            || status.head_branch != previous.head_branch
+        {
+            return Err(OrbitError::Execution(
+                "reconciliation did not confirm matching MERGED evidence".into(),
+            ));
+        }
+        ensure_pr_head_is_reviewed(&status, self.pr_number, self.reviewed_head_sha.as_deref())?;
+        self.delivered_merge(&status).map(Some)
     }
 
     fn dispatch_blocked(
@@ -218,8 +253,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         status: PullRequestStatus,
         reason: super::super::merge_state::PrMergeBlock,
         pending_required: bool,
-        base_red_reason: &mut Option<String>,
-    ) -> Result<SubFlow, OrbitError> {
+    ) -> Result<DispatchFlow, OrbitError> {
         let host = self.host;
         let input = self.input;
         let workspace_path = self.workspace_path;
@@ -227,7 +261,6 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         let auto_fix = self.auto_fix;
         let observation_budget = self.observation_budget;
         let completion_deadline_ms = self.completion_deadline_ms;
-        let mutated = self.mutated;
         let Some(auto_fix) = auto_fix.filter(|_| is_blocked_merge_state(&status)) else {
             let diagnosis = self
                 .pin
@@ -278,16 +311,8 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                 ) {
                     Ok(evidence) => evidence,
                     Err(CheckReadGap::Deferred(deferred)) => {
-                        let wait_ms = defer_throttled_read(
-                            host,
-                            auto_fix,
-                            pr_number,
-                            &deferred,
-                            observation_budget,
-                            mutated,
-                        )?;
-                        sleep(Duration::from_millis(wait_ms));
-                        return Ok(SubFlow::ContinuePoll);
+                        self.repoll_after_throttled_read(auto_fix, &deferred)?;
+                        return Ok(DispatchFlow::ContinuePoll);
                     }
                     Err(CheckReadGap::Unavailable(reason)) => {
                         return Err(hold_auto_fix_stop(
@@ -301,10 +326,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                     .and_then(PrAutoFixBaseRed::from_base_tip_evidence)
                 {
                     auto_fix::record_base_red(host, auto_fix, &record)?;
-                    *base_red_reason = Some(format!(
+                    return Ok(DispatchFlow::WaitPoll(Some(format!(
                         "base_red: required failures also fail on current base {}, so no repair agent runs",
                         json!(record.landed_base)
-                    ));
+                    ))));
                 } else if !self.landed_refresh_attempted
                     && let Some(evidence) = base_evidence
                 {
@@ -325,7 +350,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                         completion_deadline_ms,
                         &evidence,
                     )?;
-                    record_landed_repair(host, auto_fix, &evidence)?;
+                    record_landed_repair(host, auto_fix, pr_number, &evidence)?;
                     let mut refresh_input = input.clone();
                     refresh_input["published_head_sha"] = json!(from);
                     // Pin the diagnosed landed base; a second base advance
@@ -340,10 +365,12 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                         &status,
                     )?;
                     if self.reviewed_head_sha.is_some() {
-                        return Ok(SubFlow::Deliver(Box::new(Delivery::RebasedForReview {
-                            rebased,
-                            reason: "auto_fix_landed_check_repair",
-                        })));
+                        return Ok(DispatchFlow::Deliver(Box::new(
+                            Delivery::RebasedForReview {
+                                rebased,
+                                reason: "auto_fix_landed_check_repair",
+                            },
+                        )));
                     }
                     push_batch_changes(
                         host,
@@ -368,46 +395,15 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                     )?;
                     self.pin.adopt_refreshed_candidate(Some(to));
                     self.landed_refresh_attempted = true;
-                    return Ok(SubFlow::ContinuePoll);
-                } else if let Some(reason) = {
-                    match red_base_wait(
-                        host,
-                        auto_fix,
-                        input,
-                        workspace_path,
-                        pr_number,
-                        &status,
-                        &failed,
-                        observation_budget,
-                    ) {
-                        Ok(reason) => reason,
-                        Err(deferred) => {
-                            let wait_ms = defer_throttled_read(
-                                host,
-                                auto_fix,
-                                pr_number,
-                                &deferred,
-                                observation_budget,
-                                mutated,
-                            )?;
-                            sleep(Duration::from_millis(wait_ms));
-                            return Ok(SubFlow::ContinuePoll);
-                        }
-                    }
-                } {
-                    auto_fix::record_base_red(
-                        host,
-                        auto_fix,
-                        &PrAutoFixBaseRed::for_failed_head(
-                            status
-                                .head_sha
-                                .clone()
-                                .ok_or_else(|| stopped(pr_number, "missing failed head"))?,
-                            reason.clone(),
-                        ),
-                    )?;
-                    *base_red_reason = Some(reason);
+                    return Ok(DispatchFlow::ContinuePoll);
                 } else {
+                    match self.red_base_step(auto_fix, &status, &failed)? {
+                        RedBaseStep::Deferred => return Ok(DispatchFlow::ContinuePoll),
+                        RedBaseStep::Red(reason) => {
+                            return Ok(DispatchFlow::WaitPoll(Some(reason)));
+                        }
+                        RedBaseStep::Clear => {}
+                    }
                     match repair_failed_checks(
                         host,
                         auto_fix,
@@ -422,25 +418,17 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                         // original deadline, then observe the pull
                         // request again before reading any evidence.
                         CheckRepair::ReadDeferred(deferred) => {
-                            let wait_ms = defer_throttled_read(
-                                host,
-                                auto_fix,
-                                pr_number,
-                                &deferred,
-                                observation_budget,
-                                mutated,
-                            )?;
-                            sleep(Duration::from_millis(wait_ms));
-                            return Ok(SubFlow::ContinuePoll);
+                            self.repoll_after_throttled_read(auto_fix, &deferred)?;
+                            return Ok(DispatchFlow::ContinuePoll);
                         }
                     }
                 }
             }
         }
-        Ok(SubFlow::WaitPoll)
+        Ok(DispatchFlow::WaitPoll(None))
     }
 
-    fn dispatch_conflict(&mut self, status: PullRequestStatus) -> Result<SubFlow, OrbitError> {
+    fn dispatch_conflict(&mut self, status: PullRequestStatus) -> Result<DispatchFlow, OrbitError> {
         let host = self.host;
         let input = self.input;
         let workspace_path = self.workspace_path;
@@ -476,10 +464,12 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                 pr_number,
                 &status,
             )?;
-            return Ok(SubFlow::Deliver(Box::new(Delivery::RebasedForReview {
-                rebased,
-                reason: "reviewed_head_conflicted",
-            })));
+            return Ok(DispatchFlow::Deliver(Box::new(
+                Delivery::RebasedForReview {
+                    rebased,
+                    reason: "reviewed_head_conflicted",
+                },
+            )));
         }
         if self.conflict_refresh_attempted || !has_completion_recovery_checkpoint(input) {
             return Err(completion_conflict_error(pr_number));
@@ -511,10 +501,13 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         // The existing PR remains authoritative. Re-read its state
         // after the branch update rather than inferring mergeability
         // from a successful push.
-        Ok(SubFlow::ContinuePoll)
+        Ok(DispatchFlow::ContinuePoll)
     }
 
-    fn dispatch_mergeable(&mut self, status: PullRequestStatus) -> Result<SubFlow, OrbitError> {
+    fn dispatch_mergeable(
+        &mut self,
+        status: PullRequestStatus,
+    ) -> Result<DispatchFlow, OrbitError> {
         let host = self.host;
         let input = self.input;
         let workspace_path = self.workspace_path;
@@ -531,7 +524,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
             .map(ToOwned::to_owned)
             .or_else(|| status.head_sha.clone());
         if let Some(held) = self.completion_hold_for_candidate(candidate.as_deref())? {
-            return Ok(SubFlow::Deliver(Box::new(held)));
+            return Ok(DispatchFlow::Deliver(Box::new(held)));
         }
         if !self.merge_requested {
             let capabilities = resolved_capabilities(
@@ -565,6 +558,9 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                     capabilities.strategy.as_str()
                 ))
             })? {
+                ReviewedMergeOutcome::InProgress { diagnostic } => {
+                    return self.poll_in_progress_merge(&status, &diagnostic);
+                }
                 ReviewedMergeOutcome::Ambiguous { diagnostic } => {
                     return self.reconcile_ambiguous_merge(&status, &diagnostic);
                 }
@@ -572,7 +568,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                     self.requested_landed_commit = landed_commit;
                     self.merge_requested = true;
                     // Re-read rather than assuming the request landed.
-                    return Ok(SubFlow::ContinuePoll);
+                    return Ok(DispatchFlow::ContinuePoll);
                 }
                 ReviewedMergeOutcome::BaseModified { diagnostic } => {
                     self.base_modified_refusals += 1;
@@ -603,10 +599,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                 }
             }
         }
-        Ok(SubFlow::WaitPoll)
+        Ok(DispatchFlow::WaitPoll(None))
     }
 
-    fn dispatch_pending(&mut self, status: PullRequestStatus) -> Result<SubFlow, OrbitError> {
+    fn dispatch_pending(&mut self, status: PullRequestStatus) -> Result<DispatchFlow, OrbitError> {
         let host = self.host;
         let input = self.input;
         let workspace_path = self.workspace_path;
@@ -629,7 +625,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                 .map(ToOwned::to_owned)
                 .or_else(|| status.head_sha.clone());
             if let Some(held) = self.completion_hold_for_candidate(candidate.as_deref())? {
-                return Ok(SubFlow::Deliver(Box::new(held)));
+                return Ok(DispatchFlow::Deliver(Box::new(held)));
             }
         }
         if !self.watch_only
@@ -670,6 +666,6 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                 self.auto_merge_requested = true;
             }
         }
-        Ok(SubFlow::WaitPoll)
+        Ok(DispatchFlow::WaitPoll(None))
     }
 }

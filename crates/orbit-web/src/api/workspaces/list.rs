@@ -25,14 +25,11 @@ pub(in crate::api) async fn list_workspaces(State(state): State<DashboardState>)
     }
 }
 
-/// Whether this host owns the checkout for `entry`. A binding with no
-/// recorded role (single-host installs, older registrations) counts as owned.
+/// Whether this host owns the checkout for `entry`. A row with no recorded
+/// role (single-host installs, older registrations) counts as owned. The role
+/// is registry metadata, so an unavailable replica checkout is still a replica.
 pub(crate) fn entry_is_owned(entry: &crate::state::WsEntry) -> bool {
-    entry
-        .binding
-        .as_ref()
-        .and_then(|binding| binding.checkout_role)
-        != Some(WorkspaceCheckoutRole::Replica)
+    entry.checkout_role != Some(WorkspaceCheckoutRole::Replica)
 }
 
 fn list_workspaces_json(state: &DashboardState) -> Vec<Value> {
@@ -66,8 +63,8 @@ fn list_workspaces_json(state: &DashboardState) -> Vec<Value> {
                 "status": if entry.active { "active" } else { "invalid" },
                 "is_default": default == Some(entry.id.as_str()),
                 "lease_enabled": lease_enabled,
-                "checkout_role": entry.binding.as_ref().and_then(|binding| binding.checkout_role).map(|role| role.as_str()),
-                "owner_machine_id": entry.binding.as_ref().and_then(|binding| binding.owner_machine_id.clone()),
+                "checkout_role": entry.checkout_role.map(|role| role.as_str()),
+                "owner_machine_id": entry.owner_machine_id,
             })
         })
         .collect()

@@ -12,6 +12,7 @@
 //! cannot reach `review -> done` through this path either.
 use chrono::Utc;
 use orbit_common::{ClaimRefusalKind, OrbitError};
+use orbit_types::plugin::is_full_commit_id;
 use orbit_types::task::{TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::PostDeployRecord;
 use orbit_types::workflow::handoff::*;
@@ -448,7 +449,7 @@ impl TaskCommitBoundary {
             .push((old, row(ATTEMPT, handoff_id, &attempt)?));
         self.settle_landing_request(handoff_id, LandingStartState::Completed, effects)?;
         let owes =
-            PostDeployRecord::read(history).is_some_and(|record| !record.outstanding().is_empty());
+            PostDeployRecord::read(history)?.is_some_and(|record| !record.outstanding().is_empty());
         params.status = (!owes).then_some(TaskStatus::Done);
         params.status_note = Some(evidence.into());
         params.status_event = Some("landing_completed".into());
@@ -499,12 +500,7 @@ impl TaskCommitBoundary {
                 .map(|raw| decode::<LandingAttempt>(&raw.payload_json))
                 .transpose()?
                 .is_some_and(|attempt| attempt.state == LandingAttemptState::Stopped);
-            if !stopped
-                || !verified_candidate_head.is_some_and(|head| {
-                    matches!(head.len(), 40 | 64)
-                        && head.bytes().all(|byte| byte.is_ascii_hexdigit())
-                })
-            {
+            if !stopped || !verified_candidate_head.is_some_and(is_full_commit_id) {
                 return Err(invalid(
                     "handoff completion authority is not revoked; a stopped attempt and owner-verified candidate head are required",
                 ));
@@ -527,7 +523,7 @@ impl TaskCommitBoundary {
                 "the merged pull request is not this handoff's candidate on its landing branch",
             ));
         }
-        if PostDeployRecord::read(history).is_some_and(|record| !record.outstanding().is_empty()) {
+        if PostDeployRecord::read(history)?.is_some_and(|record| !record.outstanding().is_empty()) {
             return Err(invalid("the task owes acceptance criteria after deploy"));
         }
         Ok(())

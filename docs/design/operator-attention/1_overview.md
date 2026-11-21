@@ -50,7 +50,8 @@ gives the orchestrator one place to look.
   `fingerprint`. Schema: [attention-item](./specs/attention-item.md).
 - **Kind**: the closed enum of reasons (`pilot_warning`, `pilot_hold`, `blocked`,
   `decision_open`, `run_failed`, `run_stuck`, `claim_stale`, `review_waiting`, `ci_red`,
-  `friction_untriaged`, `host_unhealthy`, `notice_open`, `resident_stalled`). Each kind has exactly one source of truth that
+  `friction_untriaged`, `host_unhealthy`, `notice_open`, `resident_stalled`, `routine_tripped`, `drain_paused`,
+  `drain_breaker_open`). Each kind has exactly one source of truth that
   already exists.
 - **Derived view**: the list is rebuilt from the sources on each call. An item exists
   exactly while its source condition holds; resolving the source removes the item.

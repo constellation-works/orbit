@@ -155,9 +155,20 @@ orbit web connect <ssh-host> --workspace <remote-workspace-selector>
 
 `orbit --root <ROOT> web serve` serves `<ROOT>/workspaces.json` and nothing from
 the machine-global registry, so an explicit root isolates the dashboard the same
-way it isolates every other command. `--workspace` picks which of the served
-workspaces the dashboard opens on, and is what `connect` forwards to the remote
-server; `connect` itself rejects `--root`.
+way it isolates every other command. `--workspace` sets a server hint. An
+unmatched selector clears it. The server looks for a workspace containing its
+current directory only when `--workspace` is omitted. `connect` forwards the
+selector when it starts a remote server and rejects `--root`.
+
+For a host with multiple owned workspaces, the browser tries a valid
+`?workspace=` link first, including `?workspace=all`, then the choice remembered
+for that host, including **All workspaces**. Next it tries a live drain on an
+active owned workspace, then the server hint if it names an active owned
+workspace. The fallback is the first active owned workspace in registry order.
+If all owned workspaces are unavailable, the picker selects the first owned
+entry in registry order and its board is unavailable. With exactly one owned
+workspace, the browser opens it only if active. With zero owned workspaces,
+there is no board to open.
 
 The default dashboard port is 7878. `connect` reuses an existing remote loopback
 server when available; otherwise it starts one and owns that process's lifetime.
@@ -166,11 +177,25 @@ run/step inspection, routines, knowledge/frictions, audit, and metrics. Verify t
 selected workspace before any mutation; a dashboard aggregate or metric is not
 proof that a particular task or run succeeded.
 
+Global search sits in the top bar of the dashboard served by `orbit web serve`,
+on every destination; press `/` or choose the search field. It finds tasks
+across all statuses. For substring matches its scope follows the Workspace
+picker: with **All workspaces** it searches across workspaces, and with one
+workspace selected it searches only that workspace. Typing part of a task ID or
+title lists compact matches. Entering an exact task ID or run ID with Enter
+opens the full task page or run page; that lookup also resolves across the
+other active workspaces and selects the owning workspace when one holds the ID.
+There is nothing to configure. To verify a match, type a known title
+fragment, choose the suggested entry and confirm the full task page opens; then
+enter a known run ID, press Enter and confirm the full run page opens.
+
 In the left rail, the **Workspace** picker is single-select. It lists the workspaces
-for the selected host, marks unavailable ones *(unavailable)* and leaves them
-unchosen, and offers **All workspaces** as its first option. Its button shows the
-chosen workspace's name, or **All workspaces** when none is chosen. Choose a
-workspace to open its board, or choose **All workspaces** for the aggregate view.
+the selected host owns (a replica checkout is not listed), marks unavailable ones
+*(unavailable)* and leaves them unchosen, and offers **All workspaces** as its
+first option. Its button shows the chosen workspace's name. It shows **All
+workspaces** only after that entry is chosen, through the picker, a shared link or
+a remembered choice. Choose a workspace to open its board, or choose **All
+workspaces** for the aggregate view.
 
 In the Tasks list, the **Workspaces** chip sits beside **More** and appears only
 under **All workspaces** when the host has more than one active workspace. It is
@@ -210,19 +235,18 @@ same order. To verify the colours, open the **Workspaces** chip: each workspace
 pill matches its entry's colour in that list, which is the colour key. The rail
 Workspace picker has no workspace colours, so use it for order only.
 
-Under **All workspaces**, the Tasks dock adds a **Fleet** tab right after its
-**Drain** tab. Open it to see the **Fleet drains** pane, which
-lists drain rows across the registered hosts and their workspaces. The tab is
-present only while **All workspaces** is selected in the rail picker; choosing a
-single workspace removes it.
+**Observe › Fleet** lists the drain rows across the registered hosts and their
+workspaces in its **Drains** section. The workspace picker does not filter
+Fleet, so the list is the same whichever workspace is selected.
 
 The Tasks dock's **Drain** pane holds the **Auto-drain** card and, beside it, the
 quick-start card headed **Start a window**. When the target is a replica checkout,
 the heading and the toggle read **Start pulling on** followed by the host name. On
-narrow layouts (1000px wide or less), a live window folds the quick-start card
+narrow layouts (1315px wide or less), a live window folds the quick-start card
 behind **Start another window**, which expands the form. Under **All workspaces**,
-pick the target in the Auto-drain panel's **Drain workspace** and **Drain host**
-selects before starting a window.
+pick the target in the Auto-drain panel's **Drain target** select, whose options
+are workspace-host pairs such as `site · owner-host (owner)` and
+`site · follower-host (pull)`, before starting a window.
 
 A visible dashboard with a workspace selected opens a change stream for that
 workspace; **All workspaces** has no single-workspace stream. In the Tasks tab,
@@ -265,11 +289,12 @@ the machine is not registered, when you need `--no-operator` or a non-default
   restore the host each history entry names, and an entry without `?host=`
   is the serving host.
 - Every panel, action, log tail and resource chip follows the selected host,
-  and the workspace picker lists that host's workspaces. Settings › Hosts
-  keeps editing the serving host's `hosts.toml`. It also shows each reachable
-  registered host's load, memory, disk, admission throttle, and drain or
-  pull-drain state, and **Show** on a row switches the dashboard to that host.
-  An unreachable host shows its error instead of readings.
+  and the workspace picker lists that host's workspaces. **Observe › Fleet**
+  keeps editing the serving host's `hosts.toml`. Each reachable registered host
+  has a card with its load, memory, disk, I/O and admission state, and the
+  **Drains** section lists its drains and pull drains. Select the host's card,
+  then **Show** in its dialog, to switch the dashboard to that host. An
+  unreachable host shows its error instead of readings.
 - Version or protocol skew shows a persistent banner and is never refused.
   An unreachable host replaces the panels with one state carrying a code:
   `unknown_host`, `unreachable_destination`, `process_timeout`,

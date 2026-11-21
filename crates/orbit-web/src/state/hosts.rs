@@ -8,6 +8,7 @@
 //! Mutations never read this snapshot: they call the CLI's operations, which
 //! load the file themselves and refuse a concurrent edit.
 
+use orbit_common::{OrbitError, StorageLayer};
 use orbit_registry::hosts::{
     HostRegistry, hosts_path, legacy_destinations_path, load_host_registry, validated_host_root,
 };
@@ -141,7 +142,7 @@ impl HostFileState {
                     "host file failed to load; the dashboard keeps its last valid snapshot"
                 );
                 lock(&self.published).load_error = Some(HostLoadError {
-                    code: crate::api::host_error_code(&error).to_string(),
+                    code: host_error_code(&error).to_string(),
                     message: error.to_string(),
                 });
             }
@@ -189,4 +190,37 @@ fn gate_signal(point: &str) {
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The CLI's error code for every error a host operation returns, so the
+/// dashboard reports `orbit host --json`'s typed refusals verbatim.
+pub(crate) fn host_error_code(error: &OrbitError) -> &str {
+    match error {
+        OrbitError::HostRegistry { code, .. } => code.as_str(),
+        OrbitError::HostConfiguration { .. } => "host_configuration",
+        OrbitError::InvalidInput(_)
+        | OrbitError::InvalidInputDiagnostic { .. }
+        | OrbitError::ClaimRefused { .. } => "invalid_input",
+        OrbitError::UnreachableDestination(_) => "unreachable_destination",
+        OrbitError::AmbiguousDestination(_) => "ambiguous_destination",
+        OrbitError::OutcomeUnknown { .. } => "outcome_unknown",
+        OrbitError::RemoteTool { code, .. } => code.as_str(),
+        OrbitError::ProcessTimeout { .. } => "process_timeout",
+        OrbitError::Execution(_)
+        | OrbitError::PrivateVcs(_)
+        | OrbitError::ForgeUnavailable(_)
+        | OrbitError::WorkflowEvidenceUnavailable(_)
+        | OrbitError::ExecutionTimeout { .. } => "execution_failed",
+        OrbitError::WorkspaceError(_) => "workspace_error",
+        OrbitError::Io(_)
+        | OrbitError::StorageAccessDenied {
+            layer: StorageLayer::Io,
+            ..
+        }
+        | OrbitError::StorageLockBusy {
+            layer: StorageLayer::Io,
+            ..
+        } => "io_error",
+        _ => "internal_error",
+    }
 }

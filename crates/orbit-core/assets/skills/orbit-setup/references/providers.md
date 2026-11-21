@@ -127,14 +127,21 @@ Choose the intended scope:
   service exports.
 
 A shared `pass` name that is unset or empty produces a warning, but does
-not itself refuse the run; the provider may use its saved login. A missing
+not itself refuse the run; the provider may use its saved login. On a host
+whose Claude (or Codex) crews authenticate through `claude login` (`codex
+login`) rather than a token, set `execution.env.login_auth = ["claude"]` with
+`orbit config set`: doctor, `orbit attention` and drain starts then skip that
+provider's credential names. It is a declaration; Orbit reads no credential. A missing
 per-crew source instead excludes that crew from drains and refuses its
 activities, so it cannot silently use another account.
 
 Verify the actual launcher, not just an SSH login shell. Run
 `orbit config get execution.env.pass`, `orbit config get crews.sol.env`
 (substitute the intended crew) and `orbit doctor --check env-pass --json`.
-Dashboard runs inherit the web service; clock runs can read admitted names
+Doctor's `env-pass` row also counts a `pass` name that a non-empty
+`clock.env` value supplies as held, so its `ok` for such a name covers
+timer-started runs, not a manual drain from this shell. Dashboard runs inherit
+the web service; clock runs can read admitted names
 and crew sources from owner-only `~/.orbit/clock.env`, which does not supply
 the web service. A service started with `bash -lc` reads login exports at
 startup, but an already running process does not receive later profile edits.

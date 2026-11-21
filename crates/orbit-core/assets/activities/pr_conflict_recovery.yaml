@@ -71,6 +71,8 @@ spec:
         type: string
       error_message:
         type: string
+      error_diagnostic:
+        type: object
       attempt:
         type: integer
         minimum: 1
@@ -114,6 +116,46 @@ spec:
               type: string
       diagnostic:
         type: string
+      # Injected by the recovery dispatcher only: this invocation's slot for
+      # an unchanged keep-side or delete resolution of a modify/delete
+      # conflict. The host adopts only an intent bound to these fields.
+      resolution_intent:
+        type: object
+        additionalProperties: false
+        required:
+          - path
+          - schema_version
+          - run_id
+          - failed_step_id
+          - attempt
+          - nonce
+          - target_base_sha
+          - task_ids
+        properties:
+          path:
+            type: string
+            minLength: 1
+          schema_version:
+            const: 1
+          run_id:
+            type: string
+            minLength: 1
+          failed_step_id:
+            type: string
+            minLength: 1
+          attempt:
+            type: integer
+            minimum: 1
+          nonce:
+            type: string
+            minLength: 1
+          target_base_sha:
+            type: string
+            minLength: 1
+          task_ids:
+            type: array
+            items:
+              type: string
   # Advisory only. Neither this result nor any agent-returned flag authorizes
   # Git mutation; the host boundary and deterministic retry judge recovery.
   # Gate outcomes are reported here, never used as a stop condition.
@@ -166,11 +208,8 @@ spec:
       paths you did not touch, are never reasons to stop.
     - "Conflict paths" below means the supplied `conflicting_paths` except those
       listed in `regenerated_paths`.
-    - A provider CLI permission denial covers only the one command it refused:
-      rerun the needed work with commands that avoid the denied path, and keep
-      using the shell. Report a tool unavailable only after a trivial call to
-      it (for the shell, `true`) is also denied, quoting that denial. A
-      denial never excuses skipping the checks that step 3 requires.
+    - A provider CLI permission denial (see Provider CLI permission denials)
+      never excuses skipping the checks that step 3 requires.
 
     Procedure:
 
@@ -212,6 +251,10 @@ spec:
          that pins the merged behavior). Any path may change.
        - A conflict file an earlier final recovery already repaired correctly
          needs no further edit. Leave it as it is.
+       - A modify/delete conflict (one side deleted the path) whose correct
+         resolution is one side exactly as it is, or the deletion, needs a
+         resolution intent: Orbit cannot tell an unchanged side from a
+         conflict nobody touched. See Resolution intent below.
        - Read the local `origin/<base>` ref for the same paths (for example
          `git show origin/<base>:<path>`), so the resolution stays compatible
          with where the host lands the candidate. Do not pre-apply that newer
@@ -240,6 +283,30 @@ spec:
          involves a resolved path. A failure on paths you did not touch is
          baseline state: report it and still return success. Fix a failure
          that involves a resolved path before returning.
+
+    Resolution intent:
+    When the input carries `resolution_intent`, and a conflict path is a
+    modify/delete conflict you resolve by keeping one side byte-for-byte or by
+    deleting the path, write `resolution_intent.path` (in `.orbit/tmp/`) once
+    before you finish, as a regular file (never a link, never elsewhere),
+    copying the binding fields from `resolution_intent`:
+
+        {"schema_version": 1, "run_id": "<run_id>",
+         "failed_step_id": "<failed_step_id>", "attempt": <attempt>,
+         "nonce": "<nonce>", "target_base_sha": "<target_base_sha>",
+         "task_ids": [<task_ids, in order>],
+         "resolutions": [{"path": "<conflict path>",
+                          "resolution": "keep_candidate" | "keep_target_base" | "delete"}]}
+
+    - `keep_candidate` keeps the candidate side (index stage 3, `git show
+      :3:<path>`), `keep_target_base` the target base side (stage 2), each
+      with its content and mode exactly; `delete` leaves the path absent.
+    - List only modify/delete conflict paths. Orbit refuses the whole
+      continuation when an entry names any other path, a side the index does
+      not hold, or a worktree that does not hold exactly that side, so write
+      no entry for a path you merged or edited.
+    - Skip the file when no such path exists. Add no other fields, then parse
+      it back (for example `jq .`) and check every binding.
 
     Claimed leaves:
     A `task_claimed_pr_pipeline` run executes a task another machine owns.
@@ -299,5 +366,6 @@ spec:
     - unshare
     - docker
     - podman
+  provider_denial_guidance: true
   on_denial: terminate
   wall_clock_timeout_seconds: 3600

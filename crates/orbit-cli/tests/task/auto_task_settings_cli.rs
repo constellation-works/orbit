@@ -4,9 +4,14 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
 
+use chrono::Utc;
 use orbit_common::security::release::sha256_hex;
-use serde_json::Value;
+use orbit_core::application::automation::{consumer_key, evaluate_auto_task};
+use orbit_types::workflow::automation::{Delivery, SourceRevision, UNATTRIBUTED_NO_LANDING_TASK};
+use serde_json::{Value, json};
 
 use crate::isolated_cli_fixture::Fixture;
 
@@ -423,6 +428,959 @@ fn older_shipped_bodies_upgrade_with_settings_and_custom_bodies_stay_forked() {
 }
 
 #[test]
+fn stale_run_failure_contract_holds_mint_and_adopt_preserves_customizations() {
+    let fixture = Fixture::new();
+    let path = definition_path(&fixture, "run-failure-patterns");
+    let dir = path.parent().unwrap().to_path_buf();
+    let bundled = fs::read_to_string(&path).unwrap();
+
+    // A customized body that dedupes by bare leaf id: the bundled host-aware
+    // rule is omitted, while operator title/crew/criterion edits are intended.
+    let mut custom = orbit_common::protocol::yaml::parse_auto_task_yaml(&bundled).unwrap();
+    custom.template.title = "Operator scan title".to_string();
+    custom.template.crew = Some("opus".to_string());
+    custom.template.description =
+        "Operator custom scan.\n\nDedupe follower settlements by bare leaf id against this host's history; count the rest."
+            .to_string();
+    custom.template.acceptance_criteria =
+        vec!["Operator criterion: count follower settlements once by leaf id.".to_string()];
+    fs::write(&path, serde_yaml::to_string(&custom).unwrap()).unwrap();
+    set_manifest_digest(&dir, "run-failure-patterns", None);
+
+    let shown = fixture.json(&["auto-task", "show", "run-failure-patterns", "--json"]);
+    assert_eq!(shown["layering"]["body"], "forked");
+    assert!(
+        shown["layering"]["stale_contract"]["contract"]
+            .as_str()
+            .unwrap()
+            .contains("machine_id"),
+        "{shown}"
+    );
+    assert!(
+        shown["layering"]["stale_contract"]["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|missing| missing == "task_id"),
+        "{shown}"
+    );
+    let listed = fixture.json(&["auto-task", "list", "--json"]);
+    let row = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "run-failure-patterns")
+        .unwrap();
+    assert!(row["stale_contract"].is_object(), "{row}");
+    let doctor = auto_task_doctor_row(&fixture);
+    assert!(
+        doctor["message"]
+            .as_str()
+            .unwrap()
+            .contains("Stale contract"),
+        "{doctor}"
+    );
+
+    // Minting is held, not silently minted as a reconciled scan.
+    fixture
+        .command(&["auto-task", "mint", "run-failure-patterns"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("is held"))
+        .stderr(predicates::str::contains("--adopt-bundled-contract"));
+
+    // Operator-directed reconciliation appends the bundled rule and keeps
+    // every intended customization.
+    fixture.json(&[
+        "auto-task",
+        "update",
+        "run-failure-patterns",
+        "--adopt-bundled-contract",
+        "--json",
+    ]);
+    let shown = fixture.json(&["auto-task", "show", "run-failure-patterns", "--json"]);
+    assert!(shown["layering"]["stale_contract"].is_null(), "{shown}");
+    assert_eq!(shown["template"]["title"], "Operator scan title");
+    assert_eq!(shown["template"]["crew"], "opus");
+    let description = shown["template"]["description"].as_str().unwrap();
+    assert!(
+        description.contains("Operator custom scan."),
+        "{description}"
+    );
+    assert!(description.contains("machine_id"), "{description}");
+    assert!(description.contains("leaf_run_id"), "{description}");
+    let criteria = shown["template"]["acceptance_criteria"].clone();
+    assert!(
+        criteria
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|criterion| criterion.as_str().unwrap().contains("Operator criterion")),
+        "{criteria}"
+    );
+    assert!(
+        criteria
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|criterion| criterion.as_str().unwrap().contains("task_ids")),
+        "{criteria}"
+    );
+
+    // A scan minted after reconciliation carries the triple-match rule, so
+    // two settlements sharing a leaf id on different hosts both count.
+    let minted = fixture.json(&["auto-task", "mint", "run-failure-patterns", "--json"]);
+    assert_eq!(minted["title"], "[auto-task] Operator scan title");
+    let minted_body = minted["description"].as_str().unwrap();
+    assert!(minted_body.contains("machine_id"), "{minted_body}");
+    assert!(minted_body.contains("leaf_run_id"), "{minted_body}");
+    assert!(minted_body.contains("task_id"), "{minted_body}");
+
+    // A customized body that already states the rule in its own wording
+    // remains usable, and an unrelated fork is not held.
+    fixture.json(&[
+        "auto-task",
+        "update",
+        "run-failure-patterns",
+        "--title",
+        "Compliant custom title",
+        "--json",
+    ]);
+    let minted = fixture.json(&["auto-task", "mint", "run-failure-patterns", "--json"]);
+    assert_eq!(minted["title"], "[auto-task] Compliant custom title");
+
+    // The same rule in the operator's own wording is not stale either.
+    fixture.json(&[
+        "auto-task",
+        "update",
+        "run-failure-patterns",
+        "--body",
+        "Count a follower as a duplicate only when host, leaf run id and task id all match; otherwise count it.",
+        "--criterion",
+        "Dedupe only when host, leaf run id and task id all match.",
+        "--json",
+    ]);
+    let shown = fixture.json(&["auto-task", "show", "run-failure-patterns", "--json"]);
+    assert!(shown["layering"]["stale_contract"].is_null(), "{shown}");
+    fixture.json(&["auto-task", "mint", "run-failure-patterns", "--json"]);
+
+    let unrelated = definition_path(&fixture, "security-review");
+    let mut edited = orbit_common::protocol::yaml::parse_auto_task_yaml(
+        &fs::read_to_string(&unrelated).unwrap(),
+    )
+    .unwrap();
+    edited.template.title = "Operator security title".to_string();
+    fs::write(&unrelated, serde_yaml::to_string(&edited).unwrap()).unwrap();
+    let minted = fixture.json(&["auto-task", "mint", "security-review", "--json"]);
+    assert_eq!(minted["title"], "[auto-task] Operator security title");
+}
+
+const RUN_FAILURE: &str = "run-failure-patterns";
+const DELIVERY_TRIGGER: &str = r#"{"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0}"#;
+const UNRELATED_TRIGGER: &str = r#"{"branch":"unrelated-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0}"#;
+
+/// Job-step admission, a condition fire and a due delivery all hold a stale
+/// run-failure body with the manual mint's error, and mint again once that
+/// body carries the bundled contract. An unrelated definition keeps minting.
+#[test]
+fn stale_run_failure_contract_holds_job_step_and_automation_mints() {
+    const TEST: &str =
+        "auto_task_settings_cli::stale_run_failure_contract_holds_job_step_and_automation_mints";
+    if crate::isolated_test::run_in_child(TEST) {
+        return;
+    }
+    let _authority = orbit_common::test_env::unset(
+        orbit_common::test_env::INHERITED_AUTHORITY_ENV
+            .iter()
+            .copied(),
+    );
+    let fixture = Fixture::new();
+    write_stale_run_failure_body(&fixture);
+    auto_task_tool(
+        &fixture,
+        json!({
+            "action": "update",
+            "name": RUN_FAILURE,
+            "dedupe": "always",
+            "enabled": true,
+        }),
+    );
+    let shown = show(&fixture, RUN_FAILURE);
+    assert_eq!(shown["enabled"], true, "{shown}");
+    assert_eq!(shown["dedupe"], "always", "{shown}");
+    assert!(shown["layering"]["stale_contract"].is_object(), "{shown}");
+
+    let parked = run_auto_task_step(&fixture, "stale-hold", RUN_FAILURE);
+    assert_stale_hold(&parked, "job step");
+    assert!(tasks_for(&fixture, RUN_FAILURE).is_empty(), "{parked}");
+
+    let subject = add_subject(&fixture, "Stale condition subject");
+    set_condition(&fixture, RUN_FAILURE, "'stale-scan' in task.tags");
+    assert_eq!(show(&fixture, RUN_FAILURE)["enabled"], true);
+    tick_named(&fixture, RUN_FAILURE);
+    assert!(tasks_for(&fixture, RUN_FAILURE).is_empty());
+    tag_task(&fixture, &subject, "stale-scan");
+    tick_named(&fixture, RUN_FAILURE);
+    assert!(
+        tasks_for(&fixture, RUN_FAILURE).is_empty(),
+        "a stale condition fire must not mint"
+    );
+    assert_stale_hold(&fire_details(&fixture, RUN_FAILURE), "condition fire");
+
+    set_deliveries(&fixture, RUN_FAILURE, DELIVERY_TRIGGER);
+    let git = crate::auto_task_lifecycle_cli::git;
+    git(&fixture, &["checkout", "-b", "fixture-delivery"]);
+    commit_file(&fixture, "baseline.txt", "baseline\n");
+    crate::auto_task_lifecycle_cli::publish_origin_if_configured(&fixture);
+    let runtime = open_runtime(&fixture);
+    evaluate_named(&runtime, RUN_FAILURE);
+    land_delivery(
+        &fixture,
+        &runtime,
+        RUN_FAILURE,
+        "fixture-delivery",
+        "landed.txt",
+    );
+    let held = evaluate_named(&runtime, RUN_FAILURE);
+    assert_stale_hold(&held.reason, "delivery");
+    assert!(
+        held.state
+            .as_ref()
+            .and_then(|state| state.active.as_ref())
+            .is_none(),
+        "a stale delivery must not claim a batch: {}",
+        held.reason
+    );
+    assert!(
+        tasks_for(&fixture, RUN_FAILURE).is_empty(),
+        "{}",
+        held.reason
+    );
+
+    fixture.json(&[
+        "auto-task",
+        "update",
+        RUN_FAILURE,
+        "--adopt-bundled-contract",
+        "--json",
+    ]);
+    assert!(
+        show(&fixture, RUN_FAILURE)["layering"]["stale_contract"].is_null(),
+        "adopt must clear the stale contract"
+    );
+    let runtime = open_runtime(&fixture);
+    let minted = evaluate_named(&runtime, RUN_FAILURE);
+    let action_id = minted
+        .state
+        .as_ref()
+        .and_then(|state| state.active.as_ref())
+        .and_then(|active| active.action_id.clone());
+    assert!(
+        action_id.is_some(),
+        "reconciled delivery should mint: reason={} refusals={:?}",
+        minted.reason,
+        minted.refusals
+    );
+    let delivered = tasks_for(&fixture, RUN_FAILURE);
+    assert_eq!(delivered.len(), 1, "{delivered:?}");
+    assert_contract_present(&fixture, &delivered[0]);
+
+    set_interval(&fixture, RUN_FAILURE);
+    let parked = run_auto_task_step(&fixture, "reconciled-scan", RUN_FAILURE);
+    assert!(
+        parked.contains("minted task"),
+        "reconciled job step should mint: {parked}"
+    );
+    assert!(!parked.contains("is held"), "{parked}");
+    assert_eq!(tasks_for(&fixture, RUN_FAILURE).len(), 2);
+
+    let reconciled_subject = add_subject(&fixture, "Reconciled condition subject");
+    set_condition(&fixture, RUN_FAILURE, "'reconciled-scan' in task.tags");
+    tick_named(&fixture, RUN_FAILURE);
+    assert_eq!(tasks_for(&fixture, RUN_FAILURE).len(), 2);
+    tag_task(&fixture, &reconciled_subject, "reconciled-scan");
+    tick_named(&fixture, RUN_FAILURE);
+    let reconciled = tasks_for(&fixture, RUN_FAILURE);
+    assert_eq!(reconciled.len(), 3, "{reconciled:?}");
+    assert_contract_present(&fixture, reconciled.last().unwrap());
+
+    add_unrelated(&fixture);
+    let parked = run_auto_task_step(&fixture, "unrelated-job", "unrelated-scan");
+    assert!(
+        parked.contains("minted task"),
+        "unrelated job step should mint: {parked}"
+    );
+    assert_eq!(tasks_for(&fixture, "unrelated-scan").len(), 1);
+
+    let unrelated_subject = add_subject(&fixture, "Unrelated condition subject");
+    set_condition(&fixture, "unrelated-scan", "'unrelated-edge' in task.tags");
+    tick_named(&fixture, "unrelated-scan");
+    assert_eq!(tasks_for(&fixture, "unrelated-scan").len(), 1);
+    tag_task(&fixture, &unrelated_subject, "unrelated-edge");
+    tick_named(&fixture, "unrelated-scan");
+    assert_eq!(tasks_for(&fixture, "unrelated-scan").len(), 2);
+
+    set_deliveries(&fixture, "unrelated-scan", UNRELATED_TRIGGER);
+    fixture.json(&["auto-task", "toggle", "unrelated-scan", "on", "--json"]);
+    git(&fixture, &["checkout", "-b", "unrelated-delivery"]);
+    commit_file(&fixture, "unrelated-baseline.txt", "baseline\n");
+    crate::auto_task_lifecycle_cli::publish_origin_if_configured(&fixture);
+    let runtime = open_runtime(&fixture);
+    evaluate_named(&runtime, "unrelated-scan");
+    land_delivery(
+        &fixture,
+        &runtime,
+        "unrelated-scan",
+        "unrelated-delivery",
+        "unrelated-landed.txt",
+    );
+    let minted = evaluate_named(&runtime, "unrelated-scan");
+    assert!(
+        minted
+            .state
+            .as_ref()
+            .and_then(|state| state.active.as_ref())
+            .and_then(|active| active.action_id.as_ref())
+            .is_some(),
+        "unrelated delivery should mint: reason={} refusals={:?}",
+        minted.reason,
+        minted.refusals
+    );
+    assert_eq!(tasks_for(&fixture, "unrelated-scan").len(), 3);
+}
+
+fn write_stale_run_failure_body(fixture: &Fixture) {
+    let path = definition_path(fixture, RUN_FAILURE);
+    let dir = path.parent().unwrap().to_path_buf();
+    let bundled = fs::read_to_string(&path).unwrap();
+    let mut custom = orbit_common::protocol::yaml::parse_auto_task_yaml(&bundled).unwrap();
+    custom.template.title = "Operator scan title".to_string();
+    custom.template.description = "Operator custom scan.\n\nDedupe follower settlements by bare \
+         leaf id against this host's history; count the rest."
+        .to_string();
+    custom.template.acceptance_criteria =
+        vec!["Operator criterion: count follower settlements once by leaf id.".to_string()];
+    fs::write(&path, serde_yaml::to_string(&custom).unwrap()).unwrap();
+    set_manifest_digest(&dir, RUN_FAILURE, None);
+}
+
+fn show(fixture: &Fixture, name: &str) -> Value {
+    fixture.json(&["auto-task", "show", name, "--json"])
+}
+
+fn auto_task_tool(fixture: &Fixture, input: Value) -> Value {
+    fixture.json(&[
+        "tool",
+        "run",
+        "orbit.auto_task",
+        "--input",
+        &input.to_string(),
+        "--format",
+        "json",
+    ])
+}
+
+fn set_condition(fixture: &Fixture, name: &str, when: &str) {
+    auto_task_tool(
+        fixture,
+        json!({
+            "action": "update",
+            "name": name,
+            "schedule": {"condition": {"scope": "task", "when": when}},
+        }),
+    );
+}
+
+fn set_interval(fixture: &Fixture, name: &str) {
+    auto_task_tool(
+        fixture,
+        json!({"action": "update", "name": name, "schedule": {"every_minutes": 60}}),
+    );
+}
+
+fn set_deliveries(fixture: &Fixture, name: &str, trigger: &str) {
+    fixture.json(&[
+        "auto-task",
+        "update",
+        name,
+        "--deliveries-landed",
+        trigger,
+        "--json",
+    ]);
+}
+
+fn add_unrelated(fixture: &Fixture) {
+    auto_task_tool(
+        fixture,
+        json!({
+            "action": "add",
+            "name": "unrelated-scan",
+            "description": "unrelated",
+            "schedule": {"every_minutes": 60},
+            "template": {
+                "title": "Unrelated scan",
+                "description": "Unrelated body",
+                "acceptance_criteria": ["Unrelated criterion"],
+            },
+            "dedupe": "always",
+        }),
+    );
+}
+
+fn add_subject(fixture: &Fixture, title: &str) -> String {
+    fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        title,
+        "--complexity",
+        "low",
+        "--acceptance-criteria",
+        "Condition subject",
+        "--json",
+    ])["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn tag_task(fixture: &Fixture, id: &str, tag: &str) {
+    fixture
+        .command(&["task", "update", id, "--tag", tag, "--json"])
+        .assert()
+        .success();
+}
+
+fn tasks_for(fixture: &Fixture, name: &str) -> Vec<Value> {
+    let listed = fixture.json(&[
+        "task",
+        "list",
+        "--tag",
+        &format!("auto-task:{name}"),
+        "--json",
+    ]);
+    listed.as_array().cloned().unwrap_or_else(|| {
+        listed
+            .get("tasks")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_else(|| panic!("task list: {listed}"))
+    })
+}
+
+fn tick_named(fixture: &Fixture, name: &str) -> Value {
+    let report = fixture.json(&["clock", "tick", "--format", "json"]);
+    report["reports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == name)
+        .unwrap_or_else(|| panic!("{name} missing from clock tick: {report}"))
+        .clone()
+}
+
+fn fire_details(fixture: &Fixture, name: &str) -> String {
+    let explained = fixture.json(&["automation", "explain", name, "--json"]);
+    let fires = explained["tracking"]["recent_fires"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let text = fires
+        .iter()
+        .filter_map(|fire| fire["detail"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!text.is_empty(), "no fire detail: {explained}");
+    text
+}
+
+fn assert_stale_hold(text: &str, path: &str) {
+    assert!(
+        text.contains("is held"),
+        "{path} must carry the stale-contract hold: {text}"
+    );
+    assert!(
+        text.contains("--adopt-bundled-contract"),
+        "{path} must name the reconciliation: {text}"
+    );
+}
+
+fn assert_contract_present(fixture: &Fixture, task: &Value) {
+    let id = task["id"].as_str().unwrap();
+    let shown = fixture.json(&["task", "show", id, "--json"]);
+    let body = shown["description"].as_str().unwrap_or("");
+    assert!(
+        body.contains("machine_id") && body.contains("leaf_run_id") && body.contains("task_id"),
+        "minted scan must carry the bundled contract: {body}"
+    );
+}
+
+fn open_runtime(fixture: &Fixture) -> orbit_core::OrbitRuntime {
+    use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
+
+    let roots = RegisteredRuntimeFactory::resolve_roots_for_cwd(&fixture.repo, Some(&fixture.root))
+        .unwrap_or_else(|error| panic!("resolve roots: {error}"));
+    RegisteredRuntimeFactory::open_resolved_roots(roots)
+        .unwrap_or_else(|error| panic!("runtime: {error}"))
+        .with_actor(orbit_core::ActorIdentity::human("fixture"))
+}
+
+fn runtime_roots(fixture: &Fixture) -> (PathBuf, PathBuf) {
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    (
+        fixture.root.clone(),
+        PathBuf::from(shown["orbit_root"].as_str().unwrap()),
+    )
+}
+
+/// Kills and reaps an unrelated bystander process on drop.
+struct Bystander(std::process::Child);
+
+impl Drop for Bystander {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+fn process_alive(pid: u32) -> bool {
+    // SAFETY: signal 0 only probes for the process; nothing is delivered.
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+fn stalled_worker_pid(guard: &AutoTaskWorkerGuard<'_>) -> u32 {
+    guard
+        .worker_pid(Duration::from_secs(30))
+        .unwrap_or_else(|| panic!("no worker pid for {}", guard.run_id))
+}
+
+fn assert_worker_terminated_and_reaped(runtime: &orbit_core::OrbitRuntime, run_id: &str, pid: u32) {
+    assert!(
+        orbit_core::test_support::pipeline_worker_observer_completed(
+            &runtime.paths().repo_root,
+            run_id,
+            pid
+        ),
+        "worker {pid} of {run_id} was not reaped"
+    );
+    assert!(!process_alive(pid), "worker {pid} of {run_id} survived");
+}
+
+#[test]
+fn stalled_auto_task_worker_is_terminated_and_reaped_on_timeout_and_unwind() {
+    const TEST: &str = "auto_task_settings_cli::stalled_auto_task_worker_is_terminated_and_reaped_on_timeout_and_unwind";
+    if crate::isolated_test::run_in_child(TEST) {
+        return;
+    }
+    let _authority = orbit_common::test_env::unset(
+        orbit_common::test_env::INHERITED_AUTHORITY_ENV
+            .iter()
+            .copied(),
+    );
+    let fixture = Fixture::new();
+    let (global, workspace) = runtime_roots(&fixture);
+    // The stalled worker carries the run marker in its environment only, as
+    // the real worker does after `env` execs it.
+    install_auto_task_worker_command(
+        &global,
+        [
+            format!(
+                "{AUTO_TASK_WORKER_RUN_ENV}={}",
+                orbit_core::test_support::RUN_ID_PLACEHOLDER
+            ),
+            "/bin/sleep".to_string(),
+            "600".to_string(),
+        ],
+    );
+    let runtime = orbit_core::OrbitRuntime::from_roots(&global, &workspace)
+        .unwrap_or_else(|error| panic!("runtime: {error}"));
+    let bystander = Bystander(
+        std::process::Command::new("/bin/sleep")
+            .arg("600")
+            .spawn()
+            .unwrap_or_else(|error| panic!("bystander: {error}")),
+    );
+    let bystander_pid = bystander.0.id();
+
+    // Timeout: the fixture terminates and reaps the stalled worker.
+    let path = write_auto_task_job(&fixture, "stalled-timeout", RUN_FAILURE);
+    let guard = submit_auto_task_job(&runtime, &global, &path, "stalled-timeout", RUN_FAILURE);
+    let run_id = guard.run_id.clone();
+    let pid = stalled_worker_pid(&guard);
+    assert!(process_alive(pid), "stalled worker {pid} must be running");
+    let timed_out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        await_auto_task_park(
+            &runtime,
+            "stalled-timeout",
+            &guard,
+            Duration::from_millis(300),
+        )
+    }));
+    assert!(
+        timed_out.is_err(),
+        "a stalled worker must time out the fixture"
+    );
+    assert_worker_terminated_and_reaped(&runtime, &run_id, pid);
+    drop(guard);
+
+    // Unwind after submission: dropping the guard terminates and reaps.
+    let path = write_auto_task_job(&fixture, "stalled-unwind", RUN_FAILURE);
+    let unwound_run = std::cell::RefCell::new(None);
+    let unwound_pid = std::cell::RefCell::new(None);
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let guard = submit_auto_task_job(&runtime, &global, &path, "stalled-unwind", RUN_FAILURE);
+        *unwound_run.borrow_mut() = Some(guard.run_id.clone());
+        *unwound_pid.borrow_mut() = Some(stalled_worker_pid(&guard));
+        panic!("fixture failed after worker submission");
+    }));
+    assert!(unwound.is_err());
+    let unwound_run = unwound_run.into_inner().expect("submitted run");
+    let unwound_pid = unwound_pid.into_inner().expect("worker pid");
+    assert_worker_terminated_and_reaped(&runtime, &unwound_run, unwound_pid);
+
+    assert!(
+        process_alive(bystander_pid),
+        "cleanup must not signal unrelated processes"
+    );
+}
+
+/// Foreground `run_job_v2_from_yaml` refuses auto-task steps. Submit the job
+/// the way an operator does, and let this process's substitute worker execute
+/// the detached run until the step parks.
+const AUTO_TASK_JOB_WORKER: &str = "auto_task_settings_cli::execute_submitted_auto_task_job";
+
+const AUTO_TASK_WORKER_RUN_ENV: &str = "ORBIT_TEST_AUTO_TASK_RUN";
+
+/// How long a submitted auto-task step may take to park before the fixture
+/// terminates its worker.
+const AUTO_TASK_PARK_TIMEOUT: Duration = Duration::from_secs(90);
+
+fn install_auto_task_job_worker(global: &Path, workspace: &Path) {
+    orbit_common::test_env::assert_child_test_exists(AUTO_TASK_JOB_WORKER);
+    let exe = std::env::current_exe().unwrap_or_else(|error| panic!("test exe: {error}"));
+    install_auto_task_worker_command(
+        global,
+        [
+            format!("ORBIT_TEST_AUTO_TASK_GLOBAL={}", global.display()),
+            format!("ORBIT_TEST_AUTO_TASK_WORKSPACE={}", workspace.display()),
+            // `env` execs the worker, so the run marker lives in its environment
+            // (not argv) and the recorded worker PID is the executing process.
+            format!(
+                "{AUTO_TASK_WORKER_RUN_ENV}={}",
+                orbit_core::test_support::RUN_ID_PLACEHOLDER
+            ),
+            exe.to_string_lossy().into_owned(),
+            "--exact".to_string(),
+            AUTO_TASK_JOB_WORKER.to_string(),
+            "--ignored".to_string(),
+            "--nocapture".to_string(),
+        ],
+    );
+}
+
+/// Records the worker's own PID before `exec`, so the fixture knows the
+/// identity of the child it launched even if the worker stalls before it
+/// claims its run (the run records a PID only on that claim).
+const AUTO_TASK_WORKER_LAUNCH: &str = r#"echo $$ > "$0.tmp" && mv "$0.tmp" "$0" && exec "$@""#;
+
+fn auto_task_worker_pid_file(global: &Path, run_id: &str) -> PathBuf {
+    global.join(format!("{run_id}.auto-task-worker.pid"))
+}
+
+fn install_auto_task_worker_command(
+    global: &Path,
+    env_and_command: impl IntoIterator<Item = String>,
+) {
+    orbit_core::test_support::install_substitute_pipeline_worker(
+        [
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            AUTO_TASK_WORKER_LAUNCH.to_string(),
+            auto_task_worker_pid_file(global, orbit_core::test_support::RUN_ID_PLACEHOLDER)
+                .to_string_lossy()
+                .into_owned(),
+            "env".to_string(),
+        ]
+        .into_iter()
+        .chain(env_and_command),
+    );
+}
+
+#[test]
+#[ignore = "entry point for a detached auto-task job step"]
+fn execute_submitted_auto_task_job() {
+    let global = std::env::var_os("ORBIT_TEST_AUTO_TASK_GLOBAL").expect("worker global root");
+    let workspace =
+        std::env::var_os("ORBIT_TEST_AUTO_TASK_WORKSPACE").expect("worker workspace root");
+    let run = std::env::var("ORBIT_TEST_AUTO_TASK_RUN").expect("worker run id");
+    let runtime = orbit_core::OrbitRuntime::from_roots(Path::new(&global), Path::new(&workspace))
+        .unwrap_or_else(|error| panic!("worker runtime: {error}"));
+    runtime
+        .execute_pipeline_run_worker(&run)
+        .unwrap_or_else(|error| panic!("worker {run}: {error}"));
+}
+
+fn write_auto_task_job(fixture: &Fixture, job: &str, auto_task: &str) -> PathBuf {
+    let path = fixture.repo.join(format!("{job}.yaml"));
+    fs::write(
+        &path,
+        format!(
+            "schemaVersion: 3\nkind: Job\nmetadata:\n  name: {job}\nspec:\n  state: enabled\n  expire_when: \"now >= job.started_at + duration('24h')\"\n  steps:\n    - id: scan\n      target: auto-task:{auto_task}\n"
+        ),
+    )
+    .unwrap();
+    path
+}
+
+fn run_auto_task_step(fixture: &Fixture, job: &str, auto_task: &str) -> String {
+    let path = write_auto_task_job(fixture, job, auto_task);
+    let (global, workspace) = runtime_roots(fixture);
+    install_auto_task_job_worker(&global, &workspace);
+    let runtime = orbit_core::OrbitRuntime::from_roots(&global, &workspace)
+        .unwrap_or_else(|error| panic!("{job} runtime: {error}"));
+    let guard = submit_auto_task_job(&runtime, &global, &path, job, auto_task);
+    await_auto_task_park(&runtime, job, &guard, AUTO_TASK_PARK_TIMEOUT)
+}
+
+/// Submit the job and own its worker from the moment the run exists, so an
+/// unwind anywhere after submission still terminates and reaps it.
+fn submit_auto_task_job<'a>(
+    runtime: &'a orbit_core::OrbitRuntime,
+    global: &Path,
+    path: &Path,
+    job: &str,
+    auto_task: &str,
+) -> AutoTaskWorkerGuard<'a> {
+    let submitted = runtime
+        .submit_job_run(
+            path.to_str().unwrap_or_else(|| panic!("{job} path")),
+            json!({}),
+            Some("test"),
+        )
+        .unwrap_or_else(|error| panic!("{job} ({auto_task}) submit: {error}"));
+    AutoTaskWorkerGuard {
+        runtime,
+        pid_file: auto_task_worker_pid_file(global, &submitted.run_id),
+        run_id: submitted.run_id,
+    }
+}
+
+fn await_auto_task_park(
+    runtime: &orbit_core::OrbitRuntime,
+    job: &str,
+    guard: &AutoTaskWorkerGuard<'_>,
+    timeout: Duration,
+) -> String {
+    let run_id = guard.run_id.as_str();
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(reason) = parked_after_worker_exit(runtime, job, run_id) {
+            return reason;
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    let reaped = guard.terminate_and_reap();
+    // Once reaped, a park that landed before the kill is still the run's
+    // outcome; the pre-existing post-kill grace loop reported it the same way.
+    if let Some(reason) = parked_after_worker_exit(runtime, job, run_id) {
+        return reason;
+    }
+    let run = runtime
+        .show_job_run(run_id)
+        .unwrap_or_else(|error| panic!("{job} show {run_id}: {error}"));
+    panic!(
+        "{job} run {run_id} did not park within {timeout:?} ({:?}); worker terminated and reaped: {reaped}; worker log:\n{}",
+        run.state,
+        worker_log(runtime, run_id)
+    );
+}
+
+/// Owns the detached substitute worker of one submitted run. Termination is
+/// bound to the PID the launched worker recorded for itself, never to a
+/// command-line pattern, so it cannot signal another run's worker. Dropping the
+/// guard (including on unwind) terminates and reaps that worker.
+struct AutoTaskWorkerGuard<'a> {
+    runtime: &'a orbit_core::OrbitRuntime,
+    run_id: String,
+    pid_file: PathBuf,
+}
+
+impl AutoTaskWorkerGuard<'_> {
+    /// The launched worker's PID, once it has recorded one.
+    fn worker_pid(&self, wait: Duration) -> Option<u32> {
+        let deadline = Instant::now() + wait;
+        loop {
+            let recorded = fs::read_to_string(&self.pid_file)
+                .ok()
+                .and_then(|pid| pid.trim().parse().ok());
+            if let Some(pid) = recorded {
+                return Some(pid);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// SIGKILL the worker's process group if this process has not reaped it
+    /// yet, then wait for the launch observer to reap it. Returns whether the
+    /// worker is reaped. Idempotent, and never panics (it also runs while
+    /// unwinding).
+    fn terminate_and_reap(&self) -> bool {
+        let Some(pid) = self.worker_pid(Duration::from_secs(10)) else {
+            return false;
+        };
+        let workspace = &self.runtime.paths().repo_root;
+        let reaped = || {
+            orbit_core::test_support::pipeline_worker_observer_completed(
+                workspace,
+                &self.run_id,
+                pid,
+            )
+        };
+        // Until the observer reaps the child, its PID cannot be reused, so
+        // these signals can only reach the worker this fixture launched. The
+        // worker is its own session (and group) leader, so the group signal
+        // also ends anything it spawned.
+        if !reaped() {
+            // SAFETY: `pid` is this run's unreaped child; SIGKILL only ends it
+            // and its own process group.
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !reaped() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        true
+    }
+}
+
+impl Drop for AutoTaskWorkerGuard<'_> {
+    fn drop(&mut self) {
+        self.terminate_and_reap();
+    }
+}
+
+/// The park text, once this process has reaped the substitute worker.
+/// A worker that exits without parking fails the test.
+fn parked_after_worker_exit(
+    runtime: &orbit_core::OrbitRuntime,
+    job: &str,
+    run_id: &str,
+) -> Option<String> {
+    let run = runtime
+        .show_job_run(run_id)
+        .unwrap_or_else(|error| panic!("{job} show {run_id}: {error}"));
+    let pid = run.pid?;
+    if !orbit_core::test_support::pipeline_worker_observer_completed(
+        &runtime.paths().repo_root,
+        run_id,
+        pid,
+    ) {
+        return None;
+    }
+    let parked = runtime
+        .read_run_state(run_id)
+        .unwrap_or_else(|error| panic!("{job} state {run_id}: {error}"))
+        .and_then(|state| state.parked_wait().map(|park| park.reason.clone()));
+    Some(parked.unwrap_or_else(|| {
+        panic!(
+            "{job} worker exited without a park ({:?}); worker log:\n{}",
+            run.state,
+            worker_log(runtime, run_id)
+        )
+    }))
+}
+
+fn worker_log(runtime: &orbit_core::OrbitRuntime, run_id: &str) -> String {
+    match runtime.read_pipeline_worker_log(run_id) {
+        Ok(Some(snapshot)) => snapshot
+            .content
+            .unwrap_or_else(|| "(empty worker log)".to_string()),
+        Ok(None) => "(no worker log)".to_string(),
+        Err(error) => format!("worker log unreadable: {error}"),
+    }
+}
+
+fn evaluate_named(
+    runtime: &orbit_core::OrbitRuntime,
+    name: &str,
+) -> orbit_types::workflow::automation::AutomationDiagnostic {
+    let definition = runtime.auto_task_show(name).unwrap().expect(name);
+    evaluate_auto_task(runtime, &definition, false, Utc::now())
+        .unwrap_or_else(|error| panic!("{name}: {error}"))
+}
+
+fn commit_file(fixture: &Fixture, name: &str, content: &str) -> SourceRevision {
+    let git = crate::auto_task_lifecycle_cli::git;
+    fs::write(fixture.repo.join(name), content).unwrap();
+    git(fixture, &["add", name]);
+    git(fixture, &["commit", "-m", name]);
+    SourceRevision {
+        commit: git(fixture, &["rev-parse", "HEAD"]),
+        tree: git(fixture, &["rev-parse", "HEAD^{tree}"]),
+    }
+}
+
+fn land_delivery(
+    fixture: &Fixture,
+    runtime: &orbit_core::OrbitRuntime,
+    name: &str,
+    branch: &str,
+    file: &str,
+) {
+    let consumer = consumer_key(runtime, "auto-task", name).unwrap();
+    let store = runtime.automation_store().unwrap();
+    let state = store
+        .automation_state(&consumer)
+        .unwrap()
+        .unwrap_or_else(|| panic!("{name} has no delivery state after baseline"));
+    let landed = commit_file(fixture, file, "landed\n");
+    store
+        .automation_record_delivery_intent(&Delivery {
+            key: format!("direct:{}:{branch}:{}", state.repository, landed.commit),
+            repository: state.repository.clone(),
+            branch: branch.to_string(),
+            before: state.observed.clone(),
+            after: landed.clone(),
+            commits: vec![landed.commit.clone()],
+            task_ids: Vec::new(),
+            unattributed: Some(UNATTRIBUTED_NO_LANDING_TASK.into()),
+            evidence_reference: format!("run:fixture-run:{}", landed.commit),
+            evidence_digest: "fixture-digest".into(),
+            landed_at: Utc::now(),
+        })
+        .unwrap();
+}
+
+#[test]
+fn adopt_on_a_compliant_managed_body_writes_nothing() {
+    let fixture = Fixture::new();
+    // The shipped body already carries the host-aware contract, so adopting it
+    // is a no-op: it must not record an operator edit stamp or settings entry.
+    fixture.json(&[
+        "auto-task",
+        "update",
+        "run-failure-patterns",
+        "--adopt-bundled-contract",
+        "--json",
+    ]);
+    let shown = fixture.json(&["auto-task", "show", "run-failure-patterns", "--json"]);
+    assert_eq!(shown["layering"]["body"], "managed", "{shown}");
+    assert!(shown["layering"]["settings"].is_null(), "{shown}");
+}
+
+#[test]
 fn auto_task_settings_and_managed_bodies() {
     for (name, check) in [
         (
@@ -448,8 +1406,8 @@ fn auto_task_settings_and_managed_bodies() {
 }
 
 /// The host-health body this change supersedes is already in body history
-/// (enabled-by-default revision). An install holding those bytes converges,
-/// and a copy an operator edited does not.
+/// (the previously enabled revision). An install holding those bytes
+/// converges to disabled, and a copy an operator edited does not.
 #[test]
 fn host_health_previous_managed_body_converges_and_an_operator_edit_stays() {
     let sources: Value = serde_json::from_str(include_str!(
@@ -467,7 +1425,16 @@ fn host_health_previous_managed_body_converges_and_an_operator_edit_stays() {
         "the shipped body must differ from the recorded previous body"
     );
     let seeded = fixture.json(&["auto-task", "show", "host-health", "--json"]);
-    assert_eq!(seeded["enabled"], true, "host-health still ships enabled");
+    assert_eq!(seeded["enabled"], false, "host-health now ships disabled");
+
+    // The untouched previous body migrates to the disabled shipped body.
+    fs::write(&path, previous).unwrap();
+    let sync = fixture.json(&["workspace", "sync", "--json"]);
+    assert_eq!(sync_outcome(&sync, "host-health"), "migrated");
+    assert_eq!(fs::read_to_string(&path).unwrap(), bundled);
+    let shown = fixture.json(&["auto-task", "show", "host-health", "--json"]);
+    assert_eq!(shown["layering"]["body"], "managed");
+    assert_eq!(shown["enabled"], false);
 
     let settings_edit = previous.replacen("  priority: medium", "  priority: high", 1);
     assert_ne!(settings_edit, previous, "fixture must change a setting");
@@ -477,7 +1444,7 @@ fn host_health_previous_managed_body_converges_and_an_operator_edit_stays() {
     assert_eq!(fs::read_to_string(&path).unwrap(), bundled);
     let shown = fixture.json(&["auto-task", "show", "host-health", "--json"]);
     assert_eq!(shown["layering"]["body"], "managed");
-    assert_eq!(shown["enabled"], true);
+    assert_eq!(shown["enabled"], false);
     assert_eq!(shown["template"]["priority"], "high");
 
     let operator_edit = format!("# operator note: local procedure\n{previous}");

@@ -15,7 +15,7 @@ use crate::executor::automation::vcs::{
 
 use super::super::final_recovery::RunWorktree;
 use super::*;
-use crate::executor::automation::vcs::git::{git_command_success, git_output};
+use crate::executor::automation::vcs::git::{git_command_success, git_output, is_ancestor};
 
 /// Commit what `recovery` left in the worktree when the failed step runs on
 /// a committed candidate. Nothing happens before the candidate's commit or
@@ -108,12 +108,20 @@ pub(in crate::activity_job::job_executor) fn commit_recovery_repair_after_commit
         .filter_map(Value::as_str)
         .map(str::to_string)
         .collect::<Vec<_>>();
+    // The commit type is the tasks' own; an unreadable task counts as a chore.
+    let commit_type = orbit_types::workflow::CommitType::for_bundle(
+        task_ids
+            .iter()
+            .filter_map(|id| ctx.host.get_task(id).ok())
+            .map(|task| task.task_type),
+    );
     let request = RecoveryCommitRequest {
         workspace_path: std::path::Path::new(workspace_path),
         run_id: &ctx.run_id,
         failed_step_id: &step.id,
         recovery_activity: &recovery.name,
         task_ids: &task_ids,
+        commit_type,
         recovery_model: recovery_model.map(str::to_string),
         repair_paths: bound
             .get("ci_repair_paths")
@@ -154,6 +162,23 @@ pub(in crate::activity_job::job_executor) fn commit_recovery_repair_after_commit
             Err(refusal)
         }
     }
+}
+
+/// Whether `root` is inside a rebase stopped on unmerged entries, with HEAD
+/// detached as Git leaves it.
+fn stopped_rebase(root: &std::path::Path) -> Result<bool, orbit_common::OrbitError> {
+    if git_command_success(root, &["symbolic-ref", "--quiet", "HEAD"])? {
+        return Ok(false);
+    }
+    let mut in_progress = false;
+    for backend in ["rebase-merge", "rebase-apply"] {
+        let path =
+            std::path::PathBuf::from(git_output(root, &["rev-parse", "--git-path", backend])?);
+        if root.join(path).is_dir() {
+            in_progress = true;
+        }
+    }
+    Ok(in_progress && !git_output(root, &["ls-files", "--unmerged"])?.is_empty())
 }
 
 fn deterministic_action(step: &JobV2Step) -> Option<&str> {
@@ -198,6 +223,14 @@ pub(in crate::activity_job::job_executor) fn commit_final_recovery_repair(
     if output(&["status", "--porcelain"])?.is_empty() {
         return Ok(());
     }
+    // A rebase stopped on conflicts (detached HEAD, unmerged entries) is not
+    // a repair this host commits: the resumed rebasing step reports the same
+    // stop, and conflict recovery's authenticated host continuation adopts
+    // the repaired files and continues it [F2026-11-277]. Every other
+    // detached or moved checkout still needs its symbolic branch below.
+    if stopped_rebase(root).map_err(|error| refused(&error.to_string()))? {
+        return Ok(());
+    }
     let (root_before, head_before, branch_before) = source_before
         .ok_or_else(|| refused("final recovery has no observed checkout, candidate or branch"))?;
     let canonical = root
@@ -218,9 +251,7 @@ pub(in crate::activity_job::job_executor) fn commit_final_recovery_repair(
         .base_sha
         .as_deref()
         .ok_or_else(|| refused("final recovery has no pinned base for its file repair"))?;
-    if !git_command_success(root, &["merge-base", "--is-ancestor", base, head_before])
-        .map_err(|error| refused(&error.to_string()))?
-    {
+    if !is_ancestor(root, base, head_before).map_err(|error| refused(&error.to_string()))? {
         return Err(refused(
             "final recovery candidate does not descend from its pinned base",
         ));

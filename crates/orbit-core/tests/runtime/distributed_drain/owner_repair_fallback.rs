@@ -79,7 +79,6 @@ fn owner_fallback(busy: bool, with_backlog: bool, distinct_logical: bool) {
         )
     });
     let task = pair.tasks[0].clone();
-    *pair.wire.accept_handoffs.lock().unwrap() = true;
     let follower_drain = pair.run_drain();
     let leaf = pair.running_leaf(&follower_drain, 1);
     let delivered = handoff(&pair.admission(&leaf));

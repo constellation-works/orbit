@@ -14,6 +14,7 @@ use clap::{Args, Subcommand};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
 
+use super::breaker::RoutineBreakerArgs;
 use super::init::RoutineInitArgs;
 use super::list::RoutineListArgs;
 use super::pause::RoutinePauseArgs;
@@ -32,7 +33,9 @@ use crate::command::CommandOut;
                   git ignores, so a definition edit applies to that checkout only.\n\
                   A replica checkout schedules only its worktree GC and store GC\n\
                   routines; its other routines are listed as owner-only. Pauses are\n\
-                  host-local and never synced. `enable` and `disable` edit the definition's\n\
+                  host-local and never synced, like circuit breakers: a routine whose\n\
+                  fires fail 3 times in a row with the same error stops firing until\n\
+                  a trial succeeds or `breaker reset`. `enable` and `disable` edit the definition's\n\
                   versioned `enabled` field like the dashboard toggle, are operator-only\n\
                   and are audited. A newly initialized workspace seeds `task-pilot`,\n\
                   `worktree-gc` and `crew-memory-dream` (which mints nothing while\n\
@@ -88,6 +91,8 @@ pub enum RoutineSubcommand {
     Pause(RoutinePauseArgs),
     /// Clear a host-local pause
     Resume(RoutineResumeArgs),
+    /// Reset or bypass a routine's circuit breaker on this host
+    Breaker(RoutineBreakerArgs),
     /// Read this host's identity and optionally install the OS clock unit
     Init(RoutineInitArgs),
 }
@@ -106,6 +111,7 @@ impl RoutineSubcommand {
             Self::Disable(args) => args.execute_without_runtime(global_root, runtime),
             Self::Pause(args) => args.execute_without_runtime(global_root),
             Self::Resume(args) => args.execute_without_runtime(global_root),
+            Self::Breaker(args) => args.execute_without_runtime(global_root),
             Self::Init(args) => args.execute_without_runtime(global_root),
         }
     }

@@ -108,6 +108,12 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
     if let Some(run_id) = capacity["drain_run_id"].as_str() {
         lines.push(format!("Running drain: {run_id}."));
     }
+    if let Some(line) = drain_intent_line(&payload["drain_intent"]) {
+        lines.push(line);
+    }
+    if let Some(line) = drain_keeper_line(&payload["drain_keeper"]) {
+        lines.push(line);
+    }
     if let Some(run_id) = capacity["pull_drain_run_id"].as_str() {
         let stopped = if capacity["pull_drain_admissions_stopped"].as_bool() == Some(true) {
             " (admissions stopped)"
@@ -224,8 +230,9 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
             // a provider limit its window, reset and skipped crews. A task
             // with no footprint names its wait and fix [ORB-15191], and an
             // unverified review finding the verification job to run. Other
-            // long repair instructions stay in JSON.
-            let host = matches!(
+            // long repair instructions stay in JSON; [ORB-25221] points
+            // operators to --json when detail is recorded.
+            let host = if matches!(
                 reason,
                 "host_os_mismatch"
                     | "host_labels_missing"
@@ -237,19 +244,23 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
                     | "provider_limit"
                     | "awaiting_footprint"
                     | "awaiting_exclusive_slot"
-            )
-            .then(|| {
-                if reason == "host_os_mismatch" {
+            ) {
+                let detail = if reason == "host_os_mismatch" {
                     task["host_os_wait"]
                         .as_str()
                         .or_else(|| task["detail"].as_str())
                 } else {
                     task["detail"].as_str()
-                }
-            })
-            .flatten()
-            .map(|detail| format!(": {detail}"))
-            .unwrap_or_default();
+                };
+                detail.map(|d| format!(": {d}")).unwrap_or_default()
+            } else if task["detail"]
+                .as_str()
+                .is_some_and(|detail| !detail.trim().is_empty())
+            {
+                ": see --json for detail".to_string()
+            } else {
+                String::new()
+            };
             // The primary OS wait already carries its local scope above.
             // Keep an OS wait behind another blocker as a secondary note.
             let secondary_os_wait = task["host_os_wait"]
@@ -314,6 +325,71 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
         ));
     }
     lines
+}
+
+/// [ORB-25965] The recorded drain intent: who paused it and when, or who
+/// last started a drain by hand.
+fn drain_intent_line(intent: &Value) -> Option<String> {
+    let by = intent["by"].as_str().unwrap_or("unknown");
+    let source = intent["source"].as_str().unwrap_or("unknown");
+    let at = intent["at"].as_str().unwrap_or("unknown time");
+    match intent["intent"].as_str()? {
+        "paused" => {
+            let reason = intent["reason"]
+                .as_str()
+                .map(|reason| format!(": {reason}"))
+                .unwrap_or_default();
+            Some(format!(
+                "Drain intent: paused by {by} from {source} at {at}{reason}."
+            ))
+        }
+        "on" => Some(format!(
+            "Drain intent: on (last started by {by} from {source} at {at})."
+        )),
+        "off" => Some("Drain intent: off.".to_string()),
+        _ => Some(format!(
+            "Drain intent: unreadable ({}).",
+            intent["error"].as_str().unwrap_or("unknown error")
+        )),
+    }
+}
+
+/// [ORB-25991] The standing-drain keeper, only while it is enabled: off
+/// prints nothing new.
+fn drain_keeper_line(keeper: &Value) -> Option<String> {
+    if keeper["enabled"].as_bool() != Some(true) {
+        return None;
+    }
+    let flags = &keeper["flags"];
+    let concurrency = flags["concurrency"]
+        .as_u64()
+        .map_or_else(|| "default".to_string(), |value| value.to_string());
+    let mut line = format!(
+        "Standing-drain keeper: enabled (window {}s, concurrency {concurrency}, complete {}, \
+         approve_proposed {}, auto_fix {})",
+        flags["window_seconds"].as_u64().unwrap_or_default(),
+        flags["complete"].as_bool().unwrap_or_default(),
+        flags["approve_proposed"].as_bool().unwrap_or_default(),
+        flags["auto_fix"].as_bool().unwrap_or_default(),
+    );
+    let breaker = &keeper["breaker"];
+    if breaker["open"].as_bool() == Some(true) {
+        line.push_str(&format!(
+            "; crash breaker open ({} failed keeper drains within an hour) until a person starts a drain",
+            breaker["failed_in_last_hour"].as_u64().unwrap_or_default()
+        ));
+    }
+    if let Some(decision) = keeper["last_decision"]["decision"].as_str() {
+        line.push_str(&format!(
+            "; last decision {decision} {} at {}",
+            keeper["last_decision"]["detail"].as_str().unwrap_or("-"),
+            keeper["last_decision"]["at"]
+                .as_str()
+                .unwrap_or("unknown time"),
+        ));
+    }
+    line.push('.');
+    Some(line)
 }
 
 /// Live repairs and the latest drain pass's skipped repair candidates.

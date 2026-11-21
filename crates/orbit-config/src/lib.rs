@@ -128,19 +128,14 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 
-pub use aliases::{WorkerContainmentMode, deprecated_key_rewrites, translate_deprecated_keys};
-pub use crew_auto_effort::{
-    AUTO_EFFORT_BANDS_KEY, AUTO_EFFORT_EXPLORE_SHARE, AUTO_EFFORT_POOLS, AutoEffortBand,
-    AutoEffortPolicy,
-};
+pub use aliases::deprecated_key_rewrites;
+pub use crew_auto_effort::{AUTO_EFFORT_BANDS_KEY, AutoEffortBand, AutoEffortPolicy};
 pub use crew_pools::{
     ComplexityCrewPools, CrewPoolEntry, PurposeCrewPools, TYPE_COMPLEXITY_CREWS_KEY,
     TypeComplexityCrewPools, canonical_crew_pool, canonical_crew_pool_entries,
     type_complexity_crews_key,
 };
-pub use crew_task_types::{
-    LEGACY_TASK_TYPES_KEY, OTHER_TYPE, TASK_TYPES_KEY, TaskTypeDefinition, classify_task_type,
-};
+pub use crew_task_types::{OTHER_TYPE, TASK_TYPES_KEY, TaskTypeDefinition, classify_task_type};
 pub use experiment_keys::ExperimentConfigKey;
 pub use human_crew_seed::{
     AgentCrewNames, HumanCrewSeedOutcome, human_crew_seed_collides, normalize_human_crew_name,
@@ -150,12 +145,11 @@ pub use layering::{
     ConfigFallback, ConfigValueSourceKind, ConfigValueState, EffectiveConfigValue, ShadowReason,
     load_effective_config,
 };
-pub use lock_modes::LOCK_MODES_KEY;
 pub use memory_limit::{MemoryLimit, MemoryUnit};
 pub use operation::{
     OPERATION_POLICY_VERSION, OperationField, OperationLayerSource, OperationPolicy,
     PRE_LANDING_REVIEW_CREW_KEY, REVIEW_CREW_KEY, REVIEW_MINUTES_KEY, REVIEW_TIMING_KEY,
-    ReviewCrewPool, ReviewCrewSetting, ReviewTimingSetting,
+    ReviewCrewPool, ReviewTimingSetting,
 };
 pub use persistence::PersistenceConfig;
 pub use plugin_enablement::{
@@ -177,8 +171,8 @@ pub use registry::{
     AUTO_CONCURRENCY_PROFILE_WINDOW, AutoConcurrencySettings, CONFIG_KEY_REGISTRY,
     ConfigAllowedValues, ConfigKeyDescriptor, ConfigKeyTier, ConfigSection, ConfigSnapshot,
     ExperimentSettings, MachineSettings, MidRunSteeringSettings, ResourceThrottleSettings,
-    WorkerContainmentSettings, admit_config_key, admit_settable_config_key, config_key_options,
-    describe as describe_config_key, immutable_key_note, is_global_only_key,
+    StandingDrainSettings, WorkerContainmentSettings, admit_config_key, admit_settable_config_key,
+    config_key_options, describe as describe_config_key, immutable_key_note, is_global_only_key,
 };
 pub use regression_layers::RegressionLayerDefinition;
 pub use resolved::{
@@ -187,7 +181,7 @@ pub use resolved::{
     ResolvedConfig, compatibility_config_keys_at, compatibility_config_keys_present,
     disabled_crew_message, executor_host_os, names_retired_system_crew,
 };
-pub use review_skip_tags::{REVIEW_SKIP_TAGS_KEY, ReviewSkipSettings};
+pub use review_skip_tags::ReviewSkipSettings;
 pub use roots::ConfigRoots;
 pub use seed::{ConfigSeed, seed_default_config, seed_new_machine_defaults, seed_workspace_review};
 pub use seeding::{
@@ -197,9 +191,7 @@ pub use seeding::{
     load_workspace_seeding_policies,
 };
 pub use store::{ConfigScope, ConfigStore, WorkspaceInitMode};
-pub use tag_instructions::{
-    AGENT_CORPUS_KEY, TAG_INSTRUCTIONS_KEY, TagInstructionSetting, TagInstructionSettings,
-};
+pub use tag_instructions::{TagInstructionSetting, TagInstructionSettings};
 
 /// Read the `[machine]` table from the global `config.toml` at `global_root`.
 ///

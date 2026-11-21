@@ -127,7 +127,7 @@ where
             io::Error::new(io::ErrorKind::InvalidInput, "invalid directory lock timing").into(),
         );
     }
-    let parent = target_path.parent().ok_or_else(|| {
+    let parent = crate::fs::path::parent_dir_or_current(target_path).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "directory lock target has no parent",

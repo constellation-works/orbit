@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: attention item kinds with their source of truth, the item and response schema, severity derivation and the next action"
-last_validated: 2026-11-08
+last_validated: 2026-11-16
 title: Spec — Attention item
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: operator-attention
 tags: [operator-attention, spec]
 related_features: [operator-attention, human-decision-channel, distributed-drain]
 related_artifacts: [ORB-21164]
-last_updated: 2026-11-14
+last_updated: 2026-11-16
 ---
 
 # Spec: Attention item
@@ -41,7 +41,7 @@ review records alone; "runtime" kinds need run, claim, provider or host state.
 | `blocked` | task | `triage_candidacy` in `task/blocked_recovery/triage.rs`, over `current_block` and the final-recovery escalation | status is `blocked` and the block episode awaits a human: a claimed leaf needs an external prerequisite (`owner_route` or `environment`, surfaced immediately with its leaf error), final recovery escalated, or its backstop is silent. A block that final recovery is still resolving mechanically is not an item | the time the task moved to `blocked` (`blocked_at`) |
 | `decision_open` | task | `decision_requests_from_history`, effective state `open` (what `orbit.decision` action `list` returns) | an open request exists that no other item folds (see below): gates `agent_request` and `proposed_approval`, or any gate whose subject has no other item | `raised_at` |
 | `review_waiting` | task | the newest single-task delivery run and `current_completion_hold`, else the review gate record (`crates/orbit-core/src/application/review/`) and the `review_approval` decision gate | status is `review`, and either the newest delivery run ended `held` on a `delivery_*` code (`detail.waiting_on`: `delivery_hold`), a completion hold is current (`completion_hold`), or no review run is active and the task waits on an approval or an exhausted review budget (`approval` or `review_budget`). A live delivery run suppresses the hold item | the hold's finish or record time, else the time the review settled |
-| `run_failed` | runtime | the job-run store (`JobRun`, `orbit.run` action `list`) | the newest submitted run of a job (per task when it has one) is `failed`, `timeout` or `interrupted`, falls inside the 48-hour run window, and nothing newer superseded it. The owning task is not terminal and is not already an item that names this run | `finished_at` |
+| `run_failed` | runtime | the job-run store (`JobRun`, `orbit.run` action `list`) | the newest submitted run of a job (per task when it has one) is `failed`, `timeout` or `interrupted`, falls inside the 48-hour run window, and nothing newer superseded it. On the workspace owner, its referenced task is not terminal and the run is not already an item that names it. A replica keeps a task-naming run visible because it cannot read the owner's task status (see below) | `finished_at` |
 | `run_stuck` | runtime | the job-run store: state `running` or `pending` | the run's owner process is gone (`pid` and `pid_start_time` no longer match a live process on the run's host) before reconcile records the existing `Interrupted` state (an orphaned-run disposition, not a separate state), or it has run past its bound: a run that declares a deadline (a drain's stamped/extended window from its pipeline state, or an explicit `deadline`/`for_seconds`/`timeout_seconds`/`ttl_seconds` in its input) is past that deadline plus the 120-minute grace, or its last progress (pipeline `updated_at` or recorded step activity) has stalled for 120 minutes; a run that declares no bound has run past 120 minutes | `started_at` (or `scheduled_at` when pending) |
 | `claim_stale` | runtime | the claim inspection behind `orbit.drain.claims` (`ClaimInspection`, `crates/orbit-store/src/contracts/task/coordination/settlement.rs`) | an unsettled claim has an expired reservation, a host-local bound run that is absent or terminal, an unresolved merge intent or an invalidated landing. These are diagnostics, not proof the worker died, so `reason` says "possibly stale" | the claim's last event time |
 | `ci_red` | runtime | provider read of the workspace's base branch (the data `github.run.list` returns for `git_remote` and `base_branch`) | the newest completed run of a workflow on the base branch head is `failure` or `timed_out` and no newer run of that workflow succeeded | that run's `updated_at`, labelled as an onset-time proxy (`detail.since_source: updated_at`, `since_is_proxy: true`); the provider projection supplies no exact completion timestamp |
@@ -49,6 +49,9 @@ review records alone; "runtime" kinds need run, claim, provider or host state.
 | `host_unhealthy` | runtime | `orbit host list` live probe (reachability, version, pull protocol), the default `orbit doctor` workspace check, and `orbit.drain.probe` refusals on a follower | a registered host does not answer or reports a skewed binary or protocol, or a default doctor check fails or warns | the check's recorded onset when the source has one, else `null` |
 | `notice_open` | record | the notice store's effective-open read (`list_notices` with status open), derived only on the home owner | an effective-open fleet notice is homed in the workspace; expired or closed notices are not items | `opened_at` |
 | `resident_stalled` | task | the resident mandate view and its checkpoint comments (`application/resident/due.rs`, `resident_stall`), derived only on the home owner | an `active` resident mandate (not paused, taken over, handed off or ended) wrote no checkpoint for twice its heartbeat, or its last three checkpoints are all `incomplete`, or its workspace's cycle routine is disabled — no cycle can fire at all then, however recently it checkpointed ([manager-channel](../../resident-orchestrator/specs/manager-channel.md#what-residents-report-through)) | the last checkpoint (task creation when it never checkpointed), or the first of the three incomplete ones |
+| `routine_tripped` | runtime | the host's routine circuit breakers (`routine_breakers` in `~/.orbit/orbit.db`, written by the routine sweep), reported by each checkout for the routines its workspace defines | the routine's breaker is open: its last three fires failed with the same error class, and the sweep stops firing it until a trial fire succeeds or an operator resets it ([routines design](../../routines/2_design.md#41-circuit-breaker)) | `tripped_at` |
+| `drain_paused` | runtime | the workspace's drain intent (`drain_intents`) and its `backlog`/`proposed` tasks, derived only on the owner and only while `workflow.standing_drain.enabled` is set ([standing-drain scope](../../standing-drain/1_scope.md)) | the intent has been `paused` by hand for over 12 hours while work waits | the pause's `updated_at` |
+| `drain_breaker_open` | runtime | the standing-drain keeper's drains (`workspace_auto_pipeline` runs whose trigger routine is `standing-drain-keeper`), derived only on the owner and only while the keeper is enabled | `max_failed_resubmits` keeper drains ended `failed` or `interrupted` (upgrade interruptions excluded) within one hour of each other since the last hand start; the breaker latches and stays open until a hand start | the newest such failure |
 
 Notes that bind implementations:
 
@@ -65,11 +68,31 @@ Notes that bind implementations:
   versus an operator verdict), so a task can carry both.
 - **A plain `proposed` task is not an item.** Awaiting approval is a normal state of most
   proposed tasks; listing them would drown the rest. See [3_vision.md §1](../3_vision.md#1-open-questions).
-- **Runtime kinds respect the caller's read rights.** `run_*`, `claim_stale` and
-  `host_unhealthy` read sources that require the Operator capability
-  (`orbit.run` action `list`, `orbit.drain.claims`). A session without it gets the task-level
-  kinds, and each skipped kind appears in `degraded` with code `capability` rather than
-  silently missing ([4_decisions.md](../4_decisions.md#a-derived-view-never-widens-who-may-read-its-sources)).
+- **Runtime kinds respect the caller's read rights.** `run_*` and `claim_stale` read sources
+  that require the Operator capability (`orbit.run` action `list`, `orbit.drain.claims`), with
+  one workspace-scoped `degraded` entry per selected unreadable kind otherwise.
+  `host_unhealthy` is not workspace-scoped: it reads host health, which also requires Operator,
+  and a session without it gets one host-scoped `degraded` entry (`scope` `host:<name>`, code
+  `capability`) when the filter selects `host_unhealthy` and any selected workspace is withheld,
+  or when no workspace is selected. A live resident cycle (the trusted run binding
+  names a `resident_cycle_pipeline` run holding its mandate's live grant) reads the runtime
+  kinds and host health, read-only, for the workspaces its mandate covers [ORB-25254]; a
+  workspace outside the mandate and any other agent session keep the `capability` entries in
+  `degraded` rather than silently missing
+  ([4_decisions.md](../4_decisions.md#a-derived-view-never-widens-who-may-read-its-sources)).
+  The session gains no write capability.
+- **`run_failed` and the owner's task.** On the workspace owner, a failed run whose task is
+  terminal is not an item. A replica cannot read that status: the owner's task index is empty
+  there, and the replica's own task copy is not authoritative. The run stays listed (it is
+  authoritative on the executing host) and the kind adds one `degraded` entry, code
+  `source_unavailable`, message "Task records on a replica are not authoritative; read the
+  workspace owner". A failed run that names no task is not degraded for that reason.
+  `detail.held_claim` is true only while a claim bound to the run on this host is still live
+  (`claimed`, `running`, `handed_off` or `repair_pending`), or the follower's local pull for
+  that run is not `settled`, `idle` or `refused`. A settled claim (`failed`, `landed`,
+  `revoked`) is not a held claim. `detail.claimed_leaf` is true when such a binding exists,
+  including after it settled. Severity is high when `held_claim` is true. `run_stuck` uses
+  the same live-claim meaning for `detail.held_claim` and does not carry `claimed_leaf`.
 - **Network sources degrade, they do not fail.** `ci_red` needs provider authentication
   (`github.auth.status`); with none, or on timeout, it yields `degraded` code
   `source_unavailable`. On the workspace owner, a workspace with no recognisable remote
@@ -132,7 +155,7 @@ The task-level implementation returns at most 32 warning findings in `detail.fin
 
 `next` is `{summary, tool, input, command, needs?, also?}`:
 
-- `summary` is a short imperative ("Re-pilot after fixing the cited warning").
+- `summary` is a short imperative ("Edit the description, acceptance criteria or context_files to re-pilot automatically; a comment does not. Operator route: `task repilot`").
 - `tool` and `input` are the exact MCP call; `command` is the same call rendered for the CLI.
   `tool` and `input` are omitted when no MCP tool performs the action (the operator-only
   `orbit decision answer`, `orbit run cancel`, `orbit task update --approve`); `command` is
@@ -159,6 +182,9 @@ The task-level implementation returns at most 32 warning findings in `detail.fin
 | `host_unhealthy` | `orbit.drain.probe` or `orbit host show` for diagnosis, plus the failing doctor check's own fix hint when it names one |
 | `notice_open` | `orbit.notice.show`; `also`: `orbit.notice.close` (needs `reason`) |
 | `resident_stalled` | `orbit.resident.control` with `action: wake` and `status_request: true` (needs `reason`) when the resident cycle routine is enabled; `orbit.routine.control` with `action: toggle`, `expected_enabled: false`, `enabled: true` and the observed routine `name` and `target` (no `needs`) when it is disabled — routine enablement requires trusted operator authority and an explicit workspace; `also`: `orbit.resident.show` |
+| `routine_tripped` | `orbit routine breaker reset <name>` once the cause is fixed; `also`: `orbit routine show <name>` and `orbit routine breaker bypass <name>` (one fire on the next sweep) |
+| `drain_paused` | `orbit run auto --for 24h` (a hand start lifts the pause); `also`: `orbit run readiness` |
+| `drain_breaker_open` | `orbit run auto --for 24h` once the cause is found (a hand start closes the breaker); `also`: `orbit run readiness` |
 
 For `claim_stale`, `input` carries only `claim_id` and `workspace`; the observed phase is
 `detail.phase`. The operator supplies `expected_phase` after inspecting it, a fresh/replayed
@@ -195,14 +221,17 @@ and are not waiting on a single task.
 | `blocked` | high | high | none |
 | `decision_open` | medium | high | request `risk_tier` `irreversible`, `authority` or `spend`; and one level when `expires_at` is within 6 hours |
 | `review_waiting` | low for `approval` and `completion_hold`; medium for `delivery_hold` and `review_budget` | high | `review_budget` and `delivery_hold` start at medium |
-| `run_failed` | medium | high | high when the run held a claim |
+| `run_failed` | medium | high | high when `detail.held_claim` is true (a live claim; a settled claim does not raise severity) |
 | `run_stuck` | medium | high | high when the run holds a claim |
 | `claim_stale` | high | high | none |
 | `ci_red` | high | critical | critical after the age thresholds are both passed |
 | `friction_untriaged` | low | medium | none |
 | `host_unhealthy` | high | critical | critical when the host is the owner of an in-scope workspace, or its failure is the reason another item is degraded |
 | `resident_stalled` | medium | high | none; fingerprint state is the stall reason, `last_checkpoint_at`, and the routine state (`cycle_routine_disabled`, `cycle_routine_name`) |
-| `notice_open` | incident high, maintenance medium, info low | critical | one step higher when the linked task is terminal but not `done`, or when the notice expires within 2 hours. This kind's severity is the notice rule in [notice-delivery](../../fleet-notices/specs/notice-delivery.md#attention-kind), not the age-bump ladder; its fingerprint state is `revision`, effective `status` and severity, with `refs` carrying `notice_id` and the linked `task_id`, `reason` the notice title, and `since` its `opened_at` |
+| `routine_tripped` | high | high | none; fingerprint state is `tripped_at` and `trips`, so a re-opened breaker after a failed trial is a new episode |
+| `drain_paused` | medium | medium | none; fingerprint state is the pause's `since` |
+| `drain_breaker_open` | high | high | none; fingerprint state is the newest failure's `since` |
+| `notice_open` | `warn` and `incident` high, `maintenance` medium, `info` low (residents' status lines excluded) | critical | one step higher when the linked task is terminal but not `done`, or when the notice expires within 2 hours. This kind's severity is the notice rule in [notice-delivery](../../fleet-notices/specs/notice-delivery.md#attention-kind), not the age-bump ladder; its fingerprint state is `revision`, effective `status` and severity, with `refs` carrying `notice_id` and the linked `task_id`, `reason` the notice title, and `since` its `opened_at` |
 
 The thresholds, the 48-hour run window, the 120-minute stuck bound, the 60-second CI cache, the
 10-second source timeout and the 200-item workspace cap are fixed; the `[attention]` table that

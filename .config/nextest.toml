@@ -75,7 +75,7 @@ filter = '''
   (package(orbit-core) & binary(runtime) & (
     test(/^task_delivery::source_repair::published_completion_scenarios/) |
     test(=task_delivery::source_repair::publication::same_pr_publication_scenarios) |
-    test(=task_delivery::source_repair::cancelled_source_repair_scenarios) |
+    test(/^task_delivery::source_repair::cancelled_source_repair_scenarios_/) |
     test(=task_delivery::source_repair::handoff_requeue::handoff_requeue_scenarios) |
     test(=origin_fetch_hold::worktree_setup_origin_outage_holds_backlog_and_fails_in_progress))) |
   (package(orbit-engine) & binary(engine) & (
@@ -83,7 +83,7 @@ filter = '''
     test(=pr_landing::ci_rerun::owner_retry_preserves_read_only_and_independent_candidate_routes) |
     test(=pr_landing::ci_rerun::bounded::bounded_nextest_retry_observes_results_and_never_resends_unknown_replies) |
     test(=pr_landing::ci_rerun::bounded::bounded_retry_keeps_refusal_boundaries) |
-    test(=pr_landing::ci_rerun::dependency_adapter_refuses_incomplete_or_forged_evidence) |
+    test(/^pr_landing::ci_rerun::dependency_adapter_refuses_incomplete_or_forged_evidence_/) |
     test(=pr_landing::ci_rerun::diagnostic::planner_refusal_journal_deduplicates_bounds_transitions_and_clears_on_recovery) |
     test(=pr_landing::absent_context::reserved_refresh_observes_lost_unapplied_and_pending_outcomes_without_another_write) |
     test(=pr_landing::absent_context::unsupported_or_unproven_emission_never_updates_or_repairs) |

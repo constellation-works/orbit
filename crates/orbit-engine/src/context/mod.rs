@@ -1,13 +1,16 @@
 //! Execution-context primitives shared by the engine flows.
 //!
-//! Split by concern; every item is re-exported here so `crate::context::X`
-//! paths (and the crate-root re-exports in `lib.rs`) stay stable:
+//! Split by concern; existing `crate::context::X` paths (and the crate-root
+//! re-exports in `lib.rs`) stay stable. Dispatch contracts are read through
+//! their leaf module:
 //! - [`outcome`] — run outcome types, error-code constants, and
 //!   workflow-failure/interruption helpers.
+//! - [`dispatch_contract`] — executor, sandbox, outcome and error contracts for the port.
 //! - [`hosts`] — the unified [`RuntimeHost`] boundary and task-update types.
 //! - [`env`] — subprocess provenance environment variables shared by every
 //!   engine spawn path.
 
+pub(crate) mod dispatch_contract;
 mod env;
 mod hosts;
 mod outcome;
@@ -17,19 +20,20 @@ pub(crate) use env::{ProvenanceEnv, provenance_env};
 pub use hosts::NullRuntimeHost;
 pub use hosts::{
     AGENT_STALL_MINUTES, AutoTaskAdmission, AutoTaskObservation, AutoTaskReadiness,
-    AutoTaskStepRequest, ClaimExecutionContext, CompletionObservationAdmission, CrewConfig,
-    FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
-    FinalRecoveryApplied, GeneratedPath, HandoffLandingContext, HandoffLandingStep,
-    HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun,
-    PrAutoFixAdmission, PrAutoFixRequest, PrConfig, RebaseRecoveryAttemptScope,
-    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
-    ReviewReportCorrectionRequest, ReviewerInvocationRequest, RuntimeHost,
-    STEP_RECOVERY_DECISION_SCHEMA_VERSION, ScratchGcEntry, ScratchGcReport, ScriptStepEnd,
-    ScriptStepOutputs, ScriptStepRan, ScriptStepRequest, ScriptStepRun, SteeringGateReading,
-    SteeringRoundAdmission, StepRecoveryAdmission, StepRecoveryDecisionRead,
-    StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, StepRecoveryVerdict, TaskActivityUpdate,
-    TaskAutomationUpdate, UnlockedPathValidation, ValidatedTree,
-    WORKTREE_PARKED_RECLAIM_AFTER_HOURS, WorktreeGcTaskLookup,
+    AutoTaskStepRequest, ClaimExecutionContext, CompletionObservationAdmission,
+    CompletionOwnerLiveness, CrewConfig, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
+    FinalRecoveryApplication, FinalRecoveryApplied, GeneratedPath, HandoffLandingContext,
+    HandoffLandingStep, HandoffLandingUpdate, PLUGIN_BROKER_ENV, PluginBrokerHandle,
+    PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig,
+    PublishedCompletionObservation, RebaseRecoveryAttemptScope, ResolvedActivityTools,
+    ReviewLandingRequest, ReviewReleaseRequest, ReviewReportCorrectionRequest,
+    ReviewerInvocationRequest, RuntimeHost, STEP_RECOVERY_DECISION_SCHEMA_VERSION, ScratchGcEntry,
+    ScratchGcReport, ScriptStepEnd, ScriptStepOutputs, ScriptStepRan, ScriptStepRequest,
+    ScriptStepRun, SteeringGateReading, SteeringRoundAdmission, StepRecoveryAdmission,
+    StepRecoveryDecisionRead, StepRecoveryDecisionRequest, StepRecoveryDecisionSlot,
+    StepRecoveryVerdict, TaskActivityUpdate, TaskAutomationUpdate, UnlockedPathValidation,
+    ValidatedTree, WORKTREE_PARKED_RECLAIM_AFTER_HOURS, WorktreeGcTaskLookup,
+    admit_published_completion_observation,
 };
 pub use outcome::{
     WORKFLOW_RUN_FAILED_EVENT, WORKFLOW_RUN_INTERRUPTED_EVENT, baseline_red_hold_update,

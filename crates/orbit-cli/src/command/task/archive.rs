@@ -12,11 +12,14 @@ use super::output::task_to_json_for_runtime;
 pub struct TaskArchiveArgs {
     /// Task ID
     pub id: String,
+    /// Archive even if a live local run owns the task
+    #[arg(long)]
+    pub force: bool,
 }
 
 impl Execute for TaskArchiveArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        runtime.archive_task(&self.id)?;
+        runtime.archive_task_as_operator(&self.id, self.force)?;
         let task = runtime.get_task(&self.id)?;
         Ok(Payload::detail(
             task_to_json_for_runtime(runtime, &task)?,

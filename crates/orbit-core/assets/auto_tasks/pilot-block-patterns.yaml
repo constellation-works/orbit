@@ -56,33 +56,29 @@ template:
     ## 1. Windows
 
     - **Cursor.** Find the newest completed prior pass with `orbit.task.list`
-      `{"status":["done"],"tag":["pilot-block-patterns"],"limit":1}` and
+      `{"status":["done"],"type":"chore","tag":["auto-task:pilot-block-patterns"],"limit":1,"model":"<agent-family>"}` and
       read its `pilot-block-cursor.json` and `pilot-block-report.json` with
       `orbit.task.artifact` action `get` only after `artifacts` from `orbit.task.show` lists those
       paths. Record the new scan start, the moment this scan starts, before reading any
-      task. That instant is this pass's report `scan_start`. It becomes the cursor's
-      `cursor` only when section 6 says so. A resume pass does not write it as
-      `cursor`. A prior pass whose artifacts can't be read is reported, and this pass
-      compares against nothing and is a first pass.
+      task. That instant is this pass's report `scan_start`; the section 6 cursor shapes say
+      when it also becomes the cursor's `cursor`. A prior pass whose artifacts can't be read
+      is reported, and this pass compares against nothing and is a first pass.
     - **First pass (no prior cursor): the 3 days before scan start.** A pass with no
       readable cursor uses this shorter window, not 14 days, so an existing backlog drains
       over a few passes.
     - **Steady pass (a prior cursor with no `resume_after`): the 14 days before scan
       start.** Report occurrences since the prior cursor separately; they decide whether a
       cause is still firing.
-    - **Resume pass (the prior cursor has `resume_after`).** Do not advance the window.
-      The window end is the prior cursor's `cursor` value. Write that same value as this
-      pass's `cursor`, not this pass's scan start. The window start is the prior pass's
-      `pilot-block-report.json` field `window_start`: read it from that artifact in the
-      cursor step above, and write that same value as the window start this pass
-      continued (the report's `window_start`, and the cursor's `window_start` when this
-      pass is still capped). Do not recompute the start from this scan. Continue with the
-      candidates after the prior pass's boundary (section 2), in candidate order,
-      recording only occurrences inside that window.
-      Each later capped resume reads the window start from the prior report's
-      `window_start` and again writes the same `cursor`, so the chain keeps one fixed
-      window. A later pass advances the window only after a pass finishes it (`partial`
-      false and no `resume_after`).
+    - **Resume pass (the prior cursor has `resume_after`).** Do not advance the window: one
+      chain of capped passes keeps one fixed window. The window end is the prior cursor's
+      `cursor` value, which this pass writes unchanged as its own `cursor`, never this pass's
+      scan start. The window start is `window_start` from the prior pass's
+      `pilot-block-report.json`, read in the cursor step above and never recomputed from
+      this scan. This pass writes it unchanged as the report's `window_start` and, when it
+      is still capped, as the cursor's `window_start`. Continue with the candidates after
+      the prior pass's boundary (section 2), in candidate order, recording only occurrences
+      inside that window. A later pass advances the window only after a pass finishes it
+      (`partial` false and no `resume_after`).
 
     ## 2. Collect
 
@@ -112,8 +108,7 @@ template:
       `resume_after_task` to its task id. That boundary is a candidate position, not an
       occurrence time: a read task's occurrences can fall after it and are already
       counted, and an unread candidate can hold occurrences before it. The next pass
-      continues after that boundary inside this same window. It does not move the window
-      end or the window start.
+      continues after that boundary inside this same window (section 1).
 
     For every task you read, record each in-window occurrence with its task id, time and
     source record. Start from the records `escalation_triage_pipeline` already left: its
@@ -211,8 +206,11 @@ template:
 
     Check the effective `[workflow.agent_corpus]` mapping in the layered workspace and
     global configuration. A workspace has a corpus when that mapping names a tracked
-    `INDEX.md` under its corpus directory. If there is no such index, or the workspace
-    does not provide `scripts/agent-corpus.py`, say which is missing in the execution
+    `INDEX.md`. The mapped corpus directory is the directory holding that index (for
+    `knowledge/corpus/INDEX.md`, it is `knowledge/corpus`). Every corpus path below is
+    under that directory and never a fixed location; its issue documents are
+    `<mapped-corpus-directory>/issues/<kebab-case-mechanism>.md`. If there is no such index,
+    or the workspace does not provide `scripts/agent-corpus.py`, say which is missing in the execution
     summary and finish with a clean worktree as a valid no-diff handoff. Still attach
     the report and cursor and complete the other rules. Do not create a corpus here.
     Also attach `no-diff.json` with `schema_version: 1`, this task's `task_id`, this
@@ -242,8 +240,13 @@ template:
     new occurrence or mechanism, retain the existing corpus and explain the clean result.
     Where task histories contain system `agent_corpus_append` entries, export those
     histories under `.orbit/tmp/` and run `python3 scripts/agent-corpus.py --records
-    <export.json> --corpus <mapped-corpus-directory>` to materialize them deterministically. Create a missing topic document
-    in this same proposal before materializing its appends. Never fabricate system outbox
+    <export.json> --corpus <mapped-corpus-directory>` to materialize them deterministically. Do not create a new topic document in this pass: its path is only known after the scan, so it
+    cannot be authorized in advance. For a group whose mechanism has no document under
+    `<mapped-corpus-directory>/issues/`, skip materializing its appends and file one follow-up task whose
+    `context_files` names the exact `file:<mapped-corpus-directory>/issues/<kebab-case-mechanism>.md`
+    (created with `allow_missing_context`), tagged `pilot-block-patterns` and `agent-corpus`, with the
+    group's evidence; such follow-ups do not count toward the 5 fix-task cap. Record the follow-up id as
+    the group's corpus disposition in the report. Never fabricate system outbox
     records. Regenerate the index with `python3 scripts/agent-corpus.py --corpus
     <mapped-corpus-directory>`; include all
     corpus changes in the delivery. No group may live only in the report artifact.
@@ -264,31 +267,21 @@ template:
      "fix_effectiveness": [{"task": "...", "landed": "...", "before_per_week": 0, "after_per_week": 0, "verdict": "..."}]}
     ```
 
-    A capped pass sets `"partial": true`, and `resume_after` and `resume_after_task` to
-    the section 2 boundary: the sort time and task id of the last candidate read.
-    Counts cover only the tasks this pass read. `read_tasks` lists every task read in
-    this window: a first or steady pass lists its own reads, and a resume pass adds its
-    reads to the prior report's `read_tasks`. A finished window sets `"partial": false`
-    and both boundary fields to null. A first or steady pass sets `window_start` from
-    section 1 (3 days or 14 days before this scan start). A resume pass sets
-    `window_start` to the window start it continued: the prior report's `window_start`,
-    read from that prior `pilot-block-report.json`. It sets `scan_start` to the moment
-    this scan starts and does not recompute `window_start` from that instant.
+    Counts cover only the tasks this pass read. `read_tasks` lists every task read in this
+    window: a first or steady pass lists its own reads, and a resume pass adds its reads to
+    the prior report's `read_tasks`. A capped pass sets `"partial": true` and the section 2
+    boundary fields (`resume_after`, `resume_after_task`); a finished window sets
+    `"partial": false` and both to null. `window_start` and `scan_start` follow section 1.
 
     Write the cursor to `.orbit/tmp/pilot-block-cursor.json` and attach it as
     `pilot-block-cursor.json` on every completed owner pass, including an empty one and a
     partial one. A finished first or steady pass is
     `{"schema_version":1,"cursor":"<scan start>"}`. A finished resume pass is
-    `{"schema_version":1,"cursor":"<prior cursor's cursor>"}`: `cursor` is the prior
-    cursor's `cursor` value, not this pass's scan start. A capped first or steady pass is
+    `{"schema_version":1,"cursor":"<prior cursor's cursor>"}`. A capped first or steady pass is
     `{"schema_version":1,"cursor":"<scan start>","resume_after":"<last read candidate's sort time>","resume_after_task":"<its task id>"}`.
     A capped resume pass is
     `{"schema_version":1,"cursor":"<prior cursor's cursor>","resume_after":"<last read candidate's sort time>","resume_after_task":"<its task id>","window_start":"<prior report's window_start>"}`.
-    That `cursor` is the prior cursor's `cursor` value, not this pass's scan start, and
-    that `window_start` is the window start read from the prior pass's
-    `pilot-block-report.json`. The next capped resume reads the window start from the
-    prior report's `window_start` (this cursor stores the same value) and writes that
-    same `cursor` again, so a chain of capped resume passes keeps one fixed window.
+    The resume-pass `cursor` and `window_start` values are the section 1 resume rules.
     Hitting the collection cap completes the pass: attach both artifacts. An unfinished
     window is not a reason to end without them.
 
@@ -301,8 +294,8 @@ template:
   - Run-failure groups were only commented on an open `run-failure-patterns` task or filed as one tagged `run-failure-patterns`; no failure-rate measurement task was filed.
   - No blocked or pilot-held task was edited, requeued, commented on or triaged; the only writes on other tasks were comments on open fix tasks covering a group.
   - Every group carries its change against the prior pass, and every fix this auto-task filed that reached done in the last 30 days has an effectiveness verdict, with a regression task filed for each `not effective` fix.
-  - The pass ran on the owning machine and attached `pilot-block-report.json` and `pilot-block-cursor.json`, including `resume_after` and `resume_after_task` (the last read candidate's sort time and task id) when `partial` is true. When this pass resumed, the attached cursor's `cursor` is the prior cursor's `cursor` (not this scan start) and the report's `window_start` is the window start read from the prior report's `window_start`. Or the pass stopped with `wrong_host` in the execution summary without filing and without attaching a cursor.
-  - When the workspace maps a tracked corpus index and provides the corpus script, every observed group, including deferred and below-threshold groups, is proposed as a mechanism document or appended occurrences in the corpus worktree changes, with a fresh generated index; no group lives only in the report. Otherwise the execution summary identifies the missing prerequisite, and `git status --short` returns no changes.
+  - The pass ran on the owning machine and attached `pilot-block-report.json` and `pilot-block-cursor.json`, following the section 1 resume rules and the section 6 shapes, including `resume_after` and `resume_after_task` when `partial` is true. Or the pass stopped with `wrong_host` in the execution summary without filing and without attaching a cursor.
+  - When the workspace maps a tracked corpus index and provides the corpus script, every observed group, including deferred and below-threshold groups, is proposed as appended occurrences to an existing mechanism document in the corpus worktree changes or, when no document exists for its mechanism, has a filed follow-up task naming the exact new document path, with a fresh generated index; no group lives only in the report. Otherwise the execution summary identifies the missing prerequisite, and `git status --short` returns no changes.
   task_type: chore
   tags:
   - pilot-block-patterns

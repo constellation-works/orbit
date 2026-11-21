@@ -106,7 +106,7 @@ function regressionSitesOf(entry) {
 function buildRegressionEntry(entry, context) {
   const target = regressionTargetId(entry);
   const item = el("span", { class: "regression-entry" });
-  const open = el("button", { class: "mono task-delivery-relation", type: "button", text: target, title: `Open ${target}` });
+  const open = el("button", { class: "mono task-delivery-relation", type: "button", text: target, "aria-description": `Open ${target}` });
   open.addEventListener("click", (event) => {
     event.stopPropagation();
     openVisibleTask(target, context);
@@ -233,6 +233,13 @@ function syncRelationMoreToggle(toggle, hiddenCount, expanded) {
   toggle.textContent = expanded ? "Show fewer" : `View more (${hiddenCount})`;
 }
 
+// The comma between a row's ids. Its gap comes from CSS (`.relation-sep`), not
+// from a space in the row's sans font; the Regression from row's commas get the
+// same gap from their `::after` rule.
+function relationSeparator() {
+  return el("span", { class: "relation-sep", text: "," });
+}
+
 // One delivery-card relation row. Regression links collapse by wrapped lines;
 // other relation types keep their count-based limit.
 export function buildRelationRow(key, label, targets, context) {
@@ -248,8 +255,8 @@ export function buildRelationRow(key, label, targets, context) {
   const ids = targets.map((target) => regressionTargetId(target));
   const visible = ids.slice(0, RELATION_VISIBLE_LIMIT);
   visible.forEach((id, index) => {
-    if (index > 0) value.append(", ");
-    const open = el("button", { class: "mono task-delivery-relation", type: "button", text: id, title: `Open ${id}` });
+    if (index > 0) value.appendChild(relationSeparator());
+    const open = el("button", { class: "mono task-delivery-relation", type: "button", text: id, "aria-description": `Open ${id}` });
     open.addEventListener("click", (e) => {
       e.stopPropagation();
       openVisibleTask(id, context);
@@ -260,8 +267,8 @@ export function buildRelationRow(key, label, targets, context) {
     const hiddenCount = ids.length - RELATION_VISIBLE_LIMIT;
     const overflow = el("span", { class: "relation-overflow" });
     for (const id of ids.slice(RELATION_VISIBLE_LIMIT)) {
-      overflow.append(", ");
-      const open = el("button", { class: "mono task-delivery-relation", type: "button", text: id, title: `Open ${id}` });
+      overflow.appendChild(relationSeparator());
+      const open = el("button", { class: "mono task-delivery-relation", type: "button", text: id, "aria-description": `Open ${id}` });
       open.addEventListener("click", (e) => {
         e.stopPropagation();
         openVisibleTask(id, context);

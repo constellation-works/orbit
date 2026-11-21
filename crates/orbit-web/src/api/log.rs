@@ -104,13 +104,15 @@ fn global_log_stream_gate() -> &'static LogStreamGate {
     GATE.get_or_init(|| LogStreamGate::new(LOG_STREAM_MAX_CONCURRENT))
 }
 
-/// Set once a shutdown signal is received (see [`crate::serve::shutdown_signal`]), so
-/// every open (and future) `/api/log/stream` polling thread closes on its next
-/// tick instead of running until the client disconnects. An open stream that
-/// outlives the client is exactly the ownership gap that let a live restart
-/// hang past `orbit-web.service`'s `TimeoutStopUSec` until systemd's SIGKILL
-/// (ORB-11246): the stream is this handler's resource, so it must close
-/// itself, not wait to be told by a client that may not respond in time.
+/// Set once shutdown begins: a shutdown signal (see
+/// [`crate::shutdown::shutdown_signal`]) or a lifecycle boundary, both acted on
+/// by `run_server`. Then every open (and future) `/api/log/stream` polling
+/// thread closes on its next tick instead of running until the client
+/// disconnects. An open stream that outlives the client is exactly the
+/// ownership gap that let a live restart hang past `orbit-web.service`'s
+/// `TimeoutStopUSec` until systemd's SIGKILL (ORB-11246): the stream is this
+/// handler's resource, so it must close itself, not wait to be told by a client
+/// that may not respond in time.
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 
 /// Tell every open (and future) log-stream polling thread to close now.

@@ -40,16 +40,13 @@ pub fn unknown_config_keys_present(document: &toml::Value) -> Vec<UnknownConfigK
                 .map(|(key, _)| *key),
         )
         .chain([
-            "task.artifact_store",
             "runtime.backend",
-            "agent",
-            "watch",
             "routines",
             "plugins",
             "plugin_enablement",
-            crate::TAG_INSTRUCTIONS_KEY,
-            crate::AGENT_CORPUS_KEY,
-            crate::REVIEW_SKIP_TAGS_KEY,
+            crate::tag_instructions::TAG_INSTRUCTIONS_KEY,
+            crate::tag_instructions::AGENT_CORPUS_KEY,
+            orbit_types::task::REVIEW_SKIP_TAGS_KEY,
             // Read by the operation layer; the settings registry has no row for it.
             REVIEW_HOST_EVIDENCE_KEY,
         ])
@@ -57,12 +54,7 @@ pub fn unknown_config_keys_present(document: &toml::Value) -> Vec<UnknownConfigK
         .collect();
     if let Some(crews) = document.get("crews").and_then(toml::Value::as_table) {
         for name in crews.keys() {
-            for field in CREW_CONFIG_FIELDS.iter().copied().chain([
-                "backend",
-                "planner",
-                "implementer",
-                "reviewer",
-            ]) {
+            for field in CREW_CONFIG_FIELDS.iter().copied().chain(["backend"]) {
                 known.push(vec!["crews".into(), name.clone(), field.into()]);
             }
         }

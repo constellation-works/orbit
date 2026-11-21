@@ -1,8 +1,8 @@
 ---
 title: Fleet Notices — Decisions
 owner: claude
-last_updated: 2026-11-02
-last_validated: 2026-11-02
+last_updated: 2026-11-18
+last_validated: 2026-11-15
 status: Draft
 feature: fleet-notices
 doc_role: decisions
@@ -279,9 +279,83 @@ During a v1 binary update, orchestrators read the maintenance notice and hold of
 Cost: v1's maintenance case still depends on orchestrators following an instruction; a careless
 drain can still start during an update.
 
+## 2026-11-15 — A `warn` kind and resident status lines
+
+**Recorded:** 2026-11-15
+
+### Context
+
+The operator asked for resident orchestrators to leave one live `info` message per cycle and a
+`warn` for blockers that need him. `incident` means something is broken, not that the operator
+is needed. A resident cycle posts as a managed agent, whose limits (5 posts a day, 2 open, 24
+hours, evidence required, no way to close) cannot carry a line per cycle.
+
+### Decision
+
+- `warn` is a fourth kind and lists first: an operator ask is the notice a reader must act on.
+  Operators, orchestrators and resident cycles may post it; other managed agents may not.
+- A resident's status line is one notice under `resident:<mandate>:status`, replaced in place.
+  Orbit sets its expiry to twice the heartbeat, the silence the stall check already uses, and
+  writes the line itself on pause, takeover, stop, resume and release.
+- The dashboard shows status lines on the Residents row and leaves them out of the Notices list,
+  the banner, operator attention and agent briefs. The owner approved this without a mock.
+- Resident posts keep the `agent` class and get their own limits (10 open, 30 posts an hour per
+  mandate) instead of a new author class, so the stored `author.class` values are unchanged.
+
+Rejected: a feed of one info notice per cycle; reusing `incident` for operator asks; showing
+status lines pinned in the Notices list, which still spends its rows on lines that ask nothing.
+
+### Consequences
+
+A resident that stops cycling reads as silent within two heartbeats. A warn that is no longer
+re-posted lapses after 72 hours.
+
+Cost: `warn` sorts ahead of `incident`, so a reader who wants incidents first filters by kind.
+An older binary reading a `warn` notice from a newer owner fails to parse its kind.
+
+## Release-QA exception: the notices fixture may close its own notice over HTTP
+
+**Recorded:** 2026-11-18 · [ORB-25724]
+
+### Context
+
+AGENTS.md's Tests and QA rule admits tests only for an observed, reproduced defect and forbids
+speculative coverage for features, refactors or chores. The post-deployment sweep for [ORB-25717]
+on b4945b4a19edfc43fc66f00e065e52e447fc6778 recorded `api:/notices` and `api:/notices/{id}/close`
+as required capability gaps: no permanent check exercised a successful operator close over HTTP.
+The only evidence was a one-off dashboard run in a disposable home, which every release candidate
+would have to repeat by hand.
+
+### Decision
+
+The owner granted one exception to the defect-only rule for this release-QA row. The maintained
+`http_api` notices fixture (`notices::operator_closes_notice_over_http_and_unprivileged_close_is_denied`)
+may create its own test-owned notice over HTTP in the isolated fixture, close it through the governed
+operator server, read it back in `open` and `recent`, and check that an ordinary caller's close is
+refused with `403 authorization_denied`. The fixture runs with no live notice state, no extra operator
+server and no role override. The exception stops there: it admits no other new HTTP case, and the
+defect-only rule still governs every other test.
+
+A later release-QA gap of this kind needs its own owner exception recorded here. This entry does not
+make the fixture a pattern to extend.
+
+Rejected: **manual QA of each release candidate**, which produces one-off receipts that repeat by hand
+and reopen the same gap on every sweep; and **an exception for the whole notices surface**, since the
+owner named one fixture and two routes.
+
+### Consequences
+
+The two notice routes have a permanent, candidate-bound check in the `api-process-boundary` QA
+scenario, so the release-QA row no longer depends on a hand-run receipt.
+
+Cost: one more permanent HTTP case in the `http_api` target to keep working, and a documented exception
+that reviewers must check any future test against.
+
 ## Task References
 
 - [ORB-21207] — designed fleet notices and recorded these decisions
 - [ORB-21208] — orbit-office scribe `#board` routing, the first client of the notice tools
+- [ORB-25717] — the post-deployment sweep that recorded the notice-close gap
+- [ORB-25724] — the owner exception recorded in the release-QA entry above
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -117,7 +117,11 @@ pub(super) fn fixture_with_global(global: &str, config: &str) -> Fixture {
     fixture_in(Some(global), config, None)
 }
 
-fn fixture_in(global_config: Option<&str>, config: &str, machine: Option<&str>) -> Fixture {
+pub(super) fn fixture_in(
+    global_config: Option<&str>,
+    config: &str,
+    machine: Option<&str>,
+) -> Fixture {
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let repo = root.path().join("repo");

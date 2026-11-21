@@ -169,12 +169,13 @@ export GIT_OPTIONAL_LOCKS=0
 # of its test binaries and the `orbit` binary the CLI fixtures execute. The
 # shard jobs run nextest from that archive, one count partition each, and the
 # Check job (--checks) runs everything else. Archiving runs under the folded
-# build's lint environment, so it does not recompile. After the job uploads
-# the archive, --test-partitions runs the partition guard over the archive
-# itself, so the guard proves what the shards receive while they already run.
+# build's lint environment, so it does not recompile. Once the job has packed
+# the transfer, --test-partitions runs the partition guard over the archive
+# that transfer encodes, while the job uploads it; the job waits for the guard
+# before the shards start (ci.yml).
 # NEXTEST_PARTITIONS (ci.yml) is the count-partition count: the shard jobs
 # and the additional partition jobs run every partition; the test-build
-# job runs the proof after the upload.
+# job runs the proof beside the upload.
 # A caller that sets only the older NEXTEST_SHARDS gets that many partitions.
 #
 # CI_TEST_SCOPE is the Change scope job's mode. For `affected:<crate>,...` (a
@@ -275,6 +276,8 @@ elif [[ "$fast" == true || ("$guards" == true && "${CI_SELF_TESTS:-all}" == chan
     while IFS= read -r -d '' path; do
       case "$path" in
         scripts/* | .github/* | Makefile | .cargo/* | Cargo.toml | Cargo.lock | \
+          .config/nextest.toml | \
+          crates/orbit-engine/tests/engine/pr_landing/infrastructure/fixtures/legacy-codeql.yml | \
           install.sh | RELEASING.md | docs/dev/qa/path-leases-listener-sudo.md | \
           docs/standards/* | AGENTS.md | CLAUDE.md | \
           plugin/* | npm/* | .agents/* | .claude-plugin/*)
@@ -592,12 +595,13 @@ start_check_chain() {
 
 # Exclusive self-tests run one at a time, at normal priority, in a lane that
 # starts after formatting. Each one asserts elapsed time or timeouts, measures
-# build-budget admission, or drives a real Cargo target; the rendezvous and
-# deadline checks in ci-fast-guards count too. Everything beside them, the guard
-# pool and in full mode the workflow test build, starts at lowered priority to
-# reduce CPU contention with the suites. The lane joins after the pool and
-# before the workspace tests start. Each suite is mostly one process, so the
-# lane leaves most of the host to that lowered work.
+# build-budget admission, or drives a real Cargo target; this includes the
+# installer security guard's progressing slow-stream fixture. The rendezvous
+# and deadline checks in ci-fast-guards count too. Everything beside them, the
+# guard pool and in full mode the workflow test build, starts at lowered
+# priority to reduce CPU contention with the suites. The lane joins after the
+# pool and before the workspace tests start. Each suite is mostly one process,
+# so the lane leaves most of the host to that lowered work.
 guard_phase_started=$SECONDS
 if [[ "$static" == false && "$checks" == false ]]; then
   exclusive_started=$SECONDS
@@ -607,8 +611,10 @@ if [[ "$static" == false && "$checks" == false ]]; then
     slot_prefix=exclusive-
     open_done_fifo
     run_exclusive_guard "$repo_root/scripts/test-build-budget.sh"
+    run_exclusive_guard "$repo_root/scripts/test-ci-await-jobs.py"
     run_exclusive_guard "$repo_root/scripts/test-ci-fast-guards.py"
     run_exclusive_guard "$repo_root/scripts/test-ci-workspace-cache.py"
+    run_exclusive_guard "$repo_root/scripts/test-installer-security.sh"
     run_exclusive_guard "$repo_root/scripts/test-ci-test-affected.py"
     run_exclusive_guard "$repo_root/scripts/test-codeql-rust-local.py"
     run_exclusive_guard "$repo_root/scripts/test-compiler-cache.sh"
@@ -665,6 +671,8 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/check-dependency-direction.sh"
   run_guard "$repo_root/scripts/check-workflow-yaml.py"
   run_guard "$repo_root/scripts/check-test-shell-waits.py"
+  run_guard "$repo_root/scripts/check-removed-dashboard-labels.py"
+  run_guard "$repo_root/scripts/check-test-child-runners.py"
   run_guard "$repo_root/scripts/check-codeql-production-paths.py"
   run_guard "$repo_root/scripts/check-codeql-extension-schema.py"
   run_guard "$repo_root/scripts/check-terminal-state-guard.sh"
@@ -689,7 +697,6 @@ if [[ "$checks" == false ]]; then
   # Fixture self-tests that assert no elapsed time or timeout and touch no real
   # Cargo target. Full CI always runs these; fast mode selects them by inputs.
   # The exclusive suites run in their own lane, above.
-  run_guard "$repo_root/scripts/test-installer-security.sh"
   run_guard "$repo_root/scripts/test-mcp-registry-publish-workflow.sh"
   run_guard "$repo_root/scripts/test-check-unused-dependencies.py"
   run_guard "$repo_root/scripts/test-release-workflow.py"
@@ -708,9 +715,10 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/test-validate-codex-plugin.sh"
   run_guard "$repo_root/scripts/test-validate-agent-plugin.sh"
   run_guard "$repo_root/scripts/test-make-install.py"
+  run_guard "$repo_root/scripts/test-check-npm-package.py"
   run_guard "$repo_root/scripts/test-cross-revision-check.sh"
+  run_guard "$repo_root/scripts/test-cleanup-branches.sh"
   run_guard "$repo_root/scripts/test-check-nextest-partitions.py"
-  run_guard "$repo_root/scripts/test-ci-await-jobs.py"
   run_guard "$repo_root/scripts/test-ci-p90.py"
   run_guard "$repo_root/scripts/test-audit-panics.py"
   run_guard "$repo_root/scripts/test-smoke-claude-mcp.py"

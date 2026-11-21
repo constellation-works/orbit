@@ -34,7 +34,12 @@ publish_step="Authenticate and publish"
 record_step="Verify the public registry record"
 
 system_path="/usr/bin:/bin"
-jq_dir="$(dirname "$(command -v jq)")"
+real_jq="$(command -v jq || true)"
+if [[ -z "$real_jq" ]]; then
+  echo "registry workflow guard requires jq" >&2
+  exit 1
+fi
+jq_dir="$(dirname "$real_jq")"
 case ":$system_path:" in
   *":$jq_dir:"*) ;;
   *) system_path="$jq_dir:$system_path" ;;
@@ -96,8 +101,7 @@ run_extracted() {
   extract_step "$step_name" "$script" || return 2
   local status=0
   (
-    # shellcheck disable=SC2164
-    cd "$workdir"
+    cd "$workdir" || exit
     env -i LANG=C LC_ALL=C HOME="$temporary_directory" TMPDIR="$temporary_directory" \
       "$@" bash "$script"
   ) >"$output_file" 2>&1 || status=$?

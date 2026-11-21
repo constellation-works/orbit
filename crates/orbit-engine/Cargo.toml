@@ -17,7 +17,7 @@ doctest = false
 [features]
 # Scoped deadline clocks and the null `RuntimeHost` base for test fixtures only.
 # Enable it only from `[dev-dependencies]`, never in a shipped build.
-test-support = ["orbit-common/test-support"]
+test-support = ["orbit-common/test-support", "orbit-tools/test-support"]
 
 [dependencies]
 chrono.workspace = true

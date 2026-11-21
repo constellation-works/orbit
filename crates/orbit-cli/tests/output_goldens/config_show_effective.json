@@ -112,6 +112,13 @@
         }
       ]
     },
+    "execution.env.login_auth": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "execution.env.pass": {
       "scope": "built-in",
       "state": "default",
@@ -151,6 +158,27 @@
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.github_quota.agent_reserve_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.github_quota.background_reserve_percent": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.github_quota.refresh_interval_seconds": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
       "path": null,
       "shadowed_by": []
     },
@@ -670,6 +698,62 @@
       "scope": "built-in",
       "state": "default",
       "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.standing_drain.approve_proposed": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.standing_drain.auto_fix": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.standing_drain.complete": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.standing_drain.concurrency": {
+      "scope": "built-in",
+      "state": "unset",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.standing_drain.enabled": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.standing_drain.max_failed_resubmits": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.standing_drain.min_resubmit_interval": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.standing_drain.window": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
       "path": null,
       "shadowed_by": []
     },

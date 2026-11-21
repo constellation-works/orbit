@@ -1010,15 +1010,48 @@ use std::time::{Duration, Instant};
 #[cfg(target_os = "linux")]
 #[test]
 fn timed_out_source_reaps_its_leader_and_kills_the_grandchild() {
-    if crate::application::run_isolated_test(std::any::type_name_of_val(
-        &timed_out_source_reaps_its_leader_and_kills_the_grandchild,
-    )) {
+    const GIT_CEILING_FOR_ISOLATED_CHILD: &str = "ORBIT_TEST_SOURCE_GIT_CEILING";
+    // The isolated test child runs from its disposable home, so seed the
+    // checkout root from the test runner before re-executing. Keep the value
+    // in a test-only variable so the child does not derive it from TMPDIR.
+    // A source archive has no checkout ancestor: then there is no checkout
+    // to isolate from, and the fixture parent alone is the ceiling.
+    let git_ceiling: Option<String> = match std::env::var(GIT_CEILING_FOR_ISOLATED_CHILD) {
+        Ok(ceiling) if !ceiling.is_empty() => Some(ceiling),
+        _ => std::env::current_dir().ok().and_then(|cwd| {
+            cwd.ancestors()
+                .find(|path| path.join(".git").exists())
+                .and_then(|path| path.to_str().map(str::to_owned))
+        }),
+    };
+    let git_ceiling = git_ceiling.as_deref().unwrap_or("");
+    if crate::application::run_isolated_test_with_env(
+        std::any::type_name_of_val(&timed_out_source_reaps_its_leader_and_kills_the_grandchild),
+        &[
+            ("GIT_CEILING_DIRECTORIES", git_ceiling),
+            (GIT_CEILING_FOR_ISOLATED_CHILD, git_ceiling),
+        ],
+    ) {
         return;
     }
     // SAFETY: this isolated child adopts orphaned grandchildren so the test
     // can reap them and prove they are gone, even with a non-reaping PID 1.
     assert_eq!(unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1) }, 0);
     let root = tempfile::tempdir().unwrap();
+    // Git splits GIT_CEILING_DIRECTORIES on colons. Stop discovery at the
+    // checkout, and also at the fixture's parent when that path is UTF-8 and
+    // colon-free, so a TMPDIR nested in another repository stays isolated.
+    let ceilings = match root.path().parent().and_then(|parent| parent.to_str()) {
+        Some(parent) if !parent.contains(':') && !git_ceiling.is_empty() => {
+            format!("{git_ceiling}:{parent}")
+        }
+        Some(parent) if !parent.contains(':') => parent.to_owned(),
+        _ => git_ceiling.to_owned(),
+    };
+    let _git_ceiling = orbit_common::test_env::scoped([
+        ("GIT_CEILING_DIRECTORIES", Some(ceilings.as_str())),
+        (GIT_CEILING_FOR_ISOLATED_CHILD, Some(git_ceiling)),
+    ]);
     let source = Source::new(root.path());
     let started = Instant::now();
     let result = source.git(&[
@@ -1114,4 +1147,272 @@ fn held_fetch_lock_consumes_only_the_remaining_source_deadline() {
         },
     );
     drop(lock);
+}
+
+/// ORB-25868: once a rate-limit answer holds the host's `graphql` quota, a
+/// source pass's provider read defers without running `gh`.
+#[test]
+fn held_graphql_quota_defers_a_provider_read_without_running_gh() {
+    use orbit_tools::github_quota::{self, GithubQuotaPolicy, GithubQuotaStore, RateLimitAnswer};
+
+    let root = tempfile::tempdir().expect("tempdir");
+    let records = tempfile::tempdir().expect("tempdir");
+    let store = GithubQuotaStore::new(records.path().to_path_buf());
+    let policy = GithubQuotaPolicy::default();
+    let account = github_quota::inherited_account_key();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs();
+    // Claim this interval's refresh, so the pass reads nothing at all.
+    store.refresh_if_due(&policy, &account, now, &|| {
+        RateLimitAnswer::Unknown("fixture".into())
+    });
+    store.record_throttle(
+        &policy,
+        &account,
+        github_quota::RESOURCE_GRAPHQL,
+        &orbit_common::ProviderReadThrottle {
+            reset_epoch_seconds: Some(now + 600),
+            principal: Some("user ID 42".into()),
+            ..Default::default()
+        },
+        now,
+    );
+
+    let error = github_quota::with_scoped_guard(store.clone(), policy, || {
+        Source::new(root.path()).ci_cover_pull_request("#1")
+    })
+    .expect_err("a held provider read defers");
+    assert!(
+        matches!(
+            &error,
+            AutomationError::Deferred(DeferredReason::EvidenceUnavailable(detail))
+                if detail.contains("refused locally without calling GitHub")
+        ),
+        "{error:?}"
+    );
+    let graphql = store
+        .status(&policy, &account, now)
+        .resources
+        .into_iter()
+        .find(|resource| resource.resource == github_quota::RESOURCE_GRAPHQL)
+        .expect("graphql status");
+    assert_eq!(graphql.calls.background, 0, "no provider read may run");
+    assert_eq!(graphql.refused.background, 1);
+}
+
+/// ORB-26140: a hold that meets a spent command budget is the timeout
+/// deferral and leaves the refusal count unchanged; with budget left the same
+/// hold defers as a counted refusal.
+#[test]
+fn held_quota_refusal_meeting_a_spent_command_budget_defers_as_source_budget_uncounted() {
+    use orbit_tools::github_quota::{self, GithubQuotaPolicy, GithubQuotaStore, RateLimitAnswer};
+
+    let policy = GithubQuotaPolicy::default();
+    let account = github_quota::inherited_account_key();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs();
+    let held_store = || {
+        let records = tempfile::tempdir().expect("tempdir");
+        let store = GithubQuotaStore::new(records.path().to_path_buf());
+        store.refresh_if_due(&policy, &account, now, &|| {
+            RateLimitAnswer::Unknown("fixture".into())
+        });
+        store.record_throttle(
+            &policy,
+            &account,
+            github_quota::RESOURCE_GRAPHQL,
+            &orbit_common::ProviderReadThrottle {
+                reset_epoch_seconds: Some(now + 600),
+                principal: Some("user ID 42".into()),
+                ..Default::default()
+            },
+            now,
+        );
+        (records, store)
+    };
+    let refused = |store: &GithubQuotaStore| {
+        store
+            .status(&policy, &account, now)
+            .resources
+            .into_iter()
+            .find(|resource| resource.resource == github_quota::RESOURCE_GRAPHQL)
+            .expect("graphql status")
+            .refused
+            .background
+    };
+    let root = tempfile::tempdir().expect("tempdir");
+
+    let (_within_records, within) = held_store();
+    let error = github_quota::with_scoped_guard(within.clone(), policy, || {
+        Source::new(root.path()).ci_cover_pull_request("#1")
+    })
+    .expect_err("a held provider read defers");
+    assert!(
+        matches!(
+            &error,
+            AutomationError::Deferred(DeferredReason::EvidenceUnavailable(_))
+        ),
+        "{error:?}"
+    );
+    assert_eq!(refused(&within), 1);
+
+    // Armed last: the skewed clock stays on this thread afterwards.
+    let (_spent_records, spent) = held_store();
+    github_quota::advance_deadline_clock_after_next_refusal_decision(
+        std::time::Duration::from_secs(120),
+    );
+    let error = github_quota::with_scoped_guard(spent.clone(), policy, || {
+        Source::new(root.path()).ci_cover_pull_request("#1")
+    })
+    .expect_err("a refusal met by a spent budget defers");
+    assert!(
+        matches!(
+            &error,
+            AutomationError::Deferred(DeferredReason::SourceBudget)
+        ),
+        "{error:?}"
+    );
+    assert_eq!(refused(&spent), 0);
+}
+
+/// ORB-25934: a slow `api rate_limit` quota probe is bounded by the source's
+/// remaining budget and prevents spawning the original provider command when
+/// `SOURCE_DEADLINE` expires during admission.
+#[cfg(unix)]
+#[test]
+fn slow_quota_probe_consuming_source_deadline_prevents_spawning_gh() {
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
+        &slow_quota_probe_consuming_source_deadline_prevents_spawning_gh,
+    )) {
+        return;
+    }
+    use orbit_tools::github_quota::{self, GithubQuotaPolicy, GithubQuotaStore};
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().expect("tempdir");
+    let bin = root.path().join("bin");
+    std::fs::create_dir_all(&bin).expect("bin dir");
+    let gh = bin.join("gh");
+    let calls = root.path().join("calls");
+    std::fs::write(
+        &gh,
+        format!(
+            "#!/bin/sh\n\
+             [ \"$1\" = --warm-up ] && exit 0\n\
+             printf '%s\\n' \"$*\" >> '{}'\n\
+             if [ \"$*\" = 'api rate_limit' ]; then sleep 30; exit 0; fi\n\
+             echo '{{}}'\n",
+            calls.display()
+        ),
+    )
+    .expect("write fake gh");
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+    let mut attempts = 0;
+    while std::process::Command::new(&gh)
+        .arg("--warm-up")
+        .status()
+        .is_err()
+    {
+        attempts += 1;
+        assert!(attempts < 200, "fake gh never became executable");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let path = std::env::join_paths(
+        std::iter::once(bin).chain(
+            std::env::var_os("PATH")
+                .into_iter()
+                .flat_map(|p| std::env::split_paths(&p).collect::<Vec<_>>()),
+        ),
+    )
+    .expect("join PATH");
+    let _env = orbit_common::test_env::scoped([
+        ("PATH", path.to_str()),
+        (super::super::source::SOURCE_ELAPSED_ENV, None),
+    ]);
+
+    let records = tempfile::tempdir().expect("tempdir");
+    let store = GithubQuotaStore::new(records.path().to_path_buf());
+    let policy = GithubQuotaPolicy::default();
+    // A known record whose refresh is due, so the admission probe runs and the
+    // source budget clips it. The clipped probe must leave the record as it
+    // was, and the read admitted past its budget must not be charged to it.
+    let epoch_now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_secs())
+    };
+    let account = github_quota::inherited_account_key();
+    let seeded_at = epoch_now() - 10_000;
+    store.refresh_if_due(&policy, &account, seeded_at, &|| {
+        let quota = |remaining| github_quota::ObservedQuota {
+            limit: 5000,
+            remaining,
+            reset_epoch_seconds: seeded_at + 20_000,
+        };
+        github_quota::RateLimitAnswer::Known(
+            [github_quota::RESOURCE_CORE, github_quota::RESOURCE_GRAPHQL]
+                .into_iter()
+                .map(|resource| (resource.to_string(), quota(4000)))
+                .collect(),
+        )
+    });
+
+    let spent = std::rc::Rc::new(std::cell::Cell::new(Duration::ZERO));
+    let clock_spent = std::rc::Rc::clone(&spent);
+    let origin = Instant::now();
+    let started = Instant::now();
+    let error = super::super::source::test_support::with_delivery_source_clock(
+        move || origin + clock_spent.get(),
+        || {
+            let source = Source::new(root.path());
+            spent.set(super::super::source::SOURCE_DEADLINE - Duration::from_millis(80));
+            // The 80 ms budget ends once the probe has reached the fake `gh`,
+            // not on a wall-clock timer that a loaded host can win (ORB-26200).
+            let probe_calls = calls.clone();
+            let probe_logged = move || {
+                std::fs::read_to_string(&probe_calls)
+                    .unwrap_or_default()
+                    .lines()
+                    .any(|line| line == "api rate_limit")
+            };
+            github_quota::with_probe_timeout_when(probe_logged, || {
+                github_quota::with_scoped_guard(store.clone(), policy, || {
+                    source.ci_cover_pull_request("#1")
+                })
+            })
+        },
+    )
+    .expect_err("slow probe exhausting source deadline must defer");
+
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "slow quota probe must be bounded by the remaining 80 ms source deadline, took {:?}",
+        started.elapsed()
+    );
+    assert!(
+        matches!(
+            error,
+            AutomationError::Deferred(DeferredReason::SourceDeadline)
+        ),
+        "expected SourceDeadline, got {error:?}"
+    );
+    let recorded = std::fs::read_to_string(&calls).unwrap_or_default();
+    assert_eq!(
+        recorded.lines().collect::<Vec<_>>(),
+        vec!["api rate_limit"],
+        "expired quota probe must prevent spawning gh pr view"
+    );
+    let status = store.status(&policy, &account, epoch_now());
+    for resource in &status.resources {
+        assert_eq!(
+            (resource.remaining, resource.calls.background),
+            (Some(4000), 0),
+            "a read admitted past its budget must leave the known record uncharged: {resource:?}"
+        );
+    }
 }

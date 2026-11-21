@@ -53,7 +53,7 @@ let logVisibilityWired = false;
 const LOG_PANEL_PREFS_KEY = "orbit.dashboard.logPanel";
 // Visual order of the Tasks dock tabs. The arrow, Home and End keys walk this
 // list (wireDockModeToggle), so it must match the tablist's order in index.html.
-const DOCK_MODES = ["drain", "fleet", "notices", "residents", "log"];
+const DOCK_MODES = ["drain", "notices", "residents", "log"];
 
 function loadLogPanelPrefs() {
   try {
@@ -139,21 +139,6 @@ export function fitLogPanelToViewport() {
 function applyDockMode() {
   const dock = $("side-dock");
   if (!dock) return;
-  if (isAggregateView() && !$("dock-tab-fleet")) {
-    const tab = el("button", { type: "button", role: "tab", class: "dock-seg", id: "dock-tab-fleet", "aria-selected": "false", "aria-controls": "dock-pane-fleet", text: "Fleet" });
-    tab.dataset.mode = "fleet";
-    tab.tabIndex = -1;
-    tab.addEventListener("click", () => chooseDockMode("fleet"));
-    $("dock-tab-drain").after(tab);
-    const pane = el("div", { class: "dock-pane", id: "dock-pane-fleet", role: "tabpanel", "aria-labelledby": "dock-tab-fleet" }, [
-      el("section", { class: "panel drain-card" }, [el("header", {}, [el("h2", { class: "drain-title", text: "Fleet drains" })]), el("div", { class: "body", id: "fleet-drains-body" })]),
-    ]);
-    pane.dataset.pane = "fleet";
-    $("dock-pane-drain").after(pane);
-  } else if (!isAggregateView()) {
-    $("dock-tab-fleet")?.remove();
-    $("dock-pane-fleet")?.remove();
-  }
   const modes = dockModes();
   const mode = shownDockMode();
   dock.dataset.mode = mode;
@@ -167,10 +152,54 @@ function applyDockMode() {
   // CSS keeps every tab's first card at the same depth below the shared
   // chrome. Reassert alignment without anchoring it to drain-only notices.
   alignTasksDock();
+  fitDockTabs();
+}
+
+// The tab strip keeps its full size wherever it fits (STD-07 R39): shrink
+// only when the full-size strip would overflow, then drop secondary state
+// only when the shrunken strip still would. A fixed width breakpoint
+// cannot tell fitting from overflowing layouts — the same dock width fits
+// without counts and overflows with them — so the trigger is
+// measured: the visible tabs' natural widths against the head's width.
+let dockTabFitWired = false;
+
+function dockTabStripNaturalWidth(group) {
+  const tabs = [...group.querySelectorAll(".dock-seg")].filter((tab) => !tab.hidden);
+  const gap = parseFloat(getComputedStyle(group).columnGap) || 0;
+  let width = gap * Math.max(0, tabs.length - 1);
+  for (const tab of tabs) width += tab.scrollWidth;
+  return width;
+}
+
+function fitDockTabs() {
+  const head = document.querySelector("#side-dock > .dock-head");
+  const group = $("dock-mode-toggle");
+  if (!head || !group || !group.clientWidth) return;
+  head.classList.remove("dock-tabs-compact", "dock-tabs-tight");
+  if (dockTabStripNaturalWidth(group) <= group.clientWidth) return;
+  head.classList.add("dock-tabs-compact");
+  if (dockTabStripNaturalWidth(group) <= group.clientWidth) return;
+  head.classList.add("dock-tabs-tight");
+}
+
+function wireDockTabFit() {
+  if (dockTabFitWired) return;
+  const head = document.querySelector("#side-dock > .dock-head");
+  const group = $("dock-mode-toggle");
+  if (!head || !group) return;
+  dockTabFitWired = true;
+  new ResizeObserver(fitDockTabs).observe(head);
+  // Badge and state text (counts, the log's worst level)
+  // changes the natural width without resizing the head.
+  new MutationObserver(fitDockTabs).observe(group, {
+    childList: true, subtree: true, characterData: true,
+    attributes: true, attributeFilter: ["hidden"],
+  });
+  document.fonts?.ready.then(fitDockTabs);
 }
 
 function dockModes() {
-  return isAggregateView() ? DOCK_MODES : DOCK_MODES.filter(mode => mode !== "fleet");
+  return DOCK_MODES;
 }
 
 function shownDockMode() {
@@ -187,20 +216,38 @@ export function residentsDockShown() {
   return shownDockMode() === "residents";
 }
 
+// The Tasks dock gives way to the rail at 1315px so the list keeps its width.
+// CSS media queries mirror this named breakpoint in shell.css and tasks.css.
+const TASKS_ONE_COLUMN_QUERY = "(max-width: 1315px)";
+
+/// Whether the Tasks view is in its one-column layout, where the dock is a
+/// route of its own rather than a column beside the list.
+export function tasksOneColumn() {
+  return typeof window.matchMedia === "function" && window.matchMedia(TASKS_ONE_COLUMN_QUERY).matches;
+}
+
 export function chooseDockMode(mode) {
   setDockMode(mode);
   const url = new URL(window.location.href);
   const [route, query = ""] = url.hash.slice(1).split("?");
   if (route !== "tasks") return;
   const params = new URLSearchParams(query);
-  params.set("dock", mode);
-  url.hash = `tasks?${params}`;
+  // The selection itself is remembered in the dock prefs (setDockMode). Only a
+  // tab chosen in the one-column dock route is part of the address: there the
+  // dock stands in for the list. With both columns showing, the choice is
+  // inside the Tasks page, so it drops `dock=` and a reload or collapse to one
+  // column keeps the list.
+  if (tasksOneColumn()) params.set("dock", mode);
+  else {
+    params.delete("dock");
+    params.delete("dockMode");
+    params.delete("panel");
+  }
+  const rest = params.toString();
+  url.hash = rest ? `tasks?${rest}` : "tasks";
   window.history.replaceState(null, "", url);
-  // ORB-19732: replaceState bypasses the router, so mirror its Tasks-branch
-  // dock-route sync here. Without it a desktop tab selection leaves
-  // `tasks-main` without `dock-route` until a reload routes the same hash,
-  // and a resize to phone width keeps the list instead of the selected dock.
-  setDockRouteShown(true);
+  // replaceState bypasses the router, so mirror its Tasks-branch dock-route sync.
+  setDockRouteShown(params.has("dock"));
   // ORB-19783: the router's last-routed address must follow this rewrite, or a
   // later hash navigation back to the list URL is skipped as already routed.
   recordRoutedHref();
@@ -238,11 +285,16 @@ export function revealDockStart() {
   card.scrollIntoView?.({ block: "nearest" });
 }
 
-// At phone width an explicit dock route (`dock=` in the Tasks hash) shows the
-// dock in place of the list. The router calls this on every Tasks route, so a
-// route without `dock=` brings the list back. Desktop keeps both (tasks.css).
+// In the one-column layout an explicit dock route (`dock=` in the Tasks hash)
+// shows the dock in place of the list. The router calls this on every Tasks
+// route, so a route without `dock=` brings the list back. The route counts only
+// when it is reached at that width: a dock link followed with both columns
+// showing leaves the list when the window narrows. Two columns keep both
+// (tasks.css).
 export function setDockRouteShown(shown) {
-  $("tasks-main")?.classList.toggle("dock-route", Boolean(shown));
+  const dockRouteShown = Boolean(shown) && tasksOneColumn();
+  $("tasks-main")?.classList.toggle("dock-route", dockRouteShown);
+  return dockRouteShown;
 }
 
 /// Place the filter bar, then level the active tab's first card with the
@@ -660,7 +712,7 @@ function clearLogView() {
   const btnBuffered = $("log-buffered-count");
   if (btnBuffered) {
     btnBuffered.textContent = "";
-    btnBuffered.title = "";
+    btnBuffered.removeAttribute("aria-description");
     btnBuffered.style.display = "none";
   }
   statusNewestEvent = null;
@@ -688,6 +740,7 @@ export function initLogTail() {
   wireLogPanelPreferences();
   wireLogWrapToggle();
   wireDockAlignment();
+  wireDockTabFit();
   fitLogPanelToViewport();
   syncLogFilterPills();
   loadLogSnapshot();
@@ -797,7 +850,7 @@ function bufferPausedLogEvent(ev) {
     btn.textContent = logBufferedDropped > 0
       ? `${logBuffered.length} buffered · ${logBufferedDropped} discarded`
       : `${logBuffered.length} buffered`;
-    btn.title = logBufferedDropped > 0 ? logGapMessage(logBufferedDropped) : "";
+    if (logBufferedDropped > 0) btn.setAttribute("aria-description", logGapMessage(logBufferedDropped)); else btn.removeAttribute("aria-description");
     btn.style.display = "";
   }
 }
@@ -878,7 +931,6 @@ function writeLogCounts(counts) {
   state.dataset.level = level;
   const tab = $("dock-tab-log");
   if (tab) {
-    tab.title = state.textContent;
     tab.setAttribute("aria-label", state.textContent ? `Log: ${state.textContent}` : "Log");
   }
 }

@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::activity_job::{
+use crate::context::dispatch_contract::{
     DispatchError, DispatchInvocationTrace, ResolvedCliExecutor, ResolvedSandbox,
     ResolvedShellExecutor,
 };
@@ -355,7 +355,7 @@ pub trait NullRuntimeHost: Send + Sync {
         _request: &orbit_types::workflow::PrBaseUpdateReservation,
     ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
         Ok(orbit_types::workflow::PrBaseUpdateAdmission::Refused(
-            "current handoff authority is unavailable".into(),
+            orbit_types::workflow::PrBaseUpdateRefusal::HandoffAuthorityUnavailable,
         ))
     }
     fn admit_pr_base_update(
@@ -364,7 +364,7 @@ pub trait NullRuntimeHost: Send + Sync {
         _request: &orbit_types::workflow::PrBaseUpdateReservation,
     ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
         Ok(orbit_types::workflow::PrBaseUpdateAdmission::Refused(
-            "no base update ledger".into(),
+            orbit_types::workflow::PrBaseUpdateRefusal::LedgerAbsent,
         ))
     }
     fn admit_ci_rerun(
@@ -375,7 +375,7 @@ pub trait NullRuntimeHost: Send + Sync {
         _now_ms: u64,
     ) -> Result<orbit_types::workflow::CiRerunAdmission, OrbitError> {
         Ok(orbit_types::workflow::CiRerunAdmission::Refused(
-            "this host keeps no CI retry ledger".into(),
+            orbit_types::workflow::CiRerunRefusal::LedgerAbsent,
         ))
     }
     fn admit_pr_infrastructure(
@@ -418,6 +418,13 @@ pub trait NullRuntimeHost: Send + Sync {
     }
 
     fn review_report_correction(
+        &self,
+        _request: &ReviewReportCorrectionRequest,
+    ) -> Result<Option<String>, OrbitError> {
+        Ok(None)
+    }
+
+    fn review_report_evidence_hold(
         &self,
         _request: &ReviewReportCorrectionRequest,
     ) -> Result<Option<String>, OrbitError> {
@@ -702,6 +709,15 @@ pub trait NullRuntimeHost: Send + Sync {
         _observation: &ProviderLimitObservation,
     ) -> Result<(), OrbitError> {
         Err(unsupported_runtime_capability("record_provider_limit"))
+    }
+    /// A double that records limits keeps each reading; it retires nothing.
+    fn record_provider_usage_reading(
+        &self,
+        observations: &[ProviderLimitObservation],
+    ) -> Result<(), OrbitError> {
+        observations
+            .iter()
+            .try_for_each(|observation| self.record_provider_limit(observation))
     }
     fn activity_implementer_identity(
         &self,

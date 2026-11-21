@@ -72,7 +72,7 @@ Committed scope is shipped: [ORB-10552] delivered the Linux backend, [ORB-10602]
 | Policy schema and validation | `crates/orbit-types/src/policy/policy_def.rs`, `crates/orbit-types/src/resource/data.rs` | [T20260416-0728] |
 | Policy facade | `crates/orbit-policy/src/{lib,engine,evaluator}.rs` | [T20260416-0728] |
 | Profile resolution + deny injection | `crates/orbit-types/src/policy/policy_def.rs` (`effective_profile`, `check_path`) | [T20260416-0728] |
-| Shipped versioned `.orbit` modify boundary and missing-anchor preparation | `crates/orbit-core/assets/policies/default.yaml`, `crates/orbit-core/src/adapter/engine_host/actions/sandbox/`, `crates/orbit-engine/src/activity_job/cli_runner/spawn.rs`, `crates/orbit-exec/src/{linux_sandbox,macos_sandbox}/` | Done: [ORB-10560], [ORB-10573], [ORB-10602], [ORB-10607] |
+| Shipped versioned `.orbit` modify boundary and missing-anchor preparation | `crates/orbit-core/assets/policies/default.yaml`, `crates/orbit-core/src/adapter/engine_host/actions/sandbox/`, `crates/orbit-engine/src/sandbox_spawn.rs`, `crates/orbit-exec/src/{linux_sandbox,macos_sandbox}/` | Done: [ORB-10560], [ORB-10573], [ORB-10602], [ORB-10607] |
 | Implicit `unrestricted` materialization | `crates/orbit-core/src/adapter/engine_host/actions/sandbox/resolve.rs` (`resolve_fs_profile_absolute`) | [T20260419-0503] |
 | Retired tool-layer fs enforcement | Removed with the `fs.*` builtins ([ORB-10828], [ORB-10833]); `FsAuditLogger` types remain in `crates/orbit-tools/src/fs_audit.rs` | [ORB-10833] |
 | Activity `fsProfile:` binding | `crates/orbit-engine/src/activity_job/dispatcher.rs`, `crates/orbit-engine/src/activity_job/job_executor/{step,target}.rs` | [T20260419-0503] |

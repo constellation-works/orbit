@@ -41,8 +41,7 @@ const AUTO_DRAIN_COMPLETE_WARNING = "Also marks every task this window ships as 
 // `review` "" keeps workspace review policy; "before-landing" adds that layer.
 const autoDrainFormsByHost = new Map();
 
-function autoDrainHostForm() {
-  const key = autoDrainControlScope()?.host ?? getHost() ?? "";
+function autoDrainHostForm(key = autoDrainControlScope()?.host ?? getHost() ?? "") {
   let form = autoDrainFormsByHost.get(key);
   if (!form) {
     const defaults = { duration: "1h", concurrency: null, complete: false, approveProposed: false, autoFix: false, review: "" };
@@ -64,15 +63,16 @@ function autoDrainHostForm() {
 const AUTO_DRAIN_CONCURRENCY_MAX = 4_294_967_295;
 const AUTO_DRAIN_CONCURRENCY_PROBLEM = "Parallel tasks must be a whole number, 1 or more. Leave it blank for the runtime default.";
 
-export function autoDrainConcurrencyValid() {
-  if (!autoDrainHostForm().concurrency) return true;
-  if (!/^\d+$/.test(autoDrainHostForm().concurrency)) return false;
-  const value = Number(autoDrainHostForm().concurrency);
+function autoDrainConcurrencyValid(concurrency = autoDrainHostForm().concurrency) {
+  if (!concurrency) return true;
+  if (!/^\d+$/.test(concurrency)) return false;
+  const value = Number(concurrency);
   return value >= 1 && value <= AUTO_DRAIN_CONCURRENCY_MAX;
 }
 
-export function autoDrainConcurrencyValue() {
-  return autoDrainHostForm().concurrency || "";
+export function autoDrainConcurrencyValue(host) {
+  const { concurrency } = autoDrainHostForm(host);
+  return autoDrainConcurrencyValid(concurrency) ? concurrency : null;
 }
 
 function drainFieldHead(label, help, { warn = false, id = null } = {}) {
@@ -413,7 +413,7 @@ function autoDrainStartButton(payload, form) {
   const button = el("button", {
     class: "operation-button drain-start primary",
     text: pending ? "Starting…" : `${payload.capacity?.drain_phase === "draining" ? "Start another" : "Start"} ${startLabel} window`,
-    title: reasons.submit || autoDrainStartRefusal(payload) || "Submit orbit.workflow action auto with this duration and concurrency",
+    "aria-description": reasons.submit || autoDrainStartRefusal(payload) || "Submit orbit.workflow action auto with this duration and concurrency",
   });
   button.type = "button";
   button.dataset.drainFocus = "start";
@@ -460,7 +460,8 @@ function autoDrainStartButton(payload, form) {
         ? { for_duration: duration, pull: checkout.workspaceId || checkout.pullSelector, host: checkout.ownerHost }
         : { for_duration: duration, complete: autoDrainHostForm().complete, approve_proposed: approveProposed, auto_fix: autoFix };
       if (!checkout.replica && review) body.review = review;
-      if (autoDrainHostForm().concurrency) body.concurrency = Number(autoDrainHostForm().concurrency);
+      const concurrency = autoDrainConcurrencyValue();
+      if (concurrency) body.concurrency = Number(concurrency);
       const result = autoDrainControlScope(payload)
         ? await requestJson("/api/workflows/auto", "POST", body, visit)
         : await postJson(visit.path("/api/workflows/auto"), body);
@@ -576,7 +577,7 @@ export function autoDrainStopButton(payload) {
   const button = el("button", {
     class: `operation-button drain-stop${autoDrainStopMode(payload) === "settle" ? " settle" : ""}`,
     text: pending ? copy.busy : copy.label,
-    title: reasons.stop || `${copy.description}${autoDrainStopMode(payload) === "settle" ? " (deliver recorded settlements)" : ""}`,
+    "aria-description": reasons.stop || `${copy.description}${autoDrainStopMode(payload) === "settle" ? " (deliver recorded settlements)" : ""}`,
   });
   button.type = "button";
   button.dataset.drainFocus = "stop";

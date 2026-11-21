@@ -114,7 +114,10 @@ pub(super) fn execute_sync_all(check: bool, root_override: Option<&Path>) -> Com
 
     let mut records = Vec::new();
     // Checkouts that share one data root would converge the same files under
-    // different routine bindings, so only the first is synced.
+    // different routine bindings, so only the first that converges is synced.
+    // A checkout that was skipped or failed leaves its root unclaimed, so the
+    // next checkout sharing it gets to try instead of naming a workspace that
+    // never synced.
     let mut synced_roots: BTreeMap<&Path, &str> = BTreeMap::new();
     for checkout in &registry.checkouts {
         let Some(workspace) =
@@ -137,8 +140,15 @@ pub(super) fn execute_sync_all(check: bool, root_override: Option<&Path>) -> Com
                 format!("shares its data root with workspace `{first}`"),
             )
         } else {
-            synced_roots.insert(&checkout.orbit_dir, &workspace.name);
-            sync_registered_checkout(&global_root, &machine_id, workspace, checkout, check)
+            let record =
+                sync_registered_checkout(&global_root, &machine_id, workspace, checkout, check);
+            if !matches!(
+                record.status,
+                WorkspaceSyncStatus::Skipped | WorkspaceSyncStatus::Failed
+            ) {
+                synced_roots.insert(&checkout.orbit_dir, &workspace.name);
+            }
+            record
         };
         records.push(record);
     }

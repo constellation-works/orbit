@@ -4,8 +4,9 @@ use std::collections::BTreeMap;
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
-    Task, TaskStatus, serialize_task_artifacts, task_artifact_manifest_json, task_base_json,
-    task_show_record_field_json, task_show_reference_field_json, unknown_task_show_field_message,
+    Task, TaskComment, TaskStatus, serialize_task_artifacts, task_artifact_manifest_json,
+    task_base_json, task_show_record_field_json, task_show_reference_field_json,
+    unknown_task_show_field_message,
 };
 use serde_json::{Map, Value};
 
@@ -105,10 +106,7 @@ pub fn task_record_json(
             ),)
         ),
     );
-    object.insert(
-        "comments".to_string(),
-        serde_json::to_value(&row.comments).map_err(serialize_error("comments"))?,
-    );
+    object.insert("comments".to_string(), comments_json(&row.comments)?);
     object.insert(
         "history".to_string(),
         serde_json::to_value(&row.history).map_err(serialize_error("history"))?,
@@ -168,7 +166,7 @@ pub fn task_show_json(
             serde_json::to_value(hold).map_err(serialize_error("completion_hold"))?,
         );
     }
-    if let Some(owed) = super::owed_criteria_json(&row.history) {
+    if let Some(owed) = super::owed_criteria_json(&row.history)? {
         object.insert("owed_criteria".to_string(), owed);
     }
     if row
@@ -302,9 +300,8 @@ pub(crate) fn task_show_field_json_with_row(
                 })
         }
         "comments" => match row {
-            Some(row) => serde_json::to_value(&row.comments).map_err(serialize_error("comments")),
-            None => serde_json::to_value(runtime.get_task_comments(&task.id)?)
-                .map_err(serialize_error("comments")),
+            Some(row) => comments_json(&row.comments),
+            None => comments_json(&runtime.get_task_comments(&task.id)?),
         },
         "history" => match row {
             Some(row) => serde_json::to_value(&row.history).map_err(serialize_error("history")),
@@ -347,6 +344,27 @@ fn pilot_artifact_payload_corruption(error: &OrbitError) -> bool {
 
 fn serialize_error(label: &'static str) -> impl FnOnce(serde_json::Error) -> OrbitError {
     move |error| OrbitError::Execution(format!("serialize task {label}: {error}"))
+}
+
+/// The `comments` projection of a task record. A task-pilot receipt keeps its
+/// stored `message` (the raw view, and the digest the audit reads) and adds a
+/// `pilot` object with the summary readers show and the receipt's structured
+/// fields. Every other comment serializes as stored.
+fn comments_json(comments: &[TaskComment]) -> Result<Value, OrbitError> {
+    comments
+        .iter()
+        .map(|comment| {
+            let mut value = serde_json::to_value(comment).map_err(serialize_error("comments"))?;
+            if let Some(view) = comment.pilot_comment_view() {
+                let view = serde_json::to_value(view).map_err(serialize_error("comments"))?;
+                if let Some(object) = value.as_object_mut() {
+                    object.insert("pilot".into(), view);
+                }
+            }
+            Ok(value)
+        })
+        .collect::<Result<Vec<_>, OrbitError>>()
+        .map(Value::Array)
 }
 
 /// A list projection preserves the row and marks unreadable fields as unknown,

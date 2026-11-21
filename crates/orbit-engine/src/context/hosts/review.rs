@@ -38,8 +38,11 @@ pub struct ReviewerInvocationRequest {
     pub event: ReviewerInvocationEvent,
 }
 
-/// A before-PR reviewer that returned, asking whether its report holds a
-/// defect it can still correct before settlement judges it [ORB-14616].
+/// A reviewer that returned, asking about the report it persisted before
+/// settlement judges it: whether it holds a defect the reviewer can still
+/// correct [ORB-14616], or, for a reviewer that declared failure, whether it
+/// is an incomplete verdict whose only gap is named external evidence
+/// [ORB-25667].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewReportCorrectionRequest {
     /// The run executing the reviewer step.

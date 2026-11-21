@@ -296,6 +296,10 @@ pub(crate) fn promotion_findings<'a>(
     })
 }
 
+/// What clears a pilot warning or hold without an operator, for the attention
+/// items' next action. `task repilot` is only the operator route.
+pub(crate) const PILOT_HOLD_CLEARANCE_SUMMARY: &str = "Edit the description, acceptance criteria or context_files to re-pilot automatically; a comment does not. Operator route: `task repilot`";
+
 /// The warning findings an approval hold can show: one entry per warning-field
 /// item, with the original kind and full text.
 pub(crate) fn warning_hold_findings(

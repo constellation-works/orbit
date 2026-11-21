@@ -1,14 +1,14 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getUnownedReplicas, getWorkspace, hostWriteRefusal, workspaceColor, workspacePickerIndex, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, syncNodes, makeRowDisclosure, enableRovingRows, makeCopyButton } from './common.js';
+import { findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getUnownedReplicas, getWorkspace, hostWriteRefusal, workspaceColor, workspacePickerIndex, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, syncNodes, makeRowDisclosure, enableRovingRows, makeCopyButton, setBadgeDescription } from './common.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessFor, drainWaitSignature } from './drain-waits.js';
 import { elapsedLabel, runStartedAt, taskLockFiles } from './task-runtime.js';
 import { buildRiskRowPart, riskinessSignature } from './task-riskiness.js';
 import { $, absTimeNode, rerender, taskState, setRenderer, taskList, tasksMeta, plural, isOsTag, taskDispatchIdentity, isSelectedTask, TASK_SECTION_STEP } from './task-shared.js';
 import { buildMutationFeedback, crewOptionsSignature, feedbackSignature, humanCrewFor } from './task-crew.js';
 import { invalidateDistributedConsole } from './distributed.js';
-import { recoveryRefusals } from './task-agent-actions.js';
+import { recoveryRefusals, recoveryRefusalDetails } from './task-agent-actions.js';
 export { normalizeCrewPayload, cacheCrewPayload, hasCrewOptions } from './task-crew.js';
 import * as taskReadiness from './task-readiness.js';
 import * as taskComments from './task-comments.js';
@@ -22,6 +22,8 @@ import { applyTaskStatusChange, buildCrewUpdateControl } from './task-status-con
 import { followRovingSelection, renderTaskPane } from './task-pane.js';
 import { taskRunLoads } from './task-detail.js';
 export { wireTaskPane } from './task-pane.js';
+import { quickFilterActive, syncQuickFilterCount } from './task-quick-filter.js';
+export { wireQuickFilter } from './task-quick-filter.js';
 
 // Task modules repaint the list through task-shared's `rerender`.
 setRenderer(renderTasks);
@@ -49,6 +51,7 @@ onWorkspaceChange(() => {
   taskState.fieldFeedback.clear();
   clearTaskDataCaches();
   recoveryRefusals.clear();
+  recoveryRefusalDetails.clear();
   taskState.expandedComments.clear();
   taskComments.rawComments.clear();
   taskState.restoredCommentHash = null;
@@ -383,7 +386,7 @@ function buildGroupHeader(status, group, count, context) {
     class: "group-toggle",
     type: "button",
     "aria-expanded": collapsed ? "false" : "true",
-    title: collapsed ? `Expand ${label}` : `Collapse ${label}`,
+    "aria-description": collapsed ? `Expand ${label}` : `Collapse ${label}`,
   }, [
     el("span", { class: "group-chevron", "aria-hidden": "true" }),
     el("span", { class: "group-dot", "aria-hidden": "true" }),
@@ -422,7 +425,7 @@ function buildSectionMore(status, section, context) {
     class: "group-more-button",
     type: "button",
     text: `Show ${step} more · ${remaining} remaining`,
-    title: `Load the next ${step} ${label} tasks below these`,
+    "aria-description": `Load the next ${step} ${label} tasks below these`,
   });
   more.dataset.more = "step";
   more.addEventListener("click", () => context.loadMoreTaskSection(status));
@@ -430,7 +433,7 @@ function buildSectionMore(status, section, context) {
     class: "group-more-button",
     type: "button",
     text: "Show all",
-    title: `Load the remaining ${remaining} ${label} tasks`,
+    "aria-description": `Load the remaining ${remaining} ${label} tasks`,
   }) : null;
   if (all) {
     all.dataset.more = "all";
@@ -459,6 +462,10 @@ const READY_POOL_WORDS = { eligible: "eligible", locks: "locks", capacity: "capa
 // The Backlog card's readiness strip: one slim bar split by pool and a legend
 // whose entries filter the card to that pool. It is absent until the drain
 // snapshot arrives, so the card never claims readiness it does not know.
+// `group` is the Backlog population without the Shift-Shift quick filter:
+// the strip counts the underlying pools, so a temporary query can neither
+// shrink a pool's count nor clear the operator's pool selection (renderTasks
+// settles that selection against this same population before painting).
 function buildBacklogReadiness(group, context) {
   const { known, counts } = backlogReadiness(group);
   if (!known) return null;
@@ -473,7 +480,6 @@ function buildBacklogReadiness(group, context) {
     }),
     counts.unknown > 0 ? el("span", { class: "ready-bar-segment unknown", style: { flexGrow: String(counts.unknown) } }) : null,
   ]);
-  if (readyPoolFilter && counts[readyPoolFilter] === 0) readyPoolFilter = null;
   const legend = el("div", { class: "ready-legend", role: "group", "aria-label": "Filter the backlog by readiness" }, [
     ...DRAIN_POOLS.map(({ key, label }) => {
       const on = readyPoolFilter === key;
@@ -481,7 +487,7 @@ function buildBacklogReadiness(group, context) {
         class: `ready-filter${on ? " active" : ""}`,
         type: "button",
         "aria-pressed": on ? "true" : "false",
-        title: on ? "Show every backlog task" : `Show only tasks ${label.toLowerCase()}`,
+        "aria-description": on ? "Show every backlog task" : `Show only tasks ${label.toLowerCase()}`,
       }, [
         el("span", { class: "ready-filter-dot", "aria-hidden": "true" }),
         el("strong", { class: "ready-filter-count", text: String(counts[key]) }),
@@ -581,34 +587,53 @@ export function renderTasks(tasks, context) {
   const notice = takeTaskActionNotice(context);
 
   const filtered = filterTasks(tasks, context);
+  // The Shift-Shift quick filter narrows only the rows the board shows. The
+  // open pane and the counts read the rows without it, so typing never closes
+  // the pane or changes a total.
+  const quick = quickFilterActive();
+  const unnarrowed = quick ? filterTasks(tasks, context, { quick: false }) : filtered;
+  // The readiness strip and its auto-clear read the Backlog rows without the
+  // quick filter: a pool the query merely hides is not an empty pool, so the
+  // operator's selection survives typing and closing the bar restores it.
+  // Only a pool empty in this underlying population clears the selection.
+  const backlogBase = unnarrowed.filter((t) => t.status === "backlog");
+  const baseReadiness = backlogReadiness(backlogBase);
+  if (readyPoolFilter && baseReadiness.known && baseReadiness.counts[readyPoolFilter] === 0) readyPoolFilter = null;
+  const poolNarrows = Boolean(readyPoolFilter && baseReadiness.known);
+  // Rows actually displayed: the quick filter intersected with the selected
+  // pool, so the shown counts never include an out-of-pool row.
+  const displayed = poolNarrows
+    ? filtered.filter((t) => t.status !== "backlog" || drainReadinessFor(t)?.pool === readyPoolFilter)
+    : filtered;
+  syncQuickFilterCount(displayed.length, unnarrowed.length);
   // Rows keep a fixed-width action column so actions line up between groups;
   // when no visible row has an action (a Done-only view) the whole column is
   // dead space, so the list gives it back as one.
-  const quickActions = filtered.some(hasQuickAction) ? "some" : "none";
+  const quickActions = displayed.some(hasQuickAction) ? "some" : "none";
   if (body.dataset.quickActions !== quickActions) body.dataset.quickActions = quickActions;
-  $("tasks-count").textContent = formatTaskCount(filtered.length, tasks.length, tasksMeta(context));
+  $("tasks-count").textContent = formatTaskCount(displayed.length, tasks.length, tasksMeta(context));
   // ORB-10972: the rail shows the matching total the panel header reports, so
   // the Tasks entry reads correctly from any other tab. The rows loaded are
   // not that total while a section holds more (ORB-14701).
   const railCount = document.getElementById("rail-count-tasks");
   if (railCount) {
     const meta = tasksMeta(context);
-    const matching = meta && Number.isFinite(meta.total) ? meta.total : filtered.length;
+    const matching = meta && Number.isFinite(meta.total) ? meta.total : unnarrowed.length;
     railCount.textContent = String(matching);
-    railCount.title = "Tasks matching the current status filter";
+    setBadgeDescription(railCount, "Tasks matching the current status filter");
   }
   renderFilterSummary(context);
   refreshChips(context);
   const sections = tasksMeta(context)?.sections || new Map();
-  const narrowed = browserTaskFilterActive();
+  const narrowed = browserTaskFilterActive() || quick;
   const activeStatuses = context && typeof context.getActiveStatuses === "function" ? context.getActiveStatuses() : null;
   // A section with rows still to load keeps its control even when a
   // browser-side filter hides every loaded row, so more can be read.
   const pending = [...sections.values()].filter((section) => section.next_cursor
     && section.total > section.items.length && (!activeStatuses || activeStatuses.has(section.status)));
-  if (filtered.length === 0 && pending.length === 0) {
+  if (filtered.length === 0 && (pending.length === 0 || quick)) {
     const replica = tasks.length === 0 ? replicaOwner() : null;
-    const defaultText = tasks.length === 0 ? "No tasks available." : "No tasks match filter.";
+    const defaultText = tasks.length === 0 ? "No tasks available." : quick ? "No loaded tasks match the quick filter." : "No tasks match filter.";
     const replicaText = !replica
       ? defaultText
       : replica.several
@@ -621,7 +646,7 @@ export function renderTasks(tasks, context) {
     ]);
     syncTaskNotices([notice, ...buildFoldedStatusNotices(new Set(), context)].filter(Boolean));
     syncNodes(body, [emptyState]);
-    renderTaskPane(filtered, context);
+    renderTaskPane(unnarrowed, context);
     finishTaskRender(body);
     return;
   }
@@ -634,14 +659,16 @@ export function renderTasks(tasks, context) {
   }
   // Under All workspaces each status section reads workspace by workspace,
   // in picker order. The sort is stable, so one workspace's rows keep their
-  // order; /api/tasks/all already cuts pages in this order.
+  // order. /api/tasks/all still cuts its pages in /api/workspaces order; this
+  // sort only regroups the rows it returned.
   if (aggregate) {
     for (const group of groups.values()) {
       group.sort((a, b) => workspacePickerIndex(a.workspace_id) - workspacePickerIndex(b.workspace_id));
     }
   }
+  // A status with no loaded match collapses while the quick filter is on.
   for (const section of pending) {
-    if (!groups.has(section.status)) groups.set(section.status, []);
+    if (!quick && !groups.has(section.status)) groups.set(section.status, []);
   }
   const ordered = GROUP_ORDER.filter((s) => groups.has(s)).concat(
     [...groups.keys()].filter((s) => !GROUP_ORDER.includes(s)),
@@ -654,7 +681,13 @@ export function renderTasks(tasks, context) {
   for (const status of ordered) {
     const group = groups.get(status);
     const section = sections.get(status);
-    const count = !narrowed && section ? { value: section.total, total: true } : { value: group.length, total: false };
+    // The selected pool narrows the Backlog card's rows, so its head counts
+    // the rows shown, like any other browser-side filter.
+    const poolRows = status === "backlog" && poolNarrows
+      ? group.filter((t) => drainReadinessFor(t)?.pool === readyPoolFilter)
+      : group;
+    const count = status === "backlog" && poolNarrows ? { value: poolRows.length, total: false }
+      : !narrowed && section ? { value: section.total, total: true } : { value: group.length, total: false };
     // Each status is one card: its head, the backlog's readiness strip, the
     // rows, then the control that loads more. The nodes stay siblings in the
     // list so row reuse and keyboard roving work across groups; CSS draws the
@@ -670,9 +703,9 @@ export function renderTasks(tasks, context) {
     }
     let rows = group;
     if (status === "backlog") {
-      const strip = buildBacklogReadiness(group, context);
+      const strip = buildBacklogReadiness(backlogBase, context);
       if (strip) groupNodes.push(strip);
-      if (readyPoolFilter && strip) rows = group.filter((t) => drainReadinessFor(t)?.pool === readyPoolFilter);
+      if (poolNarrows && strip) rows = poolRows;
     }
     for (const t of rows) {
       const rowKey = `task-${taskDispatchIdentity(t)}`;
@@ -688,7 +721,7 @@ export function renderTasks(tasks, context) {
         // is. The ID line comes first in the DOM so Tab goes title → crew →
         // action; the grid draws it under the title.
         const meta = el("span", { class: "row-meta" }, [
-          makeCopyButton(t.id, { class: "id mono", title: "Copy task ID" }),
+          makeCopyButton(t.id, { class: "id mono", description: "Copy task ID" }),
           t.status === "backlog" ? taskReadiness.buildRowReason(t) : null,
           run ? buildRunCell(t) : null,
           buildRiskRowPart(t),
@@ -767,7 +800,7 @@ export function renderTasks(tasks, context) {
   syncNodes(body, nodes);
   syncRowSelection(body);
   restoreSectionFocus(body, moreFocus);
-  renderTaskPane(filtered, context);
+  renderTaskPane(unnarrowed, context);
   finishTaskRender(body);
   const commentHash = taskComments.getCommentHash();
   if (commentHash.startsWith("#comment-")) {

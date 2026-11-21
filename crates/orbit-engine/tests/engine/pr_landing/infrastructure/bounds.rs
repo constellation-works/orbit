@@ -560,6 +560,8 @@ fn deadline_arriving_during_job_log_read_holds_instead_of_failing_the_read() {
     );
 }
 
+const PR_READ: &str = "workflow prerequisite read repos/{owner}/{repo}/pulls/42";
+
 #[test]
 fn prerequisite_expiry_stops_next_read_and_preserves_single_shot() {
     isolated(
@@ -614,7 +616,10 @@ fn prerequisite_expiry_stops_next_read_and_preserves_single_shot() {
                     let forge = fx.forge.clone();
                     let reads = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
                     let observed = std::rc::Rc::clone(&reads);
-                    let repo_reads = std::rc::Rc::new(std::cell::Cell::new(0));
+                    // Each snapshot reads the pull request once, after the repository
+                    // identity it reuses [ORB-25864]: the Nth PR read starts the Nth
+                    // snapshot.
+                    let snapshot_reads = std::rc::Rc::new(std::cell::Cell::new(0));
                     let mut input = fx.complete_ungated_input();
                     input["auto_fix"] = json!(true);
                     input["completion"] = json!("review");
@@ -640,24 +645,17 @@ fn prerequisite_expiry_stops_next_read_and_preserves_single_shot() {
                                 "{case}: {label} receives at most the remaining completion budget, got {timeout}"
                             );
                             observed.borrow_mut().push(label.into());
-                            if label == "workflow prerequisite read repos/{owner}/{repo}" {
-                                repo_reads.set(repo_reads.get() + 1);
+                            if label == PR_READ {
+                                snapshot_reads.set(snapshot_reads.get() + 1);
                             }
                             let expired = match case {
                                 "evidence" | "observation" => {
-                                    label == "workflow prerequisite read repos/{owner}/{repo}"
-                                        && repo_reads.get() == 1
+                                    label == PR_READ && snapshot_reads.get() == 1
                                 }
                                 "source" => label == "workflow blob",
                                 // Expire after the first successful read of pre-mutation observation.
-                                "revalidation" => {
-                                    label == "workflow prerequisite read repos/{owner}/{repo}"
-                                        && repo_reads.get() == 2
-                                }
-                                "lost_reply" => {
-                                    label == "workflow prerequisite read repos/{owner}/{repo}"
-                                        && repo_reads.get() == 4
-                                }
+                                "revalidation" => label == PR_READ && snapshot_reads.get() == 2,
+                                "lost_reply" => label == PR_READ && snapshot_reads.get() == 4,
                                 _ => false,
                             };
                             if expired {
@@ -703,8 +701,8 @@ fn prerequisite_expiry_stops_next_read_and_preserves_single_shot() {
                         assert!(
                             !calls
                                 .lines()
-                                .any(|line| line == "api repos/{owner}/{repo}/pulls/42"),
-                            "expiry after repo read forbids the next PR read"
+                                .any(|line| line.starts_with("api repos/{owner}/{repo}/rules/")),
+                            "expiry after the PR read forbids the next policy read"
                         );
                     }
                     if matches!(
@@ -713,13 +711,13 @@ fn prerequisite_expiry_stops_next_read_and_preserves_single_shot() {
                     ) {
                         assert_eq!(
                             reads.borrow().last().map(String::as_str),
-                            Some("workflow prerequisite read repos/{owner}/{repo}"),
+                            Some(PR_READ),
                             "expiry forbids every subsequent read"
                         );
                         let expected = match case {
-                            "revalidation" => 1,
-                            "lost_reply" => 3,
-                            _ => 0,
+                            "revalidation" => 2,
+                            "lost_reply" => 4,
+                            _ => 1,
                         };
                         assert_eq!(
                             calls
@@ -900,4 +898,225 @@ fn infrastructure_deadline_refusal_keeps_type_and_unreadable_forge_holds() {
             );
         }
     }
+}
+
+/// ORB-26140: a quota refusal that meets the spent completion budget is the
+/// typed `CompletionBudgetExpired` and is not counted in the host record, so
+/// the outcome agrees with the record.
+#[test]
+fn quota_refusal_meeting_a_spent_budget_expires_the_read_uncounted() {
+    use orbit_tools::github_quota::{self, GithubQuotaPolicy, GithubQuotaStore};
+
+    isolated(
+        "infrastructure::bounds::quota_refusal_meeting_a_spent_budget_expires_the_read_uncounted",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let fx = fixture_with_workflow(row);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                action(
+                    &host,
+                    "pr_open",
+                    &fx.open_input(&fx.candidate, &fx.base_sha),
+                )
+                .unwrap();
+                setup(&fx, "positive");
+                let reset = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+                    + 1800;
+                fs::write(
+                    fx.forge.join("infra-rate-limit"),
+                    json!({"resources":{
+                        "core":{"limit":5000,"remaining":0,"reset":reset},
+                        "graphql":{"limit":5000,"remaining":4000,"reset":reset}
+                    }})
+                    .to_string(),
+                )
+                .unwrap();
+                let records = tempfile::TempDir::new().unwrap();
+                let store = GithubQuotaStore::new(records.path().to_path_buf());
+                let policy = GithubQuotaPolicy::default();
+                let mut input = fx.complete_ungated_input();
+                input["auto_fix"] = json!(true);
+                input["completion"] = json!("review");
+                input["max_wait_seconds"] = json!(60);
+                // The deadline crosses right after the exhausted core quota's
+                // refusal is decided. Armed last: the skewed clock stays on
+                // this thread afterwards.
+                github_quota::advance_deadline_clock_after_next_refusal_decision(
+                    std::time::Duration::from_secs(120),
+                );
+                let result = orbit_engine::test_support::with_prerequisite_clock(
+                    || 1_000,
+                    |_, _| {},
+                    || {
+                        github_quota::with_scoped_guard(store.clone(), policy, || {
+                            orbit_engine::test_support::with_vcs_retry_wait(
+                                |_| {},
+                                || action(&host, "pr_complete", &input),
+                            )
+                        })
+                    },
+                );
+                let error = result.expect_err("a refusal met by a spent budget expires");
+                assert!(
+                    matches!(
+                        &error,
+                        orbit_common::OrbitError::DeliveryRefused {
+                            refusal:
+                                orbit_types::workflow::DeliveryRefusal::CompletionBudgetExpired,
+                            ..
+                        }
+                    ),
+                    "expected CompletionBudgetExpired, got {error:?}"
+                );
+                let account = fs::read_dir(records.path())
+                    .unwrap()
+                    .filter_map(|entry| {
+                        let path = entry.ok()?.path();
+                        (path.extension()? == "json")
+                            .then(|| path.file_stem()?.to_str().map(str::to_owned))?
+                    })
+                    .next()
+                    .expect("the admission wrote a quota record");
+                let refused = store
+                    .status(&policy, &account, reset - 1800)
+                    .resources
+                    .into_iter()
+                    .find(|resource| resource.resource == github_quota::RESOURCE_CORE)
+                    .expect("core status")
+                    .refused;
+                assert_eq!(
+                    (refused.delivery, refused.background),
+                    (0, 0),
+                    "a refusal delivered as an expiry must not be counted"
+                );
+            });
+        },
+    );
+}
+
+/// ORB-25934: a slow `api rate_limit` quota probe is bounded by the caller's
+/// remaining deadline instead of 15 s, prevents spawning the original request
+/// once the budget expires, and preserves `CompletionBudgetExpired` on both
+/// `Deadline::execute` and the `ci_job_log` guard.
+#[test]
+fn slow_quota_probe_exhausting_budget_prevents_spawn_and_preserves_deadline() {
+    use orbit_tools::github_quota::{self, GithubQuotaPolicy, GithubQuotaStore};
+
+    isolated(
+        "infrastructure::bounds::slow_quota_probe_exhausting_budget_prevents_spawn_and_preserves_deadline",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let fx = fixture_with_workflow(row);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                action(
+                    &host,
+                    "pr_open",
+                    &fx.open_input(&fx.candidate, &fx.base_sha),
+                )
+                .unwrap();
+                setup(&fx, "positive");
+                fs::write(fx.forge.join("infra-rate-limit-hang"), "").unwrap();
+
+                // 1) Completion `Deadline::execute` (via `pr_complete` -> `pr.status`).
+                fs::write(fx.forge.join("calls"), "").unwrap();
+                let records_deadline = tempfile::TempDir::new().unwrap();
+                let store_deadline = GithubQuotaStore::new(records_deadline.path().to_path_buf());
+                let policy = GithubQuotaPolicy::default();
+                let clock_calls = std::rc::Rc::new(std::cell::Cell::new(0_u32));
+                let mut input = fx.complete_ungated_input();
+                input["auto_fix"] = json!(true);
+                input["completion"] = json!("review");
+                input["max_wait_seconds"] = json!(1);
+                let started = std::time::Instant::now();
+                let result = orbit_engine::test_support::with_prerequisite_clock(
+                    move || {
+                        let call = clock_calls.get();
+                        clock_calls.set(call + 1);
+                        if call == 0 { 1_000 } else { 1_920 }
+                    },
+                    |_, _| {},
+                    || {
+                        github_quota::with_scoped_guard(store_deadline, policy, || {
+                            orbit_engine::test_support::with_vcs_retry_wait(
+                                |_| {},
+                                || action(&host, "pr_complete", &input),
+                            )
+                        })
+                    },
+                );
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(2),
+                    "slow quota probe must be bounded by the 80 ms remaining deadline, took {:?}",
+                    started.elapsed()
+                );
+                let error = result.expect_err("slow quota probe exhausting budget must expire");
+                assert!(
+                    matches!(
+                        &error,
+                        orbit_common::OrbitError::DeliveryRefused {
+                            refusal:
+                                orbit_types::workflow::DeliveryRefusal::CompletionBudgetExpired,
+                            ..
+                        }
+                    ),
+                    "expected CompletionBudgetExpired, got {error:?}"
+                );
+                let calls = fs::read_to_string(fx.forge.join("calls")).unwrap();
+                assert_eq!(
+                    calls.lines().collect::<Vec<_>>(),
+                    vec!["api rate_limit"],
+                    "expired quota probe must prevent spawning the original pr view"
+                );
+
+                // 2) `ci_job_log` guard (`jobs.rs`).
+                fs::write(fx.forge.join("calls"), "").unwrap();
+                let records_log = tempfile::TempDir::new().unwrap();
+                let store_log = GithubQuotaStore::new(records_log.path().to_path_buf());
+                let started = std::time::Instant::now();
+                let log_result = orbit_engine::test_support::with_prerequisite_clock(
+                    || 1_000,
+                    |_, _| {},
+                    || {
+                        github_quota::with_scoped_guard(store_log, policy, || {
+                            orbit_engine::run_private_vcs_operation(
+                                "ci.job_log",
+                                &json!({
+                                    "workspace_path": fx.repo,
+                                    "run_id": "700",
+                                    "job_id": "1100",
+                                    "deadline_ms": 1_080_u64,
+                                }),
+                            )
+                        })
+                    },
+                );
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(2),
+                    "log guard probe must be bounded by the 80 ms deadline, took {:?}",
+                    started.elapsed()
+                );
+                let log_error = log_result.expect_err("slow quota probe in ci_job_log must expire");
+                assert!(
+                    matches!(
+                        &log_error,
+                        orbit_common::OrbitError::DeliveryRefused {
+                            refusal:
+                                orbit_types::workflow::DeliveryRefusal::CompletionBudgetExpired,
+                            ..
+                        }
+                    ),
+                    "expected CompletionBudgetExpired from ci_job_log, got {log_error:?}"
+                );
+                let calls = fs::read_to_string(fx.forge.join("calls")).unwrap();
+                assert_eq!(
+                    calls.lines().collect::<Vec<_>>(),
+                    vec!["api rate_limit"],
+                    "expired quota probe must prevent spawning gh run view --log"
+                );
+            });
+        },
+    );
 }

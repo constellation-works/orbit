@@ -12,18 +12,33 @@ use crate::runtime::audit::system::{
 };
 use crate::runtime::run_input::managed_run_context_run_id_from_env;
 
+/// Source of the run scope. Only the resident broker constructs the authenticated variant.
+pub(crate) enum ToolHostRun {
+    InProcess(Option<String>),
+    #[cfg(unix)]
+    BrokeredResident(String),
+}
+
 pub(crate) fn build_orbit_tool_host(
     runtime: &OrbitRuntime,
     task_id: Option<String>,
-    run_id: Option<String>,
+    run: ToolHostRun,
     session_context: ToolSessionContext,
 ) -> Arc<dyn OrbitToolHost> {
+    let (run_id, brokered_resident) = match run {
+        ToolHostRun::InProcess(run_id) => {
+            (run_id.or_else(managed_run_context_run_id_from_env), false)
+        }
+        #[cfg(unix)]
+        ToolHostRun::BrokeredResident(run_id) => (Some(run_id), true),
+    };
     Arc::new(RuntimeOrbitToolHost {
+        brokered_resident,
         runtime: runtime.clone(),
         task_scope: OrbitTaskScope {
             orbit_root: Some(runtime.data_root_path().to_path_buf()),
             task_id,
-            run_id: run_id.or_else(trusted_env_run_id),
+            run_id,
         },
         session_context,
     })
@@ -33,6 +48,7 @@ pub(crate) fn build_orbit_tool_host(
 struct RuntimeOrbitToolHost {
     runtime: OrbitRuntime,
     task_scope: OrbitTaskScope,
+    brokered_resident: bool,
     /// The calling session's asserted grants, carried so a handler whose
     /// decision depends on *who is calling* can reach them [ORB-11354].
     ///
@@ -74,6 +90,7 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
         super::dispatch::execute(
             &self.runtime,
             &self.task_scope,
+            self.brokered_resident,
             super::dispatch::ToolCaller {
                 session_context: &session,
                 agent,
@@ -87,13 +104,6 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
 
     fn task_scope(&self) -> OrbitTaskScope {
         self.task_scope.clone()
-    }
-
-    fn scope_is_resident_cycle(&self) -> bool {
-        self.task_scope
-            .run_id
-            .as_deref()
-            .is_some_and(|run_id| self.runtime.is_resident_cycle_run(run_id))
     }
 
     /// A routed decision-channel callback runs here, outside the plugin
@@ -176,6 +186,7 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
         super::dispatch::execute(
             &self.runtime,
             &self.task_scope,
+            self.brokered_resident,
             super::dispatch::ToolCaller {
                 session_context: &session,
                 agent: None,
@@ -186,8 +197,4 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
             input,
         )
     }
-}
-
-fn trusted_env_run_id() -> Option<String> {
-    managed_run_context_run_id_from_env()
 }

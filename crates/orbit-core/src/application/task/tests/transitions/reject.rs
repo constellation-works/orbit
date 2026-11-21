@@ -11,10 +11,10 @@ fn dashboard_archive_rechecks_run_ownership_after_its_guard_and_preserves_force(
     let (_root, runtime) = test_runtime();
     let task = add_task(&runtime, "Archive stale guard");
 
-    // A local run starts owning the task after the dashboard archive's outer
+    // A local run starts owning the task after the operator archive's outer
     // ownership pre-check and before the archive write commits.
     runtime.set_transition_run_hook_task(Some(&task.id));
-    let result = runtime.archive_task_for_dashboard(&task.id, false);
+    let result = runtime.archive_task_as_operator(&task.id, false);
     runtime.set_transition_run_hook_task(None);
 
     let refusal = result
@@ -41,7 +41,7 @@ fn dashboard_archive_rechecks_run_ownership_after_its_guard_and_preserves_force(
     );
 
     runtime
-        .archive_task_for_dashboard(&task.id, true)
+        .archive_task_as_operator(&task.id, true)
         .expect("force archives despite the owning run");
     assert_eq!(
         runtime.get_task(&task.id).expect("archived task").status,

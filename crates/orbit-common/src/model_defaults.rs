@@ -42,7 +42,7 @@ pub const CLAUDE_HAIKU_MODEL: &str = "haiku";
 pub const CLAUDE_FABLE_MODEL: &str = "claude-fable-5-2";
 
 /// Codex model used by the standard Sol crew.
-pub const CODEX_SOL_MODEL: &str = "gpt-6.1-sol";
+pub const CODEX_SOL_MODEL: &str = "gpt-6.2-sol";
 
 /// Codex model used by the standard Terra crew.
 pub const CODEX_TERRA_MODEL: &str = "gpt-6.1-terra";
@@ -51,7 +51,7 @@ pub const CODEX_TERRA_MODEL: &str = "gpt-6.1-terra";
 pub const CODEX_LUNA_MODEL: &str = "gpt-6-luna";
 
 /// Codex model used by the standard Astra crew and provider default.
-pub const CODEX_ASTRA_MODEL: &str = "gpt-6-astra";
+pub const CODEX_ASTRA_MODEL: &str = "gpt-6.2-astra";
 
 /// Default Antigravity (`agy`) model: a slug from `agy models` (verified
 /// against Antigravity CLI 1.1.27). Bare Gemini CLI ids such as
@@ -62,6 +62,21 @@ pub const ANTIGRAVITY_DEFAULT_MODEL: &str = "gemini-3.8-flash-high";
 /// `agy models`, verified against Antigravity CLI 1.4.7 (`agy --version`),
 /// which lists `gemini-4-argon-high` alongside the Gemini 3.8 Flash slugs.
 pub const ANTIGRAVITY_ARGON_MODEL: &str = "gemini-4-argon-high";
+
+/// Antigravity (`agy`) model for the built-in `neon` crew: a slug from
+/// `agy models`, verified against Antigravity CLI 1.5.13 on 2026-11-20.
+/// High is the model's default thinking level. [ORB-25818]
+pub const ANTIGRAVITY_NEON_MODEL: &str = "gemini-4-neon-high";
+
+/// Antigravity (`agy`) model for the built-in `hydrogen` crew: a slug from
+/// `agy models`, verified against Antigravity CLI 1.5.13 on 2026-11-20.
+/// High is the model's default thinking level. [ORB-25818]
+pub const ANTIGRAVITY_HYDROGEN_MODEL: &str = "gemini-4-hydrogen-high";
+
+/// Antigravity (`agy`) model for the built-in `carbon` crew: a slug from
+/// `agy models`, verified against Antigravity CLI 1.5.13. Carbon is offered
+/// on Google AI Ultra and Enterprise accounts only. [ORB-25944]
+pub const ANTIGRAVITY_CARBON_MODEL: &str = "gemini-4-carbon-high";
 
 /// Default Grok Build model (the canonical model listed by `grok models`).
 pub const GROK_DEFAULT_MODEL: &str = "grok-4.7";

@@ -2,8 +2,9 @@
 //! the action ledger that makes a recovery cycle skip what its dead
 //! predecessor already did.
 //!
-//! A call is a resident cycle call when the trusted run binding (never tool
-//! input) names a `resident_cycle_pipeline` run. Reads always pass. Every
+//! A run scope naming a `resident_cycle_pipeline` run subjects its calls to
+//! the cycle guard. Exercising a resident right on an operator-only operation
+//! also requires the broker to authenticate that run. Reads always pass. Every
 //! write needs the run to hold its mandate's live cycle and a recorded grant;
 //! a right-gated write needs the right in that grant (observe-only grants
 //! hold none), and any `workspace` the call names must be the assignment's
@@ -67,6 +68,29 @@ pub(crate) enum ResidentCallAdmission {
 pub(crate) struct ResidentActionTicket {
     task_id: String,
     row: ResidentActionRow,
+}
+
+std::thread_local! {
+    /// The key of the most recent ledgered write on this thread that
+    /// failed or was refused. The broker dispatch on the same thread
+    /// takes it to fill the envelope `action_key` (ORB-25284); other
+    /// callers leave it, and the next broker call clears it first.
+    static FAILED_RESIDENT_ACTION_KEY: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Drop any stale ledger key left on this thread.
+pub(crate) fn clear_failed_resident_action_key() {
+    FAILED_RESIDENT_ACTION_KEY.with(|slot| *slot.borrow_mut() = None);
+}
+
+/// Take the ledger key a ledgered write on this thread failed with.
+pub(crate) fn take_failed_resident_action_key() -> Option<String> {
+    FAILED_RESIDENT_ACTION_KEY.with(|slot| slot.borrow_mut().take())
+}
+
+fn record_failed_resident_action_key(key: &str) {
+    FAILED_RESIDENT_ACTION_KEY.with(|slot| *slot.borrow_mut() = Some(key.to_string()));
 }
 
 /// Every action row recorded under `cycle`, latest state per key, in key order.
@@ -217,8 +241,66 @@ impl OrbitRuntime {
         ids
     }
 
-    /// Admit one tool call made under the trusted `run_id`, before it runs.
+    /// The workspaces (ids and names) a live resident cycle may read runtime
+    /// attention for: its mandate's own workspace and the ones its frozen
+    /// grant covers. `None` for any session that is not the live cycle of a
+    /// mandate: no run binding, another job's run, a stale or expired cycle,
+    /// a pending task commit, or a lookup that fails. The answer widens no
+    /// write: it only lets `orbit.attention` read the runtime kinds for these
+    /// workspaces.
+    pub(crate) fn resident_cycle_attention_scope(
+        &self,
+        run_id: Option<&str>,
+    ) -> Option<BTreeSet<String>> {
+        let run_id = run_id.map(str::trim).filter(|id| !id.is_empty())?;
+        let run = self.show_job_run_observed(run_id).ok()?;
+        if run.job_id != RESIDENT_CYCLE_JOB {
+            return None;
+        }
+        // History reads recover interrupted task commits. Attention is
+        // observational, so fail closed when non-repairing inspection cannot
+        // verify that the home partition is settled before reading the grant.
+        self.inspect_live_execution_claims().ok()?;
+        let task_id = self.resident_cycle_mandate_of_run(run_id).ok()?;
+        let history = self.get_task_history(&task_id).ok()?;
+        let grant = live_cycle_from_history(&history)
+            .ok()?
+            .filter(|live| live.run_id == run_id && live.expires_at > Utc::now())
+            .and_then(|live| cycle_grant(&history, &live.cycle))?;
+        let mut covered = BTreeSet::from([self.workspace_id().ok()?, self.workspace_label()]);
+        for selector in &grant.workspaces {
+            covered.extend(self.resident_workspace_ids(selector));
+        }
+        Some(covered)
+    }
+
+    /// Admit the call before dispatch. Only the authenticated resident broker may
+    /// substitute a cycle's grant for operator authority.
     pub(crate) fn admit_resident_cycle_call(
+        &self,
+        run_id: Option<&str>,
+        brokered_resident: bool,
+        tool: &str,
+        class: ResidentCallClass,
+        input: &Value,
+    ) -> Result<ResidentCallAdmission, OrbitError> {
+        let right_gated =
+            crate::runtime::authorization::is_resident_cycle_right_gated_operation(tool);
+        if right_gated && run_id.is_some() && !brokered_resident {
+            return Err(OrbitError::CapabilityDenied(format!(
+                "a managed run may call '{tool}' only through its resident cycle's broker"
+            )));
+        }
+        let admission = self.check_resident_cycle_grant(run_id, tool, class, input)?;
+        if right_gated && brokered_resident && matches!(admission, ResidentCallAdmission::Proceed) {
+            return Err(OrbitError::CapabilityDenied(format!(
+                "the resident cycle did not admit '{tool}'"
+            )));
+        }
+        Ok(admission)
+    }
+
+    fn check_resident_cycle_grant(
         &self,
         run_id: Option<&str>,
         tool: &str,
@@ -453,7 +535,9 @@ impl OrbitRuntime {
     }
 
     /// Record how a ledgered write ended. The key travels back in the
-    /// response so the cycle can cite it in its checkpoint.
+    /// response (or RemoteTool error detail) so the cycle can cite it in its
+    /// checkpoint. Other error variants have no compatible detail carrier,
+    /// so their key is stashed for the broker envelope `action_key`.
     pub(crate) fn close_resident_action(
         &self,
         ticket: ResidentActionTicket,
@@ -478,6 +562,24 @@ impl OrbitRuntime {
             if let Value::Object(map) = value {
                 map.insert("resident_action_key".into(), json!(row.key));
             }
+        }
+        if let Err(OrbitError::RemoteTool { payload, .. }) = result {
+            // Keep remote diagnostics, including non-object detail, while
+            // reserving the action key for this local ledger's admission.
+            if !payload.is_object() {
+                *payload = json!({"detail": payload.take()});
+            }
+            let detail = &mut payload["detail"];
+            if !detail.is_object() {
+                *detail = match detail.take() {
+                    Value::Null => json!({}),
+                    remote_detail => json!({"remote_detail": remote_detail}),
+                };
+            }
+            detail["resident_action_key"] = json!(row.key);
+        }
+        if result.is_err() {
+            record_failed_resident_action_key(&row.key);
         }
         self.append_resident_action_row(&task_id, &row)
     }

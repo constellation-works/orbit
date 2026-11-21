@@ -1,0 +1,151 @@
+//! The `standing-drain` row (standing drain phase 1, ORB-25965): on the
+//! owner host, the workspace's drain intent and how long work waited with no
+//! drain admitting it over the last week.
+//!
+//! While `workflow.standing_drain.enabled` is set (ORB-25991) it also shows
+//! the keeper's effective flags, crash breaker and last decision.
+//!
+//! Read-only and informational: it reports, and nothing acts on it.
+
+use orbit_core::{IDLE_WITH_WORK_DAYS, IdleWithWork, OrbitRuntime};
+
+use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
+
+const CHECK: &str = "standing-drain";
+
+pub(super) fn standing_drain_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+    if let Some(owner) = runtime.coordination_write_owner() {
+        return row(
+            WorkspaceDoctorStatus::Skipped,
+            format!(
+                "this checkout is a replica of {owner}; the owner host reports drain idle time"
+            ),
+        );
+    }
+    let mut intent_unreadable = false;
+    let intent = match runtime.workspace_drain_intent() {
+        Ok(None) => "off".to_string(),
+        Ok(Some(record)) => {
+            let at = record
+                .updated_at
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            match record.intent {
+                orbit_store::contracts::DrainIntentState::On => {
+                    format!(
+                        "on (started by {} from {} at {at})",
+                        record.actor, record.source
+                    )
+                }
+                orbit_store::contracts::DrainIntentState::Paused => {
+                    format!("paused by {} from {} at {at}", record.actor, record.source)
+                }
+            }
+        }
+        Err(error) => {
+            intent_unreadable = true;
+            format!("unreadable ({error})")
+        }
+    };
+    let keeper = keeper_sentence(runtime);
+    match runtime.drain_idle_with_work(IDLE_WITH_WORK_DAYS) {
+        // An intent this binary cannot read is never a healthy row, even when
+        // the idle measure reads (ORB-26041).
+        Ok(idle) => row(
+            if intent_unreadable {
+                WorkspaceDoctorStatus::Warning
+            } else {
+                WorkspaceDoctorStatus::Ok
+            },
+            format!("Drain intent: {intent}.{keeper} {}", idle_sentence(&idle)),
+        ),
+        Err(error) => row(
+            WorkspaceDoctorStatus::Warning,
+            format!("Drain intent: {intent}.{keeper} Cannot measure idle-with-work time: {error}"),
+        ),
+    }
+}
+
+/// The keeper's state and effective flags, with a leading space; empty while
+/// the keeper is off, so the off row reads as before.
+fn keeper_sentence(runtime: &OrbitRuntime) -> String {
+    let view = match runtime.standing_drain_keeper_view() {
+        Ok(view) => view,
+        Err(error) => return format!(" Standing-drain keeper: unreadable ({error})."),
+    };
+    let settings = view.settings;
+    if !settings.enabled {
+        return String::new();
+    }
+    let concurrency = settings
+        .concurrency
+        .map_or_else(|| "job default".to_string(), |value| value.to_string());
+    let mut sentence = format!(
+        " Standing-drain keeper: enabled with window {}s, concurrency {concurrency}, \
+         complete {}, approve_proposed {}, auto_fix {}, min resubmit interval {}s.",
+        settings.window_seconds,
+        settings.complete,
+        settings.approve_proposed,
+        settings.auto_fix,
+        settings.min_resubmit_interval_seconds,
+    );
+    if let Some(breaker) = view.breaker {
+        sentence.push_str(&format!(
+            " Crash breaker {} ({} of {} keeper drains failed or interrupted within an hour{}).",
+            if breaker.open() { "open" } else { "closed" },
+            breaker.failed,
+            breaker.threshold,
+            if breaker.open() {
+                "; stays open until a person starts a drain"
+            } else {
+                ""
+            },
+        ));
+    }
+    if let Some(last) = view.last_decision {
+        sentence.push_str(&format!(
+            " Last keeper decision: {} {} at {}.",
+            last.decision,
+            last.detail.as_deref().unwrap_or("-"),
+            last.at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        ));
+    }
+    sentence
+}
+
+/// The measured figure, then one `day hours` pair per UTC day, oldest first,
+/// so a reader can take the daily series from the text.
+fn idle_sentence(idle: &IdleWithWork) -> String {
+    let daily = idle
+        .days
+        .iter()
+        .map(|day| format!("{} {:.1} h", day.day, day.idle_hours))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut sentence = format!(
+        "Idle with work waiting, last {} UTC days: {:.1} h with no admission window while \
+         backlog or proposed work existed ({:.1} task-hours over {} tasks; drains admitted \
+         for {:.1} h). Daily: {daily}.",
+        idle.days.len(),
+        idle.idle_hours,
+        idle.idle_task_hours,
+        idle.idle_tasks,
+        idle.window_hours,
+    );
+    if idle.unreadable_histories > 0 {
+        sentence.push_str(&format!(
+            " {} task histories were unreadable and are not counted.",
+            idle.unreadable_histories
+        ));
+    }
+    sentence
+}
+
+fn row(status: WorkspaceDoctorStatus, message: String) -> WorkspaceDoctorResult {
+    WorkspaceDoctorResult {
+        duration_ms: 0,
+        check_name: CHECK.into(),
+        status,
+        message,
+        remediation: None,
+    }
+}

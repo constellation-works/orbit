@@ -2,7 +2,7 @@
 //! [ORB-17179].
 //!
 //! The persisted exit-record format and its readers live with the run
-//! (`job/run/worker_exit.rs`), which reconciliation reads. This module is the
+//! (`job/run/worker_exit/`), which reconciliation reads. This module is the
 //! writing side. Only the worker's parent, the supervisor that launched it,
 //! can reap its exit status. When the supervisor is gone, init or the user
 //! manager reaps the worker and its status is lost. So:
@@ -11,6 +11,11 @@
 //!   it reaps, before it settles the run: exit code or terminating signal,
 //!   and the worker scope's OOM-kill and refused-fork counters while the
 //!   scope's cgroup still exists ([`WorkerExit::observe`]).
+//!   It first saves the reap to the already-open worker log, so a failed
+//!   audit insert cannot erase that observation. The worker also logs its
+//!   own entry and application return independently of the store; the
+//!   run's `worker_exit::lifecycle` reader recovers these diagnostic receipts
+//!   when the submitting process or its audit is unavailable.
 //! - A supervisor that reaps after reconciliation already wrote "no exit
 //!   status was observed" appends what it observed to that diagnostic
 //!   ([`note_exit_after_reconciliation`]). Reconciliation that settles before

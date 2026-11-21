@@ -6,17 +6,23 @@
 use chrono::Utc;
 use orbit_common::{ConflictedFile, RecoverableVcsConflict};
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
-use orbit_engine::{CompletionObservationAdmission, DispatchError, FinalRecoveryApplication};
+use orbit_engine::{
+    CompletionObservationAdmission, CompletionOwnerLiveness, DispatchError,
+    FinalRecoveryApplication, PublishedCompletionObservation,
+};
 use orbit_types::workflow::activity_job::{ActivityV2, JobV2, V2AuditEventKind};
 use orbit_types::workflow::{
-    FinalRecoveryCheckpoint, FinalRecoveryCheckpointOutcome, FinalRecoveryDecision,
-    FinalRecoveryKey, JobRunState, PipelineState, RecoveryFault, TransientInfrastructure,
+    DeliveryRefusal, FinalRecoveryCheckpoint, FinalRecoveryCheckpointOutcome,
+    FinalRecoveryDecision, FinalRecoveryKey, JobRunState, PipelineState, RecoveryFault,
+    TransientInfrastructure,
 };
 use serde_json::{Value, json};
 
 #[path = "host.rs"]
 mod host;
-use host::{RecoveryHost, Reply, Run, evidence_hold, run, run_with_evidence, run_with_input};
+use host::{
+    ApplyScript, RecoveryHost, Reply, Run, evidence_hold, run, run_with_evidence, run_with_input,
+};
 
 const RUN_ID: &str = "jrun-final-recovery";
 
@@ -729,6 +735,69 @@ fn transient_infrastructure_is_escalated_without_an_agent() {
     }
 }
 
+/// [ORB-25864] GitHub rate-limiting the automation account's read failed
+/// `pr_complete` on seven complete candidates in one drain, and the agent
+/// escalated each into a blocked task with a decision request. The rate limit
+/// resets within the hour and judged nothing about the candidate, so final
+/// recovery requeues the unchanged publication without an agent. The same
+/// text quoted by a validation action's output still goes to the agent.
+/// `reserve_locks` stands for every delivery action, `pr_complete` among
+/// them: the host runs it, and the classifier lists it.
+fn a_github_rate_limit_is_requeued_without_an_agent() {
+    let limited = "execution failed: private automation VCS workflow prerequisite read \
+                   repos/{owner}/{repo} failed: gh: API rate limit exceeded for user ID 270255973. \
+                   If you reach out to GitHub Support for help, please include the request ID \
+                   DE78:121DB1:92BAD8:9B7940:6AFFAFC1 (HTTP 403)";
+    // The adapter's own error, and the same error inside an auto-fix stop.
+    let stopped = format!(
+        "auto_fix_stopped: pull request #42 cannot be repaired automatically ({limited}); no \
+         repair agent runs, the pull request stays open and the task stays in review"
+    );
+    for message in [limited.to_string(), stopped] {
+        let host = RecoveryHost::new([
+            ("reserve_locks", vec![Reply::Diagnostic(message.clone())]),
+            ("decide", vec![escalate()]),
+        ]);
+        let limited_run = run(&pipeline_acting("reserve_locks", false), &host, None);
+        assert!(limited_run.result.is_err(), "{message}");
+        assert_eq!(
+            host.count("decide"),
+            0,
+            "no agent judges a rate limit: {message}"
+        );
+        let applications = host.applications();
+        assert_eq!(applications.len(), 1, "{message}");
+        assert_eq!(applications[0].infrastructure, None, "{message}");
+        assert!(
+            matches!(
+                &applications[0].decision,
+                FinalRecoveryDecision::Requeue { reason } if reason.starts_with("provider-rate-limit:")
+            ),
+            "a rate limit is requeued, never escalated: {:?}",
+            applications[0].decision
+        );
+    }
+
+    let host = RecoveryHost::new([
+        (
+            "review_reconciliation_validate",
+            vec![Reply::Diagnostic(limited.into())],
+        ),
+        ("decide", vec![escalate()]),
+    ]);
+    let quoted_run = run(
+        &pipeline_acting("review_reconciliation_validate", false),
+        &host,
+        None,
+    );
+    assert!(quoted_run.result.is_err());
+    assert_eq!(
+        host.count("decide"),
+        1,
+        "validation output goes to the agent"
+    );
+}
+
 /// A `worktree_setup` failure caused by a dependency lookup `not_found` is
 /// not transient: final recovery must not dispatch an agent that could requeue
 /// it on an unchanged environment. The same text from another step still reaches the agent.
@@ -1395,7 +1464,8 @@ macro_rules! recovery_contracts {
 recovery_contracts!(recovery_contracts_1: a_resume_reruns_from_the_named_step_and_the_run_completes, resume_context_is_opaque_when_the_target_inherits_job_input, a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart, an_oversized_refusal_reaches_the_resumed_step_bounded_under_the_admitted_id, an_oversized_refused_output_reaches_the_resumed_implementer_bounded, a_settling_decision_ends_the_run_without_the_failure_handoff);
 recovery_contracts!(recovery_contracts_2: an_escalation_still_runs_the_failure_handoff, an_error_that_skips_step_recovery_still_reaches_final_recovery, step_recovery_runs_first_and_final_recovery_only_once_it_is_spent, final_recovery_runs_at_most_once_per_run, a_run_resumed_after_a_final_recovery_resume_never_runs_it_again, a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision, an_evidence_hold_after_step_recovery_holds_the_run, a_cancelled_child_after_step_recovery_cancels_the_run);
 recovery_contracts!(recovery_contracts_3: a_provider_authentication_failure_skips_final_recovery, an_empty_crew_pool_skips_final_recovery, a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade, a_resume_to_an_earlier_step_keeps_the_named_target, a_resume_to_an_admission_or_nonexistent_step_is_escalated, a_malformed_decision_is_escalated, a_decision_carries_its_fault_and_one_without_a_fault_escalates, the_recovery_packet_withholds_the_implementers_model);
-recovery_contracts!(recovery_contracts_4: completion_observation_classifies_retry_policy_and_candidate_refusal, a_failure_before_the_worktree_exists_skips_final_recovery, failed_recovery_dispatch_is_injected_before_final_recovery, final_recovery_injects_only_its_runs_bounded_evidence_in_order, final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_evidence_overflows, final_recovery_keeps_post_recovery_output_when_a_later_step_fails, final_recovery_resume_checkpoints_the_latest_conflict_diagnostics, transient_infrastructure_is_escalated_without_an_agent, worktree_setup_dependency_not_found_skips_final_recovery);
+recovery_contracts!(recovery_contracts_4: a_stopped_rebase_resumes_its_rebasing_step_without_a_repair_commit, completion_observation_classifies_retry_policy_and_candidate_refusal, a_failure_before_the_worktree_exists_skips_final_recovery, failed_recovery_dispatch_is_injected_before_final_recovery, final_recovery_injects_only_its_runs_bounded_evidence_in_order, final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_evidence_overflows, final_recovery_keeps_post_recovery_output_when_a_later_step_fails, final_recovery_resume_checkpoints_the_latest_conflict_diagnostics, transient_infrastructure_is_escalated_without_an_agent, a_github_rate_limit_is_requeued_without_an_agent, worktree_setup_dependency_not_found_skips_final_recovery);
+recovery_contracts!(recovery_contracts_5: finished_run_tls_observation_readmits_unchanged_publication, transient_observation_held_after_recovery_parks_or_requeues);
 
 /// The executor cannot turn a policy refusal into completion authority, and
 /// the deterministic retry spends the existing once-only recovery budget.
@@ -1428,6 +1498,15 @@ fn completion_observation_classifies_retry_policy_and_candidate_refusal() {
         let observed =
             orbit_engine::test_support::with_vcs_retry_wait(|_| {}, || run(&job, &host, None));
         assert!(observed.result.is_err());
+        // [ORB-25661] A policy requeue (and a spent retry) ends held; a
+        // candidate-changed refusal keeps the failure and its handoff.
+        if kind == "escalate" {
+            assert_failed_completion(&observed);
+            assert_count(&host, "handoff", 1);
+        } else {
+            assert_held_after_recovery(&observed);
+            assert_count(&host, "handoff", 0);
+        }
         assert_eq!(host.count("work"), count);
         assert_count(&host, "decide", 0);
         assert_count(&host, "setup", 1);
@@ -1446,5 +1525,380 @@ fn completion_observation_classifies_retry_policy_and_candidate_refusal() {
             other => panic!("unexpected {other:?}"),
         };
         assert!(text.contains(classification), "{text}");
+    }
+}
+
+const INSPECT_PUBLICATION: &str = "Inspect the publication and admit current-policy source repair";
+
+fn unchanged_observation(liveness: CompletionOwnerLiveness) -> PublishedCompletionObservation {
+    PublishedCompletionObservation {
+        liveness,
+        candidate_unchanged: true,
+        validation_unchanged: true,
+        policy_change: None,
+    }
+}
+
+/// Run the `pr_complete` step through final recovery with the finished-run
+/// classifier, not an injected admission.
+///
+/// The fixture host scripts the observation fault. The engine action
+/// `pr_complete` does not pass through that host, so the scripted action is
+/// `work` and the failing step id is `pr_complete`. `Reply::Observation`
+/// is the TLS handshake timeout the dispatcher records as
+/// `completion_observation_unavailable`.
+fn observe_finished_completion(
+    facts: PublishedCompletionObservation,
+    replies: Vec<Reply>,
+) -> (RecoveryHost, Run) {
+    observe_finished_completion_applying(facts, replies, ApplyScript::ByDecision)
+}
+
+fn observe_finished_completion_applying(
+    facts: PublishedCompletionObservation,
+    replies: Vec<Reply>,
+    apply_script: ApplyScript,
+) -> (RecoveryHost, Run) {
+    let mut host = RecoveryHost::new([("work", replies)]);
+    host.observation = Some(facts);
+    host.apply_script = apply_script;
+    let job = pipeline_step_acting("pr_complete", "work");
+    let observed =
+        orbit_engine::test_support::with_vcs_retry_wait(|_| {}, || run(&job, &host, None));
+    (host, observed)
+}
+
+fn assert_held_after_recovery(run: &Run) {
+    let Err(error) = &run.result else {
+        panic!("a held completion ends as a delivery refusal, not a run outcome");
+    };
+    assert!(
+        matches!(
+            error,
+            DispatchError::DeliveryRefused {
+                refusal: DeliveryRefusal::ForgeObservationUnavailable,
+                message,
+                ..
+            } if message.contains("TLS handshake timeout")
+        ),
+        "{error}"
+    );
+}
+
+fn assert_failed_completion(run: &Run) {
+    let Err(error) = &run.result else {
+        panic!("a failed completion keeps its original error");
+    };
+    assert!(
+        matches!(
+            error,
+            DispatchError::CompletionObservationUnavailable { message, .. }
+                if message.contains("TLS handshake timeout")
+        ),
+        "{error}"
+    );
+}
+
+/// [ORB-25661] A transient observation that final recovery successfully
+/// requeues (current-policy or stopped-run) or that the host parks ends
+/// held, with its recorded disposition intact and no failure handoff. A
+/// candidate-changed refusal and a failed application stay failures.
+fn transient_observation_held_after_recovery_parks_or_requeues() {
+    let stopped = unchanged_observation(CompletionOwnerLiveness::Stopped);
+    let (host, observed) = observe_finished_completion(stopped.clone(), vec![Reply::Observation]);
+    assert_held_after_recovery(&observed);
+    assert_count(&host, "handoff", 0);
+    assert_attempts(&observed.attempts, &[("settled", Some("requeue"))]);
+
+    let mut policy_changed = stopped.clone();
+    policy_changed.policy_change = Some("review now required".into());
+    let (host, observed) = observe_finished_completion(policy_changed, vec![Reply::Observation]);
+    assert_held_after_recovery(&observed);
+    assert_count(&host, "handoff", 0);
+    assert_attempts(&observed.attempts, &[("settled", Some("requeue"))]);
+
+    let (host, observed) = observe_finished_completion_applying(
+        stopped.clone(),
+        vec![Reply::Observation],
+        ApplyScript::ParkRequeue,
+    );
+    assert_held_after_recovery(&observed);
+    assert_count(&host, "handoff", 0);
+    assert_attempts(&observed.attempts, &[("escalated", Some("requeue"))]);
+
+    let mut changed = stopped.clone();
+    changed.candidate_unchanged = false;
+    let (host, observed) = observe_finished_completion(changed, vec![Reply::Observation]);
+    assert_failed_completion(&observed);
+    assert_count(&host, "handoff", 1);
+    assert_attempts(&observed.attempts, &[("escalated", Some("escalate"))]);
+
+    let (host, observed) =
+        observe_finished_completion_applying(stopped, vec![Reply::Observation], ApplyScript::Fail);
+    assert_failed_completion(&observed);
+    assert_count(&host, "handoff", 1);
+    assert_attempts(&observed.attempts, &[("escalated", Some("requeue"))]);
+}
+
+fn decision_text(decision: &FinalRecoveryDecision) -> String {
+    match decision {
+        FinalRecoveryDecision::Resume { rationale, .. } => rationale.clone(),
+        FinalRecoveryDecision::Requeue { reason } => reason.clone(),
+        FinalRecoveryDecision::Escalate {
+            diagnosis,
+            human_action,
+            ..
+        } => format!("{diagnosis}\n{human_action}"),
+        other => format!("{other:?}"),
+    }
+}
+
+/// A finished `pr_complete` whose only fault is a TLS handshake timeout, with
+/// an unchanged candidate, policy and validation, is requeued. The classifier
+/// reads the finished-run facts; the admission is not an injected `Retry`.
+/// A changed candidate, changed validation, changed policy, foreign live
+/// owner, or non-transient error does not take that requeue.
+fn finished_run_tls_observation_readmits_unchanged_publication() {
+    let stopped = unchanged_observation(CompletionOwnerLiveness::Stopped);
+    let (host, observed) = observe_finished_completion(stopped.clone(), vec![Reply::Observation]);
+    assert_count(&host, "decide", 0);
+    assert_count(&host, "work", 1);
+    assert_count(&host, "handoff", 0);
+    assert_attempts(&observed.attempts, &[("settled", Some("requeue"))]);
+    let application = first_application(&host);
+    assert_eq!(application.failed_step_id, "pr_complete");
+    assert!(
+        application
+            .fault
+            .fault_evidence
+            .contains("TLS handshake timeout"),
+        "{}",
+        application.fault.fault_evidence
+    );
+    let FinalRecoveryDecision::Requeue { reason } = &application.decision else {
+        panic!("finished unchanged observation requeues: {application:?}");
+    };
+    assert!(reason.contains("stopped-run"), "{reason}");
+    assert!(
+        !reason.contains("candidate-changed") && !reason.contains(INSPECT_PUBLICATION),
+        "{reason}"
+    );
+    assert!(!reason.contains("policy-changed"), "{reason}");
+
+    let mut changed_candidate = stopped.clone();
+    changed_candidate.candidate_unchanged = false;
+    let (host, _) = observe_finished_completion(changed_candidate, vec![Reply::Observation]);
+    assert_count(&host, "decide", 0);
+    assert_count(&host, "work", 1);
+    let text = decision_text(&first_application(&host).decision);
+    assert!(
+        text.contains("candidate-changed") && text.contains(INSPECT_PUBLICATION),
+        "{text}"
+    );
+    assert!(!text.contains("stopped-run"), "{text}");
+
+    let mut changed_validation = stopped.clone();
+    changed_validation.validation_unchanged = false;
+    let (host, _) = observe_finished_completion(changed_validation, vec![Reply::Observation]);
+    assert_count(&host, "decide", 0);
+    let text = decision_text(&first_application(&host).decision);
+    assert!(
+        text.contains("candidate-changed")
+            && text.contains("native validation candidate or effective policy changed"),
+        "{text}"
+    );
+    assert!(!text.contains("stopped-run"), "{text}");
+
+    let mut changed_policy = stopped.clone();
+    changed_policy.policy_change = Some("review now required".into());
+    let (host, _) = observe_finished_completion(changed_policy, vec![Reply::Observation]);
+    assert_count(&host, "decide", 0);
+    assert_count(&host, "work", 1);
+    let FinalRecoveryDecision::Requeue { reason } = &first_application(&host).decision else {
+        panic!("a policy change stays a policy requeue, not a stopped-run resume");
+    };
+    assert!(reason.contains("policy-changed"), "{reason}");
+    assert!(
+        !reason.contains("stopped-run") && !reason.contains("candidate-changed"),
+        "{reason}"
+    );
+
+    let (host, _) = observe_finished_completion(stopped.clone(), vec![Reply::Fail]);
+    assert!(
+        host.count("decide") >= 1,
+        "a non-transient pr_complete failure still reaches the recovery agent"
+    );
+    assert_eq!(host.count("work"), 1);
+    let text = decision_text(&first_application(&host).decision);
+    assert!(
+        !text.contains("stopped-run") && !text.contains("transient-observation"),
+        "{text}"
+    );
+
+    let (host, observed) = observe_finished_completion(
+        unchanged_observation(CompletionOwnerLiveness::ProcessOwned),
+        vec![Reply::Observation, Reply::Observation],
+    );
+    assert_count(&host, "decide", 0);
+    assert_count(&host, "work", 2);
+    assert!(observed.result.is_err());
+    let FinalRecoveryDecision::Resume { rationale, .. } = &first_application(&host).decision else {
+        panic!("a process-owned unchanged observation retries in the worker");
+    };
+    assert!(rationale.contains("transient-observation"), "{rationale}");
+    assert!(!rationale.contains("candidate-changed"), "{rationale}");
+
+    let (host, _) = observe_finished_completion(
+        unchanged_observation(CompletionOwnerLiveness::ForeignLive),
+        vec![Reply::Observation],
+    );
+    assert_count(&host, "decide", 0);
+    let text = decision_text(&first_application(&host).decision);
+    assert!(
+        text.contains("candidate-changed")
+            && text.contains("completion no longer belongs to this active owner"),
+        "{text}"
+    );
+    assert!(!text.contains("stopped-run"), "{text}");
+}
+
+/// Commit everything in `repo` as the fixture identity.
+fn commit_all(repo: &std::path::Path, message: &str) {
+    crate::git_fixture::run(repo, &["add", "--all"]);
+    crate::git_fixture::run(
+        repo,
+        &[
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@orbit.invalid",
+            "commit",
+            "-qm",
+            message,
+        ],
+    );
+}
+
+/// [F2026-11-277] Final recovery that repairs a rebase stopped on conflicts
+/// (detached HEAD, unmerged entries) and resumes its rebasing step is not an
+/// ordinary repair commit: Git stays untouched and the resumed step reports
+/// the stop for conflict recovery's authenticated continuation. A detached,
+/// dirty checkout outside a rebase still needs its symbolic branch.
+fn a_stopped_rebase_resumes_its_rebasing_step_without_a_repair_commit() {
+    for (case, stopped) in [("stopped-rebase", true), ("detached-dirty", false)] {
+        let root = tempfile::tempdir().unwrap();
+        let repo = root.path().canonicalize().unwrap().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        crate::git_fixture::init(&repo);
+        std::fs::write(repo.join("base.txt"), "base\n").unwrap();
+        commit_all(&repo, "base");
+        let base = crate::git_fixture::run(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+        crate::git_fixture::run(&repo, &["checkout", "-qb", "feature"]);
+        std::fs::write(repo.join("base.txt"), "candidate\n").unwrap();
+        commit_all(&repo, "candidate re-lands base.txt");
+        crate::git_fixture::run(&repo, &["checkout", "-q", &base]);
+        std::fs::remove_file(repo.join("base.txt")).unwrap();
+        commit_all(&repo, "base deletes base.txt");
+        crate::git_fixture::run(&repo, &["checkout", "-q", "feature"]);
+        if stopped {
+            let rebase = crate::git_test_support::command()
+                .args(["rebase", &base])
+                .current_dir(&repo)
+                .output()
+                .unwrap();
+            assert!(!rebase.status.success(), "{case}: the rebase stops");
+        } else {
+            crate::git_fixture::run(&repo, &["checkout", "-q", "--detach"]);
+            std::fs::write(repo.join("base.txt"), "dirty\n").unwrap();
+        }
+        let head = crate::git_fixture::run(&repo, &["rev-parse", "HEAD"]);
+        let unmerged = crate::git_fixture::run(&repo, &["ls-files", "--unmerged"]);
+        assert_eq!(!unmerged.is_empty(), stopped, "{case}");
+
+        let mut host = RecoveryHost::new([
+            (
+                "sync_base",
+                vec![
+                    Reply::Conflict(conflict(&["base.txt"], false)),
+                    Reply::Ok(json!({"rebased": true})),
+                ],
+            ),
+            ("decide", vec![resume_to("sync_base")]),
+            ("deliver", vec![Reply::Ok(json!({"delivered": true}))]),
+        ]);
+        host.workspace_path = repo.to_string_lossy().into_owned();
+        let job = with_handoff(job_from_steps(
+            "stopped_rebase_resume",
+            vec![
+                det_step("setup", "setup"),
+                det_step("commit", "git_commit"),
+                det_step("sync_base", "sync_base"),
+                det_step("deliver", "deliver"),
+            ],
+        ));
+        // Setup and the candidate's commit already checkpointed; the run
+        // resumes at the rebasing step that stops.
+        let setup = json!({
+            "workspace_path": host.workspace_path,
+            "base_ref": base,
+            "base_sha": crate::git_fixture::run(&repo, &["rev-parse", &base]),
+        });
+        let commit = json!({"phase": "commit", "task_id": "T-1", "committed": true});
+        let mut resume = PipelineState::new(
+            RUN_ID.into(),
+            "stopped_rebase_resume".into(),
+            json!({ "task_ids": ["T-1"] }),
+        );
+        resume.record_step(0, JobRunState::Success, Some(setup.clone()), None);
+        resume.record_pipeline_output("setup", setup);
+        resume.record_step(1, JobRunState::Success, Some(commit.clone()), None);
+        resume.record_pipeline_output("commit", commit);
+        let observed = run(&job, &host, Some(&resume));
+        let applications = host.applications();
+        if stopped {
+            assert!(
+                observed
+                    .result
+                    .as_ref()
+                    .is_ok_and(|outcome| outcome.success),
+                "{case}: {:?}; applications: {applications:?}",
+                observed.result
+            );
+            assert_eq!(applications[0].decision.kind(), "resume", "{case}");
+            assert!(applications[0].repair_commit.is_none(), "{case}");
+            assert_eq!(
+                host.actions(),
+                ["sync_base", "decide", "sync_base", "deliver"],
+                "{case}: the rebasing step reruns on the stop"
+            );
+            assert!(
+                crate::git_test_support::command()
+                    .args(["symbolic-ref", "--quiet", "HEAD"])
+                    .current_dir(&repo)
+                    .status()
+                    .is_ok_and(|status| !status.success()),
+                "{case}: HEAD stays detached"
+            );
+        } else {
+            let FinalRecoveryDecision::Escalate { diagnosis, .. } = &applications[0].decision
+            else {
+                panic!("{case}: expected an escalation, got {applications:?}");
+            };
+            assert!(
+                diagnosis.contains("final recovery has no observed checkout, candidate or branch"),
+                "{case}: {diagnosis}"
+            );
+            assert_eq!(host.count("sync_base"), 1, "{case}: nothing resumes");
+        }
+        assert_eq!(
+            crate::git_fixture::run(&repo, &["rev-parse", "HEAD"]),
+            head,
+            "{case}: no host commit"
+        );
+        assert_eq!(
+            crate::git_fixture::run(&repo, &["ls-files", "--unmerged"]),
+            unmerged,
+            "{case}: the index is untouched"
+        );
     }
 }

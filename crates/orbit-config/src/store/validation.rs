@@ -70,12 +70,7 @@ impl ConfigStore {
         match self.scope {
             ConfigScope::Global => Ok(self.resolved()?.plugins),
             ConfigScope::Workspace => {
-                let workspace_root = self.path.parent().ok_or_else(|| {
-                    OrbitError::InvalidInput(
-                        "workspace config path has no parent directory".to_string(),
-                    )
-                })?;
-                let roots = ConfigRoots::new(global_root, workspace_root);
+                let roots = self.workspace_roots(global_root)?;
                 Ok(
                     validate_staged_workspace_document(&roots, &self.path, &self.doc.to_string())?
                         .plugins,
@@ -127,16 +122,7 @@ impl ConfigStore {
     /// a pool may refer to a crew defined only in the global file. Workspace
     /// writes use this same layer-aware admission path as runtime loads.
     pub fn validate_workspace_with_global(&self, global_root: &Path) -> Result<(), OrbitError> {
-        if self.scope != ConfigScope::Workspace {
-            return Err(OrbitError::InvalidInput(
-                "layered workspace validation requires a workspace config store".to_string(),
-            ));
-        }
-        let workspace_root = self.path.parent().ok_or_else(|| {
-            OrbitError::InvalidInput("workspace config path has no parent directory".to_string())
-        })?;
-        let roots = ConfigRoots::new(global_root, workspace_root);
-        validate_staged_workspace_document(&roots, &self.path, &self.doc.to_string()).map(|_| ())
+        self.staged_workspace_resolved(global_root).map(|_| ())
     }
 
     /// Validate a staged workspace write and the specific value being set
@@ -146,18 +132,37 @@ impl ConfigStore {
         key: &str,
         global_root: &Path,
     ) -> Result<(), OrbitError> {
-        if self.scope != ConfigScope::Workspace {
-            return Err(OrbitError::InvalidInput(
-                "layered workspace validation requires a workspace config store".to_string(),
-            ));
-        }
+        let resolved = self.staged_workspace_resolved(global_root)?;
+        self.validate_set_target(key, &resolved)
+    }
+
+    /// Roots for this workspace file, layered over the global config at `global_root`.
+    fn workspace_roots(&self, global_root: &Path) -> Result<ConfigRoots, OrbitError> {
         let workspace_root = self.path.parent().ok_or_else(|| {
             OrbitError::InvalidInput("workspace config path has no parent directory".to_string())
         })?;
-        let roots = ConfigRoots::new(global_root, workspace_root);
-        let resolved =
-            validate_staged_workspace_document(&roots, &self.path, &self.doc.to_string())?;
-        self.validate_set_target(key, &resolved)
+        Ok(ConfigRoots::new(global_root, workspace_root))
+    }
+
+    /// The staged workspace document admitted over the global config, as resolved settings.
+    fn staged_workspace_resolved(&self, global_root: &Path) -> Result<ResolvedConfig, OrbitError> {
+        self.require_scope(ConfigScope::Workspace)?;
+        let roots = self.workspace_roots(global_root)?;
+        validate_staged_workspace_document(&roots, &self.path, &self.doc.to_string())
+    }
+
+    /// Refuse a layered validation entry point called on the other scope's store.
+    fn require_scope(&self, expected: ConfigScope) -> Result<(), OrbitError> {
+        if self.scope == expected {
+            return Ok(());
+        }
+        let message = match expected {
+            ConfigScope::Workspace => {
+                "layered workspace validation requires a workspace config store"
+            }
+            ConfigScope::Global => "layered global validation requires a global config store",
+        };
+        Err(OrbitError::InvalidInput(message.to_string()))
     }
 
     /// A workspace file may not carry `[machine]` at all, and the global file
@@ -198,11 +203,7 @@ impl ConfigStore {
     /// resource-throttle resume at or above a workspace high, a crew a
     /// workspace pool names), so the write is refused here instead.
     pub fn validate_global_with_workspace(&self, workspace_root: &Path) -> Result<(), OrbitError> {
-        if self.scope != ConfigScope::Global {
-            return Err(OrbitError::InvalidInput(
-                "layered global validation requires a global config store".to_string(),
-            ));
-        }
+        self.require_scope(ConfigScope::Global)?;
         let global_root = self.path.parent().ok_or_else(|| {
             OrbitError::InvalidInput("global config path has no parent directory".to_string())
         })?;
@@ -217,11 +218,7 @@ impl ConfigStore {
         key: &str,
         workspace_root: &Path,
     ) -> Result<(), OrbitError> {
-        if self.scope != ConfigScope::Global {
-            return Err(OrbitError::InvalidInput(
-                "layered global validation requires a global config store".to_string(),
-            ));
-        }
+        self.require_scope(ConfigScope::Global)?;
         self.validate_for_set(key)?;
         self.validate_global_with_workspace(workspace_root)
     }

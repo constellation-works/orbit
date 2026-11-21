@@ -1,7 +1,7 @@
 ---
 title: Review Gate — Design
 owner: codex
-last_updated: 2026-11-08
+last_updated: 2026-11-18
 last_validated: 2026-11-14
 status: Implemented
 feature: review-gate
@@ -71,7 +71,7 @@ names no crew, so each minted task is unassigned and draws from the complexity
 pool for its complexity. Changing `review_crew` changes only future mints, never the
 consumer's epoch or its retained debt. The consumer admits only on the machine
 that owns the workspace (see [delivery automation
-operations](../automation-triggers/5_operations.md)). After-landing review
+operations](../automation-triggers/references/operations.md)). After-landing review
 never affects delivery admission, local or distributed.
 
 `orbit config show` (`review` in `--json`), `orbit doctor` (the `review`
@@ -390,10 +390,13 @@ everything the reviewer left uncommitted as one second commit on top of it:
 
 ```text
 <implementation commit(s)>     authored by the implementer
-review: <first line of the reviewer summary> [<task ids>]
-                               authored orbit[<reviewer model>], <family>-reviewer@orbit.local, Orbit committer
-    Findings: F1, F2
-    Paths: src/a.rs, docs/b.md
+<type>: <first line of the reviewer summary> [<task id>]…
+                               authored orbit[<reviewer model>] <reviewer@orbit.invalid>, Orbit committer
+
+    Repaired findings: F1, F2.
+    Changed paths: src/a.rs, docs/b.md.
+
+    Orbit-Task: <task id>
     Orbit-Review-Attempt: <attempt id>
     Orbit-Review-Crew: <reviewer crew>
 ```
@@ -416,20 +419,30 @@ Findings:
 - `F2` [low, open] <summary>
   - Cited: <paths the finding cites>
 
+<what the verdict means for delivery> Full certificate: `review-gate.json`.
 - Reviewer: crew `<crew>` (<provider> / <model>)
-- Implementation: `<sha>` on base `<sha>` (N commit(s), unchanged by review)
-- Reviewer commit: `<sha>` `review: …` by <author>
-- Final candidate: `<sha>`
+- Implementation: `<sha12>` on base `<sha12>` (N commit(s), unchanged by review)
+- Reviewer commit: `<sha12>` `review: …` by <author>
+- Final candidate: `<sha12>`
 - Selectors widened for reviewer-changed paths: …
 - Validation on final candidate: … record(s) […], complete: …
-- Owner-required checks: <captured commands, or none configured>
-- Not established by this review: <failed diagnostics and their sources, or none>
-- Required checks retained from earlier report revisions: <id, command and outcome, with any retirement reason, or none>
+- Owner-required checks: <captured commands>
+- Not established by this review: <failed diagnostics and their sources>
+- Required checks retained from earlier report revisions: <id, command and outcome, with any retirement reason>
 - Reviewer runtime: …s of … min
 - Escalation: …
-
-<what the verdict means for delivery>
 ```
+
+Only evidence that carries information is written. `Findings:` is omitted
+without findings; the `Reviewer commit` line needs a reviewer commit; the
+`Final candidate` line appears only when it differs from the implementation;
+widened selectors, owner-required checks (omitted when none are configured),
+not-established diagnostics, retained checks and an escalation appear only when
+present. The `Owner-required checks` line states `missing legacy host contract;
+fresh review required` when the certificate has no host check snapshot. Commits
+are shortened to 12 characters, and the `review-gate.json` artifact holds the
+full certificate [ORB-25129]. The lead line is unchanged, so
+`legacy_review_settlement` still decodes it.
 
 A fixed finding names its changed paths on its `Changed:` line. Any other finding that cites paths lists them on a `Cited:` line. The [agent scorecards](../agent-scorecards/2_design.md#53-reviewers) judge a `reject` by whether the next implementation run changed those paths.
 
@@ -851,6 +864,33 @@ reservation succeeds without collision. A Bubblewrap notice no such command can 
 stays on its record and keeps blocking, as does an `incomplete` report's
 uncovered deferral.
 
+Synthesis owes the run only for a deferred test the candidate can reach
+[ORB-25096] (`BubblewrapReach`). The rule is conservative: the candidate
+reaches every deferred test when it changes any path other than Markdown and
+Rust sources under a `tests` directory, any Rust source under `tests/support`,
+or a test source whose path mentions a sandbox; it reaches a test when a
+changed test source, at the reviewed base or the final candidate, names the
+test or mentions `sandbox`, `bwrap` or `bubblewrap`. Shared test support can
+affect a sandbox test even when the helper does not mention it. For an
+unreached test the notice is cleared with a `not owed`
+note, a reviewer-named Linux requirement that covers only that notice leaves
+`external_evidence` and its required `not_run` record becomes `excluded`, and
+no hold is raised. A workspace `host_evidence` rule owing the same check
+keeps it owed. The chosen option was (b) of ORB-25096 — not owing what the
+diff cannot reach — rather than reading hosted check runs into settlement or
+routing the delivery to a capable host: a host without user namespaces can
+never fulfil the hold, and the candidate does not reach the test, so the review
+releases it without relying on a later pull request run. CI scope decides
+whether such a run executes the test (`scripts/ci-change-scope.sh`, via
+`scripts/ci-test-affected.py pull_request_scope`: a docs-only pull request
+runs no test job; one confined to `crates/` normally runs tests for the
+affected and always-run crates, but runs every test for a member manifest
+(`crates/<crate>/Cargo.toml`), a `crates/` path no member owns, or a
+selection covering the whole workspace; and any other pull request runs every
+test unless a `FILE_READERS`-declared reader selects affected crates),
+so no execution is claimed. A diff that touches sandbox code keeps requiring
+real execution evidence.
+
 A broader required run can defer the very tests the reviewer names [ORB-17043].
 `cargo test -p <crate> --test <target> <module>` passes with a
 deferral notice for each of two tests, and each test is its own
@@ -1167,8 +1207,8 @@ predate the attempt are ignored, the rest merge into the most severe verdict
 with every distinct finding and validation record — (none, a wrong attempt,
 another contract version, or an unreadable report is `incomplete`), commits every
 uncommitted change as the one reviewer commit (§3.1) authored
-`orbit[<reviewer model>] <<family>-reviewer@orbit.local>` (falling back to
-`<family>-reviewer <<family>-reviewer@orbit.local>` when the model is unknown)
+`orbit[<reviewer model>] <reviewer@orbit.invalid>` (`orbit <reviewer@orbit.invalid>`
+when the model is unknown; the [commit-message standard](../../CONFIG.md#the-commit-message-standard))
 with the Orbit committer and the `Orbit-Review-Attempt` and `Orbit-Review-Crew` trailers, widens the
 tasks' selectors with an exact `file:` entry for every repaired path they do
 not cover, declared in a finding or not, with one `context_files_widened`
@@ -1446,10 +1486,11 @@ when its host could not have run it. To close that gap, the workspace
 declares what a claimed leaf owes, and Orbit derives the requirement instead of
 reading it from the report. Each `[[review.host_evidence]]` rule
 ([config](../../CONFIG.md#owed-host-evidence)) names a `kind` (`codeql` or
-`host_sandbox_test`), a display `name`, workspace-relative `paths` globs, an
-`os`, the exact `command` and the result `artifact`. The owner captures the
-rules in the review contract each claim carries. A rule is owed when a claimed
-leaf's candidate changes a matching path and one of these holds:
+`host_sandbox_test`), a display `name`, workspace-relative `paths` globs,
+optional task `tags`, an `os`, the exact `command` and the result `artifact`.
+The owner captures the rules in the review contract each claim carries. A rule
+is owed when a claimed leaf's candidate changes a matching path, or its task
+carries a listed tag [ORB-24940], and one of these holds:
 
 - a `codeql` rule runs on a host of another OS, and the owner fulfils it on
   `os`;
@@ -1599,6 +1640,20 @@ attempt with its verdict, keeping the runtime already charged and adding the
 reviewer runtime it records; a released attempt that a later start superseded
 is stale.
 
+A reviewer whose envelope declares failure (`status: "failed"`, exit 0)
+because a required check could not run on its host still leaves its report
+[ORB-25667]. Before the step's failure stands, the engine asks the host
+whether that report is a readable report for the open attempt on the admitted
+candidate (uncommitted reviewer repairs included), of a single task, with an
+`incomplete` verdict, no open finding, and records that establish the
+candidate once every external check it names passes. Only then does the
+reviewer step succeed, with `reviewer_declared_failure` in its output, so the
+gate's own settlement authenticates the report, commits the repairs and
+decides the evidence hold as for any report. A timeout, a reserved or typed
+failure code, a missing or mismatched report, a reject, an open finding or
+any gap beyond the named checks keeps the step failed and releases the
+attempt as above.
+
 `review.minutes` is a wall-clock limit on the candidate's review. Each
 reviewer invocation records its start, and the ledger sets its deadline to
 the seconds the candidate has left; the engine sets the reviewer's wall clock
@@ -1609,8 +1664,13 @@ invocation that ended earlier with time left. The engine refuses the
 step (`review_minutes_exhausted`) when nothing is left. An accept that
 finished within its deadline settles on its evidence. A reviewer commit costs
 no separate budget; there are no reviewer-start counts or repair cycles.
-Exhaustion refuses admission (`review_budget_exhausted:
-review_candidate_reviewed | review_minutes_exhausted`). Provider token/cost
+Exhaustion holds the run at admission (`review_budget_exhausted:
+review_candidate_reviewed | review_minutes_exhausted`), including the early
+minutes preflight. This typed delivery hold runs no retry, recovery or failure
+handoff and is excluded from run failures. It preserves the task status,
+ledger and operator recovery text, reserving no new review. After a recorded
+local `review-reset`, the held run can resume in the same lineage; a claimed
+leaf instead needs the owner to requeue the task for a fresh claim. Provider token/cost
 caps are not enforced; usage stays unknown.
 
 ## 6. Managed completion and landing
@@ -1630,6 +1690,16 @@ same retry and ceiling to its synchronous merge, resolving each refused intent a
 unmerged before it asks again [ORB-21765]. Runs without a pinned head retain
 ordinary `gh pr merge` and repository-enabled auto-merge. See the
 [provider merge contract](https://docs.github.com/en/rest/pulls/pulls#merge-a-pull-request).
+
+The exact `gh: Merge already in progress (HTTP 405)` diagnostic, with an
+empty or consistent JSON error body, instead permits up to three read-only PR
+observations. Completion uses its ordinary poll waits and original deadline,
+with a separate counter from base-modification retries, and requires the same
+strict merged evidence described below. It never resends the merge or enters
+repair while that merge is in flight. Reaching the observation ceiling leaves
+the task in review. `handoff_land` makes only one reconciliation read: it may
+complete if already merged, and otherwise fails without another merge request.
+Other HTTP 405 refusals still fail on the first request.
 
 A narrowly classified synchronous server failure (HTTP 500, 502, 503 or 504)
 can mean that the merge landed but its response was lost. `pr_complete` makes
@@ -1896,7 +1966,7 @@ non-branch ref on the same repository.
 Existing runs without a `review` snapshot behave exactly as before. The
 seeded cron `code-review` auto-task and any custom definition stay untouched;
 migrating to delivery-triggered review remains the explicit edit described in
-[delivery automation operations](../automation-triggers/5_operations.md).
+[delivery automation operations](../automation-triggers/references/operations.md).
 To roll back, set `review.timing = "off"` (and toggle the
 `delivery-code-review` consumer on for after-landing review, §1): future
 submissions capture the new value, admitted runs keep their gate, and
@@ -2017,6 +2087,7 @@ candidate is the handed-off head. External pushes and rebases remain stale.
 - [ORB-14434] — a reviewer's host-verified claim that a failed required check fails the same way on the pinned base holds the task for the red base instead of blocking it.
 - [ORB-14334] — a Linux owner fulfils held `host_sandbox_test` evidence that nested agent sandboxes cannot produce, and a pass that deferred its sandbox-confined path no longer counts as executing it.
 - [ORB-14616] — a counterfactual names mutation targets apart from its sources, and one shape defect returns to the reviewer once.
+- [ORB-25667] — a reviewer that declared failure over a host-denied check reaches settlement when its report is evidence-only, instead of failing the run.
 - [ORB-14632] — settlement compares each mutation target with rename detection off, so a modified, deleted or moved target fails.
 - [ORB-14684] — a failed check the owner trusts (`workflow.required_validation_commands` or `review.baseline_commands`) can no longer be filed as a `diagnostic`; the baseline list is captured with the admission and recorded on the certificate.
 - [ORB-14849] — adds `review.before_landing`: the reviewer reviews the open PR while hosted CI runs, completion merges only the head it settled, any other outcome keeps the PR open in review, and a claimed leaf reviews its PR before handing it off.

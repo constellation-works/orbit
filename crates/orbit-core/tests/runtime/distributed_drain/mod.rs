@@ -229,9 +229,6 @@ struct Wire {
     late_effort_rpc_refusal: Mutex<Option<(i64, String)>>,
     /// Send handoffs to the real owner observation path.
     observe_handoffs: Mutex<bool>,
-    /// When set, the owner accepts a handoff into its claim journal, with
-    /// the candidate the handoff names standing in for its provider read.
-    accept_handoffs: Mutex<bool>,
     /// When set, every call arrives as the owner's own local session, as an
     /// owner-local drain's does, and a settlement reaches the owner's real
     /// observation of its own checkout.
@@ -402,7 +399,10 @@ impl DrainOwnerTransport for Wire {
         }
         // The owner verifies a handoff against its published pull request,
         // which no test here has; the wire answers as an owner that did, and
-        // records the acceptance when the test asks for it.
+        // records the acceptance on the owner claim, as the real owner's
+        // accepted handoff does. Answering `handed_off` without recording it
+        // left the owner claim unsettled while the follower marked its
+        // admission settled [ORB-25460].
         let local = *self.local.lock().unwrap();
         if name == "orbit.drain.claim.settle"
             && !local
@@ -414,9 +414,7 @@ impl DrainOwnerTransport for Wire {
                     && state.claim.phase.is_unsettled()
             })
         {
-            if *self.accept_handoffs.lock().unwrap() {
-                self.accept(serde_json::from_value(handoff.clone()).unwrap())?;
-            }
+            self.accept(serde_json::from_value(handoff.clone()).unwrap())?;
             return Ok(json!({"phase": "handed_off"}));
         }
         let session = ToolSessionContext {
@@ -776,7 +774,6 @@ impl Pair {
             predates_late_effort: Mutex::default(),
             late_effort_rpc_refusal: Mutex::default(),
             observe_handoffs: Mutex::default(),
-            accept_handoffs: Mutex::default(),
             local: Mutex::default(),
             prefix_hosts: Mutex::default(),
             by_id_reads: Mutex::default(),
@@ -1445,6 +1442,8 @@ fn git(dir: &Path, args: &[&str]) -> String {
 }
 
 /// The owner's comments on `task`, as one searchable text.
+/// The task's comments and its open decision requests, where an
+/// escalation's human action lives.
 fn comments_of(task: &Value) -> String {
-    task["comments"].to_string()
+    format!("{} {}", task["comments"], task["open_decisions"])
 }

@@ -20,6 +20,7 @@
 // Also exports parseHashRoute for symmetry (used only internally today).
 
 import { el, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, setWorkspace, parseDashboardWindow, persistScopeToUrl, syncWindowSelectors, notifyScopeChange } from './common.js';
+import { renderIncidentWindowHeader } from './incidents.js';
 import { adoptRunFiltersFromAddress, renderRuns } from './runs.js';
 import { AGENT_ROLES, adoptAgentsSpan, agentsSpan } from './agents.js';
 import { countViewsHashSuffix } from './metrics-running.js';
@@ -47,7 +48,7 @@ function markWorkspaceSelectorScope(fleetWide) {
 
 // Retired Drain and auto-drain links are
 // normalized in place so Back never gets trapped on a redirect.
-const TABS = ["tasks", "jobs", "leases", "diagnostics", "analytics", "operations", "knowledge", "plugins", "config", "run-detail"];
+const TABS = ["tasks", "jobs", "leases", "fleet", "diagnostics", "analytics", "operations", "knowledge", "plugins", "config", "run-detail"];
 const DIAG_SUBTABS = ["incidents", "doctor"];
 // Health › Incidents views: `#diagnostics/incidents[/events|/errors]`.
 const INCIDENTS_VIEWS = ["incidents", "events", "errors"];
@@ -82,6 +83,7 @@ const RAIL_LABELS = {
   tasks: "Tasks",
   jobs: "Jobs",
   leases: "Leases",
+  fleet: "Fleet",
   diagnostics: "Health",
   analytics: "Analytics",
   operations: "Automation",
@@ -222,9 +224,9 @@ function syncViewTabs(id, view, shown) {
 }
 const KNOWLEDGE_SUBTABS = ["frictions", "memory"];
 // ORB-12724: `effective` is the layered view; the two `*-file` views are the
-// `--scope` equivalents, and `keys` is the settable-key reference. `hosts` is
-// the serving host's registered remote hosts [ORB-14451].
-const CONFIG_SUBTABS = ["workflow", "execution", "review", "crews", "machine", "hosts", "other"];
+// `--scope` equivalents, and `keys` is the settable-key reference.
+// Retired Hosts routes are normalized to Observe Fleet below.
+const CONFIG_SUBTABS = ["workflow", "execution", "review", "crews", "machine", "other"];
 const CONFIG_LEGACY_REDIRECTS = { effective: "workflow", "workspace-file": "other", "global-file": "machine", system: "machine", keys: "other", "all-keys": "other" };
 
 function parseHashRoute(raw) {
@@ -321,6 +323,7 @@ function setDiagSubtabImpl(ctx, name, view = ctx.getIncidentsView()) {
   ctx.setIncidentsView(view);
   // The view on screen: Incidents shows one of its three views.
   const shown = name === "incidents" ? view : name;
+  renderIncidentWindowHeader(shown === "incidents");
   const title = $("diag-title");
   if (title && DIAG_TITLES[shown]) title.textContent = DIAG_TITLES[shown];
   for (const btn of document.querySelectorAll("#diag-subtabs .subtab")) {
@@ -617,6 +620,15 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     query.delete("dockMode");
     query.delete("panel");
   } else dockView = null;
+  // Retired host settings and aggregate dock links retain the address's
+  // host/workspace scope; only the destination changes.
+  if ((head === "config" && segments[1] === "hosts") || (head === "tasks" && dockView === "fleet")) {
+    head = "fleet";
+    segments.splice(0, segments.length, "fleet");
+    for (const key of ["dock", "dockMode", "panel"]) query.delete(key);
+    dockView = null;
+    legacyRoute = true;
+  }
   // Old standalone Agents links normalize to Analytics › Agents in place.
   if (head === "agents") {
     const role = AGENT_ROLES.includes(segments[1]) || segments[1] === "orchestrators" ? segments[1] : ctx.getAgentsRole();
@@ -678,6 +690,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   } else {
     top = "tasks";
   }
+  if (top !== "fleet") ctx.resetFleetView?.();
   ctx.setTab(top);
   // ORB-10972: the topbar breadcrumb names the active destination, since the
   // rail no longer sits above the content where the tab strip used to.
@@ -868,13 +881,22 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     if (ctx.applyTasksHashQuery) ctx.applyTasksHashQuery(query, page);
     if (ctx.syncTaskControls) ctx.syncTaskControls();
     hash = ctx.buildTasksHash ? ctx.buildTasksHash() : "#tasks";
-    if (ctx.setDockRouteShown) ctx.setDockRouteShown(Boolean(dockView));
+    const dockRouteShown = ctx.setDockRouteShown
+      ? ctx.setDockRouteShown(Boolean(dockView))
+      : Boolean(dockView);
     if (dockView) {
       if (ctx.setDrainView) ctx.setDrainView(dockView);
-      const [route, taskQuery = ""] = hash.split("?");
-      const params = new URLSearchParams(taskQuery);
-      params.set("dock", dockView);
-      hash = `${route}?${params}`;
+      // Above the one-column breakpoint an explicit dock target shows the
+      // dock beside the list and remembers it shown. A Tasks route with no
+      // dock target never reaches here, so a collapsed choice stays put.
+      // One column already shows the dock as its own route.
+      if (ctx.showDockBesideList) ctx.showDockBesideList();
+      if (dockRouteShown) {
+        const [route, taskQuery = ""] = hash.split("?");
+        const params = new URLSearchParams(taskQuery);
+        params.set("dock", dockView);
+        hash = `${route}?${params}`;
+      }
     }
   } else {
     hash = `#${top}`;

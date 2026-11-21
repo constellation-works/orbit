@@ -20,8 +20,8 @@ pub use antigravity::{
     antigravity_terminal_error_diagnostic, apply_antigravity_print_timeout,
 };
 pub use long_prompt::provider_long_prompt_requests;
-pub use muse::muse_terminal_failure_diagnostic;
-pub use usage_window::provider_usage_windows;
+pub use muse::{muse_terminal_failure_diagnostic, muse_terminal_rejects_model};
+pub use usage_window::{ProviderUsageSnapshot, provider_usage_snapshot, provider_usage_windows};
 
 use std::borrow::Cow;
 

@@ -11,8 +11,8 @@ pub struct PluginSandboxProfile {
     pub read: Vec<PathBuf>,
     /// Host-owned trees carved out of [`Self::read`] however it was composed:
     /// the live callback sessions, the grant witnesses, every plugin's state,
-    /// the plugin secret store and the decision-channel key store
-    /// (`PLUGIN_GLOBAL_READ_DENY_DIRS`). Neither platform lets a
+    /// the plugin secret store, the decision-channel key store and the GitHub
+    /// run-log cache (`PLUGIN_GLOBAL_READ_DENY_DIRS`). Neither platform lets a
     /// manifest buy them back: the carve-out is applied after the granted
     /// paths rather than beside them, and a manifest read root inside one of
     /// them never reaches [`Self::read`].
@@ -32,8 +32,9 @@ pub struct PluginSandboxProfile {
     /// leaf grant into its parent tree.
     pub write_files: Vec<PathBuf>,
     /// Manifest requests are strict: unlike optional host store files, they
-    /// must still be safe and present immediately before the child starts.
-    pub(crate) manifest_write_files: Vec<PathBuf>,
+    /// must still be safe, present and resolve to the same granted file
+    /// immediately before the child starts.
+    pub(crate) manifest_write_files: Vec<super::write_file::ManifestWriteFile>,
     /// Roots beneath which the host may materialize an absent granted write
     /// directory: the selected workspace, this plugin's state tree, and every
     /// directory the host itself added to [`Self::write`] for the
@@ -175,8 +176,18 @@ impl Sandbox for PluginSandboxProfile {
         for file in &self.manifest_write_files {
             // Brokered profiles may remove a requested file. Never validate
             // or restore a capability the calling agent did not retain.
-            if self.write_files.contains(file) {
-                super::write_file::validate(file)?;
+            if self.write_files.contains(&file.granted) {
+                let granted =
+                    super::write_file::resolve(&file.requested, file.workspace_root.as_deref())?;
+                if granted != file.granted {
+                    return Err(OrbitError::PolicyDenied(format!(
+                        "spec.permissions.fs.write_files: `{}` now resolves to `{}` rather than \
+                         the granted `{}`; the plugin was not started",
+                        file.requested.display(),
+                        granted.display(),
+                        file.granted.display()
+                    )));
+                }
             }
         }
         // A plugin's state is host-owned and always readable to that plugin,

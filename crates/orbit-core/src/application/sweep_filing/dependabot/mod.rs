@@ -3,6 +3,7 @@
 //! one repair.
 
 pub(super) mod code_groups;
+mod codeql_bundle;
 pub(crate) mod consolidate;
 mod duplicates;
 pub(crate) mod filing;

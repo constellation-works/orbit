@@ -167,7 +167,9 @@ fn read_file_lock_holder_with_hook(
 /// and handing back a path left a window between this check and the caller's
 /// open where the final component could be swapped for a symlink [ORB-12029].
 fn validated_lock_holder_parent(lock_path: &Path) -> Option<PathBuf> {
-    lock_path.parent()?.canonicalize().ok()
+    crate::fs::path::parent_dir_or_current(lock_path)?
+        .canonicalize()
+        .ok()
 }
 
 /// Open `lock_path`'s final component for a read-only diagnostic read

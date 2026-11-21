@@ -241,9 +241,10 @@ usage limit or failure hold redraws inside the pool instead of stalling it.
 
 Orbit's own work: `task_pilot`, `failure_recovery`, `final_recovery`,
 `auto_fix`, `review`, `pre_landing_review`, `baseline_red_repair`,
-`sweep_tasks`. `orbit init` writes most of them as fixed lists of the
-enabled crews, so editing a complexity pool later does **not** move them:
-revisit each one whenever you retune the tiers. Guidance:
+`sweep_tasks`, `pilot_warning_triage`. `orbit init` writes most of them as
+fixed lists of the enabled crews (not `sweep_tasks` or
+`pilot_warning_triage`), so editing a complexity pool later does **not** move
+them: revisit each one whenever you retune the tiers. Guidance:
 
 - `task_pilot`, `auto_fix`: cheap, fast crews; the pilot also
   needs crews whose executor declares `inspection_args`.
@@ -255,6 +256,22 @@ revisit each one whenever you retune the tiers. Guidance:
 - `final_recovery`: one strong crew; `[]` turns final recovery off.
 - `baseline_red_repair`, `sweep_tasks`: leave unset to route by type and
   complexity, or pin to crews that fix CI well.
+- `pilot_warning_triage`: the triager of each held task-pilot assessment (a
+  pilot warning). Triagers inspect the pinned source natively, so only crews
+  whose executor declares `inspection_args` are drawn, and the crew that wrote
+  the held assessment is passed over while the pool offers another.
+  `orbit init` does not write this pool, so while it is unset or `[]` triage
+  stays on the hard-tier route and draws from `workflow.hard_complexity_crews`.
+  Leave it unset to keep that route, or pin the triagers to crews that declare
+  `inspection_args` (the Claude and Codex executors do), for example:
+
+  ```bash
+  orbit config set workflow.purpose_crews.pilot_warning_triage '["sol", "opus"]'
+  ```
+
+  Verify the resolved pool with `orbit config show --all`. Its **Crew
+  purposes** block shows `pilot_warning_triage` with your pool and its key, or
+  `unset; falls back to workflow.hard_complexity_crews` while it is unset.
 
 ### Task types and type pools
 

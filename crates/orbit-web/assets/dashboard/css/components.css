@@ -281,6 +281,37 @@ th,
 }
 .action::first-letter { text-transform: uppercase; }
 
+/* STD-07 R44. The close control Esc uses. The label is the lowercase word
+   "esc"; the width is that word (R42), never a fixed square. The height
+   matches the header buttons beside it: 30px here, 32px in the task pane,
+   26px in a fleet dialog header, 36px beside the propose-task actions.
+   `.action::first-letter` would paint "Esc", so this control is not an
+   `.action` and its own first letter stays lowercase. */
+.esc-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: auto;
+  box-sizing: border-box;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  text-transform: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.esc-close::first-letter { text-transform: none; }
+.esc-close:hover { color: var(--fg); border-color: var(--fg-disabled); background: var(--bg-well); }
+.esc-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 .action:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .action.approve {
@@ -380,6 +411,37 @@ th,
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   background: rgba(239, 68, 68, 0.1);
+}
+
+.action-error-toggle {
+  display: block;
+  margin-top: 6px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-dim);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 400;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.action-error-toggle:hover { color: var(--fg-strong); text-decoration: underline; }
+
+.action-error-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.action-error-detail {
+  margin-top: 6px;
+  color: var(--fg-soft);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  white-space: pre-wrap;
 }
 
 .pill {

@@ -20,11 +20,11 @@ use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness};
 use orbit_common::storage::blob_store::BlobStore;
 use orbit_store::V2AuditEventRow;
 use orbit_store::contracts::V2AuditStoreBackend;
-use serde_json::Value;
 
 use crate::RuntimeKernel;
 use orbit_store::V2AuditEventFilter;
 
+use super::body::{RunTrailBody, RunTrailRow};
 use super::projection::{
     audit_steps_from_events, bound_provider_processes, cli_invocation_record,
     provider_processes_from_events, run_audit_event, step_index_by_id,
@@ -103,7 +103,7 @@ struct ProgressProjection {
     progress: RunExecutionProgress,
     steps: Vec<RunAuditStep>,
     step_indices: HashMap<String, u32>,
-    known: HashMap<String, Value>,
+    known: HashMap<String, RunTrailRow>,
     ancestry_complete: bool,
     live_activity_names: Vec<String>,
 }
@@ -259,13 +259,13 @@ impl RuntimeKernel {
             .chain(&windows.provider)
             .chain(extra)
         {
-            known.insert(row.event_id.clone(), row.raw.clone());
+            known.insert(row.event_id.clone(), row.row.clone());
         }
         let ancestry_complete =
             reader.resolve_ancestors(windows.provider.iter().chain(extra), &mut known)?;
         let events = |rows: &[ParsedRow]| -> Vec<RunAuditEvent> {
             rows.iter()
-                .map(|row| run_audit_event(row.event_id.clone(), row.raw.clone(), &known))
+                .map(|row| run_audit_event(row.event_id.clone(), row.row.clone(), &known))
                 .collect()
         };
         let steps = audit_steps_from_events(&events(&windows.lifecycle));
@@ -381,8 +381,8 @@ impl RuntimeKernel {
         let blob_store = BlobStore::new(self.v2_audit_blob_root());
         let logs = log_rows
             .into_iter()
-            .map(|row| run_audit_event(row.event_id, row.raw, &projection.known))
-            .map(|event| {
+            .map(|row| run_audit_event(row.event_id, row.row, &projection.known))
+            .filter_map(|event| {
                 cli_invocation_record(
                     run_id,
                     event,
@@ -465,13 +465,13 @@ impl TrailReader<'_> {
     fn resolve_ancestors<'r>(
         &mut self,
         rows: impl Iterator<Item = &'r ParsedRow>,
-        known: &mut HashMap<String, Value>,
+        known: &mut HashMap<String, RunTrailRow>,
     ) -> Result<bool, OrbitError> {
         let mut requested = HashSet::new();
         let mut frontier = Vec::new();
         for row in rows {
-            if row.raw.get("step_id").and_then(Value::as_str).is_none() {
-                push_parent(&row.raw, known, &mut requested, &mut frontier);
+            if row.row.envelope.step_id.is_none() {
+                push_parent(&row.row, known, &mut requested, &mut frontier);
             }
         }
         let mut fetched = 0;
@@ -494,10 +494,10 @@ impl TrailReader<'_> {
                 fetched += rows.len();
                 for row in parse_rows(rows) {
                     // The walk stops at a step start; other parents continue it.
-                    if row.raw.get("body_kind").and_then(Value::as_str) != Some("step_started") {
-                        push_parent(&row.raw, known, &mut requested, &mut next);
+                    if !matches!(row.row.body, RunTrailBody::StepStarted { .. }) {
+                        push_parent(&row.row, known, &mut requested, &mut next);
                     }
-                    known.insert(row.event_id, row.raw);
+                    known.insert(row.event_id, row.row);
                 }
             }
             if truncated {
@@ -513,35 +513,29 @@ impl TrailReader<'_> {
 ///
 /// Pipeline steps record the step id there. A recovery dispatch records the
 /// recovery activity's name. The walk stops at a missing parent or a cycle.
-fn enclosing_activity_name(event_id: &str, known: &HashMap<String, Value>) -> Option<String> {
+fn enclosing_activity_name(event_id: &str, known: &HashMap<String, RunTrailRow>) -> Option<String> {
     let mut current = Some(event_id.to_string());
     let mut seen = HashSet::new();
     while let Some(id) = current {
         if !seen.insert(id.clone()) {
             return None;
         }
-        let raw = known.get(&id)?;
-        if raw.get("body_kind").and_then(Value::as_str) == Some("activity_started") {
-            return raw
-                .get("activity_name")
-                .and_then(Value::as_str)
-                .map(str::to_string);
+        let row = known.get(&id)?;
+        if let RunTrailBody::ActivityStarted { activity_name } = &row.body {
+            return activity_name.clone();
         }
-        current = raw
-            .get("parent_event_id")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        current = row.envelope.parent_event_id.clone();
     }
     None
 }
 
 fn push_parent(
-    raw: &Value,
-    known: &HashMap<String, Value>,
+    row: &RunTrailRow,
+    known: &HashMap<String, RunTrailRow>,
     requested: &mut HashSet<String>,
     frontier: &mut Vec<String>,
 ) {
-    if let Some(parent) = raw.get("parent_event_id").and_then(Value::as_str)
+    if let Some(parent) = row.envelope.parent_event_id.as_deref()
         && !known.contains_key(parent)
         && requested.insert(parent.to_string())
     {
@@ -554,19 +548,19 @@ struct ParsedRow {
     id: i64,
     ts: chrono::DateTime<chrono::Utc>,
     event_id: String,
-    raw: Value,
+    row: RunTrailRow,
 }
 
 fn parse_rows(rows: Vec<V2AuditEventRow>) -> Vec<ParsedRow> {
     rows.into_iter()
-        .filter_map(|row| {
-            let raw: Value = serde_json::from_str(&row.payload_json).ok()?;
-            let event_id = raw.get("event_id").and_then(Value::as_str)?.to_string();
+        .filter_map(|stored| {
+            let row = RunTrailRow::parse(&stored.payload_json)?;
+            let event_id = row.envelope.event_id.clone()?;
             Some(ParsedRow {
-                id: row.id,
-                ts: row.ts,
+                id: stored.id,
+                ts: stored.ts,
                 event_id,
-                raw,
+                row,
             })
         })
         .collect()

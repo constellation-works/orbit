@@ -5,6 +5,29 @@ use orbit_core::application::distributed::PendingPullSettlements;
 
 use crate::doctor::*;
 
+/// A workspace whose job definitions are not installed yet has run no pull
+/// drain. The report observes it without installing them, so it names the
+/// setup step instead of failing the probe.
+fn pull_job_not_installed(check_name: &str, error: &OrbitError) -> Option<WorkspaceDoctorResult> {
+    matches!(
+        error,
+        OrbitError::NotFound {
+            kind: orbit_core::NotFoundKind::Job,
+            ..
+        }
+    )
+    .then(|| {
+        actionable_check(
+            check_name,
+            WorkspaceDoctorStatus::Skipped,
+            "the pull drain job is not installed in this workspace, so no pull drain has run"
+                .to_string(),
+            "Run `orbit init` to install the workspace's job definitions; `orbit doctor` only observes them."
+                .to_string(),
+        )
+    })
+}
+
 /// The latest pull window remains actionable after it ends on wire skew.
 /// A newer healthy window supersedes that diagnosis, avoiding stale warnings.
 pub(in crate::doctor) fn doctor_check_pull_protocol(
@@ -12,11 +35,15 @@ pub(in crate::doctor) fn doctor_check_pull_protocol(
 ) -> WorkspaceDoctorResult {
     const CHECK: &str = "pull-protocol";
     let inspect = || -> Result<Option<String>, OrbitError> {
-        let runs = runtime.list_job_runs(orbit_core::application::job::JobRunListParams {
-            job_id: Some(orbit_core::application::contracts::PULL_DRAIN_JOB.to_string()),
-            limit: Some(1),
-            ..Default::default()
-        })?;
+        // [ORB-25811] Observed, not reconciled: a reconciling list finalizes a
+        // stale pull drain and releases its reservations on any runtime that is
+        // not write-free, including a same-generation read-only one.
+        let runs =
+            runtime.list_job_runs_observed(orbit_core::application::job::JobRunListParams {
+                job_id: Some(orbit_core::application::contracts::PULL_DRAIN_JOB.to_string()),
+                limit: Some(1),
+                ..Default::default()
+            })?;
         let Some(run) = runs.first() else {
             return Ok(None);
         };
@@ -47,7 +74,7 @@ pub(in crate::doctor) fn doctor_check_pull_protocol(
         Ok(Some(message)) => actionable_check(CHECK, WorkspaceDoctorStatus::Warning, message,
             "Deploy matching Orbit builds on the owner and follower, restart their long-lived processes, then start a new pull drain.".to_string()),
         Ok(None) => check(CHECK, WorkspaceDoctorStatus::Ok, "no protocol skew recorded on the latest pull drain".to_string()),
-        Err(error) => check(CHECK, WorkspaceDoctorStatus::Warning, format!("cannot inspect pull protocol: {error}")),
+        Err(error) => pull_job_not_installed(CHECK, &error).unwrap_or_else(|| check(CHECK, WorkspaceDoctorStatus::Warning, format!("cannot inspect pull protocol: {error}"))),
     }
 }
 
@@ -59,11 +86,13 @@ pub(in crate::doctor) fn doctor_check_pull_protocol(
 pub(in crate::doctor) fn doctor_check_pull_gates(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     const CHECK: &str = "pull-gates";
     let inspect = || -> Result<Option<Option<String>>, OrbitError> {
-        let runs = runtime.list_job_runs(orbit_core::application::job::JobRunListParams {
-            job_id: Some(orbit_core::application::contracts::PULL_DRAIN_JOB.to_string()),
-            limit: Some(1),
-            ..Default::default()
-        })?;
+        // [ORB-25811] Observed, not reconciled; see `doctor_check_pull_protocol`.
+        let runs =
+            runtime.list_job_runs_observed(orbit_core::application::job::JobRunListParams {
+                job_id: Some(orbit_core::application::contracts::PULL_DRAIN_JOB.to_string()),
+                limit: Some(1),
+                ..Default::default()
+            })?;
         let Some(run) = runs.first() else {
             return Ok(None);
         };
@@ -89,11 +118,13 @@ pub(in crate::doctor) fn doctor_check_pull_gates(runtime: &OrbitRuntime) -> Work
              get` on the owner shows them), then start a new pull drain."
                 .to_string(),
         ),
-        Err(error) => check(
-            CHECK,
-            WorkspaceDoctorStatus::Warning,
-            format!("cannot inspect pull validation gates: {error}"),
-        ),
+        Err(error) => pull_job_not_installed(CHECK, &error).unwrap_or_else(|| {
+            check(
+                CHECK,
+                WorkspaceDoctorStatus::Warning,
+                format!("cannot inspect pull validation gates: {error}"),
+            )
+        }),
     }
 }
 

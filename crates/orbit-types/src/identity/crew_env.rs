@@ -111,7 +111,7 @@ impl CrewEnvVar {
 }
 
 fn check_variable_name(entry: &str, side: &str) -> Result<(), IdentityError> {
-    if !is_identifier(side) {
+    if !is_env_var_name(side) {
         return Err(IdentityError::Invalid(format!(
             "'{entry}' is not NAME, NAME=SOURCE or NAME=file:PATH: '{side}' is not a variable \
              name (letters, digits and '_', not starting with a digit)"
@@ -126,7 +126,11 @@ fn check_variable_name(entry: &str, side: &str) -> Result<(), IdentityError> {
     Ok(())
 }
 
-fn is_identifier(value: &str) -> bool {
+/// Whether `value` is a POSIX environment-variable name: `[A-Za-z_][A-Za-z0-9_]*`.
+///
+/// This is the single definition of the grammar; it neither trims nor checks
+/// reserved names, so callers decide both.
+pub fn is_env_var_name(value: &str) -> bool {
     let mut chars = value.chars();
     chars
         .next()

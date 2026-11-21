@@ -893,15 +893,10 @@ fn limit_and_refusal_failures_do_not_withhold_the_routine() {
 
 /// A pilot that fails on the provider's login is the failure that holds the
 /// next tick. The shipped job runs for real, with only the provider scripted,
-/// so the projection reads the record a real pilot failure leaves.
-fn a_pilot_that_fails_on_the_provider_login_withholds_the_next_tick() {
-    // The scripted provider is a Unix shell script.
-    #[cfg(unix)]
-    pilot_login_failure_withholds_the_next_tick();
-}
-
+/// so the projection reads the record a real pilot failure leaves. The
+/// scripted provider is a Unix shell script, so the row exists only there.
 #[cfg(unix)]
-fn pilot_login_failure_withholds_the_next_tick() {
+fn a_pilot_that_fails_on_the_provider_login_withholds_the_next_tick() {
     let workspace = Workspace::new();
     install_logged_out_codex(&workspace);
     let task = workspace.task("pilot meets a revoked codex login");
@@ -1149,7 +1144,6 @@ crate::scenario_table!(
     a_hold_that_starts_during_debounce_withholds_the_pending_pilot,
     a_later_success_clears_unavailable_and_capacity,
     a_success_started_before_the_failure_does_not_clear_it,
-    a_pilot_that_fails_on_the_provider_login_withholds_the_next_tick,
     a_pilot_run_counts_as_the_crew_it_drew,
     recovery_and_verification_count_their_recorded_draws,
     an_auth_probe_recovery_clears_unavailable,
@@ -1161,4 +1155,10 @@ crate::scenario_table!(
     capacity_on_one_crew_leaves_another_crew_of_that_provider,
     another_hosts_failure_does_not_withhold,
     limit_and_refusal_failures_do_not_withhold_the_routine,
+);
+
+#[cfg(unix)]
+crate::scenario_table!(
+    task_pilot_login_failure_hold_scenarios,
+    a_pilot_that_fails_on_the_provider_login_withholds_the_next_tick,
 );

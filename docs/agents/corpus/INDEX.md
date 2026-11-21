@@ -62,6 +62,7 @@ Resolved issues remain here as history and are excluded from activity injection.
 | [Nested sandbox profile cannot be applied in the worker](issues/sandbox-profile-cannot-apply.md) | issue | active | final_recovery |
 | [Implementer stops for scope reassessment with no candidate](issues/scope-reassessment-no-candidate.md) | issue | active | agent_implement, final_recovery |
 | [Minted sweep contract cannot be satisfied in one leaf](issues/stale-minted-sweep-contract.md) | issue | active | agent_implement, final_recovery |
+| [Claimed-leaf steering gate unreadable on the owner route](issues/steering-gate-unreadable-owner-route.md) | issue | active | final_recovery |
 | [Store upgrade pending at admission](issues/store-upgrade-pending-at-admission.md) | issue | draft | final_recovery |
 | [Sweep run hits its per-pass filing cap](issues/sweep-filing-cap-exhausted.md) | issue | active | agent_implement, final_recovery |
 | [Final recovery refused because the task changed after the failure](issues/task-changed-after-failure-refused.md) | issue | active | final_recovery |
@@ -125,6 +126,7 @@ Resolved issues remain here as history and are excluded from activity injection.
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-18099", "ORB-19265", "ORB-20040"], "path": "issues/sandbox-profile-cannot-apply.md", "status": "active", "title": "Nested sandbox profile cannot be applied in the worker", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["agent_implement", "final_recovery"], "links": ["ORB-19066", "ORB-20598", "ORB-20646", "ORB-21875", "ORB-22481"], "path": "issues/scope-reassessment-no-candidate.md", "status": "active", "title": "Implementer stops for scope reassessment with no candidate", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["agent_implement", "final_recovery"], "links": ["ORB-20125", "ORB-19588", "ORB-20132"], "path": "issues/stale-minted-sweep-contract.md", "status": "active", "title": "Minted sweep contract cannot be satisfied in one leaf", "type": "issue"} -->
+<!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-24530", "ORB-25348"], "path": "issues/steering-gate-unreadable-owner-route.md", "status": "active", "title": "Claimed-leaf steering gate unreadable on the owner route", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-20339"], "path": "issues/store-upgrade-pending-at-admission.md", "status": "draft", "title": "Store upgrade pending at admission", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["agent_implement", "final_recovery"], "links": ["ORB-20310", "ORB-20312", "ORB-20623"], "path": "issues/sweep-filing-cap-exhausted.md", "status": "active", "title": "Sweep run hits its per-pass filing cap", "type": "issue"} -->
 <!-- agent-corpus-row {"applies_to": ["final_recovery"], "links": ["ORB-16063", "ORB-16616", "ORB-17520", "ORB-18052", "ORB-15206", "ORB-21875", "ORB-21229", "ORB-22481"], "path": "issues/task-changed-after-failure-refused.md", "status": "active", "title": "Final recovery refused because the task changed after the failure", "type": "issue"} -->

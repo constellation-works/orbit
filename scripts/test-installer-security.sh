@@ -285,7 +285,7 @@ expect_shell_failure "$expired_key_release" "expired-key"
 expect_shell_failure "$revoked_key_release" "revoked-key"
 expect_shell_failure "$untrusted_key_release" "untrusted-key"
 expect_shell_failure "$symlink_release" "symlink-member"
-expect_shell_failure "$traversal_release" "traversal-member"
+expect_shell_failure "$traversal_release" "traversal-member" 'unsafe release archive member'
 
 # Use the same malformed dates for both installers and both optional fields.
 malformed_dates=('next-month' '2026-1-01' '2026-01-1' '26-01-01'

@@ -63,11 +63,313 @@ export function detailFeedbackSignature(task) {
   }
   return parts.join("|");
 }
+function detabLeading(line) {
+  let col = 0;
+  let i = 0;
+  while (i < line.length && (line[i] === " " || line[i] === "\t")) {
+    col += line[i] === "\t" ? 4 - (col % 4) : 1;
+    i++;
+  }
+  return i ? " ".repeat(col) + line.slice(i) : line;
+}
+
+// Column width of a whitespace run, tabs at stops of four. Measures a fence's
+// own indent; it is not a rewritten command line.
+function whitespaceColumns(text) {
+  let col = 0;
+  for (let i = 0; i < text.length; i++) {
+    col += text[i] === "\t" ? 4 - (col % 4) : 1;
+  }
+  return col;
+}
+
+function leadingWhitespace(line) {
+  let i = 0;
+  while (i < line.length && (line[i] === " " || line[i] === "\t")) i++;
+  return line.slice(0, i);
+}
+
+// True when `lead` itself has a tab occupying exactly [col, col + width).
+function leadTabAt(lead, col, width) {
+  let c = 0;
+  for (let i = 0; i < lead.length; i++) {
+    if (lead[i] === "\t") {
+      const w = 4 - (c % 4);
+      if (c === col && w === width) return true;
+      c += w;
+    } else {
+      c += 1;
+    }
+    if (c > col) return false;
+  }
+  return false;
+}
+
+// Drop the opening fence's indent from a code line. Spaces come off up to
+// that indent's column count. A tab comes off only when the fence lead covers
+// those columns with a tab, so a recipe tab is never rewritten as spaces.
+function stripFenceLead(line, lead) {
+  if (!lead) return line;
+  const columns = whitespaceColumns(lead);
+  let col = 0;
+  let i = 0;
+  while (i < line.length && col < columns) {
+    const ch = line[i];
+    if (ch === " ") {
+      col += 1;
+      i += 1;
+    } else if (ch === "\t") {
+      const width = 4 - (col % 4);
+      if (col + width > columns || !leadTabAt(lead, col, width)) break;
+      col += width;
+      i += 1;
+    } else {
+      break;
+    }
+  }
+  return line.slice(i);
+}
+
+function leadingSpaces(line) {
+  let i = 0;
+  while (i < line.length && line[i] === " ") i++;
+  return i;
+}
+
+function stripBlockquotePrefix(line) {
+  let rest = line;
+  let quoted = false;
+  let depth = 0;
+  for (;;) {
+    const match = /^ {0,3}> ?/.exec(rest);
+    if (!match) return { line: rest, quoted, depth };
+    quoted = true;
+    depth++;
+    rest = rest.slice(match[0].length);
+  }
+}
+
+// Remove at most `depth` quote prefixes — the enclosing container's own.
+// Any further `>` is content (for example a shell redirection inside a
+// fenced block quoted at that depth), not another quote marker to strip.
+function stripBlockquotePrefixes(line, depth) {
+  let rest = line;
+  for (let i = 0; i < depth; i++) {
+    const match = /^ {0,3}> ?/.exec(rest);
+    if (!match) break;
+    rest = rest.slice(match[0].length);
+  }
+  return rest;
+}
+
+// A list item's marker column and the column its content starts at, or null.
+// Content indent follows CommonMark: marker width plus the spaces after it
+// (more than four spaces counts as one).
+function parseListItem(line) {
+  const match = /^([ ]*)([-*+]|\d{1,9}[.)])(?:([ ]+)(.*)|[ ]*)$/.exec(line);
+  if (!match) return null;
+  const markerIndent = match[1].length;
+  const markerWidth = match[2].length;
+  if (match[3] === undefined) {
+    return { markerIndent, contentIndent: markerIndent + markerWidth + 1 };
+  }
+  const spaces = match[3].length;
+  return {
+    markerIndent,
+    contentIndent: markerIndent + markerWidth + (spaces > 4 ? 1 : spaces),
+  };
+}
+
+function parseOpeningFence(line, baseIndent = 0) {
+  const indent = leadingSpaces(line);
+  if (indent < baseIndent || indent - baseIndent > 3) return null;
+  let i = indent;
+  if (i === line.length) return null;
+  const char = line[i];
+  if (char !== "`" && char !== "~") return null;
+  let count = 0;
+  while (i < line.length && line[i] === char) {
+    count++;
+    i++;
+  }
+  if (count < 3) return null;
+  const info = line.slice(i);
+  if (char === "`" && info.includes("`")) return null;
+  return { fenceChar: char, fenceLength: count, indent };
+}
+
+function isClosingFence(line, fenceChar, fenceLength, baseIndent = 0) {
+  const indent = leadingSpaces(line);
+  if (indent < baseIndent || indent - baseIndent > 3) return false;
+  let i = indent;
+  if (i === line.length || line[i] !== fenceChar) return false;
+  let count = 0;
+  while (i < line.length && line[i] === fenceChar) {
+    count++;
+    i++;
+  }
+  if (count < fenceLength) return false;
+  while (i < line.length && line[i] === " ") i++;
+  return i === line.length;
+}
+
 // Fenced commands in a task description, in order.
 export function humanTaskCommands(text) {
   const out = [];
-  const re = /```[^\n]*\n([\s\S]*?)```/g;
-  let m; while ((m = re.exec(String(text || "")))) { const c = m[1].replace(/\n$/, ""); if (c.trim()) out.push(c); }
+  const lines = String(text || "").split(/\r?\n/);
+  let inFence = false;
+  let fenceChar = "";
+  let fenceLength = 0;
+  let fenceLead = "";
+  let fenceBaseIndent = 0;
+  let fenceInBlockquote = false;
+  let fenceQuoteDepth = 0;
+  let fenceInList = false;
+  let blockLines = [];
+  // Open list items, outermost first. A fence indented to an item's content
+  // indent (plus up to three columns) is a fenced block inside that item —
+  // the way `marked` renders it — while the same indent at the top level is
+  // an indented code block and yields no command. Each item records the
+  // blockquote depth it opened at, so an item inside a quote does not own
+  // lines after that quote ends.
+  let listStack = [];
+
+  const flushBlock = (dropTrailingBlank = false) => {
+    let end = blockLines.length;
+    if (dropTrailingBlank) {
+      while (end > 0 && !blockLines[end - 1].trim()) end--;
+    }
+    const c = blockLines.slice(0, end).join("\n");
+    if (c.trim()) out.push(c);
+    blockLines = [];
+  };
+
+  // `lead` is the opening fence's indent in command bytes (spaces, or the
+  // fence line's own whitespace when the fence is a later line). `baseIndent`
+  // is the enclosing list item's content column, or 0 at the top level.
+  const beginFence = (open, lead, baseIndent, quote) => {
+    inFence = true;
+    fenceChar = open.fenceChar;
+    fenceLength = open.fenceLength;
+    fenceLead = lead;
+    fenceBaseIndent = baseIndent;
+    fenceInBlockquote = quote.quoted;
+    fenceQuoteDepth = quote.depth;
+    fenceInList = listStack.length > 0;
+    blockLines = [];
+  };
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const rawLine = lines[lineIndex];
+    // Expanded text measures list and fence structure. Command bytes stay on
+    // the original line: a tab inside the command is not four spaces.
+    const expanded = detabLeading(rawLine);
+    if (inFence) {
+      const structural = fenceInBlockquote
+        ? stripBlockquotePrefixes(expanded, fenceQuoteDepth)
+        : expanded;
+      const source = fenceInBlockquote
+        ? stripBlockquotePrefixes(rawLine, fenceQuoteDepth)
+        : rawLine;
+      // Markdown ends an unclosed fenced block when its enclosing list
+      // item or blockquote ends. A quoted fence needs its quote prefix on
+      // every line; a list fence needs lines at or past its item's content
+      // indent (blank lines close neither). End the block and reprocess
+      // this line outside the fence, so dedented prose stays prose and a
+      // later top-level fence still opens as its own command.
+      const quoteEnded =
+        fenceInBlockquote &&
+        stripBlockquotePrefix(expanded).depth < fenceQuoteDepth;
+      const listEnded =
+        !quoteEnded &&
+        fenceInList &&
+        !!structural.trim() &&
+        leadingSpaces(structural) < fenceBaseIndent;
+      if (quoteEnded || listEnded) {
+        flushBlock(true);
+        inFence = false;
+        fenceInList = false;
+        fenceInBlockquote = false;
+        fenceQuoteDepth = 0;
+        lineIndex--;
+        continue;
+      }
+      if (isClosingFence(structural, fenceChar, fenceLength, fenceBaseIndent)) {
+        inFence = false;
+        fenceInList = false;
+        fenceInBlockquote = false;
+        fenceQuoteDepth = 0;
+        flushBlock();
+      } else {
+        blockLines.push(stripFenceLead(source, fenceLead));
+      }
+      continue;
+    }
+
+    const { line, quoted, depth } = stripBlockquotePrefix(expanded);
+    if (!line.trim()) continue;
+    // A line outside an item's quote has left that quote's container, so
+    // items opened inside the quote no longer own it.
+    while (
+      listStack.length &&
+      listStack[listStack.length - 1].quoteDepth > depth
+    ) {
+      listStack.pop();
+    }
+    const indent = leadingSpaces(line);
+    const item = parseListItem(line);
+    // Close the items this line sits outside of. A sibling item closes the
+    // previous item at its marker column; any other dedented line closes
+    // every item whose content indent it falls short of. Blank lines (above)
+    // close nothing, so a loose item still owns a later indented fence.
+    while (listStack.length) {
+      const top = listStack[listStack.length - 1];
+      if (item && item.markerIndent === top.markerIndent) {
+        listStack.pop();
+        break;
+      }
+      if (indent >= top.contentIndent) break;
+      listStack.pop();
+    }
+    if (item) {
+      // An item marker indented past the top level with no item around it
+      // is indented code, not a list; an item that dedents past its parent
+      // after the sibling pop likewise starts nothing. Within a parent,
+      // four or more extra columns make the marker indented code.
+      const parent = listStack[listStack.length - 1];
+      if (parent ? indent >= parent.contentIndent && indent - parent.contentIndent <= 3 : item.markerIndent <= 3) {
+        listStack.push({ ...item, quoteDepth: depth });
+        // The marker and its padding are not content. A fence opening in
+        // that content, on this same line, is the item's code block: `marked`
+        // renders it, and continuation lines are indented to the content
+        // column. Skipping the line here dropped the command.
+        const content = line.slice(item.contentIndent);
+        const open = parseOpeningFence(content, 0);
+        if (open) {
+          const quote = { quoted, depth };
+          beginFence(
+            open,
+            " ".repeat(item.contentIndent + open.indent),
+            item.contentIndent,
+            quote,
+          );
+        }
+        continue;
+      }
+    }
+
+    const containerIndent = listStack.length
+      ? listStack[listStack.length - 1].contentIndent
+      : 0;
+    const open = parseOpeningFence(line, containerIndent);
+    if (open) {
+      const rawStructural = quoted ? stripBlockquotePrefixes(rawLine, depth) : rawLine;
+      beginFence(open, leadingWhitespace(rawStructural), containerIndent, { quoted, depth });
+    }
+  }
+
+  if (inFence) flushBlock();
+
   return out;
 }
 export function humanTaskSteps(text) {

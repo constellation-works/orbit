@@ -25,7 +25,9 @@ pub(in crate::executor::automation::vcs) const GITHUB_TRANSIENT_RETRY_DELAY: Dur
 /// used during completion and landing. Pushes have their own remote-confirming retry path;
 /// PR creation and merge are never retried in this process wrapper: `pr_open`
 /// reconciles ambiguous create failures by looking up the head before retrying,
-/// while resending a merge risks a duplicate side effect.
+/// while resending a merge risks a duplicate side effect. A failed read keeps
+/// GitHub's authenticated rate limit typed ([`succeeded_read`]), so the
+/// caller's policy can wait for the reset.
 pub(super) fn execute_with_transient_retry(
     program: &str,
     args: &[String],
@@ -35,7 +37,9 @@ pub(super) fn execute_with_transient_retry(
 ) -> Result<orbit_exec::ExecutionResult, OrbitError> {
     let mut attempt = 1;
     loop {
-        match execute(program, args.to_vec(), current_dir, timeout_ms, operation) {
+        let result = run_vcs_process(program, args.to_vec(), current_dir, timeout_ms)
+            .and_then(|result| succeeded_read(result, operation));
+        match result {
             Ok(result) => return Ok(result),
             Err(error) if attempt < GITHUB_TRANSIENT_ATTEMPTS && is_transient(&error) => {
                 tracing::warn!(target: "orbit_engine::executor::automation::vcs::operations",
@@ -176,21 +180,20 @@ pub(in crate::executor::automation::vcs) fn execute(
     )
 }
 
-/// Run one VCS process and return its outcome, failed or not.
-pub(in crate::executor::automation::vcs) fn run_vcs_process(
+fn build_vcs_request(
     program: &str,
     args: Vec<String>,
     current_dir: Option<&Path>,
     timeout_ms: u64,
-) -> Result<orbit_exec::ExecutionResult, OrbitError> {
-    let request = if program == "git" {
+) -> Result<ExecRequest, OrbitError> {
+    if program == "git" {
         let root = current_dir.ok_or_else(|| {
             OrbitError::InvalidInput("Git operation requires a working directory".to_string())
         })?;
         let args = args.iter().map(String::as_str).collect::<Vec<_>>();
-        super::super::git::git_request(root, &args, timeout_ms)
+        Ok(super::super::git::git_request(root, &args, timeout_ms))
     } else {
-        ExecRequest {
+        Ok(ExecRequest {
             program: program.to_string(),
             args,
             current_dir: current_dir.map(|path| path.to_string_lossy().into_owned()),
@@ -198,9 +201,92 @@ pub(in crate::executor::automation::vcs) fn run_vcs_process(
             stdin_mode: StdinMode::Null,
             environment_mode: EnvironmentMode::ClearAndSet(super::super::git::gh_environment()),
             debug: false,
+        })
+    }
+}
+
+/// Run one VCS process and return its outcome, failed or not.
+///
+/// A `gh` call is delivery's spend of the host's GitHub quota: it is admitted
+/// against the host record first, so a hold after a rate-limit answer refuses
+/// it locally with a typed throttle and nothing runs, and its result is
+/// recorded so a rate-limit answer holds every other reader on the host.
+pub(in crate::executor::automation::vcs) fn run_vcs_process(
+    program: &str,
+    args: Vec<String>,
+    current_dir: Option<&Path>,
+    timeout_ms: u64,
+) -> Result<orbit_exec::ExecutionResult, OrbitError> {
+    let request = build_vcs_request(program, args, current_dir, timeout_ms)?;
+    if program == "git" {
+        return run_process(&request, &NoSandbox);
+    }
+    orbit_tools::github_quota::run_gh_request(
+        orbit_tools::github_quota::GithubCaller::Delivery,
+        &request,
+    )
+}
+
+/// [`run_vcs_process`] for a deadline-bounded caller: admission sees
+/// `timeout_ms`, and `remaining_after_admission` validates and bounds the
+/// remaining budget (both elapsed wall clock and any caller clock) before the
+/// original `gh` process may spawn.
+pub(in crate::executor::automation::vcs) fn run_vcs_process_within(
+    program: &str,
+    args: Vec<String>,
+    current_dir: Option<&Path>,
+    timeout_ms: u64,
+    remaining_after_admission: impl FnOnce(u64) -> Result<u64, OrbitError>,
+) -> Result<orbit_exec::ExecutionResult, OrbitError> {
+    let mut request = build_vcs_request(program, args, current_dir, timeout_ms)?;
+    if program == "git" {
+        return run_process(&request, &NoSandbox);
+    }
+    let admit_started = std::time::Instant::now();
+    // The instant the original budget runs out; the post-child accounting
+    // waits for the quota record only until then.
+    let deadline = orbit_tools::github_quota::gh_request_deadline(&request, admit_started);
+    let admission = orbit_tools::github_quota::admit_gh_request(
+        orbit_tools::github_quota::GithubCaller::Delivery,
+        &request,
+    );
+    let admit_elapsed_ms = u64::try_from(admit_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    // A refusal the guard counted is returned as decided, so the outcome
+    // matches the host record. An admission that ended on the spent budget was
+    // not counted: it is the caller's expiry, whatever whole milliseconds the
+    // caller's own clock measured.
+    let remaining_ms = match admission {
+        Ok(()) => remaining_after_admission(admit_elapsed_ms)?,
+        Err(timed_out @ OrbitError::ProcessTimeout { .. }) => {
+            remaining_after_admission(admit_elapsed_ms.max(timeout_ms))?;
+            return Err(timed_out);
         }
+        Err(refusal) => return Err(refusal),
     };
-    run_process(&request, &NoSandbox)
+    request.timeout_ms = Some(remaining_ms);
+    let result = run_process(&request, &NoSandbox)?;
+    orbit_tools::github_quota::observe_gh_result_by_deadline(&request, &result, deadline);
+    Ok(result)
+}
+
+/// The latest exhausted reset of `resources` through the host's shared quota
+/// record, which reads GitHub's rate-limit endpoint only when no process has
+/// within the refresh interval. [`orbit_tools::github_quota::SharedReset::Unguarded`]
+/// while the guard is off.
+pub(in crate::executor::automation::vcs) fn shared_exhausted_reset(
+    workspace: &Path,
+    timeout_ms: u64,
+    resources: &[&str],
+) -> Result<orbit_tools::github_quota::SharedReset, OrbitError> {
+    let request = build_vcs_request(
+        "gh",
+        vec!["api".into(), "rate_limit".into()],
+        Some(workspace),
+        timeout_ms,
+    )?;
+    Ok(orbit_tools::github_quota::shared_exhausted_reset(
+        &request, resources,
+    ))
 }
 
 pub(in crate::executor::automation::vcs) fn succeeded(
@@ -220,4 +306,28 @@ pub(in crate::executor::automation::vcs) fn succeeded(
         })));
     }
     Ok(result)
+}
+
+/// [`succeeded`] for a read through `gh`: GitHub's authenticated rate limit
+/// keeps its class and message and gains the typed
+/// [`orbit_common::ProviderReadThrottle`], so the caller's policy can wait
+/// for the reset instead of failing the step [ORB-25864].
+pub(in crate::executor::automation::vcs) fn succeeded_read(
+    result: orbit_exec::ExecutionResult,
+    operation: &str,
+) -> Result<orbit_exec::ExecutionResult, OrbitError> {
+    let throttle = if result.success {
+        None
+    } else {
+        orbit_tools::github_cli::check_gh_read_result(&result, operation)
+            .err()
+            .and_then(|error| error.private_vcs_failure()?.read_throttle.clone())
+    };
+    succeeded(result, operation).map_err(|error| match (error, throttle) {
+        (OrbitError::PrivateVcs(mut failure), Some(throttle)) => {
+            failure.read_throttle = Some(throttle);
+            OrbitError::PrivateVcs(failure)
+        }
+        (error, _) => error,
+    })
 }

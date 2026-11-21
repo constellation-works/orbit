@@ -589,26 +589,78 @@ pub(in crate::executor::automation::vcs::operations) fn ci_job_log(
         .map(|_| super::super::super::completion_deadline::Deadline::from_input(input))
         .transpose()?;
     let last_timeout = std::cell::Cell::new(DEFAULT_TIMEOUT_MS);
+    let budget_expired = std::cell::Cell::new(false);
     let read = github_cli::read_run_log_guarded(
         &requests,
         github_cli::LogReadBounds::new(MAX_JOB_LOG_BYTES),
         None,
         &|request| {
-            let mut request =
-                crate::executor::automation::github_host::clear_gh_environment(request);
-            if let Some(deadline) = deadline {
-                let timeout = deadline.remaining()?;
-                last_timeout.set(timeout);
-                request.timeout_ms = Some(timeout);
+            let mut request = request.clone();
+            let pre_timeout = match deadline {
+                Some(deadline) => match deadline.remaining() {
+                    Ok(timeout) => {
+                        last_timeout.set(timeout);
+                        request.timeout_ms = Some(timeout);
+                        Some(timeout)
+                    }
+                    Err(error) => {
+                        budget_expired.set(true);
+                        return Err(error);
+                    }
+                },
+                None => None,
+            };
+            let admit_started = std::time::Instant::now();
+            let admitted = crate::executor::automation::github_host::clear_gh_environment(
+                &request,
+                orbit_tools::github_quota::GithubCaller::Delivery,
+            );
+            if let (Some(deadline), Some(pre_timeout)) = (deadline, pre_timeout) {
+                // A refusal the guard counted is returned as decided; only the
+                // uncounted spent-budget answer yields to the expiry.
+                if let Err(refusal) = &admitted
+                    && !matches!(refusal, OrbitError::ProcessTimeout { .. })
+                {
+                    return admitted;
+                }
+                let admit_elapsed_ms =
+                    u64::try_from(admit_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                let admit_elapsed_ms = if admitted.is_err() {
+                    admit_elapsed_ms.max(pre_timeout)
+                } else {
+                    admit_elapsed_ms
+                };
+                match deadline.remaining_after(pre_timeout, admit_elapsed_ms) {
+                    Ok(remaining) => {
+                        let mut request = admitted?;
+                        last_timeout.set(remaining);
+                        request.timeout_ms = Some(remaining);
+                        return Ok(request);
+                    }
+                    Err(error) => {
+                        budget_expired.set(true);
+                        return Err(error);
+                    }
+                }
             }
-            Ok(request)
+            admitted
         },
     )
-    .map_err(|error| match deadline {
-        Some(deadline) => deadline.type_killed_read(error, last_timeout.get()),
-        None => error,
+    .map_err(|error| {
+        if budget_expired.get()
+            && let Some(deadline) = deadline
+        {
+            return deadline.expired_error();
+        }
+        match deadline {
+            Some(deadline) => deadline.type_killed_read(error, last_timeout.get()),
+            None => error,
+        }
     })?;
     if let Some(deadline) = deadline {
+        if budget_expired.get() {
+            return Err(deadline.expired_error());
+        }
         super::super::super::completion_deadline::probe("prerequisite log", deadline.remaining()?);
         deadline.remaining()?;
     }

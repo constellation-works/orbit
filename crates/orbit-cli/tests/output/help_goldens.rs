@@ -301,7 +301,7 @@ fn plugin_help_wraps_and_aligns_in_a_pty_and_stays_flat_when_piped() {
 
     fs::write(
         source.join(".orbit-plugin/plugin.yaml"),
-        "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: long-plugin-namespace\n  version: 0.1.0\n  description: A very long plugin description used to inspect the shared root help column and wrapped output at narrow terminal sizes.\nspec:\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: status\n      description: Report status.\n      execution_kind: read_only\n      mcp_scope: workspace\n      input_schema:\n        type: object\n",
+        "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: long-plugin-namespace\n  version: 0.1.0\n  description: A very long plugin description used to inspect the shared root help column and wrapped output at narrow terminal sizes. Its second sentence is for --help only.\nspec:\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: status\n      description: Report status.\n      execution_kind: read_only\n      mcp_scope: workspace\n      input_schema:\n        type: object\n",
     )
     .expect("write plugin manifest");
     let backend = source.join(".orbit-plugin/bin/backend.sh");
@@ -479,6 +479,20 @@ fn plugin_help_wraps_and_aligns_in_a_pty_and_stays_flat_when_piped() {
                 "plugin continuation did not hang at its description column:\n{}",
                 plugin_lines.join("\n")
             );
+            assert!(
+                plugin_lines
+                    .iter()
+                    .all(|line| !line.contains("for --help only")),
+                "plugin row printed the full manifest description at {width} columns:\n{}",
+                plugin_lines.join("\n")
+            );
+            if width == 80 {
+                assert!(
+                    plugin_lines.len() <= 2,
+                    "plugin row wrapped past two lines at 80 columns:\n{}",
+                    plugin_lines.join("\n")
+                );
+            }
         }
     }
 
@@ -498,6 +512,10 @@ fn plugin_help_wraps_and_aligns_in_a_pty_and_stays_flat_when_piped() {
         .position(|line| line.is_empty())
         .expect("piped plugin section boundary");
     assert_eq!(end, 1, "piped plugin description stays on one line");
+    assert!(
+        !piped_lines[heading + 1].contains("for --help only"),
+        "piped plugin row printed the full manifest description"
+    );
 
     let no_plugin = fixture_command(&empty_root)
         .arg("--help")

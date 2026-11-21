@@ -310,6 +310,20 @@ impl RuntimeKernel {
             .record_provider_limit(observation)
     }
 
+    /// [ORB-25967] Records a provider's complete usage reading and retires
+    /// the event observations an older reading stored that it no longer
+    /// reports.
+    pub fn record_provider_usage_reading(
+        &self,
+        observations: &[ProviderLimitObservation],
+    ) -> Result<(), OrbitError> {
+        self.context
+            .stores()
+            .host
+            .provider_limit
+            .record_provider_usage_reading(observations)
+    }
+
     /// [ORB-14695] The latest provider usage limit per provider account,
     /// scope and window this host observed, newest first.
     pub fn provider_limits(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError> {

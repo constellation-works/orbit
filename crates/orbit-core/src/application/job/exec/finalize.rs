@@ -2,12 +2,14 @@ use super::entry::V2JobRunResult;
 use crate::OrbitRuntime;
 use crate::application::job::log_best_effort;
 use crate::application::job::resume::ResumePlan;
+use crate::runtime::audit::run::AuditStepOutcome;
 use orbit_common::OrbitError;
 use orbit_engine::JobOutcome;
 use orbit_store::contracts::{JobRunStepParams, TaskReservationReleaseReason};
 use orbit_types::record::OrbitEvent;
 use orbit_types::workflow::{
     HeldFailure, JobRun, JobRunState, JobRunTrigger, JobTargetType, PipelineState,
+    ReviewGateRefusal,
 };
 use serde_json::{Value, json};
 
@@ -159,7 +161,7 @@ impl OrbitRuntime {
                         run,
                         started_at,
                         finished_at,
-                        Some("review_awaiting_evidence"),
+                        Some(ReviewGateRefusal::AwaitingEvidence.error_code()),
                         "Delivery awaits named external evidence; receipt queues a fresh review.",
                         JobRunState::Held,
                     ),
@@ -201,12 +203,14 @@ impl OrbitRuntime {
                 log_best_effort(
                     "record cancelled step",
                     &run.run_id,
-                    self.record_pipeline_diagnostic_step(
+                    // Run-level errors are projected from recorded steps.
+                    // Retain the cancellation explanation as step output, not
+                    // an error; the activity audit still names the child too.
+                    self.record_synthetic_v2_terminal_step(
                         run,
                         started_at,
                         finished_at,
-                        None,
-                        result.message.as_deref().unwrap_or(fallback),
+                        json!({"message": result.message.as_deref().unwrap_or(fallback)}),
                         JobRunState::Cancelled,
                     ),
                 );
@@ -224,7 +228,13 @@ impl OrbitRuntime {
                     log_best_effort(
                         "record success step",
                         &run.run_id,
-                        self.record_synthetic_v2_success_step(run, started_at, finished_at, result),
+                        self.record_synthetic_v2_terminal_step(
+                            run,
+                            started_at,
+                            finished_at,
+                            result.pipeline.clone(),
+                            JobRunState::Success,
+                        ),
                     );
                 } else {
                     log_best_effort(
@@ -398,12 +408,14 @@ impl OrbitRuntime {
         self.stores().jobs().write_run_state(&run.run_id, &state)
     }
 
-    fn record_synthetic_v2_success_step(
+    /// Record a terminal summary without promoting its output to a run error.
+    fn record_synthetic_v2_terminal_step(
         &self,
         run: &JobRun,
         started_at: chrono::DateTime<chrono::Utc>,
         finished_at: chrono::DateTime<chrono::Utc>,
-        result: &V2JobRunResult,
+        output: Value,
+        state: JobRunState,
     ) -> Result<(), OrbitError> {
         let duration_ms = Some(
             finished_at
@@ -411,19 +423,28 @@ impl OrbitRuntime {
                 .num_milliseconds()
                 .max(0) as u64,
         );
+        // Cancellation diagnostics used to append after any stored steps;
+        // keep that history while successful summaries retain step 0.
+        let step_index = if state == JobRunState::Cancelled {
+            self.get_job_run_backend(&run.run_id)?
+                .and_then(|current| current.steps.iter().map(|step| step.step_index).max())
+                .map_or(0, |index| index.saturating_add(1) as usize)
+        } else {
+            0
+        };
         self.stores().jobs().complete_job_run_step(
             &run.run_id,
             &JobRunStepParams {
                 lock_wait_ms: None,
-                step_index: 0,
+                step_index,
                 target_type: JobTargetType::Job,
                 target_id: run.job_id.clone(),
                 started_at,
                 finished_at,
                 duration_ms,
-                exit_code: Some(0),
-                agent_response_json: Some(result.pipeline.clone()),
-                state: JobRunState::Success,
+                exit_code: (state == JobRunState::Success).then_some(0),
+                agent_response_json: Some(output),
+                state,
                 error_code: None,
                 error_message: None,
             },
@@ -455,7 +476,13 @@ impl OrbitRuntime {
             .collect_run_audit_steps(&run.run_id)
             .unwrap_or_default();
         if audit_steps.is_empty() {
-            return self.record_synthetic_v2_success_step(run, started_at, finished_at, result);
+            return self.record_synthetic_v2_terminal_step(
+                run,
+                started_at,
+                finished_at,
+                result.pipeline.clone(),
+                JobRunState::Success,
+            );
         }
 
         for step in audit_steps {
@@ -467,7 +494,7 @@ impl OrbitRuntime {
                     .num_milliseconds()
                     .max(0) as u64,
             );
-            let state = job_run_state_from_audit_outcome(step.state.as_deref());
+            let state = AuditStepOutcome::job_run_state(step.outcome.as_ref());
             self.stores().jobs().complete_job_run_step(
                 &run.run_id,
                 &JobRunStepParams {
@@ -507,7 +534,7 @@ pub(crate) fn audit_terminal_outcome(
         Ok(o) if o.parked.is_some() => ("parked", o.message.clone()),
         Ok(o) if o.evidence_hold.is_some() => ("held", None),
         Ok(o) if o.forge_hold.is_some() => ("held", o.message.clone()),
-        Ok(o) if o.child_cancelled => ("cancelled", o.message.clone()),
+        Ok(o) if o.child_cancelled => ("cancelled", None),
         Ok(o) if o.success => ("success", None),
         Ok(o)
             if held_failure(
@@ -532,28 +559,6 @@ pub(crate) fn audit_terminal_outcome(
             ("held", Some(err.to_string()))
         }
         Err(err) => ("error", Some(err.to_string())),
-    }
-}
-
-fn job_run_state_from_audit_outcome(outcome: Option<&str>) -> JobRunState {
-    match outcome {
-        Some("success" | "succeeded" | "finished") => JobRunState::Success,
-        Some("failed" | "error" | "denied") => JobRunState::Failed,
-        Some("timeout") => JobRunState::Timeout,
-        Some("skipped") => JobRunState::Skipped,
-        Some("cancelled") => JobRunState::Cancelled,
-        Some("interrupted") => JobRunState::Interrupted,
-        Some("held") => JobRunState::Held,
-        Some("retrying") => JobRunState::Retrying,
-        Some("pending") => JobRunState::Pending,
-        Some("running") => JobRunState::Running,
-        other => {
-            tracing::warn!(
-                outcome = other.unwrap_or("<missing>"),
-                "unrecognized audit step outcome persisted as failed",
-            );
-            JobRunState::Failed
-        }
     }
 }
 

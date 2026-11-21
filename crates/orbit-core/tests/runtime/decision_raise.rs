@@ -303,7 +303,11 @@ fn raised_decision_risk_and_category_are_stored_and_exposed() {
     input["options"][2]["risk_tier"] = json!("irreversible");
     let mut invalid = input.clone();
     invalid["options"][0]["risk_tier"] = json!("bogus");
-    assert!(fx.raise("claude", invalid).is_err());
+    let refused = fx.raise("claude", invalid).unwrap_err();
+    assert!(
+        matches!(&refused, OrbitError::InvalidInput(message) if message.contains("risk tier") && message.contains("bogus")),
+        "{refused:?}"
+    );
     let raised = fx.raise("claude", input).unwrap();
     assert_eq!(raised["risk_tier"], "irreversible");
     assert_eq!(raised["answers"][0]["risk_tier"], "reversible");
@@ -482,7 +486,10 @@ fn an_agent_raises_a_decision_and_only_the_operator_answers_it() {
     let tool = fx
         .runtime
         .run_tool("orbit.decision.answer", json!({"id": id, "answer": "1"}));
-    assert!(tool.is_err(), "answer is not a tool: {tool:?}");
+    assert!(
+        matches!(&tool, Err(OrbitError::PolicyDenied(message)) if message.contains("operator")),
+        "answer is refused to agents as an operator-only verb: {tool:?}"
+    );
     let as_agent = fx
         .runtime
         .answer_decision_request_as_human(&id, "1", None, "claude".into(), None)
@@ -545,9 +552,11 @@ fn an_agent_raises_a_decision_and_only_the_operator_answers_it() {
     assert!(comment.message.contains("Ship it."), "{}", comment.message);
 
     // A closed request cannot be answered again.
-    fx.operator()
+    let again = fx
+        .operator()
         .answer_decision_request_as_human(&id, "1", None, "human:operator".into(), None)
         .expect_err("already answered");
+    assert!(again.to_string().contains("answered"), "{again}");
 }
 
 fn concurrent_raises_for_distinct_tasks_do_not_deadlock_on_bundle_locks() {

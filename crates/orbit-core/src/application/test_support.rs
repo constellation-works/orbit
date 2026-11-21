@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use chrono::Utc;
 use orbit_store::contracts::{
     AdmissionReceipt, AdmissionRequest, AdmissionTaskSummary, ExecutionClaim,
 };
+use orbit_types::timestamp::UtcTimestamp;
 use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, ExecutorType};
 use serde_json::json;
 use tempfile::tempdir;
@@ -40,7 +40,7 @@ pub(crate) fn seed_executor(
     name: &str,
     sandbox: Option<ExecutorSandboxKind>,
 ) {
-    let now = Utc::now();
+    let now = UtcTimestamp::try_from(std::time::SystemTime::now()).expect("executor timestamp");
     runtime
         .upsert_executor_def(&ExecutorDef {
             name: name.to_string(),

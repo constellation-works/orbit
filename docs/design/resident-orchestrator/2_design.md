@@ -1,7 +1,7 @@
 ---
 title: Resident Orchestrator — Design
 owner: claude
-last_updated: 2026-11-12
+last_updated: 2026-11-15
 last_validated: 2026-11-08
 status: Draft
 feature: resident-orchestrator
@@ -54,8 +54,9 @@ cadence ([§11.4](#114-the-manager-digest)).
 
 A resident owns **coordination only**. When the workspace `HEAD` can be checked out, its
 reviewer-profile agent receives a disposable, read-only managed checkout for the live cycle, passed
-as `workspace_path`. This is a cycle inspection checkout, not a leaf implementation worktree: the
-resident acts through Orbit tools rather than editing source files, and checkout changes are not
+as matching `workspace_path` and `repo_root` declarations. This is a cycle inspection checkout,
+not a leaf implementation worktree: the resident acts through Orbit tools rather than editing
+source files, and checkout changes are not
 committed or delivered. The resident has no pinned drain slot or admission path of its own; leaf
 tasks it dispatches run on the normal pipeline under the normal footprint rule. The
 epic-is-a-tag decision of [ORB-12488] stands
@@ -151,12 +152,14 @@ trigger kind, `resident_due`. Its observation rule, deterministic and model-free
 `preparation_eligible`, evaluates every active mandate whose assignment task lives in that
 workspace and marks it due when:
 
-- its **wake digest** differs from the digest in its last checkpoint; or
-- its **heartbeat** has elapsed since the last checkpoint (default 2 h); or
+- an item its **wake digest** covers changed in a way the mandate acts on since its last
+  checkpoint's observation ([§5.1](#51-slice-3-as-implemented)); or
+- its last checkpoint's **planned next wake** came, clamped between the floor and the heartbeat; or
+- its **heartbeat** has elapsed since the last cycle started; or
 - a control action asks for a cycle (`wake`, `resume`, `release`);
 
-and in every case only when the **cadence floor** has elapsed since the last cycle started (default
-10 min, minimum 5 min) and no cycle is live.
+and in every case only when the **cadence floor** has elapsed since the last cycle started (default:
+the heartbeat; minimum 5 min) and no cycle is live.
 
 The wake digest is a hash over the facts that can change what a cycle should do:
 
@@ -184,10 +187,17 @@ observation rule, not an expression. Workspaces may still add condition-triggere
 
 ### 4.3 Cadence floor
 
-The floor bounds cost: at the default 10 min a resident runs at most 144 cycles a day, and in
-practice far fewer, because cycles start only on change or heartbeat. The floor cannot go below the
-clock cadence or 5 min. A busy mandate whose digest changes on every tick runs once per floor
+The floor bounds cost when there is something to react to. It defaults to the heartbeat
+([ORB-25105]), so an unprompted mandate runs once per heartbeat whatever happens, and a manager sets
+a lower floor only when the operator asks for faster reaction. The floor cannot go below the clock
+cadence or 5 min. A busy mandate whose qualifying changes arrive on every tick runs once per floor
 interval and sees all accumulated changes together.
+
+Expected cycles per hour at steady state (STD-08 R1): a mandate with a 20-minute heartbeat and no
+qualifying change runs 3 cycles an hour (60 / heartbeat), however busy the workspace is, because
+drain churn on the tasks it acted on is not a qualifying change; a planned next wake can bring the
+next cycle forward to the floor, so with an explicit 5-minute floor the ceiling is 12 an hour, and
+only while the resident keeps planning early wakes or qualifying changes keep arriving.
 
 ### 4.4 Ending
 
@@ -220,17 +230,19 @@ manager surfaces it in the next digest and `orbit attention` lists the review as
 
 ## 5. The cycle
 
-A cycle is one run of `resident_cycle_pipeline`, a catalog job with three steps:
+A cycle is one run of `resident_cycle_pipeline`, a catalog job with three phases:
 
 1. **`resident_observe`** (deterministic). Takes the cycle lease (a fenced lease keyed by the
-   mandate; a held lease defers the fire). Loads the mandate, effective authority, the last *K*
-   checkpoints (default 5), open requests and their answers, the wake reasons and their facts, the
+   mandate; a held lease defers the fire). Loads the mandate, effective authority, the latest full checkpoint
+   and up to four earlier summaries, open requests and their answers, the wake reasons and their facts, the
    notices in scope, and the workspace's standing goals. Computes the cycle's tool grant
    ([§3](#3-authority)), narrowed to observe-only when a maintenance notice is open
    ([§7](#7-notices)). If the previous cycle has no checkpoint, it marks this cycle a **recovery
    cycle** and adds the dead cycle's audit rows (actions taken under its action keys) to the brief.
-2. **one `agent_loop`** (the crew from the mandate). Does one bounded cycle of work: check, recover,
-   dispatch, promote, merge within the grant; escalate what it must not decide; record costs; and
+2. **one `agent_loop`** (the crew from the mandate). The mutually exclusive `cycle` and
+   `cycle_fallback` steps select the managed checkout or the registered-checkout fallback.
+   The agent does one bounded cycle of work: check, recover, dispatch, promote, merge within
+   the grant; escalate what it must not decide; record costs; and
    write its checkpoint with `orbit.resident.checkpoint`. The loop has a turn and wall-time budget
    (default 30 min); it is coordination, so it should rarely need it.
 3. **`resident_finalize`** (deterministic). If the agent wrote no valid checkpoint, writes a
@@ -278,9 +290,9 @@ bounded by one floor interval. Recovery cost is measured ([§9](#9-metrics-that-
 
 **Checkpoint and resume contract.** The checkpoint carries the cycle id, the wake reasons and digest,
 actions with keys and results, decisions taken with their class and reversibility, open requests,
-cost events, a short `notes` for the next cycle, the next planned wake, and the outcome. The
+cost events, delta-only `notes` of at most 600 characters for the next cycle, the next planned wake, and the outcome. The
 `resident.request` and `resident.answer` shapes cover escalated questions and manager relays. An
-expired provider conversation reconstructs from the mandate, the authority, the last *K* checkpoints,
+expired provider conversation reconstructs from the mandate, the authority, the latest full checkpoint and bounded earlier summaries,
 open requests with answers, wake events and notices: the same brief every cycle gets. Continuity, a
 resumed conversation, is an adapter that adds context and never changes correctness. Full schemas:
 [specs/checkpoint-contract.md](./specs/checkpoint-contract.md).
@@ -306,18 +318,41 @@ like every state routine) uses the `resident_due` state kind with `batch_size: 1
 any other size). Each tick it reads every `resident`-tagged task in `proposed`, `backlog`,
 `in-progress` or `blocked` whose mandate is `active`, and computes:
 
-- the **wake digest**: a sha256 over the mandate, the authority revision, each watched task's id,
-  status and `updated_at`, the decision requests on the assignment and watched tasks (id and state),
-  the in-scope notices (id, revision, status) and the wake comments. Wake comments are every
-  `resident.answer`, and every other non-resident comment except, while a cycle is live, those
-  written by the cycle itself (only `human*` writers count inside a live window);
-- the **reasons**: `first_cycle`, `digest_changed` (against the last checkpoint's digest),
-  `heartbeat` (since the last cycle *start*, or task creation), `deadline` (once, when the deadline
-  passed after the last cycle started) and `recovery:<cycle>` (a dead live cycle);
+- the **wake items** ([ORB-25105]), one keyed state each: `mandate` (its hash), `authority` (the
+  revision), `assignment` (the assignment's settled decision requests), `watch` (one hash over the
+  tasks `watch` names by id or tag: status, review decision, `updated_at` and settled decision
+  requests, so any change to them wakes), `task:<id>` for each task the resident acted on,
+  `notice:<id>` for each open incident or maintenance notice in scope, and `comments` (a hash over
+  the wake comments). Tasks the resident acted on are the subjects of the last checkpoint's actions
+  plus the still-open ones the previous baseline carried; with the `watch` tasks they are capped at
+  200. Their state is a class (`active` for proposed, backlog and in-progress; otherwise the
+  status), the review decision and the settled (non-open) decision requests, never `updated_at`.
+  Wake comments are every `resident.answer`, and every other non-resident comment except, while a
+  cycle is live, those written by the cycle itself (only `human*` writers count inside a live
+  window). The **wake digest** is a sha256 over the items;
+- the **baseline**: observe records the items in the cycle's grant (`wake_items`), and finalize
+  appends a `resident_wake_settled` history entry with the items of the tasks the finished cycle
+  acted on (outside `watch`), which replace the observed ones, so the resident's own actions on
+  them do not wake it again. Size (STD-08 R1): about 300 bytes of fixed items plus about 40 bytes
+  per open task the resident acted on and per open notice, on each grant and settled entry, so a
+  resident tending 20 open tasks adds about 1.1 KB to the assignment's history per cycle, 26 KB over
+  24 cycles. Only the due check reads it (a person sees it as a history note); neither the
+  brief nor the agent sees it;
+- the **reasons**: `first_cycle`; `digest_changed` when, against the baseline of the last
+  checkpoint's cycle, an item present in both changed, a new item needs attention (a task the
+  resident acted on that is `blocked` or in `review`, a notice opening, any other new key), or an
+  item other than such a task is gone (a notice cleared), while a task that only joined or left the
+  tasks the resident acted on does not count (a grant without `wake_items`, written before
+  [ORB-25105], compares the digests instead); `heartbeat` (since the last cycle *start*, or task creation);
+  `next_wake` (the last checkpoint's `next_wake.not_before`, clamped between floor and heartbeat
+  after the last cycle start, ignored when that checkpoint is not the last cycle's or ended
+  `incomplete`); `deadline` (once, when the deadline passed after the last cycle started) and
+  `recovery:<cycle>` (a dead live cycle);
 - **withheld**: `cycle_live` (a live cycle that is not dead) or `cadence_floor` (the floor since the
   last cycle start has not elapsed).
 
-A due mandate becomes a member whose fingerprint is `after:<last cycle>|<digest or heartbeat>`, with
+A due mandate becomes a member whose fingerprint is `after:<last cycle>|<why>` (`wake:<at>`,
+`heartbeat`, `next_wake`, `changed`, or else the digest), with
 its debounce clock at the last cycle start, so it is admitted on the first tick the floor allows.
 Admission re-evaluates with the observation's clock and retires a member whose reason changed. A
 cycle run settles its member once it stops: applied if it started its cycle, failed (and retried)
@@ -336,23 +371,28 @@ publishes the live cycle and records a `resident_cycle_granted` history entry: t
 (`rights`, `workspaces`, `observe_only`, `narrowed_by`, `recovery_of`, `digest`, `reasons`). An open
 maintenance notice in a covered workspace (or the global scope) empties the rights with
 `narrowed_by: notice:<id>`; a passed deadline does the same with `narrowed_by: deadline`. An
-unreadable notice store narrows too. The brief carries the mandate, the grant, the last 5
-checkpoints, open requests, comments since the last cycle, the wake, the notices (title and body as
+unreadable notice store narrows too. The brief carries the mandate, the grant, the latest full checkpoint and up to four earlier summaries, open requests, comments since the last cycle, the wake, the notices (title and body as
 `untrusted_*`), and for a recovery cycle the dead cycle's ledger rows. Standing goals and the skill
 reference arrive with [ORB-21250]. Observe also makes a detached managed checkout of the registered
-workspace's current `HEAD` for this cycle and includes its path in the brief; the job forwards that
-path to the cycle activity as `workspace_path`. A resumed run that already holds its cycle reuses
+workspace's current `HEAD` for this cycle (with Git's parallel checkout workers, which write the
+same files) and includes its path in the brief; the job forwards that
+path to the cycle activity as both `workspace_path` and `repo_root`, so the agent-launch integrity
+check can validate the distinct checkout. A resumed run that already holds its cycle reuses
 that checkout, including its scratch. If the workspace has no checkoutable `HEAD` or checkout
-creation fails, observe logs a warning and leaves `workspace_path` null, so the activity falls back
-to the registered checkout; a direct launch there can still be refused when the sandbox cannot
-enforce its filesystem policy.
+creation fails, observe logs a warning and leaves `workspace_path` null. The `cycle_fallback` step
+omits both path declarations and launches in the registered checkout; a direct launch there can
+still be refused when the sandbox cannot enforce its filesystem policy.
 
 **Finalize.** `resident_finalize` writes the synthesized `incomplete` checkpoint when the agent wrote
 none (its `actions[]` from the ledger rows under the cycle's keys), clears the live cycle and
 discards its managed checkout. If finalize never runs, the next observe treats the predecessor as
 dead, synthesizes its checkpoint and discards its checkout during recovery before starting a new
 cycle. Removal is best-effort: failures are logged and may leave a checkout on disk, but its contents
-are never committed or delivered.
+are never committed or delivered. An unlocked registered checkout's contents are cleared in
+parallel before `git worktree remove --force` unregisters it; a locked checkout is never cleared
+first, so Git's refusal leaves it untouched and is reported. Cleanup requires matching owner
+evidence even for a registered checkout. The parallel clear retains its owner nonce until Git
+confirms removal, so a restarted cleanup can still verify ownership after an interrupted clear.
 
 **Tool guard.** Core, not the activity's tool list, scopes the cycle. A tool call carries the run id
 from the trusted managed-run binding, never from input. For a `resident_cycle_pipeline` run, reads
@@ -379,8 +419,11 @@ left `started` is refused as `resident_action_in_doubt` for the agent to check b
 
 - Wake reasons are coarse: `digest_changed` does not say which fact changed; the brief carries the
   facts and the agent compares.
-- PR and CI state are seen only through watched task revisions (`updated_at`), not read from the PR
-  or CI evidence directly.
+- PR and CI state are seen only through a task's status and review decision (and `updated_at` for
+  tasks `watch` names), not read from the PR or CI evidence directly: a red check wakes the
+  resident when the pipeline blocks the task or files a repair task it watches.
+- Info notices and a notice's edits that keep its status do not wake (§7 says any notice change
+  does); they still reach the brief.
 - Writes from a resident run that this workspace's runtime does not hold (a cycle run in another
   catalog workspace) are refused as `resident_scope_refused`: cross-workspace writes through another
   workspace's MCP server are not supported in this slice.
@@ -422,13 +465,15 @@ rights or workspaces, and a direction the resident reads as a widening goes back
 ### 6.1 The dashboard path
 
 The dashboard's Tasks dock › Residents tab is the human's own surface for the same records, so a
-mandate can be set up and steered without a manager session ([ORB-21649]). Every read and write goes
-through the `orbit.resident.*` tools, and every write also leaves a `dashboard.operations` audit row
-under the governed operation `resident.write` (operator session only):
+mandate can be set up and steered without a manager session ([ORB-21649]). The list read uses the
+batched core card read (`list_resident_mandate_cards`); writes go through the `orbit.resident.*`
+tools or the governed core operations beside them, and every write also leaves a
+`dashboard.operations` audit row under the governed operation `resident.write` (operator session
+only):
 
 | View action | Route | Mechanism |
 |---|---|---|
-| List mandates, ended ones included, with state, stalled flag, effective rights and workspaces, deadline, open requests, live cycle and latest checkpoint | `GET /api/residents?all=true` | `orbit.resident.list`, then `orbit.resident.show` per mandate |
+| List mandates, ended ones included, with state, stalled flag, effective rights and workspaces, deadline, open requests, live cycle and latest checkpoint | `GET /api/residents?all=true` | Batched core card read `list_resident_mandate_cards`: what `orbit.resident.show` reports, plus `goal`, `open_decisions` and `cycle_authority`, in one bundle read per mandate and one notice scan |
 | Show one mandate, with its grant and narrow history and the latest checkpoint's wake digest | `GET /api/residents/{id}` | `orbit.resident.show` |
 | Create a mandate | `POST /api/residents` | One action: the `resident`-tagged assignment and its `resident/mandate.json`. The draft is checked first by the rule every mandate read applies (the `resident.mandate/v1` parser plus a configured crew), and a refused draft returns that message and writes nothing |
 | Widen | `POST /api/residents/{id}/grant` with rights or workspaces to add and a quote | The request-and-answer of [§3](#3-authority), recorded `via: decision:<id>` |
@@ -437,6 +482,8 @@ under the governed operation `resident.write` (operator session only):
 | Pause, resume, wake with a status request, take over, release, stop | `POST /api/residents/{id}/control` | `orbit.resident.control` |
 | Relay a direction | `POST /api/residents/{id}/relay` | `orbit.resident.relay`, source `via: dashboard` |
 | Enable or disable the workspace's resident cycle routine | `POST /api/routines/toggle` | The existing routine toggle, audited like other operator toggles |
+
+`GET /api/residents` and `GET /api/residents/{id}` add two reads beside that show payload: `cycle_authority` is the grant recorded for the live cycle, or for the latest checkpoint's cycle when none is live, and `open_decisions` is every open decision on the mandate plus a checkpoint request that is still open on another task. `open_requests` remains the open `resident_authority` grants. An answer whose risk tier is `irreversible` confirms the chosen label and its consequence before `POST /api/decisions/{id}/answer`; cancelling sends no request. Other answers, including a `resident_authority` grant, still post on click.
 
 The dashboard runs the tools with its own session envelope (Agent, plus Operator when served
 `--operator`), never the terminal it was started from. So the tools' own authority rules apply
@@ -494,7 +541,8 @@ cycle. The resident design adds rules on top; the notice record and poster class
   replaced finishes on the old process and checkpoints. The next one, if it is a recovery cycle,
   reads that checkpoint under the new binary's schema, so the checkpoint record follows the
   state-compatibility rules (additive fields, versioned schema).
-- **Notices as wake events.** Any notice opened, changed or closed in scope changes the wake digest.
+- **Notices as wake events.** An incident or maintenance notice opened or cleared in scope wakes the
+  resident ([§5.1](#51-slice-3-as-implemented)).
   An `incident` notice about a watched task's failure is the usual reason for an early cycle.
 
 ## 8. Escalation
@@ -564,7 +612,7 @@ the checkpoints above, by `orbit resident metrics` ([ORB-21247]); none needs a n
 
 | Measure | Definition | Measured from |
 |---|---|---|
-| Manual interventions per mandate | Human writes on the mandate's assignment or watched tasks that are not answers to a resident escalation and not grants: requeues, cancels, manual status changes, operator steering comments, unprompted relays, `stop`/`takeover`. Reported per mandate and per active mandate-day | Task history writer labels, audit rows, `resident.answer` comments without a `request_id` |
+| Manual interventions per mandate | Human writes on the mandate's assignment or watched tasks that are not answers to a resident escalation and not grants: requeues, cancels, manual status changes, operator steering comments, unprompted relays, `stop`/`takeover`. Reported per mandate and per active mandate-day | Task history writer labels, the `human_actor` flag on `resident_control` history notes, audit rows, `resident.answer` comments without a `request_id` |
 | Escalation load on the human | Resident-raised decision requests per mandate-day and per human-day across all mandates; median answer latency; share answered with the recommended option; expired-unanswered count | Decision requests filed by resident runs |
 | Reversal rate | Share of resident decisions and actions later undone by a human within 7 days: a promoted task sent back to `proposed` or rejected, a reverted merge, a requeue undone, a relay with `reverses: <decision>`, a vetoed digest decision | Checkpoint `decisions[]` and `actions[]` with action keys, joined to later human writes on the same subject |
 | Recovery cost of a crashed cycle | Cycles that ended without an agent checkpoint; time from the dead cycle's start to the next good checkpoint; recovery cycle slot minutes; actions repeated (must be 0: slice 3's action ledger answers a retried completed action); human interventions needed | Cycle leases, `outcome: incomplete` checkpoints, run records, action keys (slice 3, [ORB-21244]) |
@@ -575,19 +623,41 @@ they are derivable, from an interactive orchestration task's history. The first 
 crash recovery are mostly not: a chat loop that died left no record, which is part of the point.
 Measures that cannot be derived report `not_derivable`, never zero.
 
-**As implemented ([ORB-21247]).** `orbit resident metrics [--mandate <task>] [--since <window>]
+**As implemented ([ORB-21247], updated in [ORB-25960]).** `orbit resident metrics [--mandate <task>] [--since <window>]
 [--baseline <task>]` (tool `orbit.resident.metrics`, read-only; `--since` takes a span such as
 `7d`, `24h` or `2w`, or an RFC 3339 instant, default `30d`) reports per mandate and, without
-`--mandate`, across mandates with workspace totals. A resident-raised escalation is a decision
-request named by a checkpoint `requests[]` or a `resident.request` record, or an agent-raised
-request on a task related to the assignment. A reversal is counted once per checkpoint decision
-or completed action: a `resident.answer` with `reverses` naming the decision id or action key, or
-a human status write on the action's subject to `proposed` or `rejected` (or a revert), within
-7 days of the checkpoint. Recovery cost counts `outcome: incomplete` checkpoints, measures to
-the next non-`incomplete` checkpoint from the dead cycle's recorded start, sums recovery-cycle
-time to its checkpoint as slot minutes, and counts a completed dead-cycle action run again as
-`ok` (rather than the ledger's `already_done`) as a repeat. A baseline task with no checkpoints
-reports reversals and recovery as `not_derivable`.
+`--mandate`, across mandates with workspace totals; `totals` is absent only for a `--baseline` run
+without `--mandate`, which reports the baseline alone. Without `--mandate`, only `resident`-tagged
+tasks that carry a `resident/mandate.json` artifact are counted as mandates; tagged tasks without
+the mandate artifact are excluded. `--mandate` checks the artifact only (`metrics/measure.rs` explicit
+lookup): the named task counts when it carries the artifact, whatever its tags, and it is reported
+even when its active span does not overlap the window. Each mandate's active span is bounded by its activation (when
+`resident/mandate.json` was attached, or its earliest resident lifecycle event if the artifact was
+later edited) and its end (`resident_control` stop, passed mandate `deadline`, or closed/`review`
+assignment status), intersected with the report window `[start, now]`; unfiltered reports omit
+mandates whose active span does not overlap the window. Interventions, escalations (`raised_at`),
+reversals and recovery checkpoints count only inside that active span.
+
+**Rate divisors and escalation states.** `per_mandate_day` divides by **mandate active days**: for
+each mandate, its bounded active span within the window rounded up to whole days with a 1-day floor
+(`ceil().max(1.0)`), and in `totals`, the sum of active mandate-days across all included mandates
+(with a 1-day floor). `per_human_day` divides by **human calendar days**: the length of the report
+window (`window.days`, from `--since` to `now`, rounded up to whole days with a 1-day floor) for
+both individual mandates and `totals`, because one human operator fields escalations across the
+whole calendar window. Only escalations carry a per-human-day rate. A resident-raised escalation is a
+decision request named by a checkpoint `requests[]` or a `resident.request` record, or an
+agent-raised request on a task related to the assignment. Every counted escalation lands in exactly
+one state bucket among `answered`, `open`, `expired_unanswered` and `superseded`
+(`answered + open + expired_unanswered + superseded == count`): `superseded` is a request whose
+binding stopped matching before an answer arrived, and `expired_unanswered` is one whose expiry
+passed while it was still open.
+A reversal is counted once per checkpoint decision or completed action: a `resident.answer` with
+`reverses` naming the decision id or action key, or a human status write on the action's subject to
+`proposed` or `rejected` (or a revert), within 7 days of the checkpoint. Recovery cost counts
+`outcome: incomplete` checkpoints, measures to the next non-`incomplete` checkpoint from the dead
+cycle's recorded start, sums recovery-cycle time to its checkpoint as slot minutes, and counts a
+completed dead-cycle action run again as `ok` (rather than the ledger's `already_done`) as a
+repeat. A baseline task with no checkpoints reports reversals and recovery as `not_derivable`.
 
 **References outside the assignment's workspace ([ORB-21642]).** Run the report in the
 workspace that owns the mandate or baseline task. Its references (watched and related tasks,
@@ -792,8 +862,9 @@ Slices 1–9 have landed (slice 3 as [§5.1](#51-slice-3-as-implemented) describ
   any agent context still resolves as the operator; that is the existing caller model
   ([notice-authority](../fleet-notices/specs/notice-authority.md) records the same limit).
 - **The wake digest can miss a relevant change.** Anything outside the watched set (an unrelated task
-  that starts touching the same files, say) shows up only at the heartbeat. A short heartbeat costs
-  cycles; a long one costs latency. Workspaces can add condition-triggered wakes.
+  that starts touching the same files, say), and any change that keeps a task it acted on in the same
+  state class, shows up only at the planned wake or the heartbeat. A short heartbeat costs cycles; a
+  long one costs latency. Workspaces can add condition-triggered wakes.
 - **The escalation rubric is a heuristic.** Its numbers are guesses until the pilot measures them. The
   fixed classes carry the safety; the rubric only trades question load against rework.
 - **Self-reported costs.** Cost events are what the agent says it spent. The pass ranks by recurrence
@@ -806,7 +877,7 @@ Slices 1–9 have landed (slice 3 as [§5.1](#51-slice-3-as-implemented) describ
   heartbeat. Ten residents at a 2 h heartbeat cost at least 120 runs a day, before change-driven
   cycles. The cadence floor and observe-only cycles bound it, and the cost is visible in the metrics.
 - **Checkpoint comments grow the assignment's history.** A long mandate accumulates hundreds of
-  checkpoints. The brief reads only the last *K*, and the reader parses the newest ones, but the
+  checkpoints. The brief includes only the latest full checkpoint and four summaries, but the
   dashboard's comment view gets noisy. A collapsed rendering is a dashboard follow-up.
 
 ## Task References
@@ -830,5 +901,6 @@ Slices 1–9 have landed (slice 3 as [§5.1](#51-slice-3-as-implemented) describ
 - [ORB-21649] — the dashboard Residents view and how a dashboard widening is authorized
 - [ORB-21642] — fixed `orbit resident metrics --baseline` failing on a baseline task in another workspace
 - [ORB-22844] — removed the evolution pass routine, job and proposal filing; the ledger and manager digest stay
+- [ORB-25105] — wake only on changes the mandate acts on, honour the planned next wake, default the floor to the heartbeat
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

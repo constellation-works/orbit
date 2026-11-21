@@ -16,8 +16,12 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_exec::{ExecRequest, NoSandbox, run_process};
+use orbit_engine::{CheckState, classify_rollup_context};
+use orbit_exec::ExecRequest;
+use orbit_types::plugin::is_full_commit_id;
+use orbit_types::workflow::MergeMessage;
 use serde_json::Value;
 
 /// One open pull request as the closure policy matches it.
@@ -38,12 +42,16 @@ pub struct ForgePullRequest {
 pub struct MergedPullRequest {
     /// The fields an open pull request is matched by.
     pub pull: ForgePullRequest,
+    /// The forge URL, which identifies the repository as well as the number.
+    pub url: String,
     /// The branch it merged into.
     pub base_branch: String,
     /// The PR head observed after merge, including an operator's rebase.
     pub head_sha: String,
     /// The commit it merged as.
     pub merge_commit: String,
+    /// When the forge merged the pull request.
+    pub merged_at: DateTime<Utc>,
 }
 
 /// State of the PR a lease's branch or explicit `#number` binds to.
@@ -224,12 +232,14 @@ pub trait TaskPrForge: Send + Sync {
     /// rule the forge enforces. An error means the outcome is unknown or no
     /// request was made; a refusal the forge answered is
     /// [`PullRequestMergeOutcome::Refused`]. The default refuses before a
-    /// request.
+    /// request. A squash or merge commit carries `message`, Orbit's composed
+    /// title and body, never the forge's default.
     fn merge_pull_request(
         &self,
         _repo_root: &Path,
         number: u64,
         _head_sha: &str,
+        _message: &MergeMessage,
     ) -> Result<PullRequestMergeOutcome, OrbitError> {
         Err(OrbitError::Execution(format!(
             "this forge cannot merge pull request #{number}"
@@ -407,11 +417,11 @@ impl TaskPrForge for GhTaskPrForge {
             return Ok(None);
         }
         merged_pull_request_from_json(&entry)
+            .filter(|merged| merged.pull.number == number)
             .map(Some)
             .ok_or_else(|| {
                 OrbitError::Execution(format!(
-                    "gh pr view #{number} did not report its head branch, head commit, author, base branch \
-                     and merge commit"
+                    "gh pr view #{number} did not report matching identity and complete merge evidence"
                 ))
             })
     }
@@ -511,6 +521,7 @@ impl TaskPrForge for GhTaskPrForge {
         repo_root: &Path,
         number: u64,
         head_sha: &str,
+        message: &MergeMessage,
     ) -> Result<PullRequestMergeOutcome, OrbitError> {
         if !matches!(head_sha.len(), 40 | 64) || !head_sha.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(OrbitError::InvalidInput(format!(
@@ -536,10 +547,11 @@ impl TaskPrForge for GhTaskPrForge {
                 reason: "the repository permits no merge method".to_string(),
             });
         };
-        let mut request =
-            orbit_tools::github_cli::merge_pull_request_at_head_request(number, head_sha, method);
+        let mut request = orbit_tools::github_cli::merge_pull_request_at_head_request(
+            number, head_sha, method, message,
+        );
         request.current_dir = Some(repo_root.to_string_lossy().into_owned());
-        let result = run_process(&request, &NoSandbox)?;
+        let result = orbit_tools::github_quota::run_gh_request(FORGE_QUOTA_CALLER, &request)?;
         if !result.success {
             // This text is returned to an agent's call.
             let stderr =
@@ -622,19 +634,22 @@ fn has_state(entry: &Value, state: &str) -> bool {
         .is_some_and(|reported| reported.eq_ignore_ascii_case(state))
 }
 
+/// The forge drives a task's own pull request through leasing, landing, merge
+/// and its terminal close, so it spends the host's GitHub quota as delivery.
+const FORGE_QUOTA_CALLER: orbit_tools::github_quota::GithubCaller =
+    orbit_tools::github_quota::GithubCaller::Delivery;
+
+/// Run one forge `gh` request in `repo_root` under the host's GitHub quota
+/// guard. A local refusal or GitHub's authenticated rate limit stays typed,
+/// so a caller can wait for the reset; nothing runs on a local refusal.
 pub(super) fn task_forge_gh_request(
     mut request: ExecRequest,
     repo_root: &Path,
     label: &str,
 ) -> Result<String, OrbitError> {
     request.current_dir = Some(repo_root.to_string_lossy().into_owned());
-    let result = run_process(&request, &NoSandbox)?;
-    if !result.success {
-        return Err(OrbitError::Execution(format!(
-            "{label} failed: {}",
-            result.stderr.trim()
-        )));
-    }
+    let result = orbit_tools::github_quota::run_gh_request(FORGE_QUOTA_CALLER, &request)?;
+    orbit_tools::github_cli::check_gh_read_result(&result, label)?;
     Ok(result.stdout)
 }
 
@@ -656,6 +671,9 @@ fn pull_request_from_json(entry: &Value) -> Option<ForgePullRequest> {
 /// A merged entry also needs the branch it merged into and its merge commit;
 /// without them it cannot prove where the task's work landed.
 fn merged_pull_request_from_json(entry: &Value) -> Option<MergedPullRequest> {
+    if !has_state(entry, "merged") {
+        return None;
+    }
     let non_empty = |value: Option<&Value>| {
         value
             .and_then(Value::as_str)
@@ -663,11 +681,14 @@ fn merged_pull_request_from_json(entry: &Value) -> Option<MergedPullRequest> {
             .filter(|value| !value.is_empty())
             .map(str::to_string)
     };
+    let commit = |value: Option<&Value>| non_empty(value).filter(|sha| is_full_commit_id(sha));
     Some(MergedPullRequest {
         pull: pull_request_from_json(entry)?,
+        url: non_empty(entry.get("url"))?,
         base_branch: non_empty(entry.get("baseRefName"))?,
-        head_sha: non_empty(entry.get("headRefOid"))?,
-        merge_commit: non_empty(entry.pointer("/mergeCommit/oid"))?,
+        head_sha: commit(entry.get("headRefOid"))?,
+        merge_commit: commit(entry.pointer("/mergeCommit/oid"))?,
+        merged_at: entry.get("mergedAt")?.as_str()?.parse().ok()?,
     })
 }
 
@@ -736,12 +757,10 @@ fn pull_request_blockers_from_json(number: u64, pull: &Value) -> Option<PullRequ
                 .and_then(Value::as_str)
                 .unwrap_or("unnamed check")
                 .to_string();
-            if required_context_failed(context) {
-                failed_required_checks.push(name);
-            } else if required_context_passed(context) {
-                passed_required_checks.push(name);
-            } else {
-                pending_required_checks.push(name);
+            match classify_rollup_context(context) {
+                Some(CheckState::Failed) => failed_required_checks.push(name),
+                Some(CheckState::Passed) => passed_required_checks.push(name),
+                Some(CheckState::Pending) | None => pending_required_checks.push(name),
             }
         }
     }
@@ -762,39 +781,4 @@ fn pull_request_blockers_from_json(number: u64, pull: &Value) -> Option<PullRequ
         pending_required_checks,
         passed_required_checks,
     })
-}
-
-/// Whether a required status context failed, as completion's watcher
-/// classifies it: a status `FAILURE` or `ERROR`, or a completed check run
-/// that did not succeed, skip or end neutral.
-fn required_context_failed(context: &Value) -> bool {
-    if let Some(state) = context.get("state").and_then(Value::as_str) {
-        return matches!(state, "FAILURE" | "ERROR");
-    }
-    context.get("status").and_then(Value::as_str) == Some("COMPLETED")
-        && matches!(
-            context.get("conclusion").and_then(Value::as_str),
-            Some(
-                "FAILURE"
-                    | "CANCELLED"
-                    | "TIMED_OUT"
-                    | "ACTION_REQUIRED"
-                    | "STARTUP_FAILURE"
-                    | "STALE"
-            )
-        )
-}
-
-/// Whether a required status context passed: a status `SUCCESS`, or a
-/// completed check run that succeeded, skipped or ended neutral. A context
-/// neither failed nor passed has not finished.
-fn required_context_passed(context: &Value) -> bool {
-    if let Some(state) = context.get("state").and_then(Value::as_str) {
-        return state == "SUCCESS";
-    }
-    context.get("status").and_then(Value::as_str) == Some("COMPLETED")
-        && matches!(
-            context.get("conclusion").and_then(Value::as_str),
-            Some("SUCCESS" | "SKIPPED" | "NEUTRAL")
-        )
 }

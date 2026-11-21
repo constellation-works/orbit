@@ -18,7 +18,7 @@ impl Store {
     /// Change tokens over the tables a routine status read draws on, as
     /// `(routines, job_runs)`.
     ///
-    /// `routines` changes when a routine fire, cursor or pause row or an
+    /// `routines` changes when a routine fire, cursor, pause or breaker row or an
     /// automation consumer is added or removed, or when a sampled fire row
     /// advances. Those writes are rare and are what an operator acts on, so a
     /// caller invalidates on them at once. Fire in-place updates are sampled
@@ -47,14 +47,15 @@ impl Store {
                 (SELECT COUNT(*) || '/' || COALESCE(MAX(updated_at), '') FROM routine_cursors),
                 (SELECT COUNT(*) || '/' || COALESCE(MAX(paused_at), '') FROM routine_pauses),
                 (SELECT COUNT(*) || '/' || COALESCE(SUM(generation), 0) FROM automation_consumers),
+                (SELECT COUNT(*) || '/' || COALESCE(MAX(updated_at), '') FROM routine_breakers),
                 (SELECT COUNT(*) || '/' || COALESCE(MAX(rowid), 0) FROM job_runs),
                 (SELECT COALESCE(group_concat(state || COALESCE(finished_at, '')), '') FROM
                     (SELECT state, finished_at FROM job_runs ORDER BY rowid DESC LIMIT ?1))",
             [FINGERPRINT_ROW_WINDOW],
             |row| {
                 let column = |index: usize| row.get::<_, String>(index);
-                let routines = (0..5).map(column).collect::<Result<Vec<_>, _>>()?.join("|");
-                let job_runs = (5..7).map(column).collect::<Result<Vec<_>, _>>()?.join("|");
+                let routines = (0..6).map(column).collect::<Result<Vec<_>, _>>()?.join("|");
+                let job_runs = (6..8).map(column).collect::<Result<Vec<_>, _>>()?.join("|");
                 Ok((routines, job_runs))
             },
         )

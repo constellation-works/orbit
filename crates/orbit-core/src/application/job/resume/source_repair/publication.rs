@@ -176,3 +176,100 @@ pub(super) fn published_head<'a>(
     }
     Ok(head)
 }
+
+/// The before-landing settlement whose `incomplete` verdict the failure
+/// handoff preserves by pushing the reviewer's commit.
+const LANDING_SETTLE: &str = "landing_review_gate_settle";
+
+/// [ORB-25671] The reviewer commit an incomplete before-landing review left
+/// on the published head, when this run's own failure handoff attests that
+/// it pushed exactly that commit onto `published`: the head the branch and
+/// pull request now carry. The push certifies nothing about the commit, so
+/// the successor delivery validates it. Any fresh independent review follows
+/// that delivery's selected review policy, which may be off.
+///
+/// `None` when the handoff pushed nothing (no receipt, no reviewer commit,
+/// or a push it could not make), which keeps `published` and every refusal
+/// for a branch that moved anyway. A receipt that claims a push but does not
+/// bind this run, task, branch, failed settlement and published head is
+/// refused rather than ignored.
+pub(super) fn incomplete_review_pushed_head<'a>(
+    job: &JobV2,
+    state: &'a PipelineState,
+    source: (&str, &Task),
+    branch: &str,
+    published: &str,
+    repo: &std::path::Path,
+) -> Result<Option<&'a str>, OrbitError> {
+    let Some(receipt) = state.failure_activity_checkpoint.as_ref() else {
+        return Ok(None);
+    };
+    let output = &receipt.output;
+    let Some(push) = output.get("reviewer_push").filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    if matches!(
+        push.get("decision").and_then(Value::as_str),
+        Some("no_reviewer_commit" | "push_failed")
+    ) {
+        return Ok(None);
+    }
+    let disagrees = |what: &str| {
+        refuse_operator_decision(format!(
+            "the failure handoff's reviewer push attestation disagrees ({what}); the retained \
+             branch is not an attested reviewer correction of the published head"
+        ))
+    };
+    let (source_id, task) = source;
+    let settle = job.steps.iter().position(|step| step.id == LANDING_SETTLE);
+    let opened = job.steps.iter().position(|step| step.id == "pr_open");
+    if job.failure_activity.as_deref() != Some("pr_failure_handoff")
+        || !job.resolved_failure_activity.as_ref().is_some_and(|a| {
+            matches!(&a.spec, ActivityV2Spec::Deterministic(s) if s.action == "pr_failure_handoff")
+        })
+        || receipt.activity_name != "pr_failure_handoff"
+    {
+        return Err(disagrees("not the host failure handoff"));
+    }
+    if receipt.failed_step_id != LANDING_SETTLE
+        || output["failed_step_id"] != LANDING_SETTLE
+        || output["phase"] != "failure_handoff"
+        || output["decision"] != "landing_review_failure"
+        || output["candidate_preserved"] != true
+        || output["handoff_run_id"] != source_id
+        || output["task_id"] != task.id.as_str()
+        || !output["task_spec_digest"]
+            .as_str()
+            .is_some_and(|digest| task.spec_digest_matches(digest))
+    {
+        return Err(disagrees(
+            "not this run's and task's incomplete before-landing review",
+        ));
+    }
+    let (Some(settle), Some(opened)) = (settle, opened) else {
+        return Err(disagrees("the definition has no before-landing settlement"));
+    };
+    if settle <= opened
+        || state.step_states.get(&(settle as u32)) == Some(&JobRunState::Success)
+        || [LANDING_SETTLE, "landing_push"]
+            .iter()
+            .any(|id| state.pipeline.get(*id).is_some_and(|v| !v.is_null()))
+    {
+        return Err(disagrees("the before-landing review settled or published"));
+    }
+    let pushed = push.get("local_sha").and_then(Value::as_str).unwrap_or("");
+    if push["phase"] != "push"
+        || push["decision"] != "performed_fast_forward"
+        || push["branch"] != branch
+        || push["published_head_sha"] != published
+        || push["remote_sha_before"] != published
+        || !observation::is_exact_sha(pushed)
+        || pushed == published
+        || !observation::is_git_ancestor(repo, published, pushed)?
+    {
+        return Err(disagrees(
+            "it is not a fast-forward of the published head on this branch",
+        ));
+    }
+    Ok(Some(pushed))
+}

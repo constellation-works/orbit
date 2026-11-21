@@ -47,9 +47,11 @@ fn merged_delivery(task: &str, base: &str) -> MergedPullRequest {
             body: format!("Delivers {task}."),
             author: "orbit-bot".into(),
         },
+        url: "https://github.com/owner/repo/pull/17".into(),
         base_branch: base.into(),
         head_sha: "0123456789abcdef0123456789abcdef01234567".into(),
         merge_commit: "89abcdef0123456789abcdef0123456789abcdef".into(),
+        merged_at: chrono::Utc::now(),
     }
 }
 

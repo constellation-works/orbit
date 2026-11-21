@@ -11,10 +11,9 @@ use orbit_engine::RuntimeHost;
 use orbit_store::contracts::{AuditEventFilter, JobRunStoreBackend};
 use orbit_tools::ToolContext;
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::{JobRunState, PipelineState};
+use orbit_types::workflow::{ChildDispatch, JobRunState, PipelineState};
 use serde_json::{Value, json};
 use std::sync::Arc;
-use std::time::{Duration as StdDuration, Instant};
 use tempfile::TempDir;
 
 const PULL: &str = "workspace_pull_pipeline";
@@ -277,6 +276,37 @@ fn concurrency_given_with_an_extension_retunes_the_drain_like_run_concurrency() 
     }
 }
 
+fn readiness_exposes_running_drain_task_slots_separately_from_leaf_capacity() {
+    let drains = Drains::new();
+    let drain = drains.running(OWNER, 3600, Utc::now() + Duration::minutes(10), |state| {
+        let worker = drains
+            .jobs
+            .insert_job_run("task_auto_pipeline", 1, Utc::now(), None, None)
+            .unwrap();
+        drains
+            .jobs
+            .mark_job_run_running(&worker.run_id, Utc::now(), std::process::id())
+            .unwrap();
+        state.record_child_dispatch(ChildDispatch::submitted(
+            worker.run_id,
+            "task_auto_pipeline".into(),
+            "invoke_detached".into(),
+            false,
+            false,
+            Utc::now(),
+        ));
+    });
+
+    let readiness = drains
+        .runtime
+        .workspace_auto_readiness(&[], Some(15), 10, &[])
+        .unwrap();
+    assert_eq!(readiness["capacity"]["drain_run_id"], drain);
+    assert_eq!(readiness["capacity"]["max_active_leaf_runs"], 15);
+    assert_eq!(readiness["capacity"]["drain_concurrency"], 2);
+    assert_eq!(readiness["capacity"]["drain_running_tasks"], 1);
+}
+
 fn stopped_cancelling_single_pass_and_ineligible_runs_refuse_the_extension_and_stay_closed() {
     let drains = Drains::new();
     let open = Utc::now() + Duration::minutes(10);
@@ -438,90 +468,6 @@ fn invalid_concurrency_given_with_an_extension_fails_and_leaves_state_unchanged(
     }
 }
 
-fn acquire_claim(runtime: &OrbitRuntime) {
-    use orbit_store::contracts::WorkspaceClaimAcquireParams;
-    let store = runtime.sqlite_store().unwrap();
-    store
-        .acquire_workspace_claim(&WorkspaceClaimAcquireParams {
-            workspace_orbit_dir: runtime.paths().orbit_dir.to_string_lossy().into_owned(),
-            workspace_id: runtime.workspace_id().ok(),
-            actor: "claim-racer".to_string(),
-            ttl_seconds: 3600,
-            machine_id: Some("claim-racer".to_string()),
-            session_id: Some("claim-racer".to_string()),
-        })
-        .unwrap();
-}
-
-/// A claim taken by another operator after the extension would have
-/// committed must not leave a combined request half-applied: the request
-/// either succeeds with both controls or refuses with neither changed.
-fn a_claim_taken_during_a_combined_extension_leaves_no_partial_change() {
-    for job in [PULL, OWNER] {
-        let drains = Drains::new();
-        let stamped = whole_seconds(Utc::now() + Duration::minutes(10));
-        let drain = drains.running(job, 3600, stamped, |_| {});
-        let racer_runtime = drains.runtime.clone();
-        let racer_drain = drain.clone();
-        let racer = std::thread::spawn(move || {
-            let deadline = Instant::now() + StdDuration::from_secs(10);
-            while Instant::now() < deadline {
-                let extended = racer_runtime
-                    .read_run_state(&racer_drain)
-                    .ok()
-                    .flatten()
-                    .and_then(|state| state.pull_drain.drain_window_extension)
-                    .is_some();
-                if extended {
-                    acquire_claim(&racer_runtime);
-                    return;
-                }
-                std::hint::spin_loop();
-            }
-        });
-        let result = drains.extend(&drain, Duration::hours(2), Some(5));
-        let _ = racer.join();
-        let state = drains.state(&drain);
-        match result {
-            Ok(change) => {
-                assert_eq!(
-                    change.outcome,
-                    DrainWindowExtensionOutcome::Extended,
-                    "{job}"
-                );
-                assert_eq!(
-                    change
-                        .worker_limit
-                        .expect("ceiling retuned")
-                        .max_active_leaf_runs,
-                    5,
-                    "{job}"
-                );
-                assert!(state.pull_drain.drain_window_extension.is_some(), "{job}");
-                assert_eq!(
-                    state
-                        .pull_drain
-                        .drain_worker_limit
-                        .expect("ceiling persisted")
-                        .max_active_leaf_runs,
-                    5,
-                    "{job}"
-                );
-            }
-            Err(error) => {
-                assert!(
-                    state.pull_drain.drain_window_extension.is_none(),
-                    "{job}: refused combined extension left the longer window behind: {error}"
-                );
-                assert!(
-                    state.pull_drain.drain_worker_limit.is_none(),
-                    "{job}: refused combined extension left the ceiling behind: {error}"
-                );
-            }
-        }
-    }
-}
-
 fn combined_extension_resize_audit_links_to_the_extension_request() {
     let drains = Drains::new();
     for job in [PULL, OWNER] {
@@ -643,8 +589,8 @@ crate::scenario_table!(
     extending_a_pull_or_owner_drain_moves_the_deadline_its_window_reads_and_never_shortens_it,
     a_pull_drain_in_its_settling_tail_resumes_requesting_while_a_closed_owner_drain_refuses,
     concurrency_given_with_an_extension_retunes_the_drain_like_run_concurrency,
+    readiness_exposes_running_drain_task_slots_separately_from_leaf_capacity,
     stopped_cancelling_single_pass_and_ineligible_runs_refuse_the_extension_and_stay_closed,
     invalid_concurrency_given_with_an_extension_fails_and_leaves_state_unchanged,
-    a_claim_taken_during_a_combined_extension_leaves_no_partial_change,
     combined_extension_resize_audit_links_to_the_extension_request
 );

@@ -1,8 +1,8 @@
 ---
 type: context
 summary: "Evidence map for shipped Orbit jobs and the coverage boundaries of their named tests."
-last_updated: 2026-11-07
-last_validated: 2026-10-23
+last_updated: 2026-11-18
+last_validated: 2026-11-18
 ---
 
 # Shipped workflow evidence
@@ -10,7 +10,7 @@ last_validated: 2026-10-23
 The process-boundary fixtures in `crates/orbit-cli/tests/process/` run update-root routing, stale-updater refusal, live-run cancellation and dashboard handover on Linux and macOS. `mcp_roundtrip::upgrade` also verifies drain handover and safe-point yielding across both hosts. Handover reads a live process's locked image registration rather than `/proc/<pid>/exe`; the updater race uses a nonblocking FIFO rendezvous available on both systems. The macOS workflow runs these suites. Linux `/proc` owner/namespace proofs and the Linux-only privileged host-preparation opt-out retain explicit gates, and Darwin libproc probes retain theirs.
 
 The shipped catalog is `DEFAULT_JOB_FILES` in
-[`orbit-runtime/src/assets.rs`](../../../crates/orbit-runtime/src/assets.rs): 22 jobs;
+[`orbit-runtime/src/assets.rs`](../../../crates/orbit-runtime/src/assets.rs): 24 jobs;
 `assets/jobs/examples/` is excluded. A catalog parse or a persisted row bearing
 one of these names does **not** prove that its shipped graph executed.
 
@@ -28,6 +28,7 @@ relative to `crates/orbit-engine/src/`.
 | `baseline_hold_refresh_pipeline` | Graph through the owner sweep runtime: `a_hold_check_runs_off_the_tick_and_ticks_meanwhile_fire_routines_and_auto_tasks` dispatches and executes the shipped refresh job outside the tick, records its verdict and lets other clock work continue. `a_checked_tip_is_judged_from_its_recorded_result_without_another_run` and `an_inconclusive_tip_waits_for_backoff_or_a_new_tip_before_another_refresh` cover recorded results and bounded retry. | `crates/orbit-core/tests/runtime/baseline_hold_tick.rs` |
 | `blocked_task_recovery_pipeline` | Graph through the owner runtime: `recovery_uses_machine_bound_run_evidence_and_its_own_crew_draw` runs the shipped recovery job for a settled follower failure, checks machine-bound failure evidence and crew selection, and verifies requeue. | `crates/orbit-core/tests/runtime/distributed_drain/recovery.rs` |
 | `ci_failure_sweep_pipeline` | Boundary: `ci_failure_fixture_goldens` drives `file_ci_failure_tasks` through `OrbitRuntime::run_deterministic` over captured log shapes, including rustfmt diffs ending in punctuation, symbols-only excerpts falling back to the step, and unusable signatures retaining exact-key deduplication without aborting unrelated filings. It reads the filed tasks back and reruns scenarios to verify persisted deduplication; `ci_failure_predating_a_landed_repair_is_held_not_refiled` holds a failure tested before a done repair of the same signature landed and files one tested after it. `ci_failure_claimed_branch_defers_attribution_until_the_claim_settles` keeps a follower-claimed task-branch failure out of the owner's bundle, files the landing failure in the same snapshot, and writes the observation when the claim is released. Collection's in-flight-descendant hold is covered by `orbit-engine`'s `executor::automation::ci::tests::pending`. Filing only; pilot admission and the shipped graph have no current test. | `crates/orbit-core/tests/ci_failure_goldens.rs` |
+| `crew_memory_dream_pipeline` | Evidence not yet mapped in this document. | — |
 | `dependabot_alert_sweep_pipeline` | Boundary: `sentinel_credential_never_reaches_snapshot_output_or_persisted_task_fields` files from a collected snapshot and checks that a credential never reaches output or task fields. Per-file grouping, unavailable families and the collector have no current test. | `crates/orbit-core/tests/runtime/admission_audit/dependabot.rs` |
 | `escalation_triage_pipeline` | No graph evidence. Boundary: `a_pilot_warning_draws_from_its_purpose_pool_and_records_it_as_the_source`, `an_unset_pilot_warning_pool_draws_from_the_hard_tier_as_before` and `a_pool_without_an_inspection_capable_member_falls_back_to_the_hard_tier` cover pilot-warning pool selection and fallback. `pilot_warning_cards` drives the `pilot_warning` subject of `orbit.task.block_triage` into a decision card and a human answer, and refuses the retired `block` subject. Task membership and marker settlement have no current test. | `crates/orbit-core/tests/runtime/escalation_triage_crews.rs`; `crates/orbit-core/tests/runtime/pilot_warning_cards.rs` |
 | `image_input_probe_pipeline` | Evidence not yet mapped in this document. | — |
@@ -42,6 +43,7 @@ relative to `crates/orbit-engine/src/`.
 | `task_local_pipeline` | Boundary: `a_shell_step_gets_only_the_policy_baseline_and_its_explicit_env` exercises the explicit environment exposed to a local shell step; it does not execute the shipped graph. | `crates/orbit-engine/tests/engine/v2_local_shell.rs` |
 | `task_pilot_pipeline` | Graph, empty selection: `all_held_pilot_run_succeeds_and_retains_every_holder_skip` runs the shipped job, retains every exclusion and verifies unchanged tasks without invoking a pilot agent. Boundary: `mixed_pilot_selection_applies_free_tasks_and_skips_held_tasks` applies fixture pilot results; `context_and_instruction_edits_skip_stale_partitions_and_requeue_without_failures` verifies source invalidation. Real pilot-provider execution is not established by these proofs. | `crates/orbit-core/tests/runtime/task_pilot.rs`; `crates/orbit-core/tests/runtime/task_pilot/source_moves.rs` |
 | `task_pr_pipeline` | No graph or boundary evidence; recovery context preparation for the shipped definition has no current test. | — |
+| `task_pr_watch_pipeline` | Evidence not yet mapped in this document. | — |
 | `task_publication_pipeline` | Evidence not yet mapped in this document. | — |
 | `task_review_reconciliation_pipeline` | Graph in-process: `distributed_drain::desktop_completion` submits it through `orbit.task.recover` action `reconcile_review` and runs every step with the in-process worker. The run executes real required commands at the merged head and base, a stub reviewer provider on the configured crew, and settlement. The tests cover accepted, rejected-with-follow-up, baseline-disposition and changed-head outcomes, and an unadmitted run that cannot touch the record. The detached worker process and a real reviewer model are untested. | `crates/orbit-core/tests/runtime/distributed_drain/desktop_completion.rs` |
 | `workspace_auto_pipeline` | Graph through the runtime: `backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_for_it` executes the shipped job, proves admission and refill while a pilot is running, and waits for that pilot after admissions close. Child workers are substituted and pilot output is fixture data. Boundary: `dispatch_admission.rs` backlog admission and `a_held_workspace_claim_gates_dispatch_to_its_holder` / `an_expired_workspace_claim_stops_gating_dispatch`. | `crates/orbit-core/tests/runtime/drain_approval/step_graph.rs`; `crates/orbit-core/tests/runtime/dispatch_admission.rs` |

@@ -1,7 +1,7 @@
 [
   {
     "name": "github.auth.status",
-    "description": "Preflight the GitHub CLI surface: whether a GitHub CLI is present on this execution lane (`available`) and whether it holds usable credentials there (`authenticated`). Neither absence nor a missing credential is an error — both are reported so a caller can record a capability-unavailable outcome instead of mistaking it for a clean result.",
+    "description": "Preflight the GitHub CLI surface: whether a GitHub CLI is present on this execution lane (`available`) and whether it holds usable credentials there (`authenticated`). Neither absence nor a missing credential is an error — both are reported so a caller can record a capability-unavailable outcome instead of mistaking it for a clean result. `quota` is the host's GitHub API quota record for this account: per resource (`core`, `graphql`) the limit, remaining count and reset time (`state: unknown` when GitHub's rate-limit answer could not be read), whether agent, background or delivery reads are currently refused, and the calls each caller class made in the current window.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -425,6 +425,12 @@
         "required": false
       },
       {
+        "name": "wait_grant",
+        "description": "Also mint a shell token for `orbit attention wait`.",
+        "param_type": "boolean",
+        "required": false
+      },
+      {
         "name": "candidate_read",
         "description": "Reserved for Orbit's federated aggregator; never send it.",
         "param_type": "boolean",
@@ -529,6 +535,12 @@
         "name": "workspace",
         "description": "Explicit workspace, required with `expected_enabled`",
         "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "adopt_bundled_contract",
+        "description": "For update: Append the bundled contract the effective body omits, keeping every other field.",
+        "param_type": "boolean",
         "required": false
       },
       {
@@ -1660,7 +1672,7 @@
   },
   {
     "name": "orbit.notice.close",
-    "description": "Close a fleet notice by id or dedupe_key with a reason. The operator may close any notice; an orchestrator may close its own crew's notices and any orchestrator- or agent-authored notice; a managed agent may close only its own task's notices. Closing a notice that is already closed or expired returns it unchanged with already_inactive: true.",
+    "description": "Close a fleet notice by id or dedupe_key with a reason. The operator may close any notice; an orchestrator may close its own crew's notices and any orchestrator- or agent-authored notice; a managed agent, a resident cycle included, may close only its own task's notices. Closing a notice that is already closed or expired returns it unchanged with already_inactive: true.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1695,7 +1707,7 @@
   },
   {
     "name": "orbit.notice.list",
-    "description": "List fleet notices, open ones unless status says otherwise. With a workspace, that workspace's notices plus global notices homed elsewhere on its owner; with all: true, every workspace homed on this owner; without a workspace in a federated session, every reachable owner's notices merged, deduplicated by id and limited once after the merge. Each notice carries its kind, scope, title, body, author class, linked task and its status, expiry, report count and effective status (open, closed or expired, derived when read). Ordered incident, maintenance, info, newest update first. Output {notices, degraded}; degraded names any owner or home that could not be read, so a shorter list never silently hides an unreachable owner. Read-only.",
+    "description": "List fleet notices, open ones unless status says otherwise. With a workspace, that workspace's notices plus global notices homed elsewhere on its owner; with all: true, every workspace homed on this owner; without a workspace in a federated session, every reachable owner's notices merged, deduplicated by id and limited once after the merge. Each notice carries its kind, scope, title, body, author class, linked task and its status, expiry, report count and effective status (open, closed or expired, derived when read). Ordered warn, incident, maintenance, info, newest update first. Output {notices, degraded}; degraded names any owner or home that could not be read, so a shorter list never silently hides an unreachable owner. Read-only.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1766,7 +1778,7 @@
   },
   {
     "name": "orbit.notice.post",
-    "description": "Post a fleet notice: a short, scoped note every agent and operator in its scope should see until it stops being true (an incident, planned maintenance, or other information). Not a lease notice: lease notices are events on one path lease. The notice is held by this workspace's owner, expires (defaults by kind, capped by poster class), closes when its linked task is done, and is deduplicated by dedupe_key: posting a key an open notice already holds updates it when you may edit it, or corroborates it (bumps its report count) when you may not. The response is {notice, outcome} with outcome created, updated or corroborated; a lost reply is safe to retry. Who you post as (operator, orchestrator or agent) comes from your session, never from input; a managed agent may post only incident or info notices about its own workspace, for at most 24 hours, with a linked task or evidence. A notice informs; it grants nothing.",
+    "description": "Post a fleet notice: a short, scoped note every agent and operator in its scope should see until it stops being true (an ask of the operator, an incident, planned maintenance, or other information). Not a lease notice: lease notices are events on one path lease. The notice is held by this workspace's owner, expires (defaults by kind, capped by poster class), closes when its linked task is done, and is deduplicated by dedupe_key: posting a key an open notice already holds updates it when you may edit it, or corroborates it (bumps its report count) when you may not. The response is {notice, outcome} with outcome created, updated or corroborated; a lost reply is safe to retry. Who you post as (operator, orchestrator or agent) comes from your session, never from input; a managed agent may post only incident or info notices about its own workspace, for at most 24 hours, with a linked task or evidence. A resident cycle may also post warn notices and keeps one info status line under the key resident:<mandate>:status, whose expiry Orbit sets to twice the mandate's heartbeat. A notice informs; it grants nothing.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1774,7 +1786,7 @@
     "parameters": [
       {
         "name": "kind",
-        "description": "incident (something is broken now), maintenance (planned work others should hold off or plan around) or info (anything else worth knowing).",
+        "description": "warn (the operator is needed: name the exact ask), incident (something is broken now), maintenance (planned work others should hold off or plan around) or info (anything else worth knowing).",
         "param_type": "string",
         "required": true
       },
@@ -1816,7 +1828,7 @@
       },
       {
         "name": "evidence",
-        "description": "Up to 8 references as {type, value} objects; type is task, run, friction, pull_request, url or commit, and value is at most 256 characters. Stored and shown, never dereferenced.",
+        "description": "Up to 8 references as {type, value} objects; type is task, run, friction, pull_request, decision, url or commit, and value is at most 256 characters. Stored and shown, never dereferenced.",
         "param_type": "object_array",
         "required": false
       },
@@ -1828,7 +1840,7 @@
       },
       {
         "name": "expires_in_hours",
-        "description": "Hours until the notice expires. Defaults by kind (incident 72, maintenance 12, info 168); capped by poster class, and a longer request is refused rather than clamped. Mutually exclusive with expires_at.",
+        "description": "Hours until the notice expires. Defaults by kind (warn 72, incident 72, maintenance 12, info 168); capped by poster class, and a longer request is refused rather than clamped. Mutually exclusive with expires_at.",
         "param_type": "integer",
         "required": false
       },
@@ -1956,7 +1968,7 @@
       },
       {
         "name": "record",
-        "description": "Complete resident.checkpoint v1 JSON object (kind, schema=1, mandate, cycle, run_id, crew, recovery_of, wake, authority, actions, decisions, requests, costs, notes, next_wake, continuity, outcome, probe). At most 64 KiB, 50 actions, 20 decisions, 20 costs and 2000 note characters. Action keys are resident:<mandate>:<cycle>:<positive integer>.",
+        "description": "Complete resident.checkpoint v1 JSON object (kind, schema=1, mandate, cycle, run_id, crew, recovery_of, wake, authority, actions, decisions, requests, costs, notes, next_wake, continuity, outcome, probe). At most 64 KiB, 50 actions, 20 decisions, 20 costs and 600 note characters, where notes describe only this cycle's delta. Action keys are resident:<mandate>:<cycle>:<positive integer>.",
         "param_type": "object",
         "required": true
       },
@@ -2211,7 +2223,7 @@
   },
   {
     "name": "orbit.resident.show",
-    "description": "Show one resident mandate: the mandate artifact (or why it is missing or invalid), the effective authority (rights and the workspaces both the authority and the mandate cover), the authority record with its grant and narrowing history, open grant requests, the latest parsed checkpoint and live cycle, and the mandate's state (active, handed_off, ended or invalid). Read-only.",
+    "description": "Show one resident mandate: the mandate artifact (or why it is missing or invalid), the effective authority (rights and the workspaces both the authority and the mandate cover), the authority record with its grant and narrowing history, open grant requests, the latest parsed checkpoint and live cycle, the status line (the mandate's one info notice: title, body, when it was posted and lapses, and stale once it has lapsed), and the mandate's state (active, handed_off, ended or invalid). Read-only.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2663,55 +2675,55 @@
       },
       {
         "name": "subject",
-        "description": "what is triaged: pilot_warning (the default and only subject), a proposed task's pilot warning hold",
+        "description": "Triage subject, only pilot_warning (default); a proposed task's pilot warning hold",
         "param_type": "string",
         "required": false
       },
       {
         "name": "id",
-        "description": "propose and report: the pilot-held task",
+        "description": "Pilot-held task ID, for propose and report",
         "param_type": "string",
         "required": false
       },
       {
         "name": "summary",
-        "description": "propose and report: one or two plain-language sentences naming the decision needed, readable without opening the code",
+        "description": "Decision needed in one or two plain sentences, for propose and report; readable without opening the code",
         "param_type": "string",
         "required": false
       },
       {
         "name": "reason",
-        "description": "report: the exact action only a human outside Orbit can take",
+        "description": "Exact action only a human outside Orbit can take, for report",
         "param_type": "string",
         "required": false
       },
       {
         "name": "options",
-        "description": "propose: two or three {summary, consequence, rewrite, action} objects; rewrite is {description?, acceptance_criteria?} with the field's complete new value; action is {kind: requeue | re_pilot | change_crew (crew) | split (title, description, acceptance_criteria) | reject | archive}; every option needs a rewrite, an action or both",
+        "description": "Two or three decision options for propose; each is a {summary, consequence, rewrite, action} object; rewrite is {description?, acceptance_criteria?} with the field's complete new value; action is {kind: requeue | re_pilot | change_crew (crew) | split (title, description, acceptance_criteria) | reject | archive}; every option needs a rewrite, an action or both",
         "param_type": "object_array",
         "required": false
       },
       {
         "name": "recommended",
-        "description": "propose: 1-based index of the recommended option",
+        "description": "1-based index of the recommended option, for propose",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "source_revision",
-        "description": "inspection proof: the pinned commit id the caller inspected, or null in a non-Git workspace; supply with observed_revision and observed_tree",
+        "description": "Pinned commit id inspected (null if non-Git); supply with observed_revision and observed_tree",
         "param_type": "string",
         "required": false
       },
       {
         "name": "observed_revision",
-        "description": "inspection proof: `git rev-parse HEAD` in the inspection checkout",
+        "description": "Value of `git rev-parse HEAD` in the inspection checkout; inspection proof",
         "param_type": "string",
         "required": false
       },
       {
         "name": "observed_tree",
-        "description": "inspection proof: `git rev-parse 'HEAD^{tree}'` in the inspection checkout",
+        "description": "Value of `git rev-parse 'HEAD^{tree}'` in the inspection checkout; inspection proof",
         "param_type": "string",
         "required": false
       }
@@ -2853,7 +2865,7 @@
       },
       {
         "name": "view",
-        "description": "Bounded metadata view. The only accepted value is `bounded`.",
+        "description": "Bounded metadata view; requires `workspace`. The only accepted value is `bounded`.",
         "param_type": "string",
         "required": false
       },
@@ -3138,19 +3150,19 @@
       },
       {
         "name": "fields",
-        "description": "No pagination with a projection on a claimed read. Fields to return, keyed (even one); `delivery` alone selects delivery evidence. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop the projection to page the full task, or drop pagination for a projection.",
+        "description": "Fields to return, keyed (even one); `delivery` alone selects delivery evidence. Not with pagination on a claimed read. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop the projection to page the full task, or drop pagination for a projection.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "field",
-        "description": "No pagination with a projection on a claimed read. Compatibility alias for a single field projection, for example `field: \"artifacts\"`. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop the projection to page the full task, or drop pagination for a projection.",
+        "description": "Alias for `fields` taking one field, for example `field: \"artifacts\"`. Not with pagination on a claimed read. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop the projection to page the full task, or drop pagination for a projection.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "run_id",
-        "description": "No pagination with a delivery selector on a claimed read. With `field: \"delivery\"` only: the delivery run to report. Omitted, the newest task-delivery run submitted with this task is used. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop `run_id` (and any projection) to page the full task, or drop pagination for a projection.",
+        "description": "Delivery run to report, with `field: \"delivery\"` only; not with pagination on a claimed read. Omitted, the newest task-delivery run submitted with this task is used. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop `run_id` (and any projection) to page the full task, or drop pagination for a projection.",
         "param_type": "string",
         "required": false
       },
@@ -3162,31 +3174,31 @@
       },
       {
         "name": "view",
-        "description": "Bounded metadata view. The only accepted value is `bounded`.",
+        "description": "Bounded metadata view; requires `workspace`. The only accepted value is `bounded`.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "limit",
-        "description": "No projection with pagination on a claimed read. Bounded detail page size for a paginated claimed read, which accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+        "description": "Detail page size for a paginated claimed read; not with a projection. That read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "comments_offset",
-        "description": "No projection with pagination on a claimed read. Comment offset for a paginated claimed read, which accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+        "description": "Comment offset for a paginated claimed read; not with a projection. That read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "history_offset",
-        "description": "No projection with pagination on a claimed read. History offset for a paginated claimed read, which accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+        "description": "History offset for a paginated claimed read; not with a projection. That read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "artifacts_offset",
-        "description": "No projection with pagination on a claimed read. Artifact metadata offset for a paginated claimed read, which accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+        "description": "Artifact metadata offset for a paginated claimed read; not with a projection. That read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
         "param_type": "integer",
         "required": false
       }

@@ -178,7 +178,9 @@ definitions first and fall back by name to the registered workspace's catalog.
 provenance come from that same catalog. A disabled or invalid local definition
 does not expose a shared replacement. Inspection accepts `.yaml` and `.yml`
 (case-insensitive extensions) and reports the actual file path. If multiple
-files in one catalog have the same name, `show` refuses the ambiguous lookup.
+files in one catalog have the same name, `show` refuses the ambiguous lookup,
+and the scheduler, `list` and `orbit doctor` report every one of them as a load
+error and fire none until only one remains.
 Writes and `mint` still require the canonical `<name>.yaml` file and keep their
 existing checkout scope; inspecting a shared definition does not authorize
 changing or minting it from a worktree. An empty worktree catalog can be a Linux sandbox
@@ -243,6 +245,25 @@ rewrite is logged to `.orbit/state/tool-name-migrations.jsonl` (plugin
 rewrites to `~/.orbit/state/`), and a task gets a
 `tool_names_migrated` history entry.
 
+Plugin rewrites preserve exact consent. Before changing a matching installed
+manifest, Orbit durably retains its original bytes under
+`~/.orbit/state/plugin-tool-name-originals/`, keyed by the original SHA-256.
+If the rewritten file lands but its digest record and rollback do not, a
+later ordinary open verifies the retained original against the recorded digest
+and accepts only its exact tool-name rewrite. This works for mixed legacy and
+canonical names, including repeated items. The loader takes its snapshot
+before migration, so the following open loads the repaired plugin.
+
+For interrupted writes from older versions without a retained original,
+Orbit checks the all-legacy spelling and mixed spellings of up to ten
+convertible list items (at most 1,024 candidates). Each candidate must match
+the recorded digest and reproduce the entire on-disk manifest exactly when
+rewritten. Larger ambiguous old lists require reinstalling the reviewed
+plugin with `orbit plugin add --force` and enabling it with the intended
+grants. An unrelated manifest edit never gains consent through recovery.
+The plugin migration has its own versioned completion marker, so installs
+marked complete by the older pass receive this repair once.
+
 The dashboard's **Automation › Auto-tasks** row has an **edit** link on the
 trigger that changes only the schedule (cron, a fixed interval or
 `deliveries_landed`). It runs the schedule half of `update`, with the same
@@ -255,6 +276,16 @@ A genuine custom body is intentionally preserved, even if it still names a
 retired tool. Sync recognizes historical shipped bodies by exact body digest;
 it cannot decide which local prose to discard. Do not weaken that matcher,
 delete/recreate the definition, or use `restore` to replace an existing fork.
+
+`run-failure-patterns` has a narrower reconciliation. When its effective body
+omits the bundled host-aware deduplication rule (machine id, leaf run id and
+task id), `orbit auto-task show` and `list` report a stale contract, `orbit
+doctor` flags it, and minting is held until the body is reconciled.
+`orbit auto-task update run-failure-patterns --adopt-bundled-contract` appends
+only that bundled paragraph and acceptance criterion and keeps every other
+field. It cannot be combined with another edit, and it writes nothing when the
+body already carries the rule. Any other stale fork still uses the procedure
+below.
 
 Use the owning checkout and its registered workspace explicitly. This is an
 operator change after review, separate from preparing or testing a repair:
@@ -376,7 +407,7 @@ reset before it stays applied, recorded as its own audited reset.
   sweeps from a workspace whose repository holds no code.
 - `orbit auto-task restore <name>` is the way back for a deleted shipped
   default. It writes the shipped content, with the shipped `enabled` value
-  (disabled, except `host-health`, which ships enabled), and clears the
+  (disabled for every default, including `host-health`), and clears the
   opt-out, so later reseeds manage it again. `restore` refuses a name Orbit
   does not ship and a definition that already exists. `auto-task add` under a
   deleted default's name creates your own definition instead; the opt-out
@@ -416,7 +447,10 @@ authority over either restriction. `qa-sweep` keeps its claimed path: its shared
 requirements are `orbit.task.add`, `orbit.task.artifact` action `put`, and
 `orbit.task.show`. It persists the execution summary with `orbit.task.update`
 only on the owner; a claimed worker returns that summary for owner import, so
-the template does not unconditionally require that tool.
+the template does not unconditionally require that tool. `path-risk-review`
+takes the same route for its creation-grant reauthorization: it runs the step
+when `orbit.task.update` is available and otherwise leaves the filed task held
+for the pilot, so it declares no grant and its placement stays unchanged.
 
 A template that declares exactly `github.auth.status`, `github.run.list`,
 `github.run.view`, `github.run.logs`, and `github.pr.list` is the worked
@@ -453,12 +487,12 @@ plugin being removed.
 `orbit workspace init` seeds the defaults selected by `seeding.auto_tasks`
 (`"all"` by default) from this catalog, disabled,
 except any you deleted (see [Deleting a definition](#deleting-a-definition)).
-`host-health` is the one exception: it seeds enabled. In an existing
-workspace, `orbit workspace sync` or `orbit workspace init` turns on a
+`host-health` seeds disabled, like every other default. In an existing
+workspace, `orbit workspace sync` or `orbit workspace init` turns off a
 `host-health` no operator has configured (its file still holds the bytes Orbit
 wrote and no `orbit auto-task toggle` set its flag); `orbit init` leaves
 existing files alone. After a toggle or a file edit, that choice decides:
-`orbit auto-task toggle host-health off` keeps it off. Only the workspace
+`orbit auto-task toggle host-health on` keeps it on. Only the workspace
 owner mints it; a replica never does.
 For ongoing selection and reconciliation, follow [Seeding policy](configuration.md#seeding-policy):
 
@@ -623,7 +657,7 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration.
   established, never both. It runs on the owner: preparation records a
   `required_machine` owner-evidence contract before admission, and a follower
   that still starts it stops with `wrong_host` without filing.
-- **`host-health`** (`low`) — enabled-by-default weekly review of host-local
+- **`host-health`** (`low`) — disabled-by-default weekly review of host-local
   `orbit doctor --json` findings, Orbit service logs, and a read-only Orbit
   version and migrations check. That check records `orbit --version`, the
   executable path, SHA-256 and any recorded local-candidate source commit,

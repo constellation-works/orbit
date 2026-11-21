@@ -267,16 +267,10 @@ fn unminted_retry_recovers_after_a_legacy_task_closed_and_settings_changed() {
         let (fixture, runtime, legacy, action_id) = claimed(false);
         let store = runtime.automation_store().unwrap();
         let receipts = store.automation_receipts(&legacy.consumer, 100).unwrap();
-        if matches!(status, "archived" | "deleted") {
-            fixture
-                .command(&["task", "archive", &action_id])
-                .assert()
-                .success();
-        } else {
-            fixture.json(&[
-                "task", "update", &action_id, "--status", status, "--force", "--json",
-            ]);
-        }
+        fixture
+            .command(&["task", "archive", &action_id])
+            .assert()
+            .success();
         let closed = runtime.get_task(&action_id).unwrap();
         let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
         let before = evaluate_auto_task(&runtime, &definition, false, Utc::now())

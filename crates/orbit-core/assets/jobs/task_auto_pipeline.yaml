@@ -59,6 +59,11 @@ spec:
     # which is the behavior of every caller that does not pass it. Forwarded
     # unchanged so the leaf jobs this run admits inherit the same window.
     allowed_crews: []
+    # Set only by an operator's explicit ship (CLI, dashboard): its named tasks
+    # bypass the drain's readiness gates in `list_backlog`, and each gate run
+    # it is forwarded to does not wait on other tasks' context locks. Drain
+    # children and other callers leave it false.
+    operator_readiness_override: false
     max_bundles: 10
     concurrency: 5
     max_bundle_size: 5
@@ -72,6 +77,7 @@ spec:
         task_ids: "{{ input.task_ids }}"
         allowed_crews: "{{ input.allowed_crews }}"
         mode: "{{ input.mode }}"
+        operator_readiness_override: "{{ input.operator_readiness_override }}"
 
     - id: validate_bundles
       target: activity:validate_bundles
@@ -101,10 +107,21 @@ spec:
               completion: "{{ input.completion }}"
               auto_fix: "{{ input.auto_fix }}"
               allowed_crews: "{{ input.allowed_crews }}"
+              operator_readiness_override: "{{ input.operator_readiness_override }}"
       fan_in:
         join:
           mode: all
         collect: gate_results
+
+    # Check omissions only after dispatch, preserving eligible siblings.
+    - id: report_named_holds
+      target: activity:validate_bundles
+      default_input:
+        bundles: "{{ steps.list_backlog.output.bundles }}"
+        max_bundle_size: "{{ input.max_bundle_size }}"
+        known_task_ids: "{{ steps.list_backlog.output.task_ids }}"
+        requested_task_ids: "{{ input.task_ids }}"
+        excluded: "{{ steps.list_backlog.output.excluded }}"
 
     - id: require_gate_success
       when: "{{ steps.validate_bundles.output.bundle_count }} != 0"

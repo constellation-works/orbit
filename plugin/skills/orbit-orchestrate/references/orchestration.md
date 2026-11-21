@@ -42,6 +42,29 @@ An explicit task ID must be in `backlog` or `in-progress`: shipping a `blocked`,
 so return a blocked task to the backlog (`orbit task update <id> --status backlog`)
 before shipping it again.
 
+`orbit run ship --json` returns `workflow`, `job_id`, `run_id`, `state`,
+`submitted_at`, and the captured `review` layer (`{timing, source}`, or null),
+matching MCP ship and HTTP `POST /workflows/ship`. The CLI also retains its
+one-shot dispatch fields: `wait_timeout: false`, `attempt: 1`, `error_code: null`
+and `error_message: null`. Submission notices use `warning` and `note` strings
+(one notice per line); a validation-environment warning also appears as
+`validation_env_warning`. Absent notices omit their keys. Text output keeps
+its workflow/job/run/state and inspect lines, followed by warnings and notes.
+
+Readiness gates and lock waits are drain policy. An operator's explicit ship
+of named tasks (`orbit run ship <id>` or the dashboard's Ship) overrides them
+and dispatches: a pending `not_before`, unassessed complexity, no
+`context_files`, and context locks another in-flight task or reservation holds
+(its gate takes a reservation holding no files and edits beside them). Once
+the task is `in-progress`, its own locks hold against the drain as usual. The
+task's history records a `readiness_overridden` event naming the gates and the
+lock holders it overrode. It still refuses a task this host cannot run (host
+OS, `requires_labels`, a `ui` task without a verified browser kit), a
+human-crew task, a task a live run, execution claim or task-pilot preparation
+holds, an inherited-only epic root, a task-pilot finding, and an overlap with
+a pull follower's live execution claim. `orbit.workflow` action `ship` does
+not override readiness.
+
 `run auto` drains backlog leaf tasks for a bounded window of at most 24 hours.
 The window bounds only the *start* of new work — a task already shipping when
 it expires still finishes.
@@ -480,19 +503,38 @@ Two of its answers separate contention from capacity:
   reserving task reports `context_lock_conflict` with a `detail` saying it
   reserves. At most two tasks reserve per pass; work that does not overlap a
   reserved surface admits normally.
+- A `ci-failure-sweep` repair whose `context_lock_conflict` carries a
+  `shared_base_repair` object (and a `detail` starting `shared base failure:`)
+  waits on a `review` task that waits on it. The holder holds a selector its
+  own recovery added, and its current head fails with the repair's exact
+  failure signature: either the failure its admitted auto-fix check repair was
+  handed (`pr_auto_fix_head_failure`) or a `known_red_base` hold. The repair
+  owns the fix. Admission still grants no overlapping write. For each holder,
+  head, failure and selector, the owner's admission pass files one human-crew
+  task tagged `shared-base-repair-decision` and raises one `agent_request`
+  decision on it. The decision asks who owns the repair: free the holder's
+  lock without discarding its candidate or pull request, let the holder's PR
+  carry the repair, or keep waiting. The `detail` names that task and
+  request. Answering records the choice and completes the task; Orbit applies
+  nothing to either task. With no human crew configured, nothing is filed and
+  the `detail` says so.
 - `published_delivery` (text: `resuming published delivery (PR #N)`) marks a
   backlog task whose final-recovery requeue kept its pull request. Its next
   run adopts that branch and pull request before it edits anything, so it is
   admitted past other tasks' context locks rather than waiting on
   `context_lock_conflict`. Before any agent of that run that may edit, the run
   takes the task's own footprint locks, waiting while another task holds them,
-  so two writers never share a file.
+  so two writers never share a file. An operator's explicit ship
+  (`orbit run ship`) is the exception: the gate un-defers those locks and
+  records a `readiness_overridden` event naming the holders, so the run edits
+  beside them without waiting.
 - `awaiting_footprint` and `awaiting_exclusive_slot` mean the task declares
-  no `context_files` and has no `no-diff-expected` tag in a run with more than
-  one slot. It would hold no file lock, so it waits for the task pilot, then
-  for a slot with nothing else in flight; `detail` names the
-  deadline and the fix. A `conflict_deferred` whose `provenance` is
-  `unknown_footprint` is blocked by a running task with no footprint, and
+  no `context_files`, has no `no-diff-expected` tag and no operator
+  `readiness-waived` tag, in a run with more than one slot. It would hold no
+  file lock, so it waits for the task pilot, then for a slot with nothing else
+  in flight; `detail` names the deadline and the fix. A `conflict_deferred`
+  whose `provenance` is `unknown_footprint` is blocked by a running task with
+  no footprint, and
   `exclusive_reservation` by such a task waiting to go alone. See
   [Prepare selectors](#prepare-selectors-before-dispatching-under-traffic).
 - `capacity.occupancy` breaks the occupied slots down by what each is doing —
@@ -518,12 +560,15 @@ set selectors, then promote. On 2026-10-10 three tasks filed straight into a
 live four-slot drain's backlog with no selectors were admitted together and
 all edited the website's then-shared stylesheet; two of the runs were cancelled.
 A drain or ship with more than one slot now treats such a task (no
-`context_files`, no `no-diff-expected` tag) as a whole-tree footprint. While
-an enabled task-pilot routine this host owns would still prepare it, the task
-waits (`awaiting_footprint`). After that, or once the pilot has assessed it
-and left it empty, it starts only when no other leaf is in flight
-(`awaiting_exclusive_slot`) and, while it runs, no other editing work is
-admitted. A single-slot drain and `orbit run ship <id>` admit it as before.
+`context_files`, no `no-diff-expected` tag, no operator `readiness-waived` tag)
+as a whole-tree footprint. While an enabled task-pilot routine this host owns
+would still prepare it, the task waits (`awaiting_footprint`). After that, or
+once the pilot has assessed it and left it empty, it starts only when no other
+leaf is in flight (`awaiting_exclusive_slot`) and, while it runs, no other
+editing work is admitted. A single-slot drain and `orbit run ship <id>` admit
+it as before. A task an operator tagged `readiness-waived` skips this: the
+drain admits it like ready work, beside other editing work, with no file lock
+and no whole-tree reservation.
 
 Do **not** fill them inline. Use `orbit run task-pilot`: it audits tasks
 read-only in bounded partitions, and its apply step persists only selectors it
@@ -537,7 +582,7 @@ orbit run job task_pilot_pipeline --input 'task_ids=["<id>"]' --json
 
 The first pilot is automatic once for eligible tasks. Creators can add `no-pilot`
 when the footprint, complexity, testable criteria and deduplication are already
-settled; readiness still applies and an explicit pilot remains available. The routine queues a later pilot automatically only when a certified description or acceptance-criteria edit makes the applied assessment stale on a proposed or backlog task, and no live execution claim or unresolved failed pilot holds the task. Edits to other material (title, plan, selectors) or policy never queue one through the routine; every other later routine assessment requires an explicit
+settled; readiness still applies and an explicit pilot remains available. The routine queues a later pilot automatically only when a certified description or acceptance-criteria edit makes the applied assessment stale on a proposed or backlog task, and no live execution claim or unresolved failed pilot holds the task. A person's or agent session's `context_files` edit on such a task whose latest assessment holds a warning or an admission hold also queues one and releases an unresolved failed pilot; comments, plan and execution-summary updates, the pilot's own selector writes and a run's `context_files_widened` records do not. Other material edits (title, plan, and selectors not covered by that rule) or policy never queue one through the routine; every other later routine assessment requires an explicit
 request: `orbit task repilot <id>`, `orbit.task.recover` action `repilot` with `id` and the
 owning `workspace`, or `orbit task update <id> --repilot` / `orbit.task.update`
 with `repilot: true`. An `--approve-proposed` drain still queues a fresh pilot automatically when a stale explicit/routine assessment's certified description/criteria or other material drifted and no live execution claim holds the task, while scheduled discovery still queues one automatically only when its certified description/criteria drifted and no live execution claim holds the task; a failed repilot holds it until its meaning changes again or an operator acts. These operator requests submit one pending pilot and
@@ -625,8 +670,8 @@ free named tasks. Apply settles each held task as `superseded` with reason
 `piloted_elsewhere`; if every named task is held, the run succeeds without
 agent work. Inspect or resume the owning run for that task's assessment.
 
-The dashboard's **Run pilot** action on a `proposed` task in the task details
-panel makes this same single-task submission (`POST /api/tasks/<id>/pilot`,
+The dashboard's **Run pilot** action on a `proposed` or `backlog` task in the
+task details panel makes this same single-task submission (`POST /api/tasks/<id>/pilot`,
 operator session required). It is refused, with a typed reason and no run, when
 a pilot run already holds the task, a delivery run carries it, it is not
 `proposed`/`backlog`, or the checkout is a replica. On success the panel shows
@@ -662,7 +707,7 @@ It uses a `preparation_eligible` state trigger, not a periodic cron: each tick
 fingerprints eligible tasks and
 queues only tasks without an applied assessment after the 2-minute debounce or
 the 10-minute maximum wait. Once assessed, a task stays quiet across routine
-windows until a certified description or acceptance-criteria edit makes its assessment stale; it then gets a fresh routine pilot unless a live execution claim or an unresolved failed pilot holds it. Edits to other material or policy never queue one; request another routine pilot explicitly. An `--approve-proposed` drain still repilots a stale assessment automatically as described below. Inspect the workspace's actual `task_pilot.yaml`
+windows until a certified description or acceptance-criteria edit makes its assessment stale; it then gets a fresh routine pilot unless a live execution claim or an unresolved failed pilot holds it. A person's or agent session's `context_files` edit on a proposed or backlog task whose latest assessment holds a warning or an admission hold queues one the same way and releases an unresolved failed pilot; comments, plan and execution-summary updates and the pilot's own selector writes do not. Other material or policy edits never queue one; request another routine pilot explicitly. An `--approve-proposed` drain still repilots a stale assessment automatically as described below. Inspect the workspace's actual `task_pilot.yaml`
 before relying on that cadence, because a customized routine or preserved
 legacy cron definition can differ from the shipped seed.
 
@@ -860,7 +905,8 @@ By default the task pipelines end in `review`. PR mode prepares a source branch
 and opens a PR, then stops with that PR unmerged unless `--complete` was
 authorized. Local mode implements in an isolated worktree and fast-forwards the
 configured local base branch before the task reaches `review`; the leaf job's
-`auto_push` input controls its optional push. Review is not a pre-merge stop in
+`auto_push` input controls its optional push for a run that ends in `review`
+(a run under `--complete` always pushes). Review is not a pre-merge stop in
 local mode. Inspect the effective wrapper and child job inputs rather than
 assuming local mode means the current checkout was edited or a remote branch was
 updated.
@@ -875,7 +921,10 @@ tasks it ships from `review` to `done`. Default-off, and never enabled by
 workspace configuration, an environment variable, or a routine.
 
 - Local mode completes only after the bundle merged *and* pushed; a failed
-  publication leaves the task in `review`.
+  publication leaves the task in `review`. The push merges commits other hosts
+  published to the base since the run started (landed commits keep their shas and
+  stay reachable from the pushed base); a remote that cannot be merged cleanly
+  leaves the task in `review` with the merge failure as the reason.
 - PR mode completes only after the PR is verified merged. Branch protections and
   required checks are respected and never bypassed; pending checks may use
   GitHub auto-merge, but enabling auto-merge is not success. A closed or blocked

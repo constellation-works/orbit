@@ -178,11 +178,22 @@ impl OrbitRuntime {
     /// authority, so an edge the generated index lost is still reported.
     /// Pass `Some(workspace_id)` to scope the sweep to one workspace, or
     /// `None` to audit the whole coordination registry.
+    ///
+    /// Observational: the registry is opened read-only, so auditing never
+    /// creates, hardens or migrates it. A missing or older registry is an
+    /// error naming the setup it needs.
     pub fn audit_dangling_relations(
         &self,
         workspace_id: Option<&str>,
     ) -> Result<Vec<DanglingRelationTarget>, OrbitError> {
-        let registry = self.open_task_registry()?;
+        let path = task_registry_path(&self.global_root());
+        if !path.exists() {
+            return Err(OrbitError::Store(format!(
+                "task registry '{}' does not exist yet; any writable Orbit command creates it",
+                path.display()
+            )));
+        }
+        let registry = TaskRegistryStore::open_read_only(&path)?;
         audit_relation_targets(&registry, workspace_id)
     }
 }

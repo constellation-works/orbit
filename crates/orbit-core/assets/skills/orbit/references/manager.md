@@ -50,8 +50,9 @@ session cannot write, or hand the filing to a session with that surface.
    `resident.mandate/v1`: `goal` (one line), `exit_criteria` (1–8 lines),
    optional `deadline` (RFC 3339), `workspaces` the mandate is about,
    `watch` (`tasks` and `tags` whose changes wake the resident), `crew` (any
-   registered crew), `cadence` (`floor_minutes` at least 5, `heartbeat_minutes`
-   at least the floor) and `continuity` (`prefer` or `off`).
+   registered crew), `cadence` (`heartbeat_minutes` at least 5, optional
+   `floor_minutes` at least 5 and at most the heartbeat) and `continuity`
+   (`prefer` or `off`). See "Cadence: floor and heartbeat" below.
 3. Submit the authority grant with the human's words verbatim (next section).
 4. The mandate becomes active when it has a valid mandate artifact and its
    assignment is open (tagged `resident`, control active): a grant is not an
@@ -71,6 +72,29 @@ the `tasks-write` toolset, but it is not otherwise gated: an edit cannot
 widen authority — the effective scope is the workspaces both the
 mandate and the authority record cover. `orbit.resident.show` reports both
 records beside the effective authority.
+
+## Cadence: floor and heartbeat
+
+The **heartbeat** is the longest a resident goes without a cycle. The
+**floor** is the shortest gap between two cycles, however much changes; it
+bounds cost when the resident has something to react to. Between them, each
+checkpoint's `next_wake.not_before` picks the next cycle time when nothing
+wakes it sooner.
+
+A resident wakes early only on a change it acts on: any change to a task in
+`watch`, or a state change (blocked, review, review decision, done,
+rejected, a settled decision request) of a task its cycles acted on; a
+warn, incident or maintenance notice opening or clearing (every `resident:`-keyed
+notice, any resident's status line or warn, and notices authored by the assignment
+excluded); an answer, comment or
+mandate or authority change on the assignment. Edits, run retries and moves
+between active states do not wake it.
+
+Leave `floor_minutes` out: it defaults to the heartbeat. Set a lower floor
+only when the operator asks for faster reaction ("react within 5 minutes");
+"every 20 minutes or as it sees fit" is `heartbeat_minutes: 20` with no
+floor. Keep `watch` for tasks whose every change matters: a watched tag on a
+busy queue makes the floor the interval.
 
 ## Relay grants verbatim
 
@@ -139,12 +163,15 @@ Residents report only through Orbit; there is no inbox to check.
   requests, checkpoints and audit rows. It reports manual interventions (per
   mandate and per active mandate-day), escalation load (per mandate-day and
   per human-day, median answer latency, share answered with the recommended
-  option, expired-unanswered), reversal rate (resident decisions and actions
-  a human undid within 7 days, each counted once), and crashed-cycle recovery
-  cost (cycles without a checkpoint, time to the next good checkpoint,
-  recovery slot minutes, repeated actions, human interventions needed). It
-  covers every resident mandate in the workspace with workspace totals unless
-  scoped, and it writes nothing. It is part of the `resident` toolset.
+  option, and the answered, open, expired-unanswered and superseded counts),
+  reversal rate (resident decisions and actions a human undid within 7 days,
+  each counted once), and crashed-cycle recovery cost (cycles without a
+  checkpoint, time to the next good checkpoint, recovery slot minutes, repeated
+  actions, human interventions needed). Unscoped, it covers the workspace's
+  `resident`-tagged mandates whose active span overlaps the window, with
+  workspace totals. `--mandate` reports the named task instead, tagged or not,
+  when it carries the mandate artifact, with totals over that one mandate. It
+  writes nothing. It is part of the `resident` toolset.
 
 Run it as `orbit resident metrics [--mandate <MANDATE>] [--since <SINCE>]
 [--baseline <BASELINE>]`, or call `orbit.resident.metrics` with the same
@@ -159,8 +186,11 @@ unmanaged work; a baseline measure that cannot be derived reports
 The digest is the operational view for the shift — state, open escalations,
 reversible decisions awaiting veto, top pains, pending proposals, plus
 metrics totals. The metrics report is the evidence behind those totals:
-per-mandate and per-day rates to read before a widening decision. To verify,
-run `orbit resident metrics --json` and read the returned measures.
+per-mandate and per-day rates to read before a widening decision. Per-mandate-day
+rates divide by each mandate's active days; the per-human-day escalation rate
+divides by the window's calendar days, because one person handles escalations
+across the whole window. To verify, run `orbit resident metrics --json` and
+read the returned measures.
 - `orbit.attention` — everything waiting on the human, including a stalled
   resident (`resident_stalled`: no checkpoint for twice its heartbeat,
   three `incomplete` checkpoints in a row, or its workspace's cycle routine

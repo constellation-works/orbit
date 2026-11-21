@@ -1,4 +1,5 @@
 use super::*;
+use orbit_types::task::TaskHistoryEntry;
 
 impl OrbitRuntime {
     pub fn reject_task(
@@ -10,6 +11,34 @@ impl OrbitRuntime {
         self.reject_task_with_identity(id, note, comment, None, None)
     }
 
+    /// Reject a `blocked` task on the operator's answer to its block-triage
+    /// decision. The public reject refuses `blocked`, but that request is
+    /// bound to the blocked status, so an offered reject option would never
+    /// settle. The answer holds the task's write lock from its status check
+    /// through this write, so the status written here is the one validated.
+    /// A live local run that still owns the task refuses the reject, as it
+    /// refuses the archive and requeue answers on the same request.
+    ///
+    /// `answered` is written in the same store update as the status, so an
+    /// interruption leaves either neither or both. The returned effects close
+    /// the task's pull requests and must run after the caller releases the
+    /// task lock; a forge call is not part of the answer's atomic write.
+    pub(crate) fn reject_blocked_task_for_triage_decision(
+        &self,
+        id: &str,
+        note: String,
+        comment: Option<String>,
+        answered: Vec<TaskHistoryEntry>,
+    ) -> Result<DeferredApprovalEffects, OrbitError> {
+        let (task, previous_status, reason) =
+            self.reject_task_recording(id, note, comment, None, None, true, answered)?;
+        Ok(DeferredApprovalEffects::after_rejection(
+            previous_status,
+            task,
+            reason,
+        ))
+    }
+
     pub(crate) fn reject_task_with_identity(
         &self,
         id: &str,
@@ -18,6 +47,39 @@ impl OrbitRuntime {
         agent: Option<String>,
         model: Option<String>,
     ) -> Result<Task, OrbitError> {
+        self.reject_task_in_status(id, note, comment, agent, model, false)
+    }
+
+    fn reject_task_in_status(
+        &self,
+        id: &str,
+        note: String,
+        comment: Option<String>,
+        agent: Option<String>,
+        model: Option<String>,
+        allow_blocked: bool,
+    ) -> Result<Task, OrbitError> {
+        let (result, previous_status, reason) =
+            self.reject_task_recording(id, note, comment, agent, model, allow_blocked, Vec::new())?;
+        self.close_task_prs_after_transition(previous_status, &result, Some(&reason));
+
+        Ok(result)
+    }
+
+    /// Write the rejection with `append_history` in the same store update and
+    /// return the rejected task, the status it left and the redacted reason.
+    /// Pull-request closure is the caller's.
+    #[allow(clippy::too_many_arguments)]
+    fn reject_task_recording(
+        &self,
+        id: &str,
+        note: String,
+        comment: Option<String>,
+        agent: Option<String>,
+        model: Option<String>,
+        allow_blocked: bool,
+        append_history: Vec<TaskHistoryEntry>,
+    ) -> Result<(Task, TaskStatus, String), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
@@ -47,12 +109,16 @@ impl OrbitRuntime {
             let task = self.get_task(id)?;
             #[cfg(test)]
             self.apply_transition_read_hook(id)?;
+            if allow_blocked {
+                ensure_status_change_not_run_owned(self, id)?;
+            }
             let previous_status = task.status;
             let status_event = match task.status {
                 TaskStatus::Proposed => "proposal_rejected",
                 TaskStatus::Review => "review_rejected",
                 TaskStatus::Backlog => "backlog_rejected",
                 TaskStatus::InProgress => "in_progress_rejected",
+                TaskStatus::Blocked if allow_blocked => "blocked_rejected",
                 other => {
                     return Err(OrbitError::InvalidInput(format!(
                         "task '{id}' is in status '{other}'; reject requires 'proposed', 'review', 'backlog', or 'in-progress'"
@@ -67,18 +133,17 @@ impl OrbitRuntime {
                     status_event: Some(status_event.to_string()),
                     status_note: Some(reason.clone()),
                     append_comments: append_comments.clone(),
+                    append_history: append_history.clone(),
                     expected_status: Some(vec![task.status]),
                     ..Default::default()
                 },
             )?;
             Ok((updated, previous_status))
         })?;
-        self.close_task_prs_after_transition(previous_status, &result, Some(&reason));
-
-        Ok(result)
+        Ok((result, previous_status, reason))
     }
 
-    pub fn archive_task(&self, id: &str) -> Result<(), OrbitError> {
+    pub(crate) fn archive_task(&self, id: &str) -> Result<(), OrbitError> {
         self.update_task(
             id,
             TaskUpdateParams {
@@ -89,12 +154,9 @@ impl OrbitRuntime {
         .map(|_| ())
     }
 
-    /// Archive as the dashboard's archive button does: refused while a
-    /// local run owns the task unless `force`, in which case the move is
-    /// applied under the forced authority and recorded as `forced`. The
-    /// plain [`Self::archive_task`] stays the internal path its in-process
-    /// callers own.
-    pub fn archive_task_for_dashboard(&self, id: &str, force: bool) -> Result<(), OrbitError> {
+    /// Archive a task in any status. A live local run must release the task
+    /// first unless the operator requests `force`, which records a forced archive.
+    pub fn archive_task_as_operator(&self, id: &str, force: bool) -> Result<(), OrbitError> {
         if force {
             return self
                 .force_update_task_with_identity(

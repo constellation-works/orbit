@@ -16,6 +16,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use super::super::automation::ScheduleGuard;
 use super::super::error::WorkflowError;
+use crate::plugin::is_full_commit_id;
 use crate::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 
 /// Auto-task YAML schema version this binary reads and writes.
@@ -102,9 +103,7 @@ impl SweepCursorRecord {
                 self.schema_version
             )));
         }
-        if !matches!(self.cursor.len(), 40 | 64)
-            || !self.cursor.bytes().all(|byte| byte.is_ascii_hexdigit())
-        {
+        if !is_full_commit_id(&self.cursor) {
             return Err(WorkflowError::Invalid(
                 "sweep cursor must be a full 40- or 64-character hexadecimal commit id".to_string(),
             ));

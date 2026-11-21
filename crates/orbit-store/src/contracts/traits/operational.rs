@@ -17,8 +17,8 @@ use crate::contracts::invocation::{
     TaskInvocationMetrics, ToolInvocationMetrics,
 };
 use crate::contracts::routine::{
-    RoutineCursor, RoutineFireIntentParams, RoutineFireRecord, RoutineFireState,
-    RoutinePauseRecord, RoutineSlotAttempts,
+    RoutineBreakerEvent, RoutineBreakerRecord, RoutineCursor, RoutineFireIntentParams,
+    RoutineFireRecord, RoutineFireState, RoutinePauseRecord, RoutineSlotAttempts,
 };
 use crate::contracts::session_log::{SessionLogAppendParams, SessionLogEntry, SessionLogFilter};
 use crate::contracts::v2_audit::{
@@ -44,6 +44,12 @@ pub trait RoutineStoreBackend: Send + Sync {
         baseline_at: &str,
     ) -> Result<bool, OrbitError>;
     fn routine_record_fire_intent(
+        &self,
+        intent: &RoutineFireIntentParams,
+    ) -> Result<bool, OrbitError>;
+    /// Record a fire intent that consumes no scheduled slot: the cursor's
+    /// `last_slot` is left unchanged.
+    fn routine_record_unscheduled_fire_intent(
         &self,
         intent: &RoutineFireIntentParams,
     ) -> Result<bool, OrbitError>;
@@ -123,6 +129,41 @@ pub trait RoutineStoreBackend: Send + Sync {
     fn routine_pause(&self, routine_name: &str, actor: &str) -> Result<bool, OrbitError>;
     fn routine_resume(&self, routine_name: &str) -> Result<bool, OrbitError>;
     fn routine_pauses(&self) -> Result<BTreeMap<String, RoutinePauseRecord>, OrbitError>;
+    /// Every routine circuit-breaker row on this host, keyed by routine name.
+    fn routine_breakers(&self) -> Result<BTreeMap<String, RoutineBreakerRecord>, OrbitError>;
+    /// Write one breaker row and append its transition event atomically.
+    fn routine_breaker_transition(
+        &self,
+        breaker: &RoutineBreakerRecord,
+        event: &RoutineBreakerEvent,
+    ) -> Result<(), OrbitError>;
+    /// Write `breaker` and append `event` only when the stored row still
+    /// equals `expected` (`None` means no row). Returns whether the write
+    /// landed; `false` means a concurrent write (for example an operator
+    /// reset or bypass) changed the row after `expected` was read, and
+    /// neither the row nor the event was written. Backends that cannot
+    /// compare fall back to the unconditional transition.
+    fn routine_breaker_transition_if_current(
+        &self,
+        expected: Option<&RoutineBreakerRecord>,
+        breaker: &RoutineBreakerRecord,
+        event: &RoutineBreakerEvent,
+    ) -> Result<bool, OrbitError> {
+        let _ = expected;
+        self.routine_breaker_transition(breaker, event)?;
+        Ok(true)
+    }
+    /// Close an open breaker now; `false` when it was not open.
+    fn routine_breaker_reset(&self, routine_name: &str, actor: &str) -> Result<bool, OrbitError>;
+    /// Let one fire through an open breaker on the next sweep; `false` when
+    /// it was not open.
+    fn routine_breaker_bypass(&self, routine_name: &str, actor: &str) -> Result<bool, OrbitError>;
+    /// Newest breaker events for one routine, newest first.
+    fn routine_breaker_events(
+        &self,
+        routine_name: &str,
+        limit: usize,
+    ) -> Result<Vec<RoutineBreakerEvent>, OrbitError>;
 }
 
 pub trait FrictionStoreBackend: Send + Sync {
@@ -224,6 +265,20 @@ pub trait ProviderLimitStoreBackend: Send + Sync {
         &self,
         observation: &ProviderLimitObservation,
     ) -> Result<bool, OrbitError>;
+    /// [ORB-25967] Record a provider's complete usage reading, taken at one
+    /// instant for one provider account: store each observation as
+    /// `record_provider_limit` does, and in the same transaction retire the
+    /// account's `event` observations of that provider that an older reading
+    /// stored and this one no longer reports, so a window the provider stopped
+    /// reporting neither shows nor gates. `error` observations keep their own
+    /// expiry. An empty reading changes nothing, and neither does a reading
+    /// older than an `event` observation the account already has: the newer
+    /// reading is the authority, and writing the older one would restore a
+    /// window the newer one retired.
+    fn record_provider_usage_reading(
+        &self,
+        observations: &[ProviderLimitObservation],
+    ) -> Result<(), OrbitError>;
     /// The latest observation per provider, model scope and window, newest
     /// first.
     fn provider_limits(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError>;

@@ -63,7 +63,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | Single-owner distributed drain setup or claimed-attempt recovery | [Distributed drain](../orbit/references/setup/distributed-drain.md) |
 | Owner completion policy for distributed-drain handoffs (`review` versus automatic owner landing) | [Configuration — Distributed-drain completion policy](references/configuration.md#distributed-drain-completion-policy) |
 | Task snapshots, backup and restore | [Publication](references/publication.md) |
-| Upgrade, resource sync, doctor, worktree GC, workspace removal or teardown, or source-remote rebinding; inspect layout migrations or repair SQLite permissions offline | [Maintenance](references/maintenance.md#database-and-layout-upgrades) |
+| Upgrade, resource sync, doctor, worktree GC, workspace removal or teardown, source-remote rebinding, or re-pointing this host at a moved checkout directory (`workspace rebind --path`); inspect layout migrations or repair SQLite permissions offline | [Maintenance](references/maintenance.md#database-and-layout-upgrades); moved checkout: [Maintenance — Rebind a moved checkout](references/maintenance.md#rebind-a-moved-checkout) |
 | Inspect the installed skill catalog or user-level skill links: use `orbit skill list` and `show`, and `orbit skill doctor` to diagnose dangling links. If a client cannot find a skill, inspect the expected links or run `orbit skill link`; a healthy doctor result does not certify that every client link exists. | [Maintenance — Skill management](references/maintenance.md#skill-management) |
 | Retired features and their leftover keys, commands or toolset names (explorer and agent invocation, crew ladder, regression-risk marks, explore brief, visual review, and the other removals): what to delete, what replaces it, the recognition deadline, and how to verify the cleanup with `orbit doctor` | [Maintenance — Retired features](references/maintenance.md#retired-features-and-their-keys) |
 | A removed command, MCP tool name or task input: `orbit orchestrator`, `--role orchestrators`, per-action MCP names such as `orbit_friction_add`, a bare string in a list field, or a `model`, `agent` or `context` task input. Find the replacement and what to delete | [Maintenance — Retired features](references/maintenance.md#retired-features-and-their-keys) |
@@ -104,8 +104,8 @@ Never delete admission/identity files, bypass schema guards, or start a shadow
 store to recover access. Follow [maintenance](references/maintenance.md).
 
 Seeded schedules are disabled until an operator deliberately enables them, except
-the `worktree-gc`, `task-pilot` and `crew-memory-dream` routines and the `host-health` auto-task, which
-seed enabled when the seeding policy selects them. Seeded enabled does not
+the `worktree-gc`, `task-pilot` and `crew-memory-dream` routines, which
+seed enabled when the seeding policy selects them. The `host-health` auto-task seeds disabled. Seeded enabled does not
 turn the experimental crew-memory feature on: `crew-memory-dream` mints
 nothing while `crew_memory.enabled` is false or no running memory-arm
 experiment applies. Configure, inspect and stop crew memory with

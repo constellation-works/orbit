@@ -1,5 +1,5 @@
 //! Completion's generic infrastructure recovery; the adapter owns forge evidence.
-use super::super::{completion_deadline::Deadline, operations};
+use super::super::{completion_deadline::Deadline, operations, remote_probe::exact_remote_ref_sha};
 use super::{
     answers::{PullRequestStatus, RequiredChecks},
     auto_fix::{hold_auto_fix_stop, stopped, stopped_by},
@@ -26,12 +26,12 @@ pub(super) struct InfrastructureOwner<'a> {
 }
 
 impl InfrastructureOwner<'_> {
-    fn primary_task(&self) -> Result<&str, OrbitError> {
+    fn primary_task(&self, pr: &str) -> Result<&str, OrbitError> {
         self.task_ids
             .iter()
             .min()
             .map(String::as_str)
-            .ok_or_else(|| stopped("", "infrastructure recovery names no owning task"))
+            .ok_or_else(|| stopped(pr, "infrastructure recovery names no owning task"))
     }
 }
 
@@ -46,7 +46,7 @@ fn record<H: RuntimeHost + ?Sized>(
         "auto-fix/{}/infrastructure-{}-{suffix}.json",
         owner.run_id, evidence.run_id
     );
-    let primary = owner.primary_task()?;
+    let primary = owner.primary_task(&evidence.pr_number)?;
     let run_id = host.get_task(primary)?.job_run_id.ok_or_else(|| {
         stopped(
             &evidence.pr_number,
@@ -82,18 +82,21 @@ fn exact_remote(
             "infrastructure PR identity changed",
         ));
     }
+    let reference = format!("refs/heads/{}", evidence.head_branch);
     let remote = deadline.execute(
         "git",
         vec![
             "ls-remote".into(),
             "--heads".into(),
             "origin".into(),
-            format!("refs/heads/{}", evidence.head_branch),
+            reference.clone(),
         ],
         Path::new(workspace),
         "infrastructure remote head",
     )?;
-    if remote.stdout.split_whitespace().next() != Some(evidence.head_sha.as_str()) {
+    if exact_remote_ref_sha(&remote.stdout, &reference).as_deref()
+        != Some(evidence.head_sha.as_str())
+    {
         return Err(stopped(
             &evidence.pr_number,
             "infrastructure remote head changed or was deleted",
@@ -105,8 +108,20 @@ fn exact_remote(
 /// The stop for a prerequisite evidence read that could not be read
 /// conclusively (for example the attempt is still running, was superseded, or
 /// did not fail). The stop is deliberate, so it is held rather than recorded
-/// as a run failure; other read failures keep their class.
+/// as a run failure; other read failures keep their class. A throttled read
+/// whose reset did not fit the completion deadline is held the same way, with
+/// the provider's diagnostic [ORB-25918]: `hold_auto_fix_stop` holds only an
+/// `Execution` stop, and `stopped_by` would keep the throttled `PrivateVcs`.
 fn unreadable_prerequisite_evidence_stop(pr: &str, error: &OrbitError) -> OrbitError {
+    let throttled = error
+        .private_vcs_failure()
+        .is_some_and(|failure| failure.read_throttle.is_some());
+    if throttled {
+        return hold_auto_fix_stop(
+            stopped(pr, &error.to_string()),
+            DeliveryRefusal::CheckEvidenceInconclusive,
+        );
+    }
     let stop = stopped_by(pr, &error.to_string(), error);
     if matches!(error, OrbitError::WorkflowEvidenceUnavailable(_)) {
         hold_auto_fix_stop(stop, DeliveryRefusal::CheckEvidenceInconclusive)
@@ -129,7 +144,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
     deadline_ms: u64,
 ) -> Result<InfrastructureStep, OrbitError> {
     let deadline = Deadline(deadline_ms);
-    let history = host.get_task_history(owner.primary_task()?)?;
+    let history = host.get_task_history(owner.primary_task(pr)?)?;
     let reservations =
         pr_infrastructure_reservations(&history).map_err(|reason| stopped(pr, &reason))?;
     if let Some(reservation) = reservations

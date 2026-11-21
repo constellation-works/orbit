@@ -230,6 +230,15 @@ impl OrbitRuntime {
                 .last()
                 .and_then(|step| step.error_code.as_deref())
                 == Some(DeliveryRefusal::BaseChaseExhausted.error_code());
+        // A local review-reset renews the ledger, then this same lineage
+        // resumes. Admission still enforces the ledger on every retry; a
+        // claimed leaf is already refused above and needs a fresh claim.
+        let review_budget_held = source.state == JobRunState::Held
+            && source
+                .steps
+                .last()
+                .and_then(|step| step.error_code.as_deref())
+                == Some(DeliveryRefusal::ReviewBudgetExhausted.error_code());
         // [ORB-23003] A delivery that succeeded at review handed its pull
         // request to nobody: no completion step ran, so a red or conflicting
         // PR it left is repaired by rewinding it to that step, exactly as a
@@ -260,6 +269,7 @@ impl OrbitRuntime {
         if !forge_held
             && !check_evidence_held
             && !base_chase_held
+            && !review_budget_held
             && !review_handoff
             && !held_handback
             && !operator_stopped
@@ -272,7 +282,7 @@ impl OrbitRuntime {
                 "job run '{}' is {} — resume requires an interrupted, failed, or timed-out run, \
                  one held because the host manager stopped its worker, or one held because the \
                  forge refused its push, could not be read, check evidence was inconclusive, \
-                 or the base chase exhausted",
+                 the base chase exhausted, or review admission exhausted its budget",
                 source_run_id, source.state
             )));
         }

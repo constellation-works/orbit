@@ -285,14 +285,27 @@ pub(super) fn evaluate(
 }
 
 pub(super) fn setup() -> (Arc<dyn AutomationStoreBackend>, Host, DeliveryTrigger) {
-    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let (_, store, host, trigger) = setup_raw();
+    (store, host, trigger)
+}
+
+/// [`setup`], also handing back the SQLite store under it so a fixture can
+/// seed retained history no evaluation pass could build cheaply.
+pub(super) fn setup_raw() -> (
+    Store,
+    Arc<dyn AutomationStoreBackend>,
+    Host,
+    DeliveryTrigger,
+) {
+    let raw = Store::open_in_memory().unwrap();
+    let store = compose::automation_store(raw.clone()).unwrap();
     let host = Host::new();
     let trigger = trigger();
     assert_eq!(
         evaluate(store.as_ref(), &host, &trigger, true).reason,
         "baselined"
     );
-    (store, host, trigger)
+    (raw, store, host, trigger)
 }
 
 #[test]
@@ -559,4 +572,84 @@ fn a_stopped_action_with_malformed_evidence_settles_and_spends_its_retry_budget(
     assert_eq!(state.active.unwrap().state, BatchState::Exhausted);
     assert_eq!(state.covered, revision(0));
     assert!(exhausted.receipts.is_empty());
+}
+
+/// An evaluator that read no state while a concurrent one won the baseline
+/// at another head [ORB-25602]: the read of `automation_state` installs the
+/// winner before answering `None`, the deterministic form of that race.
+struct LostInitialization {
+    inner: Arc<dyn AutomationStoreBackend>,
+    winner: Mutex<Option<AutomationState>>,
+}
+
+impl AutomationStoreBackend for LostInitialization {
+    fn automation_state(&self, c: &str) -> Result<Option<AutomationState>, OrbitError> {
+        if let Some(winner) = self.winner.lock().unwrap().take() {
+            assert!(self.inner.automation_initialize(&winner)?);
+            return Ok(None);
+        }
+        self.inner.automation_state(c)
+    }
+
+    fn automation_initialize(&self, s: &AutomationState) -> Result<bool, OrbitError> {
+        self.inner.automation_initialize(s)
+    }
+
+    fn automation_commit(
+        &self,
+        a: &AutomationState,
+        b: &AutomationState,
+        r: Option<&AcceptedCoverage>,
+    ) -> Result<bool, OrbitError> {
+        self.inner.automation_commit(a, b, r)
+    }
+
+    fn automation_receipts(&self, c: &str, n: usize) -> Result<Vec<AcceptedCoverage>, OrbitError> {
+        self.inner.automation_receipts(c, n)
+    }
+}
+
+#[test]
+fn a_lost_baseline_race_defers_instead_of_reporting_its_unwritten_state() {
+    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let host = Host::new();
+    let trigger = trigger();
+    let winner = AutomationState {
+        members: None,
+        consumer: CONSUMER.into(),
+        epoch: "v1".into(),
+        trigger: Some(trigger.clone()),
+        repository: "owner/repo".into(),
+        branch: trigger.branch.clone(),
+        generation: 0,
+        baseline: revision(7),
+        observed: revision(7),
+        covered: revision(7),
+        pending_commits: vec![],
+        pending: vec![],
+        waived: vec![],
+        excluded: vec![],
+        unresolved: Default::default(),
+        associations: Default::default(),
+        lookup_retries: Default::default(),
+        active: None,
+        stall: None,
+    };
+    let racing = LostInitialization {
+        inner: store.clone(),
+        winner: Mutex::new(Some(winner.clone())),
+    };
+
+    let lost = evaluate_at(&racing, &host, &trigger, true, 0);
+    assert!(
+        matches!(
+            lost,
+            Err(AutomationError::Deferred(
+                DeferredReason::ConcurrentEvaluation
+            ))
+        ),
+        "the losing evaluator must not report its own baseline at {:?}: {lost:?}",
+        revision(0)
+    );
+    assert_eq!(store.automation_state(CONSUMER).unwrap(), Some(winner));
 }

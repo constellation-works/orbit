@@ -56,6 +56,22 @@ pickup. Do not confuse a task description with a design document or a transcript
   When no such stable bound is known yet, make the timing result informational,
   gate on a deterministic proxy (operation, request or payload counts), or file
   a measurement task first that establishes the fixture, spread and margin.
+  Before promotion, put the evidence route for each hard timing criterion in
+  the brief. Name the fixture artifact or exact seed and reset commands for a
+  disposable workspace and data set, the exact build and measurement commands,
+  and how to select the baseline revision and reviewed final candidate revision
+  with matching build profiles and settings. Specify the bounded same-fixture
+  protocol for both builds, including pacing, warmups, samples, repetitions,
+  aggregation and the unchanged-build control. Name the lane and host or host
+  requirements that can actually run it, who owns any necessary serial
+  host-owned run, and the exact log or task-artifact path the reviewer will use.
+  Have that run retain the resolved revisions, profiles, host environment,
+  fixture identity, samples, aggregate and unchanged-build spread at that path.
+  Use required validation only if its configured command runs this benchmark
+  on the reviewed candidate and retains the evidence. An empty command list or
+  a passing behavioral check supplies no timing result. Use the existing
+  post-deploy route only for a criterion that needs the deployed build, and
+  record that measurement as owed until it is run.
 
 Split work when independently deliverable outcomes or real dependency boundaries
 justify it. A coherent cross-layer change can remain one task; file count and
@@ -178,11 +194,16 @@ halves of its input:
   selectors or evidence and request a new pilot assessment.
 
 Write the title as a concrete outcome that fits the commit subject. The pipeline
-writes the title as `<type>: <title>` and cuts that part at 72 characters with
-an ellipsis, so a longer title ends mid-word in the history. Keep titles to at
-most 67 characters for a bug, 66 for a feature, 65 for a chore and 62 for a
-refactor, which is 72 minus the type's prefix. Put the detail in the
-description, not the title.
+composes the subject as `<type>: <title> [<ID>]` and rewrites a literal `…` to
+`...` and commas inside brackets to semicolons. It cuts the title at a word
+boundary, never with an ellipsis, to keep the whole subject within 72 characters.
+When the subject cuts or rewrites the title, the full title leads the commit body.
+Keep titles to at most 55
+characters for a bug, 54 for a feature, 53 for a chore and 50 for a refactor,
+which is 72 minus the type's prefix and the ` [<ID>]` marker (12 characters for
+an `ORB-` id with five digits). A longer id, or the ` (#<PR>)` a squash appends,
+takes more room, so a title at the limit may still be cut at a word boundary.
+Put the detail in the description, not the title.
 
 Assign `crew` to the actual intended implementer. If you will implement the task
 personally, use your own configured crew rather than the crew you would have
@@ -467,11 +488,12 @@ name it as an evidence gap rather than declaring its missing selector, and
 never invent a filename.
 
 A builtin MCP tool surface change has companions that authors usually do not
-declare. When a plan adds, removes or renames a builtin MCP tool, changes its
-advertised placement, or changes its id route, locate these companions at the
-revision being scoped (`rg -l` on the named test or table, `rg --files` for a
-named golden file) and declare each as a `file:` selector in a workspace that
-keeps them. Four kinds apply:
+declare. When a plan adds, removes or renames a builtin MCP tool, or changes
+its advertised placement, id route, advertised description or input schema,
+locate the applicable companions at the revision being scoped (`rg -l` on the
+named test or table, `rg --files` for a named golden file), then declare each
+as a `file:` selector only when its trigger below applies. Do so only in a
+workspace that keeps the companion. The first four kinds apply:
 
 - The handwritten exact advertised-name list, asserted by the test
   `canonical_builtin_definitions_preserve_the_exact_workspace_surface`, changes
@@ -498,7 +520,23 @@ keeps them. Four kinds apply:
   does not change it.
 
 A body-only tool edit that keeps the name, verbs, placement and id route
-declares none of these.
+declares none of these four companions.
+
+The fifth companion is the handwritten per-role MCP surface budget
+(`mcp_role_budgets.json`, in the `orbit-mcp` crate's `tests/boundary/`
+directory), read by `role_surface_budget` in `role_surface.rs`.
+Locate it at the revision being scoped with `rg --files -g 'mcp_role_budgets.json'`,
+verify the matching include in `role_surface.rs`, and declare its exact
+workspace-relative path as a `file:` selector. Its ceilings bound each role's
+tool count and approximate tokens (serialized name, description and
+input-schema byte count divided by four). Declare this fixture when a plan adds,
+removes or renames a builtin MCP tool, or changes its advertised description or input
+schema. A placement-only change, id-route-only change, or implementation-only
+edit that leaves the advertised name, description and input schema unchanged
+does not trigger it. Keep the measured surface within the recorded ceilings.
+If a change requires more surface, raise only the affected ceiling in this
+file as a reviewed decision and explain in the PR why the role needs the extra
+surface, as the file comment requires.
 
 When the planned change establishes a new or renamed action, or a changed
 cross-module interface, follow it through the existing registration wiring
@@ -607,11 +645,13 @@ Missing-file selectors remain valid declarations; do not prune them because a
 checkout cannot yet resolve them. Empty context holds no context lock, so a
 drain or ship with more than one slot holds such a task: it waits for an
 enabled task pilot to prepare it (`awaiting_footprint`), and otherwise runs
-only alone (`awaiting_exclusive_slot`). A single-slot run, an explicit `orbit
-run ship <id>` and owner pull admission still admit it. Do not invent paths to
-satisfy admission. Task-pilot can prepare unknown targets, and a live
-pilot's preparation (its reservation from prepare, then its checkpoint)
-still holds its tasks until that run settles.
+only alone (`awaiting_exclusive_slot`), unless an operator has tagged it
+`readiness-waived`. A single-slot run, an explicit `orbit run ship <id>` and
+owner pull admission still admit it. Do not invent paths to satisfy admission,
+and do not add `readiness-waived` yourself: only an operator adds it, and an
+agent's write that adds it is refused. Task-pilot can prepare unknown
+targets, and a live pilot's preparation (its reservation from prepare, then
+its checkpoint) still holds its tasks until that run settles.
 
 **Never file with `--status backlog`, or promote to `backlog`, a task with
 empty `context_files` while a drain is live.** File it `proposed`, run the
@@ -628,6 +668,11 @@ and `orbit.task.update` responses carry it, `orbit task show` prints a
 blocks drain approval of a proposed task and is advisory in the backlog,
 where it names the missing file lock;
 `unassessed_complexity` blocks both. A `no-diff-expected` tag clears both.
+An operator's `readiness-waived` tag makes a backlog task's gaps advisory: the
+task is admitted with its configured or default crew, even with unassessed
+complexity. It does not reach the proposed stage, so approval still needs a
+prepared task. Host OS, labels, browser kit, human-crew assignment,
+dependencies, real lock holders and live pilot holds still apply.
 Read the gaps after filing and fix what blocks, or leave it to task-pilot.
 
 ### When to skip the pilot

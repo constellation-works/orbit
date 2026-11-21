@@ -105,7 +105,9 @@ after the wrapper signals that its queue interval earned the capped credit.
 
 ### `v2_worktree_lifecycle::worktree_contracts_2`
 
+- `worktree_setup_uses_the_branch_not_a_same_named_tag`
 - `worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched`
+- `worktree_setup_names_a_templated_branch_stably_and_refuses_an_unsafe_render`
 - `worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits`
 - `local_landing_precheck_uses_the_normalized_base_checkout`
 - `local_landing_preserves_unrelated_untracked_files`
@@ -117,6 +119,7 @@ after the wrapper signals that its queue interval earned the capped credit.
 - `a_validated_candidate_is_resumed_on_the_new_base_without_implementation`
 - `a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run`
 - `a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run`
+- `a_candidate_held_for_owner_signoff_is_resumed_for_implementation_repair`
 - `a_conflicting_candidate_is_handed_to_the_implementer_with_its_conflict`
 
 ### `v2_worktree_lifecycle::worktree_contracts_4`
@@ -160,6 +163,7 @@ certifies the repaired head as both the original head and publication lease.
 - `conflict_recovery_still_refuses_unresolved_conflicts_beside_companion_edits`
 - `agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits`
 - `provider_primary_source_edit_fails_closed_and_preserves_both_checkouts`
+- `dispatch_whose_checkout_vanishes_during_the_run_names_the_missing_worktree`
 
 ### `v2_worktree_lifecycle::worktree_contracts_8`
 
@@ -172,6 +176,8 @@ certifies the repaired head as both the original head and publication lease.
 ### `v2_worktree_lifecycle::worktree_contracts_9`
 
 - `repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts`
+- `primary_returned_to_the_base_branch_mid_run_is_not_drift`
+- `primary_moves_off_the_base_branch_still_fail_closed`
 
 ### `v2_worktree_lifecycle::preparation::preparation_contracts`
 
@@ -267,6 +273,7 @@ certifies the repaired head as both the original head and publication lease.
 - `claimed_commit_accepts_required_checks_with_controls_and_diagnostics`
 - `claimed_commit_refuses_incomplete_or_mismatched_mixed_role_evidence`
 - `claimed_commit_lands_after_owner_records_supplied_regression_from`
+- `owner_recheck_types_a_task_scope_change_after_the_evidence_as_stale`
 
 ### `candidate_resume::candidate_resume_contracts_1`
 
@@ -399,9 +406,11 @@ certifies the repaired head as both the original head and publication lease.
 - `a_local_candidate_landing_names_its_task_before_the_branch_moves`
 - `a_candidate_that_cannot_fast_forward_records_no_landing_intent`
 - `a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts`
+- `an_already_landed_landing_holds_when_its_evidence_went_stale`
 
 ### `handoff_landing::handoff_landing_contracts_2`
 
+- `landing_refusals_keep_typed_holds_and_candidate_red_stays_failed`
 - `only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair`
 - `an_owed_hosted_check_must_pass_before_the_owner_merges`
 
@@ -507,7 +516,7 @@ certifies the repaired head as both the original head and publication lease.
 
 ### `pr_landing::claimed_known_red_superset_and_disjoint`
 
-- `a_claimed_candidate_failing_only_known_red_tests_hands_off_a_report_the_owner_rechecks`: superset, disjoint
+- `a_claimed_candidate_failing_only_known_red_tests_hands_off_a_report_the_owner_rechecks`: shared-plus-new, disjoint-six-vs-one
 
 
 ## Reconciled PR families (ORB-15959 salvage)
@@ -599,7 +608,7 @@ These families reuse one bounded child and pristine Git seed; each named row sti
 ### `pr_landing::supervisor_and_truncated_failures`
 
 - `supervisor_stops_are_environment_failures_and_never_poison_the_base_cache`
-- `a_failure_only_the_truncated_middle_names_still_holds_the_candidate`
+- `a_failure_only_the_truncated_middle_names_still_requires_candidate_repair`
 
 ### `pr_landing::network_retry_and_cached_base`
 
@@ -669,7 +678,6 @@ Each named row keeps a fresh disposable home, temporary directory, cwd, authorit
 
 - `a_forged_admission_value_does_not_admit_the_mode`
 - `an_admission_alone_does_not_remove_an_ordinary_activitys_sandbox`
-- `distinct_target_keeps_the_pipeline_step_id_in_trusted_host_audit`
 
 ## QA required selector reconciliation
 
@@ -719,8 +727,11 @@ current-source Linux result is recorded below.
   `known_red_validation_and_subset`; its claimed assertions use the existing
   `claimed_known_red_rows` dispatcher. `equal` and `subset` remain in the
   positive family. The former `superset` and `disjoint` rows map to upstream's
-  stronger `shared-plus-new` and `disjoint-six-vs-one`; `candidate-unknown`,
-  `base-unknown` and `both-unknown` also execute in the existing negative family.
+  stronger `shared-plus-new` and `disjoint-six-vs-one` in
+  `claimed_known_red_superset_and_disjoint` (ORB-16844 retired
+  `candidate-unknown`, `base-unknown` and `both-unknown` from the claimed
+  route; they remain covered on the owner route in
+  `a_candidate_failing_only_known_red_tests_proceeds_and_records_them`).
   Complete failure identities, candidate-repair classification, baseline log
   linkage, absent publication and independent owner recheck assertions are
   preserved. The historical truncated-middle helper name
@@ -837,7 +848,7 @@ remain pipeline-owned; full CI is separately run on the PR.
 
 ## Worktree lifecycle shared setup
 
-All 43 `v2_worktree_lifecycle::worktree_contracts_N` rows keep their scenario
+All 48 `v2_worktree_lifecycle::worktree_contracts_N` rows keep their scenario
 functions, names, `cfg(unix)` gates and assertions. The rows now share the
 fixture steps they used to repeat: checkout setup (`setup_checkout`,
 `gc_checkout`, `landing_checkout`), GC reports, Git queries (`head`, `status`,

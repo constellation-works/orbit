@@ -8,13 +8,15 @@ tags: [plugins, security, sandbox, secrets, ipc]
 paths: ["crates/orbit-core/src/adapter/engine_host/actions/sandbox/**", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-runtime/src/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
 related_features: [policy-sandbox, plugins]
 related_artifacts: [ORB-13038, ORB-13008, ORB-13009, ORB-14017, ORB-14194, F2026-09-230]
-last_updated: 2026-11-04
-last_validated: 2026-11-04
+last_updated: 2026-11-20
+last_validated: 2026-11-15
 ---
 
 # Design: host-side broker for agent-initiated plugin calls
 
-Status: proposal, partly implemented. The broker server exists (§4.2, "As implemented"): every
+Status: the broker, confinement, client forwarding and agent mask are implemented
+(§8). The design remains Draft; implementation does not establish design approval.
+The broker server exists (§4.2, "As implemented"): every
 sandboxed agent step gets a per-run socket with kernel peer authentication. With
 `ORBIT_PLUGIN_BROKER` set, nested CLI and MCP plugin calls forward to it after checking the
 server UID. The broker executes authenticated requests for exec-backed plugin tools through
@@ -90,7 +92,7 @@ So the process that needs the credential (the backend) and the process that must
 (the agent) cannot both be descendants of the same sandboxed process. At least one of them has
 to be spawned from outside the agent sandbox.
 
-The in-sandbox path has two more defects today, even before any deny is added. Neither agent
+The former in-sandbox path had two more defects, even before a deny was added. Neither agent
 profile grants writes to `state/plugins/` or `state/plugin-secrets/`
 (`append_linux_runtime_write_roots` and `append_orbit_child_runtime_write_roots` in
 `crates/orbit-core/src/adapter/engine_host/actions/sandbox/`). So an agent-initiated call
@@ -102,8 +104,8 @@ cannot:
   call is therefore refused. With X, which invalidates the old refresh token when it issues a
   new one, a refused rotation loses the account's only valid token.
 
-This follows from the code and has not been measured on a live host. The broker fixes both
-defects, because the backend and the store writes then run on the host.
+These were the code-derived gaps that motivated the design, not live-host measurements.
+The implemented broker fixes both, because the backend and the store writes run on the host.
 
 ### Alternatives considered
 
@@ -161,6 +163,17 @@ worktree nor start its own agent sandbox. With `ORBIT_PLUGIN_BROKER` set and the
 naming a resident cycle's run, the nested `orbit` forwards the call. The broker refuses it unless the
 job run it serves is a cycle, then runs the ship through the tool host for that run, so the cycle guard
 decides the live grant, the `dispatch` right and the workspace and writes the action ledger row.
+
+For ship, land, re-pilot and requeue, the managed-run environment is a routing hint. Only the
+broker's authenticated run can exercise the resident exemption. An in-process call still faces
+the operator capability check and cannot use a resident grant or replay its ledger entries.
+
+**A resident cycle's re-pilot and requeue.** `orbit.task.recover` action `repilot` submits a pilot run
+whose worker, like a ship's leaf, must start beside the cycle's read-only sandbox, and action `requeue`
+restores a held task and its preserved candidate, which the read-only sandbox cannot write. The nested `orbit` forwards both
+on the same terms as the ship, and the broker runs them through the tool host for the run it serves,
+so the cycle guard decides the live grant, the `dispatch` right and the workspace. No other
+`orbit.task.recover` action is brokered.
 
 **A resident cycle's decision raise.** A cycle escalates with `orbit.decision` action `raise`, whose
 workspace-wide raise lock lies in `.orbit`, which the cycle's sandbox mounts read-only. The nested
@@ -251,8 +264,11 @@ the owner receives that form. A path such as ` review-gate.json` or `./review-ga
 therefore the gate's `review-gate.json`, never an ordinary artifact.
 
 A `review-*` artifact (the prefix matched without ASCII case) is the review gate's and keeps its
-stricter scope. A `review-*` read or write naming a task other than the claimed task is refused
-as `claimed_owner_bridge_refused` before any of the scopes below. The broker carries it only for the reviewer activity (`agent_review_repair`),
+stricter scope. Artifact reads validate their fields before comparing the task ID. A read with
+`task_id` in place of `id` is refused with guidance to pass the task as `id`.
+A `review-*` call with valid fields for a task other than the claimed task is refused as
+`claimed_owner_bridge_refused` before any of the scopes below. The broker carries it only for the
+reviewer activity (`agent_review_repair`),
 and only while the review ledger shows one open attempt, admitted by that leaf, whose reviewer
 is running in this run before its deadline. A read may name the review contract's
 `review-manifest.json`, `review-report.json`, `review-report-history.json` or
@@ -322,7 +338,7 @@ nothing else.
 **Where the broker lives.** It runs in the `orbit job run-pipeline-worker` process that
 executes the agent step. `run_cli_backend` reaches `invoke_cli_provider`
 (`crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch/subprocess.rs`), which spawns the sandboxed
-provider through `spawn_child_with_optional_sandbox` (`cli_runner/spawn.rs`), records the child
+provider through `spawn_child_with_optional_sandbox` (`crates/orbit-engine/src/sandbox_spawn.rs`), records the child
 PID and, on Linux, its Bubblewrap PID namespace, and then blocks in `spawn_with_timeout` until
 the provider exits. That process is outside the sandbox and stays alive for the whole agent
 run. It already holds the run's authoritative context: run ID, task ID, workspace, the
@@ -444,11 +460,17 @@ resolves against the run's own registry. Everything that decides authority comes
 broker's own dispatch record and is never read from the request or the client's environment:
 run ID, task ID, the activity's allowlist, the filesystem profile and the tool ceiling.
 Consequently `context.task_id` and `context.job_run_id` (1_scope.md §4.2 "Call identity")
-become authenticated for brokered calls, where today they are host-attested only.
+are authenticated for brokered calls; ordinary host calls remain host-attested.
 
 `secret_updates` never leave the host. The broker applies them with the store's compare-and-swap
 exactly as the in-process host does and returns only `ok`/`output`/`error`. `entry_point` is a
 hint for the audit row; it grants nothing.
+
+A failed or refused reply for a ledgered resident write admitted before it failed also carries
+the write's already-assigned key as an optional top-level `action_key` on the error envelope
+(mirrored inside `error`; ORB-25284). It is omitted when no key was assigned — pre-admission
+denials and non-ledgered calls — and changes no code, status or retryability, so clients that
+ignore unknown fields keep working.
 
 ### 4.4 Execution and audit
 
@@ -659,7 +681,8 @@ granting `unsandboxed`.
 
 `<global_root>/state/plugins/` and `<global_root>/state/plugin-secrets/`, for reads and writes,
 on both platforms. The same mask also hides core's decision-channel store
-`<global_root>/state/decision-channels/`, which keeps every channel's token key, and `clock.env`
+`<global_root>/state/decision-channels/`, which keeps every channel's token key, the broker's
+GitHub run-log cache `<global_root>/state/github-run-logs/`, and `clock.env`
 ([policy-sandbox design](../policy-sandbox/2_design.md)). Other nested-`orbit` reads under the
 global root are unchanged. That includes `plugins/`, `plugins/.grants/` (the loader verifies
 witnesses when it builds the tool surface) and `state/plugin-callbacks/`.
@@ -770,7 +793,9 @@ Every refusal reaches the agent as an ordinary structured plugin error (1_scope.
 
 ## 8. Rollout and follow-up tasks
 
-The mask ships last, only once every call it would break has a broker to go to:
+[ORB-13038] authored this design. The four implementation steps below have shipped;
+[ORB-13238] was archived in favour of the three completed forwarding slices.
+The mask landed last, after every call it would break had a broker to go to:
 
 1. **Broker server and peer authentication.** The per-run listener in the CLI step runner, the
    wire protocol, Linux PID-namespace and macOS ancestry authentication, limits, teardown, and
@@ -778,41 +803,51 @@ The mask ships last, only once every call it would break has a broker to go to:
    "As implemented". [ORB-13236]
 2. **Brokered backend confinement.** Compile the plugin profile against the calling run's
    agent profile (§5) on both platforms, with `{{plugin_state}}` as the only widening. This is a
-   pure profile-compilation change, testable without the broker. [ORB-13237]
+   pure profile-compilation change, testable without the broker. Landed [ORB-13237].
 3. **Nested client forwarding.** `orbit tool run`, the `orbit <ns> <verb>` group and
    `orbit mcp serve` forward plugin calls when `ORBIT_PLUGIN_BROKER` is set. The broker runs
    them through the audited dispatch with the authoritative run context and the §5 profile.
    This slice also adds `brokered` audit fields and the §7 error codes, and updates
-   1_scope.md §4.2 "Call identity". [ORB-13238] Implemented in three slices:
+   1_scope.md §4.2 "Call identity". The archived umbrella [ORB-13238] was replaced
+   by three landed slices:
    - 3a. Broker-side execution: the audited dispatch, run-record authority, the `brokered`
-     audit fields and the broker's error codes. Landed; see §4.4 "As implemented".
-   - 3b. The nested client forwarding, implemented for CLI and MCP plugin calls.
+     audit fields and the broker's error codes. Landed; see §4.4 "As implemented". [ORB-13358] delivered this slice.
+   - 3b. [ORB-13359] implemented nested client forwarding for CLI and MCP plugin calls.
    - 3c. Implemented: MCP sessions owned by each dispatched invocation, process-group
      cleanup on disconnect and teardown, and CLI/MCP end-to-end coverage under real
-     Bubblewrap. See §4.4 "As implemented". Merge-commit CI is checked by delivery.
+     Bubblewrap in [ORB-13360]. See §4.4 "As implemented". Merge-commit CI is checked by delivery.
 4. **Agent sandbox mask.** The §6 mask on Linux and macOS, applied to every sandboxed agent
    whether or not its broker bound, plus the §6.3 nested behaviour: the sentinel, no in-process fallback, the secret
    store refusing a masked directory, and operator commands degrading. This slice also updates
    1_scope.md §3 and §4.3 to remove the "agent sandboxes can still read it" gap. Implemented;
    see §6.2 "As implemented". [ORB-13239]
 
+The former explorer sibling-worker route introduced by [ORB-20566] was removed
+with `orbit.agent.invoke` in [ORB-20383]. It is no longer a broker consumer.
+
 ## Task References
 
-- [ORB-13038] — this design.
-- [ORB-13008] — plugin-vs-plugin isolation of `state/plugins/<ns>`; its agent-side deny was
+- [ORB-13038] — authored this broker design.
+- [ORB-13008] — isolated plugins from each other's `state/plugins/<ns>`; its agent-side deny was
   split out to this design.
-- [ORB-13009] — the host secret store and per-call delivery the broker reuses.
-- [ORB-13236], [ORB-13237], [ORB-13238], [ORB-13239] — the implementation slices in §8.
-- [ORB-14017] — the host-credentialed `github.*` reads (§3).
-- [ORB-14194] — the claimed-review artifact route (§3).
-- [ORB-14260] — the claimed-owner calls and `owner_route_unavailable` (§3, §6.3).
-- [ORB-14661] — a claimed leaf's final-recovery evidence reads and its leaf delivery view (§3).
-- [ORB-18667] — a claimed leaf's read of the evidence findings on the kept candidate it resumes (§3).
-- [ORB-14792] — a claimed review task's `regression_from` findings and `unfiled-findings.json` (§3).
-- [ORB-19270] — a claimed worker's task show and artifact get of any task in the claimed workspace (§3).
+- [ORB-13009] — built the host secret store and per-call secret delivery.
+- [ORB-13236] — built the broker server and peer authentication.
+- [ORB-13237] — intersected brokered backend and calling-agent profiles.
+- [ORB-13238] — scoped the forwarding umbrella, then was archived for its decomposition.
+- [ORB-13358] — implemented broker-side audited dispatch.
+- [ORB-13359] — forwarded nested CLI and MCP plugin calls.
+- [ORB-13360] — completed MCP session lifecycle and disconnect cleanup.
+- [ORB-13239] — masked plugin state and secrets in sandboxed agent runs.
+- [ORB-14017] — brokered host-credentialed `github.*` reads (§3).
+- [ORB-14194] — added the claimed-review artifact route (§3).
+- [ORB-14260] — brokered claimed-owner calls and added `owner_route_unavailable` (§3, §6.3).
+- [ORB-14661] — admitted a claimed leaf's final-recovery evidence reads and leaf delivery view (§3).
+- [ORB-18667] — admitted a claimed leaf's reads of findings on its resumed candidate (§3).
+- [ORB-14792] — admitted claimed review findings with `regression_from` and retained refused findings (§3).
+- [ORB-19270] — widened claimed-worker reads to tasks and ordinary artifacts in the claimed workspace (§3).
 - [ORB-20350] — prevented nested Landlock write grants from reopening the
   agent's read exclusions (§6.2).
-- [ORB-20566] — moved managed explorer submissions to a sibling worker
-  outside the caller's sandbox (§3).
+- [ORB-20566] — moved managed explorer submissions outside the caller's sandbox.
+- [ORB-20383] — removed `orbit.agent.invoke` and the explorer route.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

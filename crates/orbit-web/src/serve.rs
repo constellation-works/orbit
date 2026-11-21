@@ -1,6 +1,6 @@
 use std::future::{Future, IntoFuture};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,7 +13,6 @@ use clap::Args;
 use orbit_cmd::registry_runtime;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
-use orbit_types::workspace::{WorkspaceRegistry, WorkspaceStatus};
 use tokio::sync::Notify;
 use tower_http::compression::CompressionLayer;
 
@@ -21,10 +20,10 @@ use tower_http::compression::CompressionLayer;
 use crate::lease_intake;
 use crate::{api, assets, health, heap, state};
 
-/// Conventional loopback port for the dashboard. Shared by `web serve`'s
-/// `--port` default and `web connect`'s local/remote port preference so the
-/// two surfaces agree on one number.
-pub(crate) const DEFAULT_DASHBOARD_PORT: u16 = 7878;
+// Compatibility shims for names serve still calls. Retirement: import `connect`
+// and `shutdown` at the call sites, then drop these re-exports.
+pub(crate) use crate::connect::{DEFAULT_DASHBOARD_PORT, open_browser};
+pub(crate) use crate::shutdown::shutdown_signal;
 
 /// Arguments for `orbit web serve` (and the library entry point).
 #[derive(Args, Clone)]
@@ -50,10 +49,11 @@ pub struct ServeArgs {
     #[arg(long)]
     pub global: bool,
 
-    /// Preselect this workspace in the dashboard, by registered name, logical
-    /// ID (`ws_*`), or local checkout path. Defaults to the workspace
-    /// containing the current directory. Distinct from `--root`, which
-    /// chooses which registry is served.
+    /// Set the browser's workspace hint by registered name, logical ID
+    /// (`ws_*`), or local checkout path. An unmatched selector clears the
+    /// hint. Omit to derive the hint from the current directory. A valid
+    /// dashboard link or remembered choice takes precedence when the host
+    /// owns multiple workspaces.
     #[arg(long, value_name = "SELECTOR")]
     pub workspace: Option<String>,
 
@@ -94,7 +94,8 @@ pub fn serve(runtime: &OrbitRuntime, args: ServeArgs) -> Result<(), OrbitError> 
 /// here exactly what it means everywhere else in the CLI: the Orbit data
 /// directory to read, so the dashboard serves `<root>/workspaces.json` and
 /// nothing from the machine-global registry (ORB-11388). Which workspace the
-/// dropdown opens on is a separate question, answered by `--workspace`.
+/// browser opens on is a separate question: `--workspace` only supplies the
+/// registry default hint described on `build_state`.
 pub fn serve_from_env(args: ServeArgs, root_override: Option<&Path>) -> Result<(), OrbitError> {
     heap::configure();
     let state = build_state(root_override, args.workspace.as_deref())?;
@@ -112,12 +113,26 @@ pub fn serve_from_env(args: ServeArgs, root_override: Option<&Path>) -> Result<(
 /// reloaded from that same path when `workspaces.json` mtime or length
 /// changes (see [`state::DashboardState::pin`]), so a native `orbit
 /// workspace init/remove` or binding change becomes visible on the next
-/// request without restarting the server. The dropdown's default selection is,
-/// in priority order: the registered/active workspace matching
-/// `workspace_selector` (an explicit
-/// `--workspace`), else the registered workspace containing the cwd (see
-/// [`default_workspace_for_cwd`]), else "All workspaces". See
-/// [`default_workspace_selection`] for the precedence logic.
+/// request without restarting the server. The registry default is only a hint
+/// for the browser. `state::registry::default_workspace_selection` sets it from
+/// `workspace_selector` when an explicit `--workspace` was given: an active
+/// workspace matched by name or `ws_*` ID, else a path-shaped value matched
+/// against eligible roots by longest lexical prefix. A selector that matches
+/// nothing sets no hint and does not fall back to the cwd. Without
+/// `--workspace`, the hint is the cwd's match (see
+/// `state::registry::default_workspace_for_cwd`). `RegistrySource::load` drops
+/// the hint when that workspace's runtime binding fails, so the hint can be
+/// absent even when a selector matched.
+///
+/// Without a hint, `/api/workspaces` marks no row `is_default`. With multiple
+/// owned rows, the browser tries a valid `?workspace=` link and then the choice
+/// remembered for the host, either of which can select All workspaces. Next it
+/// tries a live drain on an active owned workspace, the hint if it names an
+/// active owned workspace, and the first active owned row in registry order.
+/// If none are active, it selects the first owned row in registry order, whose
+/// board is unavailable. With exactly one owned row, the browser selects it
+/// only if active. See `initWorkspaceSelector` in
+/// `crates/orbit-web/assets/dashboard/app.js`.
 ///
 /// The initial load is eager: a malformed registry at startup is fatal, exactly
 /// as before this became refreshable. A malformed *refresh* after a good
@@ -137,94 +152,16 @@ pub(crate) fn build_state(
     state::DashboardState::from_registry(global_root, source)
 }
 
-/// Best-effort default when serving globally: the registered workspace whose
-/// repo root is the longest prefix of `cwd`, if the server was launched inside
-/// one. `None` means the frontend opens on the aggregate "all workspaces" view.
-pub(crate) fn default_workspace_for_cwd(
-    registry: &WorkspaceRegistry,
-    cwd: &Path,
-) -> Option<String> {
-    workspace_registry::local_workspaces(registry)
-        .filter(|(workspace, _)| workspace.status == WorkspaceStatus::Active)
-        .filter_map(|(workspace, checkout)| {
-            std::iter::once(&checkout.repo_root)
-                .chain(&checkout.path_overrides)
-                .filter(|candidate| cwd.starts_with(candidate))
-                .map(|candidate| candidate.as_os_str().len())
-                .max()
-                .map(|prefix_len| (workspace, prefix_len))
-        })
-        .max_by_key(|(_, prefix_len)| *prefix_len)
-        .map(|(workspace, _)| workspace.id.clone())
-}
-
-/// Precedence logic for the dropdown's default-preselected workspace: an
-/// explicit `workspace_selector` (the `--workspace` flag) always wins over
-/// `cwd` when given, even if it does not resolve to any registered/active
-/// workspace — in that case the result is `None` ("All workspaces"), not a
-/// fallback to the cwd-based default. This matches [`default_workspace_for_cwd`]:
-/// don't error, don't auto-register, just prefer the aggregate view.
-///
-/// The selector is a registered name or logical `ws_*` ID first, and a local
-/// checkout path when it is path-shaped
-/// ([`registry_runtime::selector_looks_like_path`]); a path is matched the
-/// same way a cwd is (longest registered prefix), which is what `orbit web
-/// connect` forwards for a remote workspace directory. An unknown bare name is
-/// never joined to cwd — that would preselect the cwd's workspace for a
-/// selector that matched nothing. `workspace_selector` not being given falls
-/// back to the existing cwd-based behavior unchanged.
-pub(crate) fn default_workspace_selection(
-    registry: &WorkspaceRegistry,
-    workspace_selector: Option<&str>,
-    cwd: Option<&Path>,
-) -> Option<String> {
-    match workspace_selector {
-        Some(selector) => workspace_registry::resolve_logical_workspace(registry, selector)
-            .ok()
-            .filter(|workspace| workspace.status == WorkspaceStatus::Active)
-            .map(|workspace| workspace.id.clone())
-            .or_else(|| {
-                if !registry_runtime::selector_looks_like_path(selector) {
-                    return None;
-                }
-                let path = resolve_selector_path(Path::new(selector), cwd);
-                default_workspace_for_cwd(registry, &path)
-            }),
-        None => cwd.and_then(|cwd| default_workspace_for_cwd(registry, cwd)),
-    }
-}
-
-/// Normalize a path-shaped `--workspace <selector>` value so it can be
-/// prefix-matched against registered workspace roots (which are canonical
-/// absolute paths after the pipeline's canonicalization; see
-/// `orbit-runtime/src/builder.rs`).
-///
-/// Relative paths are resolved against `cwd` before canonicalization. If
-/// canonicalization fails (path may not exist, or symlink resolution errors),
-/// return the pre-canonical absolute path so behavior for nonexistent paths is
-/// preserved: a raw lexical prefix comparison against a stale/nonexistent path
-/// just misses, which is the existing "All workspaces" fallback.
-fn resolve_selector_path(selector: &Path, cwd: Option<&Path>) -> PathBuf {
-    let absolute = if selector.is_absolute() {
-        selector.to_path_buf()
-    } else {
-        match cwd {
-            Some(cwd) => cwd.join(selector),
-            None => selector.to_path_buf(),
-        }
-    };
-    absolute.canonicalize().unwrap_or(absolute)
-}
-
-/// Upper bound on graceful connection drain once a shutdown signal (ctrl-c or
-/// SIGTERM) is received — well under `orbit-web.service`'s
-/// `TimeoutStopUSec=90s` (see the 2026-09-05 restart incident, ORB-11246:
-/// `stop-sigterm` timed out and systemd fell back to SIGKILL). [`shutdown_signal`]
-/// also tells long-lived streaming handlers (`api::request_shutdown`, e.g.
-/// `/api/log/stream`) to close cooperatively as soon as shutdown begins, so in
-/// practice the drain below finishes almost immediately; this timeout is a
-/// deterministic backstop for a connection that doesn't cooperate, so the
-/// process still exits on its own instead of relying on systemd's SIGKILL.
+/// Upper bound on graceful connection drain once shutdown begins (a shutdown
+/// signal or a lifecycle boundary such as an Orbit upgrade) — well under
+/// `orbit-web.service`'s `TimeoutStopUSec=90s` (see the 2026-09-05 restart
+/// incident, ORB-11246: `stop-sigterm` timed out and systemd fell back to
+/// SIGKILL). As soon as shutdown begins, `run_server` also tells long-lived
+/// streaming handlers (`api::request_shutdown`, e.g. `/api/log/stream`) to close
+/// cooperatively, so in practice the drain below finishes almost immediately;
+/// this timeout is a deterministic backstop for a connection that doesn't
+/// cooperate, so the process still exits on its own instead of relying on
+/// systemd's SIGKILL.
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(10);
 
 /// `/healthz` with the same Host/Origin and nosniff layers as `/api`.
@@ -561,54 +498,4 @@ pub(crate) fn check_bindable_host(host: IpAddr, port: u16) -> Result<(), OrbitEr
          and use an authenticated tunnel/reverse proxy (e.g. \
          `ssh -L {port}:localhost:{port} <host>`) for remote access."
     )))
-}
-
-/// Prepare shutdown notification, installing Unix handlers before returning.
-pub(crate) fn shutdown_signal() -> Result<impl Future<Output = ()> + Send, OrbitError> {
-    #[cfg(unix)]
-    let mut interrupt =
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-            .map_err(|error| OrbitError::Execution(format!("install SIGINT handler: {error}")))?;
-    #[cfg(unix)]
-    let ctrl_c = async move {
-        interrupt.recv().await;
-    };
-
-    #[cfg(not(unix))]
-    let ctrl_c = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
-
-    #[cfg(unix)]
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .map_err(|error| OrbitError::Execution(format!("install SIGTERM handler: {error}")))?;
-    #[cfg(unix)]
-    let terminate = async move {
-        sigterm.recv().await;
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    Ok(async move {
-        tokio::select! {
-            _ = ctrl_c => {}
-            _ = terminate => {}
-        }
-    })
-}
-
-pub(crate) fn open_browser(url: &str) {
-    #[cfg(target_os = "macos")]
-    let cmd = "open";
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let cmd = "xdg-open";
-    #[cfg(windows)]
-    let cmd = "explorer";
-
-    let _ = std::process::Command::new(cmd)
-        .arg(url)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
 }

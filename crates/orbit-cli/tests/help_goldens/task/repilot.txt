@@ -1,4 +1,4 @@
-Explicitly request one new pilot assessment
+Explicitly request one new pilot assessment for a proposed or backlog task. Eligible tasks can also receive an automatic re-pilot after edits to their description or acceptance criteria.
 
 Usage: orbit task repilot [OPTIONS] <ID>
 

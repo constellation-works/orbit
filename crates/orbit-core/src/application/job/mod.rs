@@ -29,6 +29,7 @@ mod run;
 pub use run::with_run_root_cause_write_hook;
 mod run_stage;
 mod run_worktree;
+mod standing_drain_keeper;
 mod task_port;
 mod triage_submit;
 mod upgrade_resume;
@@ -64,6 +65,7 @@ pub(crate) use activity_tool_requirements::{
     unliftable_required_tool_error,
 };
 pub(in crate::application) use admission_port::JobAdmissionPort;
+pub(crate) use admission_port::OPERATOR_READINESS_OVERRIDE_INPUT;
 pub use agent::{AgentInvokeResult, agent_invoke_result};
 pub(in crate::application) use auto_concurrency_port::JobAutoConcurrencyPort;
 pub(in crate::application) use automation_port::JobAutomationPort;
@@ -83,13 +85,14 @@ pub use pipeline::{
     AutoDrainRequest, AutoDrainSubmissionProfile, AutoDrainSubmissionReceipt,
     AutoDrainSubmissionSource, PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult,
     PipelineWaitStatus, PipelineWorkerLogSnapshot, ShipModeResolutionProfile, ShipRunRequest,
-    SubmissionKind, SubmissionNotices,
+    ShipSubmissionProfile, ShipSubmissionReceipt, SubmissionKind, SubmissionNotices,
 };
 pub use pr_repair::{TaskAutoFixError, TaskAutoFixRefusal};
 pub(crate) use resume::PublishedResume;
 pub use review_hold::{ReviewHold, ReviewHoldKind};
 pub(in crate::application) use review_hook::ReviewAdmissionHook;
 pub(crate) use run::CodebaseDeliveryScan;
+pub use run::pull_drain_detail;
 pub(crate) use run::running_run_has_verified_owner;
 pub use run::{
     ActivityInvocationEvidence, BOUNDED_RUN_ANSWER_MAX_BYTES, BOUNDED_RUN_STEP_LIMIT,
@@ -108,9 +111,11 @@ pub use run::{
     run_error_step, run_execution_progress_to_json, run_upgrade_paused,
     trim_full_show_agent_invocation_answer,
 };
+pub(crate) use run::{DrainAdmissionWindow, drain_intent_json};
 pub(crate) use run::{
     RunOwnerLiveness, drain_deadline, pull_window_closed, run_owner_liveness,
     running_run_owner_is_stale,
 };
 pub(crate) use run::{kept_candidate, kept_clause};
+pub(crate) use standing_drain_keeper::KeeperDecision;
 pub use triage_submit::{EscalationTriageRefusal, EscalationTriageSubmitError};

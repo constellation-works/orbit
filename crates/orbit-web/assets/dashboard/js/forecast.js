@@ -32,7 +32,7 @@ import {
   COMPLEXITY_LABELS, scheduleShowsReview,
 } from './forecast-shared.js';
 import {
-  UNREPORTED_FORECAST_REASON, forecastUnavailableInfo, forecastBaselineFigures, formatForecastHours,
+  UNREPORTED_FORECAST_REASON, forecastBoundedGap, forecastUnavailableInfo, forecastBaselineFigures, formatForecastHours,
   formatForecastQuantileRange, formatForecastTokens, formatForecastUsd, fmtParallelism, fmtRank, fmtRate,
   fmtShare, forecastCount, hasHorizonCensoringEvidence, num, quantilePair, recordedPoolsContainGaps,
   regressionGapBecause, regressionHistoryIsAbsent, forecastDrainScope,
@@ -47,7 +47,7 @@ import {
 
 export {
   backlogForecastFailureSummary, backlogForecastSummary, drainBacklogForecastLink, forecastBaselineFigures,
-  forecastUnavailableInfo, formatForecastHours, formatForecastQuantileRange, formatForecastTokens, formatForecastUsd,
+  forecastBoundedGap, forecastUnavailableInfo, formatForecastHours, formatForecastQuantileRange, formatForecastTokens, formatForecastUsd,
 } from './forecast-summary.js';
 
 const $ = (id) => document.getElementById(id);
@@ -383,18 +383,27 @@ function historyControl() {
   return el("label", { class: "fc-history" }, [el("span", { class: "fc-control-label", text: "History" }), select]);
 }
 
-// Where this forecast came from and how old it is. The absolute time is its
-// tooltip; Refresh recomputes it live.
+// Where this forecast came from and how old it is (its tooltip, below, adds the
+// absolute time); Refresh recomputes it live.
+function sourceText() {
+  if (view.payload.served_from !== "stored") return "Live";
+  return `Stored ${relativeTime(view.payload.generated_at) ?? "earlier"}`;
+}
+
 function sourceLabel() {
-  const stored = view.payload.served_from === "stored";
-  const age = relativeTime(view.payload.generated_at);
-  const text = stored ? `Stored ${age ?? "earlier"}` : "Live";
-  const title = view.payload.generated_at ? `Computed ${formatDateTime(view.payload.generated_at)}` : null;
-  return el("span", { class: "fc-source", text, title });
+  return el("span", { class: "fc-source", text: sourceText() });
+}
+
+// The whole line as the header's tooltip: the absolute time, and what a truncated
+// header row cuts off.
+function sourceLineTitle() {
+  const model = view.payload.model_version != null ? ` · model v${view.payload.model_version}` : "";
+  const computed = view.payload.generated_at ? ` (computed ${formatDateTime(view.payload.generated_at)})` : "";
+  return `${sourceText()}${model}${computed}`;
 }
 
 function refreshButton() {
-  const button = el("button", { class: "fc-refresh", type: "button", title: "Recompute this forecast live now", "aria-label": "Refresh forecast" }, [
+  const button = el("button", { class: "fc-refresh", type: "button", "aria-description": "Recompute this forecast live now", "aria-label": "Refresh forecast" }, [
     el("span", { class: "visually-hidden", text: "Refresh" }),
   ]);
   button.addEventListener("click", () => {
@@ -406,8 +415,23 @@ function refreshButton() {
   return button;
 }
 
+// R39: the header row never wraps. While its natural width fits it stays at full
+// size; once it does not, the History label drops out of sight (the select keeps
+// its accessible name) and the source line truncates behind its tooltip.
+function fitForecastHeaderRow(header) {
+  if (!header.clientWidth) return;
+  header.classList.remove("fc-header-compact");
+  if (header.scrollWidth > header.clientWidth) header.classList.add("fc-header-compact");
+}
+
+function oneRowHeader(children, extraClass = "") {
+  const header = el("div", { class: `fc-header fc-header-row${extraClass}` }, children);
+  if (typeof ResizeObserver === "function") new ResizeObserver(() => fitForecastHeaderRow(header)).observe(header);
+  return header;
+}
+
 function tabbedHeader(tab, children) {
-  const header = el("div", { class: "fc-header fc-tabbed" }, children);
+  const header = tab === "forecast" ? oneRowHeader(children, " fc-tabbed") : el("div", { class: "fc-header fc-tabbed" }, children);
   header.dataset.fcTab = tab;
   return header;
 }
@@ -415,7 +439,7 @@ function tabbedHeader(tab, children) {
 // The panel head already reads "N tasks · N slots"; this line continues it.
 function forecastHeader() {
   return tabbedHeader("forecast", [
-    el("p", { class: "fc-meta" }, [
+    el("p", { class: "fc-meta", title: sourceLineTitle() }, [
       sourceLabel(),
       view.payload.model_version != null ? ` · model v${view.payload.model_version}` : null,
     ]),
@@ -438,7 +462,7 @@ function renderViewControls() {
   const body = $(BODY);
   if (!body) return;
   const root = el("div", { class: "fc-view" }, [
-    el("div", { class: "fc-header" }, [el("div", { class: "fc-tools" }, [historyControl(), refreshButton()])]),
+    oneRowHeader([el("div", { class: "fc-tools" }, [historyControl(), refreshButton()])]),
     el("div", { class: "fc-scenario-row" }, [scenarioSwitch()]),
   ]);
   root.dataset.key = "forecast-view";
@@ -497,7 +521,7 @@ function scenarioSwitch() {
   ];
   return el("div", { class: "mx-seg mx-seg-wrap fc-scenario", role: "group", "aria-label": "Scenario" }, choices.map(([key, text, title]) => {
     const pressed = key === on;
-    const button = el("button", { class: pressed ? "mx-seg-btn on" : "mx-seg-btn", type: "button", text, title, "aria-pressed": pressed ? "true" : "false" });
+    const button = el("button", { class: pressed ? "mx-seg-btn on" : "mx-seg-btn", type: "button", text, "aria-description": title, "aria-pressed": pressed ? "true" : "false" });
     if (key === "proposed" && !offerable) button.disabled = true;
     button.addEventListener("click", () => {
       if (!pressed) pickScenario(key);
@@ -581,7 +605,10 @@ function arrivalsApprovedLine(scenario) {
   const coverage = forecastSummary.proposedForecastCoverage(view.payload);
   const figures = forecastUnavailableInfo(approved, { coverage }) ? approved.pre_regression_baseline : approved;
   if (!quantilePair(figures?.time_to_drain_hours) && !quantilePair(figures?.usd) && !quantilePair(figures?.tokens)) return null;
-  const basis = figures === approved ? "" : " (pre-regression baseline)";
+  const approvedGap = figures === approved ? forecastBoundedGap(approved) : null;
+  const basis = figures !== approved
+    ? " (pre-regression baseline)"
+    : approvedGap ? ` (${approvedGap.compact})` : "";
   return `If proposed work is also approved${basis}: drain ${formatForecastQuantileRange(figures.time_to_drain_hours, formatForecastHours)}, cost ${formatForecastQuantileRange(figures.usd, formatForecastUsd)}, tokens ${formatForecastQuantileRange(figures.tokens, formatForecastTokens)}.`;
 }
 
@@ -605,11 +632,12 @@ function tileValue(quantiles, fmt, missing) {
   return { text: text ?? missing, known: text != null };
 }
 
-function adjustedTiles(scenario) {
+function adjustedTiles(scenario, boundedGap = forecastBoundedGap(scenario.source)) {
   const { source } = scenario;
   const inputs = view.payload.inputs || {};
   const parallelism = rangeText(source.effective_parallelism, fmtParallelism);
   const criticalPath = rangeText(source.critical_path_hours, formatForecastHours);
+  const gapLine = boundedGap?.detail ?? null;
   return [
     totalTile("Time to drain", tileValue(source.time_to_drain_hours, formatForecastHours, "Unknown"), [
       drainReason(scenario, source.time_to_drain_hours),
@@ -618,9 +646,10 @@ function adjustedTiles(scenario) {
       parallelism ? `Effective parallelism ${parallelism} of ${inputs.concurrency ?? "?"} slots, averaged over the drain.` : null,
       criticalPath ? `Critical path ${criticalPath}: the longest dependency chain.` : null,
       arrivalsApprovedLine(scenario),
+      gapLine,
     ], "fc-kpi"),
-    totalTile("Cost", tileValue(source.usd, formatForecastUsd, "Unknown"), [metricReason(scenario, source.usd, "usd"), costedLine(scenario)], "fc-kpi"),
-    totalTile("Tokens", tileValue(source.tokens, formatForecastTokens, "Unknown"), [metricReason(scenario, source.tokens, "tokens")], "fc-kpi"),
+    totalTile("Cost", tileValue(source.usd, formatForecastUsd, "Unknown"), [metricReason(scenario, source.usd, "usd"), costedLine(scenario), gapLine], "fc-kpi"),
+    totalTile("Tokens", tileValue(source.tokens, formatForecastTokens, "Unknown"), [metricReason(scenario, source.tokens, "tokens"), gapLine], "fc-kpi"),
   ];
 }
 
@@ -685,16 +714,33 @@ function proposedWarning(info, hasBaseline) {
   return unavailableWarning(`${reason}${limit}`, info.kind);
 }
 
+function subsetHasQuantile(subset) {
+  return Boolean(subset) && (quantilePair(subset.time_to_drain_hours) || quantilePair(subset.usd) || quantilePair(subset.tokens));
+}
+
 // Unforecastable dependencies withhold the full totals; the schedulable
-// subset is what the simulation could still drain.
+// subset is what the simulation could still drain. A draw that omitted
+// regression follow-up keeps those figures only on the pre-regression
+// baseline. An older stored snapshot may still have copied them onto the
+// adjusted scenario; either way they are labelled as that baseline.
 function subsetNote(forecast) {
-  const subset = forecast.schedulable_subset;
-  if (!subset) return null;
+  const adjusted = forecast?.schedulable_subset;
+  if (!adjusted || typeof adjusted !== "object") return null;
+  const baseline = forecast.pre_regression_baseline?.schedulable_subset;
+  const fromBaseline = forecast.regression_rework?.available === false
+    && (subsetHasQuantile(baseline) || subsetHasQuantile(adjusted));
+  const subset = fromBaseline && subsetHasQuantile(baseline) ? baseline : adjusted;
   const left = (subset.of ?? 0) - (subset.tasks ?? 0);
-  return el("p", { class: "fc-line fc-subset", role: "note" }, [
+  const figures = `drain ${formatForecastQuantileRange(subset.time_to_drain_hours, formatForecastHours)}, cost ${formatForecastQuantileRange(subset.usd, formatForecastUsd)}, tokens ${formatForecastQuantileRange(subset.tokens, formatForecastTokens)} (p50 – p90).`;
+  const detail = fromBaseline
+    ? `Pre-regression baseline, which excludes regression follow-up work: the other ${subset.tasks} of ${subset.of}: ${figures}`
+    : `The other ${subset.tasks} of ${subset.of}: ${figures}`;
+  const note = el("p", { class: "fc-line fc-subset", role: "note" }, [
     el("strong", { text: `No full total: ${left} task${left === 1 ? "" : "s"} depend${left === 1 ? "s" : ""} on work the drain cannot start. ` }),
-    `The other ${subset.tasks} of ${subset.of}: drain ${formatForecastQuantileRange(subset.time_to_drain_hours, formatForecastHours)}, cost ${formatForecastQuantileRange(subset.usd, formatForecastUsd)}, tokens ${formatForecastQuantileRange(subset.tokens, formatForecastTokens)} (p50 – p90).`,
+    detail,
   ]);
+  if (fromBaseline) note.dataset.forecastBaseline = "pre-regression";
+  return note;
 }
 
 function emptyState(title, detail) {
@@ -702,6 +748,13 @@ function emptyState(title, detail) {
     el("div", { class: "mx-empty-title", text: title }),
     el("div", { class: "mx-empty-detail", text: detail }),
   ]);
+}
+
+function boundedGapNote(gap) {
+  if (!gap) return null;
+  const hint = pinnedInfoHint(gap.detail);
+  hint.classList.add("warn");
+  return el("p", { class: "fc-line fc-bounded-gap", role: "note" }, [gap.summary, hint]);
 }
 
 function totalsNodes(scenario) {
@@ -714,7 +767,10 @@ function totalsNodes(scenario) {
       : `No task finished with recorded agent runs in the last ${inputs.lookback_days} days or among the newest ${inputs.min_history_tasks ?? 50} completions. Widen the history.`)];
   }
   if (!info) {
-    return [el("section", { class: "fc-figures", "aria-label": "Totals" }, adjustedTiles(scenario)), subsetNote(source)];
+    const boundedGap = forecastBoundedGap(source);
+    const figures = el("section", { class: "fc-figures", "aria-label": "Totals" }, adjustedTiles(scenario, boundedGap));
+    if (boundedGap) figures.dataset.boundedGap = "true";
+    return [figures, boundedGapNote(boundedGap), subsetNote(source)];
   }
   const hasBaseline = Boolean(forecastBaselineFigures(source.pre_regression_baseline));
   const figures = el("section", { class: hasBaseline ? "fc-figures fc-baseline" : "fc-figures", "aria-label": "Totals" }, withheldTiles(scenario));

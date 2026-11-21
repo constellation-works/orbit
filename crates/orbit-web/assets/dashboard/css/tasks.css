@@ -843,8 +843,22 @@ main.tasks-layout > .controls {
    status card, Start a window, Log, Notices) beside both, its tab bar
    level with the bar. With `filter-spans` the bar takes both columns and the
    dock starts below it with the list. An open task takes the dock's place,
-   and below 1000px, where shell.css stacks every main grid, the task list
-   takes the full width. */
+   and below the Tasks dock breakpoint (`TASKS_ONE_COLUMN_QUERY` in log-tail.js),
+   the task list takes the full width. shell.css separately stacks other main
+   grids at 1000px. */
+/* The dock keeps the layout's share, not a fixed width: 28% between a floor
+   the Drain card's content sets and a cap past which a wider dock only
+   stretches the card. The 320px floor is the card's real minimum: the header
+   select keeps its measured "…host (role)" tail (operations-drain.js sets
+   --drain-target-floor from the longest option, then the header drops the
+   phase word, the title, and finally the select floor via drain-head-tight),
+   the counts row shrinks its figures and then drops pilots and reviewers in
+   the drain-card container stages, the slot message ellipsizes, the forecast
+   figures shrink to min-width 0 beside their meters, and the Start controls
+   keep only their fixed stepper and switch widths while their labels wrap.
+   28% clears the floor for every layout wider than ~1143px, so between the
+   one-column breakpoint below and ~1571px the dock narrows and widens with
+   the viewport instead of pinning. */
 main.tasks-layout {
   grid-template-columns: minmax(0, 1fr) clamp(320px, 28%, 440px);
   grid-template-rows: auto minmax(0, 1fr);
@@ -856,11 +870,33 @@ main.tasks-layout > .tasks-dock { grid-column: 2; grid-row: 1 / -1; }
 main.tasks-layout.filter-spans:not(.task-pane-open) > .controls { grid-column: 1 / -1; }
 main.tasks-layout.filter-spans:not(.task-pane-open) > .tasks-dock { grid-row: 2; }
 .tasks-dock { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-/* Without room for the dock (an open task, or below 1000px) only its message
-   area stays, floating at the foot of the view (see below). */
+/* Without room for the dock (an open task or the one-column Tasks layout),
+   only its message area stays, floating at the foot of the view (see below). */
 main.tasks-layout.task-pane-open > .tasks-dock { display: contents; }
 main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
-@media (max-width: 1000px) {
+/* Collapsed (dock-toggle.js): the list takes the full width and only the
+   dock's message area stays, floating at the foot of the view as with an open
+   task. The dock slides out (`dock-leaving`) before the column goes, and the
+   column comes back before it slides in (`dock-entering`), so the dock's tab
+   compaction settles once rather than every frame. The show button ends the
+   filter bar. The one-column layout below already moves the dock to a route
+   of its own, so the collapse applies only above it. */
+#dock-expand { display: none; }
+@media (min-width: 1316px) {
+  #side-dock { transition: transform 180ms ease, opacity 180ms ease; }
+  main.tasks-layout:is(.dock-leaving, .dock-entering) > .tasks-dock > #side-dock {
+    transform: translateX(32px);
+    opacity: 0;
+    pointer-events: none;
+  }
+  main.tasks-layout.dock-collapsed { grid-template-columns: minmax(0, 1fr); }
+  main.tasks-layout.dock-collapsed > .tasks-dock { display: contents; }
+  main.tasks-layout.dock-collapsed > .tasks-dock > #side-dock { display: none; }
+  main.tasks-layout.dock-collapsed:not(.task-pane-open):not(.task-page-mode) > .controls > #dock-expand { display: inline-flex; margin: 2px 0 0 auto; }
+}
+@media (prefers-reduced-motion: reduce) { #side-dock { transition: none; } }
+/* Keep this cutoff aligned with TASKS_ONE_COLUMN_QUERY in log-tail.js. */
+@media (max-width: 1315px) {
   /* Stacked: the bar, then the list (or the dock on the dock route), each
      content-sized as before; the bar's own padding keeps the 12px gap. */
   main.tasks-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
@@ -887,6 +923,8 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
   main.tasks-layout.dock-route > .col-tasks { display: none !important; }
   main.tasks-layout.dock-route > .controls { display: none; }
   main.tasks-layout.dock-route > .tasks-dock > #side-dock { display: flex; }
+  /* Collapsing applies only beside the list (dock-toggle.js). */
+  #dock-collapse { display: none; }
   main.tasks-layout.dock-route #dock-pane-log .log-stream { max-height: 70svh; }
   main.tasks-layout.dock-route :is(#dock-pane-notices, #dock-pane-residents) { max-height: 70svh; }
   /* The dock route is what a phone drives a drain with: 44px targets, Stop and
@@ -947,7 +985,8 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
 .tasks-messages .task-action-notice { background: color-mix(in srgb, var(--state-success) 10%, var(--bg-elev)); }
 /* The floating area, at the foot of the Tasks view (the active tab pane is
    its containing block): under the list while a task is open, so it covers
-   none of the task's controls, and across the page below 1000px. It takes no
+   none of the task's controls, and across the page at the one-column Tasks
+   breakpoint (`TASKS_ONE_COLUMN_QUERY` in log-tail.js). It takes no
    clicks of its own, so when empty it hides nothing; its messages are opaque
    cards over the list. */
 main.tasks-layout.task-pane-open > .tasks-dock > .tasks-messages {
@@ -963,7 +1002,23 @@ main.tasks-layout.task-pane-open > .tasks-dock > .tasks-messages {
 }
 main.tasks-layout.task-pane-open > .tasks-dock > .tasks-messages > :not(#tasks-notices),
 main.tasks-layout.task-pane-open #tasks-notices > * { pointer-events: auto; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
-@media (max-width: 1000px) {
+/* A collapsed dock (above) leaves its message area floating the same way. */
+@media (min-width: 1316px) {
+  main.tasks-layout.dock-collapsed > .tasks-dock > .tasks-messages {
+    position: absolute;
+    left: 20px;
+    bottom: 16px;
+    z-index: 150;
+    width: min(360px, calc(100% - 40px));
+    height: auto;
+    max-height: 40%;
+    padding-bottom: 0;
+    pointer-events: none;
+  }
+  main.tasks-layout.dock-collapsed > .tasks-dock > .tasks-messages > :not(#tasks-notices),
+  main.tasks-layout.dock-collapsed #tasks-notices > * { pointer-events: auto; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+}
+@media (max-width: 1315px) {
   .tasks-dock > .tasks-messages {
     position: absolute;
     left: 12px;
@@ -1088,9 +1143,8 @@ main.task-pane-resizing { cursor: col-resize; user-select: none; }
 .task-pane-title:focus { outline: none; }
 .task-pane-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .task-pane-head .panel-placeholder { margin: 10px 0 0; }
-.task-pane-back { display: inline-flex; align-items: center; }
-/* Open full page and close are icon buttons: the glyph is a mask over the
-   current colour, the accessible name is the aria-label. */
+/* Open full page is an icon button: the glyph is a mask over the current
+   colour, the accessible name is the aria-label. Close is `.esc-close`. */
 .task-pane-icon {
   display: inline-flex;
   align-items: center;
@@ -1114,7 +1168,8 @@ main.task-pane-resizing { cursor: col-resize; user-select: none; }
   mask: var(--icon) center / contain no-repeat;
 }
 .task-pane-full { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 5h5v5M19 5l-8 8M18 14v5H5V6h5'/%3E%3C/svg%3E"); }
-.task-pane-close { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round'%3E%3Cpath d='M6 6l12 12M18 6L6 18'/%3E%3C/svg%3E"); }
+/* Level with the 32px open-full-page icon beside it. */
+.task-pane-bar .esc-close { height: 32px; }
 .task-pane-icon:hover { color: var(--fg); background: var(--bg-well); }
 .task-pane-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
@@ -1167,6 +1222,7 @@ main.tasks-layout.task-page-mode > .task-detail-pane { grid-column: 1; grid-row:
 .task-create input, .task-create textarea, .task-create select { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--fg); font: inherit; }
 .task-create :disabled { opacity: 0.7; }
 .task-create .action { min-height: 36px; }
+.task-create-actions .esc-close { height: 36px; min-height: 36px; }
 /* The head's primary action: New task, in the accent. */
 #task-create-open {
   align-items: center;
@@ -1302,3 +1358,87 @@ main.tasks-layout.task-page-mode > .task-detail-pane { grid-column: 1; grid-row:
 }
 .empty-state .show-on-owner:hover { border-color: var(--accent); color: var(--accent); }
 .empty-state .show-on-owner:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The Shift-Shift quick filter: a Spotlight-style bar fixed to the viewport,
+   top-centre on every open, draggable by its own surface. It floats over the
+   page and moves nothing in the board's layout. */
+.quick-filter {
+  position: fixed;
+  top: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  width: min(580px, calc(100vw - 32px));
+  padding: 0 12px 0 16px;
+  height: 52px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-control) 94%, transparent);
+  box-shadow: 0 22px 56px rgba(0, 0, 0, 0.6), 0 3px 10px rgba(0, 0, 0, 0.4);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  cursor: grab;
+  touch-action: none;
+  animation: quick-filter-in 120ms ease-out;
+}
+.quick-filter.dragging { cursor: grabbing; transition: none; }
+/* Once dragged the bar is placed by its own left/top, not centred. */
+.quick-filter[style*="left"] { transform: none; }
+.quick-filter:focus-within { border-color: var(--accent-line); }
+.quick-filter-icon { flex: none; width: 20px; height: 20px; color: var(--fg-mute); }
+.quick-filter-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--fg-strong);
+  font: inherit;
+  font-size: 17px;
+  cursor: text;
+}
+.quick-filter-input::placeholder { color: var(--fg-disabled); }
+.quick-filter-count {
+  flex: none;
+  color: var(--fg-mute);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.quick-filter .esc-close {
+  height: auto;
+  padding: 3px 8px;
+  border-color: var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-well);
+  color: var(--fg-mute);
+  font-size: 11px;
+  line-height: 1.3;
+}
+.quick-filter .esc-close:hover { color: var(--fg-strong); background: var(--bg-well); border-color: var(--fg-disabled); }
+@keyframes quick-filter-in {
+  from { opacity: 0; margin-top: -6px; }
+  to { opacity: 1; margin-top: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .quick-filter { animation: none; }
+}
+/* One column: the bar opens full-width at the top and stays there. */
+@media (max-width: 760px) {
+  .quick-filter,
+  .quick-filter[style*="left"] {
+    top: 8px;
+    left: 8px;
+    right: 8px;
+    width: auto;
+    transform: none;
+    cursor: default;
+  }
+}

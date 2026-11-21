@@ -27,7 +27,10 @@
 //! handoff that awaits approval or is authorized, which approval or the
 //! owner's landing job completes.
 //!
-//! A delivery PR is matched as the closure matches it: its head branch is
+//! A stopped native completion run's authenticated publication pins the PR
+//! number and URL, head branch and commit, and target branch. It can settle
+//! without a separate forge login lookup. Otherwise a recorded delivery PR
+//! is matched as the closure matches it: its head branch is
 //! `orbit/<TASK-ID>-…`, its body names the task, and it was authored by a
 //! delivery identity (`pr.delivery_authors`, else the login this machine's
 //! forge credentials act as), or it is the delivery PR of a follower handoff
@@ -37,8 +40,8 @@
 //! the base branch the task's delivery run was submitted against, else the
 //! workspace base branch.
 //!
-//! The write is Orbit's own: `done` with a landing note naming the PR and its
-//! merge commit, recorded in history as [`super::lifecycle::EXTERNAL_MERGE_SETTLED_EVENT`]. It
+//! The write is Orbit's own: `done` with a landing note naming the PR, its
+//! merge time and commit, recorded in history as [`super::lifecycle::EXTERNAL_MERGE_SETTLED_EVENT`]. It
 //! starts no execution, so no footprint guard applies to it. A task with an
 //! execution claim of its own is still refused by the store, except through
 //! the claim journal: a revoked handoff's settlement is one owner store write
@@ -62,10 +65,15 @@
 //! running. `orbit task settle-merged <id>` reads the task's own PRs one by
 //! one, so a merge older than that listing settles too.
 //!
+//! The same tick also finishes a delivery nobody is left to merge: an
+//! authorised (`completion: done`) run that held or ended with its PR open, once
+//! the checks pass ([`auto_land`], ORB-25966).
+//!
 //! `orbit.workflow.land` merges the delivery PR of a task in `review` and then
 //! settles it here ([`land`]), so a landing and an observed merge complete a
 //! task the same way.
 
+mod auto_land;
 mod candidate;
 mod entry;
 mod handoff;
@@ -76,6 +84,9 @@ mod refusal;
 mod rescued;
 
 use crate::runtime::task_pr_forge::MergedPullRequest;
+pub use auto_land::{
+    AutoLanding, FOLLOW_UP_OWNER_OPERATOR, LANDING_FOLLOW_UP_EVENT, LandingFollowUp,
+};
 use candidate::{RevokedHandoff, names_delivery};
 pub use model::ExternalMergeSettlement;
 pub use model::ExternalMergeSettlementProfile;

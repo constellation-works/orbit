@@ -123,6 +123,16 @@ pub(crate) fn run() {
     // Invalid `orbit tool run` input cannot run. Reporting it before generation
     // pin keeps a typo from resolving a workspace or applying pending migrations.
     let unusable_tool_input = matches!(runtime_need, RuntimeNeed::UnusableToolInput { .. });
+    // This prerequisite must fail without even a generation registration.
+    // Successful rebinds still take normal executable-generation admission.
+    if matches!(&cli.command, command::Commands::Workspace(workspace)
+        if matches!(&workspace.command, command::workspace::WorkspaceSubcommand::Rebind(_)))
+        && let Err(error) = orbit_core::runtime::resolve_generation_root(root_override.as_deref())
+            .and_then(|root| orbit_cmd::workspace_rebind::require_checkout_rebind_host_store(&root))
+    {
+        print_error(&error, &sink, json_error_preference);
+        orbit_common::observability::logging::exit(1);
+    }
     let _generation = if matches!(&cli.command, command::Commands::Update(_))
         || inspection
         || unusable_tool_input
@@ -149,7 +159,10 @@ pub(crate) fn run() {
             &root,
             matches!(
                 runtime_need,
-                RuntimeNeed::ReadOnly | RuntimeNeed::PluginReadOnly | RuntimeNeed::HostReadOnly
+                RuntimeNeed::ReadOnly
+                    | RuntimeNeed::Inspection
+                    | RuntimeNeed::PluginReadOnly
+                    | RuntimeNeed::HostReadOnly
             ),
             participant_role(&cli.command),
             handover_capability(&cli.command),
@@ -289,6 +302,12 @@ pub(crate) fn run() {
                     workspace_selector.as_deref(),
                 ),
             },
+            RuntimeNeed::Inspection => {
+                RegisteredRuntimeFactory::initialize_observational_with_overrides(
+                    root_override.as_deref(),
+                    workspace_selector.as_deref(),
+                )
+            }
             RuntimeNeed::PluginReadOnly => {
                 RegisteredRuntimeFactory::initialize_plugin_read_only_with_overrides(
                     root_override.as_deref(),
@@ -312,10 +331,11 @@ pub(crate) fn run() {
     let runtime = match bootstrapped {
         Ok(runtime) => runtime,
         Err(err) => {
-            // A misplaced host `[plugin_enablement]` table is what keeps the
-            // runtime from opening, so `orbit doctor` reports it from the
-            // file instead of failing with the bare refusal. Everything else
-            // fails closed.
+            // `orbit doctor` reports a runtime that would not open instead of
+            // failing with the bare refusal when the cause is a misplaced
+            // host `[plugin_enablement]` table (read from the file), a store
+            // that was never created, or a store that needs a writable
+            // migration. Everything else fails closed.
             if let command::Commands::Doctor(doctor) = &cli.command
                 && let Some(degraded) = doctor.degraded_report(root_override.as_deref(), &err)
             {

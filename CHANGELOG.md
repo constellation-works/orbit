@@ -2,6 +2,58 @@
 
 ## Unreleased
 
+## 0.52.0 — 2026-11-21
+
+### Breaking Changes
+
+- **Refused-model review holds**: An after-landing review hold can now record the refused Muse model in `model_refused`, which older binaries reject as an unknown field. ([ORB-25562])
+  Holds with `model_refused` refused by older binaries → upgrade every host that reads review state to 0.52.0+
+- **Job runs read only `crew_model`**: Store schema 94 backfills `crew_model` from `implementer_model`, and job-run records no longer accept the `implementer_model` alias. ([ORB-25763])
+  `implementer_model` job-run alias removed → use `crew_model`
+- **`cli_command` executor type removed**: An Executor definition whose `spec.executor_type` is still `cli_command` now fails to load. ([ORB-25764])
+  `cli_command` executor type removed → change `spec.executor_type` to `local_shell` in Executor definitions
+- **Store schema 95 for drain intent**: The store schema rises to 95 with an additive `drain_intents` table. Older binaries can still read the store but ignore the drain-intent table. ([ORB-25965])
+  Drain intent ignored by older binaries → use Orbit 0.52.0+ on every host that starts or stops drains
+
+### Highlights
+
+- **Standing drain**: Each workspace records whether its drain is on or paused, and by whom. An opt-in keeper, off by default, resubmits one bounded drain on the clock tick while work waits. ([ORB-25991])
+- **Carbon crew**: A built-in `carbon` crew runs `gemini-4-carbon-high` through Antigravity. `orbit init` adds it to the xhard pool when it seeds a fresh config with `agy` detected; existing configurations keep their pool. ([ORB-25944])
+- **GitHub quota reserve**: Orbit tracks each host's GitHub REST quota and holds background and agent reads back so delivery keeps a reserve. ([ORB-25868])
+- **Faster aggregate board**: The five-section aggregate task board read is faster: the recorded warm grouped HTTP p95 on the 12-workspace fixture fell from 447 ms to 188 ms. ([ORB-25654])
+- **Residents can re-pilot and requeue**: Resident cycles holding the `dispatch` right can now re-pilot and requeue tasks. Landing still needs the separate `merge` right. ([ORB-25959])
+
+## 0.51.1 — 2026-11-17
+
+### Highlights
+
+- **Tasks page shortcuts**: Shift-Shift opens a floating quick filter that live-filters the board by id, PR, run, branch, host or tag. Cmd+B slides the drain dock away, and the nav rail collapses to a strip. ([ORB-25409])
+- **"esc" close buttons**: Panels and dialogs that Esc closes now label their close button "esc". ([ORB-25410])
+- **Fleet under Observe**: Fleet moved to Observe, with one host diagnostics dialog per host and only live drains listed. ([ORB-25239])
+- **Clearer Residents page**: The resident card separates current authority from the authority its last cycle ran with, shows open decisions and lists checkpoint actions; resident cycles now read runtime attention. ([ORB-25312])
+- **Held, not failed**: Implementer-declared blockers, review-budget refusals and stale already-landed evidence now hold the task instead of failing the run. ([ORB-25393])
+- **Refusals name the fix**: CLI refusals point to the tool to call, `orbit doctor` findings lead with the fix, and readiness text shows only the reason. ([ORB-25222])
+
+## 0.51.0 — 2026-11-16
+
+### Breaking Changes
+
+- **Host-evidence rules match task tags**: Host-evidence rules can now carry a `tags` field, which older Orbit binaries reject as an unknown field when loading the rule. ([ORB-24940])
+  Tag-matching rules refused by older binaries → keep rules path-only or upgrade every reader to 0.51.0+
+- **Store schema 93 for routine breakers**: The store schema rises to 93 with additive routine-breaker tables, which older binaries can read but do not enforce. ([ORB-25103])
+  Breaker state ignored by older binaries → use Orbit 0.51.0+ to manage and honour breaker state
+- **Named operator ship bypasses readiness gates**: A named `orbit run ship` now dispatches past schedule and readiness gates, and `--ignore-schedule` is a hidden no-op. ([ORB-25082])
+  Readiness gates removed from named ships → use auto-drain or the agent ship path when gates must hold
+
+### Highlights
+
+- **Routine circuit breaker**: Routine jobs stop after three consecutive failures in the same error class and retry half-open after backoff or a deploy, with operator controls to inspect the breaker. ([ORB-25103])
+- **Rebind a moved workspace**: Operators can rebind a registered workspace after moving its checkout, with identity checks and an atomic host-local update. ([ORB-25066])
+- **Waivable readiness blockers**: The task readiness panel lets an operator waive waivable blockers, records the action, and lets the operator remove the waiver. ([ORB-25084])
+- **Bounded resident briefs**: Resident briefs include the latest checkpoint in full, bounded summaries for earlier checkpoints, and delta-only notes instead of an unbounded history tail. ([ORB-25099])
+- **Tag-matched host evidence**: Host-evidence rules can match task tags as well as changed paths, so security-tagged work can owe CodeQL on a non-Linux follower. ([ORB-24940])
+- **Operator ship override**: An explicit operator ship can dispatch a named task past drain readiness gates and lock waits, recording what it overrode. ([ORB-25082])
+
 ## 0.50.0 — 2026-11-15
 
 ### Breaking Changes

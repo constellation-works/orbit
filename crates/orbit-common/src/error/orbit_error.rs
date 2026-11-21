@@ -192,6 +192,21 @@ pub enum OrbitError {
     },
     #[error("execution failed: {0}")]
     Execution(String),
+    /// No configured automatic crew remains after recorded model refusals.
+    #[error("{0}")]
+    ProviderModelAccessHold(String),
+    /// A resumed published delivery's deferred footprint was still held by
+    /// another task when its wait expired. Displays exactly as
+    /// [`Self::Execution`]; the variant carries the typed
+    /// `footprint_unavailable` step code so run finalization holds the run
+    /// instead of failing it. The run-stopped refusal from the same wait
+    /// stays [`Self::Execution`]: cancellation is not a hold.
+    #[error("execution failed: {0}")]
+    #[serde(
+        rename = "Execution",
+        serialize_with = "serialize_footprint_unavailable"
+    )]
+    FootprintUnavailable(String),
     /// Executable-generation admission refused an operation. Displays and
     /// serializes exactly as [`Self::Execution`]; callers select clock handling
     /// by the refusal kind, never from its message.
@@ -327,7 +342,7 @@ pub enum OrbitError {
     #[error(
         "task '{task_id}' is scheduled: not before {not_before}; it starts on the first \
          admission pass after that time. An operator can start it now with \
-         `orbit run ship {task_id} --ignore-schedule`"
+         `orbit run ship {task_id}` or the dashboard's Ship"
     )]
     TaskScheduled { task_id: String, not_before: String },
     /// GitHub has not finished calculating whether an open pull request can
@@ -398,6 +413,13 @@ pub enum OrbitError {
     JobRunControlConflict(String),
     #[error("workspace error: {0}")]
     WorkspaceError(String),
+    /// Checkout relocation cannot inspect activity or append its audit without
+    /// an initialized host store. Reporting this prerequisite never creates it.
+    #[error(
+        "checkout rebind requires the missing host store '{}'; initialize it by running a runtime Orbit command such as `orbit tool run orbit.task.list --input '{{}}'` from a registered checkout before moving it, then retry",
+        path.display()
+    )]
+    WorkspaceRebindHostStoreRequired { path: std::path::PathBuf },
     #[error("io error: {0}")]
     Io(String),
     #[error("schema migration failed: {0}")]
@@ -442,6 +464,28 @@ pub enum OrbitError {
         reason: SourceRepairRunStateRefusal,
         message: String,
     },
+    /// A source-repair refusal that waits on an operator decision (discard
+    /// the candidate or select an explicit source). Displays, reports and
+    /// serializes exactly as the [`Self::JobValidation`] carrying `message`;
+    /// the variant is attached where the refusal is decided, so callers
+    /// never classify it from the text.
+    #[error("job validation failed: {message}")]
+    #[serde(untagged, serialize_with = "serialize_source_repair_operator_decision")]
+    SourceRepairOperatorDecisionRefused { message: String },
+    /// No delivery run submitted this task in the selected workspace.
+    /// Retains the invalid-input wire contract while surfaces render their
+    /// own task-read remedy from the task ID.
+    #[error("invalid input: {}", task_delivery_unavailable_message(.0, &format!("orbit task show {}", .0)))]
+    #[serde(untagged, serialize_with = "serialize_task_delivery_unavailable")]
+    TaskDeliveryUnavailable(String),
+    /// An observation-only open found a supported store or task registry that
+    /// still owes a writable open (for example migration or additive setup),
+    /// rather than an unreadable or unsupported format. Displays, reports and
+    /// serializes identically to [`Self::Store`]; callers select writable-open
+    /// remediation from this variant alone, never from message text (STD-02 §R10).
+    #[error("store error: {0}")]
+    #[serde(untagged, serialize_with = "serialize_as_store")]
+    StoreWritableOpenOwed(String),
 }
 
 const _: () = assert!(
@@ -460,10 +504,16 @@ fn not_found_message(kind: NotFoundKind, id: &str, guidance: Option<&str>) -> St
 
     // Explicit guidance (for example a spelling suggestion or an artifact's
     // owning task) is more specific than the default listing.
+    let default_guidance;
     let guidance = guidance.unwrap_or(match kind {
-        NotFoundKind::Task => "; see `orbit task list` or `orbit.task.list` for valid task IDs",
+        NotFoundKind::Task => "; see `orbit task list` for valid task IDs",
         NotFoundKind::JobRun => {
-            "; see `orbit run history` for valid run IDs, or use `orbit.task.show` with `field: \"delivery\"` for a task's delivery run"
+            if orbit_types::task::is_valid_orb_task_id(id) {
+                default_guidance = format!("; see `orbit run history` for valid run IDs, or use `orbit task show {id} --fields delivery` for a task's delivery run");
+                &default_guidance
+            } else {
+                "; see `orbit run history` for valid run IDs"
+            }
         }
         NotFoundKind::Job => "; see `orbit job list` for valid job IDs",
         NotFoundKind::Tool => "; see `orbit tool list` or MCP `tools/list` for valid tool names",
@@ -471,6 +521,73 @@ fn not_found_message(kind: NotFoundKind, id: &str, guidance: Option<&str>) -> St
         _ => "",
     });
     format!("{kind} not found: {id}{guidance}")
+}
+
+impl OrbitError {
+    /// Render task/run remedies using the advertised MCP tool names and JSON
+    /// arguments. Explicit not-found guidance still takes precedence.
+    pub fn mcp_error_message(&self) -> String {
+        match self {
+            Self::NotFound {
+                kind: NotFoundKind::Task,
+                id,
+                guidance: None,
+            } => not_found_message(
+                NotFoundKind::Task,
+                id,
+                Some("; see `orbit_task_list {}` for valid task IDs"),
+            ),
+            Self::NotFound {
+                kind: NotFoundKind::JobRun,
+                id,
+                guidance: None,
+            } => {
+                let default_guidance;
+                let guidance = if orbit_types::task::is_valid_orb_task_id(id) {
+                    let input = serde_json::json!({"id": id, "field": "delivery"});
+                    default_guidance = format!(
+                        "; see `orbit_run {{\"action\":\"list\"}}` for valid run IDs, or use `orbit_task_show {input}` for a task's delivery run"
+                    );
+                    &default_guidance
+                } else {
+                    "; see `orbit_run {\"action\":\"list\"}` for valid run IDs"
+                };
+                not_found_message(NotFoundKind::JobRun, id, Some(guidance))
+            }
+            Self::TaskDeliveryUnavailable(task_id) => {
+                let input = serde_json::json!({"id": task_id});
+                format!(
+                    "invalid input: {}",
+                    task_delivery_unavailable_message(task_id, &format!("orbit_task_show {input}"))
+                )
+            }
+            _ => self.to_string(),
+        }
+    }
+}
+
+fn task_delivery_unavailable_message(task_id: &str, remedy: &str) -> String {
+    format!(
+        "no task delivery run in this workspace was submitted with task '{task_id}'; delivery evidence exists only for tasks submitted by a delivery run in this workspace — use `{remedy}` instead"
+    )
+}
+
+fn serialize_task_delivery_unavailable<S: serde::Serializer>(
+    task_id: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    OrbitError::InvalidInput(task_delivery_unavailable_message(
+        task_id,
+        &format!("orbit task show {task_id}"),
+    ))
+    .serialize(serializer)
+}
+
+fn serialize_footprint_unavailable<S: serde::Serializer>(
+    message: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(message)
 }
 
 fn serialize_absorbed_candidate<S: serde::Serializer>(
@@ -508,6 +625,13 @@ fn serialize_forge_push_hold<S: serde::Serializer>(
     serializer.serialize_str(&failure.message)
 }
 
+fn serialize_as_store<S: serde::Serializer>(
+    message: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    OrbitError::Store(message.to_string()).serialize(serializer)
+}
+
 fn serialize_as_storage_layer<S: serde::Serializer>(
     layer: &StorageLayer,
     message: &str,
@@ -527,6 +651,13 @@ fn source_repair_refusal_legacy_error(code: SourceRepairAuthorityRefusal) -> Orb
 
 fn serialize_source_repair_run_state_refusal<S: serde::Serializer>(
     _reason: &SourceRepairRunStateRefusal,
+    message: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    OrbitError::JobValidation(message.to_string()).serialize(serializer)
+}
+
+fn serialize_source_repair_operator_decision<S: serde::Serializer>(
     message: &str,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {

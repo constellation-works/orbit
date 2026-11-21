@@ -191,12 +191,8 @@ pub(super) fn parse_default_executor_for_platform(
         )));
     }
 
-    let mut def = ExecutorDef::from_resource_spec(
-        resource.metadata.name,
-        resource.spec.clone(),
-        resource.spec.created_at,
-        resource.spec.updated_at,
-    );
+    let mut def =
+        ExecutorDef::from_resource_spec(resource.metadata.name, resource.spec, None, None);
 
     // Shipped agent assets use their sandbox field as an opt-in marker. Keep
     // sandbox-exec on macOS, translate it to linux-bwrap on Linux, and keep

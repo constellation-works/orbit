@@ -326,7 +326,7 @@ fn local_owner_scope(
             Ok(false)
         }
         GET => {
-            accept_fields(object, &GET_FIELDS)?;
+            accept_task_fields(object, &GET_FIELDS)?;
             let path = canonical_artifact_path(object)?;
             if super::review::is_review_artifact(&path) {
                 require_claimed_task(object, binding)?;
@@ -454,17 +454,49 @@ fn claim_binding<'a>(
 }
 
 /// Refuse any field outside `allowed`: nothing a request adds can widen the
-/// scope the broker derived.
-pub(super) fn accept_fields(
+/// scope the broker derived. The refusal names the accepted fields, so the
+/// caller can recover without guessing.
+fn accept_fields(object: &Map<String, Value>, allowed: &[&str]) -> Result<(), OrbitError> {
+    refuse_unaccepted_field(object, allowed, false)
+}
+
+/// [`accept_fields`] for a request whose `id` names a task, which every
+/// claimed task read and artifact call does. A `task_id` alias is refused
+/// with the recovery that passes the task as `id`.
+pub(super) fn accept_task_fields(
     object: &Map<String, Value>,
     allowed: &[&str],
 ) -> Result<(), OrbitError> {
-    match object.keys().find(|key| !allowed.contains(&key.as_str())) {
-        Some(field) => Err(OrbitError::InvalidInput(format!(
-            "a claimed worker's brokered request does not accept `{field}`"
-        ))),
-        None => Ok(()),
-    }
+    refuse_unaccepted_field(object, allowed, true)
+}
+
+fn refuse_unaccepted_field(
+    object: &Map<String, Value>,
+    allowed: &[&str],
+    id_names_task: bool,
+) -> Result<(), OrbitError> {
+    let Some(field) = object.keys().find(|key| !allowed.contains(&key.as_str())) else {
+        return Ok(());
+    };
+    // `task_id` is the alias agents reach for. It is recoverable only where
+    // `id` names the task and the request has no `id` of its own yet.
+    let recovery = if id_names_task
+        && field == "task_id"
+        && allowed.contains(&"id")
+        && !object.contains_key("id")
+    {
+        "pass the task as `id`".to_owned()
+    } else {
+        let accepted = allowed
+            .iter()
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("accepted fields are {accepted}")
+    };
+    Err(OrbitError::InvalidInput(format!(
+        "a claimed worker's brokered request does not accept `{field}`; {recovery}"
+    )))
 }
 
 /// The fields a claimed worker's `orbit.task.show` may carry. The binding
@@ -518,9 +550,9 @@ const NOTICE_CLOSE_FIELDS: [&str; 5] = ["id", "dedupe_key", "reason", "model", "
 /// Check a claimed worker's `orbit.task.show` request, of any task in the
 /// claimed workspace, and say whether it asks for a bounded page.
 fn check_task_show(object: &Map<String, Value>) -> Result<bool, OrbitError> {
-    accept_fields(object, &TASK_SHOW_FIELDS)?;
+    accept_task_fields(object, &TASK_SHOW_FIELDS)?;
     if super::recovery::wants_delivery(object) {
-        accept_fields(object, &["id", "fields", "field", "run_id", "model"])?;
+        accept_task_fields(object, &["id", "fields", "field", "run_id", "model"])?;
         return Ok(false);
     }
     if !TASK_SHOW_PAGE_FIELDS
@@ -632,6 +664,9 @@ pub(in crate::adapter::command::dispatch) fn execute_brokered(
     };
     let review = matches!(tool, GET | PUT) && super::review::is_review_artifact(&path);
     let binding = claim_binding(runtime, run, review)?;
+    if tool == GET {
+        accept_task_fields(object, &GET_FIELDS)?;
+    }
     if review {
         // Another task's review artifacts are outside the claim for every
         // activity, before any review scope decides [ORB-19289].
@@ -679,13 +714,12 @@ pub(in crate::adapter::command::dispatch) fn execute_brokered(
             input
         }
         GET => {
-            accept_fields(object, &GET_FIELDS)?;
             let mut input = input.clone();
             input["path"] = Value::String(path);
             input
         }
         PUT => {
-            accept_fields(object, &["id", "path", "content_base64", "model"])?;
+            accept_task_fields(object, &["id", "path", "content_base64", "model"])?;
             require_claimed_task(object, binding)?;
             artifact_put_input(binding, &path, put_content(object)?, object.get("model"))
         }
