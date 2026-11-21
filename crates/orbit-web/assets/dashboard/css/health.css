@@ -693,9 +693,12 @@ td .rel-rate { font-size: 12px; }
 /* Series cards double as the legend and the series toggles. */
 .mx-trends, .rp-card { container-type: inline-size; }
 .mx-series { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
-/* Prevent a 4-tile series grid from wrapping 3+1 (leaving an orphan) at mid widths
-   where 4 columns of 170px + 12px gaps (716px + 38px card chrome = 754px) don't fit. */
-@container (max-width: 753px) {
+/* Prevent a 4-tile series grid from wrapping 3+1 (leaving an orphan) at mid widths.
+   A size query measures the container's content box, which already excludes the card's
+   padding and border. Four 170px tiles with 3 gaps of 12px need 716px, so two columns
+   apply below that. The bound is 715.98px, not 716px: Chromium's comparison allows one
+   1/64px layout unit of slack, and 715.98px still matches the widest width below 716px. */
+@container (max-width: 715.98px) {
   .mx-series:has(> .mx-sc:nth-child(4):last-child):not(:has(> .mx-sc-breakdown)) {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
