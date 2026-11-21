@@ -151,17 +151,24 @@ pub(crate) fn read_rate_limit(request: &ExecRequest, deadline: Option<Instant>) 
             "rate-limit read skipped: timeout budget exhausted".to_string(),
         );
     };
-    #[cfg(any(test, feature = "test-support"))]
-    if simulated_probe::fire(&probe) {
-        if let Some(deadline) = deadline {
-            super::store::reach_deadline(deadline);
-        }
-        return RateLimitAnswer::Clipped("simulated caller timeout".to_string());
-    }
     let clipped = probe
         .timeout_ms
         .is_some_and(|limit| limit < REFRESH_TIMEOUT_MS);
-    match run_process(&probe, &NoSandbox) {
+    #[cfg(any(test, feature = "test-support"))]
+    let run = match simulated_probe::fire(&probe) {
+        // The fixture's probe ends as a caller-clipped timeout would, and the
+        // production classification below decides what that means.
+        Some(timed_out) => {
+            if let Some(deadline) = deadline {
+                super::store::reach_deadline(deadline);
+            }
+            Ok(timed_out)
+        }
+        None => run_process(&probe, &NoSandbox),
+    };
+    #[cfg(not(any(test, feature = "test-support")))]
+    let run = run_process(&probe, &NoSandbox);
+    match run {
         Ok(result) if result.success => parse_rate_limit(&result.stdout),
         // The caller's deadline, not the endpoint, ended the read.
         Ok(result) if result.timed_out && clipped => RateLimitAnswer::Clipped(
@@ -178,8 +185,11 @@ pub(crate) fn read_rate_limit(request: &ExecRequest, deadline: Option<Instant>) 
     }
 }
 
-/// Simulate a clipped probe after observing its request, with a fixed admission
-/// clock until the probe consumes its deadline. Test fixtures only.
+/// Answer each rate-limit probe in `body` as a probe that the caller's budget
+/// cut short: `observe` sees the probe, and the probe returns a timed-out
+/// process result that the production classification in `read_rate_limit`
+/// maps to `Clipped`. The admission clock is fixed until the probe consumes its
+/// deadline. Test fixtures only.
 #[cfg(any(test, feature = "test-support"))]
 pub fn with_simulated_clipped_probe<T>(
     observe: impl Fn(&ExecRequest) + 'static,
@@ -190,7 +200,7 @@ pub fn with_simulated_clipped_probe<T>(
 
 #[cfg(any(test, feature = "test-support"))]
 mod simulated_probe {
-    use orbit_exec::ExecRequest;
+    use orbit_exec::{ExecRequest, ExecutionResult};
     use std::{cell::RefCell, rc::Rc};
     type Observer = Rc<dyn Fn(&ExecRequest)>;
     thread_local! { static OBSERVER: RefCell<Option<Observer>> = const { RefCell::new(None) }; }
@@ -206,14 +216,20 @@ mod simulated_probe {
         let _reset = Reset(OBSERVER.with(|slot| slot.replace(Some(Rc::new(observe)))));
         body()
     }
-    pub(super) fn fire(request: &ExecRequest) -> bool {
-        let observer = OBSERVER.with(|slot| slot.borrow().clone());
-        if let Some(observer) = observer {
-            observer(request);
-            true
-        } else {
-            false
-        }
+    /// The timed-out result of an observed probe, or `None` when no fixture is
+    /// armed and the probe must run for real.
+    pub(super) fn fire(request: &ExecRequest) -> Option<ExecutionResult> {
+        let observer = OBSERVER.with(|slot| slot.borrow().clone())?;
+        observer(request);
+        Some(ExecutionResult {
+            success: false,
+            timed_out: true,
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: None,
+            duration_ms: request.timeout_ms.unwrap_or(0),
+            output: None,
+        })
     }
 }
 
