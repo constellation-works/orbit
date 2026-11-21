@@ -682,6 +682,13 @@ class PairedCliSupervisionTest(PairedCliTestCase):
         self.assertEqual(
             {key: protocol[key] for key in expected}, expected)
 
+    def test_large_command_timeout_allows_short_probe(self) -> None:
+        result, out = self.run_paired("--parity", "probe-same", "--command-timeout", "3000000")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        report = json.loads((out / "parity.json").read_text())
+        self.assertIs(report["match"], True)
+        self.assertEqual(report["limits"]["command_timeout_seconds"], 3_000_000.0)
+
     def test_cancellation_during_process_acquisition(self) -> None:
         # Trace Popen's return, before its caller can install a cleanup guard.
         driver = PASSWD_HOME_PATCH + """
