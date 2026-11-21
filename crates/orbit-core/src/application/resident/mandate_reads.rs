@@ -242,7 +242,7 @@ impl OrbitRuntime {
         let now = chrono::Utc::now();
         let cycle_routine_disabled = self.resident_cycle_routine_disabled();
         let mut tasks: Vec<Task> = Vec::new();
-        for task in self.list_task_metadata()? {
+        for task in self.list_resident_task_metadata()? {
             if !task.tags.iter().any(|tag| tag == RESIDENT_TAG) {
                 continue;
             }
@@ -349,12 +349,20 @@ impl OrbitRuntime {
         Ok(mandates)
     }
 
+    /// The tasks tagged `resident`, newest first, selected from the task
+    /// index by tag. On a large workspace the full metadata listing was
+    /// most of a resident list read (ORB-26324), and only the mandates are
+    /// needed. Callers still keep only the exact tag.
+    fn list_resident_task_metadata(&self) -> Result<Vec<Task>, OrbitError> {
+        self.list_task_metadata_with_any_tag(&BTreeSet::from([RESIDENT_TAG.to_string()]))
+    }
+
     /// `orbit.resident.list`: every task tagged `resident`, ended ones only
     /// with `include_ended`.
     pub fn list_resident_mandates(&self, include_ended: bool) -> Result<Value, OrbitError> {
         let cycle_routine_disabled = self.resident_cycle_routine_disabled();
         let mut rows = Vec::new();
-        for task in self.list_task_metadata()? {
+        for task in self.list_resident_task_metadata()? {
             if !task.tags.iter().any(|tag| tag == RESIDENT_TAG) {
                 continue;
             }
