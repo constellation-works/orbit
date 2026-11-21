@@ -84,6 +84,21 @@ class LinuxGatedTestItemTests(unittest.TestCase):
                 self.check_tree({SUITE: source}, 1, f"test helper {keyword} `LIMIT`")
                 self.check_tree({SUITE: f"{LINUX}\n" + source}, 0)
 
+    def test_cfg_on_a_statement_with_two_braces_gates_the_helper_use(self):
+        # The helper is named only in the second brace. That brace stays linux-gated,
+        # so on macOS the helper has no live use and the guard reports it.
+        source = (
+            "fn helper() {}\n\n"
+            "#[test]\n"
+            "fn linux_only() {\n"
+            "    #[cfg(target_os = \"linux\")]\n"
+            "    let value = if ready() { 1 } else { helper() };\n"
+            "}\n"
+        )
+        self.check_tree({SUITE: source}, 1, "test helper fn `helper`")
+        live = source.replace("    #[cfg(target_os = \"linux\")]\n", "")
+        self.check_tree({SUITE: live}, 0)
+
     def test_ungated_fixture_module_used_only_by_linux_tests_is_reported(self):
         files = {SUITE: "mod support;\n\n" + linux_test("support::command();"),
                  SUPPORT: "pub fn command() {}\n"}

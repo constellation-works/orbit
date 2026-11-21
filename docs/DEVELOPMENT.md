@@ -599,7 +599,7 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   the `scripts/test-*` self-tests only when their inputs changed against the
   PR base, by the rule `make ci-fast` uses (`scripts/`, `.github/`, `Makefile`,
   `.cargo/`, the root manifests, `.config/nextest.toml`, `crates/orbit-engine/tests/engine/pr_landing/infrastructure/fixtures/legacy-codeql.yml`, `install.sh`, `RELEASING.md`, `docs/dev/qa/path-leases-listener-sudo.md`, `docs/standards/`,
-  `AGENTS.md`, `CLAUDE.md`, `plugin/`, `npm/`, `.agents/`, `.claude-plugin/`); `test-qa-full-sweep.py --check`
+  `AGENTS.md`, `CLAUDE.md`, `plugin/`, `npm/`, `.agents/`, `.claude-plugin/`, `server.json`, `examples/release-readiness/scripts/release-readiness.yaml`); `test-qa-full-sweep.py --check`
   always runs its inventory check and runs its fixture self-test under the
   same rule. That process fixture accepts an identity-bound pidfd signal only
   on Linux. On macOS and other hosts it records an unsupported identity-signal
@@ -881,7 +881,8 @@ python3 scripts/ci-p90.py --from-json .orbit/tmp/ci-budget-after/runs.json \
 ```
 
 Preserve the p90 command's exit status: 0 means within budget, 1 over budget,
-2 no executed Check job. Report nearest-rank `ceil(0.9 * n)`, the ascending
+2 no executed Check job, 3 a `gh` failure (not over budget). Report
+nearest-rank `ceil(0.9 * n)`, the ascending
 executed Check start-to-completion durations, median and maximum, with
 skipped, cancelled, missing/invalid jobs and executed failures counted
 separately. Never treat a gap as a zero-duration pass. Include earlier attempts

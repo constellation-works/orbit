@@ -267,6 +267,16 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
     def signals(self, report):
         return {(s["task"], s["signal"], s["detail"]) for s in report["signals"]}
 
+    def test_three_dot_range_is_refused_and_names_the_two_dot_form(self):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--repo", str(self.repo.root),
+             "--offline", "--range", "v0.35.0...HEAD"],
+            env=git_environment(self.repo.env), capture_output=True, text=True,
+            timeout=self_test_hang.HANG_CEILING_SECONDS)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("A..B", result.stderr)
+        self.assertNotIn(".HEAD", result.stderr)
+
     def test_public_entrypoint_ignores_git_location_environment(self):
         sentinel = Path(self.tmp.name) / "sentinel"
         sentinel.mkdir()

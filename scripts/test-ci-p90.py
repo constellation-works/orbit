@@ -3,6 +3,7 @@
 
 from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -66,6 +67,38 @@ class CiP90ReplayTests(unittest.TestCase):
         ]}])
         self.assertTrue(summary["executed"], summary)
         self.assertEqual(summary["check_seconds"], 0)
+
+    def test_gh_failure_is_not_an_over_budget_exit(self):
+        # Over budget is exit 1. A missing or failing gh must not use that status.
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        gh = bin_dir / "gh"
+        gh.write_text("#!/bin/sh\necho 'HTTP 401: authentication required' >&2\nexit 1\n")
+        gh.chmod(0o755)
+        env = dict(os.environ, PATH=f"{bin_dir}:/usr/bin:/bin")
+        failed = subprocess.run([sys.executable, str(SCRIPT), "--limit", "1"],
+                                capture_output=True, text=True, env=env)
+        self.assertEqual(failed.returncode, 3, failed.stderr)
+        self.assertIn("gh failed", failed.stderr)
+
+        empty = self.root / "empty-bin"
+        empty.mkdir()
+        missing = subprocess.run([sys.executable, str(SCRIPT), "--limit", "1"],
+                                 capture_output=True, text=True,
+                                 env=dict(os.environ, PATH=str(empty)))
+        self.assertEqual(missing.returncode, 3, missing.stderr)
+        self.assertIn("gh failed", missing.stderr)
+
+        # A gh that is on PATH but not executable raises PermissionError, not FileNotFoundError.
+        unrunnable = self.root / "unrunnable-bin"
+        unrunnable.mkdir()
+        (unrunnable / "gh").write_text("#!/bin/sh\nexit 0\n")
+        (unrunnable / "gh").chmod(0o644)
+        denied = subprocess.run([sys.executable, str(SCRIPT), "--limit", "1"],
+                                capture_output=True, text=True,
+                                env=dict(os.environ, PATH=str(unrunnable)))
+        self.assertEqual(denied.returncode, 3, denied.stderr)
+        self.assertIn("gh failed", denied.stderr)
 
 
 if __name__ == "__main__":

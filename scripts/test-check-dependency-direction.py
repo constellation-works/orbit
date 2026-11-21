@@ -1480,6 +1480,35 @@ class RelativeImportTests(unittest.TestCase):
             with self.subTest(relative=relative):
                 self.check_rows([(relative, source)], rejected=True, base=store)
 
+    def test_super_relative_crate_paths_rejected(self):
+        # `crate::adapter`, `crate::driver…`, `crate::repository` and
+        # `crate::Store`/`StoreTx` are named-path guards. The same edge written
+        # with `super::` from that file's module is the same import.
+        self.check_rows([
+            ("probe.rs", "use super::super::adapter::Probe;\n"),
+            ("nested/probe.rs", "use super::super::super::adapter::Probe;\n"),
+            ("grouped.rs", "use super::super::{adapter::Probe};\n"),
+            ("inline.rs", "fn probe() { super::super::adapter::Probe; }\n"),
+        ], rejected=True)
+        self.check_rows([
+            ("probe.rs", "use super::adapter::Probe;\n"),
+            ("kept.rs", "use super::super::std::io::Probe;\n"),
+        ], rejected=False)
+        store = self.root / "crates/orbit-store/src"
+        self.check_rows([
+            ("contracts/probe.rs", "use super::super::repository::Probe;\n"),
+            ("contracts/driver.rs", "use super::super::driver::Probe;\n"),
+            ("driver/file/probe.rs", "use super::super::super::driver::sqlite::Probe;\n"),
+            ("driver/file/store.rs", "use super::super::super::Store;\n"),
+            ("driver/file/tx.rs", "use super::super::super::StoreTx;\n"),
+            ("driver/sqlite/probe.rs", "use super::super::super::repository::Probe;\n"),
+            ("driver/sqlite/file.rs", "use super::super::super::driver::file::Probe;\n"),
+            ("fs/probe.rs", "use super::super::workflow::Probe;\n"),
+        ], rejected=True, base=store)
+        self.check_rows([
+            ("driver/file/probe.rs", "use super::super::super::contracts::Probe;\n"),
+        ], rejected=False, base=store)
+
     def test_tools_builtin_grouped_imports_rejected_in_either_spelling(self):
         # [ORB-26107] `r#builtin` names the same module as `builtin`. The
         # tokenizer once split the raw identifier into `r` and `#`, so a grouped

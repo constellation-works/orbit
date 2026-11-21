@@ -1889,6 +1889,9 @@ def commit_task_ids(subject, trailer_ids):
 def survey(repo, revision_range, orbit, offline):
     git = Git(repo)
     revision_range = revision_range or default_range(git)
+    if "..." in revision_range:
+        raise SystemExit(
+            "release-breaking-changes: --range A...B is not accepted; use A..B")
     if ".." not in revision_range:
         raise SystemExit("release-breaking-changes: --range must be A..B")
     base, head = revision_range.split("..", 1)
@@ -2013,7 +2016,8 @@ def render_text(report):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--range", help="git range A..B (default: last vX.Y.Z tag..HEAD)")
+    parser.add_argument("--range",
+                        help="git range A..B (A...B is refused; default: last vX.Y.Z tag..HEAD)")
     parser.add_argument("--repo", default=".", help="repository to survey (default: .)")
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
     parser.add_argument("--offline", action="store_true",

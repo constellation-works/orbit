@@ -273,6 +273,8 @@ elif [[ "$fast" == true || ("$guards" == true && "${CI_SELF_TESTS:-all}" == chan
     git diff --name-only --no-renames -z "$base" -- >"$guard_logs/paths" &&
     git ls-files --others --exclude-standard -z >>"$guard_logs/paths"; then
     run_self_tests=false
+    # server.json feeds the QA npm fixture. The release-readiness manifest
+    # feeds the adapter self-test. A change to either runs those self-tests.
     while IFS= read -r -d '' path; do
       case "$path" in
         scripts/* | .github/* | Makefile | .cargo/* | Cargo.toml | Cargo.lock | \
@@ -280,7 +282,8 @@ elif [[ "$fast" == true || ("$guards" == true && "${CI_SELF_TESTS:-all}" == chan
           crates/orbit-engine/tests/engine/pr_landing/infrastructure/fixtures/legacy-codeql.yml | \
           install.sh | RELEASING.md | docs/dev/qa/path-leases-listener-sudo.md | \
           docs/standards/* | AGENTS.md | CLAUDE.md | \
-          plugin/* | npm/* | .agents/* | .claude-plugin/*)
+          plugin/* | npm/* | .agents/* | .claude-plugin/* | \
+          server.json | examples/release-readiness/scripts/release-readiness.yaml)
           run_self_tests=true
           break
           ;;

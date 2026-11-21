@@ -328,6 +328,8 @@ contracts_higher="${app_modules}|routines|auto_tasks"
 # With `$4` set to `named-path`, match the `|`-separated path prefixes `$3`
 # anywhere in code, including grouped trees, while preserving comments and
 # literals as non-dependencies. A single name matches that identifier alone.
+# A leading `super::` chain is resolved from the file's module path under
+# `src/`, so `super::…::adapter` inside `application` matches `crate::adapter`.
 # With `$5` set to `include-tests`, also scan sibling test modules.
 super_chains_into() {
   python3 - "$1" "$2" "$3" "${4:-}" "${5:-}" <<'PY'
@@ -405,6 +407,32 @@ def use_tree(tokens, index, prefix=(), aliases=None):
     return paths, index
 
 
+def crate_module_parts(file_path):
+    """Module path of a Rust file relative to its crate `src/` directory."""
+    resolved = file_path.resolve()
+    for parent in resolved.parents:
+        if parent.name != "src":
+            continue
+        names = list(resolved.relative_to(parent).with_suffix("").parts)
+        if names and names[-1] == "mod":
+            names.pop()
+        return names
+    return None
+
+
+def resolve_super_chain(segments, module_parts):
+    """Rewrite a leading `super::` chain as a `crate::` path, or None."""
+    if module_parts is None or not segments or segments[0] != "super":
+        return None
+    ups = 0
+    while ups < len(segments) and segments[ups] == "super":
+        ups += 1
+    if ups > len(module_parts):
+        return None
+    climbed = module_parts[:len(module_parts) - ups]
+    return ("crate", *climbed, *segments[ups:])
+
+
 failed = False
 target = app / module
 if not target.exists():
@@ -449,12 +477,26 @@ for path in paths:
                         grown = True
             expanded.extend((head, *prefix[1:]) for head in heads - {prefix[0]})
         prefixes = [*prefixes, *expanded]
+        module_parts = crate_module_parts(path)
+
+        def matches(segments):
+            def hit(candidate):
+                return any(candidate[:len(prefix)] == prefix for prefix in prefixes)
+            if hit(segments):
+                return True
+            absolute = resolve_super_chain(segments, module_parts)
+            return absolute is not None and hit(absolute)
+
         for index, (name, start) in enumerate(tokens):
-            if not any(name == prefix[0] for prefix in prefixes):
+            starts_prefix = any(name == prefix[0] for prefix in prefixes)
+            # Only the first `super` of a path. A later `super` has climbed
+            # less and would name a deeper module than the chain does.
+            starts_super = (name == "super" and (index == 0 or tokens[index - 1][0] != "::")
+                            and index + 1 < len(tokens) and tokens[index + 1][0] == "::")
+            if not starts_prefix and not starts_super:
                 continue
             named_paths, _ = use_tree(tokens, index)
-            if any(segments[:len(prefix)] == prefix
-                   for segments in named_paths for prefix in prefixes):
+            if any(matches(segments) for segments in named_paths):
                 number = source.count("\n", 0, start) + 1
                 print(f"{path}:{number}:{source.splitlines()[number - 1]}")
                 failed = True

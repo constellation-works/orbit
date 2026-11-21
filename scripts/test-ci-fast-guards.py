@@ -442,6 +442,33 @@ exec {shlex.quote(sys.executable)} "$@"
             if mode != "--guards-core":
                 self.assertEqual((self.guard_calls / "test-qa-full-sweep.py").read_text().split(), ["--check"])
 
+    def test_server_json_and_release_readiness_manifest_select_self_tests(self):
+        """PR-mode runs the self-tests that read these two inputs.
+
+        server.json feeds the QA npm fixture, so the sweep runs full --check.
+        The release-readiness manifest feeds the adapter self-test.
+        """
+        self.prepare_ci()
+        self.init_ci_git()
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+        for path in ("server.json",
+                     "examples/release-readiness/scripts/release-readiness.yaml"):
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("# changed input\n")
+            for flag, env in (("--fast", None),
+                              ("--guards", {"CI_SELF_TESTS": "changed"}),
+                              ("--guards-core", {"CI_SELF_TESTS": "changed"}),
+                              ("--guards-qa", {"CI_SELF_TESTS": "changed"})):
+                with self.subTest(path=path, flag=flag):
+                    result = self.run_guard("ci-guardrails.sh", flag, env_overrides=env)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assert_self_tests(True, flag)
+                    if flag != "--guards-qa":
+                        self.assertTrue(
+                            (self.guard_calls / "test-release-readiness-adapter.py").exists())
+            target.unlink()
+
     def test_listener_sudo_recipe_selects_self_tests_and_ordinary_docs_do_not(self):
         """A recipe-only edit runs the executable fixture. Ordinary Markdown does not."""
         self.prepare_ci()
