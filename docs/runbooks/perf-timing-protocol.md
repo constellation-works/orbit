@@ -87,8 +87,9 @@ A run that cannot take the lane within `--lane-wait` seconds (default 900, or
 
 A paired run verifies the complete snapshot and performs one full restore and path
 rewrite, then keeps a pristine copy of that restored root. Before every parity
-observation and sampling round it synchronously resets a fixed root with `rsync -a
---checksum --delete`; rsync is required on the host. Checksumming reads both copies,
+observation and sampling round it synchronously resets a fixed root with `rsync -aX
+--checksum --delete` (preserving and restoring extended attributes as well as
+file contents); rsync is required on the host. Checksumming reads both copies,
 while only changed files are copied and newly created files are deleted. Setup and
 checksum scans can still cause substantial disk IO for a live-sized fixture, and
 other host activity also contributes to pressure. For example, a 33 GiB snapshot with

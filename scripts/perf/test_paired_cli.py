@@ -279,6 +279,9 @@ case "$mode" in
     printf 'timed %s\\n' "$role"
     exit 0
     ;;
+  xattr-parity|xattr-timed)
+    exec {python} -I {xattr_driver} "$role" "$marks" "$mode"
+    ;;
   *)
     printf 'unexpected %s\\n' "$mode" >&2
     exit 3
@@ -423,6 +426,27 @@ print(f"http://127.0.0.1:{server.server_address[1]}", flush=True)
 server.serve_forever()
 """
 
+# Records user extended attributes on `.orbit/config.yaml`, then mutates them
+# (adding `user.fixture_probe` and dropping `user.original` if present).
+XATTR_DRIVER = r"""
+import json, os, sys
+from pathlib import Path
+
+role, marks_dir, mode = sys.argv[1:4]
+target = Path(".orbit/config.yaml")
+observed = {
+    name: os.getxattr(target, name).decode("utf-8", "replace")
+    for name in sorted(os.listxattr(target))
+    if name.startswith("user.")
+}
+with open(Path(marks_dir) / "xattr-observations.jsonl", "a") as handle:
+    handle.write(json.dumps({"mode": mode, "role": role, "attrs": observed}) + "\n")
+if "user.original" in observed:
+    os.removexattr(target, "user.original")
+os.setxattr(target, "user.fixture_probe", f"{mode}:{role}".encode())
+print(json.dumps(observed, sort_keys=True))
+"""
+
 
 def process_gone(pid: int) -> bool:
     """Whether `pid` is gone or a zombie awaiting its (non-harness) reaper."""
@@ -485,6 +509,8 @@ def write_builds(builds: Path, marks: Path) -> dict[str, Path]:
     graceful_driver.write_text(GRACEFUL_DRIVER)
     ignore_term_driver = builds.parent / "ignore_term_driver.py"
     ignore_term_driver.write_text(IGNORE_TERM_DRIVER)
+    xattr_driver = builds.parent / "xattr_driver.py"
+    xattr_driver.write_text(XATTR_DRIVER)
     binaries = {}
     revisions = {}
     for role, commit in (("base", "a"), ("candidate", "c")):
@@ -498,6 +524,7 @@ def write_builds(builds: Path, marks: Path) -> dict[str, Path]:
             web_server=shlex.quote(str(web_server)),
             graceful_driver=shlex.quote(str(graceful_driver)),
             ignore_term_driver=shlex.quote(str(ignore_term_driver)),
+            xattr_driver=shlex.quote(str(xattr_driver)),
         ))
         path.chmod(0o755)
         binaries[role] = path
@@ -875,6 +902,75 @@ fi
         self.assertFalse(out.exists(), "a refused usage error creates no output")
         self.assertFalse((self.marks / "web-all.pids").exists(),
                          "no arm server may start for a malformed parity command")
+
+    def _require_xattr_support(self) -> None:
+        if not (hasattr(os, "listxattr") and hasattr(os, "setxattr")):
+            self.skipTest("requires os.listxattr and os.setxattr")
+        probe = Path(self.temp.name) / "xattr-probe"
+        probe.write_text("probe")
+        try:
+            os.setxattr(probe, "user.probe", b"1")
+        except OSError as error:
+            self.skipTest(f"filesystem does not support user xattrs: {error}")
+
+    def _run_xattr_check(self, *extra: str, bootstrap: str = PAIRED_BOOTSTRAP,
+                         expected_attrs: dict[str, str] | None = None) -> list[dict]:
+        obs_file = self.marks / "xattr-observations.jsonl"
+        if obs_file.exists():
+            obs_file.unlink()
+        result, out = self.run_paired(
+            "--parity", "xattr-parity", *extra,
+            surface=("--cli", "xattr-timed"), bootstrap=bootstrap,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        report = json.loads((out / "parity.json").read_text())
+        self.assertIs(report["match"], True, report)
+        observations = [json.loads(line) for line in obs_file.read_text().splitlines()]
+        self.assertEqual(
+            [(o["mode"], o["role"]) for o in observations],
+            [("xattr-parity", "base"), ("xattr-parity", "candidate"), ("xattr-parity", "base"),
+             ("xattr-timed", "base"), ("xattr-timed", "candidate"), ("xattr-timed", "base")],
+        )
+        if expected_attrs is not None:
+            for obs in observations:
+                self.assertEqual(obs["attrs"], expected_attrs, obs)
+        return observations
+
+    def test_reset_clears_extended_attributes_between_arms_and_agrees_with_keep(self) -> None:
+        # ORB-26573: an attribute added by an earlier arm must be absent at the next
+        # parity observation and sampling round, and user attributes must agree
+        # with a full restore (--keep).
+        self._require_xattr_support()
+        keep_obs = self._run_xattr_check("--keep", expected_attrs={})
+        reset_obs = self._run_xattr_check(expected_attrs={})
+        self.assertEqual(reset_obs, keep_obs)
+
+    def test_reset_preserves_original_extended_attributes_from_full_restore(self) -> None:
+        # If a full restore leaves original user attributes on a file, the
+        # pristine template and reset must preserve them even when an earlier
+        # arm removes them and adds its own attribute.
+        self._require_xattr_support()
+        original_xattr_bootstrap = PASSWD_HOME_PATCH + r"""
+import importlib.util, os, pathlib, sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]).resolve().parent))
+import fixture
+_real_restore_root = fixture.restore_root
+def _restore_with_original_xattr(*args, **kwargs):
+    info = _real_restore_root(*args, **kwargs)
+    os.setxattr(pathlib.Path(info["cwd"]) / ".orbit" / "config.yaml", "user.original", b"kept")
+    return info
+fixture.restore_root = _restore_with_original_xattr
+import runpy
+script = sys.argv[1]
+sys.argv = [script] + sys.argv[2:]
+runpy.run_path(script, run_name="__main__")
+"""
+        expected = {"user.original": "kept"}
+        keep_obs = self._run_xattr_check(
+            "--keep", bootstrap=original_xattr_bootstrap, expected_attrs=expected)
+        reset_obs = self._run_xattr_check(
+            bootstrap=original_xattr_bootstrap, expected_attrs=expected)
+        self.assertEqual(reset_obs, keep_obs)
 
 
 class PairedCliSupervisionTest(PairedCliTestCase):

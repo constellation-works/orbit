@@ -639,6 +639,14 @@ class Harness:
                           "harness client, so it stays in the host network namespace",
             }
 
+    @staticmethod
+    def _sync_tree(src: Path, dest: Path, *extra_args: str) -> None:
+        try:
+            subprocess.run(["rsync", "-aX", *extra_args, "--",
+                            f"{src}/", f"{dest}/"], check=True)
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise common.PerfRefusal(f"fixture reset failed: {error}") from error
+
     def restore(self, label: str) -> dict:
         if self.args.keep:
             return fixture.restore_root(self.snapshot, self.work / f"root-{label}", self.manifest)
@@ -648,17 +656,15 @@ class Harness:
             self.reset_info = fixture.restore_root(self.snapshot, root, self.manifest)
             # The populated root can carry the filesystem to the gate threshold.
             # restore_root gates only the root it creates, so gate the pristine
-            # copy before its full tree is written.
+            # copy before its full tree is written. Copy extended attributes too
+            # so resets preserve whatever a full restore produced.
             common.disk_gate(template)
-            shutil.copytree(root, template, symlinks=True)
+            self._sync_tree(root, template)
         else:
-            # Checksums detect equal-size, equal-mtime changes made by an arm.
-            # Deletion also removes SQLite WALs and other newly created files.
-            try:
-                subprocess.run(["rsync", "-a", "--checksum", "--delete", "--",
-                                str(template) + "/", str(root) + "/"], check=True)
-            except (OSError, subprocess.CalledProcessError) as error:
-                raise common.PerfRefusal(f"fixture reset failed: {error}") from error
+            # Checksums detect equal-size, equal-mtime changes made by an arm;
+            # deletion removes newly created files, and -X clears or restores
+            # extended attributes left by an earlier arm.
+            self._sync_tree(template, root, "--checksum", "--delete")
         return self.reset_info
 
     def drop(self, info: dict) -> None:
