@@ -274,6 +274,15 @@ class VisualFixtureServerTest(unittest.TestCase):
                 self.assertTrue(hosts[0]["local"], hosts)
                 remote = [row for row in hosts if not row["local"]]
                 self.assertEqual([row["name"] for row in remote], ["fixture-remote"], hosts)
+                drains_status, _, drains_body = self._fetch(
+                    url, "/api/on/fixture-remote/fleet/drains?workspace=ws_work",
+                )
+                self.assertEqual(drains_status, 200, drains_body[:200])
+                self.assertEqual(json.loads(drains_body), {"items": []})
+                self.assertNotIn(
+                    "GET /api/on/fixture-remote/fleet/drains?workspace=ws_work\n",
+                    record.read_text(),
+                )
             finally:
                 self._stop(server)
 
