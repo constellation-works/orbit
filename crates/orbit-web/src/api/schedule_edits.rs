@@ -7,12 +7,13 @@
 
 use std::time::Instant;
 
+use axum::extract::rejection::JsonRejection;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_cmd::registry_routines::routine_statuses;
 use orbit_common::governance::authorization::{
-    DASHBOARD_AUTO_TASK_SCHEDULE, DASHBOARD_ROUTINE_TRIGGER,
+    DASHBOARD_AUTO_TASK_SCHEDULE, DASHBOARD_ROUTINE_TRIGGER, GovernedOperation,
 };
 use orbit_core::application::auto_tasks::{
     AutoTaskScheduleError, AutoTaskScheduleOutcome, AutoTaskScheduleProfile,
@@ -20,7 +21,6 @@ use orbit_core::application::auto_tasks::{
 use orbit_core::application::routines::{RoutineEditRefusal, edit_listed_routine_trigger};
 use orbit_types::workflow::{AutoTaskSchedule, RoutineTrigger};
 use serde::Deserialize;
-use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use super::auto_tasks::{auto_task_control_error, resolve_workspace_blocking};
@@ -38,32 +38,42 @@ pub(super) struct RoutineTriggerRequest {
     target: String,
     /// The machine the browser acted from; recorded in the audit event only.
     machine_name: String,
-    expected_trigger: Value,
-    trigger: Value,
+    expected_trigger: RoutineTrigger,
+    trigger: RoutineTrigger,
 }
 
 #[derive(Debug, Deserialize)]
 pub(super) struct AutoTaskScheduleRequest {
     name: String,
-    expected_schedule: Value,
-    schedule: Value,
+    expected_schedule: AutoTaskSchedule,
+    schedule: AutoTaskSchedule,
 }
 
-/// Parse one typed field of a request body, refusing a malformed value with
-/// the parser's own explanation as a 400 the editor shows verbatim.
-fn typed<T: DeserializeOwned>(value: &Value, field: &str, what: &str) -> Result<T, Box<Response>> {
-    serde_json::from_value(value.clone()).map_err(|error| {
-        Box::new(
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "error": format!("{field} is not a valid {what}: {error}"),
-                    "code": "invalid_schedule",
-                })),
-            )
-                .into_response(),
+/// The body is deserialized by the extractor straight into the typed request,
+/// so every trigger or schedule field is checked against its closed shape
+/// there. A value that does not parse is a 400 carrying the parser's own
+/// explanation, which the editor shows verbatim; any other rejection (bad
+/// syntax, wrong content type, oversized body) keeps the framework's answer.
+/// The caller is authorized first, so a refused caller still gets the 403.
+fn refused_body(
+    rejection: JsonRejection,
+    operation: &'static GovernedOperation,
+    state: &DashboardState,
+) -> Response {
+    if let Err(denial) = authorized_caller(operation, state.operator_session()) {
+        return authorization_denied(denial);
+    }
+    match rejection {
+        JsonRejection::JsonDataError(_) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!("invalid request body: {}", rejection.body_text()),
+                "code": "invalid_schedule",
+            })),
         )
-    })
+            .into_response(),
+        other => other.into_response(),
+    }
 }
 
 fn conflict(refusal: Value) -> Response {
@@ -75,8 +85,12 @@ pub(super) async fn set_routine_trigger(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
     Ws(runtime): Ws,
-    Json(body): Json<RoutineTriggerRequest>,
+    body: Result<Json<RoutineTriggerRequest>, JsonRejection>,
 ) -> Response {
+    let Json(body) = match body {
+        Ok(body) => body,
+        Err(rejection) => return refused_body(rejection, &DASHBOARD_ROUTINE_TRIGGER, &state),
+    };
     let workspace = match explicit_workspace(&query) {
         Ok(workspace) => workspace.to_string(),
         Err(rejection) => return rejection.into_response(),
@@ -96,23 +110,12 @@ pub(super) async fn set_routine_trigger(
             return authorization_denied(denial);
         }
     };
-    let expected = match typed::<RoutineTrigger>(
-        &body.expected_trigger,
-        "expected_trigger",
-        "routine trigger",
-    ) {
-        Ok(trigger) => trigger,
-        Err(response) => return *response,
-    };
-    let trigger = match typed::<RoutineTrigger>(&body.trigger, "trigger", "routine trigger") {
-        Ok(trigger) => trigger,
-        Err(response) => return *response,
-    };
     let started = Instant::now();
     let selected = match blocking("routine trigger edit", {
         let global_root = state.global_root().to_path_buf();
         let shared_root = runtime.shared_root();
         let (name, source, target) = (body.name.clone(), body.source.clone(), body.target.clone());
+        let (expected, trigger) = (body.expected_trigger.clone(), body.trigger.clone());
         move || {
             let report = routine_statuses(&global_root)?;
             Ok(edit_listed_routine_trigger(
@@ -161,8 +164,12 @@ pub(super) async fn set_routine_trigger(
 pub(super) async fn set_auto_task_schedule(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
-    Json(body): Json<AutoTaskScheduleRequest>,
+    body: Result<Json<AutoTaskScheduleRequest>, JsonRejection>,
 ) -> Response {
+    let Json(body) = match body {
+        Ok(body) => body,
+        Err(rejection) => return refused_body(rejection, &DASHBOARD_AUTO_TASK_SCHEDULE, &state),
+    };
     let workspace = match explicit_workspace(&query) {
         Ok(workspace) => workspace.to_string(),
         Err(rejection) => return rejection.into_response(),
@@ -185,25 +192,13 @@ pub(super) async fn set_auto_task_schedule(
             return authorization_denied(denial);
         }
     };
-    let expected = match typed::<AutoTaskSchedule>(
-        &body.expected_schedule,
-        "expected_schedule",
-        "auto-task schedule",
-    ) {
-        Ok(schedule) => schedule,
-        Err(response) => return *response,
-    };
-    let schedule = match typed::<AutoTaskSchedule>(&body.schedule, "schedule", "auto-task schedule")
-    {
-        Ok(schedule) => schedule,
-        Err(response) => return *response,
-    };
     let started = Instant::now();
     let outcome = match blocking("auto-task schedule", {
         let runtime = runtime.clone();
         let name = body.name.clone();
+        let schedule = body.schedule.clone();
         let profile = AutoTaskScheduleProfile::Observed {
-            expected_schedule: Box::new(expected),
+            expected_schedule: Box::new(body.expected_schedule.clone()),
         };
         move || Ok(runtime.auto_task_schedule_command(&name, schedule, profile))
     })
