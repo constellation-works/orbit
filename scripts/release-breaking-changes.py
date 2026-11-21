@@ -676,6 +676,15 @@ def alternative_path_map(before, after):
                     old_branches = before_alts[(baseline_parent, keyword)]
                     paired.add(((parent, keyword), (baseline_parent, keyword)))
                     matches = match_schema_alternatives(old_branches, new_branches)
+                    # A single-remainder match between disjoint branches can
+                    # hide a removal when another conjunct's branch flattens
+                    # to the same location. Keep that removal separate.
+                    if len(group_before) > 1 or len(group_after) > 1:
+                        strong = match_schema_alternatives(
+                            old_branches, new_branches, allow_single_remainder=False)
+                        matches = {new_i: old_i for new_i, old_i in matches.items()
+                                   if new_i in strong or not schemas_disjoint(
+                                       old_branches[old_i], new_branches[new_i])}
                 else:
                     baseline_parent = remap_alternative_path(parent, path_map)
                     matches = {}

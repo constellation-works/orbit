@@ -346,6 +346,36 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(len(missed), 0, f"{len(missed)} unsound schema pairs; "
                          f"first counterexamples (old, new, instance): {list(missed.items())[:10]}")
 
+    def test_same_keyword_conjunct_edits_report_breaking(self):
+        def choice(keyword, *types):
+            return {keyword: [{"type": t} for t in types]}
+
+        cases = [
+            ({"allOf": [choice("anyOf", "integer", "null"), choice("anyOf", "string", "integer")]},
+             {"allOf": [choice("anyOf", "integer", "null"), choice("anyOf", "string", "null")]}),
+            ({"allOf": [choice("anyOf", "integer", "null"), choice("anyOf", "boolean", "integer")]},
+             {"allOf": [choice("anyOf", "integer", "null"), choice("anyOf", "string", "boolean")]}),
+            ({"allOf": [choice("anyOf", "null"), choice("anyOf", "string", "null")]},
+             {"allOf": [choice("anyOf", "integer"), choice("anyOf", "string", "null")]}),
+            ({"allOf": [choice("oneOf", "integer"), choice("oneOf", "string", "integer")]},
+             {"allOf": [choice("oneOf", "boolean"), choice("oneOf", "string", "integer")]}),
+            ({"allOf": [choice("anyOf", "string", "boolean"), choice("oneOf", "string", "boolean"),
+                        choice("anyOf", "boolean", "null")]}, choice("anyOf", "string", "null")),
+        ]
+        for index, (before, after) in enumerate(cases):
+            with self.subTest(case=index):
+                tools = self.repo.mcp()
+                tools[0]["inputSchema"] = before
+                self.repo.write_mcp(tools)
+                self.repo.commit("chore: prepare conjunct edit [ORB-90]")
+                self.repo.git("tag", "-f", "v0.35.0")
+                tools[0]["inputSchema"] = after
+                self.repo.write_mcp(tools)
+                self.repo.commit("chore: edit conjunct [ORB-91]")
+                report = self.report()
+                self.assertEqual(report["bump"], "minor")
+                self.assertTrue(any(s["signal"] == "mcp-schema" for s in report["signals"]))
+
     def test_schema_oracle_unknown_keyword_refusal_and_semantics(self):
         with self.assertRaises(ValueError):
             schema_accepts_instance({"items": {"type": "string"}}, ["a"])
