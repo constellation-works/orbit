@@ -36,7 +36,11 @@ When validating a hosted alert, use the same CodeQL bundle version as the
 hosted analysis when possible. Record the local version from `codeql version`
 and the hosted analysis version shown with the alert or its analysis metadata.
 If they differ, record both versions in the evidence and treat the local result
-as limited evidence for that hosted alert.
+as limited evidence for that hosted alert. A rule the local bundle does not
+offer cannot be confirmed at all: the code-scanning sweep holds such a repair
+behind a proposed `CodeQL bundle <version> needed on <host>` prerequisite and
+an open drift friction record ([CONFIG.md](../CONFIG.md#security_alert_sweep--security-finding-severity)).
+Install that bundle on the host, then mark the prerequisite done.
 
 The default extractor toolchain is **Rust 1.97.0 plus rust-src**, confirmed for
 CodeQL **2.27.1**. This is separate from the repository's build toolchain. For

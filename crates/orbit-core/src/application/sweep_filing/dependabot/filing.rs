@@ -1,8 +1,9 @@
 //! Turn a host-collected repository security snapshot into ordinary backlog tasks.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
+use orbit_types::OrbitId;
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 
@@ -20,6 +21,10 @@ use super::code_groups;
 use super::code_groups::{
     CodeGroupTaskRequest, CoveredAlert, alert_key, cause_key, code_group_task_params,
     group_alert_numbers, group_code_alerts, group_paths,
+};
+use super::codeql_bundle::{
+    BundleHold, LocalCodeqlBundle, hold_section, open_prerequisite, prerequisite_task_params,
+    report_bundle_drift,
 };
 use super::duplicates::{
     code_duplicate_candidate, dependabot_duplicate_candidate, duplicate_lookup_error,
@@ -41,6 +46,16 @@ const MAX_TASKS: u64 = 50;
 struct PendingTask {
     params: TaskAddParams,
     result: Value,
+    /// Prerequisite key of a code-scanning repair held for the local CodeQL
+    /// bundle; the task depends on that prerequisite once it is filed.
+    codeql_hold: Option<String>,
+}
+
+/// A bundle prerequisite the sweep files, or reuses, before its repairs.
+struct PlannedBundleHold {
+    hold: BundleHold,
+    rules: BTreeSet<String>,
+    existing: Option<OrbitId>,
 }
 
 pub(crate) fn file_dependabot_alert_tasks(
@@ -225,6 +240,7 @@ where
                 "ecosystem": ecosystem, "package": package, "manifest_path": manifest_path,
                 "alert_count": cluster_alerts.len(),
                 }),
+                codeql_hold: None,
             });
         }
     }
@@ -302,6 +318,9 @@ where
         + covered_by_cause.values().map(Vec::len).sum::<usize>()
         + suppressed_code_alerts;
     let no_siblings: Vec<CoveredAlert> = Vec::new();
+    // Probed once, and only when a CodeQL group is about to be filed.
+    let mut local_bundle: Option<LocalCodeqlBundle> = None;
+    let mut bundle_holds: BTreeMap<String, PlannedBundleHold> = BTreeMap::new();
     for group in &code_groups {
         let alert_numbers = group_alert_numbers(group);
         if pending_tasks.len() >= max_tasks {
@@ -314,22 +333,58 @@ where
         let covered_siblings = covered_by_cause
             .get(&group.cause_key)
             .unwrap_or(&no_siblings);
-        let params = code_group_task_params(&CodeGroupTaskRequest {
+        let mut params = code_group_task_params(&CodeGroupTaskRequest {
             snapshot,
             group,
             covered_siblings,
             repo_root: &runtime.paths().repo_root,
         });
+        let mut result = json!({
+            "family": "code_scanning", "key": group.cause_key,
+            "rule_id": field(&group.alerts[0], "rule_id"),
+            "paths": group_paths(group),
+            "alert_numbers": alert_numbers,
+            "alert_count": group.alerts.len(),
+            "delta_covered_by": covered_alert_owners(covered_siblings),
+        });
+        let hold = if field(&group.alerts[0], "tool_name").eq_ignore_ascii_case("codeql") {
+            local_bundle
+                .get_or_insert_with(|| LocalCodeqlBundle::probe(runtime))
+                .hold_for(&group.alerts[0])
+        } else {
+            None
+        };
+        let codeql_hold = match hold {
+            None => None,
+            Some(hold) => {
+                params.description.push_str(&hold_section(&hold));
+                result["held_for_codeql_bundle"] = json!({
+                    "host": hold.host,
+                    "hosted_version": hold.hosted_version,
+                    "installed_version": hold.local_version,
+                });
+                let key = hold.prerequisite_key();
+                if !bundle_holds.contains_key(&key) {
+                    let existing = open_prerequisite(runtime, &key)?;
+                    bundle_holds.insert(
+                        key.clone(),
+                        PlannedBundleHold {
+                            hold: hold.clone(),
+                            rules: BTreeSet::new(),
+                            existing,
+                        },
+                    );
+                }
+                if let Some(planned) = bundle_holds.get_mut(&key) {
+                    planned.rules.insert(hold.rule_id);
+                }
+                Some(key)
+            }
+        };
         pending_tasks.push(PendingTask {
             params,
-            result: json!({
-                "family": "code_scanning", "key": group.cause_key,
-                "rule_id": field(&group.alerts[0], "rule_id"),
-                "paths": group_paths(group),
-                "alert_numbers": alert_numbers,
-                "alert_count": group.alerts.len(),
-                "delta_covered_by": covered_alert_owners(covered_siblings),
-            }),
+            result,
+            codeql_hold,
         });
     }
 
@@ -395,14 +450,50 @@ where
                 "family": "secret_scanning", "key": key,
                 "alert_number": number, "secret_type": secret_type,
             }),
+            codeql_hold: None,
         });
     }
 
     // Duplicate lookups for every candidate completed above. Only now may the
     // action begin mutating task state, so a lookup failure cannot leave a
     // partial sweep behind.
+    //
+    // Bundle prerequisites and their drift record come first, so every held
+    // repair is filed already depending on its prerequisite.
+    let mut prerequisite_ids: BTreeMap<String, OrbitId> = BTreeMap::new();
+    let mut codeql_bundle_prerequisites = Vec::with_capacity(bundle_holds.len());
+    for (key, planned) in bundle_holds {
+        let (task_id, created) = match planned.existing {
+            Some(task_id) => (task_id, false),
+            None => (
+                runtime
+                    .add_task(prerequisite_task_params(&planned.hold, &planned.rules))?
+                    .id,
+                true,
+            ),
+        };
+        let friction_id =
+            report_bundle_drift(runtime, &planned.hold, &task_id.to_string(), &planned.rules)?;
+        codeql_bundle_prerequisites.push(json!({
+            "task_id": task_id, "created": created,
+            "host": planned.hold.host,
+            "hosted_version": planned.hold.hosted_version,
+            "installed_version": planned.hold.local_version,
+            "rule_ids": planned.rules,
+            "drift_friction_id": friction_id,
+        }));
+        prerequisite_ids.insert(key, task_id);
+    }
     let mut filed = Vec::with_capacity(pending_tasks.len());
-    for pending in pending_tasks {
+    for mut pending in pending_tasks {
+        if let Some(prerequisite) = pending
+            .codeql_hold
+            .as_ref()
+            .and_then(|key| prerequisite_ids.get(key))
+        {
+            pending.params.dependencies.push(prerequisite.clone());
+            pending.result["held_by"] = json!(prerequisite);
+        }
         let task = runtime.add_task(pending.params)?;
         let mut result = pending.result;
         result["task_id"] = json!(task.id);
@@ -443,6 +534,7 @@ where
         "skip_when_dependabot_pr_open": skip_pr,
         "max_tasks": max_tasks,
         "code_scanning_group_bounds": code_groups::group_bounds(),
+        "codeql_bundle_prerequisites": codeql_bundle_prerequisites,
     }))
 }
 

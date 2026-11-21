@@ -795,6 +795,11 @@ exposes per-source collection caps. The file step records the effective
 before the fixed floor may name `workspace` or `global`), and `excluded_below_min_severity`. `orbit run show <RUN_ID>`
 summarizes the filed count, floor and source, and excluded alert count and
 numbers, including for a successful sweep.
+A CodeQL alert whose rule the owner host's installed CodeQL bundle does not
+offer (or any CodeQL alert when no `codeql` answers on the validation PATH) is
+filed depending on one proposed `CodeQL bundle <version> needed on <host>`
+prerequisite, with an open drift friction record that attention lists; install
+the bundle on that host and mark the prerequisite done to release the repairs.
 Secret values must not be copied into task prose or logs.
 
 A missing GitHub client, authentication, or API permission is a capability gap,
