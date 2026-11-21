@@ -42,7 +42,7 @@
     pointer-events: none;
   }
   .shell.rail-collapsed { grid-template-columns: 45px minmax(0, 1fr); }
-  .shell.rail-collapsed > .rail { padding: 8px; }
+  .shell.rail-collapsed > .rail { padding: var(--space-8); }
   .shell.rail-collapsed .rail > :not(.rail-toggle) { display: none; }
   .shell.rail-collapsed .rail-toggle {
     align-self: center;
@@ -63,7 +63,7 @@
   top: 8px;
   left: 8px;
   transform: translateY(calc(-100% - 16px));
-  padding: 8px 12px;
+  padding: var(--space-8) var(--space-12);
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
   background: var(--bg-elev);
@@ -81,17 +81,17 @@
   min-height: 0;
   min-width: 0;
   overflow-y: auto;
-  padding: 12px 12px 8px;
+  padding: var(--space-12) var(--space-12) var(--space-8);
 }
 
-.rail-brand { flex: 0 0 auto; display: flex; align-items: center; height: 36px; padding-right: 6px; }
+.rail-brand { flex: 0 0 auto; display: flex; align-items: center; height: 36px; padding-right: var(--space-6); }
 .rail-brand svg { height: 22px; width: auto; display: block; }
 
 .rail .tabs {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  margin-top: 12px;
+  gap: var(--space-12);
+  margin-top: var(--space-12);
 }
 
 /* The router still appends #tab-indicator / #subtab-indicator to .tabs
@@ -103,27 +103,27 @@
 .rail-group { display: flex; flex-direction: column; gap: 1px; }
 
 .rail-group-label {
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--fg-mute);
-  padding: 0 10px 4px;
+  padding: 0 var(--space-10) var(--space-4);
 }
 
 .rail .tab {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-10);
   width: 100%;
   height: 30px;
-  padding: 0 10px;
+  padding: 0 var(--space-10);
   border: none;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg-soft);
   font: inherit;
-  font-size: 13.5px;
+  font-size: var(--text-md);
   text-align: left;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
@@ -148,7 +148,7 @@
   .rail .rail-drain { display: none; }
 }
 /* The live reading: a dot and words, tinted by state. */
-.rail-drain-state { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; color: var(--state-running); }
+.rail-drain-state { display: inline-flex; align-items: center; gap: var(--space-6); font-weight: 500; color: var(--state-running); }
 .rail-drain-state[hidden] { display: none; }
 .rail-drain-state[data-drain-state="winding_down"], .rail-drain-state.held { color: var(--warn-fg); }
 .rail-drain-state[data-drain-state="pulling"] { color: var(--accent); }
@@ -177,7 +177,7 @@
    so something needing action never reads at the weight of a total. */
 .rail-count {
   margin-left: auto;
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 400;
   font-variant-numeric: tabular-nums;
   color: var(--fg-mute);
@@ -186,10 +186,10 @@
 .rail-count.alert {
   color: var(--danger-fg);
   background: #3a1d1a;
-  border-radius: 999px;
-  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  padding: var(--space-2) var(--space-8);
   line-height: 18px;
-  font-size: 11.5px;
+  font-size: var(--text-xs);
   font-weight: 600;
 }
 /* A warning whose latest refresh failed: still visible, marked as last known. */
@@ -199,7 +199,7 @@
 }
 /* A second count does not split the free space with the first. The desktop
    two-line layout below resets this margin. */
-.rail-count + .rail-count { margin-left: 6px; }
+.rail-count + .rail-count { margin-left: var(--space-6); }
 
 /* Two counts cannot share the fixed desktop rail width with a readable
    label. Keep the volume beside the label and the attention pill below it.
@@ -219,7 +219,7 @@
     gap: 1px;
     overflow-x: hidden;
     overflow-y: auto;
-    scroll-padding-block: 4px;
+    scroll-padding-block: var(--space-4);
     scrollbar-width: thin;
   }
   /* Flatten groups into `.tabs` so fixed labels and tabs never crush or
@@ -227,14 +227,14 @@
      its min-height, and `.tabs` scrolls vertically once all fixed items
      exceed the viewport height (such as 800x600). */
   .rail-group { display: contents; }
-  .rail-group + .rail-group > .rail-group-label { margin-top: 11px; }
+  .rail-group + .rail-group > .rail-group-label { margin-top: var(--space-12); }
   .rail-group > .rail-group-label, .rail-group > .tab { flex: 0 0 auto; }
   .rail-subtabs:not(.dimmed) {
     flex: 0 1 auto;
     min-height: 0;
     overflow-x: hidden;
     overflow-y: auto;
-    scroll-padding-block: 4px;
+    scroll-padding-block: var(--space-4);
     scrollbar-width: thin;
   }
   /* Views keep their 30px line and scroll out of the region; they never
@@ -254,7 +254,7 @@
     -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
     mask-image: linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
   }
-  .rail .tab, .rail-subtabs .subtab { scroll-margin-block: 4px; }
+  .rail .tab, .rail-subtabs .subtab { scroll-margin-block: var(--space-4); }
 }
 /* On a short desktop window, fixed rail content plus a usable views
    region can exceed the height even before any view is shown. Tighten
@@ -262,11 +262,11 @@
    views stay whole beside every destination and the foot. Taller
    windows keep the spacing above. */
 @media (min-width: 761px) and (max-height: 800px) {
-  .shell > .rail { padding: 8px 12px 6px; }
-  .shell > .rail .tabs { gap: 1px; margin-top: 6px; margin-bottom: 4px; }
-  .shell > .rail .rail-group + .rail-group > .rail-group-label { margin-top: 5px; }
-  .shell > .rail .rail-group-label { padding-bottom: 2px; }
-  .shell > .rail .rail-foot { gap: 4px; padding-top: 4px; padding-bottom: 4px; }
+  .shell > .rail { padding: var(--space-8) var(--space-12) var(--space-6); }
+  .shell > .rail .tabs { gap: 1px; margin-top: var(--space-6); margin-bottom: var(--space-4); }
+  .shell > .rail .rail-group + .rail-group > .rail-group-label { margin-top: var(--space-6); }
+  .shell > .rail .rail-group-label { padding-bottom: var(--space-2); }
+  .shell > .rail .rail-foot { gap: var(--space-4); padding-top: var(--space-4); padding-bottom: var(--space-4); }
   .shell > .rail .rail-subtabs:not(.dimmed) { min-height: 64px; }
 }
 @media (min-width: 761px) {
@@ -275,8 +275,8 @@
     grid-template-columns: 17px minmax(0, 1fr) max-content;
     height: auto;
     min-height: 38px;
-    padding-block: 6px;
-    row-gap: 4px;
+    padding-block: var(--space-6);
+    row-gap: var(--space-4);
   }
   /* If the first count is itself an attention pill, it needs the same row
      below the label as the second count. Free the max-content column so the
@@ -308,8 +308,8 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
-  margin: 2px 0 4px 17px;
-  padding: 0 0 0 12px;
+  margin: var(--space-2) 0 var(--space-4) var(--space-16);
+  padding: 0 0 0 var(--space-12);
   border-left: 1px solid var(--border);
   border-bottom: none;
   background: transparent;
@@ -321,11 +321,11 @@
 .rail-subtabs .subtab {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   height: 30px;
-  padding: 0 8px;
-  border-radius: 6px;
-  font-size: 13px;
+  padding: 0 var(--space-8);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-md);
   color: var(--fg-dim);
   text-align: left;
   white-space: nowrap;
@@ -335,41 +335,41 @@
 .rail-subtabs .subtab .rail-count { flex: none; }
 @media (min-width: 761px) {
   /* Give the Auto-tasks label room beside its enabled/total count. */
-  .rail-subtabs .subtab[data-subtab="auto-tasks"] { padding-inline: 3px; gap: 4px; }
+  .rail-subtabs .subtab[data-subtab="auto-tasks"] { padding-inline: var(--space-4); gap: var(--space-4); }
 }
 
 /* The host and workspace pickers read as one scope card at the head of the
    rail: host above, workspace below. */
-.rail-host, .rail-workspace { display: flex; flex-direction: column; gap: 6px; }
-.rail-host:not(:empty) { margin-bottom: 6px; }
+.rail-host, .rail-workspace { display: flex; flex-direction: column; gap: var(--space-6); }
+.rail-host:not(:empty) { margin-bottom: var(--space-6); }
 .rail-host .workspace-select,
 .rail-workspace .workspace-select {
   max-width: 100%;
   width: 100%;
   height: 36px;
   margin: 0;
-  padding: 0 10px;
+  padding: 0 var(--space-10);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   background-color: var(--bg-control);
-  font-size: 13px;
+  font-size: var(--text-md);
   font-weight: 600;
 }
-.rail-host .workspace-select { font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; }
-.rail-host .host-picker-control { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.rail-host .workspace-select { font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 500; }
+.rail-host .host-picker-control { display: flex; align-items: center; gap: var(--space-4); min-width: 0; }
 /* The select uses the rail width beside the Serving badge. A longer name ends
    in an ellipsis; its title keeps the whole name. */
-.rail-host .host-picker-control .host-select { flex: 1 1 0; min-width: 0; width: 0; padding-inline: 7px; text-overflow: ellipsis; }
+.rail-host .host-picker-control .host-select { flex: 1 1 0; min-width: 0; width: 0; padding-inline: var(--space-8); text-overflow: ellipsis; }
 /* Keep the badge shorter than the select, so changing hosts does not change
    the host control's height. */
 .rail-host .host-serving-badge {
   flex: none;
-  padding: 2px 3px;
+  padding: var(--space-2) var(--space-4);
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: var(--bg-control);
   color: var(--fg-dim);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
@@ -382,22 +382,22 @@
 .rail-foot {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-8);
   position: sticky;
   bottom: -8px;
   margin-top: auto;
-  padding: 8px 2px 8px;
+  padding: var(--space-8) var(--space-2) var(--space-8);
   margin-bottom: -8px;
   background: var(--bg-rail);
 }
-.rail .tabs { margin-bottom: 10px; }
+.rail .tabs { margin-bottom: var(--space-10); }
 .rail-conn {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-8);
   min-width: 0;
-  padding: 0 8px;
-  font-size: 12px;
+  padding: 0 var(--space-8);
+  font-size: var(--text-sm);
   line-height: 1.4;
   color: var(--fg-mute);
   white-space: nowrap;
@@ -416,9 +416,9 @@
   width: 100%;
   margin-left: 0;
   box-sizing: border-box;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
-.rail-foot .clock-zone-btn { flex: 1 1 0; padding: 5px 4px; text-align: center; }
+.rail-foot .clock-zone-btn { flex: 1 1 0; padding: var(--space-6) var(--space-4); text-align: center; }
 
 .main-col {
   display: flex;
@@ -446,14 +446,14 @@
   border-bottom: 1px solid #1f242b;
   display: flex;
   align-items: center;
-  gap: 18px;
-  padding: 0 20px;
+  gap: var(--space-20);
+  padding: 0 var(--space-20);
   background: var(--bg-chrome);
 }
 
 .topbar .crumb {
   margin: 0;
-  font-size: 18px;
+  font-size: var(--text-xl);
   font-weight: 600;
   letter-spacing: -0.01em;
   flex: 0 0 auto;
@@ -466,11 +466,11 @@
    chips are shown, and the group stays rigid so a longer list takes the
    refresh line's spare room instead of sliding these chips. The UTC/Local
    control sits in that same spare room from 1280px. */
-.host-resource-group { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; }
+.host-resource-group { display: flex; flex-wrap: nowrap; align-items: center; gap: var(--space-8); flex: 0 1 auto; min-width: 0; }
 @media (min-width: 1900px) {
   .host-resource-group { flex: 0 0 auto; }
 }
-.host-resource-chips { display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; flex: 0 0 auto; }
+.host-resource-chips { display: flex; flex-wrap: nowrap; align-items: center; gap: var(--space-10); flex: 0 0 auto; }
 /* One chip per resource, sized so a new reading does not resize it; its meter
    sits at the chip's right edge, so the spare room stays inside the chip and
    the chips stay evenly spaced. Throttling changes the held chip's colour and
@@ -479,16 +479,16 @@
 .host-resource {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-8);
   position: relative;
   box-sizing: border-box;
   flex: 0 0 auto;
   height: 30px;
-  padding: 0 6px;
+  padding: 0 var(--space-6);
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   color: var(--fg-mute);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   white-space: nowrap;
   cursor: default;
   --meter: var(--status-done);
@@ -499,7 +499,7 @@
 .host-resource[data-resource="memory"], .host-resource[data-resource="disk"], .host-resource[data-resource="io"] { min-width: 7.75rem; }
 .host-resource .v { font-weight: 500; color: var(--fg); font-variant-numeric: tabular-nums; }
 .host-resource .unit { font-weight: 400; }
-.host-resource-bar { flex: none; width: 36px; height: 4px; margin-left: auto; border-radius: 2px; background: #232a33; overflow: hidden; }
+.host-resource-bar { flex: none; width: 36px; height: 4px; margin-left: auto; border-radius: var(--radius-2xs); background: #232a33; overflow: hidden; }
 .host-resource-fill { display: block; height: 100%; background: var(--meter); }
 .host-resource.elevated { --meter: var(--warn-fg); color: var(--warn-fg); }
 .host-resource.critical { --meter: var(--state-failed); background: var(--danger-wash); border-color: var(--danger-line); color: var(--danger-fg); }
@@ -525,10 +525,10 @@
 button.provider-usage {
   width: auto;
   margin: 0;
-  gap: 6px;
+  gap: var(--space-6);
   background: transparent;
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   cursor: pointer;
 }
 button.provider-usage:not(.critical):hover { border-color: var(--border-strong); }
@@ -536,12 +536,12 @@ button.provider-usage[aria-expanded="true"] { box-shadow: 0 0 0 1px var(--border
 button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .provider-usage .k { min-width: 0; max-width: 11rem; overflow: hidden; text-overflow: ellipsis; }
 .provider-usage-item .v { min-width: 3ch; text-align: right; }
-.provider-usage-meter { flex: none; width: 28px; height: 4px; border-radius: 2px; background: var(--border-strong); overflow: hidden; }
+.provider-usage-meter { flex: none; width: 28px; height: 4px; border-radius: var(--radius-2xs); background: var(--border-strong); overflow: hidden; }
 .provider-usage-meter-fill { display: block; height: 100%; background: var(--meter); }
-.provider-usage-pressure, .provider-usage-count { font-family: var(--font-mono); font-size: 11px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
+.provider-usage-pressure, .provider-usage-count { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-dim); font-variant-numeric: tabular-nums; }
 .provider-usage.stale { border-style: dashed; border-color: var(--border-strong); opacity: 0.75; }
 .provider-usage.gating-off { border-style: dashed; border-color: var(--border-strong); }
-.provider-usage-flag { font-size: 10.5px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-dim); }
+.provider-usage-flag { font-size: var(--text-xs); letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-dim); }
 .provider-usage-chips .provider-usage-summary { display: none; }
 @media (max-width: 1899px) {
   .provider-usage-chips .provider-usage-item { display: none; }
@@ -559,71 +559,71 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   max-width: calc(100vw - 16px);
   max-height: min(640px, calc(100vh - 16px));
   overflow: auto;
-  padding: 14px 16px 12px;
+  padding: var(--space-14) var(--space-16) var(--space-12);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-panel);
   background: var(--bg-elev);
   color: var(--fg);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   box-shadow: 0 12px 32px color-mix(in srgb, var(--bg) 55%, transparent);
 }
 .usage-dialog[hidden] { display: none; }
-.usage-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-bottom: 12px; }
-.usage-title { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--fg-strong); }
+.usage-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-6) var(--space-10); margin-bottom: var(--space-12); }
+.usage-title { font-family: var(--font-mono); font-size: var(--text-md); font-weight: 600; color: var(--fg-strong); }
 .usage-pill {
-  padding: 2px 8px;
+  padding: var(--space-2) var(--space-8);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg-control);
   color: var(--fg-dim);
-  font-size: 11.5px;
+  font-size: var(--text-xs);
 }
 .usage-pill.ok { color: var(--status-done); }
 .usage-pill.elevated { border-color: var(--warn-line); background: var(--warn-wash); color: var(--warn-fg); }
 .usage-pill.critical { border-color: var(--danger-line); background: var(--danger-wash); color: var(--danger-fg); }
 .usage-pill.stale, .usage-pill.off { border-style: dashed; color: var(--fg-mute); }
-.usage-observed { margin-left: auto; color: var(--fg-mute); font-size: 12px; font-variant-numeric: tabular-nums; }
-.usage-section { margin: 0 0 12px; }
-.usage-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.usage-section-title { margin: 0 0 6px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-mute); }
-.usage-pressure-value { font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--fg-strong); }
-.usage-note { margin: 4px 0 0; color: var(--fg-dim); font-size: 12px; line-height: 1.45; }
+.usage-observed { margin-left: auto; color: var(--fg-mute); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.usage-section { margin: 0 0 var(--space-12); }
+.usage-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-8); }
+.usage-section-title { margin: 0 0 var(--space-6); font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-mute); }
+.usage-pressure-value { font-family: var(--font-mono); font-size: var(--text-lg); font-weight: 600; color: var(--fg-strong); }
+.usage-note { margin: var(--space-4) 0 0; color: var(--fg-dim); font-size: var(--text-sm); line-height: 1.45; }
 .usage-basis { color: var(--fg-mute); }
-.usage-rows { display: flex; flex-direction: column; gap: 12px; }
-.usage-row-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.usage-rows { display: flex; flex-direction: column; gap: var(--space-12); }
+.usage-row-head { display: flex; align-items: baseline; gap: var(--space-8); min-width: 0; }
 .usage-row-name { flex: none; font-weight: 600; }
-.usage-row-sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-mute); font-size: 12px; }
+.usage-row-sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-mute); font-size: var(--text-sm); }
 .usage-row-value { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; }
 .usage-row.elevated .usage-row-name, .usage-row.elevated .usage-row-value { color: var(--warn-fg); }
 .usage-row.critical .usage-row-name, .usage-row.critical .usage-row-value { color: var(--danger-fg); }
 .usage-row.stale { opacity: 0.75; }
-.usage-meter { display: block; position: relative; height: 6px; margin-top: 6px; border-radius: 3px; background: var(--border-strong); }
+.usage-meter { display: block; position: relative; height: 6px; margin-top: var(--space-6); border-radius: var(--radius-xs); background: var(--border-strong); }
 .usage-meter-fill { display: block; height: 100%; border-radius: inherit; background: var(--status-done); }
 .usage-row.elevated .usage-meter-fill { background: var(--warn-fg); }
 .usage-row.critical .usage-meter-fill { background: var(--state-failed); }
 .usage-row.unknown .usage-meter-fill { background: var(--fg-disabled); }
 .usage-meter-tick { position: absolute; top: -3px; width: 1px; height: 12px; background: var(--fg-soft); }
-.usage-row-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 4px; color: var(--fg-mute); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.usage-row-foot { display: flex; justify-content: space-between; gap: var(--space-8); margin-top: var(--space-4); color: var(--fg-mute); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 .usage-foot {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px 12px;
-  margin-top: 4px;
-  padding-top: 10px;
+  gap: var(--space-8) var(--space-12);
+  margin-top: var(--space-4);
+  padding-top: var(--space-10);
   border-top: 1px solid var(--hair);
   color: var(--fg-dim);
   line-height: 1.45;
 }
 .usage-pin {
-  padding: 3px 10px;
+  padding: var(--space-4) var(--space-10);
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--fg);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-sm);
   cursor: pointer;
 }
 .usage-pin:hover { background: var(--bg-hover); }
@@ -633,7 +633,7 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 /* Shorter meters, gaps and chips give the usage summary chip and the io chip
    their room, so the host's name and the connection text keep theirs. */
 @media (max-width: 1599px) {
-  .host-resource { gap: 6px; }
+  .host-resource { gap: var(--space-6); }
   .host-resource-bar { width: 20px; }
   .host-resource[data-resource="cpu"] { min-width: 10.25rem; }
   .host-resource[data-resource="memory"], .host-resource[data-resource="disk"], .host-resource[data-resource="io"] { min-width: 6.75rem; }
@@ -651,7 +651,7 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 /* Below 1240px the bar tightens its spacing, so the widest destination, the
    three chips and the Tasks controls still share one row. */
 @media (max-width: 1240px) {
-  .topbar { padding: 0 14px; gap: 10px; }
+  .topbar { padding: 0 var(--space-14); gap: var(--space-10); }
 }
 /* Below 1025px the bar drops the host warning and provider usage. */
 @media (max-width: 1024px) {
@@ -662,8 +662,8 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   .topbar {
     height: auto;
     flex-wrap: wrap;
-    row-gap: 6px;
-    padding: 8px 12px;
+    row-gap: var(--space-6);
+    padding: var(--space-8) var(--space-12);
   }
   .topbar-spacer { order: 0; }
   .topbar .rail-brand, .topbar .refresh-btn { order: 0; }
@@ -672,15 +672,15 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 .refresh-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   height: 34px;
-  padding: 0 12px;
+  padding: 0 var(--space-12);
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: transparent;
   color: var(--fg);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-md);
   font-weight: 500;
   cursor: pointer;
   transition: border-color 0.15s ease, color 0.15s ease;
@@ -723,16 +723,16 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
     border-right: none;
     border-bottom: 1px solid var(--hair);
     overflow: hidden;
-    padding: 3px 8px;
+    padding: var(--space-4) var(--space-8);
     align-items: center;
-    gap: 2px 6px;
+    gap: var(--space-2) var(--space-6);
   }
   .rail-brand svg { width: 64px; height: auto; }
   .rail-host { grid-column: 1; grid-row: 1; min-width: 0; margin-bottom: 0; align-self: start; }
   .rail-host .rail-scope-label { display: none; }
   /* Phones keep the select and the Serving badge on one row. The host column
      is wider than the workspace column so a host name fits beside the badge. */
-  .rail-host { flex-direction: row; align-items: center; gap: 4px; }
+  .rail-host { flex-direction: row; align-items: center; gap: var(--space-4); }
   .rail-host .host-picker-control { order: 1; flex: 1 1 0; min-width: 0; }
   .rail-workspace { grid-column: 2; grid-row: 1; min-width: 0; align-self: start; }
   .rail-host .workspace-select,
@@ -747,8 +747,8 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
     overflow-x: auto;
     min-width: 0;
     margin: 0;
-    padding: 2px;
-    gap: 2px;
+    padding: var(--space-2);
+    gap: var(--space-2);
     scrollbar-width: none;
   }
   .rail .tabs::-webkit-scrollbar,
@@ -774,12 +774,12 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
     max-width: calc(100vw - 28px - var(--active-tab-width, 140px));
     overflow-x: auto;
     margin: 0;
-    padding: 0 4px;
-    gap: 2px;
+    padding: 0 var(--space-4);
+    gap: var(--space-2);
     scrollbar-width: none;
   }
   .rail-subtabs .subtab {
-    padding: 0 10px;
+    padding: 0 var(--space-10);
     white-space: nowrap;
     flex: 0 0 auto;
   }
@@ -805,8 +805,8 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   .topbar {
     flex-wrap: wrap;
     height: auto;
-    padding: 4px 8px;
-    gap: 6px;
+    padding: var(--space-4) var(--space-8);
+    gap: var(--space-6);
     /* Clip a subpixel leftover instead of growing a sideways page scroll.
        The Tasks row is sized to fit, so this does not hide a control. */
     overflow-x: clip;
@@ -833,7 +833,7 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   /* A scope note takes room only while it says something. */
   .rail-workspace .workspace-scope-note.is-inactive { display: none; }
   /* Tighter readings keep all three in view at 375px. */
-  .host-resource { gap: 5px; padding: 0 4px; }
+  .host-resource { gap: var(--space-6); padding: 0 var(--space-4); }
   .host-resource-bar { width: 20px; }
   .host-resource[data-resource="cpu"] { min-width: 9.75rem; }
   .host-resource[data-resource="memory"], .host-resource[data-resource="disk"], .host-resource[data-resource="io"] { min-width: 6.5rem; }
@@ -866,15 +866,15 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 .workspace-select {
   height: 30px;
   max-width: 190px;
-  margin: 0 2px;
+  margin: 0 var(--space-2);
   border: 1px solid var(--border);
-  border-radius: 2px;
+  border-radius: var(--radius-2xs);
   background: var(--bg-elev);
   color: var(--fg);
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 500;
-  padding: 0 6px;
+  padding: 0 var(--space-6);
   cursor: pointer;
 }
 .workspace-select:hover { border-color: var(--accent); }
@@ -886,14 +886,14 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 }
 .workspace-scope-note {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--accent-hi);
   border: 1px solid var(--accent);
   background: rgba(110, 159, 255, 0.12);
-  border-radius: 2px;
-  padding: 3px 8px;
+  border-radius: var(--radius-2xs);
+  padding: var(--space-4) var(--space-8);
   white-space: nowrap;
 }
 .workspace-scope-note.is-inactive { visibility: hidden; }
@@ -903,13 +903,13 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   align-items: center;
   flex: 0 0 auto;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 2px;
-  padding: 2px 7px;
+  border-radius: var(--radius-2xs);
+  padding: var(--space-2) var(--space-8);
   white-space: nowrap;
 }
 .scope-badge.independent {
@@ -920,21 +920,21 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 .scope-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--space-6);
   align-items: center;
   min-width: 0;
 }
 .scope-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   font: inherit;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 1.2;
-  padding: 3px 8px;
+  padding: var(--space-4) var(--space-8);
   border: 1px solid var(--border);
-  border-radius: 2px;
+  border-radius: var(--radius-2xs);
   background: var(--bg-elev);
   color: var(--fg);
   max-width: 100%;
@@ -949,7 +949,7 @@ button.scope-chip:hover {
   color: var(--fg-dim);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  font-size: 9px;
+  font-size: var(--text-2xs);
 }
 .scope-chip-v {
   overflow: hidden;
@@ -959,7 +959,7 @@ button.scope-chip:hover {
 }
 .scope-chip-x {
   color: var(--fg-dim);
-  font-size: 13px;
+  font-size: var(--text-md);
   line-height: 1;
 }
 .scope-chip.independent {
@@ -972,12 +972,12 @@ button.scope-chip:hover {
 .os-badge,
 .readiness-badge {
   display: inline-block;
-  margin-right: 6px;
-  padding: 0 6px;
-  font-size: 11px;
+  margin-right: var(--space-6);
+  padding: 0 var(--space-6);
+  font-size: var(--text-xs);
   line-height: 18px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   vertical-align: 1px;
 }
 .ws-badge { color: var(--fg-dim); }
@@ -1015,8 +1015,8 @@ button.scope-chip:hover {
 main {
   display: grid;
   grid-template-columns: minmax(0, 2.5fr) minmax(0, 1fr);
-  gap: 16px;
-  padding: 16px 20px;
+  gap: var(--space-16);
+  padding: var(--space-16) var(--space-20);
   max-width: 1800px;
   margin: 0 auto;
   min-height: 0;
@@ -1049,8 +1049,8 @@ main {
   }
   .workspace-scope-note,
   .scope-badge {
-    font-size: 9px;
-    padding: 2px 6px;
+    font-size: var(--text-2xs);
+    padding: var(--space-2) var(--space-6);
   }
   #audit-events-controls {
     flex-wrap: wrap;
@@ -1061,8 +1061,8 @@ main {
     width: 100%;
   }
   .scope-chip {
-    font-size: 10px;
-    padding: 3px 6px;
+    font-size: var(--text-2xs);
+    padding: var(--space-4) var(--space-6);
   }
   .scope-chip-v {
     max-width: 10ch;
@@ -1084,7 +1084,7 @@ main {
   height: 2px;
   background: var(--accent);
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  border-radius: 2px 2px 0 0;
+  border-radius: var(--radius-2xs) var(--radius-2xs) 0 0;
   pointer-events: none;
 }
 
@@ -1093,8 +1093,8 @@ main {
 
 .subtabs {
   display: flex;
-  gap: 4px;
-  padding: 8px 16px;
+  gap: var(--space-4);
+  padding: var(--space-8) var(--space-16);
   border-bottom: 1px solid var(--hair);
   background: transparent;
   position: relative;
@@ -1104,11 +1104,11 @@ main {
   background: transparent;
   color: var(--fg-dim);
   border: none;
-  padding: 6px 12px;
-  border-radius: 6px;
+  padding: var(--space-6) var(--space-12);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-md);
   font-weight: 500;
   transition: background 0.15s ease, color 0.15s ease;
 }
@@ -1125,16 +1125,16 @@ main {
 .view-tabs {
   max-width: 1800px;
   margin: 0 auto;
-  padding: 12px 20px 0;
+  padding: var(--space-12) var(--space-20) 0;
   border-bottom: none;
 }
 .view-tabs[hidden] { display: none; }
-.view-tabs:not([hidden]) ~ main { padding-top: 12px; }
+.view-tabs:not([hidden]) ~ main { padding-top: var(--space-12); }
 
 footer {
-  padding: 24px;
+  padding: var(--space-24);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--fg-dim);
   text-align: right;
   border-top: 1px solid var(--border);
@@ -1144,12 +1144,12 @@ footer {
 /* ORB-14680: host switcher. The picker's label names what it scopes; the
    select itself shares the workspace picker's styling and focus ring. */
 .rail-scope-label {
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--fg-mute);
-  padding: 0 8px;
+  padding: 0 var(--space-8);
 }
 
 /* One state for the selected host when it cannot be shown. It replaces every
@@ -1160,27 +1160,27 @@ footer {
    Global search remains available to show lookup failures in place. */
 .shell:has(.main-col.host-unavailable .tab-pane[data-tab="tasks"].active) #task-create-open { display: none; }
 .host-state {
-  margin: 24px;
+  margin: var(--space-24);
   max-width: 720px;
-  padding: 18px 20px;
+  padding: var(--space-20) var(--space-20);
   border: 1px solid var(--danger-line);
   border-radius: var(--radius);
   background: var(--danger-wash);
   color: var(--danger-fg);
 }
-.host-state h2 { margin: 0 0 8px; font-size: 16px; font-weight: 600; color: var(--fg); }
-.host-state p { margin: 0 0 6px; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
-.host-state .host-state-code { font-family: var(--font-mono); font-size: 12px; }
-.host-state-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.host-state h2 { margin: 0 0 var(--space-8); font-size: var(--text-lg); font-weight: 600; color: var(--fg); }
+.host-state p { margin: 0 0 var(--space-6); font-size: var(--text-md); line-height: 1.5; overflow-wrap: anywhere; }
+.host-state .host-state-code { font-family: var(--font-mono); font-size: var(--text-sm); }
+.host-state-actions { display: flex; flex-wrap: wrap; gap: var(--space-8); margin-top: var(--space-14); }
 .host-state-actions button {
   height: 32px;
-  padding: 0 12px;
+  padding: 0 var(--space-12);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-elev);
   color: var(--fg);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-md);
   font-weight: 500;
   cursor: pointer;
 }
@@ -1191,16 +1191,16 @@ footer {
    refused writes. They sit under the top bar and never cover a panel. */
 .host-banner {
   flex: 0 0 auto;
-  padding: 8px 24px;
+  padding: var(--space-8) var(--space-24);
   border-bottom: 1px solid var(--hair);
   background: color-mix(in srgb, var(--state-pending) 10%, var(--bg));
   color: var(--state-pending);
-  font-size: 13px;
+  font-size: var(--text-md);
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
 .host-banner[hidden] { display: none; }
-.host-read-only-note { flex-basis: 100%; font-size: 12px; color: var(--state-pending); }
+.host-read-only-note { flex-basis: 100%; font-size: var(--text-sm); color: var(--state-pending); }
 a.exec-origin.remote-run-link { color: var(--accent); }
 
 .visually-hidden {
@@ -1221,16 +1221,16 @@ a.exec-origin.remote-run-link { color: var(--accent); }
 .host-block {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: var(--space-6);
   width: 100%;
   margin: 0;
-  padding: 7px 8px 8px;
+  padding: var(--space-8) var(--space-8) var(--space-8);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--bg-control);
   color: var(--fg-mute);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.2;
   text-align: left;
   cursor: pointer;
@@ -1242,17 +1242,17 @@ a.exec-origin.remote-run-link { color: var(--accent); }
 .host-block.elevated { border-color: var(--warn-line); background: var(--warn-wash); }
 .host-block.critical { border-color: var(--danger-line); background: var(--danger-wash); }
 .host-block.stale { border-style: dashed; border-color: var(--border-strong); opacity: 0.8; }
-.host-block-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
+.host-block-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-6); min-width: 0; }
 .host-block-kicker {
-  font-size: 10.5px;
+  font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--fg-mute);
 }
-.host-block-verdict { display: inline-flex; align-items: flex-start; justify-content: flex-end; gap: 5px; min-width: 0; color: var(--fg-dim); font-variant-numeric: tabular-nums; text-align: right; }
+.host-block-verdict { display: inline-flex; align-items: flex-start; justify-content: flex-end; gap: var(--space-6); min-width: 0; color: var(--fg-dim); font-variant-numeric: tabular-nums; text-align: right; }
 .host-block-verdict-text { white-space: normal; }
-.host-block-dot { flex: none; width: 6px; height: 6px; margin-top: 4px; border-radius: 50%; background: var(--status-done); }
+.host-block-dot { flex: none; width: 6px; height: 6px; margin-top: var(--space-4); border-radius: 50%; background: var(--status-done); }
 .host-block.elevated .host-block-dot,
 .host-block.elevated .host-block-verdict { color: var(--warn-fg); background: transparent; }
 .host-block.elevated .host-block-dot { background: var(--warn-fg); }
@@ -1266,7 +1266,7 @@ a.exec-origin.remote-run-link { color: var(--accent); }
   /* A fixed value track keeps every bar at one left edge and length. */
   grid-template-columns: 2.1rem 2.75rem minmax(1.25rem, 1fr);
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   width: 100%;
   min-width: 0;
   height: auto;
@@ -1274,7 +1274,7 @@ a.exec-origin.remote-run-link { color: var(--accent); }
   border: none;
   border-radius: 0;
   background: transparent;
-  font-size: 12px;
+  font-size: var(--text-sm);
   cursor: inherit;
 }
 .host-block .host-resource .k { color: var(--fg-mute); }
@@ -1297,16 +1297,16 @@ a.exec-origin.remote-run-link { color: var(--accent); }
 .host-warn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   flex: 0 0 auto;
   height: 30px;
-  padding: 0 8px;
+  padding: 0 var(--space-8);
   border: 1px solid var(--warn-line);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--warn-wash);
   color: var(--warn-fg);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   cursor: pointer;
@@ -1323,30 +1323,30 @@ a.exec-origin.remote-run-link { color: var(--accent); }
   max-width: calc(100vw - 16px);
   max-height: min(560px, calc(100vh - 16px));
   overflow: auto;
-  padding: 14px 16px 12px;
+  padding: var(--space-14) var(--space-16) var(--space-12);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-panel);
   background: var(--bg-elev);
   color: var(--fg);
   box-shadow: 0 12px 32px color-mix(in srgb, var(--bg) 55%, transparent);
 }
 .host-detail[hidden] { display: none; }
-.host-detail-head { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-bottom: 12px; }
-.host-detail-name { font-family: var(--font-mono); font-size: 13px; font-weight: 600; color: var(--fg-strong); }
+.host-detail-head { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8) var(--space-10); margin-bottom: var(--space-12); }
+.host-detail-name { font-family: var(--font-mono); font-size: var(--text-md); font-weight: 600; color: var(--fg-strong); }
 .host-detail-pill {
-  padding: 2px 8px;
+  padding: var(--space-2) var(--space-8);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg-control);
   color: var(--fg-dim);
-  font-size: 11.5px;
+  font-size: var(--text-xs);
 }
 .host-detail-pill.elevated { border-color: var(--warn-line); background: var(--warn-wash); color: var(--warn-fg); }
 .host-detail-pill.critical { border-color: var(--danger-line); background: var(--danger-wash); color: var(--danger-fg); }
 .host-detail-pill.stale { border-style: dashed; color: var(--fg-mute); }
-.host-detail-age { margin-left: auto; color: var(--fg-mute); font-size: 12px; font-variant-numeric: tabular-nums; }
-.host-detail-row { position: relative; margin: 0 0 12px; }
-.host-detail-row-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.host-detail-age { margin-left: auto; color: var(--fg-mute); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.host-detail-row { position: relative; margin: 0 0 var(--space-12); }
+.host-detail-row-head { display: flex; align-items: baseline; gap: var(--space-8); min-width: 0; }
 .host-detail-label { font-weight: 600; }
 .host-detail .info-hint { align-self: center; margin-left: 0; }
 /* The panel scrolls and sits on the viewport's bottom edge, so the last row's
@@ -1358,7 +1358,7 @@ a.exec-origin.remote-run-link { color: var(--accent); }
 .host-detail-row.elevated .host-detail-value { color: var(--warn-fg); }
 .host-detail-row.critical .host-detail-label,
 .host-detail-row.critical .host-detail-value { color: var(--danger-fg); }
-.host-detail-meter { position: relative; height: 6px; margin-top: 6px; border-radius: 3px; background: var(--border-strong); }
+.host-detail-meter { position: relative; height: 6px; margin-top: var(--space-6); border-radius: var(--radius-xs); background: var(--border-strong); }
 .host-detail-fill { display: block; height: 100%; border-radius: inherit; background: var(--status-done); }
 .host-detail-row.elevated .host-detail-fill { background: var(--warn-fg); }
 .host-detail-row.critical .host-detail-fill { background: var(--state-failed); }
@@ -1371,12 +1371,12 @@ a.exec-origin.remote-run-link { color: var(--accent); }
   flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px 12px;
-  margin-top: 4px;
-  padding-top: 10px;
+  gap: var(--space-8) var(--space-12);
+  margin-top: var(--space-4);
+  padding-top: var(--space-10);
   border-top: 1px solid var(--hair);
   color: var(--fg-dim);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   line-height: 1.45;
 }
 .host-detail-drain { color: var(--accent); white-space: nowrap; }
@@ -1386,9 +1386,9 @@ a.exec-origin.remote-run-link { color: var(--accent); }
 
 /* The Tasks chip uses a custom listbox for multi-workspace filtering. The
    rail workspace picker stays a native select with its browser popup. */
-.workspace-options { position: fixed; z-index: 100; left: 12px; bottom: auto; max-width: calc(100vw - 24px); max-height: 50vh; overflow: auto; padding: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-control); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+.workspace-options { position: fixed; z-index: 100; left: 12px; bottom: auto; max-width: calc(100vw - 24px); max-height: 50vh; overflow: auto; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-control); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
 .workspace-options[hidden] { display: none; }
-.workspace-options [role="option"] { display: flex; align-items: center; gap: 8px; padding: 8px; cursor: pointer; }
+.workspace-options [role="option"] { display: flex; align-items: center; gap: var(--space-8); padding: var(--space-8); cursor: pointer; }
 .workspace-options [role="option"]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .workspace-options [role="option"][aria-disabled="true"] { opacity: 0.55; cursor: default; }
 .workspace-options input { pointer-events: none; }

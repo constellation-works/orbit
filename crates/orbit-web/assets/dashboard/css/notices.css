@@ -3,16 +3,16 @@
   flex: 0 0 auto;
   border-bottom: 1px solid var(--hair);
   background: color-mix(in srgb, var(--state-pending) 12%, var(--bg));
-  padding: 6px 24px;
+  padding: var(--space-6) var(--space-24);
 }
 .notice-banner[hidden] { display: none; }
 .notice-banner-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding: 3px 0;
-  font-size: 13px;
+  gap: var(--space-8);
+  padding: var(--space-4) 0;
+  font-size: var(--text-md);
   line-height: 1.4;
 }
 .notice-banner-title { font-weight: 600; overflow-wrap: anywhere; }
@@ -20,9 +20,9 @@
 .notice-banner-link { color: var(--accent); }
 .notice-chip {
   border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 1px 7px;
-  font-size: 11px;
+  border-radius: var(--radius-pill);
+  padding: var(--space-2) var(--space-8);
+  font-size: var(--text-xs);
   color: var(--fg-mute);
   white-space: nowrap;
 }
@@ -39,35 +39,35 @@
 }
 #notices-panel > header { flex: 0 0 auto; }
 .notice-row:last-child > .notice-row-main:last-child { border-radius: 0 0 var(--radius-panel) var(--radius-panel); }
-.notices-head-title { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
-.notices-head-actions { display: inline-flex; align-items: center; gap: 6px; }
+.notices-head-title { display: inline-flex; align-items: center; gap: var(--space-8); min-width: 0; }
+.notices-head-actions { display: inline-flex; align-items: center; gap: var(--space-6); }
 .notice-post-toggle { min-height: 32px; }
 /* The closed group follows the open rows under its own heading. */
 .notice-group-heading {
   margin: 0;
-  padding: 12px 16px 6px;
+  padding: var(--space-12) var(--space-16) var(--space-6);
   border-top: 1px solid var(--border-strong);
   color: var(--fg-mute);
-  font: 600 11px var(--font-sans);
+  font: 600 var(--text-xs) var(--font-sans);
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
-.notice-group-heading.notice-group-first { border-top: 0; padding-top: 4px; }
+.notice-group-heading.notice-group-first { border-top: 0; padding-top: var(--space-4); }
 .notice-open-empty {
-  padding: 10px 16px 2px;
+  padding: var(--space-10) var(--space-16) var(--space-2);
   color: var(--fg-dim);
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-style: italic;
 }
 .notice-coverage {
-  padding: 10px 16px;
+  padding: var(--space-10) var(--space-16);
   border-bottom: 1px solid var(--hair);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   line-height: 1.45;
 }
 .notice-coverage-lead { margin: 0; }
 .notice-coverage-reason {
-  margin: 4px 0 0;
+  margin: var(--space-4) 0 0;
   color: var(--fg-dim);
   overflow-wrap: anywhere;
 }
@@ -96,11 +96,11 @@
     "severity scope when close chevron"
     "title title title title title";
   align-items: center;
-  column-gap: 8px;
-  row-gap: 2px;
+  column-gap: var(--space-8);
+  row-gap: var(--space-2);
   min-height: 44px;
   min-width: 0;
-  padding: 8px 12px;
+  padding: var(--space-8) var(--space-12);
   cursor: pointer;
 }
 .notice-row-main:hover { background: var(--bg-hover); }
@@ -108,8 +108,8 @@
   grid-area: severity;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  font-size: 12.5px;
+  gap: var(--space-8);
+  font-size: var(--text-sm);
   color: var(--fg-mute);
   text-transform: capitalize;
 }
@@ -143,7 +143,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--fg-mute);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .notice-when {
   grid-area: when;
@@ -151,7 +151,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--fg-mute);
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
@@ -162,13 +162,13 @@
   grid-area: close;
   justify-self: end;
   min-height: 28px;
-  padding: 0 6px;
+  padding: 0 var(--space-6);
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--fg-mute);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   cursor: pointer;
 }
 .notice-row-main:hover .notice-close-open { color: var(--fg); }
@@ -179,7 +179,7 @@
   justify-self: end;
   width: 7px;
   height: 7px;
-  margin-right: 2px;
+  margin-right: var(--space-2);
   border-right: 1.5px solid var(--fg-mute);
   border-bottom: 1.5px solid var(--fg-mute);
   transform: translateY(-2px) rotate(45deg);
@@ -187,28 +187,28 @@
 .notice-row.is-open .notice-chevron { transform: translateY(2px) rotate(225deg); }
 
 /* The open notice sits under the row, inside the dock's width. */
-.notice-detail { padding: 2px 12px 14px; min-width: 0; }
-.notice-body, .notice-ended-text { margin: 0 0 10px; max-width: 72ch; overflow-wrap: anywhere; }
+.notice-detail { padding: var(--space-2) var(--space-12) var(--space-14); min-width: 0; }
+.notice-body, .notice-ended-text { margin: 0 0 var(--space-10); max-width: 72ch; overflow-wrap: anywhere; }
 .notice-body { white-space: pre-wrap; line-height: 1.5; }
 .notice-ended-text { color: var(--fg-dim); }
 .notice-ended-text::first-letter { text-transform: uppercase; }
-.notice-facts { display: flex; flex-wrap: wrap; gap: 2px 14px; color: var(--fg-mute); font-size: 12px; overflow-wrap: anywhere; }
+.notice-facts { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-14); color: var(--fg-mute); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .notice-facts a { color: var(--accent); }
-.notice-close-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; max-width: 72ch; }
-.notice-close-actions { display: inline-flex; gap: 6px; }
+.notice-close-form { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); margin-top: var(--space-12); max-width: 72ch; }
+.notice-close-actions { display: inline-flex; gap: var(--space-6); }
 .notice-close-reason {
   flex: 1 1 240px;
   min-width: 0;
   box-sizing: border-box;
   height: 30px;
-  padding: 0 8px;
+  padding: 0 var(--space-8);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--bg-control);
   color: var(--fg);
   font: inherit;
 }
-.notice-feedback { flex-basis: 100%; margin: 0; color: var(--state-failed); font-size: 12px; overflow-wrap: anywhere; }
+.notice-feedback { flex-basis: 100%; margin: 0; color: var(--state-failed); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .notice-feedback:empty { display: none; }
 
 /* The post dialog, in the top layer like the task proposal dialog. */
@@ -218,7 +218,7 @@
   max-width: none;
   max-height: calc(100dvh - 32px);
   margin: auto;
-  padding: 16px;
+  padding: var(--space-16);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-elev);
@@ -228,41 +228,41 @@
   overscroll-behavior: contain;
 }
 .notice-post::backdrop { background: rgb(0 0 0 / 0.6); }
-.notice-post h3 { margin: 0 0 12px; font-size: 15px; }
-.notice-post form { display: grid; gap: 6px; min-width: 0; }
-.notice-post label, .notice-post legend, .notice-post summary { font-size: 12.5px; color: var(--fg-dim); }
+.notice-post h3 { margin: 0 0 var(--space-12); font-size: var(--text-lg); }
+.notice-post form { display: grid; gap: var(--space-6); min-width: 0; }
+.notice-post label, .notice-post legend, .notice-post summary { font-size: var(--text-sm); color: var(--fg-dim); }
 .notice-post input:not([type="radio"]), .notice-post textarea, .notice-post select {
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  padding: 7px 8px;
+  padding: var(--space-8) var(--space-8);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--bg-control);
   color: var(--fg);
   font: inherit;
 }
 .notice-post textarea { resize: vertical; }
-.notice-post-severity { display: flex; flex-wrap: wrap; gap: 4px 16px; min-width: 0; margin: 8px 0; padding: 0; border: 0; }
-.notice-post-severity legend { padding: 0; margin-bottom: 6px; }
-.notice-post-severity label { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; color: var(--fg); cursor: pointer; }
-.notice-post-body { margin-bottom: 4px; }
-.notice-post-options summary { display: list-item; padding: 6px 0; line-height: 1.4; cursor: pointer; }
-#notices-post-summary { margin-left: 6px; color: var(--fg-mute); }
+.notice-post-severity { display: flex; flex-wrap: wrap; gap: var(--space-4) var(--space-16); min-width: 0; margin: var(--space-8) 0; padding: 0; border: 0; }
+.notice-post-severity legend { padding: 0; margin-bottom: var(--space-6); }
+.notice-post-severity label { display: inline-flex; align-items: center; gap: var(--space-6); min-height: 28px; color: var(--fg); cursor: pointer; }
+.notice-post-body { margin-bottom: var(--space-4); }
+.notice-post-options summary { display: list-item; padding: var(--space-6) 0; line-height: 1.4; cursor: pointer; }
+#notices-post-summary { margin-left: var(--space-6); color: var(--fg-mute); }
 .notice-post-options[open] #notices-post-summary { display: none; }
-.notice-post-option-fields { display: grid; gap: 6px; margin-top: 6px; }
-.notice-post-actions { display: flex; gap: 8px; margin-top: 8px; }
+.notice-post-option-fields { display: grid; gap: var(--space-6); margin-top: var(--space-6); }
+.notice-post-actions { display: flex; gap: var(--space-8); margin-top: var(--space-8); }
 
 @media (max-width: 760px) {
   .notice-close-open { min-width: 44px; min-height: 36px; }
-  .notice-group-heading, .notice-open-empty, .notice-coverage { padding-inline: 12px; }
+  .notice-group-heading, .notice-open-empty, .notice-coverage { padding-inline: var(--space-12); }
   /* Phones: each banner notice is one line above the content, so the banner
      takes about 27px instead of a wrapped block of up to 109px. The chip keeps
      the severity, the title ends in an ellipsis, and "Notices" opens the full
      text. The metadata line is on that list too. An incident is an error the
      operator must act on, so its title wraps in full (STD-07 §R14). */
-  .notice-banner { padding: 4px 12px; }
-  .notice-banner-row { flex-wrap: nowrap; gap: 8px; padding: 0; }
+  .notice-banner { padding: var(--space-4) var(--space-12); }
+  .notice-banner-row { flex-wrap: nowrap; gap: var(--space-8); padding: 0; }
   .notice-banner-row > .notice-chip,
   .notice-banner-link { flex: 0 0 auto; white-space: nowrap; }
   .notice-banner-title {
@@ -275,7 +275,7 @@
   }
   .notice-banner-meta { display: none; }
   /* The link's tap target is taller than its line, with no visible space added. */
-  .notice-banner-link { padding: 6px 4px; margin: -6px -4px; }
+  .notice-banner-link { padding: var(--space-6) var(--space-4); margin: -6px -4px; }
   .notice-banner-row.notice-incident { flex-wrap: wrap; }
   .notice-banner-row.notice-incident .notice-banner-title { flex-basis: 100%; overflow: visible; text-overflow: clip; white-space: normal; }
 }
