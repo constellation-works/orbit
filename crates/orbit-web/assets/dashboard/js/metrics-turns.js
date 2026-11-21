@@ -164,7 +164,7 @@ export function turnsModel(payload, { windowKey, shown, bucketTitle, bucketWidth
       cards,
       empty: {
         title: `No measured first edits for ${payload.outcome === "done" ? "done" : "closed"} tasks in the last ${windowKey === "all" ? "recorded history" : windowKey}`,
-        detail: parts.join(". "),
+        detail: parts.join(" "),
       },
     };
   }
