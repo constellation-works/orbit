@@ -4182,6 +4182,58 @@ def plugin_install_self_test():
         else:
             raise AssertionError("refusal-disabled plugin smoke earned assertions")
 
+        # Restore the real validators and skill sync. Suppress only the Agent
+        # Plugins validator's cross-manifest parity check in this disposable
+        # copy, so a valid semver mismatch reaches the installed Cursor check.
+        for name in ("validate-codex-plugin.sh", "validate-agent-plugin.sh",
+                     "sync-plugin-skills.sh"):
+            shutil.copy2(repo / "scripts" / name, candidate / "scripts" / name)
+        skills = candidate / "crates/orbit-core/assets/skills"
+        skills.parent.mkdir(parents=True)
+        shutil.copytree(repo / "crates/orbit-core/assets/skills", skills)
+        validator = candidate / "scripts/validate-agent-plugin.sh"
+        source = validator.read_text()
+        parity = "    if len(distinct) > 1:\n"
+        if source.count(parity) != 1:
+            raise AssertionError("cannot isolate the source validator parity branch")
+        validator.write_text(source.replace(parity, "    if False and len(distinct) > 1:\n"))
+
+        matching = run(command, cwd=candidate, env=env)
+        validate_plugin_result(candidate, command, matching)
+        manifest = candidate / "plugin/plugin.json"
+        payload = json.loads(manifest.read_text())
+        payload["version"] = "0.0.0" if payload["version"] != "0.0.0" else "0.0.1"
+        manifest.write_text(json.dumps(payload))
+
+        def require_cursor_mismatch(evidence):
+            if (evidence["exit_code"] == 0
+                    or "Cursor: plugin.json version does not match the installed package"
+                    not in evidence["stderr"]
+                    or "plugin-invalid-install-is-refused: invalid plugin candidate refused"
+                    not in evidence["stdout"]):
+                raise AssertionError(f"Cursor installed version mismatch not detected: {evidence}")
+
+        require_cursor_mismatch(run(command, cwd=candidate, env=env))
+
+        # Mutation control: without the installed-asset assertion, the same
+        # fixture must no longer satisfy the expected mismatch outcome.
+        smoke = candidate / "scripts/smoke-plugin-install.sh"
+        source = smoke.read_text()
+        assertion = ('if cursor_manifest.get("version") != version:\n'
+                     '    raise SystemExit("Cursor: plugin.json version does not match the installed package")\n')
+        if source.count(assertion) != 1:
+            raise AssertionError("cannot remove the Cursor version assertion for mutation control")
+        smoke.write_text(source.replace(assertion, ""))
+        without_assertion = run(command, cwd=candidate, env=env)
+        if without_assertion["exit_code"] != 0:
+            raise AssertionError(f"version assertion mutation failed earlier: {without_assertion}")
+        try:
+            require_cursor_mismatch(without_assertion)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("mismatch fixture passed with the Cursor version assertion removed")
+
 
 def retired_case_self_test():
     """The three reconciled identities stay executable dispositions, and a bad one cannot validate."""
