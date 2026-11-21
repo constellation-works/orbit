@@ -86,18 +86,22 @@ A run that cannot take the lane within `--lane-wait` seconds (default 900, or
 ### Fixture IO and drain admission
 
 A paired run verifies the complete snapshot and performs one full restore and path
-rewrite, then keeps a pristine copy of that restored root. Before every parity
-observation and sampling round it synchronously resets a fixed root with `rsync -aX
---checksum --delete` (preserving and restoring extended attributes as well as
-file contents); rsync is required on the host. Checksumming reads both copies,
+rewrite into a fixed root (`<results>/.work/root`, where `<results>` is the `--out`
+directory), then keeps a pristine copy of that restored root (`<results>/.work/pristine`).
+That first restore is the starting state of the first parity observation and is not
+reset. Every later parity observation and sampling round, for every arm, synchronously
+resets the fixed root from the pristine copy with `rsync -aX --checksum --delete`
+(preserving and restoring extended attributes
+as well as file contents); rsync is required on the host. Checksumming reads both copies,
 while only changed files are copied and newly created files are deleted. Setup and
 checksum scans can still cause substantial disk IO for a live-sized fixture, and
 other host activity also contributes to pressure. For example, a 33 GiB snapshot with
 550,927 files on dk-server-2 took about 76 minutes for a 3 × 10 CLI run in November
 2026; its one-minute IO-full readings peaked at 27.25%, with four consecutive readings
 at or above 20%. These host-dependent figures are not a guarantee. No reset overlaps
-sampling. With
-`--keep`, separate full restores are retained for diagnosis and cost more IO.
+sampling. With `--keep`, each parity observation and round instead gets its own full
+restore, labelled `root-parity-<arm>` or `root-<arm>-<round>` under `<results>/.work/`
+and retained for diagnosis at more IO cost.
 This run does not exempt its IO or change those thresholds, which are fixed rather than
 settings. Monitor `/proc/pressure/io` and schedule or investigate runs that sustain
 pressure.
@@ -130,16 +134,17 @@ capacity. A drain can stay idle after the IO reading falls below 10%.
 
 ### Disk gate and cleanup
 
-Before creating a snapshot, restore root, builds dir or results dir, each script reads
-`df --output=pcent <parent>`. At 80% or more it creates nothing and exits 2 with the
-reading, citing RB-11 (ws_constellation runbooks). For `--candidate-worktree`,
+Before creating a snapshot, restore root, pristine copy, builds dir or results dir, each
+script reads `df --output=pcent <parent>`. At 80% or more it creates nothing and exits 2
+with the reading, citing RB-11 (ws_constellation runbooks). For `--candidate-worktree`,
 `build-pair.sh` reads that percentage for the filesystem that will hold the temporary
 index and objects (`TMPDIR`, or `/tmp` when unset) and refuses before creating them.
 The builds directory is still checked on its own filesystem before it is created. Those
 two parents can be different filesystems. Each script removes the scratch it made
-when it exits (exported sources and target dirs, per-round roots) and removes its output
-directory too when it fails. A refused parity check keeps `parity.json` for diagnosis.
-`--keep` keeps everything for debugging.
+when it exits (exported sources and target dirs; `paired.py`'s `.work/`, holding the
+fixed root, pristine copy and control binary) and removes its output directory too when
+it fails. A refused parity check keeps `parity.json` for diagnosis. `--keep` keeps
+everything for debugging.
 
 ## Choose the baseline and candidate
 
@@ -163,7 +168,8 @@ directory too when it fails. A refused parity check keeps `parity.json` for diag
   reused the baseline binary). `paired.py` times the binaries this script writes; it does
   not need a separate candidate commit when the build was a working-tree snapshot.
 - The fixture's store schema must not be newer than the baseline binary understands.
-  Snapshot a store the baseline can open; each arm migrates its own fresh restored copy.
+  Snapshot a store the baseline can open; each arm migrates a copy that the harness
+  resets from the pristine root before its observation or round.
 
 ## Procedure
 
@@ -238,10 +244,11 @@ repository root of the checkout that holds these scripts.
    - **Order.** Rounds interleave forward then reversed (`base candidate control`, then
      `control candidate base`, …): with two arms over three rounds this is ORB-25652's
      A B B A A B. The order is recorded.
-   - **Rounds.** Every round restores a fresh root from the snapshot, discards
-     `--warmup` runs, then takes `--samples` sequential samples at least `--gap-ms` apart,
-     recording wall ms and exit status. A nonzero exit (or a non-2xx HTTP status) fails
-     the run.
+   - **Rounds.** Every round starts from the same restored state (see Fixture IO and drain
+     admission): its arm's fixed root is reset from the pristine copy, or `--keep` gives it a
+     separate full restore. It discards `--warmup` runs, then takes `--samples` sequential
+     samples at least `--gap-ms` apart, recording wall ms and exit status. A nonzero exit (or
+     a non-2xx HTTP status) fails the run.
    - **CLI mode** times `<binary> <orbit args>` in the restored root.
    - **Bounds.** Every parity and CLI sample command runs as the leader of its own
      process group, with its stdout drained while it runs. One that runs past
@@ -444,8 +451,10 @@ Paste this into the brief and fill the five slots:
 > **Measurement protocol.** Evidence follows `docs/runbooks/perf-timing-protocol.md` on the
 > ws_orbit owner host; the implementing leaf owns the serial run and holds the perf lane.
 > Fixture: `scripts/perf/fixture.py snapshot --workspace ws_orbit --git-metadata <checkout>
-> --out <scratch>/perf-<slug>/snapshot` taken at the start of the run, restored fresh for
-> every round. Builds during `implement_bundle` (HEAD is still the pinned base; the
+> --out <scratch>/perf-<slug>/snapshot` taken at the start of the run. `paired.py` restores
+> it into one fixed root and resets that root from a pristine copy before every later arm
+> observation and round (`--keep` gives each observation and round its own full restore, for
+> diagnosis). Builds during `implement_bundle` (HEAD is still the pinned base; the
 > candidate is uncommitted):
 > `scripts/perf/build-pair.sh --base <merge-base commit> --candidate-worktree <checkout>
 > --out <scratch>/perf-<slug>/builds`.
