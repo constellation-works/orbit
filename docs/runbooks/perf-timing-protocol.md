@@ -102,9 +102,13 @@ settings. Monitor `/proc/pressure/io` and schedule or investigate runs that sust
 pressure.
 
 The IO hold reads Linux `/proc/pressure/io` `full avg60`, the share of the last minute in
-which every runnable task was stalled on disk I/O. It applies only while
-`workflow.resource_throttle.enabled` is on (the default), applies to every drain on the
-host, and stops only new admissions: running work continues.
+which every runnable task was stalled on disk I/O. The IO signal is host-wide, so every
+drain on the host sees the same reading. Admission is decided per drain, though: each
+drain consults its own effective `workflow.resource_throttle.enabled` setting (on by
+default; a workspace override applies to that workspace's admissions). A drain whose
+effective setting is off gets an empty verdict without sampling, so this signal never
+holds it, even while a drain in another workspace on the same host is held. The hold
+stops only new admissions: running work continues.
 
 - **Start.** A reading at or above 20% is `critical` at once, but it holds admission only
   once readings have stayed at or above 20% across the 10-second sustain window
