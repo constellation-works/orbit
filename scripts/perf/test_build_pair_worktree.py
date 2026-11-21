@@ -78,6 +78,15 @@ def _fingerprint(repo: Path) -> dict[str, object]:
     return {"head": head, "index_blob": index_blob, "index_sha": index_sha, "files": files}
 
 
+def _git_index_metadata(repo: Path) -> dict[str, tuple[str, int]]:
+    git_dir = repo / ".git"
+    paths = [git_dir / "index", *sorted(git_dir.glob("sharedindex.*"))]
+    return {
+        path.name: (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mtime_ns)
+        for path in paths
+    }
+
+
 class BuildPairWorktreeTest(unittest.TestCase):
     def setUp(self) -> None:
         SCRATCH.mkdir(parents=True, exist_ok=True)
@@ -238,6 +247,51 @@ class BuildPairWorktreeTest(unittest.TestCase):
         self.assertEqual(_fingerprint(self.repo), before)
 
         exported = self.out / ".work" / "src-candidate"
+        self.assertEqual((exported / "tracked.ign").read_text(), "working\n")
+        self.assertFalse((exported / "untracked.ign").exists())
+        self.assertFalse((exported / "ignored.txt").exists())
+
+        provenance = json.loads((self.out / "provenance.json").read_text())
+        candidate = provenance["revisions"]["candidate"]
+        base = provenance["revisions"]["base"]
+        self.assertIs(candidate["working_tree_snapshot"], True)
+        self.assertNotEqual(candidate["commit"], head)
+        self.assertNotEqual(candidate["binary_sha256"], base["binary_sha256"])
+
+        leaked = _git(self.repo, "cat-file", "-t", candidate["commit"], check=False)
+        self.assertNotEqual(leaked.returncode, 0, leaked.stderr)
+
+    def test_split_index_snapshot_preserves_shared_index_bytes_and_mtime(self) -> None:
+        (self.repo / "tracked.ign").write_text("staged\n")
+        _git(self.repo, "add", "-f", "--", "tracked.ign")
+        _git(self.repo, "update-index", "--split-index")
+        (self.repo / "tracked.txt").write_text("v2\n")
+        (self.repo / "tracked.ign").write_text("working\n")
+        (self.repo / "untracked.ign").write_text("secret\n")
+        (self.repo / "ignored.txt").write_text("also-secret\n")
+
+        shared_files = sorted((self.repo / ".git").glob("sharedindex.*"))
+        self.assertTrue(shared_files, "expected split-index sharedindex.* sidecar")
+        before = _fingerprint(self.repo)
+        pinned_ns = 1500000000000000000
+        for shared in shared_files:
+            os.utime(shared, ns=(pinned_ns, pinned_ns))
+        before_meta = _git_index_metadata(self.repo)
+        head = str(before["head"])
+        _freeze_git(self.repo)
+        result = self.run_pair(
+            "--base", "HEAD",
+            "--candidate-worktree", str(self.repo),
+            "--out", str(self.out),
+            "--keep",
+        )
+        _thaw_git(self.repo)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(_git_index_metadata(self.repo), before_meta)
+        self.assertEqual(_fingerprint(self.repo), before)
+
+        exported = self.out / ".work" / "src-candidate"
+        self.assertEqual((exported / "tracked.txt").read_text(), "v2\n")
         self.assertEqual((exported / "tracked.ign").read_text(), "working\n")
         self.assertFalse((exported / "untracked.ign").exists())
         self.assertFalse((exported / "ignored.txt").exists())

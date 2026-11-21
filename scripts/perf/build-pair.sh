@@ -95,17 +95,27 @@ disk_gate() {
 # snapshot_scratch, snapshot_objects and snapshot_alternates.
 snapshot_worktree() {
   local wt="$1"
-  local head head_tree common_dir real_objects index objects tree commit
+  local head head_tree git_dir common_dir real_objects index objects tree commit
+  local src_index src_index_dir seed_git object_format shared dir
   head="$(git -C "$wt" rev-parse --verify --quiet 'HEAD^{commit}' || true)"
   [[ -n "$head" ]] || refuse "cannot resolve HEAD to a commit in $wt"
   head_tree="$(git -C "$wt" rev-parse --verify --quiet 'HEAD^{tree}' || true)"
   [[ -n "$head_tree" ]] || refuse "cannot resolve HEAD to a tree in $wt"
+  git_dir="$(git -C "$wt" rev-parse --git-dir)"
+  if [[ "$git_dir" != /* ]]; then
+    git_dir="$(cd "$wt/$git_dir" && pwd -P)"
+  fi
   common_dir="$(git -C "$wt" rev-parse --git-common-dir)"
   if [[ "$common_dir" != /* ]]; then
     common_dir="$(cd "$wt/$common_dir" && pwd -P)"
   fi
   real_objects="$common_dir/objects"
   [[ -d "$real_objects" ]] || refuse "no object store at $real_objects"
+  src_index="$(git -C "$wt" rev-parse --git-path index)"
+  if [[ "$src_index" != /* ]]; then
+    src_index="$wt/$src_index"
+  fi
+  object_format="$(git -C "$wt" rev-parse --show-object-format)"
 
   # mktemp places the temporary index and objects on TMPDIR's filesystem
   # (or /tmp), which need not be the builds directory. Refuse before creating
@@ -127,12 +137,36 @@ snapshot_worktree() {
     "GIT_OBJECT_DIRECTORY=$objects"
     "GIT_ALTERNATE_OBJECT_DIRECTORIES=$real_objects"
   )
-  git -C "$wt" ls-files --stage -z \
-    | env "${snap_env[@]}" git -C "$wt" update-index -z --index-info \
+  # Seed the scratch index from a copy of the source index (and any split-index
+  # sharedindex.* sidecars) inside a throwaway GIT_DIR so Git's split-index
+  # freshening never updates mtimes in the checkout's real git directory.
+  if [[ -f "$src_index" ]]; then
+    seed_git="$snapshot_scratch/seed-git"
+    mkdir -p "$seed_git/objects" "$seed_git/refs"
+    printf 'ref: refs/heads/invalid\n' > "$seed_git/HEAD"
+    if [[ "$object_format" != "sha1" ]]; then
+      printf '[core]\n\trepositoryformatversion = 1\n[extensions]\n\tobjectformat = %s\n' \
+        "$object_format" > "$seed_git/config"
+    fi
+    cat "$src_index" > "$seed_git/index"
+    src_index_dir="$(cd "$(dirname "$src_index")" && pwd -P)"
+    for dir in "$git_dir" "$src_index_dir" "$common_dir"; do
+      for shared in "$dir"/sharedindex.*; do
+        [[ -f "$shared" ]] || continue
+        cat "$shared" > "$seed_git/${shared##*/}"
+      done
+    done
+    env -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
+      -u GIT_COMMON_DIR -u GIT_WORK_TREE \
+      GIT_DIR="$seed_git" GIT_OBJECT_DIRECTORY="$real_objects" \
+      git ls-files --stage -z \
+      | env "${snap_env[@]}" git -C "$wt" -c core.splitIndex=false update-index -z --index-info \
+      || refuse "failed to snapshot the working tree at $wt"
+    rm -rf "$seed_git"
+  fi
+  env "${snap_env[@]}" git -C "$wt" -c core.splitIndex=false add --all -- . \
     || refuse "failed to snapshot the working tree at $wt"
-  env "${snap_env[@]}" git -C "$wt" add --all -- . \
-    || refuse "failed to snapshot the working tree at $wt"
-  tree="$(env "${snap_env[@]}" git -C "$wt" write-tree)" \
+  tree="$(env "${snap_env[@]}" git -C "$wt" -c core.splitIndex=false write-tree)" \
     || refuse "failed to snapshot the working tree at $wt"
   if [[ "$tree" == "$head_tree" ]]; then
     rm -rf "$snapshot_scratch"
