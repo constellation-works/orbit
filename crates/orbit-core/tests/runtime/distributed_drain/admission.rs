@@ -2900,6 +2900,234 @@ fn a_review_perf_task_without_a_claim_releases_the_lane_to_an_owner_wave() {
     assert_eq!(pair.owner_status(&holder), "review");
 }
 
+/// A second workspace partition sharing `pair`'s owner global root (`state.sqlite`
+/// and `task-registry.sqlite`), modeling two repos served by one owner host.
+fn second_owner_workspace(pair: &Pair) -> (OrbitRuntime, PathBuf) {
+    let repo = pair._root.path().join("owner_b_repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git_boundary().write(&repo.join(".git"));
+    std::fs::create_dir_all(repo.join(".orbit")).unwrap();
+    let owner_b = calm_host(
+        OrbitRuntime::from_roots(&pair.wire.owner.global_root(), &repo.join(".orbit"))
+            .expect("second owner runtime")
+            .with_automation_machine_identity(Some(OWNER.to_string())),
+    );
+    assert_ne!(
+        owner_b.workspace_id().unwrap(),
+        pair.wire.owner.workspace_id().unwrap()
+    );
+    (owner_b, repo)
+}
+
+/// Call `orbit.task.pull` directly on `owner` as `caller_machine`, matching the
+/// session shape `Wire` builds for follower or local owner pulls.
+fn pull_from_owner(
+    owner: &OrbitRuntime,
+    caller_machine: &str,
+    request_id: &str,
+    local: bool,
+) -> Value {
+    let session = ToolSessionContext {
+        caller_machine_id: Some(caller_machine.to_string()),
+        process_machine_id: Some(OWNER.to_string()),
+        transport: Some(if local {
+            McpTransport::Local
+        } else {
+            McpTransport::SshMcp
+        }),
+        effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+        ..ToolSessionContext::default()
+    };
+    let probe = owner
+        .run_tool_with_context(
+            "orbit.drain.probe",
+            json!({}),
+            ToolContext {
+                session_context: session.clone(),
+                ..ToolContext::default()
+            },
+        )
+        .expect("probe owner");
+    let fingerprint = orbit_store::contracts::distributed_drain_protocol_fingerprint();
+    owner
+        .run_tool_with_context(
+            "orbit.task.pull",
+            json!({
+                "request_id": request_id,
+                "caller_version": probe["binary_version"],
+                "caller_schema": DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+                "caller_fingerprint": fingerprint,
+                "caller_before_pr": false,
+                "review_gate": true,
+                "ship": probe["ship"],
+                "run_context": {"run_id": format!("drain-{request_id}"), "job_name": "workspace_pull_pipeline"},
+            }),
+            ToolContext {
+                session_context: session,
+                ..ToolContext::default()
+            },
+        )
+        .expect("pull from owner")
+}
+
+/// Two workspace partitions on one owner host share the perf lane per
+/// execution machine: a perf claim granted from workspace A blocks a second
+/// perf pull from workspace B onto that same machine, while plain work in
+/// workspace B and perf work on a distinct execution machine remain eligible.
+fn a_perf_claim_in_one_workspace_blocks_another_workspaces_perf_pull_on_the_same_machine() {
+    let pair = Pair::new(0);
+    let holder_a = backlog_task_with_input(
+        &pair.wire.owner,
+        &pair.owner_repo,
+        "src/holder_a.rs",
+        None,
+        json!({"tags": ["performance"], "priority": "high"}),
+    );
+    let drain_a = pair.start_drain();
+    let leaf_a = pair.running_leaf(&drain_a, 1);
+    assert_eq!(pair.claimed_task(&leaf_a), holder_a);
+
+    let (owner_b, repo_b) = second_owner_workspace(&pair);
+    let waiting_b = backlog_task_with_input(
+        &owner_b,
+        &repo_b,
+        "src/waiting_b.rs",
+        None,
+        json!({"tags": ["perf-review"], "priority": "high"}),
+    );
+    let plain_b = backlog_task_with_input(
+        &owner_b,
+        &repo_b,
+        "src/plain_b.rs",
+        None,
+        json!({"priority": "low"}),
+    );
+
+    // Same execution machine pulling from workspace B skips waiting_b for the
+    // perf lane and admits plain_b instead.
+    let pull_plain = pull_from_owner(&owner_b, FOLLOWER, "ws-b-plain", false);
+    assert_eq!(
+        pull_plain["receipt"]["claim"]["task_id"], plain_b,
+        "{pull_plain}"
+    );
+    let deferred = pull_plain["receipt"]["deferred_conflicts"]
+        .as_array()
+        .and_then(|entries| entries.iter().find(|entry| entry["task_id"] == waiting_b))
+        .unwrap_or_else(|| panic!("waiting_b deferred: {pull_plain}"));
+    let reason = deferred["reason"].as_str().unwrap_or_default();
+    assert!(reason.starts_with("perf_lane_busy"), "{deferred}");
+    assert!(reason.contains(&holder_a), "{deferred}");
+    assert!(
+        deferred["blocked_by"]
+            .as_array()
+            .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(holder_a.as_str()))),
+        "{deferred}"
+    );
+
+    // A follow-up pull on the same machine with only waiting_b left returns idle.
+    let pull_idle = pull_from_owner(&owner_b, FOLLOWER, "ws-b-idle", false);
+    assert!(
+        pull_idle["receipt"]["claim"].is_null(),
+        "must not grant overlapping perf claim on {FOLLOWER}: {pull_idle}"
+    );
+    assert_eq!(
+        owner_b.get_task(&waiting_b).unwrap().status,
+        TaskStatus::Backlog
+    );
+
+    // A distinct execution machine pulling from workspace B remains eligible.
+    let other_machine = Pair::follower_of(
+        pair._root.clone(),
+        owner_b.clone(),
+        repo_b,
+        vec![waiting_b.clone()],
+        "hm_follower_2",
+    );
+    let drain_b = other_machine.start_drain();
+    let leaf_b = other_machine.running_leaf(&drain_b, 1);
+    assert_eq!(other_machine.claimed_task(&leaf_b), waiting_b);
+    assert!(other_machine.owner_has_claim_for_task(&waiting_b));
+}
+
+/// An owner-local perf wave in workspace A also holds the owner machine's perf
+/// lane across workspace B for both owner pulls and owner-local waves, while
+/// plain work in workspace B remains eligible.
+fn an_owner_wave_perf_task_holds_the_lane_across_workspace_partitions() {
+    let pair = Pair::new(0);
+    let holder_a = backlog_task_with_input(
+        &pair.wire.owner,
+        &pair.owner_repo,
+        "src/holder_a.rs",
+        None,
+        json!({"tags": ["performance"], "priority": "high"}),
+    );
+    let wave_a = action(
+        &pair.wire.owner,
+        "classify_workspace_auto_tasks",
+        &json!({"max_active_leaf_runs": 1}),
+    )
+    .expect("classify A");
+    assert_eq!(wave_a["loose_task_ids"], json!([holder_a]), "{wave_a}");
+
+    let (owner_b, repo_b) = second_owner_workspace(&pair);
+    let waiting_b = backlog_task_with_input(
+        &owner_b,
+        &repo_b,
+        "src/waiting_b.rs",
+        None,
+        json!({"tags": ["perf-review"], "priority": "high"}),
+    );
+    let plain_b = backlog_task_with_input(
+        &owner_b,
+        &repo_b,
+        "src/plain_b.rs",
+        None,
+        json!({"priority": "low"}),
+    );
+
+    let wave_b = action(
+        &owner_b,
+        "classify_workspace_auto_tasks",
+        &json!({"max_active_leaf_runs": 2}),
+    )
+    .expect("classify B");
+    assert_eq!(wave_b["loose_task_ids"], json!([plain_b]), "{wave_b}");
+    let deferred_b = wave_b["deferred_conflicts"]
+        .as_array()
+        .and_then(|entries| entries.iter().find(|entry| entry["task_id"] == waiting_b))
+        .unwrap_or_else(|| panic!("waiting_b deferred in wave B: {wave_b}"));
+    assert_eq!(deferred_b["reason"], "perf_lane_busy", "{deferred_b}");
+    assert_eq!(
+        deferred_b["blocking_task_ids"],
+        json!([holder_a]),
+        "{deferred_b}"
+    );
+
+    let plain_b_pull = backlog_task_with_input(
+        &owner_b,
+        &repo_b,
+        "src/plain_b_pull.rs",
+        None,
+        json!({"priority": "low"}),
+    );
+    let owner_pull_b = pull_from_owner(&owner_b, OWNER, "ws-b-owner-pull", true);
+    assert_eq!(
+        owner_pull_b["receipt"]["claim"]["task_id"], plain_b_pull,
+        "{owner_pull_b}"
+    );
+    let pull_deferred_b = owner_pull_b["receipt"]["deferred_conflicts"]
+        .as_array()
+        .and_then(|entries| entries.iter().find(|entry| entry["task_id"] == waiting_b))
+        .unwrap_or_else(|| panic!("waiting_b deferred on owner pull B: {owner_pull_b}"));
+    assert!(
+        pull_deferred_b["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("perf_lane_busy"),
+        "{pull_deferred_b}"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     pull_admission_preserves_execution_machine_name_scenarios,
@@ -2962,5 +3190,7 @@ crate::scenario_table!(
     a_pull_drain_admits_one_perf_task_per_host_and_still_admits_other_work,
     an_owner_wave_perf_task_holds_the_lane_for_a_pull_on_that_host,
     a_review_perf_task_without_a_claim_releases_the_lane_to_an_owner_pull,
-    a_review_perf_task_without_a_claim_releases_the_lane_to_an_owner_wave
+    a_review_perf_task_without_a_claim_releases_the_lane_to_an_owner_wave,
+    a_perf_claim_in_one_workspace_blocks_another_workspaces_perf_pull_on_the_same_machine,
+    an_owner_wave_perf_task_holds_the_lane_across_workspace_partitions
 );
