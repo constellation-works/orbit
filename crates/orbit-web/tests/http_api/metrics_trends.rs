@@ -1591,3 +1591,88 @@ fn turns_to_edit_provider_filter_excludes_unattributed_tasks() {
         },
     );
 }
+
+fn provider_summary<'a>(body: &'a Value, provider: &str) -> &'a Value {
+    body["provider_summary"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["provider"] == provider)
+        .unwrap_or_else(|| panic!("missing {provider} in {body}"))
+}
+
+/// A provider with no measured sample in a window where another provider is
+/// scored is listed with `thin` set, so the panel's fewer-than-`min_tasks`
+/// marker covers it, and its mean and median stay null.
+#[test]
+fn turns_to_edit_provider_summary_marks_zero_measured_provider_thin() {
+    isolated(
+        "metrics_trends::turns_to_edit_provider_summary_marks_zero_measured_provider_thin",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let scored = [
+                add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]),
+                add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]),
+                add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]),
+            ];
+            let unmeasured = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]);
+
+            let closed_at = {
+                let base = (now - Duration::hours(2)).timestamp();
+                DateTime::from_timestamp(base - base.rem_euclid(3600) + 1800, 0)
+                    .expect("pinned close time is representable")
+            };
+            for task in scored.iter().chain([&unmeasured]) {
+                close_at(&fixture, task, TaskStatus::Done, closed_at);
+            }
+
+            // Turns and summed result bytes before the first edit: 1 and 10,
+            // 2 and 50, then 0 and 0.
+            let calls = [
+                vec![tool_call(1, "Read", 10), tool_call(2, "Edit", 20)],
+                vec![
+                    tool_call(1, "Read", 30),
+                    tool_call(2, "Grep", 20),
+                    tool_call(3, "Edit", 5),
+                ],
+                vec![tool_call(1, "Edit", 7)],
+            ];
+            for (index, (task, calls)) in scored.iter().zip(calls).enumerate() {
+                record_implement(
+                    &fixture,
+                    &format!("run-claude-{index}"),
+                    task,
+                    "implement_one",
+                    "claude",
+                    now - Duration::hours(2),
+                    calls,
+                );
+            }
+            // An empty trace attributes the task to codex without a sample.
+            record_implement(
+                &fixture,
+                "run-codex",
+                &unmeasured,
+                "implement_one",
+                "codex",
+                now - Duration::hours(2),
+                vec![],
+            );
+
+            let server = fixture.server(false);
+            let body = turns_body(&server, "since=24h");
+            let claude = provider_summary(&body, "claude");
+            assert_eq!(claude["n"], 3, "{claude}");
+            assert_eq!(claude["thin"], false, "{claude}");
+            assert_f64(&claude["mean_turns"], 1.0);
+            assert_f64(&claude["median_turns"], 1.0);
+
+            let codex = provider_summary(&body, "codex");
+            assert_eq!(codex["n"], 0, "{codex}");
+            assert_eq!(codex["thin"], true, "{codex}");
+            assert!(codex["mean_turns"].is_null(), "{codex}");
+            assert!(codex["median_turns"].is_null(), "{codex}");
+        },
+    );
+}
