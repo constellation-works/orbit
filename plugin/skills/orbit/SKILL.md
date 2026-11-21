@@ -132,3 +132,4 @@ queued work.
 Set the task's `crew` to the registered crew that actually does the work
 (for example `opus`), replacing whatever filing assigned. Crew analytics
 attribute outcomes by that field.
+Tasks minted for delivery coverage (such as `delivery-code-review`) accept `automation-coverage.json` only from their own Orbit run; dispatch them with `orbit run ship <task-id>` instead of running them by hand.

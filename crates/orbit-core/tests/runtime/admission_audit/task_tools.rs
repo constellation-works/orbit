@@ -383,9 +383,327 @@ fn artifact_put_refuses_malformed_coverage_evidence_with_the_parse_error() {
     put(&legacy.to_string()).expect("legacy evidence remains parseable");
 }
 
+fn seed_open_delivery_batch_attempt(
+    runtime: &orbit_core::OrbitRuntime,
+    machine_id: &str,
+    task_id: &str,
+) -> orbit_types::workflow::automation::BatchAttempt {
+    use chrono::Utc;
+    use orbit_types::workflow::automation::{
+        AutomationState, BatchAttempt, BatchState, CoverageBatch, CoverageClass, Delivery,
+        SourceRevision,
+    };
+
+    let now = Utc::now();
+    let workspace_id = runtime.workspace_id().expect("workspace id");
+    let consumer = format!("{machine_id}/{workspace_id}/auto-task/delivery-code-review");
+    let revision = SourceRevision {
+        commit: "c1".into(),
+        tree: "t1".into(),
+    };
+    let delivery = Delivery {
+        key: "pr:owner/repo:1".into(),
+        repository: "owner/repo".into(),
+        branch: "main".into(),
+        before: revision.clone(),
+        after: revision.clone(),
+        commits: vec!["c1".into()],
+        task_ids: vec![],
+        unattributed: None,
+        evidence_reference: "pull:1".into(),
+        evidence_digest: "digest".into(),
+        landed_at: now,
+    };
+    let batch = CoverageBatch {
+        schema_version: 1,
+        id: "batch-open".into(),
+        consumer: consumer.clone(),
+        epoch: "epoch".into(),
+        repository: "owner/repo".into(),
+        branch: "main".into(),
+        coverage: CoverageClass::LandedCodeReviewV1,
+        from_exclusive: revision.clone(),
+        through_inclusive: revision.clone(),
+        commits: vec!["c1".into()],
+        deliveries: vec![delivery.clone()],
+        exclusions: vec![],
+        created_at: now,
+        max_attempts: 2,
+        retry_until: now + chrono::Duration::hours(4),
+    };
+    let attempt = BatchAttempt {
+        batch,
+        input_digest: "digest".into(),
+        attempt: 1,
+        action_key: "automation:batch-open:1".into(),
+        action_id: Some(task_id.into()),
+        state: BatchState::Admitted,
+        reason: None,
+        retry_after: None,
+        reissue: None,
+    };
+    let baseline = AutomationState {
+        members: None,
+        consumer,
+        epoch: "epoch".into(),
+        trigger: None,
+        repository: "owner/repo".into(),
+        branch: "main".into(),
+        generation: 0,
+        baseline: revision.clone(),
+        observed: revision.clone(),
+        covered: revision,
+        pending_commits: vec![],
+        pending: vec![],
+        waived: vec![],
+        excluded: vec![],
+        unresolved: Default::default(),
+        associations: Default::default(),
+        lookup_retries: Default::default(),
+        active: None,
+        stall: None,
+    };
+    let mut admitted = baseline.clone();
+    admitted.generation = 1;
+    admitted.pending_commits = vec!["c1".into()];
+    admitted.pending = vec![delivery];
+    admitted.active = Some(attempt.clone());
+    let store = runtime.automation_store().expect("automation store");
+    assert!(store.automation_initialize(&baseline).expect("init state"));
+    assert!(
+        store
+            .automation_commit(&baseline, &admitted, None)
+            .expect("admit attempt")
+    );
+    attempt
+}
+
+fn delivery_coverage_write_refuses_outside_own_orbit_run_and_accepts_own_run() {
+    use crate::admission_audit::tool_support::run_tool_as_operator;
+    use orbit_engine::TaskAutomationUpdate;
+    use orbit_tools::{ReservationOwnerContext, ToolContext};
+    use orbit_types::tool::McpCapability;
+    use orbit_types::workflow::automation::{
+        COVERAGE_ARTIFACT, EVIDENCE_AUTHORITY_ARTIFACT, ExaminationCheck, evidence_template,
+    };
+    use std::collections::BTreeSet;
+
+    let (_root, runtime, repo_root) = test_runtime();
+    let machine_id = "local-machine";
+    let runtime = runtime.with_automation_machine_identity(Some(machine_id.into()));
+    let task = create_task(
+        &runtime,
+        &repo_root,
+        "delivery review task",
+        "owes delivery coverage",
+        TaskStatus::InProgress,
+        &[],
+    );
+    let attempt = seed_open_delivery_batch_attempt(&runtime, machine_id, &task.id);
+
+    let own_run = RuntimeHost::insert_job_run(
+        &runtime,
+        "task_local_pipeline",
+        1,
+        chrono::Utc::now(),
+        Some(json!({ "task_id": task.id })),
+        None,
+    )
+    .expect("insert own run");
+    let other_run = RuntimeHost::insert_job_run(
+        &runtime,
+        "task_local_pipeline",
+        1,
+        chrono::Utc::now(),
+        Some(json!({ "task_id": "ORB-99999" })),
+        None,
+    )
+    .expect("insert other run");
+    RuntimeHost::apply_task_automation_update(
+        &runtime,
+        &task.id,
+        TaskAutomationUpdate {
+            job_run_id: Some(own_run.run_id.clone()),
+            ..TaskAutomationUpdate::default()
+        },
+    )
+    .expect("bind task run");
+
+    let mut coverage = evidence_template(&attempt);
+    coverage.examination_complete = true;
+    coverage.checks = vec![ExaminationCheck {
+        subject: "src/lib.rs".into(),
+        method: "read diff".into(),
+        observation: "checked change".into(),
+    }];
+    coverage.delivery_examinations[0].examined_paths = vec!["src/lib.rs".into()];
+    coverage.delivery_examinations[0].rationale =
+        "Reviewed the delivered file completely and confirmed no issues.".into();
+    let payload = serde_json::to_string(&coverage).expect("serialize coverage");
+    let source = repo_root.join("automation-coverage-fixture.json");
+    std::fs::write(&source, &payload).expect("write coverage fixture");
+
+    let put_input = json!({
+        "id": task.id,
+        "source_path": source.to_string_lossy(),
+        "path": COVERAGE_ARTIFACT,
+        "model": "codex",
+    });
+
+    // 1. External session (no Orbit run) is refused before storing anything.
+    let external_err = run_tool_as_operator(&runtime, "orbit.task.artifact.put", put_input.clone())
+        .expect_err("external coverage write must be refused");
+    assert!(
+        matches!(external_err, orbit_common::OrbitError::PolicyDenied(_)),
+        "expected PolicyDenied, got {external_err}"
+    );
+    let external_msg = external_err.to_string();
+    assert!(
+        external_msg.contains("Orbit run")
+            && external_msg.contains(&format!("orbit run ship {}", task.id)),
+        "refusal must name the task's Orbit run and `orbit run ship <task-id>`: {external_msg}"
+    );
+    assert!(
+        runtime
+            .get_task_artifact(&task.id, COVERAGE_ARTIFACT)
+            .expect("read artifact")
+            .is_none()
+    );
+
+    // 2. A different Orbit run is also refused.
+    let other_err = runtime
+        .run_tool_with_context(
+            "orbit.task.artifact.put",
+            put_input.clone(),
+            ToolContext {
+                session_context: ToolSessionContext {
+                    effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+                    ..ToolSessionContext::default()
+                },
+                reservation_owner: Some(ReservationOwnerContext {
+                    owner_run_id: other_run.run_id,
+                    owner_metadata: None,
+                }),
+                ..ToolContext::default()
+            },
+        )
+        .expect_err("other run coverage write must be refused");
+    assert!(
+        matches!(other_err, orbit_common::OrbitError::PolicyDenied(_)),
+        "expected PolicyDenied, got {other_err}"
+    );
+    let other_msg = other_err.to_string();
+    assert!(
+        other_msg.contains("Orbit run")
+            && other_msg.contains(&format!("orbit run ship {}", task.id)),
+        "refusal must name the task's Orbit run and `orbit run ship <task-id>`: {other_msg}"
+    );
+    assert!(
+        runtime
+            .get_task_artifact(&task.id, COVERAGE_ARTIFACT)
+            .expect("read artifact")
+            .is_none()
+    );
+
+    // 3. The task's own Orbit run succeeds and records the evidence authority.
+    runtime
+        .run_tool_with_context(
+            "orbit.task.artifact.put",
+            put_input,
+            ToolContext {
+                session_context: ToolSessionContext {
+                    effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+                    ..ToolSessionContext::default()
+                },
+                reservation_owner: Some(ReservationOwnerContext {
+                    owner_run_id: own_run.run_id,
+                    owner_metadata: None,
+                }),
+                ..ToolContext::default()
+            },
+        )
+        .expect("task's own run can write coverage");
+    std::fs::remove_file(&source).ok();
+    assert!(
+        runtime
+            .get_task_artifact(&task.id, COVERAGE_ARTIFACT)
+            .expect("read coverage")
+            .is_some()
+    );
+    assert!(
+        runtime
+            .get_task_artifact(&task.id, EVIDENCE_AUTHORITY_ARTIFACT)
+            .expect("read authority")
+            .is_some()
+    );
+}
+
+fn moving_delivery_coverage_task_to_in_progress_outside_orbit_run_warns() {
+    use crate::admission_audit::tool_support::run_tool_as_operator;
+
+    let (_root, runtime, repo_root) = test_runtime();
+    let machine_id = "local-machine";
+    let runtime = runtime.with_automation_machine_identity(Some(machine_id.into()));
+    let review_task = create_task(
+        &runtime,
+        &repo_root,
+        "delivery review task",
+        "owes delivery coverage",
+        TaskStatus::Backlog,
+        &[],
+    );
+    seed_open_delivery_batch_attempt(&runtime, machine_id, &review_task.id);
+
+    let updated = run_tool_as_operator(
+        &runtime,
+        "orbit.task.update",
+        json!({"id": review_task.id, "status": "in-progress"}),
+    )
+    .expect("moving delivery-coverage task to in-progress outside Orbit run succeeds");
+    assert_eq!(updated["status"], "in-progress");
+    assert_eq!(
+        runtime.get_task(&review_task.id).expect("task").status,
+        TaskStatus::InProgress
+    );
+    let warnings = updated["warnings"]
+        .as_array()
+        .expect("warnings array present");
+    assert!(
+        warnings.iter().any(|warning| {
+            warning.as_str().is_some_and(|text| {
+                text.contains("Orbit run")
+                    && text.contains(&format!("orbit run ship {}", review_task.id))
+            })
+        }),
+        "expected guidance warning naming task's Orbit run and `orbit run ship`, got {warnings:?}"
+    );
+
+    // An ordinary task without an open delivery batch attempt emits no such warning.
+    let ordinary = create_task(
+        &runtime,
+        &repo_root,
+        "ordinary task",
+        "no delivery coverage",
+        TaskStatus::Backlog,
+        &[],
+    );
+    let ordinary_updated = run_tool_as_operator(
+        &runtime,
+        "orbit.task.update",
+        json!({"id": ordinary.id, "status": "in-progress"}),
+    )
+    .expect("ordinary task in-progress");
+    assert!(
+        ordinary_updated.get("warnings").is_none(),
+        "ordinary task should not carry coverage warning: {ordinary_updated}"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution_scenarios,
     task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution,
-    artifact_put_refuses_malformed_coverage_evidence_with_the_parse_error
+    artifact_put_refuses_malformed_coverage_evidence_with_the_parse_error,
+    delivery_coverage_write_refuses_outside_own_orbit_run_and_accepts_own_run,
+    moving_delivery_coverage_task_to_in_progress_outside_orbit_run_warns
 );

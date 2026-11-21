@@ -487,3 +487,65 @@ fn claimed_owner(
         state.claim.task_id == task.id && state.claim.executed_on.machine_id == claimed.machine_id;
     Ok((bound && admitted).then(|| format!("run:{}/{run_id}", claimed.machine_id)))
 }
+
+/// Whether `task_id` currently owns an open (`Claimed` or `Admitted`) delivery
+/// batch attempt in this workspace's automation consumers.
+pub(crate) fn has_open_delivery_batch_attempt(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+) -> Result<bool, OrbitError> {
+    let Some(machine) = runtime.automation_machine_identity() else {
+        return Ok(false);
+    };
+    let prefix = format!("{machine}/{}/", runtime.workspace_id()?);
+    let store = runtime.automation_store()?;
+    let found = consumer_states::for_each_workspace_consumer_state(
+        &prefix,
+        |after, limit| store.automation_states_page(&prefix, after, limit),
+        |state| &state.consumer,
+        |state| {
+            let Some(attempt) = state.active.as_ref().filter(|attempt| {
+                matches!(attempt.state, BatchState::Claimed | BatchState::Admitted)
+            }) else {
+                return Ok(ControlFlow::Continue(()));
+            };
+            let matches = attempt.action_id.as_deref() == Some(task_id)
+                || (attempt.action_id.is_none()
+                    && action_id(runtime, attempt)?.as_deref() == Some(task_id));
+            Ok(if matches {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            })
+        },
+    )?;
+    Ok(found.is_break())
+}
+
+/// Whether `run_id` is the local Orbit run that owns `task` as `evidence_owner`
+/// authenticates it: `task.job_run_id` names `run_id`, the run is local to this
+/// store, and its recorded input names `task.id`.
+pub(crate) fn is_task_own_orbit_run(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    run_id: Option<&str>,
+) -> Result<bool, OrbitError> {
+    let Some(run_id) = run_id.map(str::trim).filter(|id| !id.is_empty()) else {
+        return Ok(false);
+    };
+    if task.job_run_id.as_deref() != Some(run_id) || !runtime.task_run_is_local(task) {
+        return Ok(false);
+    }
+    let run = match runtime.show_job_run(run_id) {
+        Ok(run) => run,
+        Err(OrbitError::NotFound {
+            kind: NotFoundKind::JobRun,
+            ..
+        }) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    Ok(run.input.as_ref().is_some_and(|input| {
+        input.get("task_id").and_then(serde_json::Value::as_str) == Some(task.id.as_str())
+            || recorded_task_ids(input).iter().any(|id| *id == task.id)
+    }))
+}
