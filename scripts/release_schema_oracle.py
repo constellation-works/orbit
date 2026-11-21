@@ -188,6 +188,18 @@ def bounded_schema_pairs():
                 yield left, {"allOf": [{keyword: left[keyword][:1]}, right]}
                 yield {"allOf": [left, right]}, {keyword: left[keyword][:1]}
 
+    # Replace an alternative in one conjunct while a sibling can mask the
+    # old/new branch types at the flattened instance location.
+    type_atoms = [{"type": t} for t in ("null", "boolean", "integer", "string")]
+    for keyword, shared, old, new in product(("anyOf", "oneOf"), type_atoms, type_atoms, type_atoms):
+        sibling = {keyword: [old, new]}
+        yield ({"allOf": [sibling, {keyword: [shared, old]}]},
+               {"allOf": [sibling, {keyword: [shared, new]}]})
+    yield ({"allOf": [{"anyOf": [type_atoms[3], type_atoms[1]]},
+                      {"oneOf": [type_atoms[3], type_atoms[1]]},
+                      {"anyOf": [type_atoms[1], type_atoms[0]]}]},
+           {"anyOf": [type_atoms[3], type_atoms[0]]})
+
     # if / then / else conditionals: selector edits, branch edits, adding/removing
     # if/then/else, moving required names between root and then/else, and
     # propertyNames enum changes inside branches.
