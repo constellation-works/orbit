@@ -750,6 +750,30 @@ class PairedCliSupervisionTest(PairedCliTestCase):
         self.assertIn("--output-limit-bytes", result.stderr)
         self.assert_lane_released()
 
+    def assert_bounded_parity_report(self, result: subprocess.CompletedProcess[str], out: Path,
+                                     bound_flag: str, bound_name: str, bound_value: float) -> None:
+        # A parity command that hits a bound is a failed observation: the run exits 2
+        # before sampling and parity.json still names the failed arm and its bound.
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        report = json.loads((out / "parity.json").read_text())
+        self.assertIs(report["match"], False)
+        self.assertIn("base", report["observation_failures"])
+        self.assertEqual(report["arms"]["base"]["command"]["bound"],
+                         {"name": bound_name, "value": bound_value}, bound_flag)
+        self.assertFalse((out / "raw.json").exists(), "a refused parity check must not sample")
+        self.assertFalse((out / "paired-summary.json").exists(), result.stdout)
+        self.assert_lane_released()
+
+    def test_output_over_limit_parity_writes_failed_report(self) -> None:
+        result, out = self.run_paired("--parity", "probe-flood", "--output-limit-bytes", "1024")
+        self.assert_bounded_parity_report(
+            result, out, "--output-limit-bytes", "output_limit_bytes", 1024)
+
+    def test_timed_out_parity_writes_failed_report(self) -> None:
+        result, out = self.run_paired("--parity", "probe-stall", "--command-timeout", "1")
+        self.assert_bounded_parity_report(
+            result, out, "--command-timeout", "command_timeout_seconds", 1.0)
+
     def test_reported_limits_are_recorded(self) -> None:
         result, out = self.run_paired(
             "--parity", "probe-same", "--command-timeout", "30", "--output-limit-bytes", "4096")

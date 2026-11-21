@@ -205,7 +205,9 @@ repository root of the checkout that holds these scripts.
      5 s grace, across its whole group, and the run exits 2 naming the arm and the bound.
      A command that exits cleanly still has its group swept, so no descendant outlives
      it. Both bounds are recorded under `limits` in `parity.json` and in the
-     `protocol` of `paired-summary.json`.
+     `protocol` of `paired-summary.json`. A parity command that hits a bound is that
+     arm's failed observation: `parity.json` is still written, with `match` false, and
+     the run exits 2 without sampling.
    - **Cancellation.** SIGTERM, SIGHUP or Ctrl-C stops the running arm command or
      `web serve` group, releases the lane, cleans up as a failed run does and exits
      128 + the signal number. SIGKILL of the harness skips that cleanup; the enclosing
@@ -225,9 +227,8 @@ repository root of the checkout that holds these scripts.
      omitted one. Identical non-zero exits are a failed probe,
      not a match, even when stdout is empty on every arm. JSON outputs are compared after
      the `--parity-mask` fields (key names at any depth, or dotted paths) are removed and
-     the root path is replaced by `<root>`. A missing observation, a failed probe or a
-     difference writes
-     `parity.json` with `match` false and exits 2 without sampling, so no bounded timing
+     the root path is replaced by `<root>`. A missing observation, a failed probe, a
+     parity command that hit a bound, or a difference writes `parity.json` with `match` false and exits 2 without sampling, so no bounded timing
      verdict is issued. Mask only timing fields; a mask that hides a behaviour change
      defeats the check.
    - **Host pressure.** `/proc/loadavg` and the number of Orbit-managed processes (those
@@ -371,7 +372,9 @@ commit is not stored in the checkout. `build_stub` is true only for the
 observation; empty when every arm succeeded), and `arms.<arm>`. The top-level `command` is
 the `--parity` string, or `null` when no parity command was given. An arm record holds
 `command` (`exit`, `output`) only when `--parity` was supplied, and `http` (`status` and
-`body`, or `error` when the request failed) only in HTTP mode. So a CLI run without
+`body`, or `error` when the request failed) only in HTTP mode. A parity command that hit
+a bound has `exit` null, `stopped` (the reason, naming the flag) and `bound` (`name` and
+`value`) in place of `output`. So a CLI run without
 `--parity` leaves every arm record empty, which is a missing observation; an HTTP-only run
 without `--parity` has `command: null` and arm records holding `http` alone. Each output is
 `{format: json|text, value}` after masking. `match` is true only when `observation_failures`
@@ -460,10 +463,10 @@ Tasks land in `proposed`. Do not approve them.
 | `… built identical binaries …` | The two revisions differ only in metadata | Pick revisions whose content differs |
 | `base and candidate resolve to the same commit …` | Same commit given twice, or `--candidate-worktree` on a checkout with no uncommitted changes (ignored files do not count) and a base that is that HEAD | Check the revision selectors, or make the working-tree change first |
 | `--candidate-worktree must be the checkout root …` | `--candidate-worktree` names a subdirectory of the checkout | Pass the root path the message names (`git rev-parse --show-toplevel`) |
-| `parity mismatch between arms …` | An arm has no successful observation (missing `--parity` in CLI mode, or a probe that did not exit 0 / return 2xx), or outputs differ after masking | Read `parity.json` (`observation_failures` and `differing_arms`); fix the probe or the behaviour change, or mask only a timing field |
+| `parity mismatch between arms …` | An arm has no successful observation (missing `--parity` in CLI mode, a probe that did not exit 0 / return 2xx, or a parity command that hit `--command-timeout` or `--output-limit-bytes`, named in the parenthetical as `<arm>: timed out after <n> s …` or `<arm>: wrote more than <n> bytes …`), or outputs differ after masking | Read `parity.json` (`observation_failures` and `differing_arms`); fix the probe or the behaviour change, or mask only a timing field |
 | `paired.py: error: --parity takes an orbit command …` | `--parity` given with no command words (an empty variable, say) | Pass the command, or leave `--parity` out |
-| `<arm> parity command timed out after <n> s …` / `<arm> round <r> sample <i> timed out …` | An arm command stalled past `--command-timeout` | Find why it hangs on the fixture, or raise `--command-timeout` for a genuinely slow surface |
-| `<arm> … wrote more than <n> bytes of stdout …` | An arm command's output passed `--output-limit-bytes` | Pick a smaller probe, or raise `--output-limit-bytes` |
+| `<arm> round <r> sample <i> timed out after <n> s …` | A timed sample command stalled past `--command-timeout` (a parity command's stall is in the `parity mismatch …` row) | Find why it hangs on the fixture, or raise `--command-timeout` for a genuinely slow surface |
+| `<arm> round <r> sample <i> wrote more than <n> bytes of stdout …` | A timed sample command's output passed `--output-limit-bytes` (a parity command's overflow is in the `parity mismatch …` row) | Pick a smaller probe, or raise `--output-limit-bytes` |
 | `perf lane busy: <holder>` | Another perf run holds the lane | Wait for it, or raise `--lane-wait` |
 | `disk gate: … at or above 80% …` | The parent filesystem is too full | Free space per RB-11, then rerun |
 
