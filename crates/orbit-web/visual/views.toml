@@ -4,6 +4,10 @@ schema_version = 1
 setup = ["scripts/visual-fixture-server.sh", "{fixture}"]
 setup_timeout_s = 180
 themes = ["dark"]
+# 1000px sits between 768 and 1440 on the dashboard's own `@media (max-width: 1000px)`
+# breakpoint: tightest desktop layouts just above the 900px panel-stacking cutoff,
+# wrapped topbar beside the 200px rail, 625px short-rail height, and mid-width tile grids.
+widths = [1440, 1000, 768, 375]
 color_scheme_invariant = true
 design_rules = ["docs/design/user-interface/specs/theme.md"]
 tokens = ["crates/orbit-web/assets/dashboard/css/base.css"]
