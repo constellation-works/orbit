@@ -18,6 +18,7 @@ ROOT = PERF_DIR.parent.parent
 FIXTURE_PY = PERF_DIR / "fixture.py"
 
 sys.path.insert(0, str(PERF_DIR))
+import fixture  # noqa: E402
 import perf_common  # noqa: E402
 
 
@@ -277,7 +278,7 @@ class FixtureCliRestoreTests(unittest.TestCase):
             timeout=60,
         )
 
-    def test_large_manifest_evidence_reconstructs_and_restore_checks_files(self):
+    def test_large_manifest_restore_checks_files(self):
         source_home = self.base / "source"
         paths = _build_disposable_source(source_home, self.base / "checkout")
         task_files = paths["global_root"] / "tasks" / "workspaces" / "ws_fixture" / "ORB-1" / "artifacts"
@@ -291,25 +292,6 @@ class FixtureCliRestoreTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         manifest = snapshot / "snapshot-manifest.json"
         self.assertGreater(manifest.stat().st_size, 1048576)
-
-        evidence = self.base / "evidence"
-        evidence.mkdir()
-        checksum = subprocess.run(["sha256sum", manifest.name], cwd=snapshot,
-                                  check=True, capture_output=True).stdout
-        (evidence / "snapshot-manifest.json.sha256").write_bytes(checksum)
-        subprocess.run(["split", "-b", "1048576", "-d", "-a", "6", str(manifest),
-                        str(evidence / "snapshot-manifest.json.part-")], check=True)
-        parts = sorted(evidence.glob("snapshot-manifest.json.part-*"))
-        self.assertGreater(len(parts), 1)
-        self.assertTrue(all(part.stat().st_size <= 1048576 for part in parts))
-        (evidence / manifest.name).write_bytes(b"".join(part.read_bytes() for part in parts))
-        self.assertEqual(subprocess.run(["sha256sum", "-c", "snapshot-manifest.json.sha256"],
-                                        cwd=evidence, capture_output=True).returncode, 0)
-        self.assertEqual((evidence / manifest.name).read_bytes(), manifest.read_bytes())
-        parts[-1].write_bytes(parts[-1].read_bytes()[:-1])
-        (evidence / manifest.name).write_bytes(b"".join(part.read_bytes() for part in parts))
-        self.assertNotEqual(subprocess.run(["sha256sum", "-c", "snapshot-manifest.json.sha256"],
-                                           cwd=evidence, capture_output=True).returncode, 0)
         restored = self.base / "restored"
         result = self.run_fixture(env, "restore", "--snapshot", str(snapshot), "--into", str(restored))
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -319,6 +301,40 @@ class FixtureCliRestoreTests(unittest.TestCase):
                                   "--into", str(self.base / "tampered"))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("sha256 mismatch", result.stderr)
+
+    def test_manifest_summary_stays_bounded_for_500000_entries(self):
+        snapshot = self.base / "large-snapshot"
+        snapshot.mkdir()
+        manifest_path = snapshot / fixture.MANIFEST
+        entry = {"path": "file", "size": 1, "sha256": "0" * 64}
+        manifest = {
+            "schemaVersion": 1,
+            "kind": "orbit-perf-snapshot",
+            "source": {"registry_id": "ws_fixture"},
+            "snapshot_epoch": 123,
+            "files": [entry] * 500_000,
+        }
+        with manifest_path.open("w", encoding="utf-8") as stream:
+            json.dump(manifest, stream, separators=(",", ":"))
+
+        summary = fixture.manifest_evidence_summary(
+            snapshot,
+            manifest,
+            {"base": "a" * 40, "candidate": "c" * 40},
+            {"resident_mandates_with_history": 9},
+        )
+        summary_path = self.base / fixture.MANIFEST_SUMMARY
+        perf_common.write_json(summary_path, summary)
+
+        self.assertGreater(manifest_path.stat().st_size, fixture.MAX_ARTIFACT_BYTES)
+        self.assertLessEqual(summary_path.stat().st_size, fixture.MAX_ARTIFACT_BYTES)
+        self.assertEqual(summary["manifest"]["file_count"], 500_000)
+        self.assertEqual(summary["manifest"]["size_bytes"], manifest_path.stat().st_size)
+        self.assertEqual(summary["manifest"]["sha256"], perf_common.sha256_file(manifest_path))
+        self.assertEqual(summary["manifest"]["path_on_host"], str(manifest_path.resolve()))
+        self.assertEqual(summary["qualifying_task_counts"], {"resident_mandates_with_history": 9})
+        self.assertEqual(summary["snapshot"]["source_workspace"], "ws_fixture")
+        self.assertEqual(summary["revisions"]["base"], "a" * 40)
 
     def test_restore_with_nested_managed_run_scratch_rewrites_paths_once(self):
         source_home = self.base / "source"

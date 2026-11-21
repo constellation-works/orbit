@@ -22,7 +22,7 @@ The protocol has four scripts under `scripts/perf/`:
 | `fixture.py snapshot` | Freezes one workspace of a store into a fixture, reading the source read-only. |
 | `fixture.py restore` / `clean` | Makes / removes a disposable root (own `HOME` and workspace) from that fixture. |
 | `build-pair.sh` | Builds the release `orbit` binary for the baseline and the candidate revision, or for an uncommitted working tree. |
-| `paired.py` | Checks output parity, then times base, candidate and an unchanged-build control. |
+| `paired.py` | Writes a bounded snapshot-manifest summary, checks output parity, then times base, candidate and an unchanged-build control. |
 
 ## Owner, host and safety
 
@@ -150,14 +150,20 @@ repository root of the checkout that holds these scripts.
    python3 -I scripts/perf/paired.py --builds <scratch>/perf-<slug>/builds \
      --snapshot <scratch>/perf-<slug>/snapshot --out <scratch>/perf-<slug>/results \
      --cli 'doctor --json' --parity 'doctor --json' --parity-mask duration_ms \
-     --rounds 3 --samples 10 --warmup 1 --gap-ms 250 --bound-ms <n>
+     --rounds 3 --samples 10 --warmup 1 --gap-ms 250 --bound-ms <n> \
+     --qualifying-task-count '<check>=<observed-count>'
 
    # HTTP surface
    python3 -I scripts/perf/paired.py --builds <scratch>/perf-<slug>/builds \
      --snapshot <scratch>/perf-<slug>/snapshot --out <scratch>/perf-<slug>/results \
      --http '/api/residents?all=true' --parity 'doctor --json' --parity-mask duration_ms \
-     --rounds 3 --samples 10 --bound-ms <n>
+     --rounds 3 --samples 10 --bound-ms <n> \
+     --qualifying-task-count '<check>=<observed-count>'
    ```
+
+   Repeat `--qualifying-task-count NAME=COUNT` for every qualifying-task count the
+   acceptance criteria ask you to check. Record the observed count, not the threshold;
+   the flag records evidence and does not change or apply any measurement check.
 
    What happens:
 
@@ -214,22 +220,27 @@ repository root of the checkout that holds these scripts.
      `informational`. The exit status is 0 for any verdict; refusals exit 2.
 
 4. Attach the evidence under `performance/<slug>/` and cite the paths in the
-   execution summary. The snapshot manifest can exceed the 1,048,576-byte per-artifact
-   limit. Keep the original intact for restore; split its bytes into numbered parts and
-   attach the checksum as well. Split each of the five files so every attachment fits,
-   including large raw sample files. Use a fresh evidence directory so old parts cannot
-   be mixed into the handoff.
+   execution summary. `paired.py` writes `results/snapshot-manifest-summary.json`, a
+   summary no larger than the 1,048,576-byte artifact limit. It records the full manifest's
+   host path, byte size, SHA-256, file count, supplied qualifying-task counts, snapshot id
+   and base/candidate revision ids. The full `snapshot/snapshot-manifest.json` remains on
+   the host for restore and is not attached; its digest in the summary identifies it.
+   Split each of the five attachable files into numbered parts when needed so every
+   attachment fits, including large raw sample files. Use a fresh evidence directory so
+   old parts cannot be mixed into the handoff.
 
    ```sh
    set -e
    cd <scratch>/perf-<slug>
    mkdir evidence
-   for f in snapshot/snapshot-manifest.json builds/provenance.json results/parity.json \
+   for f in results/snapshot-manifest-summary.json builds/provenance.json results/parity.json \
             results/raw.json results/paired-summary.json; do
      name=$(basename "$f")
      (cd "$(dirname "$f")" && sha256sum "$name") > "evidence/$name.sha256"
      split -b 1048576 -d -a 6 "$f" "evidence/$name.part-"
    done
+   test "$(sha256sum snapshot/snapshot-manifest.json | cut -d' ' -f1)" = \
+     "$(jq -r '.manifest.sha256' results/snapshot-manifest-summary.json)"
    for f in evidence/*; do
      orbit tool run orbit.task.artifact --input "{\"action\":\"put\",\"id\":\"<task-id>\",
        \"source_path\":\"<scratch>/perf-<slug>/$f\",\"path\":\"performance/<slug>/$(basename "$f")\"}"
@@ -237,13 +248,12 @@ repository root of the checkout that holds these scripts.
    ```
 
    To verify the handoff, download all parts and checksums into an empty directory,
-   then reconstruct and check each file as below (shown for the manifest). The checksum
-   detects missing, reordered or altered bytes; the reconstructed manifest contains the
-   complete file list and digests.
+   then reconstruct and check each file as below (shown for the summary). Its digest
+   must also match the host-side manifest before the fixture is cleaned up.
 
    ```sh
-   cat snapshot-manifest.json.part-* > snapshot-manifest.json
-   sha256sum -c snapshot-manifest.json.sha256
+   cat snapshot-manifest-summary.json.part-* > snapshot-manifest-summary.json
+   sha256sum -c snapshot-manifest-summary.json.sha256
    ```
 
 5. Clean up. The snapshot and builds dirs are plain directories the run created; remove
@@ -285,9 +295,24 @@ fixture workspace, so resolution cannot fall through to an enclosing checkout.
 
 ## Artifact schemas
 
-All five are JSON objects with `"schemaVersion": 1` and a `kind`.
+The five attached protocol artifacts are JSON objects with `"schemaVersion": 1` and a
+`kind`. The full snapshot manifest stays on the host and is not one of the attachments.
+
+**`snapshot-manifest-summary.json`** (`kind: orbit-perf-snapshot-manifest-summary`):
+
+| Field | Meaning |
+|---|---|
+| `manifest.path_on_host`, `size_bytes`, `sha256`, `file_count` | Host path and integrity summary for the full manifest, which remains in the snapshot directory |
+| `qualifying_task_counts` | Observed counts supplied with repeated `--qualifying-task-count NAME=COUNT` arguments |
+| `snapshot.id`, `epoch`, `source_workspace` | Snapshot identifier derived from workspace id, snapshot epoch and the first 16 manifest-digest characters, plus its source and epoch |
+| `revisions.base`, `candidate` | Full commit ids from `provenance.json` |
+
+The paired harness refuses to write this summary if it exceeds 1,048,576 bytes.
 
 **`snapshot-manifest.json`** (`kind: orbit-perf-snapshot`):
+
+This full manifest stays on the host for restore and local verification; attach its
+bounded summary instead.
 
 | Field | Meaning |
 |---|---|
@@ -334,7 +359,8 @@ including warmups: `arm`, `round`, `index`, `warmup`, `ms`, `exit`.
 
 **`paired-summary.json`** (`kind: orbit-perf-paired-summary`): `surface`, `protocol`
 (rounds, samples, warmup, gap_ms, aggregation), `round_order`, `revisions`,
-`binary_sha256` per arm, `snapshot` (path, epoch, source workspace), `round_p95_ms` and
+`binary_sha256` per arm, `snapshot` (path, epoch, source workspace,
+manifest-summary path), `round_p95_ms` and
 `median_p95_ms` per arm, `control_spread_ms` (`value`, `control_range`,
 `control_vs_base`), `candidate_minus_base_ms`, `bound_ms`, `verdict`, `reason`, `network`
 (`isolated` and `method` or `reason`), `host_pressure` (per round `before`/`after`
@@ -360,11 +386,12 @@ Paste this into the brief and fill the five slots:
 > --snapshot <scratch>/perf-<slug>/snapshot --out <scratch>/perf-<slug>/results
 > --<SURFACE: cli|http> '<COMMAND OR PATH>' --parity
 > '<PARITY COMMAND>' --parity-mask <MASK FIELDS> --rounds 3 --samples 10 --warmup 1 --gap-ms 250
-> --bound-ms <BOUND>`: base, candidate and unchanged-build control arms in balanced
+> --bound-ms <BOUND> --qualifying-task-count <CHECK>=<OBSERVED-COUNT>`: base, candidate and unchanged-build control arms in balanced
 > interleaved rounds, per-round nearest-rank p95, per-arm median of round p95s, control
 > spread = max(control range, |control − base|). The criterion passes only on verdict
 > `pass` (candidate median ≤ bound − control spread); `inconclusive` means rerun with more
-> rounds, never pass. Attach the parts and checksums for `snapshot-manifest.json`,
+> rounds, never pass. Repeat the qualifying-task-count flag for each observed count in the
+> criterion. Attach the parts and checksums for `snapshot-manifest-summary.json`,
 > `provenance.json`, `parity.json`, `raw.json` and `paired-summary.json` under
 > `performance/<SLUG>/` and cite those paths in
 > the execution summary.
