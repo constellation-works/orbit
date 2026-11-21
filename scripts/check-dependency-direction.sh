@@ -434,6 +434,13 @@ def inline_module_suffixes(tokens):
     modules, while item-preserving macro invocations keep lexical module depth
     through their emitted arguments. This tokenizer spells a raw identifier as
     `r`, `#`, then the name.
+
+    Matching a macro arm is bounded by a step budget and by a nesting cap. An
+    arm that exceeds either does not match. An invocation that no arm matches
+    takes the summary of its arms: non-item when no arm emits items or every
+    arm strips its module braces, otherwise item-preserving. A large
+    pass-through invocation therefore keeps its lexical module depth instead of
+    aborting the scan.
     """
     ident = re.compile(r"[^\W\d]\w*$")
     keywords = {
@@ -455,6 +462,10 @@ def inline_module_suffixes(tokens):
         "todo", "unimplemented", "unreachable", "matches",
         "log_syntax", "trace_macros", "quote",
     }
+    # Live `match_nodes` nesting allowed per arm. Each level costs a few Python
+    # frames against the default recursion limit of 1000, so a repetition over
+    # a few hundred tokens would otherwise crash the scan [ORB-26595].
+    match_nesting_limit = 200
 
     def find_matching_close(seq, open_index):
         stack = [matching[seq[open_index][0]]]
@@ -806,9 +817,19 @@ def inline_module_suffixes(tokens):
         return ends
 
     def match_nodes(nodes, ni, arg, ai, end_ai, base_offset, bindings, mod_matches, steps, on_done):
+        # `steps` is per arm: [calls made, live nesting depth]. Past either
+        # bound the call fails, the same as an exhausted step budget.
         steps[0] += 1
-        if steps[0] > 10000:
+        if steps[0] > 10000 or steps[1] >= match_nesting_limit:
             return False
+        steps[1] += 1
+        try:
+            return match_step(nodes, ni, arg, ai, end_ai, base_offset,
+                              bindings, mod_matches, steps, on_done)
+        finally:
+            steps[1] -= 1
+
+    def match_step(nodes, ni, arg, ai, end_ai, base_offset, bindings, mod_matches, steps, on_done):
         if ni == len(nodes):
             return on_done(ai)
         node = nodes[ni]
@@ -924,7 +945,7 @@ def inline_module_suffixes(tokens):
                 continue
             bindings = {}
             mod_matches = []
-            steps = [0]
+            steps = [0, 0]
             if not match_nodes(
                     p_ast, 0, arg, 0, len(arg), base_offset, bindings,
                     mod_matches, steps, lambda end: end == len(arg),
