@@ -2552,22 +2552,51 @@ sys.exit(int(os.environ.get("FAKE_DENY_EXIT", "0")))
             ("config", "user.email", "guard@example.invalid"),
             ("remote", "add", "origin", "https://github.com/RustSec/advisory-db"),
             ("add", "."),
-            ("commit", "-qm", "fixture advisory db"),
+            ("-c", "commit.gpgsign=false", "commit", "-qm", "fixture advisory db"),
         ):
             subprocess.run(["git", "-C", str(db), *args], check=True, capture_output=True, text=True)
 
     def test_real_cargo_deny_with_writable_fixture(self):
         self._require_real_cargo_deny()
         fixture = self.root / "fixture-advisory-dbs"
-        system_advisory = Path.home() / ".cargo/advisory-dbs"
-        if system_advisory.exists():
-            shutil.copytree(str(system_advisory), str(fixture))
-        else:
-            self._write_minimal_advisory_db(fixture)
-        env = dict(os.environ, CARGO_DENY_DB_PATH=str(fixture), CARGO_DENY_DISABLE_FETCH="1")
+        self._write_minimal_advisory_db(fixture)
+        workspace = self.root / "fixture-workspace"
+        (workspace / "src").mkdir(parents=True)
+        (workspace / "src/lib.rs").write_text("")
+        (workspace / "Cargo.toml").write_text(
+            '[workspace]\n[package]\nname = "deny-fixture"\nversion = "0.1.0"\n'
+            'edition = "2021"\n'
+        )
+        cargo_home = self.root / "cargo-home"
+        cargo_home.mkdir()
+        env = {
+            key: value for key, value in os.environ.items()
+            if key not in {
+                "CARGO_HOME",
+                "CARGO_DENY_DB_PATH",
+                "ORBIT_CARGO_DENY_DB_PATH",
+                "CARGO_DENY_DISABLE_FETCH",
+                "ORBIT_CARGO_DENY_DISABLE_FETCH",
+                "CARGO_DENY_OFFLINE",
+                "ORBIT_CARGO_DENY_OFFLINE",
+            }
+        }
+        env.update(CARGO_HOME=str(cargo_home), CARGO_NET_OFFLINE="true")
+        lock = subprocess.run(
+            ["cargo", "generate-lockfile", "--offline", "--manifest-path",
+             str(workspace / "Cargo.toml")],
+            env=env,
+            capture_output=True, text=True,
+        )
+        self.assertEqual(lock.returncode, 0, lock.stdout + lock.stderr)
+        env.update(
+            CARGO_DENY_DB_PATH=str(fixture),
+            CARGO_DENY_DISABLE_FETCH="1",
+        )
         res = subprocess.run(
             ["/bin/bash", str(SCRIPTS / "cargo-deny.sh"), "check", "advisories"],
             env=env,
+            cwd=workspace,
             capture_output=True,
             text=True,
         )

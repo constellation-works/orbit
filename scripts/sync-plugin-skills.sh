@@ -13,6 +13,9 @@ skill_dirs=()
 # Entry names are taken with parameter expansion, not `$(basename ...)`: command
 # substitution strips trailing newlines, which would alias `orbit<LF>` to `orbit`
 # and turn a newline-only name into an empty path (ORB-26165).
+# nullglob: an empty or missing source must not leave the literal glob as an
+# entry. That entry fails as a missing SKILL.md and never reaches "no skills found".
+shopt -s nullglob
 for entry in "$source_root"/*/; do
   name="${entry%/}"
   name="${name##*/}"
@@ -23,6 +26,7 @@ for entry in "$source_root"/*/; do
   fi
   skill_dirs+=("$name")
 done
+shopt -u nullglob
 
 if [[ "${#skill_dirs[@]}" -eq 0 ]]; then
   echo "sync-plugin-skills: no skills found under $source_root" >&2
