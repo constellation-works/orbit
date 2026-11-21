@@ -116,6 +116,7 @@ implementation with the old candidate discarded. See
 | Compare implementer models when selecting a crew | [Model ranking](references/model-ranking.md) |
 | Scope completion authority and dispatch windows | [Authorization](references/authorization.md) |
 | Ship/auto command examples, locks and capacity | [Dispatch mechanics](references/orchestration.md) |
+| Stop or start a drain with the standing-drain keeper enabled, read the drain intent, or act on `drain_paused` or `drain_breaker_open` | [Standing drain intent and keeper](references/orchestration.md#standing-drain-intent-and-keeper) |
 | Understand the drain card's backlog forecast | [Backlog forecast](references/orchestration.md#backlog-forecast) |
 | See admission's CPU/memory forecast, its accuracy and decisions | [Resource forecast view](references/orchestration.md#resource-forecast-view) |
 | Jobs, activities, run commands and CI sweep | [Workflows](references/workflows.md) |
