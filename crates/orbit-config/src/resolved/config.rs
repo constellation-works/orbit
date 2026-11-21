@@ -120,16 +120,25 @@ pub struct ResolvedConfig {
     pub review_skip_tags: crate::ReviewSkipSettings,
 }
 
-impl ResolvedConfig {
-    /// Built-in defaults for every setting, with caller-supplied persistence
-    /// paths. There is no cwd-derived variant: persistence is always a
-    /// function of the roots the caller resolved.
-    pub fn built_in(persistence: PersistenceConfig) -> Self {
-        let snapshot = ConfigSnapshot::default();
+/// The settings both constructors take from one admitted [`ConfigSnapshot`].
+///
+/// Built once here so the built-in and document paths cannot project the same
+/// snapshot field differently. Both constructors destructure it exhaustively,
+/// so adding a field fails to compile until each path names it.
+struct SnapshotProjection {
+    pr: PrSettings,
+    workflow_base_branch: String,
+    resource_throttle: crate::registry::ResourceThrottleSettings,
+    auto_concurrency: crate::registry::AutoConcurrencySettings,
+    default_crew: Option<String>,
+    complexity_crews: crate::ComplexityCrewPools,
+    tasks_id_start: Option<u32>,
+    codex_execution: CodexExecutionPolicy,
+}
+
+impl SnapshotProjection {
+    fn from_snapshot(snapshot: &ConfigSnapshot) -> Self {
         Self {
-            execution_env: ExecutionEnvPolicy::from_snapshot(&snapshot),
-            codex_execution: CodexExecutionPolicy::from_snapshot(&snapshot),
-            persistence,
             pr: PrSettings {
                 task_url_template: snapshot.pr_task_url_template.clone(),
                 delivery_authors: snapshot.pr_delivery_authors.clone(),
@@ -148,8 +157,6 @@ impl ResolvedConfig {
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
             resource_throttle: snapshot.resource_throttle(),
             auto_concurrency: snapshot.auto_concurrency(),
-            crews: builtin_default_crews(),
-            human_crews: BTreeMap::new(),
             default_crew: snapshot.workflow_default_crew.clone(),
             complexity_crews: crate::ComplexityCrewPools {
                 low: Some(snapshot.workflow_low_complexity_crews.clone()),
@@ -157,8 +164,42 @@ impl ResolvedConfig {
                 hard: Some(snapshot.workflow_hard_complexity_crews.clone()),
                 xhard: Some(snapshot.workflow_xhard_complexity_crews.clone()),
             },
-            operation: OperationPolicy::built_in(),
             tasks_id_start: snapshot.tasks_id_start,
+            codex_execution: CodexExecutionPolicy::from_snapshot(snapshot),
+        }
+    }
+}
+
+impl ResolvedConfig {
+    /// Built-in defaults for every setting, with caller-supplied persistence
+    /// paths. There is no cwd-derived variant: persistence is always a
+    /// function of the roots the caller resolved.
+    pub fn built_in(persistence: PersistenceConfig) -> Self {
+        let snapshot = ConfigSnapshot::default();
+        let SnapshotProjection {
+            pr,
+            workflow_base_branch,
+            resource_throttle,
+            auto_concurrency,
+            default_crew,
+            complexity_crews,
+            tasks_id_start,
+            codex_execution,
+        } = SnapshotProjection::from_snapshot(&snapshot);
+        Self {
+            execution_env: ExecutionEnvPolicy::from_snapshot(&snapshot),
+            codex_execution,
+            persistence,
+            pr,
+            workflow_base_branch,
+            resource_throttle,
+            auto_concurrency,
+            crews: builtin_default_crews(),
+            human_crews: BTreeMap::new(),
+            default_crew,
+            complexity_crews,
+            operation: OperationPolicy::built_in(),
+            tasks_id_start,
             ignored_crew_properties: Vec::new(),
             plugins: BTreeMap::new(),
             plugin_enablement: BTreeMap::new(),
@@ -348,40 +389,31 @@ impl ResolvedConfig {
         let review_skip_tags =
             crate::review_skip_tags::review_skip_tags_from_document(&document, config_path)?;
 
+        let SnapshotProjection {
+            pr,
+            workflow_base_branch,
+            resource_throttle,
+            auto_concurrency,
+            default_crew,
+            complexity_crews,
+            tasks_id_start,
+            codex_execution,
+        } = SnapshotProjection::from_snapshot(&snapshot);
         Ok(Self {
             execution_env: ExecutionEnvPolicy::from_snapshot(&snapshot)
                 .with_crew_env_sources(crews.values().flat_map(|crew| &crew.env)),
-            codex_execution: CodexExecutionPolicy::from_snapshot(&snapshot),
+            codex_execution,
             persistence,
-            pr: PrSettings {
-                task_url_template: snapshot.pr_task_url_template.clone(),
-                delivery_authors: snapshot.pr_delivery_authors.clone(),
-                ci_infrastructure_signatures: snapshot
-                    .workflow_ci_infrastructure_signatures
-                    .clone(),
-                ci_infrastructure_retry: orbit_types::workflow::CiInfrastructureRetryPolicy {
-                    max_attempts: snapshot.workflow_ci_infrastructure_retry_max_attempts,
-                    backoff_seconds: snapshot.workflow_ci_infrastructure_retry_backoff_seconds,
-                },
-                ci_handoff_steps: snapshot
-                    .workflow_ci_infrastructure_retry_handoff_steps
-                    .clone(),
-                conventions: snapshot.delivery_conventions(),
-            },
-            workflow_base_branch: snapshot.workflow_base_branch.clone(),
-            resource_throttle: snapshot.resource_throttle(),
-            auto_concurrency: snapshot.auto_concurrency(),
+            pr,
+            workflow_base_branch,
+            resource_throttle,
+            auto_concurrency,
             crews,
             human_crews,
-            default_crew: snapshot.workflow_default_crew.clone(),
-            complexity_crews: crate::ComplexityCrewPools {
-                low: Some(snapshot.workflow_low_complexity_crews.clone()),
-                medium: Some(snapshot.workflow_medium_complexity_crews.clone()),
-                hard: Some(snapshot.workflow_hard_complexity_crews.clone()),
-                xhard: Some(snapshot.workflow_xhard_complexity_crews.clone()),
-            },
+            default_crew,
+            complexity_crews,
             operation,
-            tasks_id_start: snapshot.tasks_id_start,
+            tasks_id_start,
             ignored_crew_properties,
             plugins,
             plugin_enablement,
