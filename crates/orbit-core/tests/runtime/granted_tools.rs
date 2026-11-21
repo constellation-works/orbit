@@ -29,11 +29,17 @@ fn granted_tool_writes_reject_unusable_tools_atomically() {
     ] {
         let before = runtime.get_task(&task.id).unwrap();
         let history = runtime.get_task_history(&task.id).unwrap();
+        let tasks_before = runtime.list_tasks().unwrap();
         let add = runtime.add_task(TaskAddParams {
             title: "Unusable grant".into(),
             granted_tools: vec![tool.into()],
             ..Default::default()
         });
+        assert_eq!(
+            runtime.list_tasks().unwrap(),
+            tasks_before,
+            "refused add persisted a task: {tool}"
+        );
         let update = runtime.update_task_with_identity(
             &task.id,
             TaskUpdateParams {

@@ -30,7 +30,6 @@ fn guard(runtime: &OrbitRuntime, input: Value) -> Result<Value, String> {
         .map_err(|error| error.to_string())
 }
 
-#[test]
 fn held_child_passes_the_success_guard_and_is_counted() {
     let (_root, runtime) = open();
     let held = json!({"status": "held", "run_id": "jrun-held"});
@@ -48,7 +47,6 @@ fn held_child_passes_the_success_guard_and_is_counted() {
     assert_eq!(batch["held_count"], 1, "{batch}");
 }
 
-#[test]
 fn a_failed_sibling_still_fails_the_guard_when_another_child_is_held() {
     let (_root, runtime) = open();
     let error = guard(
@@ -63,7 +61,6 @@ fn a_failed_sibling_still_fails_the_guard_when_another_child_is_held() {
     assert!(!error.contains("jrun-held"), "{error}");
 }
 
-#[test]
 fn recording_mode_counts_a_held_child_separately_from_failures() {
     let (_root, runtime) = open();
     let output = guard(
@@ -83,7 +80,6 @@ fn recording_mode_counts_a_held_child_separately_from_failures() {
 /// A persisted wait entry may still carry the legacy `succeeded` spelling
 /// [ORB-12255]: it counts as a success and is echoed as written. A status that
 /// is not a terminal wait outcome is refused, never coerced.
-#[test]
 fn recording_mode_reads_legacy_success_and_refuses_an_unknown_status() {
     let (_root, runtime) = open();
     let output = guard(
@@ -110,3 +106,11 @@ fn recording_mode_reads_legacy_success_and_refuses_an_unknown_status() {
         "{error}"
     );
 }
+
+crate::scenario_table!(
+    held_child_guard_scenarios,
+    held_child_passes_the_success_guard_and_is_counted,
+    a_failed_sibling_still_fails_the_guard_when_another_child_is_held,
+    recording_mode_counts_a_held_child_separately_from_failures,
+    recording_mode_reads_legacy_success_and_refuses_an_unknown_status
+);

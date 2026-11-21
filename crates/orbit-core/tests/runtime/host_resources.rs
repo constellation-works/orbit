@@ -146,7 +146,6 @@ fn native_sampler_observes_the_host_and_missing_directory_filesystem() {
 /// cached sample; it must still answer, but must not repeat the shared
 /// history file's lock/read/write cycle that taxes every dashboard poll.
 #[cfg(unix)]
-#[test]
 fn cached_sample_statuses_do_not_rewrite_shared_history() {
     use std::os::unix::fs::MetadataExt;
 
@@ -337,3 +336,9 @@ fn proc_fixture_cpu_source_changes_admission_without_bypassing_io() {
         }
     }
 }
+
+#[cfg(unix)]
+crate::scenario_table!(
+    cached_sample_scenarios,
+    cached_sample_statuses_do_not_rewrite_shared_history
+);
