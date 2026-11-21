@@ -13,7 +13,7 @@ enum: ["a"]. Pairs also wrap atoms (including true/false) in a property
 schema, and choices may have a sibling applicator. Pairs
 exhaust atom substitutions, substitutions in a branch/property, branch
 insertion/deletion/reordering, keyword deletion under one outer choice,
-allOf member/conjunction edits, conditional selector/branch edits, moving
+allOf member/conjunction edits (including independent sibling applicators), conditional selector/branch edits, moving
 required names between root and then/else, and propertyNames enum edits.
 This is a finite soundness check, not a proof over arbitrary JSON Schema.
 """
@@ -165,6 +165,21 @@ def bounded_schema_pairs():
             yield {"allOf": [{outer: [left, right]}]}, {"allOf": [{outer: [left]}]}
             yield {"allOf": [{outer: [left]}]}, {"allOf": [{outer: [left, right]}]}
             yield {"allOf": [{outer: [left, right]}]}, {"allOf": [{}]}
+
+    # Independent same-keyword applicators in one allOf: adding, deleting or
+    # narrowing one conjunct while a sibling of the same keyword survives.
+    conjuncts = [{"anyOf": [{"type": "string"}, {"type": "boolean"}]},
+                 {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+                 {"oneOf": [{"type": "string"}, {"type": "boolean"}]},
+                 {"oneOf": [{"type": "string"}, {"type": "integer"}]}]
+    for left, right in product(conjuncts, repeat=2):
+        yield {"allOf": [left, right]}, {"allOf": [left]}
+        yield {"allOf": [left]}, {"allOf": [left, right]}
+        yield {"allOf": [left, right]}, {"allOf": [right, left]}
+        for keyword in ("anyOf", "oneOf"):
+            if keyword in right:
+                yield ({"allOf": [left, right]},
+                       {"allOf": [left, {keyword: right[keyword][:1]}]})
 
     # if / then / else conditionals: selector edits, branch edits, adding/removing
     # if/then/else, moving required names between root and then/else, and
