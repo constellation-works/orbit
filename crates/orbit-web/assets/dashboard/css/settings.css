@@ -135,6 +135,11 @@
 .settings-row.overridden .settings-value, .settings-table-cell.overridden .settings-value { color: var(--fg-dim); text-decoration: line-through; }
 
 .settings-tags { display: flex; flex-wrap: wrap; gap: var(--space-4); }
+/* Tag and pool badges keep the shared .badge chrome, but a flex child is
+   blockified and the shared badge has no block padding, so a nested note sat
+   2px inside the border (ui.cramped-padding floor 4px). Restore the 2px block
+   padding the former .settings-tag had. */
+.settings-tags > .badge { padding-block: var(--space-2); }
 .settings-tag-note { margin-left: var(--space-6); color: var(--fg-mute); }
 .settings-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-2) var(--space-14); margin: 0; font: var(--text-sm)/1.5 var(--font-mono); }
 .settings-kv dt { max-width: 22ch; color: var(--fg-dim); overflow-wrap: anywhere; }
