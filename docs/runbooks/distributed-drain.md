@@ -192,9 +192,10 @@ PR first and runs the same contract on the published head after `pr_open`,
 while hosted CI runs. A reviewer fix is revalidated on the leaf and pushed onto
 the PR under a lease (`push_lease_lost` if the branch moved to a commit that
 is not the merged pull request). When the pull request was merged at that
-published head, including a squash, and the branch was deleted while the
-repair was still local, the push fails as `review_repair_after_merge`
-instead: the repair commits are pushed to `refs/heads/orbit-evidence/<branch>`
+published head, including a squash, and the repair is still local, the push
+fails as `review_repair_after_merge` instead, whether or not the head branch
+survives on origin: the repair commits are pushed to
+`refs/heads/orbit-evidence/<branch>`
 (or the durable candidate ref if that push fails) and the task is blocked
 with the commands to land them as a follow-up pull request. The handoff
 carries before-landing evidence for the settled head, and the owner refuses a
