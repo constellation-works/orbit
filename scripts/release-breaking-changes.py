@@ -1461,7 +1461,10 @@ def detect_mcp_changes(git, parent, commit, changed):
                         report(f"`{name}` `{old_raw}` conditional `if` edited: instances it moves "
                                f"into `{target_key}` meet a stricter branch{needs}")
                     if inside_oneof(loc) and loc in after_locs:
-                        if not (is_always_true(old_cond["if"]) and is_always_true(new_cond["if"])):
+                        # A selector only decides which arm judges an instance, so
+                        # editing it matters only when some arm constrains instances.
+                        if (not (is_always_true(old_cond["if"]) and is_always_true(new_cond["if"]))
+                                and (constrains_instances(old_cond) or constrains_instances(new_cond))):
                             report(f"`{name}` `{old_raw}` conditional `if` edited "
                                    "inside oneOf alternative")
                 new_if = new_cond["if"]
