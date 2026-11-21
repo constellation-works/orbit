@@ -465,6 +465,82 @@ class FixtureCliRestoreTests(unittest.TestCase):
                 self.assertTrue((paths["global_root"] / "workspaces.json").is_file())
                 self.assertTrue((paths["orbit_dir"] / "config.yaml").is_file())
 
+    def test_snapshot_refuses_source_without_workspace_identity(self):
+        # Both checkouts keep their ordinary files but name no workspace identity:
+        # one has no config.yaml, the other a blank `workspace_id:` line whose
+        # value would otherwise be read from the next key.
+        cases = {
+            "no-config": None,
+            "blank-workspace-id": "workspace_id:\nrepo_root: {repo}\n",
+        }
+        for label, config_text in cases.items():
+            with self.subTest(source=label):
+                source_home = self.base / label / "source"
+                source_repo = source_home / "ws" / "orbit"
+                paths = _build_disposable_source(source_home, source_repo)
+                config_path = paths["orbit_dir"] / "config.yaml"
+                if config_text is None:
+                    config_path.unlink()
+                else:
+                    config_path.write_text(config_text.format(repo=source_repo), encoding="utf-8")
+
+                snapshot_dir = self.base / label / "snapshot"
+                snap_res = self.run_fixture(
+                    _child_env(source_home),
+                    "snapshot",
+                    "--workspace",
+                    "ws_fixture",
+                    "--global-root",
+                    str(paths["global_root"]),
+                    "--out",
+                    str(snapshot_dir),
+                )
+                self.assertEqual(snap_res.returncode, 2, snap_res.stdout + snap_res.stderr)
+                self.assertFalse(snapshot_dir.exists())
+
+    def test_restore_refuses_snapshot_recording_no_workspace_identity(self):
+        source_home = self.base / "source"
+        source_repo = source_home / "ws" / "orbit"
+        paths = _build_disposable_source(source_home, source_repo)
+        env = _child_env(source_home)
+
+        snapshot_dir = self.base / "snapshot"
+        snap_res = self.run_fixture(
+            env,
+            "snapshot",
+            "--workspace",
+            "ws_fixture",
+            "--global-root",
+            str(paths["global_root"]),
+            "--out",
+            str(snapshot_dir),
+        )
+        self.assertEqual(snap_res.returncode, 0, snap_res.stderr)
+
+        # Rewrite the snapshot to the shape an identity-less source recorded: an empty
+        # storage id and no checkout config.yaml. The file and its manifest entry are
+        # removed together, so digest verification still passes.
+        manifest_path = snapshot_dir / "snapshot-manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        (snapshot_dir / "checkout" / ".orbit" / "config.yaml").unlink()
+        manifest["files"] = [
+            entry for entry in manifest["files"] if entry["path"] != "checkout/.orbit/config.yaml"
+        ]
+        manifest["source"]["storage_id"] = ""
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+        restore_into = self.base / "restored"
+        res = self.run_fixture(
+            env,
+            "restore",
+            "--snapshot",
+            str(snapshot_dir),
+            "--into",
+            str(restore_into),
+        )
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertFalse(restore_into.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
