@@ -244,6 +244,7 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
                     | "provider_limit"
                     | "awaiting_footprint"
                     | "awaiting_exclusive_slot"
+                    | "perf_lane_busy"
             ) {
                 let detail = if reason == "host_os_mismatch" {
                     task["host_os_wait"]

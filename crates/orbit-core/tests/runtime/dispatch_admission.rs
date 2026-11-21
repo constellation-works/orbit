@@ -62,6 +62,7 @@ mod gap_fit;
 mod human_crew;
 mod load_failure;
 mod lock_busy_pass;
+mod perf_lane;
 mod replay_crew;
 mod reservation_grants;
 mod shared_base_repair;
