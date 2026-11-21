@@ -7,7 +7,8 @@
 #                              --out <builds-dir> [--keep] [--lane-wait <seconds>]
 #
 # Pass exactly one of --candidate and --candidate-worktree. The worktree form
-# snapshots tracked and untracked files, excluding ignored ones, into a
+# takes the checkout root (git rev-parse --show-toplevel); a subdirectory is
+# refused. It snapshots tracked and untracked files, excluding ignored ones, into a
 # temporary commit (throwaway GIT_INDEX_FILE, write-tree, commit-tree -p HEAD)
 # whose objects sit outside the checkout. HEAD, the index, the files and git
 # metadata stay untouched. A worktree with no such changes resolves to HEAD,
@@ -22,7 +23,7 @@
 set -euo pipefail
 
 usage() {
-  sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 64
 }
 
@@ -65,6 +66,9 @@ if [[ -n "$candidate_worktree" ]]; then
   candidate_worktree="$(cd "$candidate_worktree" && pwd -P)"
   inside="$(git -C "$candidate_worktree" rev-parse --is-inside-work-tree 2>/dev/null || true)"
   [[ "$inside" == "true" ]] || refuse "--candidate-worktree is not a git worktree: $candidate_worktree"
+  top="$(git -C "$candidate_worktree" rev-parse --show-toplevel)"
+  top="$(cd "$top" && pwd -P)"
+  [[ "$candidate_worktree" == "$top" ]] || refuse "--candidate-worktree must be the checkout root $top, not the subdirectory $candidate_worktree; a subdirectory snapshots and exports only part of the checkout"
   git_repo="$candidate_worktree"
 fi
 

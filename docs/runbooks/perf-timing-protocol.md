@@ -404,6 +404,7 @@ Tasks land in `proposed`. Do not approve them.
 | `snapshot … records no workspace identity …` (restore) | The snapshot was taken from an identity-less source | Take a fresh snapshot of an initialized workspace |
 | `… built identical binaries …` | The two revisions differ only in metadata | Pick revisions whose content differs |
 | `base and candidate resolve to the same commit …` | Same commit given twice, or `--candidate-worktree` on a checkout with no uncommitted changes (ignored files do not count) and a base that is that HEAD | Check the revision selectors, or make the working-tree change first |
+| `--candidate-worktree must be the checkout root …` | `--candidate-worktree` names a subdirectory of the checkout | Pass the root path the message names (`git rev-parse --show-toplevel`) |
 | `parity mismatch between arms …` | An arm has no successful observation (missing `--parity` in CLI mode, or a probe that did not exit 0 / return 2xx), or outputs differ after masking | Read `parity.json` (`observation_failures` and `differing_arms`); fix the probe or the behaviour change, or mask only a timing field |
 | `paired.py: error: --parity takes an orbit command …` | `--parity` given with no command words (an empty variable, say) | Pass the command, or leave `--parity` out |
 | `<arm> parity command timed out after <n> s …` / `<arm> round <r> sample <i> timed out …` | An arm command stalled past `--command-timeout` | Find why it hangs on the fixture, or raise `--command-timeout` for a genuinely slow surface |
