@@ -189,22 +189,71 @@ struct QuotaRecord {
 
 /// Lock-free release marker staged when a clipped probe cannot acquire the
 /// record lock before its deadline expires.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize)]
 struct ClippedClaimRelease {
     generation: u64,
     /// Always written: a claim timestamp, or an explicit `null` for a first
     /// claim. An absent key is ambiguous and must not decode as `null`.
-    #[serde(deserialize_with = "deserialize_required_previous_claim")]
     previous_claim: Option<u64>,
 }
 
-/// Decodes `previous_claim` only from a present key, so a marker without the
-/// field is a decode error rather than Serde's implicit `None`.
-fn deserialize_required_previous_claim<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Option::<u64>::deserialize(deserializer)
+impl<'de> Deserialize<'de> for ClippedClaimRelease {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ClippedClaimReleaseVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for ClippedClaimReleaseVisitor {
+            type Value = ClippedClaimRelease;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a clipped claim release object")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut generation = None;
+                let mut previous_claim = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "generation" => {
+                            if generation.is_some() {
+                                return Err(<A::Error as serde::de::Error>::duplicate_field(
+                                    "generation",
+                                ));
+                            }
+                            generation = Some(map.next_value()?);
+                        }
+                        "previous_claim" => {
+                            if previous_claim.is_some() {
+                                return Err(<A::Error as serde::de::Error>::duplicate_field(
+                                    "previous_claim",
+                                ));
+                            }
+                            previous_claim = Some(map.next_value()?);
+                        }
+                        _ => {
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+
+                Ok(ClippedClaimRelease {
+                    generation: generation.ok_or_else(|| {
+                        <A::Error as serde::de::Error>::missing_field("generation")
+                    })?,
+                    previous_claim: previous_claim.ok_or_else(|| {
+                        <A::Error as serde::de::Error>::missing_field("previous_claim")
+                    })?,
+                })
+            }
+        }
+
+        deserializer.deserialize_map(ClippedClaimReleaseVisitor)
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
