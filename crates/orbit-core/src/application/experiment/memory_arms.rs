@@ -1,6 +1,7 @@
-//! Which experiments and tasks carry the crew memory surface: the gate of
-//! the dreaming routine, the reach of `orbit.memory.show`, and the arm
-//! whose readout cost carries the dreaming overhead (crew memory §6).
+//! Which experiments and tasks carry crew memory: the one switch of the
+//! whole dormant machinery (a running experiment with a memory arm), the
+//! reach of `orbit.memory.show`, and the arm whose readout cost carries the
+//! dreaming overhead (crew memory §6).
 
 use std::collections::BTreeSet;
 
@@ -43,6 +44,24 @@ impl OrbitRuntime {
             }
         }
         Ok(ids)
+    }
+
+    /// Whether crew memory is switched on in this workspace: a running
+    /// shadow or live experiment has a memory arm. It gates every memory
+    /// write, delivery, capture and dreaming pass, read from the store each
+    /// time so concluding the experiment stops them at once. A store that
+    /// cannot be read keeps crew memory off.
+    pub fn crew_memory_experiment_running(&self) -> bool {
+        match self.running_memory_experiments() {
+            Ok(ids) => !ids.is_empty(),
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "crew memory stays off: running memory experiments could not be read"
+                );
+                false
+            }
+        }
     }
 
     /// Whether `task_id` is assigned to a memory arm of any experiment.

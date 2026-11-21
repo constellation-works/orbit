@@ -29,12 +29,6 @@ impl MemoryKey {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
-    /// The directory `orbit memory export` renders a model's files into: the
-    /// key with `/` and `:` replaced by `_`, so every key is one path segment.
-    pub(crate) fn export_dir_name(&self) -> String {
-        self.0.replace(['/', ':'], "_")
-    }
 }
 
 impl fmt::Display for MemoryKey {

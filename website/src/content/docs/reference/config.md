@@ -640,7 +640,6 @@ and `machine.task_prefix`. `orbit config keys` prints the same list.
 | `tasks.id_start` | integer · **Default:** Unset<br>Floor for this machine's task-ID allocator. Moves only forward, so machines can hold disjoint ID ranges. |
 | `decision_channel.enabled` | bool · **Default:** `false`<br>Raise decision requests for work held on a human decision. |
 | `experiments.enabled` | bool · **Default:** `false`<br>Allow experiments to start in this workspace. While false, `orbit experiment start` is refused; drafts can still be defined and edited. |
-| `crew_memory.enabled` | bool · **Default:** `false`<br>Experimental. Allow crew memory in this workspace. While false, `orbit memory write`, `reset` and `copy` are refused and memory arms deliver nothing. See [Give models a memory](/how-to/crew-memory/). |
 | `seeding.routines` | string or array&lt;string&gt; · **Default:** `all`<br>Which shipped default routines this workspace seeds: `"all"`, `"none"` or a list of file stems, such as `["worktree_gc", "store_gc"]`. Narrowing it retires a left-out default you never edited; an edited copy moves to `.orbit/.retired-managed/`. |
 | `seeding.auto_tasks` | string or array&lt;string&gt; · **Default:** `all`<br>The same policy for shipped default auto-tasks, by name, such as `["doc-duties", "qa-sweep"]`. |
 | `experiments.config_keys` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Config keys an experiment arm's `config` overlay may set. Starting an experiment whose arm sets any other key is refused. |

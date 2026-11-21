@@ -625,10 +625,6 @@ const ROOT_ADVANCED: &[GroupedRow] = &[
         "Define, run and conclude experiments over agent treatments",
     ),
     (
-        "memory",
-        "Inspect, export and reset crew memory (experimental)",
-    ),
-    (
         "resident",
         "Grant, narrow and inspect resident orchestrator mandates",
     ),

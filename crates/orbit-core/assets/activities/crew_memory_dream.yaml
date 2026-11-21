@@ -10,9 +10,8 @@ spec:
     model's base crew and carrying its score-blind evidence pack as the task
     artifact `crew-memory-evidence.json`. A model with an open dreaming task
     is skipped and the skip is recorded; a finished dreaming task that wrote
-    no revision is recorded as `no_revision`. Mints nothing while
-    `crew_memory.enabled` is false or no running shadow or live experiment
-    has a memory arm.
+    no revision is recorded as `no_revision`. Mints nothing unless
+    a running shadow or live experiment has a memory arm.
   input_schema_json:
     type: object
   output_schema_json:

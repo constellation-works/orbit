@@ -132,12 +132,10 @@ See [multi-host.md](multi-host.md).
 Three things to know about what it seeded and how to finalize:
 
 - **Three shipped routines are seeded enabled when selected by the seeding
-  policy:** `worktree-gc`, `task-pilot` and `crew-memory-dream`. The
+  policy:** `worktree-gc`, `task-pilot` and one dormant experiment routine
+  that mints nothing unless a running experiment has a memory arm. The
   `host-health` auto-task is seeded disabled, like every other shipped
-  auto-task, until someone opts in with `orbit auto-task toggle host-health on`. Seeded enabled does not
-  turn the experimental crew-memory feature on: `crew-memory-dream` mints
-  nothing while `crew_memory.enabled` is false or no running memory-arm
-  experiment applies. A host clock is still needed
+  auto-task, until someone opts in with `orbit auto-task toggle host-health on`. A host clock is still needed
   for unattended runs.
   When enabled, the `host-health` auto-task files a weekly host-health review on the workspace
   owner once the host clock is installed; `orbit auto-task toggle host-health
@@ -240,10 +238,10 @@ auto_tasks = []
 - **`[enable]`** switches on routines and auto-tasks that an enabled plugin
   already seeded into this workspace. It applies after seeding. It never enables
   a shipped default. The three shipped routines seeded enabled—`worktree-gc`,
-  `task-pilot` and `crew-memory-dream`—are on without an opt-in only when the seeding policy selects them.
+  `task-pilot` and the dormant experiment routine—are on without an opt-in only when the seeding policy selects them.
   The `host-health` auto-task seeds disabled.
-  `crew-memory-dream` still mints nothing while `crew_memory.enabled` is
-  false or no running memory-arm experiment applies. Every other
+  The experiment routine still mints nothing unless a running experiment
+  has a memory arm. Every other
   shipped routine and auto-task stays disabled unless someone opts in.
 
 **Validation and limits.** Orbit validates the whole file against this

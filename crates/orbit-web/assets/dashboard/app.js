@@ -39,7 +39,6 @@ import { applyPushedHostResources, fetchAndRenderHostResources, initHostResource
 import { changeStreamLive, onChange, onChangeStreamLive, startChangeStream } from './js/change-stream.js';
 import { refreshDashboardNow, reschedulePolling, setStreamCoverage } from './js/polling.js';
 import { fetchAndRenderPlugins } from './js/plugins.js';
-import { fetchAndRenderMemory, memoryRoute, setMemorySelection } from './js/memory.js';
 import { fetchAndRenderLeaseLandings, fetchAndRenderLeases, syncLeasesRailItem } from './js/leases.js';
 import { fetchAndRenderNoticeBanner, fetchAndRenderNotices } from './js/notices.js';
 import { fetchAndRenderResidents } from './js/operations-residents.js';
@@ -333,9 +332,6 @@ function routerContext() {
     setAgentsRole,
     getKnowledgeSubtab: () => activeKnowledgeSubtab,
     setKnowledgeSubtab: (v) => { activeKnowledgeSubtab = v; },
-    // The memory key on screen is owned by memory.js, which renders it.
-    setMemorySelection,
-    memoryRoute,
     // The friction on screen is owned here; the router reads and sets it.
     setFrictionSelection,
     frictionRoute,
@@ -1661,10 +1657,6 @@ function activeRefreshJobs({ poll = false } = {}) {
   }
 
   if (activeTab === "knowledge") {
-    if (activeKnowledgeSubtab === "memory") {
-      add("Knowledge › Memory", fetchAndRenderMemory());
-      return jobs;
-    }
     add("Knowledge › Frictions", fetchAndRenderFrictions());
     return jobs;
   }

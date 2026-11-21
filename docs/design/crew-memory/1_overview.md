@@ -1,24 +1,24 @@
 ---
 title: Crew Memory — Overview
 owner: claude
-last_updated: 2026-11-19
+last_updated: 2026-11-21
 last_validated: 2026-11-10
 status: Accepted
-stage: building
-next: "Daniel: conclude exp-5342a4d6 (no difference) and decide the consolidation proposal (ORB-25838)"
+stage: parked
+next: "Parked after exp-5342a4d6's no-difference readout (2026-11-21); on pickup, run a variant experiment on the dormant machinery, such as the consolidation redesign in specs/consolidation.md"
 feature: crew-memory
 doc_role: overview
 type: design
-summary: "Experimental: storage, gated memory delivery, weekly dreaming and operator review of global-memory proposals are built. Adoption depends on the memory-on vs memory-off experiment."
+summary: "Parked: the memory-on vs memory-off experiment found no difference (2026-11-21), so the operator surface was removed and the storage, delivery and dreaming machinery kept dormant, switched on only by an experiment with a memory arm."
 tags: [crew-memory, experiments, agent-scorecards]
 paths: ["crates/orbit-core/src/application/crew_memory/**", "crates/orbit-core/src/application/experiment/**", "crates/orbit-engine/src/activity_job/cli_runner/**"]
 related_features: [agent-scorecards, experiments, auto-tasks, project-learnings]
-related_artifacts: [ORB-23105, ORB-23113, ORB-23114, ORB-23115, ORB-23116, ORB-10736]
+related_artifacts: [ORB-23105, ORB-23113, ORB-23114, ORB-23115, ORB-23116, ORB-10736, ORB-26494, ORB-26501]
 ---
 
 # Crew Memory — Overview
 
-Crew memory lets each model learn from its own recent work. Each model has a **memory space**: a few short Markdown files. M1 builds the store and operator write surfaces; M2 adds an experiment overlay that captures the drawn model's memory, and delivers it in the agent envelope only for a live memory arm. Shadow arms capture what they would have delivered for the readout. **The feature is experimental and off by default.** M3's weekly, score-blind **dreaming run** rewrites model spaces, and M4 lets operators review **global-memory** proposals. Adoption depends on the memory-on versus memory-off [experiment](../experiments/1_scope.md): the memory arm must do better without breaching a guardrail, or the feature is removed.
+Crew memory lets each model learn from its own recent work. Each model has a **memory space**: a few short Markdown files. M1 builds the store and operator write surfaces; M2 adds an experiment overlay that captures the drawn model's memory, and delivers it in the agent envelope only for a live memory arm. Shadow arms capture what they would have delivered for the readout. M3's weekly, score-blind **dreaming run** rewrites model spaces, and M4 let operators review **global-memory** proposals. The memory-on versus memory-off [experiment](../experiments/1_scope.md) ended on 2026-11-21 with no difference, so the feature is **parked**: its operator- and agent-facing surface is removed and the machinery is kept dormant, switched on only while an experiment has a memory arm, so that variants can still be tested ([decision](./4_decisions.md#keep-the-machinery-dormant-after-the-no-difference-readout)).
 
 ## 1. Motivation
 
@@ -42,7 +42,7 @@ Orbit has tried durable learnings before. The native project-learning subsystem 
 
 ## 3. At a Glance
 
-Slices M1–M4 are built. M1 provides the store, write rules and operator CLI; M2 provides the memory overlay, capture and envelope delivery, all behind `crew_memory.enabled` (default `false`). Only a live memory arm delivers notes to an agent; shadow arms capture the would-be delivery for readout. M3 adds dreaming and M4 adds global proposal review and expiry. M5 runs and concludes the experiment.
+Slices M1–M4 were built and M5 concluded with no difference. M1 provided the store, write rules and operator CLI; M2 the memory overlay, capture and envelope delivery; M3 dreaming; M4 global proposal review and expiry. Since 2026-11-21 the operator CLI, config key, dashboard view, web routes, proposal review and listed or grantable tools are removed. What remains runs only while a running experiment has a memory arm: only a live memory arm delivers notes to an agent, and shadow arms capture the would-be delivery for readout.
 
 | Concern | Source or design | Task |
 |---------|------|------|
@@ -52,10 +52,10 @@ Slices M1–M4 are built. M1 provides the store, write rules and operator CLI; M
 | Memory overlay, receipt capture and dispatch resolution | `crates/orbit-core/src/application/experiment/definition.rs`, `crates/orbit-core/src/application/experiment/capture.rs`, `crates/orbit-core/src/application/experiment/overlay.rs`, `crates/orbit-core/src/application/crew_memory/delivery.rs`, `crates/orbit-engine/src/activity_job/cli_runner/envelope.rs` | [ORB-23114] |
 | Evidence pack from the scorecards | `crates/orbit-core/src/application/agents/memory_evidence.rs` | [ORB-23115] |
 | Weekly dreaming routine | `crates/orbit-core/src/application/crew_memory/dream.rs` | [ORB-23115] |
-| Operator CLI (`orbit memory show\|history\|export\|write\|reset\|copy`) | `crates/orbit-common/src/governance/memory.rs`, `crates/orbit-cli/src/command/memory.rs` | [ORB-23113] |
-| Agent tools (`orbit.memory.*` for dreaming runs) | `crates/orbit-core/src/application/crew_memory/agent.rs` | [ORB-23115] |
-| Global-memory proposal review | `crates/orbit-core/src/application/crew_memory/proposals.rs` | [ORB-23116] |
-| Memory-on vs memory-off experiment: shadow from 2026-11-08 (exp-57f1ef67); live from 2026-11-10 (exp-5342a4d6), paused 2026-11-19 at its horizon with the readout "no difference"; conclusion pending (M5) | `docs/design/crew-memory/2_design.md` §7 | [ORB-23117] |
+| Run-bound agent tools (`orbit.memory.show`, `write`, `propose`; unlisted and ungrantable) | `crates/orbit-common/src/governance/memory.rs`, `crates/orbit-core/src/application/crew_memory/agent.rs` | [ORB-23115] |
+| Proposal read (review surface removed; open proposals lapse after four weeks) | `crates/orbit-core/src/application/crew_memory/proposals.rs` | [ORB-23116] |
+| The one switch: a running experiment with a memory arm | `crates/orbit-core/src/application/experiment/memory_arms.rs` | [ORB-26501] |
+| Memory-on vs memory-off experiment: shadow from 2026-11-08 (exp-57f1ef67); live from 2026-11-10 (exp-5342a4d6), readout 2026-11-21 "no difference"; concluded with no winner (M5) | `docs/design/crew-memory/2_design.md` §7 | [ORB-23117] |
 | Proposed, not built: one consolidator model, trigger-and-action notes and a per-note ledger | [specs/consolidation.md](./specs/consolidation.md) | [ORB-25838] |
 
 ## Task References
@@ -69,7 +69,9 @@ Slices M1–M4 are built. M1 provides the store, write rules and operator CLI; M
 - [ORB-23110] — the ws_orbit on-call orchestration that carries the M5 live and conclusion handoff
 - [ORB-10736] — retired the native project-learning subsystem
 - [ORB-25838] — proposes outcome-checked consolidation after the live readout
+- [ORB-26494] — analyses the 2026-11-21 live readout and concludes exp-5342a4d6 with no winner
+- [ORB-26501] — removes the external surface and keeps the machinery dormant
 
-M5 runs and concludes the memory-on vs memory-off experiment: shadow started by [ORB-23117]; the live run reached its horizon on 2026-11-19 without favouring memory and is not yet concluded. Adoption remains undecided.
+M5 ran and concluded the memory-on vs memory-off experiment: shadow started by [ORB-23117]; the live run's 2026-11-21 readout found no difference, and Daniel concluded it with no winner. Memory is not adopted; the machinery stays dormant for variant experiments.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

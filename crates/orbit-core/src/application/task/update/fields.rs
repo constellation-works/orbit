@@ -1,7 +1,7 @@
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_types::task::{
-    CrewSource, LIGHT_DELIVERY_TAGS, REQUIRES_LABELS_FIELD, Task, TaskStatus,
+    CrewSource, GRANTED_TOOLS_FIELD, LIGHT_DELIVERY_TAGS, REQUIRES_LABELS_FIELD, Task, TaskStatus,
     is_system_identity_tag, is_valid_orb_task_id, normalize_host_labels, normalize_required_tools,
     normalize_task_dependencies, normalize_task_tags, validate_os_tags,
     validate_task_dependencies_with,
@@ -181,6 +181,7 @@ impl OrbitRuntime {
             let granted = normalize_required_tools(granted);
             self.validate_granted_tools(&granted)?;
             if granted != task.granted_tools {
+                self.refuse_run_bound_tool_names(GRANTED_TOOLS_FIELD, &granted)?;
                 let state = self.admit_granted_tools_change(task, params.status)?;
                 granted_tools_change = Some((task.granted_tools.clone(), state));
                 params.granted_tools = Some(granted);

@@ -225,7 +225,6 @@ export default defineConfig({
               collapsed: true,
               items: [
                 { slug: 'how-to/experiments', label: 'Run an experiment' },
-                { slug: 'how-to/crew-memory', label: 'Give models a memory' },
                 { slug: 'how-to/friction', label: 'Report and triage friction' },
               ],
             },

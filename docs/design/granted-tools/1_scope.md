@@ -118,10 +118,11 @@ operator authority, following the field-level authorization pattern of
   default it is a settings field and does not fork the body. The check is on
   the write call: the definition file itself is per-user checkout state, and
   a hand edit of it is not authority-checked.
-- **As built, call-time reads.** Crew memory's `orbit.memory.show` and
-  `orbit.memory.history` are not on any deny list; core refuses an agent's
-  call unless its run's task grants that tool, so for these two the grant is
-  what admits the call, not only what lifts a list entry
+- **Run-bound tools are not grantable.** Crew memory's `orbit.memory.*`
+  tools are run-bound since 2026-11-21: a `granted_tools` or
+  `required_tools` naming one is refused, except on the dreaming task Orbit
+  mints itself. The earlier call-time read grant for `orbit.memory.show` and
+  `orbit.memory.history` was removed
   ([crew memory design](../crew-memory/2_design.md) §6.3).
 - **Change window.** An operator may change the grant freely while the
   task is pre-dispatch (no run, claim or worktree exists for it). Once an

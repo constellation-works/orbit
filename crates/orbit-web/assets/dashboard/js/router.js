@@ -222,7 +222,7 @@ function syncViewTabs(id, view, shown) {
     btn.setAttribute("aria-current", on ? "page" : "false");
   }
 }
-const KNOWLEDGE_SUBTABS = ["frictions", "memory"];
+const KNOWLEDGE_SUBTABS = ["frictions"];
 // ORB-12724: `effective` is the layered view; the two `*-file` views are the
 // `--scope` equivalents, and `keys` is the settable-key reference.
 // Retired Hosts routes are normalized to Observe Fleet below.
@@ -433,22 +433,6 @@ function setJobsSubtabImpl(ctx, name) {
 function setKnowledgeSubtabImpl(ctx, name) {
   if (!KNOWLEDGE_SUBTABS.includes(name)) name = "frictions";
   ctx.setKnowledgeSubtab(name);
-  for (const btn of document.querySelectorAll("#knowledge-subtabs .subtab")) {
-    btn.classList.toggle("active", btn.dataset.subtab === name);
-  }
-  const toggle = (id, show) => {
-    const node = $(id);
-    if (node) node.style.display = show ? "" : "none";
-  };
-  const memory = name === "memory";
-  const title = $("knowledge-title");
-  if (title) title.textContent = memory ? "Memory spaces" : "Knowledge";
-  toggle("friction-stats", !memory);
-  toggle("friction-controls", !memory);
-  toggle("frictions-body", !memory);
-  toggle("friction-detail-panel", !memory);
-  toggle("memory-body", memory);
-  toggle("memory-detail-panel", memory);
 }
 
 function setConfigSubtabImpl(ctx, name) {
@@ -823,18 +807,6 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     if (query.get("step") != null) hash += `?step=${encodeURIComponent(query.get("step"))}`;
   } else if (top === "knowledge") {
     const sub = KNOWLEDGE_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getKnowledgeSubtab();
-    // `#knowledge/memory[/<key>|/proposals]`: the segment names the memory
-    // key or the proposals the detail shows; a bare `#knowledge` keeps the
-    // remembered one.
-    if (sub === "memory" && segments[1] && ctx.setMemorySelection) {
-      let key = null;
-      try {
-        key = segments[2] ? decodeURIComponent(segments.slice(2).join("/")) : null;
-      } catch {
-        key = null;
-      }
-      ctx.setMemorySelection(key);
-    }
     // `#knowledge/frictions[/<id>]`: the segment names the friction the list
     // and detail show. A bare `#knowledge/frictions` keeps the remembered one.
     if (sub === "frictions" && segments[2] && ctx.setFrictionSelection) {
@@ -847,8 +819,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
       ctx.setFrictionSelection(id);
     }
     setKnowledgeSubtabImpl(ctx, sub);
-    hash = sub === "memory" && ctx.memoryRoute ? `#${ctx.memoryRoute()}`
-      : sub === "frictions" && ctx.frictionRoute ? `#${ctx.frictionRoute()}`
+    hash = sub === "frictions" && ctx.frictionRoute ? `#${ctx.frictionRoute()}`
       : `#knowledge/${sub}`;
   } else if (top === "operations") {
     const sub = OPERATIONS_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getOperationsSubtab();
@@ -1114,9 +1085,6 @@ function initTabsImpl(ctx) {
         (ctx.getRunSubtab() !== "steps" ? `/${ctx.getRunSubtab()}` : "");
       setActiveTabImpl(ctx, path, { refresh: false });
     });
-  }
-  for (const btn of document.querySelectorAll("#knowledge-subtabs .subtab")) {
-    btn.addEventListener("click", () => setActiveTabImpl(ctx, `knowledge/${btn.dataset.subtab}`));
   }
   for (const btn of document.querySelectorAll("#jobs-subtabs .subtab")) {
     btn.addEventListener("click", () =>

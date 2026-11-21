@@ -298,8 +298,8 @@ auto-task: turn it on with `orbit auto-task toggle host-health on`. Once the
 clock above is installed and it is enabled, it runs a weekly
 host-health pass (`10 7 * * 1`). The `worktree-gc`, `task-pilot` and `crew-memory-dream` routines
 seed enabled; every other shipped routine seeds disabled.
-`crew-memory-dream` mints nothing while `crew_memory.enabled` is false or
-no running memory-arm experiment applies.
+`crew-memory-dream` mints nothing unless a running experiment has a memory
+arm.
 To change routine enablement, follow the
 [automation reference](../../crates/orbit-core/assets/skills/orbit-setup/references/automation.md).
 The service's `ExecStart` names the Orbit binary that installed it, so rerun

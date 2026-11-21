@@ -1,20 +1,15 @@
 //! Who may call the crew memory tools, and on which key (slice M3, design
 //! §6.3 and §9).
 //!
-//! An operator (operator capability, no run binding) keeps the M1 surface.
-//! A call bound to a managed run is the run's: `orbit.memory.write` and
-//! `orbit.memory.propose` are admitted only from a dreaming task's run, with
-//! the key fixed to that task's `crew_memory_key` (another model's key and
-//! `global` are refused), its citations held to its evidence pack and its
-//! proposals capped at two. `orbit.memory.show` is admitted from a dreaming
-//! run or a run in a memory arm, for its own model's space and `global`.
-//! An operator's task grant (`granted_tools`) is the one other way in, and
-//! it is read only: a grant for `orbit.memory.show` admits that task's run to
-//! every space, a chosen revision and the summary, and a grant for
-//! `orbit.memory.history` admits it to a space's history. Each tool needs its
-//! own grant, and no grant reaches a write. An unbound agent session is
-//! refused. The same rules decide which runs' activities list the tools at
-//! all.
+//! Crew memory has no operator surface: only a call bound to a managed run
+//! is admitted. `orbit.memory.write` and `orbit.memory.propose` are admitted
+//! only from a dreaming task's run, with the key fixed to that task's
+//! `crew_memory_key` (another model's key and `global` are refused), its
+//! citations held to its evidence pack and its proposals capped at two.
+//! `orbit.memory.show` is admitted from a dreaming run or a run in a memory
+//! arm, for its own model's space and `global`. An operator session, an
+//! unbound agent session and a task's `granted_tools` admit nothing. The
+//! same rules decide which runs' activities list the tools at all.
 
 use std::collections::BTreeSet;
 
@@ -24,34 +19,27 @@ use orbit_store::contracts::{
     CrewMemoryEventRow, CrewMemoryProposalOutcome, CrewMemoryProposalRow,
 };
 use orbit_types::task::Task;
-use orbit_types::tool::tool_requirement_name;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::dream::{CREW_MEMORY_AGENT_TOOLS, DREAM_MINTED, dreaming_task_key};
-use super::operations::{DreamingWrite, WriteAction, json_text};
+use super::operations::{DreamingWrite, json_text};
 use super::{
     MemoryFile, MemoryKey, MemoryWrite, MemoryWriteContext, MemoryWriter, memory_key,
     validate_memory_write,
 };
 use crate::OrbitRuntime;
-use crate::application::job::IMPLEMENTING_ACTIVITY;
 
 /// Proposals one dreaming run may open.
 pub(crate) const CREW_MEMORY_MAX_PROPOSALS_PER_RUN: u32 = 2;
 /// The activity whose dreaming run may write and propose.
 const DREAMING_ACTIVITY: &str = "agent_implement";
 const SHOW_TOOL: &str = "orbit.memory.show";
-const HISTORY_TOOL: &str = "orbit.memory.history";
 
 /// What the tool layer knows about a crew memory tool caller. Run and task
 /// ids come from the trusted run binding, never from tool input.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryToolCaller {
-    /// Operator capability with no worker binding.
-    pub operator: bool,
-    /// Agent capability.
-    pub agent: bool,
     /// A claimed leaf's worker binding: its task and bound run.
     pub worker_task_id: Option<String>,
     pub worker_run_id: Option<String>,
@@ -63,12 +51,12 @@ pub struct MemoryToolCaller {
 }
 
 enum ResolvedCaller {
-    Operator,
     Run {
         task: Box<Task>,
         run_id: String,
         claimed: bool,
     },
+    /// No run binding: an operator or an unbound agent session.
     Unbound,
 }
 
@@ -80,13 +68,6 @@ struct DreamingScope {
 
 fn refused(message: impl Into<String>) -> OrbitError {
     OrbitError::PolicyDenied(message.into())
-}
-
-/// Whether `task`'s `granted_tools` name the crew memory read tool `tool`.
-fn task_grants_memory_read(task: &Task, tool: &str) -> bool {
-    task.granted_tools
-        .iter()
-        .any(|granted| tool_requirement_name(granted) == tool)
 }
 
 impl OrbitRuntime {
@@ -132,9 +113,6 @@ impl OrbitRuntime {
                     claimed: false,
                 });
             }
-        }
-        if caller.operator {
-            return Ok(ResolvedCaller::Operator);
         }
         Ok(ResolvedCaller::Unbound)
     }
@@ -221,13 +199,9 @@ impl OrbitRuntime {
         revision: Option<u32>,
     ) -> Result<Value, OrbitError> {
         let (task, claimed) = match self.resolve_memory_caller(caller)? {
-            ResolvedCaller::Operator => return self.crew_memory_show(key, revision),
-            ResolvedCaller::Unbound if !caller.agent => {
-                return self.crew_memory_show(key, revision);
-            }
             ResolvedCaller::Unbound => {
                 return Err(refused(
-                    "crew memory show refused: an agent reads crew memory only from a crew memory dreaming task's run, a run in a memory experiment arm, or the run of a task whose `granted_tools` an operator set to include `orbit.memory.show`",
+                    "crew memory show refused: crew memory is read only from a crew memory dreaming task's run or a run in a memory experiment arm",
                 ));
             }
             ResolvedCaller::Run { task, claimed, .. } => (task, claimed),
@@ -241,11 +215,6 @@ impl OrbitRuntime {
             // The routine grants a dreaming task `show` to keep it on the
             // owner; its run keeps the dreaming scope.
             Some(key) => key,
-            // An operator's grant reads as the operator does: any space, any
-            // revision and the summary.
-            None if task_grants_memory_read(&task, SHOW_TOOL) => {
-                return self.crew_memory_show(key, revision);
-            }
             None if self.task_in_memory_arm(&task.id)? => {
                 memory_key(caller.model.as_deref()).ok_or_else(|| {
                     refused(
@@ -255,7 +224,7 @@ impl OrbitRuntime {
             }
             None => {
                 return Err(refused(format!(
-                    "crew memory show refused: task {} is neither a crew memory dreaming task nor in a memory experiment arm, and its `granted_tools` do not include `orbit.memory.show`, which only an operator can set",
+                    "crew memory show refused: task {} is neither a crew memory dreaming task nor in a memory experiment arm",
                     task.id
                 )));
             }
@@ -272,39 +241,8 @@ impl OrbitRuntime {
         self.crew_memory_show(Some(requested.as_str()), revision)
     }
 
-    /// `orbit.memory.history` for `caller`: the operator's read, or the read
-    /// of a run whose task an operator granted the tool.
-    pub(crate) fn crew_memory_tool_history(
-        &self,
-        caller: &MemoryToolCaller,
-        key: &str,
-    ) -> Result<Value, OrbitError> {
-        let (task, claimed) = match self.resolve_memory_caller(caller)? {
-            ResolvedCaller::Operator => return self.crew_memory_history(key),
-            ResolvedCaller::Unbound if !caller.agent => return self.crew_memory_history(key),
-            ResolvedCaller::Unbound => {
-                return Err(refused(
-                    "crew memory history refused: an agent reads a space's history only from the run of a task whose `granted_tools` an operator set to include `orbit.memory.history`",
-                ));
-            }
-            ResolvedCaller::Run { task, claimed, .. } => (task, claimed),
-        };
-        if claimed {
-            return Err(refused(
-                "crew memory history refused: crew memory lives in the owner's store, so a claimed run cannot read a space's history",
-            ));
-        }
-        if !task_grants_memory_read(&task, HISTORY_TOOL) {
-            return Err(refused(format!(
-                "crew memory history refused: task {}'s `granted_tools` do not include `orbit.memory.history`, which only an operator can set",
-                task.id
-            )));
-        }
-        self.crew_memory_history(key)
-    }
-
-    /// `orbit.memory.write` for `caller`: the operator's write, or a
-    /// dreaming run's write of its own key.
+    /// `orbit.memory.write` for `caller`: a dreaming run's write of its own
+    /// key.
     pub(crate) fn crew_memory_tool_write(
         &self,
         caller: &MemoryToolCaller,
@@ -313,10 +251,9 @@ impl OrbitRuntime {
         reason: Option<String>,
     ) -> Result<Value, OrbitError> {
         let (task, run_id, claimed) = match self.resolve_memory_caller(caller)? {
-            ResolvedCaller::Operator => return self.crew_memory_write(key, write, reason),
             ResolvedCaller::Unbound => {
                 return Err(refused(
-                    "crew memory write refused: only an operator, or a crew memory dreaming task's run writing its own model's space, may write crew memory",
+                    "crew memory write refused: only a crew memory dreaming task's run, writing its own model's space, may write crew memory",
                 ));
             }
             ResolvedCaller::Run {
@@ -357,7 +294,6 @@ impl OrbitRuntime {
             &scope.key,
             write,
             &writer,
-            WriteAction::Write,
             reason,
             Some(&DreamingWrite {
                 task_id: &task.id,
@@ -381,9 +317,9 @@ impl OrbitRuntime {
                 run_id,
                 claimed,
             } => (task, run_id, claimed),
-            ResolvedCaller::Operator | ResolvedCaller::Unbound => {
+            ResolvedCaller::Unbound => {
                 return Err(refused(
-                    "crew memory propose refused: only a crew memory dreaming task's run may propose a global note; an operator writes the global memory with `orbit memory write global`",
+                    "crew memory propose refused: only a crew memory dreaming task's run may propose a global note",
                 ));
             }
         };
@@ -479,10 +415,9 @@ impl OrbitRuntime {
 
     /// The crew memory agent tools a run serving `tasks` in `activity` must
     /// not see. Write and propose belong to a dreaming task's implementer
-    /// alone; show also to any run whose task is in a memory arm. Show and
-    /// history reach the implementer of a task an operator granted them.
-    /// `activity` is `None` where the caller cannot name it, which admits
-    /// only a memory arm's show.
+    /// alone; show also to any run whose task is in a memory arm. A task's
+    /// `granted_tools` list none of them. `activity` is `None` where the
+    /// caller cannot name it, which admits only a memory arm's show.
     pub(crate) fn crew_memory_tool_suppressions(
         &self,
         tasks: &[Task],
@@ -500,22 +435,11 @@ impl OrbitRuntime {
                 }
             }
         }
-        // A dreaming task's `show` grant is the routine's and lists nothing
-        // beyond the dreaming rule above.
-        let granted = |tool: &str| {
-            activity == Some(IMPLEMENTING_ACTIVITY)
-                && tasks.iter().any(|task| {
-                    task_grants_memory_read(task, tool)
-                        && !(tool == SHOW_TOOL && dreaming_task_key(task).is_some())
-                })
-        };
         Ok(CREW_MEMORY_AGENT_TOOLS
             .iter()
-            .chain([HISTORY_TOOL].iter())
             .filter(|tool| {
                 let listed = match **tool {
-                    SHOW_TOOL => dreaming || memory_arm || granted(SHOW_TOOL),
-                    HISTORY_TOOL => granted(HISTORY_TOOL),
+                    SHOW_TOOL => dreaming || memory_arm,
                     _ => dreaming,
                 };
                 !listed

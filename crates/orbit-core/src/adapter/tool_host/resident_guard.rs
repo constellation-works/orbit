@@ -156,17 +156,10 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
             | DecisionVerb::ChannelRotateKey => Refused,
         },
         OrbitBuiltinAction::Memory(verb) => match verb {
-            MemoryVerb::Show | MemoryVerb::History => Read,
-            // Every crew memory write, and export to host files, is the
-            // operator's or a dreaming run's, never a resident cycle's.
-            MemoryVerb::Export
-            | MemoryVerb::Write
-            | MemoryVerb::Reset
-            | MemoryVerb::Copy
-            | MemoryVerb::Proposals
-            | MemoryVerb::ProposalAccept
-            | MemoryVerb::ProposalReject
-            | MemoryVerb::Propose => Refused,
+            MemoryVerb::Show => Read,
+            // Every crew memory write is a dreaming run's, never a resident
+            // cycle's.
+            MemoryVerb::Write | MemoryVerb::Propose => Refused,
         },
         OrbitBuiltinAction::Notice(verb) => match verb {
             NoticeVerb::List | NoticeVerb::Show => Read,

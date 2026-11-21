@@ -24,8 +24,8 @@ panels, routines, auto-tasks, activities, jobs and skills from one manifest. Plu
 definitions land disabled and become active only through an operator act. Orbit also ships
 8 default routines and 19 default auto-tasks: 27 defaults in total. By default it seeds all
 27 into each workspace. The routines `worktree-gc`, `task-pilot` and
-`crew_memory_dream` are seeded enabled; `crew_memory_dream` does nothing until
-`crew_memory.enabled` is set and a memory experiment is running. Other shipped routines are
+`crew_memory_dream` are seeded enabled; `crew_memory_dream` does nothing unless a
+memory experiment is running. Other shipped routines are
 seeded disabled. Among auto-tasks, `host-health` is also seeded disabled
 ([ORB-24934], reversing [ORB-21596]); enable it with
 `orbit auto-task toggle host-health on`. The routine

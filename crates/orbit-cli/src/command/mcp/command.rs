@@ -270,7 +270,7 @@ pub(super) fn resolve_mcp_toolsets(
         return configured_mcp_toolsets(global_root, role_flag, toolset_flag);
     };
     let selection = McpToolsetSelection::default_only();
-    match selection.clone().with_names(stamped.split(',')) {
+    match selection.clone().with_stamped_names(stamped.split(',')) {
         Ok(stamped) => Ok(stamped),
         Err(error) => {
             tracing::warn!(

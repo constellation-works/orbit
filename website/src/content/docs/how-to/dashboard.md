@@ -127,7 +127,7 @@ Confirm the selected workspace before you act.
 | **Health** | What is broken now: **Incidents** (grouped failures, with **Events** and **Errors** tabs) and **Doctor**. |
 | **[Analytics](#analytics)** | How delivery is trending: **Metrics**, **Reliability**, **Codebase**, **Resources**, **Forecast**, **Cost**, **[Agents](#agents)**, and **Experiments**. |
 | **[Automation](#automation)** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Scripts**. |
-| **Knowledge** | **Frictions** (friction records) and **Memory** (crew memory). |
+| **Knowledge** | **Frictions** (friction records). |
 | **[Plugins](#plugins)** | Installed plugins and the panels they add. |
 | **[Fleet](#fleet)** | Registered hosts with their health, drains, and provider capacity. |
 | **[Settings](#settings)** | Workflow, Execution, Review, Crews, Machine, and Other. |
@@ -797,18 +797,6 @@ the status filter. Select a row to open the full record and triage it:
 
 Nothing here files a task or moves a record to another workspace. For both,
 see [Report and triage friction](/how-to/friction/).
-
-## Knowledge › Memory
-
-**Memory** shows crew memory for the selected workspace. It is read-only.
-While `crew_memory.enabled` is false (the default), the panel says Memory is
-off for this workspace.
-
-Select a key to read its current revision, evidence, files, and history, or
-**Global proposals** to see open and recently closed proposals. To accept or
-reject a proposal or write memory, use the
-[crew memory CLI commands](/reference/cli/#crew-memory-experimental). To turn
-memory on, see [Give models a memory](/how-to/crew-memory/).
 
 ## Plugins
 

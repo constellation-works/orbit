@@ -348,11 +348,12 @@ fn worker_read(
         // on an earlier build asks for them at each prompt; answer "no
         // marks" until 2026-12-07 so it stays quiet, then delete the arm.
         "regression_risk" => Ok(Value::Null),
-        // The owner's current crew-memory kill switch. A bool only: the
+        // Whether the owner still has a running memory experiment, crew
+        // memory's one switch. A bool only: the
         // leaf already holds the captured block and must not receive
         // another copy of the notes, or this workspace's memory tables.
         "crew_memory_policy" => Ok(serde_json::json!({
-            "enabled": runtime.current_crew_memory_enabled(),
+            "enabled": runtime.crew_memory_experiment_running(),
         })),
         "status_index" => serde_json::to_value(runtime.task_status_index()?),
         "completion_by_complexity" => serde_json::to_value(

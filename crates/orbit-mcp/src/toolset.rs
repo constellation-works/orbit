@@ -33,13 +33,13 @@ pub const MCP_ROLE_CONFIG_KEY: &str = "machine.mcp.role";
 pub const TOOLSET_NOT_ENABLED_CODE: &str = "toolset_not_enabled";
 
 /// Serve `inner` with only the definitions of `selection`'s toolsets.
+///
+/// Even a selection of every toolset is filtered: a [`McpToolset::RunBound`]
+/// definition is advertised only when the selection names it as a tool.
 pub fn with_mcp_toolsets(
     inner: Arc<dyn McpHost>,
     selection: McpToolsetSelection,
 ) -> Arc<dyn McpHost> {
-    if selection.enables_all() {
-        return inner;
-    }
     Arc::new(ToolsetFilteredHost {
         inner,
         selection,
@@ -129,6 +129,9 @@ fn toolset_not_enabled(
     toolset: McpToolset,
     role: Option<McpRole>,
 ) -> OrbitError {
+    if toolset == McpToolset::RunBound {
+        return run_bound_not_served(tool);
+    }
     let flag = format!("--toolset {toolset}");
     let roles = toolset.roles();
     let role_names = roles
@@ -164,6 +167,24 @@ fn toolset_not_enabled(
                 "config_key": MCP_TOOLSETS_CONFIG_KEY,
                 "roles": roles,
             },
+        }),
+        message,
+    }
+}
+
+/// The refusal for a run-bound tool on a server whose dispatch stamp does not
+/// name it: no flag, config or role enables it, so none is suggested.
+fn run_bound_not_served(tool: &str) -> OrbitError {
+    let message = format!(
+        "tool '{tool}' is served only to the managed runs that may call it, and this server was not started for one"
+    );
+    OrbitError::RemoteTool {
+        code: RemoteToolCode::Other(TOOLSET_NOT_ENABLED_CODE.into()),
+        payload: json!({
+            "code": TOOLSET_NOT_ENABLED_CODE,
+            "message": message,
+            "tool": tool,
+            "toolset": McpToolset::RunBound,
         }),
         message,
     }

@@ -1,10 +1,14 @@
 //! The proposals board is a read. Recently closed merges virtual expiries
 //! and decisions by effective close time, and listing writes nothing.
-//! An operator's task grant admits that task's run to read any space.
+//! No task can be granted a crew memory tool, so a run outside dreaming and
+//! the memory arms reads no space.
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::application::crew_memory::{MemoryFile, MemoryToolCaller, MemoryWrite};
+use orbit_core::application::experiment::{
+    ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
+};
 use orbit_core::application::task::TaskAddParams;
 use orbit_store::contracts::{
     CrewMemoryClosedProposalRow, CrewMemoryEventRow, CrewMemoryProposalDecision,
@@ -23,13 +27,35 @@ fn runtime() -> (tempfile::TempDir, OrbitRuntime) {
     std::fs::create_dir_all(&workspace).expect("workspace root");
     std::fs::write(
         workspace.join("config.toml"),
-        "[crew_memory]\nenabled = true\n",
+        "[experiments]\nenabled = true\n",
     )
-    .expect("enable crew memory");
+    .expect("enable experiments");
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("runtime");
+    let actor = ExperimentActor {
+        actor: "crew-memory-test".into(),
+        reason: None,
+    };
+    let experiment = runtime
+        .create_experiment(
+            "crew-memory-fixture",
+            ExperimentDefinitionInput {
+                mode: Some("shadow".into()),
+                arms: Some(serde_json::json!([
+                    { "name": "control", "control": true },
+                    { "name": "memory", "overlay": { "memory": { "roles": ["implement"], "global": true } } }
+                ])),
+                primary_metric: Some("first_pass_acceptance".into()),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .expect("memory experiment");
+    runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .expect("start memory experiment");
     assert!(
-        runtime.current_crew_memory_enabled(),
-        "the board is empty unless crew memory is enabled"
+        runtime.crew_memory_experiment_running(),
+        "the board is empty unless a running experiment has a memory arm"
     );
     (root, runtime)
 }
@@ -238,9 +264,9 @@ crate::scenario_table!(
     recent_decision_stays_ahead_of_older_expiries,
 );
 
-/// A task that is neither dreaming nor in a memory arm, whose operator grant
-/// names `orbit.memory.show`, reads a model space that is not its run's own.
-fn granted_run_reads_another_models_space() {
+/// A task that is neither dreaming nor in a memory arm cannot be granted
+/// `orbit.memory.show`, and its run reads no other model's space.
+fn memory_read_grant_is_refused() {
     let (_root, runtime) = runtime();
     runtime
         .crew_memory_write(
@@ -255,27 +281,33 @@ fn granted_run_reads_another_models_space() {
             None,
         )
         .expect("operator seeds model-b's space");
-    let task = runtime
+    let refused = runtime
         .add_task(TaskAddParams {
             title: "Consolidate crew memory".into(),
             granted_tools: vec!["orbit.memory.show".into()],
             ..Default::default()
         })
-        .expect("task with a memory read grant");
+        .expect_err("a crew memory tool cannot be granted");
+    assert!(
+        refused.to_string().contains("orbit.memory.show"),
+        "the refusal names the tool: {refused}"
+    );
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Consolidate crew memory".into(),
+            ..Default::default()
+        })
+        .expect("task without a grant");
     let run = MemoryToolCaller {
-        agent: true,
         scope_task_id: Some(task.id.to_string()),
-        scope_run_id: Some("jrun-granted-read".to_string()),
+        scope_run_id: Some("jrun-ungranted-read".to_string()),
         model: Some("model-a".to_string()),
         ..Default::default()
     };
 
-    let shown = runtime
+    runtime
         .crew_memory_tool_show(&run, Some("model-b"), None)
-        .expect("the grant admits the run to another model's space");
-    assert_eq!(shown["key"], "model-b");
-    assert_eq!(shown["revision"], 1);
-    assert_eq!(shown["files"][0]["path"], "notes.md");
+        .expect_err("a run outside dreaming and the memory arms reads no space");
 }
 
-crate::scenario_table!(memory_read_grant, granted_run_reads_another_models_space,);
+crate::scenario_table!(memory_read_grant, memory_read_grant_is_refused,);

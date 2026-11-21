@@ -67,6 +67,12 @@ pub enum McpToolset {
     /// Tools no MCP server advertises: `orbit tool run` and managed
     /// activities reach them. Naming it in a selection advertises nothing.
     Local,
+    /// Tools only a managed run that may call them is served: a server
+    /// advertises one only when its dispatch stamp names it (`tool:<name>`,
+    /// see [`McpToolsetSelection::with_stamped_names`]). No toolset name,
+    /// role, `all` or operator `tool:` entry enables it, so it is not in
+    /// [`Self::ALL`].
+    RunBound,
 }
 
 impl McpToolset {
@@ -152,6 +158,7 @@ impl McpToolset {
             Self::Notice => "notice",
             Self::Resident => "resident",
             Self::Local => "local",
+            Self::RunBound => "run-bound",
         }
     }
 
@@ -349,6 +356,9 @@ pub struct McpToolsetSelection {
     enabled: BTreeSet<McpToolset>,
     role: Option<McpRole>,
     explicit_tools: BTreeSet<String>,
+    /// Run-bound tools a dispatch stamp named ([`Self::with_stamped_names`]).
+    /// Only these serve a [`McpToolset::RunBound`] definition.
+    run_bound_tools: BTreeSet<String>,
 }
 
 impl Default for McpToolsetSelection {
@@ -367,6 +377,7 @@ impl McpToolsetSelection {
                 .collect(),
             role: None,
             explicit_tools: BTreeSet::new(),
+            run_bound_tools: BTreeSet::new(),
         }
     }
 
@@ -376,6 +387,7 @@ impl McpToolsetSelection {
             enabled: McpToolset::ALL.into_iter().collect(),
             role: None,
             explicit_tools: BTreeSet::new(),
+            run_bound_tools: BTreeSet::new(),
         }
     }
 
@@ -387,6 +399,7 @@ impl McpToolsetSelection {
             enabled,
             role: Some(role),
             explicit_tools: BTreeSet::new(),
+            run_bound_tools: BTreeSet::new(),
         }
     }
 
@@ -423,12 +436,34 @@ impl McpToolsetSelection {
         Ok(self)
     }
 
+    /// [`Self::with_names`] for the dispatch stamp Orbit writes for a managed
+    /// run. Its `tool:` entries also name the run-bound tools that run may
+    /// call, which no operator-written selection can name.
+    pub fn with_stamped_names<'a>(
+        mut self,
+        names: impl IntoIterator<Item = &'a str>,
+    ) -> Result<Self, McpToolsetError> {
+        let names: Vec<&str> = names.into_iter().collect();
+        for name in &names {
+            if let Some(tool) = name
+                .trim()
+                .strip_prefix("tool:")
+                .filter(|tool| !tool.is_empty())
+            {
+                self.run_bound_tools.insert(tool.to_string());
+            }
+        }
+        self.with_names(names)
+    }
+
     /// This selection with every toolset `other` enables added. The role is
     /// kept.
     pub fn union(mut self, other: &Self) -> Self {
         self.enabled.extend(other.enabled.iter().copied());
         self.explicit_tools
             .extend(other.explicit_tools.iter().cloned());
+        self.run_bound_tools
+            .extend(other.run_bound_tools.iter().cloned());
         self
     }
 
@@ -438,7 +473,11 @@ impl McpToolsetSelection {
     }
 
     /// Whether a named definition is included by its toolset or an explicit grant.
+    /// A [`McpToolset::RunBound`] definition only when a dispatch stamp named it.
     pub fn enables_tool(&self, toolset: McpToolset, name: &str) -> bool {
+        if toolset == McpToolset::RunBound {
+            return self.run_bound_tools.contains(name);
+        }
         self.enables(toolset) || self.grants_tool(name)
     }
 
@@ -446,6 +485,9 @@ impl McpToolsetSelection {
     /// actions' toolsets is enabled, or a grant names it or one of its
     /// actions (`tool:orbit.decision:list`).
     pub fn enables_definition(&self, rules: &McpToolRules, name: &str) -> bool {
+        if rules.toolset == McpToolset::RunBound {
+            return self.enables_tool(rules.toolset, name);
+        }
         self.enables_tool(rules.toolset, name)
             || rules
                 .action_toolsets
@@ -478,13 +520,6 @@ impl McpToolsetSelection {
                     .strip_suffix('*')
                     .is_some_and(|prefix| name.starts_with(prefix))
             })
-    }
-
-    /// Whether every toolset is enabled, so nothing is withheld.
-    pub fn enables_all(&self) -> bool {
-        McpToolset::ALL
-            .into_iter()
-            .all(|toolset| self.enables(toolset))
     }
 
     /// The role this selection serves, when one was configured.

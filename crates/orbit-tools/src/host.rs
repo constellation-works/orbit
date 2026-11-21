@@ -145,7 +145,7 @@ pub enum OrbitBuiltinAction {
     Resident(ResidentVerb),
     /// Capability-gap costs and evolution records.
     Evolution(orbit_common::governance::evolution::EvolutionVerb),
-    /// Crew memory spaces: operator reads, export and writes.
+    /// Crew memory spaces: the run-bound show, write and propose.
     Memory(orbit_common::governance::memory::MemoryVerb),
 }
 

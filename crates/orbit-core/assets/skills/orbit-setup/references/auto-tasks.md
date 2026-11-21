@@ -202,7 +202,7 @@ A task's `granted_tools` is an operator's grant, and a minted task has no
 operator at mint time. Put the grant on the definition instead:
 
 ```bash
-orbit auto-task update <name> --granted-tools orbit.memory.show,orbit.memory.history
+orbit auto-task update <name> --granted-tools orbit.search
 orbit auto-task show <name>
 ```
 

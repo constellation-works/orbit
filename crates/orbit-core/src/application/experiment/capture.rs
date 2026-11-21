@@ -159,8 +159,9 @@ impl OrbitRuntime {
     /// A memory arm's capture for a crew running `model`: each role in the
     /// arm's `roles` rendered from that model's newest revision (and the
     /// global's, when the arm asks). `None` for an arm without a memory
-    /// surface. No recorded model, or `crew_memory.enabled` off, captures no
-    /// delivery: no memory is guessed and none reaches a disabled workspace.
+    /// surface. No recorded model, or no running memory experiment, captures
+    /// no delivery: no memory is guessed and none reaches a workspace where
+    /// crew memory is off.
     pub(crate) fn experiment_memory_capture(
         &self,
         overlay: &ExperimentOverlay,
@@ -169,7 +170,7 @@ impl OrbitRuntime {
         let Some(memory) = &overlay.memory else {
             return Ok(None);
         };
-        let enabled = self.current_crew_memory_enabled();
+        let enabled = self.crew_memory_experiment_running();
         let mut deliveries = Vec::new();
         if enabled && let Some(key) = memory_key(model) {
             for role in &memory.roles {

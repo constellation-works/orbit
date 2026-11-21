@@ -10,7 +10,6 @@ mod automation;
 mod codebase;
 mod config;
 mod cost;
-mod crew_memory;
 mod crews;
 mod dashboard_chrome;
 mod decisions;

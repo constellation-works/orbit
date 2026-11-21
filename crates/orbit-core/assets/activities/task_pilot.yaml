@@ -1256,7 +1256,6 @@ spec:
     - orbit.experiment.reweight
     - orbit.experiment.start
     - orbit.experiment.update
-    - orbit.memory.history
     - orbit.memory.propose
     - orbit.memory.show
     - orbit.memory.write
