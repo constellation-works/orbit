@@ -996,10 +996,12 @@ def inline_module_suffixes(tokens):
                     stripped |= sub_res["stripped"]
                     non_item_braces |= sub_res["non_item_braces"]
                     non_item_ranges.extend(sub_res["non_item_ranges"])
-            # Keep a uniform module prefix for every emitted variable. Module
+            # Keep a uniform module prefix for every emitted variable, or its
+            # common depth when every emitted prefix has the same length. Module
             # names captured by the matcher resolve from the invocation; if a
-            # repeated capture has different names, its placeholder still
-            # preserves the module level needed for `super` resolution.
+            # repeated capture or differing wrapper has different names, a
+            # placeholder still preserves the module level for `super`
+            # resolution.
             def resolved_mod_prefix(mods):
                 prefix = []
                 for kind, name in mods:
@@ -1028,9 +1030,16 @@ def inline_module_suffixes(tokens):
                 for mods in emitted_vars[v]
             ]
             if (emitted_prefixes
-                    and all(prefix == emitted_prefixes[0] for prefix in emitted_prefixes)
-                    and emitted_prefixes[0]):
-                added_mods = emitted_prefixes[0]
+                    and emitted_prefixes[0]
+                    and all(len(prefix) == len(emitted_prefixes[0])
+                            for prefix in emitted_prefixes)):
+                added_mods = tuple(
+                    emitted_prefixes[0][level]
+                    if all(prefix[level] == emitted_prefixes[0][level]
+                           for prefix in emitted_prefixes)
+                    else "$mod"
+                    for level in range(len(emitted_prefixes[0]))
+                )
             return {
                 "non_item": False,
                 "stripped": stripped,
