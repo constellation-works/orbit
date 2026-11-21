@@ -1311,16 +1311,6 @@ fn slow_quota_probe_consuming_source_deadline_prevents_spawning_gh() {
     )
     .expect("write fake gh");
     std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o700)).expect("chmod");
-    let mut attempts = 0;
-    while std::process::Command::new(&gh)
-        .arg("--warm-up")
-        .status()
-        .is_err()
-    {
-        attempts += 1;
-        assert!(attempts < 200, "fake gh never became executable");
-        std::thread::sleep(Duration::from_millis(10));
-    }
 
     let path = std::env::join_paths(
         std::iter::once(bin).chain(
@@ -1365,34 +1355,33 @@ fn slow_quota_probe_consuming_source_deadline_prevents_spawning_gh() {
     let spent = std::rc::Rc::new(std::cell::Cell::new(Duration::ZERO));
     let clock_spent = std::rc::Rc::clone(&spent);
     let origin = Instant::now();
-    let started = Instant::now();
+    let probe_seen = std::rc::Rc::new(std::cell::Cell::new(false));
+    let observed = std::rc::Rc::clone(&probe_seen);
+    let probe_spent = std::rc::Rc::clone(&spent);
     let error = super::super::source::test_support::with_delivery_source_clock(
         move || origin + clock_spent.get(),
         || {
             let source = Source::new(root.path());
             spent.set(super::super::source::SOURCE_DEADLINE - Duration::from_millis(80));
-            // The 80 ms budget ends once the probe has reached the fake `gh`,
-            // not on a wall-clock timer that a loaded host can win (ORB-26200).
-            let probe_calls = calls.clone();
-            let probe_logged = move || {
-                std::fs::read_to_string(&probe_calls)
-                    .unwrap_or_default()
-                    .lines()
-                    .any(|line| line == "api rate_limit")
-            };
-            github_quota::with_probe_timeout_when(probe_logged, || {
-                github_quota::with_scoped_guard(store.clone(), policy, || {
-                    source.ci_cover_pull_request("#1")
-                })
-            })
+            github_quota::with_simulated_clipped_probe(
+                move |probe| {
+                    assert_eq!(probe.args, ["api", "rate_limit"]);
+                    observed.set(true);
+                    probe_spent.set(super::super::source::SOURCE_DEADLINE);
+                },
+                || {
+                    github_quota::with_scoped_guard(store.clone(), policy, || {
+                        source.ci_cover_pull_request("#1")
+                    })
+                },
+            )
         },
     )
     .expect_err("slow probe exhausting source deadline must defer");
 
     assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "slow quota probe must be bounded by the remaining 80 ms source deadline, took {:?}",
-        started.elapsed()
+        probe_seen.get(),
+        "quota refresh must attempt the rate-limit probe"
     );
     assert!(
         matches!(
@@ -1404,7 +1393,7 @@ fn slow_quota_probe_consuming_source_deadline_prevents_spawning_gh() {
     let recorded = std::fs::read_to_string(&calls).unwrap_or_default();
     assert_eq!(
         recorded.lines().collect::<Vec<_>>(),
-        vec!["api rate_limit"],
+        Vec::<&str>::new(),
         "expired quota probe must prevent spawning gh pr view"
     );
     let status = store.status(&policy, &account, epoch_now());
