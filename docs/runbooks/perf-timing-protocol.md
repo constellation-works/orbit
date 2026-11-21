@@ -239,7 +239,9 @@ SHA-256 against the manifest (and refuses unlisted files) before it copies anyth
 lays out `<dir>/home` (the fixture's global root is `<dir>/home/.orbit`) and
 `<dir>/checkout` (workspace root `<dir>/checkout/.orbit`, plus `.git` when the snapshot has
 Git metadata), rewrites the source's absolute paths in the copied registry, configs,
-generation and layout records and databases to the new location, and prints the env:
+generation and layout records, task records and databases to the new location, leaves
+verified task-artifact blobs under `artifacts/files/` byte-for-byte as snapshotted (a
+read checks each blob's size and SHA-256), and prints the env:
 
 ```sh
 export HOME="<dir>/home"

@@ -731,6 +731,24 @@ def restore_root(snapshot: Path, into: Path, manifest: dict | None = None) -> di
         raise
 
 
+def _is_verified_task_artifact_blob(parts: tuple[str, ...]) -> bool:
+    """True for a blob under ``tasks/workspaces/<id>/<task>/artifacts/files``.
+
+    Those bytes are named by ``artifacts/manifest.yaml`` with a size and
+    SHA-256. A source path inside one is payload, not a workspace binding:
+    rewriting it makes a later bundle read reject the task as corrupt.
+    """
+    for index in range(4, len(parts) - 1):
+        if (
+            parts[index - 4] == "tasks"
+            and parts[index - 3] == "workspaces"
+            and parts[index] == "artifacts"
+            and parts[index + 1] == "files"
+        ):
+            return True
+    return False
+
+
 def _populate_root(snapshot: Path, into: Path, manifest: dict) -> dict:
     source = manifest["source"]
     if not source["storage_id"]:
@@ -746,9 +764,12 @@ def _populate_root(snapshot: Path, into: Path, manifest: dict) -> dict:
     for dirpath, _dirs, filenames in os.walk(into):
         for name in filenames:
             path = Path(dirpath) / name
+            rel_parts = path.relative_to(into).parts
+            if _is_verified_task_artifact_blob(rel_parts):
+                continue
             if name.endswith(SQLITE_SUFFIXES):
                 rewrite_database(path, pairs)
-            elif ".git" not in path.relative_to(into).parts:
+            elif ".git" not in rel_parts:
                 rewrite_text_file(path, pairs)
     if fixture_storage_id(into) != source["storage_id"]:
         # Without an initialized `.orbit/` in the working directory, root
