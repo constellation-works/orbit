@@ -379,6 +379,32 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
     def test_schema_oracle_unknown_keyword_refusal_and_semantics(self):
         with self.assertRaises(ValueError):
             schema_accepts_instance({"items": {"type": "string"}}, ["a"])
+        # Unsupported keywords are refused wherever they sit, even when instance
+        # evaluation never visits the subtree.
+        skipped_subtrees = [
+            ({"allOf": [False, {"items": {}}]}, []),
+            ({"if": False, "then": {"items": {}}}, []),
+            ({"if": True, "else": {"items": {}}}, []),
+            ({"if": {"items": {}}}, []),
+            ({"propertyNames": {"items": {}}}, {}),
+            ({"anyOf": [True, {"items": {}}]}, []),
+            ({"properties": {"a": {"items": {}}}}, {}),
+            ({"additionalProperties": {"items": {}}}, {}),
+        ]
+        for schema, instance in skipped_subtrees:
+            with self.subTest(schema=schema):
+                with self.assertRaises(ValueError):
+                    schema_accepts_instance(schema, instance)
+        # Valid unchosen branches stay inactive; keywords inside literal
+        # const/enum values and property names are data, not schema.
+        self.assertTrue(schema_accepts_instance(
+            {"if": False, "then": False, "else": True}, 1))
+        self.assertFalse(schema_accepts_instance(
+            {"if": True, "then": False, "else": True}, 1))
+        self.assertTrue(schema_accepts_instance(
+            {"const": {"items": {}}, "enum": [{"items": {}}]}, {"items": {}}))
+        self.assertTrue(schema_accepts_instance(
+            {"properties": {"items": {"type": "string"}}}, {"items": "a"}))
         # then/else without if have no effect in JSON Schema.
         self.assertTrue(schema_accepts_instance({"then": {"type": "string"}}, 1))
         self.assertFalse(schema_accepts_instance(
