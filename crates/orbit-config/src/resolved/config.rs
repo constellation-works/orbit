@@ -417,19 +417,22 @@ fn plugin_sections_from_raw(
     for (namespace, value) in raw {
         if !orbit_types::plugin::is_valid_namespace(namespace) {
             return Err(OrbitError::InvalidInput(format!(
-                "invalid runtime config '{}': '[plugins.{namespace}]' is not a plugin namespace:                  use lowercase letters, digits, '_' or '-', starting with a letter",
+                "invalid runtime config '{}': '[plugins.{namespace}]' is not a plugin namespace: \
+                 use lowercase letters, digits, '_' or '-', starting with a letter",
                 redact_home_dir(&config_path.display().to_string())
             )));
         }
         let json = serde_json::to_value(value).map_err(|error| {
             OrbitError::InvalidInput(format!(
-                "invalid runtime config '{}': '[plugins.{namespace}]' is not representable:                  {error}",
+                "invalid runtime config '{}': '[plugins.{namespace}]' is not representable: \
+                 {error}",
                 redact_home_dir(&config_path.display().to_string())
             ))
         })?;
         if !json.is_object() {
             return Err(OrbitError::InvalidInput(format!(
-                "invalid runtime config '{}': 'plugins.{namespace}' must be a table of that                  plugin's settings",
+                "invalid runtime config '{}': 'plugins.{namespace}' must be a table of that \
+                 plugin's settings",
                 redact_home_dir(&config_path.display().to_string())
             )));
         }
