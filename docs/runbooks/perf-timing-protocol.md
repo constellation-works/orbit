@@ -151,6 +151,18 @@ repository root of the checkout that holds these scripts.
      recording wall ms and exit status. A nonzero exit (or a non-2xx HTTP status) fails
      the run.
    - **CLI mode** times `<binary> <orbit args>` in the restored root.
+   - **Bounds.** Every parity and CLI sample command runs as the leader of its own
+     process group, with its stdout drained while it runs. One that runs past
+     `--command-timeout` seconds (default 300) or writes more than
+     `--output-limit-bytes` of stdout (default 16 MiB) gets SIGTERM, then SIGKILL after a
+     5 s grace, across its whole group, and the run exits 2 naming the arm and the bound.
+     A command that exits cleanly still has its group swept, so no descendant outlives
+     it. Both bounds are recorded under `limits` in `parity.json` and in the
+     `protocol` of `paired-summary.json`.
+   - **Cancellation.** SIGTERM, SIGHUP or Ctrl-C stops the running arm command or
+     `web serve` group, releases the lane, cleans up as a failed run does and exits
+     128 + the signal number. SIGKILL of the harness skips that cleanup; the enclosing
+     run's containment reclaims what it leaves.
    - **HTTP mode** starts each arm's own `orbit web serve --no-open --port 0` (an
      ephemeral port) on its restored root, waits for its address and a first answer, times
      paced GETs of the path, then stops and reaps the server.
@@ -329,6 +341,8 @@ Tasks land in `proposed`. Do not approve them.
 | `… built identical binaries …` | The two revisions differ only in metadata | Pick revisions whose content differs |
 | `base and candidate resolve to the same commit …` | Same commit given twice | Check the revision selectors |
 | `parity mismatch between arms …` | An arm has no successful observation (missing `--parity` in CLI mode, or a probe that did not exit 0 / return 2xx), or outputs differ after masking | Read `parity.json` (`observation_failures` and `differing_arms`); fix the probe or the behaviour change, or mask only a timing field |
+| `<arm> parity command timed out after <n> s …` / `<arm> round <r> sample <i> timed out …` | An arm command stalled past `--command-timeout` | Find why it hangs on the fixture, or raise `--command-timeout` for a genuinely slow surface |
+| `<arm> … wrote more than <n> bytes of stdout …` | An arm command's output passed `--output-limit-bytes` | Pick a smaller probe, or raise `--output-limit-bytes` |
 | `perf lane busy: <holder>` | Another perf run holds the lane | Wait for it, or raise `--lane-wait` |
 | `disk gate: … at or above 80% …` | The parent filesystem is too full | Free space per RB-11, then rerun |
 
