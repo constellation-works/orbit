@@ -72,7 +72,11 @@ A run that cannot take the lane within `--lane-wait` seconds (default 900, or
 
 Before creating a snapshot, restore root, builds dir or results dir, each script reads
 `df --output=pcent <parent>`. At 80% or more it creates nothing and exits 2 with the
-reading, citing RB-11 (ws_constellation runbooks). Each script removes the scratch it made
+reading, citing RB-11 (ws_constellation runbooks). For `--candidate-worktree`,
+`build-pair.sh` reads that percentage for the filesystem that will hold the temporary
+index and objects (`TMPDIR`, or `/tmp` when unset) and refuses before creating them.
+The builds directory is still checked on its own filesystem before it is created. Those
+two parents can be different filesystems. Each script removes the scratch it made
 when it exits (exported sources and target dirs, per-round roots) and removes its output
 directory too when it fails. A refused parity check keeps `parity.json` for diagnosis.
 `--keep` keeps everything for debugging.
