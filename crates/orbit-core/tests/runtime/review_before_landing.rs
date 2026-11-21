@@ -639,6 +639,53 @@ fn a_before_landing_review_of_a_pr_merged_outside_orbit_says_so_and_names_the_st
     );
 }
 
+/// An accepted reviewer commit on a PR that merged outside Orbit still reaches
+/// the push step, which may preserve it and block the task with a recipe: the
+/// settle comment must not call it worktree-only or decision-free.
+fn an_accepted_reviewer_fix_on_a_pr_merged_outside_orbit_defers_to_the_push_step() {
+    let mut fixture = Fixture::before_landing();
+    fixture.runtime = fixture
+        .runtime
+        .clone()
+        .with_task_pr_forge(Arc::new(MergedForge));
+    fixture.input["before_landing"] = json!(true);
+    published(&fixture);
+    fixture.admit();
+    std::fs::write(fixture.repo.join("candidate.txt"), "reviewed\n").unwrap();
+    fixture.put_report(&json!({
+        "schema_version": REVIEW_CONTRACT_VERSION,
+        "attempt_id": fixture.input["admission"]["attempt_id"],
+        "verdict": "accept_with_fixes", "summary": "Fixed what was found.",
+        "findings": [{
+            "id": "F1", "severity": "low", "summary": "Line missing",
+            "paths": ["candidate.txt"], "disposition": {"kind": "repaired"},
+            "change": "Added the line",
+        }],
+        "validation": [{"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"}],
+    }));
+    fixture.settle().expect("an accepted review settles");
+
+    let comments = fixture.runtime.get_task_comments(&fixture.task_id).unwrap();
+    let verdict = comments
+        .iter()
+        .rfind(|comment| {
+            comment
+                .message
+                .starts_with("before-landing review settled attempt")
+        })
+        .unwrap_or_else(|| panic!("{comments:#?}"));
+    assert!(
+        verdict
+            .message
+            .contains("PR #42 already merged outside Orbit")
+            && verdict.message.contains("durable ref")
+            && !verdict.message.contains("no decision is pending")
+            && !verdict.message.contains("was not pushed"),
+        "{}",
+        verdict.message
+    );
+}
+
 /// The push is conditional on the head the review reviewed: a branch that moved
 /// since keeps its new head, the reviewer commit stays local, and the handoff
 /// still leaves the PR open in review.
@@ -706,5 +753,6 @@ crate::scenario_table!(
     an_incomplete_before_landing_review_pushes_its_reviewer_commit_and_merges_nothing,
     a_reviewer_commit_is_not_pushed_over_a_pr_branch_that_moved,
     a_before_landing_review_of_a_pr_merged_outside_orbit_says_so_and_names_the_stranded_commit,
+    an_accepted_reviewer_fix_on_a_pr_merged_outside_orbit_defers_to_the_push_step,
     a_rejected_before_landing_review_pushes_nothing
 );

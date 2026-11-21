@@ -511,12 +511,16 @@ staying in `review`: the pull request is already merged, and the task is
 blocked with the recipe that lands the preserved repair. No outcome closes the PR.
 A PR that merged outside Orbit while its review ran [ORB-26599] is the other
 exception: settlement reads the forge, and the settle comment names the merge
-commit, says the verdict no longer gates anything, and names any unpushed
-reviewer commit by sha and review worktree. The refusal omits the
-pending-decision text, so the run is not held for a decision; the failure
-handoff pushes no reviewer commit and its comment says the PR already merged,
-and external-merge settlement then moves the task to `done`. One exception to "no
-push": a reviewer commit that settled `incomplete` is not left in the run's
+commit and says the verdict no longer gates anything. For a `reject` or
+`incomplete` verdict it also names any unpushed reviewer commit by sha and
+review worktree. The refusal omits the pending-decision text, so the run is not
+held for a decision; the failure handoff pushes no reviewer commit, its comment
+says the PR already merged, and external-merge settlement then moves the task
+to `done`. An `accept_with_fixes` reviewer commit is not stranded by the
+comment: the settle comment defers to the push step, which follows the
+`review_repair_after_merge` exception above (the repair is preserved and the
+task is blocked with the recipe), or stays local on a lost lease. One exception to
+"no push": a reviewer commit that settled `incomplete` is not left in the run's
 host-local worktree. Settlement has already committed the reviewer's repair, so
 the failure handoff pushes it onto the published head under the same lease as
 `landing_push` and records the result as `reviewer_push` in its output and in
