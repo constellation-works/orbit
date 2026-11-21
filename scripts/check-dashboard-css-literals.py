@@ -10,9 +10,9 @@ is scanned, file by file, for:
   CSS-wide keywords (inherit, initial, unset, revert, revert-layer) set no
   size and are not counted.
 
-base.css holds the design tokens, so it is exempt. Comments and selectors (an
-id such as `#face`) are not counted. The `font` shorthand and a size held in a
-custom property are not counted either.
+base.css holds the design tokens, so it is exempt. Comments, strings, url(...)
+references and selectors (an id such as `#face`) are not counted. The `font`
+shorthand and a size held in a custom property are not counted either.
 
 scripts/dashboard-css-literals-baseline.json records each file's counts. A
 count above its baseline fails and lists every occurrence in that file, each
@@ -42,11 +42,10 @@ BASE_STYLESHEET = f"{DASHBOARD}/css/base.css"
 BASELINE = "scripts/dashboard-css-literals-baseline.json"
 THEME_DOC = "docs/design/user-interface/specs/theme.md"
 
-COMMENT = re.compile(r"/\*.*?\*/", re.S)
 HEX = re.compile(r"#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})(?![0-9A-Za-z_-])")
-# One level of nesting covers `rgb(var(--x) …)`; no stylesheet nests deeper.
-FUNCTIONAL_COLOUR = re.compile(r"\b(?:rgba?|hsla?)\((?:[^()]|\([^()]*\))*\)", re.I)
+FUNCTIONAL_COLOUR_START = re.compile(r"(?<![\w-])(?:rgba?|hsla?)\(", re.I)
 FONT_SIZE = re.compile(r"(?<![\w-])font-size\s*:([^;{}]*)", re.I)
+VAR_REFERENCE_START = re.compile(r"var\(\s*--[\w-]+\s*(?:[),])", re.I)
 IMPORTANT = re.compile(r"\s*!\s*important\s*$", re.I)
 CSS_WIDE = {"inherit", "initial", "unset", "revert", "revert-layer"}
 DECLARATION_END = re.compile(r"[;{}]")
@@ -54,9 +53,108 @@ CUSTOM_PROPERTY = re.compile(r"--([\w-]+)\s*:\s*([^;{}]+?)\s*;")
 RGB_SEPARATORS = re.compile(r"[\s,/]+")
 
 
-def strip_comments(text):
-    """Blank each comment, keeping its newlines so line numbers still hold."""
-    return COMMENT.sub(lambda match: re.sub(r"[^\n]", " ", match.group(0)), text)
+def _blank_preserving_newlines(text):
+    return "".join("\n" if char == "\n" else " " for char in text)
+
+
+def _scan_masked_span(text, start, stop_chars, *, keep_open=False):
+    """Blank a delimited CSS span (string or unquoted url), keeping delimiters and newlines."""
+    out = [text[start]] if keep_open else []
+    index = start + 1 if keep_open else start
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if char == "\\":
+            if index + 1 < length:
+                out.append(" ")
+                out.append("\n" if text[index + 1] == "\n" else " ")
+                index += 2
+            else:
+                out.append(" ")
+                index += 1
+        elif char in stop_chars:
+            out.append(char)
+            return "".join(out), index + 1
+        elif char == "\n":
+            out.append("\n")
+            index += 1
+        else:
+            out.append(" ")
+            index += 1
+    return "".join(out), index
+
+
+def mask_ignored_css(text):
+    """Blank comments, string interiors and unquoted url() bodies, keeping newlines."""
+    out = []
+    index = 0
+    length = len(text)
+    while index < length:
+        if text[index:index + 2] == "/*":
+            close = text.find("*/", index + 2)
+            end = length if close == -1 else close + 2
+            out.append(_blank_preserving_newlines(text[index:end]))
+            index = end
+        elif text[index] in ('"', "'"):
+            masked, index = _scan_masked_span(text, index, (text[index], "\n"), keep_open=True)
+            out.append(masked)
+        elif (text[index:index + 4].lower() == "url("
+              and (index == 0 or not (text[index - 1].isalnum() or text[index - 1] in "_-"))):
+            probe = index + 4
+            while probe < length and text[probe] in " \t\r\n\f":
+                probe += 1
+            out.append(text[index:index + 4])
+            index += 4
+            if probe < length and text[probe] not in ('"', "'"):
+                masked, index = _scan_masked_span(text, index, (")",))
+                out.append(masked)
+        else:
+            out.append(text[index])
+            index += 1
+    return "".join(out)
+
+
+def find_functional_colours(text):
+    """Yield (offset, literal) for rgb()/rgba()/hsl()/hsla() with balanced parentheses."""
+    pos = 0
+    length = len(text)
+    while True:
+        match = FUNCTIONAL_COLOUR_START.search(text, pos)
+        if match is None:
+            return
+        start = match.start()
+        cursor = match.end()
+        depth = 1
+        while cursor < length and depth > 0:
+            char = text[cursor]
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            elif char in ";{}":
+                break
+            cursor += 1
+        if depth == 0:
+            yield start, text[start:cursor]
+            pos = cursor
+        else:
+            pos = match.end()
+
+
+def is_var_reference(value):
+    """Return True when value is a single `var(--token ...)` expression."""
+    if VAR_REFERENCE_START.match(value) is None:
+        return False
+    depth = 0
+    for index in range(3, len(value)):
+        char = value[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return index == len(value) - 1
+    return False
 
 
 def is_selector(text, end):
@@ -95,7 +193,7 @@ def colour_key(literal):
 def colour_tokens(root):
     """Map each colour value in base.css to the first custom property holding it."""
     tokens = {}
-    text = strip_comments((root / BASE_STYLESHEET).read_text(encoding="utf-8"))
+    text = mask_ignored_css((root / BASE_STYLESHEET).read_text(encoding="utf-8"))
     for name, value in CUSTOM_PROPERTY.findall(text):
         key = colour_key(value)
         if key is not None:
@@ -105,16 +203,16 @@ def colour_tokens(root):
 
 def scan_stylesheet(text):
     """Return (line, kind, value) for each colour literal and raw font size, in source order."""
-    cleaned = strip_comments(text)
+    cleaned = mask_ignored_css(text)
     found = []
     for match in HEX.finditer(cleaned):
         if not is_selector(cleaned, match.end()):
             found.append((match.start(), "colour_literals", match.group(0)))
-    for match in FUNCTIONAL_COLOUR.finditer(cleaned):
-        found.append((match.start(), "colour_literals", match.group(0)))
+    for offset, literal in find_functional_colours(cleaned):
+        found.append((offset, "colour_literals", literal))
     for match in FONT_SIZE.finditer(cleaned):
         value = IMPORTANT.sub("", match.group(1).strip()).strip()
-        if value and value.lower() not in CSS_WIDE and not value.startswith("var(--"):
+        if value and value.lower() not in CSS_WIDE and not is_var_reference(value):
             found.append((match.start(), "raw_font_sizes", value))
     return [(cleaned.count("\n", 0, offset) + 1, kind, value)
             for offset, kind, value in sorted(found)]

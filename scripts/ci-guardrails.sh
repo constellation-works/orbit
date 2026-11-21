@@ -709,6 +709,7 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/test-openpty-portability.py"
   run_guard "$repo_root/scripts/test-linux-gated-test-items.py"
   run_guard "$repo_root/scripts/test-refresh-dashboard-vendor.py"
+  run_guard "$repo_root/scripts/test-check-dashboard-css-literals.py"
   run_guard "$repo_root/scripts/test-unit-test-inventory.py"
   run_guard "$repo_root/scripts/test-codeql-extension-schema.py"
   run_guard "$repo_root/scripts/test-codeql-production-paths.py"
