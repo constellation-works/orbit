@@ -426,7 +426,7 @@ edges leave or enter it from outside the order:
   any other path or inherent call into `codebase` and any reference from
   `codebase` back to the forecast.
 - **`routines` → forecast (downward).** The sweep clock in
-  `routines/sweep.rs` calls `record_scheduled_backlog_forecast`. `routines` is
+  `routines/sweep/tick.rs` calls `record_scheduled_backlog_forecast`. `routines` is
   outside the order, above `automation` and `auto_tasks` (next paragraph).
 
 Review has no edge into `codebase`. Selective-review retirement removed
