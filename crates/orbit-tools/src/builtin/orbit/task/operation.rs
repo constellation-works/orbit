@@ -85,22 +85,11 @@ impl GuardedModes for TaskVerb {
             TaskVerb::ReviewReset => {
                 managed_run_refusal(ctx, "managed runs cannot reset review budgets")
             }
-            // A resident cycle is a managed run whose `dispatch` right covers
-            // re-piloting and requeueing; its grant is checked on the host,
-            // under its cycle guard, as for `orbit.workflow` action `ship`.
-            TaskVerb::Repilot | TaskVerb::Requeue
-                if ctx
-                    .orbit_host
-                    .as_ref()
-                    .is_some_and(|host| host.scope_is_resident_cycle()) =>
-            {
-                None
-            }
             TaskVerb::Repilot => {
                 managed_run_refusal(ctx, "managed runs cannot request another task pilot")
             }
             TaskVerb::Requeue => {
-                managed_run_refusal(ctx, "managed runs cannot requeue blocked tasks")
+                managed_run_refusal(ctx, "managed agents cannot requeue blocked tasks")
             }
             TaskVerb::Show
             | TaskVerb::List

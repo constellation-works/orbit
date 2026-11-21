@@ -117,6 +117,7 @@ fn assert_operator_refusal(error: &str, tool: &str) {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_cycle_with_dispatch_repilots_and_requeues_and_nothing_else_is_widened() {
     if !super::super::dispatch_admission::isolated(
@@ -142,7 +143,7 @@ fn a_cycle_with_dispatch_repilots_and_requeues_and_nothing_else_is_widened() {
     let run = fx.cycle_run(&mandate, "resident-cycle-recover");
     fx.begin_cycle(&run, Utc::now());
 
-    fx.as_cycle_agent(&run, || {
+    fx.as_brokered_cycle(&mandate, &run, || {
         // A workspace outside the grant is refused before anything runs.
         let error = repilot(&fx, &proposed, "ws_not_granted").expect_err("foreign workspace");
         assert!(error.contains("resident_scope_refused"), "{error}");
@@ -159,7 +160,7 @@ fn a_cycle_with_dispatch_repilots_and_requeues_and_nothing_else_is_widened() {
         let error = requeue_discarding_candidate(&fx, &held, &workspace)
             .expect_err("resident requeues cannot discard a candidate");
         assert!(
-            error.starts_with("capability denied:") && error.contains("discard_candidate"),
+            error.contains("capability denied:") && error.contains("discard_candidate"),
             "the typed refusal names the rejected parameter: {error}"
         );
         assert_eq!(
@@ -223,6 +224,7 @@ fn a_cycle_with_dispatch_repilots_and_requeues_and_nothing_else_is_widened() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn repilot_and_requeue_need_a_live_cycle_holding_dispatch() {
     if !super::super::dispatch_admission::isolated(
@@ -246,7 +248,7 @@ fn repilot_and_requeue_need_a_live_cycle_holding_dispatch() {
     fx.grant(&promote_only, &["promote"]);
     let run = fx.cycle_run(&promote_only, "resident-cycle-no-dispatch");
     fx.begin_cycle(&run, Utc::now());
-    fx.as_cycle_agent(&run, || both("resident_right_refused"));
+    fx.as_brokered_cycle(&promote_only, &run, || both("resident_right_refused"));
 
     // A cycle that holds the right but has finished.
     let dispatcher = fx.mandate(&held);
@@ -254,7 +256,7 @@ fn repilot_and_requeue_need_a_live_cycle_holding_dispatch() {
     let run = fx.cycle_run(&dispatcher, "resident-cycle-stale");
     fx.begin_cycle(&run, Utc::now());
     fx.runtime.finish_resident_cycle(&run).unwrap();
-    fx.as_cycle_agent(&run, || both("resident_cycle_stale"));
+    fx.as_brokered_cycle(&dispatcher, &run, || both("resident_cycle_stale"));
 
     // A managed run that is no cycle, and a session with no run binding, stay
     // held to the operator row.
@@ -265,7 +267,15 @@ fn repilot_and_requeue_need_a_live_cycle_holding_dispatch() {
     else {
         panic!("a fresh run key admits its run");
     };
-    fx.as_cycle_agent(&other.run_id, || both("capability denied:"));
+    fx.as_cycle_agent(&other.run_id, || {
+        let error = repilot(&fx, &proposed, &workspace).unwrap_err();
+        assert_operator_refusal(&error, "repilot");
+        let error = requeue(&fx, &held, &workspace).unwrap_err();
+        assert!(
+            error.contains("managed agents cannot requeue blocked tasks"),
+            "{error}"
+        );
+    });
     both("requires the `operator` capability");
 
     assert_eq!(
@@ -273,4 +283,34 @@ fn repilot_and_requeue_need_a_live_cycle_holding_dispatch() {
         TaskStatus::Blocked
     );
     assert_eq!(pilot_runs(&fx), 0, "no refused re-pilot submitted a pilot");
+}
+
+#[test]
+fn environment_only_cycle_cannot_exercise_operator_rights() {
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::recover::environment_only_cycle_cannot_exercise_operator_rights",
+    ) {
+        return;
+    }
+    let fx = fixture();
+    let task = fx.task("Watched task");
+    let mandate = fx.mandate(&task);
+    fx.grant(&mandate, &["dispatch", "merge"]);
+    let run = fx.cycle_run(&mandate, "resident-scope-only");
+    fx.begin_cycle(&run, Utc::now());
+    let history = fx.runtime.get_task_history(&mandate).unwrap();
+    fx.as_cycle_agent(&run, || {
+        // No target is needed. Authorization must refuse before validating the
+        // operation's input, submitting work, or opening a ledger entry.
+        for tool in [
+            "orbit.task.repilot",
+            "orbit.task.requeue",
+            "orbit.workflow.ship",
+            "orbit.workflow.land",
+        ] {
+            let error = fx.agent_call(tool, json!({})).expect_err(tool);
+            assert_operator_refusal(&error, tool);
+        }
+    });
+    assert_eq!(fx.runtime.get_task_history(&mandate).unwrap(), history);
 }

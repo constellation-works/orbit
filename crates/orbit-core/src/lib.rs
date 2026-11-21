@@ -82,6 +82,26 @@ pub fn mark_process_as_pipeline_worker_binary() {
 /// `test-support` feature. Enable it only from `[dev-dependencies]`.
 #[cfg(feature = "test-support")]
 pub mod test_support {
+    /// Serve the production broker dispatch in an isolated test whose peer is the test process.
+    #[cfg(unix)]
+    pub fn start_test_run_broker(
+        runtime: &crate::OrbitRuntime,
+        run: orbit_engine::PluginBrokerRun,
+    ) -> Result<crate::runtime::plugin::broker::PluginBroker, orbit_common::OrbitError> {
+        use crate::runtime::plugin::broker::{PeerAnchor, PluginBroker};
+        let peer = orbit_common::process::ancestry::process_start_key(std::process::id())
+            .ok_or_else(|| orbit_common::OrbitError::Execution("test process has exited".into()))?;
+        let run_id = run.run_id.clone();
+        let dispatch = crate::adapter::command::RunDispatch::new(runtime.clone(), run);
+        let broker = PluginBroker::start(
+            &runtime.global_root(),
+            &run_id,
+            std::sync::Arc::new(dispatch),
+        )?;
+        broker.bind_anchor(PeerAnchor::Ancestor(peer));
+        Ok(broker)
+    }
+
     pub use crate::application::auto_tasks::completion_test_support::with_completion_adapter_run;
     /// Freeze source budget time in an isolated test process and its CLI children.
     pub use crate::application::automation::source::SOURCE_ELAPSED_ENV;

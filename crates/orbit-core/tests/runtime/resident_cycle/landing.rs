@@ -246,6 +246,7 @@ fn action_rows(fx: &Fixture, mandate: &str, tool: &str) -> Vec<ResidentActionRow
     rows
 }
 
+#[cfg(unix)]
 #[test]
 fn a_cycle_with_the_merge_right_lands_a_delivery_through_one_audited_call() {
     if !super::super::dispatch_admission::isolated(
@@ -259,7 +260,9 @@ fn a_cycle_with_the_merge_right_lands_a_delivery_through_one_audited_call() {
     let task = review_task(&fx, &[PR]);
     forge.open(PR, &task);
 
-    let landed = fx.as_cycle_agent(&run, || land(&fx, &task)).unwrap();
+    let landed = fx
+        .as_brokered_cycle(&mandate, &run, || land(&fx, &task))
+        .unwrap();
 
     assert_eq!(landed["task_id"], task.as_str(), "{landed}");
     assert_eq!(landed["pull_request"], PR, "{landed}");
@@ -278,6 +281,7 @@ fn a_cycle_with_the_merge_right_lands_a_delivery_through_one_audited_call() {
     assert_eq!(rows[0].subject.as_deref(), Some(task.as_str()), "{rows:?}");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_remote_landing_failure_returns_its_stored_action_key() {
     if !super::super::dispatch_admission::isolated(
@@ -314,7 +318,7 @@ fn a_remote_landing_failure_returns_its_stored_action_key() {
         forge.0.lock().unwrap().merge_failure = Some(original.clone());
 
         let error = fx
-            .as_cycle_agent(&run, || landing_reply(&fx, &task))
+            .as_brokered_cycle(&mandate, &run, || landing_reply(&fx, &task))
             .expect_err("the admitted merge has an unknown outcome");
         let OrbitError::RemoteTool {
             code,
@@ -325,7 +329,10 @@ fn a_remote_landing_failure_returns_its_stored_action_key() {
             panic!("the remote error identity must survive: {error:?}");
         };
         assert_eq!(code.as_str(), "forge_unavailable");
-        assert_eq!(message, "The remote forge did not confirm the merge.");
+        assert_eq!(
+            message,
+            "brokered tool 'orbit.workflow.land' failed: The remote forge did not confirm the merge."
+        );
         for field in ["code", "message", "retryable"] {
             assert_eq!(payload[field], original[field], "{payload}");
         }
@@ -351,6 +358,7 @@ fn a_remote_landing_failure_returns_its_stored_action_key() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn a_branch_protection_refusal_is_recorded_and_leaves_the_task_in_review() {
     if !super::super::dispatch_admission::isolated(
@@ -366,10 +374,13 @@ fn a_branch_protection_refusal_is_recorded_and_leaves_the_task_in_review() {
     forge.0.lock().unwrap().refusal = Some("Required review is missing".to_string());
 
     let error = fx
-        .as_cycle_agent(&run, || landing_reply(&fx, &task))
+        .as_brokered_cycle(&mandate, &run, || landing_reply(&fx, &task))
         .expect_err("branch protection refuses");
 
-    assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error:?}");
+    assert!(
+        matches!(&error, OrbitError::RemoteTool { code, .. } if code.as_str() == "plugin_broker_refused"),
+        "{error:?}"
+    );
     let error = error.to_string();
     assert!(error.contains("task_landing_refused"), "{error}");
     assert!(error.contains("Required review is missing"), "{error}");
@@ -386,13 +397,14 @@ fn a_branch_protection_refusal_is_recorded_and_leaves_the_task_in_review() {
         state.pending_checks = vec!["Test".to_string()];
     }
     let error = fx
-        .as_cycle_agent(&run, || land(&fx, &task))
+        .as_brokered_cycle(&mandate, &run, || land(&fx, &task))
         .expect_err("a required check is still running");
     assert!(error.contains("task_landing_refused"), "{error}");
     assert!(forge.0.lock().unwrap().merge_requests.is_empty());
     assert_eq!(status(&fx, &task), TaskStatus::Review);
 }
 
+#[cfg(unix)]
 #[test]
 fn landing_needs_the_merge_right_and_a_cycle() {
     if !super::super::dispatch_admission::isolated(
@@ -407,7 +419,7 @@ fn landing_needs_the_merge_right_and_a_cycle() {
     forge.open(PR, &task);
 
     let error = fx
-        .as_cycle_agent(&run, || land(&fx, &task))
+        .as_brokered_cycle(&mandate, &run, || land(&fx, &task))
         .expect_err("the right is missing");
     assert!(error.contains("resident_right_refused"), "{error}");
 
@@ -420,6 +432,7 @@ fn landing_needs_the_merge_right_and_a_cycle() {
     assert_eq!(status(&fx, &task), TaskStatus::Review);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_repeated_landing_settles_a_merge_whose_reply_was_lost_without_merging_again() {
     if !super::super::dispatch_admission::isolated(
@@ -429,7 +442,7 @@ fn a_repeated_landing_settles_a_merge_whose_reply_was_lost_without_merging_again
     }
     let mut fx = fixture();
     let forge = Arc::new(LandingForge::default());
-    let (_, run) = live_cycle(&mut fx, &forge, &["merge"]);
+    let (mandate, run) = live_cycle(&mut fx, &forge, &["merge"]);
     let task = review_task(&fx, &[PR]);
     forge.open(PR, &task);
     forge
@@ -437,7 +450,9 @@ fn a_repeated_landing_settles_a_merge_whose_reply_was_lost_without_merging_again
         .expect("the first attempt merged");
     forge.0.lock().unwrap().merge_requests.clear();
 
-    let landed = fx.as_cycle_agent(&run, || land(&fx, &task)).unwrap();
+    let landed = fx
+        .as_brokered_cycle(&mandate, &run, || land(&fx, &task))
+        .unwrap();
 
     assert_eq!(landed["status"], "done", "{landed}");
     assert_eq!(landed["merge_commit"], MERGE_COMMIT, "{landed}");

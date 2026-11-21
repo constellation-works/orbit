@@ -190,7 +190,7 @@ impl OrbitRuntime {
         #[cfg(unix)]
         let resident_call = (crate::runtime::plugin::broker::is_brokered_resident_tool(name)
             || crate::runtime::plugin::broker::is_brokered_resident_completion(name, &input))
-            && self.caller_is_resident_cycle();
+            && self.env_names_resident_cycle();
         #[cfg(unix)]
         if let Some(socket) = std::env::var_os("ORBIT_PLUGIN_BROKER")
             && session_context.application.is_none()
