@@ -87,7 +87,7 @@ pub(super) fn push_incomplete_landing_reviewer_commit<H: RuntimeHost + ?Sized>(
     failed_step_id: &str,
     error_message: &str,
 ) -> Option<Value> {
-    // A merged PR's branch is gone: nothing can take the reviewer's commit.
+    // A merged PR cannot incorporate the reviewer's unapproved commit.
     if failed_step_id != LANDING_SETTLE_STEP
         || !error_message.contains(INCOMPLETE_VERDICT_REFUSAL)
         || error_message.contains(REVIEW_PR_MERGED_OUTSIDE_ORBIT)

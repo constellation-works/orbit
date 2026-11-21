@@ -246,22 +246,21 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
     // head it reviewed and nowhere else: a branch that moved since loses the
     // lease, and the push itself is conditional on that head.
     let lease = input_string_field(input, "lease_remote_sha");
-    if let Some(lease) = &lease
-        && remote_sha.as_deref() != Some(lease.as_str())
-    {
-        // A pull request merged at the published head (merge or squash) deletes
-        // the branch out from under the review. The repair is not lost: it is
-        // preserved and the step fails typed, instead of as a lost lease.
+    if let Some(lease) = &lease {
+        // The forge may retain the branch after merging at the reviewed head.
+        // Check the merge before pushing even when the branch still matches.
         if let Some(outcome) =
             review_repair_after_merge(host, input, workspace_path, &branch, lease, &local_sha)?
         {
             return Err(outcome);
         }
-        return Err(OrbitError::Execution(format!(
-            "push_lease_lost: 'origin/{branch}' is at {}, not the published head {lease} the \
+        if remote_sha.as_deref() != Some(lease.as_str()) {
+            return Err(OrbitError::Execution(format!(
+                "push_lease_lost: 'origin/{branch}' is at {}, not the published head {lease} the \
              review settled on; the reviewer fix is not pushed",
-            remote_sha.as_deref().unwrap_or("<missing>")
-        )));
+                remote_sha.as_deref().unwrap_or("<missing>")
+            )));
+        }
     }
     // A claimed leaf that adopted a published candidate's branch holds a lease
     // on exactly that head, whatever else the run observed. The read is
