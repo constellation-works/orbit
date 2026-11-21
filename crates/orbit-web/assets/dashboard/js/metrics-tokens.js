@@ -87,9 +87,6 @@ export function tokensModel(payload, { windowKey, shown, bucketTitle, bucketWidt
     label: entry.label,
     tag: "",
     on: isShown(entry.key),
-    value: fmtTokens(entry.total.mean),
-    sub: entry.total.n ? `median ${fmtTokens(entry.total.median)}` : "no tasks",
-    foot: `${tasks(entry.total.n)}${excluded(entry.total) ? ` · ${excluded(entry.total)} excluded` : ""}`,
   }));
 
   if (!total.n) {
@@ -120,8 +117,6 @@ export function tokensModel(payload, { windowKey, shown, bucketTitle, bucketWidt
   ];
   if (payload.undated_tasks) notes.push(undatedNote(payload.undated_tasks));
   if (payload.tags.length) notes.push(`with tag = carries ${payload.tags.join(" or ")} now (current tags, not tags at the time); dashed = without`);
-  if (payload.model) notes.push(`implementing model ${payload.model}; ${tasks(payload.excluded_other_model)} on other models left out`);
-  if (excluded(total)) notes.push(`excluded: ${total.excluded_uncovered} with an uncovered model, ${total.excluded_no_invocations} with no linked invocation`);
 
   return {
     blurb,
@@ -220,8 +215,6 @@ export function tokenSpendModel(payload, { windowKey, shown, countView, bucketTi
   ];
   if (payload.undated_tasks) notes.push(undatedNote(payload.undated_tasks));
   if (payload.tags.length) notes.push(`with tag = carries ${payload.tags.join(" or ")} now (current tags, not tags at the time); dashed = without`);
-  if (payload.model) notes.push(`implementing model ${payload.model}; ${tasks(payload.excluded_other_model)} on other models left out`);
-  if (excluded(total)) notes.push(`excluded: ${total.excluded_uncovered} with an uncovered model, ${total.excluded_no_invocations} with no linked invocation`);
 
   return {
     blurb,

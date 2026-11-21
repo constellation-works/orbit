@@ -1,7 +1,7 @@
 // Orbit dashboard Analytics › Metrics (ORB-15746): implement_one duration,
 // task completion, defect, tokens-per-task, turns-to-first-edit,
 // lines-changed and delivery-friction trends over the shared dashboard
-// window, with the per-actor tables beneath. The tokens,
+// window, with breakdowns for the selected trend beneath. The tokens,
 // turns-to-first-edit, lines-changed and delivery-friction trends keep
 // their filters and models in metrics-tokens.js, metrics-turns.js,
 // metrics-diff.js and metrics-friction.js. The count trends (Tasks completed,
@@ -9,32 +9,30 @@
 // day views, derived in metrics-running.js.
 // Pure vanilla JS, split into ES modules with no build step.
 //
-// One panel request reads the summary/detail endpoints and the selected
-// filtered trend. Tokens, turns to first edit, lines changed and delivery
-// friction load on opening their tab; polling reads only the selected one.
+// The active tab owns its trend and breakdown requests. Polls refresh that
+// tab, and filter changes refresh only the endpoint they affect.
 // Statistic, chart/table and series changes re-render locally. Hover moves
 // the tooltip in place.
 
 import {
   el, syncNodes, fetchJson, getWindow, setWindow, persistScopeToUrl, syncWindowSelectors,
-  notifyScopeChange, wireWindowSelector, requestPanel, panelCanRender, getWorkspaceRevision,
+  notifyScopeChange, wireWindowSelector, requestPanel, getWorkspaceRevision,
   onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, formatClock, getClockZone,
-  bindTaskLink, DASHBOARD_WINDOWS, pinnedInfoHint,
+  DASHBOARD_WINDOWS, pinnedInfoHint,
 } from './common.js';
-import { linePath, sparkline as lineSparkline, svg } from './sparkline.js';
+import { linePath, svg } from './sparkline.js';
 import { fetchTokens, isCurrentTokensPayload, tokenSpendModel, tokensModel, tokensQuery, tokensTools } from './metrics-tokens.js';
-import { TERMINAL_TIME_NOTE, availableCountViews, countViewHash, countViewsFromQuery, isCountTrend, resolveCountView, runningModel, undatedNote } from './metrics-running.js';
+import { TERMINAL_TIME_NOTE, availableCountViews, countViewHash, countViewsFromQuery, delta, fmtMs, isCountTrend, previousLabel, resolveCountView, runningModel, undatedNote } from './metrics-running.js';
 import { fetchTurns, isCurrentTurnsPayload, turnsModel, turnsQuery, turnsTools, turnsView } from './metrics-turns.js';
 import { diffModel, diffQuery, diffTools, diffView, fetchDiff, isCurrentDiffPayload } from './metrics-diff.js';
 import { fetchFriction, frictionModel, frictionQuery, frictionTools, frictionView, isCurrentFrictionPayload } from './metrics-friction.js';
+import { metricsPanelRows } from './metrics-panels.js';
 
 const $ = (id) => document.getElementById(id);
 
 // A bucket or actor with fewer runs than this is drawn hollow or dimmed: its
 // average is one or two runs, not a trend.
 const LOW_SAMPLE = 3;
-const LOW_ACTOR_SAMPLE = 5;
-const ACTORS_SHOWN = 7;
 
 const SERIES = [
   { key: "all", label: "All runs", doneLabel: "Done (total)", tag: "" },
@@ -44,7 +42,6 @@ const SERIES = [
 ];
 // Stacked bottom to top; `other` is xhard plus unset.
 const STACK = ["low", "medium", "hard", "other"];
-const COMPLEXITY_TABS = ["low", "medium", "hard", "xhard", "unset"];
 const STATS = [["avg", "Avg"], ["p50", "p50"], ["p95", "p95"]];
 // The filtered trends that refetch on their own: each one's fenced fetch and
 // currency test, keyed by its field in `lastPayload`.
@@ -59,9 +56,9 @@ const TRENDS = [["duration", "Implementation time"], ["completed", "Tasks comple
 const DEFECT_GROUPS = [["lineage", "Lineage"], ["origin", "Origin"]];
 // Lineage: what a bug's `regression_from` relations name as its cause.
 const LINEAGE_SERIES = [
-  { key: "fix_for_fix", label: "Fix-for-a-fix", tag: "bug ← bug" },
-  { key: "regression", label: "Other regression", tag: "bug ← work" },
-  { key: "unattributed", label: "Unattributed", tag: "no cause" },
+  { key: "fix_for_fix", label: "Fix-for-a-fix" },
+  { key: "regression", label: "Other regression" },
+  { key: "unattributed", label: "Unattributed" },
 ];
 // Origin: the finder that filed the bug. The chart keeps seven named finders
 // and folds the rest into Other; the table lists every origin the API sends.
@@ -81,7 +78,6 @@ const ORIGIN_LABELS = {
 const ORIGIN_CHART = ["code-review", "full-code-review", "delivery-code-review", "qa-sweep", "qa-full-sweep", "security-review", "ci-failure-sweep"];
 const MODES = [["chart", "Chart"], ["table", "Table"]];
 const OUTCOMES = [["succeeded", "Succeeded"], ["all", "All"]];
-const PROVIDERS = new Set(["claude", "codex", "gemini", "grok"]);
 
 const view = {
   outcome: "succeeded",
@@ -108,8 +104,6 @@ const view = {
   // by trend; the hash query remembers it.
   countViews: {},
   hover: null,
-  allActors: false,
-  complexity: null,
 };
 let lastPayload = null;
 let metricsRequestScope = null;
@@ -121,13 +115,41 @@ function wireMetricsWindowSelector() {
 function clearMetrics() {
   lastPayload = null;
   view.hover = null;
-  const count = $("metrics-count");
-  if (count) count.textContent = "—";
 }
 
 export function placeholdMetricsAggregate() {
   clearMetrics();
   renderPanelPlaceholder("metrics-body");
+}
+
+async function fetchMetric(path, selectedWindow, notYet) {
+  try {
+    const payload = await fetchJson(path);
+    if (!payload || (selectedWindow && windowKey(payload) !== selectedWindow)) {
+      return { unavailable: "The host did not return metrics for the selected window." };
+    }
+    return payload;
+  } catch (error) {
+    return { unavailable: error.status === 404 && notYet ? notYet : error.message };
+  }
+}
+
+function metricRequests(trend, selectedWindow, outcome) {
+  const since = `since=${encodeURIComponent(selectedWindow)}`;
+  const completions = () => fetchMetric(`/api/diagnostics/completions?${since}`, selectedWindow);
+  switch (trend) {
+    case "duration":
+      return { durations: fetchMetric(`/api/diagnostics/implement_one?${since}&outcome=${outcome}`, selectedWindow)
+        .then((payload) => payload.unavailable || payload.outcome === outcome
+          ? payload : { unavailable: "The host did not return metrics for the selected run outcome." }) };
+    case "completed":
+      return { completions: completions(), outcome: fetchMetric("/api/tasks/completion-by-complexity") };
+    case "defects":
+      return { defects: fetchMetric(`/api/diagnostics/defects?${since}`, selectedWindow,
+        "This host's Orbit does not report defects yet. Upgrade it to see this trend."), completions: completions() };
+    default:
+      return { [trend]: TREND_SOURCES[trend].fetch(selectedWindow) };
+  }
 }
 
 export function fetchAndRenderMetrics() {
@@ -140,51 +162,27 @@ export function fetchAndRenderMetrics() {
     return Promise.resolve();
   }
   const selectedWindow = getWindow();
-  const selectedOutcome = view.outcome;
-  const revision = getWorkspaceRevision();
-  const since = `since=${encodeURIComponent(selectedWindow)}`;
-  const scope = `/api/diagnostics/implement_one?${since}&outcome=${selectedOutcome}`;
-  if (metricsRequestScope !== `${revision}\0${scope}`) {
-    metricsRequestScope = `${revision}\0${scope}`;
+  const selectedTrend = view.trend;
+  const trend = activeTrendSource();
+  const outcome = view.outcome;
+  const scope = JSON.stringify([getWorkspaceRevision(), selectedWindow, outcome]);
+  if (metricsRequestScope !== scope) {
+    metricsRequestScope = scope;
     clearMetrics();
   }
-  return requestPanel("metrics-body", scope, () => Promise.all([
-    fetchJson(scope),
-    fetchJson(`/api/diagnostics/completions?${since}`),
-    fetchJson("/api/tasks/completion-by-complexity"),
-    // A host running an older Orbit has no defect trend; the other trends
-    // still render and the Defects tab says why it is empty.
-    fetchJson(`/api/diagnostics/defects?${since}`).catch((error) => ({
-      unavailable: error.status === 404 ? "This host's Orbit does not report defects yet. Upgrade it to see this trend." : error.message,
-    })),
-    view.trend === "tokens" || view.trend === "tokens-total" ? fetchTokens(selectedWindow) : null,
-    view.trend === "diff" ? fetchDiff(selectedWindow) : null,
-    view.trend === "friction" ? fetchFriction(selectedWindow) : null,
-    view.trend === "turns" ? fetchTurns(selectedWindow) : null,
-  ]), ([durations, completions, outcome, defects, tokens, diff, friction, turns]) => {
-    if (getWorkspaceRevision() !== revision || getWindow() !== selectedWindow || view.outcome !== selectedOutcome) return;
-    // A refresh started before a token-filter change must keep the token
-    // result (or loading/error state) already applied for the current filter,
-    // while still applying its same-scope duration and trend results.
-    const settled = (trend, payload) => (TREND_SOURCES[trend].isCurrent(payload, selectedWindow)
-      ? payload
-      : (lastPayload ? lastPayload[trend] : null));
-    const currentTokens = settled("tokens", tokens);
-    const currentDiff = settled("diff", diff);
-    // Likewise a friction refetch after a family or filter change.
-    const currentFriction = settled("friction", friction);
-    const currentTurns = settled("turns", turns);
-    if (currentFriction && !currentFriction.unavailable && windowKey(currentFriction) !== selectedWindow) {
-      console.error(`metrics friction payload window rejected under ${selectedWindow} selection`);
-      return;
+  return requestPanel("metrics-body", scope, async () => {
+    const requests = Object.entries(metricRequests(trend, selectedWindow, outcome));
+    return Promise.all(requests.map(async ([key, request]) => [key, await request]));
+  }, (entries) => {
+    if (selectedTrend !== view.trend) return;
+    lastPayload ??= { windowKey: selectedWindow };
+    for (const [key, payload] of entries) {
+      if (!TREND_SOURCES[key] || TREND_SOURCES[key].isCurrent(payload, selectedWindow)) {
+        lastPayload[key] = checkedTrendWindow(payload, selectedWindow, key);
+      }
     }
-    if (windowKey(durations) !== selectedWindow || windowKey(completions) !== selectedWindow || (!defects.unavailable && windowKey(defects) !== selectedWindow) || (currentTokens && !currentTokens.unavailable && windowKey(currentTokens) !== selectedWindow) || (currentTurns && !currentTurns.unavailable && windowKey(currentTurns) !== selectedWindow) || (currentDiff && !currentDiff.unavailable && windowKey(currentDiff) !== selectedWindow) || durations.outcome !== selectedOutcome) {
-      console.error(`metrics payload window rejected under ${selectedWindow} selection`);
-      return;
-    }
-    lastPayload = { windowKey: selectedWindow, durations, completions, defects, tokens: currentTokens, turns: currentTurns, diff: currentDiff, friction: currentFriction, outcome: (outcome && outcome.by_complexity) || [] };
     renderMetrics();
-  }, "metrics-count");
+  });
 }
 
 onWorkspaceChange(() => {
@@ -196,6 +194,11 @@ function windowKey(payload) {
   return payload && payload.window ? payload.window.key : null;
 }
 
+function checkedTrendWindow(payload, selectedWindow, key) {
+  if (!TREND_SOURCES[key] || payload.unavailable || windowKey(payload) === selectedWindow) return payload;
+  return { unavailable: "The host did not return metrics for the selected window." };
+}
+
 export function renderMetrics() {
   const body = $("metrics-body");
   if (!body) return;
@@ -203,35 +206,23 @@ export function renderMetrics() {
     placeholdMetricsAggregate();
     return;
   }
-  if (!lastPayload || !panelCanRender("metrics-body")) return;
-  const { durations, completions } = lastPayload;
-  const count = $("metrics-count");
-  if (count) {
-    const runs = durations.current && durations.current.all ? durations.current.all.n : 0;
-    count.textContent = `${runs} runs · ${completions.current.done.total} done · window ${lastPayload.windowKey}`;
-  }
-  syncNodes(body, [
-    trendSection(),
-    el("div", { class: "mx-row" }, [actorsCard(), slowestCard()]),
-    el("div", { class: "mx-row" }, [complexityActorsCard(), outcomeCard()]),
-  ].map((node, index) => keyed(node, `metrics-${index}`, sectionHash(index))));
-}
-
-function keyed(node, key, hash) {
-  node.dataset.key = key;
-  node.dataset.hash = hash;
-  return node;
-}
-
-function sectionHash(index) {
-  const { hover, ...state } = view;
+  if (!lastPayload) return;
   const p = lastPayload;
-  const parts = [
-    [state.outcome, state.trend, state.group, state.stat, state.mode, state.shown, state.countViews, p.windowKey, p.durations.buckets, p.durations.current, p.durations.previous, p.completions, p.defects, p.tokens, tokensQuery(p.windowKey), p.turns, turnsQuery(p.windowKey), turnsView, p.diff, diffQuery(p.windowKey), diffView, p.friction, frictionQuery(p.windowKey), frictionView],
-    [state.allActors, p.durations.actors, p.durations.slowest],
-    [state.complexity, p.durations.implement_one_by_complexity, p.outcome],
-  ];
-  return JSON.stringify(parts[index]);
+  const { hover, ...trendState } = view;
+  syncNodes(body, [
+    keyed(trendSection(), "metrics-trend", [
+      trendState, p.windowKey, p.durations?.buckets, p.durations?.current, p.durations?.previous, p.durations?.unavailable,
+      p.completions, p.defects, p.tokens, tokensQuery(p.windowKey), p.turns, turnsQuery(p.windowKey), turnsView,
+      p.diff, diffQuery(p.windowKey), diffView, p.friction, frictionQuery(p.windowKey), frictionView,
+    ]),
+    ...metricsPanelRows(view.trend, p, rerender, { originLabels: ORIGIN_LABELS, lineageSeries: LINEAGE_SERIES }).map(([key, node, data]) => keyed(node, key, data)),
+  ]);
+}
+
+function keyed(node, key, data) {
+  node.dataset.key = key;
+  node.dataset.hash = JSON.stringify(data, (key, value) => key === "trendFence" ? undefined : value);
+  return node;
 }
 
 function rerender() {
@@ -239,20 +230,6 @@ function rerender() {
 }
 
 // ---- formatting -----------------------------------------------------------
-
-/// "43.9m", "1h 05m", "45s" — minutes carry one decimal so close trends stay
-/// distinguishable.
-function fmtMs(ms) {
-  if (ms == null || !Number.isFinite(Number(ms))) return "—";
-  const value = Number(ms);
-  if (value < 60000) return `${Math.round(value / 1000)}s`;
-  const minutes = value / 60000;
-  if (minutes < 60) return `${minutes.toFixed(1)}m`;
-  let hours = Math.floor(minutes / 60);
-  let rest = Math.round(minutes - hours * 60);
-  if (rest === 60) { hours += 1; rest = 0; }
-  return `${hours}h ${String(rest).padStart(2, "0")}m`;
-}
 
 function axisLabel(minutes) {
   if (minutes === 0) return "0";
@@ -319,48 +296,6 @@ function bucketTitle(start, seconds, last) {
   return last ? `${range} · in progress` : range;
 }
 
-function previousLabel(windowKeyValue) {
-  return windowKeyValue === "all" ? "" : `prev ${windowKeyValue}`;
-}
-
-// mode "duration": higher is worse; "count": higher is better; "defects":
-// a count where higher is worse.
-function delta(current, previous, mode) {
-  if (current == null) return null;
-  // Nothing then and nothing now is no change, not a new series.
-  if (!current && !previous) return null;
-  if (previous == null || !previous) return { text: "new", cls: "flat" };
-  const ratio = (current - previous) / previous * 100;
-  const abs = Math.abs(ratio);
-  const text = `${ratio >= 0 ? "▲" : "▼"} ${abs >= 10 ? Math.round(abs) : abs.toFixed(1)}%`;
-  const higherIsWorse = mode === "duration" || mode === "defects";
-  const worse = higherIsWorse ? ratio > 5 : ratio < -5;
-  const better = higherIsWorse ? ratio < -5 : ratio > 5;
-  const word = mode === "duration" ? (ratio >= 0 ? "slower" : "faster") : (ratio >= 0 ? "more" : "fewer");
-  return { text: `${text} ${word}`, cls: worse ? "bad" : better ? "good" : "flat" };
-}
-
-function splitActor(name) {
-  const parts = String(name || "").split(" / ");
-  const provider = parts.length > 1 ? parts[0] : "";
-  return { provider, model: parts.length > 1 ? parts.slice(1).join(" / ") : parts[0] };
-}
-
-function providerDot(provider, className = "mx-dot") {
-  const dot = el("span", { class: className, "aria-hidden": "true" });
-  dot.style.background = PROVIDERS.has(provider) ? `var(--ag-${provider})` : "var(--fg-mute)";
-  return dot;
-}
-
-function actorCell(actor) {
-  const who = splitActor(actor);
-  return el("span", { class: "mx-actor", title: actor }, [
-    providerDot(who.provider),
-    el("span", { class: "mx-actor-model", text: who.model }),
-    who.provider ? el("span", { class: "mx-actor-provider", text: who.provider }) : null,
-  ]);
-}
-
 // ---- trend section --------------------------------------------------------
 
 function segGroup(label, items, current, onPick) {
@@ -398,17 +333,15 @@ function pickTrend(key) {
   if (view.trend === key) return;
   view.trend = key;
   view.hover = null;
-  // A hidden filtered trend may be from a previous poll. Clear it before
-  // reading the current selection, using the same fences as filter changes.
   if (lastPayload) {
-    const selectedWindow = lastPayload.windowKey;
-    const trend = key === "tokens-total" ? "tokens" : key;
-    if (TREND_SOURCES[trend]) {
-      applyTrend(trend, null);
-      TREND_SOURCES[trend].fetch(selectedWindow).then((payload) => applyTrend(trend, payload));
-    }
+    lastPayload = { windowKey: lastPayload.windowKey };
+    rerender();
   }
-  rerender();
+  fetchAndRenderMetrics();
+}
+
+function activeTrendSource() {
+  return view.trend === "tokens-total" ? "tokens" : view.trend;
 }
 
 // The series-visibility key for the current trend; each defect grouping keeps
@@ -425,14 +358,13 @@ function shownKey() {
 // grouping and friction measure toggles do not come through here; they redraw
 // from their view state.
 function applyTrend(key, payload) {
-  if (!lastPayload) return;
+  if (!lastPayload || key !== activeTrendSource()) return;
   if (payload === null) {
     lastPayload[key] = null;
     view.hover = null;
   } else if (payload !== undefined) {
     if (!TREND_SOURCES[key].isCurrent(payload, lastPayload.windowKey)) return;
-    if (!payload.unavailable && windowKey(payload) !== lastPayload.windowKey) return;
-    lastPayload[key] = payload;
+    lastPayload[key] = checkedTrendWindow(payload, lastPayload.windowKey, key);
     view.hover = null;
   }
   rerender();
@@ -575,12 +507,12 @@ function seriesCards(cards) {
         card.label,
         card.tag && card.tag !== card.label.toLowerCase() ? el("span", { class: "mx-sc-tag", text: card.tag }) : null,
       ]),
-      el("span", { class: "mx-sc-value", text: card.value }),
-      el("span", { class: "mx-sc-delta" }, [
+      card.value != null ? el("span", { class: "mx-sc-value", text: card.value }) : null,
+      card.delta || card.sub ? el("span", { class: "mx-sc-delta" }, [
         card.delta ? el("span", { class: card.delta.cls, text: card.delta.text }) : null,
-        el("span", { class: "mx-sc-sub", text: card.sub }),
-      ]),
-      el("span", { class: "mx-sc-foot", text: card.foot }),
+        card.sub ? el("span", { class: "mx-sc-sub", text: card.sub }) : null,
+      ]) : null,
+      card.foot ? el("span", { class: "mx-sc-foot", text: card.foot }) : null,
     ]);
     button.addEventListener("click", () => {
       const shown = view.shown[shownKey()];
@@ -592,6 +524,16 @@ function seriesCards(cards) {
     });
     return button;
   }));
+}
+
+function pendingTrend(title, blurb, payload) {
+  return {
+    blurb, cards: [], empty: {
+      title: payload ? `${title} unavailable` : `Loading ${title.toLowerCase()}…`,
+      detail: payload?.unavailable,
+      noWiden: true,
+    },
+  };
 }
 
 function emptyTrend({ title, detail, noWiden }) {
@@ -616,6 +558,7 @@ function emptyTrend({ title, detail, noWiden }) {
 
 function durationModel() {
   const payload = lastPayload.durations;
+  if (!payload || payload.unavailable) return pendingTrend("Implementation time", "Wall-clock time for implementation runs.", payload);
   const windowKeyValue = lastPayload.windowKey;
   const buckets = payload.buckets || [];
   const seconds = payload.window.bucket_seconds;
@@ -733,6 +676,7 @@ function doneCount(counts, key) {
 
 function completedModel(countView) {
   const payload = lastPayload.completions;
+  if (!payload || payload.unavailable) return pendingTrend("Tasks completed", "Tasks that moved to done in each bucket, by complexity.", payload);
   const windowKeyValue = lastPayload.windowKey;
   const buckets = payload.buckets || [];
   const seconds = payload.window.bucket_seconds;
@@ -743,20 +687,19 @@ function completedModel(countView) {
   const unit = perBucketUnit(seconds);
 
   const cards = SERIES.map((series) => {
+    const isTotal = series.key === "all";
     const cur = doneCount(current, series.key);
     const prev = previous ? doneCount(previous, series.key) : null;
     return {
       key: series.key,
       label: series.doneLabel,
       tag: series.tag,
-      bar: series.key !== "all",
+      bar: !isTotal,
       on: !!shown[series.key],
-      value: String(cur),
-      delta: previous ? delta(cur, prev, "count") : null,
-      sub: previous ? `vs ${prevText} ${prev}` : `window ${windowKeyValue}`,
-      foot: series.key === "all"
-        ? `${current.rejected} rejected · ${current.archived} archived`
-        : `${current.done.total ? Math.round(cur / current.done.total * 100) : 0}% of done`,
+      value: isTotal ? String(cur) : null,
+      delta: isTotal && previous ? delta(cur, prev, "count") : null,
+      sub: isTotal && previous ? `vs ${prevText} ${prev}` : null,
+      foot: !isTotal && current.done.total ? `${Math.round(cur / current.done.total * 100)}% of done` : null,
     };
   });
 
@@ -880,10 +823,8 @@ function pct(part, whole) {
 
 function defectsModel(countView) {
   const payload = lastPayload.defects;
+  if (!payload || payload.unavailable) return pendingTrend("Defects", "Bug tasks filed in each bucket.", payload);
   const windowKeyValue = lastPayload.windowKey;
-  if (payload.unavailable) {
-    return { blurb: "Bug tasks filed in each bucket.", cards: [], empty: { title: "Defect trend unavailable", detail: payload.unavailable, noWiden: true } };
-  }
   const buckets = payload.buckets || [];
   const seconds = payload.window.bucket_seconds;
   const shown = view.shown[shownKey()];
@@ -893,29 +834,25 @@ function defectsModel(countView) {
   const unit = perBucketUnit(seconds);
   const series = defectSeries();
   const lineageOn = view.group === "lineage";
-  const fixForFix = current.lineage.fix_for_fix || 0;
 
-  const card = (key, label, tag, bar) => {
+  const card = (key, label, bar) => {
     const cur = defectCount(current, key);
     const prev = previous ? defectCount(previous, key) : null;
     return {
       key,
       label,
-      tag,
       bar,
       on: !!shown[key],
-      value: String(cur),
-      delta: previous ? delta(cur, prev, "defects") : null,
-      sub: previous ? `vs ${prevText} ${prev}` : `window ${windowKeyValue}`,
-      foot: key === "all"
-        ? `${fixForFix} fix-for-a-fix (${pct(fixForFix, current.total)}%)`
-        : `${pct(cur, current.total)}% of defects`,
+      value: key === "all" ? String(cur) : null,
+      delta: key === "all" && previous ? delta(cur, prev, "defects") : null,
+      sub: key === "all" && previous ? `vs ${prevText} ${prev}` : null,
+      foot: key !== "all" && current.total ? `${pct(cur, current.total)}% of defects` : null,
     };
   };
-  const cards = [card("all", "Defects (total)", "", false), ...series.map((entry) => card(entry.key, entry.label, entry.tag || "", true))];
+  const cards = [card("all", "Defects (total)", false), ...series.map((entry) => card(entry.key, entry.label, true))];
 
   const blurb = lineageOn
-    ? "Bug tasks filed in each bucket, by what their regression_from relation names as the cause. Fix-for-a-fix: the cause was itself a bug fix."
+    ? "Bug tasks filed in each bucket, by what their regression_from relation names as the cause. Fix-for-a-fix names a bug fix, other regression names another type of task, and unattributed defects have no cause recorded."
     : "Bug tasks filed in each bucket, by the review or sweep that filed them.";
   if (!current.total) {
     return { blurb, cards, empty: { title: `No defects filed in the last ${windowKeyValue === "all" ? "recorded history" : windowKeyValue}`, detail: "" } };
@@ -1189,153 +1126,3 @@ function fillTip(tip, model) {
 }
 
 // ---- detail cards ---------------------------------------------------------
-
-function card(title, meta, children, className = "") {
-  return el("section", { class: `mx-card ${className}`.trim(), "aria-label": title }, [
-    el("div", { class: "mx-card-head" }, [
-      el("h2", { class: "mx-card-title", text: title }),
-      meta ? el("span", { class: "mx-card-meta", text: meta }) : null,
-    ]),
-    ...children,
-  ]);
-}
-
-function emptyNote(text) {
-  return el("div", { class: "mx-empty-note", text });
-}
-
-function sparkline(trend, max, label) {
-  const values = trend || [];
-  const points = values.map((v, i) => (v == null ? null : { x: (i + 0.5) / values.length * 100, y: 100 - v / (max * 1.05) * 100 }));
-  return lineSparkline(points, { className: "mx-spark", lineClass: "mx-spark-line", label });
-}
-
-function actorsCard() {
-  const payload = lastPayload.durations;
-  const actors = payload.actors || [];
-  const prevText = previousLabel(lastPayload.windowKey);
-  const meta = `window ${lastPayload.windowKey} · sorted by runs${prevText ? ` · Δ = avg vs ${prevText}` : ""}`;
-  if (!actors.length) return card("Implementation time by actor", meta, [emptyNote("No implementation runs in this window.")], "mx-wide");
-  let sparkMax = 0;
-  for (const actor of actors) for (const v of actor.trend || []) if (v != null) sparkMax = Math.max(sparkMax, v);
-  const rows = (view.allActors ? actors : actors.slice(0, ACTORS_SHOWN)).map((actor) => {
-    const change = prevText ? delta(actor.avg, actor.previous_avg, "duration") : null;
-    const stroke = providerDot(splitActor(actor.actor).provider).style.background;
-    const spark = sparkline(actor.trend, sparkMax || 1, `${splitActor(actor.actor).model} average per bucket`);
-    spark.style.color = stroke;
-    return el("tr", { class: actor.n < LOW_ACTOR_SAMPLE ? "mx-dim" : "" }, [
-      el("th", { scope: "row" }, [actorCell(actor.actor)]),
-      el("td", { class: "num", text: String(actor.n) }),
-      el("td", { class: "num strong", text: fmtMs(actor.avg) }),
-      el("td", { class: "num", text: fmtMs(actor.p50) }),
-      el("td", { class: "num", text: fmtMs(actor.p95) }),
-      prevText ? el("td", { class: "num" }, [change ? el("span", { class: change.cls, text: change.text.replace(/ (slower|faster)$/, "") }) : "—"]) : null,
-      el("td", { class: "mx-spark-cell" }, [spark]),
-    ]);
-  });
-  const head = el("tr", {}, ["Actor", "Runs", "Avg", "p50", "p95", prevText ? "Δ avg" : null, "Avg trend"].filter(Boolean).map((label, i) => el("th", { class: i === 0 || label === "Avg trend" ? "" : "num", scope: "col", text: label })));
-  const children = [el("div", { class: "mx-table-wrap" }, [el("table", { class: "mx-table mx-actors" }, [el("thead", {}, [head]), el("tbody", {}, rows)])])];
-  if (actors.length > ACTORS_SHOWN) {
-    const toggle = el("button", { class: "mx-link-btn", type: "button", text: view.allActors ? `Show top ${ACTORS_SHOWN}` : `Show all ${actors.length} actors` });
-    toggle.addEventListener("click", () => { view.allActors = !view.allActors; rerender(); });
-    children.push(el("div", {}, [toggle]));
-  }
-  return card("Implementation time by actor", meta, children, "mx-wide");
-}
-
-function slowestCard() {
-  const slowest = lastPayload.durations.slowest || [];
-  if (!slowest.length) return card("Slowest runs", `window ${lastPayload.windowKey}`, [emptyNote("No runs in this window.")], "mx-narrow");
-  const items = slowest.map((run) => {
-    const who = splitActor(run.actor);
-    const task = run.task_id ? bindTaskLink(el("a", { class: "mono", text: run.task_id }), run.task_id) : el("span", { class: "mx-muted", text: "no task" });
-    return el("li", { class: "mx-slow" }, [
-      el("span", { class: "mx-slow-dur", text: fmtMs(run.duration_ms) }),
-      el("span", { class: "mx-slow-body" }, [
-        task,
-        el("span", { class: "mx-slow-meta", title: `${run.actor} · ${formatDateTime(run.ts)}` }, [
-          providerDot(who.provider, "mx-dot small"),
-          `${who.model} · ${run.complexity} · ${formatDateTime(run.ts)}`,
-        ]),
-      ]),
-    ]);
-  });
-  return card("Slowest runs", `window ${lastPayload.windowKey}`, [el("ol", { class: "mx-slow-list" }, items)], "mx-narrow");
-}
-
-function complexityActorsCard() {
-  const bands = lastPayload.durations.implement_one_by_complexity || [];
-  const byKey = new Map(bands.map((band) => [band.complexity, band]));
-  const selected = view.complexity && byKey.has(view.complexity)
-    ? view.complexity
-    : (["medium", "hard", "low", "xhard", "unset"].find((key) => byKey.has(key)) || "medium");
-  const tabs = el("div", { class: "mx-cx-tabs", role: "group", "aria-label": "Complexity" }, COMPLEXITY_TABS.map((key) => {
-    const band = byKey.get(key);
-    const on = key === selected;
-    const button = el("button", { class: on ? "mx-cx-tab on" : "mx-cx-tab", type: "button", "aria-pressed": on ? "true" : "false" }, [
-      key,
-      el("span", { class: "mx-cx-n", text: String(band ? band.n : 0) }),
-    ]);
-    button.disabled = !band;
-    button.addEventListener("click", () => { view.complexity = key; rerender(); });
-    return button;
-  }));
-  const band = byKey.get(selected);
-  if (!band) return card("Actors within a complexity", "last 30d · bar = avg, tick = p95", [tabs, emptyNote("No implementation runs in the last 30d.")], "mx-wide");
-  const actors = [...band.actors].sort((a, b) => b.n - a.n || a.actor.localeCompare(b.actor));
-  const max = Math.max(...actors.map((actor) => actor.p95), 1);
-  const rows = actors.map((actor) => {
-    const bar = el("div", { class: "mx-dist", "aria-hidden": "true" }, [el("div", { class: "mx-dist-avg" }), el("div", { class: "mx-dist-p95" })]);
-    const color = providerDot(splitActor(actor.actor).provider).style.background;
-    bar.firstChild.style.width = `${actor.avg / max * 100}%`;
-    bar.firstChild.style.background = color;
-    bar.lastChild.style.left = `${Math.min(actor.p95 / max * 100, 99.5)}%`;
-    return el("tr", { class: actor.n < LOW_ACTOR_SAMPLE ? "mx-dim" : "" }, [
-      el("th", { scope: "row" }, [actorCell(actor.actor)]),
-      el("td", { class: "num", text: String(actor.n) }),
-      el("td", { class: "num strong", text: fmtMs(actor.avg) }),
-      el("td", { class: "num", text: fmtMs(actor.p95) }),
-      el("td", { class: "mx-dist-cell" }, [bar]),
-    ]);
-  });
-  const head = el("tr", {}, [
-    el("th", { scope: "col", text: "Actor" }),
-    el("th", { class: "num", scope: "col", text: "Runs" }),
-    el("th", { class: "num", scope: "col", text: "Avg" }),
-    el("th", { class: "num", scope: "col", text: "p95" }),
-    el("th", { scope: "col" }, [el("span", { class: "visually-hidden", text: "Distribution" })]),
-  ]);
-  return card("Actors within a complexity", "last 30d · bar = avg, tick = p95", [
-    tabs,
-    el("div", { class: "mx-table-wrap" }, [el("table", { class: "mx-table" }, [el("thead", {}, [head]), el("tbody", {}, rows)])]),
-  ], "mx-wide");
-}
-
-function outcomeCard() {
-  const rows = lastPayload.outcome || [];
-  const legend = el("div", { class: "mx-outcome-legend" }, [["done", "done"], ["rejected", "rejected"], ["archived", "archived"], ["open", "open"]].map(([key, label]) =>
-    el("span", {}, [el("span", { class: `mx-swatch bar mx-o-${key}`, "aria-hidden": "true" }), label])));
-  if (!rows.length) return card("Outcome by complexity", "all time", [legend, emptyNote("No tasks.")], "mx-narrow");
-  const bars = rows.map((row) => {
-    const counts = {};
-    for (const status of row.statuses || []) counts[status.status] = status.count;
-    const total = row.total || 0;
-    const pct = (n) => (total ? (n || 0) / total * 100 : 0);
-    const open = total - (counts.done || 0) - (counts.rejected || 0) - (counts.archived || 0);
-    const label = row.complexity === "unset" ? "unset (unlabeled)" : row.complexity;
-    const meter = el("div", { class: "mx-outcome-bar", role: "img", "aria-label": `${label}: ${counts.done || 0} done, ${counts.rejected || 0} rejected, ${counts.archived || 0} archived, ${open} open of ${total}` },
-      ["done", "rejected", "archived"].map((key) => {
-        const fill = el("div", { class: `mx-o-${key}` });
-        fill.style.width = `${pct(counts[key])}%`;
-        return fill;
-      }));
-    return el("div", { class: "mx-outcome" }, [
-      el("div", { class: "mx-outcome-head" }, [
-        el("span", { text: label }),
-        el("span", { class: "mx-muted num", text: `${pct(counts.done).toFixed(1)}% done · n=${total}` }),
-      ]),
-      meter,
-    ]);
-  });
-  return card("Outcome by complexity", "all time", [legend, el("div", { class: "mx-outcomes" }, bars)], "mx-narrow");
-}

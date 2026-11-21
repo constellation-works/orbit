@@ -293,3 +293,38 @@ export function tagPicker({ tags, offered, apply }) {
   });
   return el("div", { class: "mx-tags", role: "group", "aria-label": "Tag cohorts" }, [picker, ...chips]);
 }
+
+/// "43.9m", "1h 05m", "45s" — minutes carry one decimal so close trends stay
+/// distinguishable.
+export function fmtMs(ms) {
+  if (ms == null || !Number.isFinite(Number(ms))) return "—";
+  const value = Number(ms);
+  if (value < 60000) return `${Math.round(value / 1000)}s`;
+  const minutes = value / 60000;
+  if (minutes < 60) return `${minutes.toFixed(1)}m`;
+  let hours = Math.floor(minutes / 60);
+  let rest = Math.round(minutes - hours * 60);
+  if (rest === 60) { hours += 1; rest = 0; }
+  return `${hours}h ${String(rest).padStart(2, "0")}m`;
+}
+
+export function previousLabel(windowKeyValue) {
+  return windowKeyValue === "all" ? "" : `prev ${windowKeyValue}`;
+}
+
+// mode "duration": higher is worse; "count": higher is better; "defects":
+// a count where higher is worse.
+export function delta(current, previous, mode) {
+  if (current == null) return null;
+  // Nothing then and nothing now is no change, not a new series.
+  if (!current && !previous) return null;
+  if (previous == null || !previous) return { text: "new", cls: "flat" };
+  const ratio = (current - previous) / previous * 100;
+  const abs = Math.abs(ratio);
+  const text = `${ratio >= 0 ? "▲" : "▼"} ${abs >= 10 ? Math.round(abs) : abs.toFixed(1)}%`;
+  const higherIsWorse = mode === "duration" || mode === "defects";
+  const worse = higherIsWorse ? ratio > 5 : ratio < -5;
+  const better = higherIsWorse ? ratio < -5 : ratio > 5;
+  const word = mode === "duration" ? (ratio >= 0 ? "slower" : "faster") : (ratio >= 0 ? "more" : "fewer");
+  return { text: `${text} ${word}`, cls: worse ? "bad" : better ? "good" : "flat" };
+}

@@ -10,7 +10,7 @@
 // which passes its helpers in.
 
 import { el } from './common.js';
-import { COMPLEXITIES, axisScale, option, trendSource, undatedNote } from './metrics-running.js';
+import { COMPLEXITIES, axisScale, delta, option, previousLabel, trendSource, undatedNote } from './metrics-running.js';
 
 const FAMILIES = [
   { key: "step_recovery", label: "Step recoveries", swatch: "c1" },
@@ -73,10 +73,6 @@ function fmtRate(unit, value) {
   if (unit === "usd") return `$${value.toFixed(2)}`;
   if (unit === "tokens") return compact(Math.round(value));
   return value >= 10 ? value.toFixed(1) : value.toFixed(2);
-}
-
-function unitWord(unit) {
-  return unit === "usd" ? "USD" : unit === "tokens" ? "tokens" : "events";
 }
 
 function tasksDone(n) {
@@ -159,28 +155,17 @@ export function frictionModel(payload, { windowKey, shown, bucketTitle, bucketWi
 
   const cards = families.map((family) => {
     const total = family.total;
-    const previous = family.previous;
-    const value = valueOf(family, total);
-    // Friction is worse when it rises, as the defects trend reads it.
-    let deltaText = null;
-    const prior = previous ? valueOf(family, previous) : null;
-    if (prior != null && value != null && prior > 0) {
-      const change = (value - prior) / prior * 100;
-      const abs = Math.abs(change);
-      deltaText = {
-        cls: change > 5 ? "bad" : change < -5 ? "good" : "flat",
-        text: `${change >= 0 ? "▲" : "▼"} ${abs >= 10 ? Math.round(abs) : abs.toFixed(1)}% vs prev ${windowKey}`,
-      };
-    }
+    const priorRate = family.previous?.rate;
+    const rateChange = rate && priorRate > 0 ? delta(total.rate, priorRate, "defects") : null;
     return {
       key: family.key,
       swatch: family.swatch,
       label: family.label,
       tag: filtering && !family.filtered ? "unfiltered" : "",
       on: isShown(family.key),
-      value: fmtValue(family, value),
-      delta: deltaText,
-      sub: rate ? `${fmtAmount(family.unit, total.count)} ${unitWord(family.unit)}` : `${fmtRate(family.unit, total.rate)} per done task`,
+      value: fmtRate(family.unit, total.rate),
+      sub: "per done task",
+      delta: rateChange ? { ...rateChange, text: `${rateChange.text} vs ${previousLabel(windowKey)}` } : null,
       foot: tasksDone(total.denominator),
     };
   });

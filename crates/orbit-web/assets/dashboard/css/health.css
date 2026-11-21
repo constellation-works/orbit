@@ -848,6 +848,10 @@ td .rel-rate { font-size: 12px; }
 .mx-table .num { text-align: right; white-space: nowrap; }
 .mx-table td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .mx-table .strong { color: var(--fg); font-weight: 500; }
+.metrics-body .mx-card-title { display: flex; align-items: center; gap: 6px; }
+.mx-table.mx-panel-table { min-width: 0; }
+.mx-panel-table tbody th { white-space: normal; overflow-wrap: anywhere; }
+.mx-panel-table th, .mx-panel-table td { padding-inline: 8px; }
 /* Low-sample rows read as de-emphasised by colour, not row opacity, which would
    drop their text below 4.5:1; only the non-text marks fade. */
 .mx-table .mx-dim > * { color: var(--fg-mute); }
