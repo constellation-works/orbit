@@ -115,6 +115,7 @@ CLI behavior, state layout, or recovery semantics change.
 | [Bound Concurrent Orbit Repository Builds](./runbooks/build-budget.md) | Run Cargo builds within Orbit's host-wide cross-worktree admission and compiler-job budget. |
 | [Run local Rust CodeQL for code-scanning repairs and security changes](./runbooks/codeql-local.md) | Run local Rust CodeQL once per delivery for code-scanning repairs, security-tagged tasks and CodeQL setup changes, with a verified host toolchain cache, bounded concurrency, threaded evaluation and exact-input reuse, and reject incomplete semantic extraction. |
 | [Share Rust dependency compilation across worker worktrees](./runbooks/compiler-cache.md) | Manage the opt-in host Rust compiler cache and understand hosted dependency and content-verified workspace-output caches. |
+| [Measure a Perf Task With the Paired Timing Protocol](./runbooks/perf-timing-protocol.md) | Produce hard-timing evidence for a perf task — frozen store fixture, exact release build pair, serial base/candidate/control runs — and attach it for review. |
 | [Full pre-release QA sweep](./runbooks/qa-full-sweep.md) | Mint, execute, and judge the workspace-local complete pre-release Orbit QA sign-off. |
 | [Release Orbit](./runbooks/release.md) | Cut and verify an Orbit release across agent plugins, Cargo, GitHub artifacts, Homebrew, npm, and the human Cursor marketplace follow-up. |
 | [Soak-Test Dashboard Memory](./runbooks/web-memory-soak.md) | Measure orbit web serve resident memory under the dashboard polling mix on a large disposable store (Linux). |

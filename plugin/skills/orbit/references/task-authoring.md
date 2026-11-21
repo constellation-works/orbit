@@ -57,9 +57,15 @@ pickup. Do not confuse a task description with a design document or a transcript
   gate on a deterministic proxy (operation, request or payload counts), or file
   a measurement task first that establishes the fixture, spread and margin.
   Before promotion, put the evidence route for each hard timing criterion in
-  the brief. Name the fixture artifact or exact seed and reset commands for a
-  disposable workspace and data set, the exact build and measurement commands,
-  and how to select the baseline revision and reviewed final candidate revision
+  the brief. For an Orbit CLI command or HTTP route, the default route is the
+  checked-in [paired timing protocol](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/perf-timing-protocol.md)
+  (`docs/runbooks/perf-timing-protocol.md` with `scripts/perf/fixture.py`,
+  `build-pair.sh` and `paired.py` in the Orbit repository): paste its
+  "Measurement protocol" paragraph and fill its slots (surface, command or
+  path, parity mask, bound, artifact slug). It supplies everything listed
+  below. Otherwise, name the fixture artifact or exact seed and reset commands
+  for a disposable workspace and data set, the exact build and measurement
+  commands, and how to select the baseline revision and reviewed final candidate revision
   with matching build profiles and settings. Specify the bounded same-fixture
   protocol for both builds, including pacing, warmups, samples, repetitions,
   aggregation and the unchanged-build control. Name the lane and host or host
