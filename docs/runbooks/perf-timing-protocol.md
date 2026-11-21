@@ -4,7 +4,7 @@ summary: Produce hard-timing evidence for a perf task — frozen store fixture, 
 tags: [performance, development, validation]
 paths: ["scripts/perf/**"]
 related_features: []
-related_artifacts: [ORB-26322, ORB-25652, ORB-25672, ORB-25638]
+related_artifacts: [ORB-26322, ORB-26395, ORB-25652, ORB-25672, ORB-25638]
 last_validated: 2026-11-21
 ---
 
@@ -21,7 +21,7 @@ The protocol has four scripts under `scripts/perf/`:
 |---|---|
 | `fixture.py snapshot` | Freezes one workspace of a store into a fixture, reading the source read-only. |
 | `fixture.py restore` / `clean` | Makes / removes a disposable root (own `HOME` and workspace) from that fixture. |
-| `build-pair.sh` | Builds the release `orbit` binary for the baseline and the candidate revision. |
+| `build-pair.sh` | Builds the release `orbit` binary for the baseline and the candidate revision, or for an uncommitted working tree. |
 | `paired.py` | Checks output parity, then times base, candidate and an unchanged-build control. |
 
 ## Owner, host and safety
@@ -81,11 +81,23 @@ directory too when it fails. A refused parity check keeps `parity.json` for diag
 
 - **Baseline** is the merge-base the task branch starts from, by commit id. In a managed
   run this is the delivery's `base_sha`; otherwise `git merge-base <task-branch> agent-main`.
-- **Candidate** is the reviewed final head of the task branch, by commit id.
+- **Candidate during `implement_bundle`** is the uncommitted working tree. HEAD is still
+  the pinned base, so pass `--candidate-worktree <checkout>` instead of a candidate
+  commit. The script snapshots tracked and untracked files, excluding ignored ones,
+  into a temporary commit (`GIT_INDEX_FILE`, `read-tree HEAD`, `git add --all`,
+  `write-tree`, `commit-tree -p HEAD`). The snapshot's objects and index live in a
+  throwaway directory, so the checkout's HEAD, index, files and git metadata stay
+  untouched, including when that git dir is read-only. `provenance.json` names that
+  commit and tree and sets `revisions.candidate.working_tree_snapshot` to true.
+  A worktree with no such changes resolves to HEAD, and the equal-commit refusal
+  fires when the base is that same commit.
+- **Candidate after the delivery commit** (a review rerun) is the reviewed final head,
+  passed as `--candidate <commit>`.
 - Both build with the same command, profile and toolchain on the same host;
   `provenance.json` proves it. `build-pair.sh` refuses the same commit twice, and refuses
   two revisions that produce byte-identical binaries (ORB-25652's first candidate silently
-  reused the baseline binary).
+  reused the baseline binary). `paired.py` times the binaries this script writes; it does
+  not need a separate candidate commit when the build was a working-tree snapshot.
 - The fixture's store schema must not be newer than the baseline binary understands.
   Snapshot a store the baseline can open; each arm migrates its own fresh restored copy.
 
@@ -115,7 +127,15 @@ repository root of the checkout that holds these scripts.
    against 300+ ms deployed; check `state_distributions` in the manifest before you rely on
    a snapshot.
 
-2. Build the pair (two cold release builds; about 15 minutes each on the owner host):
+2. Build the pair (two cold release builds; about 15 minutes each on the owner host).
+   During `implement_bundle`, build the uncommitted candidate from the checkout:
+
+   ```sh
+   scripts/perf/build-pair.sh --base <base-commit> --candidate-worktree <checkout> \
+     --out <scratch>/perf-<slug>/builds
+   ```
+
+   After the delivery commit, a review rerun can name that head instead:
 
    ```sh
    scripts/perf/build-pair.sh --base <base-commit> --candidate <candidate-commit> \
@@ -261,11 +281,16 @@ store) and its append-only triggers refuse the deletes a backup would then need.
 databases are copied whole with the online backup API.
 
 **`provenance.json`** (`kind: orbit-perf-build-pair`): `revisions.base` and
-`revisions.candidate` (each `commit`, `tree`, `binary`, `binary_sha256`,
-`cargo_config_sha256`, `cargo_lock_sha256`), `requested` revs, `profile`, `features`,
-`cargo_command`, `source_export`, `cargo_target_dir`, `rustc_vv`, `cargo_version`,
+`revisions.candidate` (each `commit`, `tree`, `working_tree_snapshot`, `binary`,
+`binary_sha256`, `cargo_config_sha256`, `cargo_lock_sha256`), `requested` (`base`,
+`candidate`, `candidate_worktree`), `profile`, `features`, `cargo_command`,
+`build_stub`, `source_export`, `cargo_target_dir`, `rustc_vv`, `cargo_version`,
 `codegen_env` (RUSTFLAGS, wrapper, target, C toolchain and `CARGO_PROFILE_RELEASE_*`
 values; `null` when unset), `rustc_wrapper`, `host`, `machine_id`, `created_at`.
+`working_tree_snapshot` is true only on a candidate built from `--candidate-worktree`
+whose tree differed from HEAD; `commit` and `tree` are that snapshot. The snapshot
+commit is not stored in the checkout. `build_stub` is true only for the
+`ORBIT_PERF_BUILD_PAIR_STUB` test hook and is never a measurement.
 
 **`parity.json`** (`kind: orbit-perf-parity`): `command`, `http_path`, `masks`, `match`,
 `differing_arms`, `observation_failures` (arm to why that arm has no successful
@@ -292,8 +317,12 @@ Paste this into the brief and fill the five slots:
 > **Measurement protocol.** Evidence follows `docs/runbooks/perf-timing-protocol.md` on the
 > ws_orbit owner host; the implementing leaf owns the serial run and holds the perf lane.
 > Fixture: `scripts/perf/fixture.py snapshot --workspace ws_orbit --git-metadata <checkout>`
-> taken at the start of the run, restored fresh for every round. Builds:
-> `scripts/perf/build-pair.sh --base <merge-base commit> --candidate <reviewed final head>`.
+> taken at the start of the run, restored fresh for every round. Builds during
+> `implement_bundle` (HEAD is still the pinned base; the candidate is uncommitted):
+> `scripts/perf/build-pair.sh --base <merge-base commit> --candidate-worktree <checkout>`.
+> That snapshots the working tree without moving HEAD, the index or files, and
+> provenance marks the snapshot commit and tree. A rerun after the delivery commit
+> uses `--candidate <reviewed final head>` instead.
 > Measurement: `scripts/perf/paired.py --<SURFACE: cli|http> '<COMMAND OR PATH>' --parity
 > '<PARITY COMMAND>' --parity-mask <MASK FIELDS> --rounds 3 --samples 10 --warmup 1 --gap-ms 250
 > --bound-ms <BOUND>`: base, candidate and unchanged-build control arms in balanced
@@ -343,7 +372,7 @@ Tasks land in `proposed`. Do not approve them.
 | `workspace … has no initialized identity: …` (snapshot) | The registered checkout's `.orbit/config.yaml` is missing or names no `workspace_id` | Initialize that checkout with `orbit workspace init --force`, then snapshot again |
 | `snapshot … records no workspace identity …` (restore) | The snapshot was taken from an identity-less source | Take a fresh snapshot of an initialized workspace |
 | `… built identical binaries …` | The two revisions differ only in metadata | Pick revisions whose content differs |
-| `base and candidate resolve to the same commit …` | Same commit given twice | Check the revision selectors |
+| `base and candidate resolve to the same commit …` | Same commit given twice, or `--candidate-worktree` on a checkout with no uncommitted changes (ignored files do not count) and a base that is that HEAD | Check the revision selectors, or make the working-tree change first |
 | `parity mismatch between arms …` | An arm has no successful observation (missing `--parity` in CLI mode, or a probe that did not exit 0 / return 2xx), or outputs differ after masking | Read `parity.json` (`observation_failures` and `differing_arms`); fix the probe or the behaviour change, or mask only a timing field |
 | `<arm> parity command timed out after <n> s …` / `<arm> round <r> sample <i> timed out …` | An arm command stalled past `--command-timeout` | Find why it hangs on the fixture, or raise `--command-timeout` for a genuinely slow surface |
 | `<arm> … wrote more than <n> bytes of stdout …` | An arm command's output passed `--output-limit-bytes` | Pick a smaller probe, or raise `--output-limit-bytes` |
