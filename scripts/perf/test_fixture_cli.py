@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -507,6 +508,85 @@ class FixtureCliRestoreTests(unittest.TestCase):
                 self.assertFalse(restore_into.exists())
                 self.assertTrue((paths["global_root"] / "workspaces.json").is_file())
                 self.assertTrue((paths["orbit_dir"] / "config.yaml").is_file())
+
+    def test_restore_preserves_verified_task_artifact_bytes(self):
+        # A text blob that contains a source path must keep the bytes the
+        # artifact manifest names. Registry and task records still rebind.
+        source_home = self.base / "source"
+        source_repo = self.base / "checkout"
+        paths = _build_disposable_source(source_home, source_repo)
+        body = f"immutable artifact\nsource checkout: {source_repo}\n".encode()
+        digest = hashlib.sha256(body).hexdigest()
+        bundle = paths["global_root"] / "tasks" / "workspaces" / "ws_fixture" / "ORB-1"
+        blob_rel = Path("files") / "notes" / "source-path.txt"
+        blob = bundle / "artifacts" / blob_rel
+        blob.parent.mkdir(parents=True, exist_ok=True)
+        blob.write_bytes(body)
+        (bundle / "artifacts" / "manifest.yaml").write_text(
+            "\n".join(
+                [
+                    "schema_version: 1",
+                    "files:",
+                    "  - path: notes/source-path.txt",
+                    "    blob: files/notes/source-path.txt",
+                    "    media_type: text/plain",
+                    f"    sha256: {digest}",
+                    f"    size_bytes: {len(body)}",
+                    "    created_by: fixture",
+                    "    created_at: 2026-11-21T00:00:00Z",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        env = _child_env(source_home)
+        snapshot = self.base / "snapshot"
+        snap = self.run_fixture(
+            env,
+            "snapshot",
+            "--workspace",
+            "ws_fixture",
+            "--global-root",
+            str(paths["global_root"]),
+            "--out",
+            str(snapshot),
+        )
+        self.assertEqual(snap.returncode, 0, snap.stderr)
+
+        restored = self.base / "restored"
+        res = self.run_fixture(
+            env, "restore", "--snapshot", str(snapshot), "--into", str(restored)
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+
+        restored_home = restored / "home"
+        restored_global = restored_home / ".orbit"
+        restored_repo = restored / "checkout"
+        restored_orbit = restored_repo / ".orbit"
+        restored_bundle = (
+            restored_global / "tasks" / "workspaces" / "ws_fixture" / "ORB-1"
+        )
+        restored_blob = restored_bundle / "artifacts" / blob_rel
+        restored_bytes = restored_blob.read_bytes()
+        restored_manifest = (restored_bundle / "artifacts" / "manifest.yaml").read_text()
+        self.assertEqual(restored_bytes, body)
+        self.assertEqual(len(restored_bytes), len(body))
+        self.assertEqual(hashlib.sha256(restored_bytes).hexdigest(), digest)
+        self.assertIn(f"sha256: {digest}", restored_manifest)
+        self.assertIn(f"size_bytes: {len(body)}", restored_manifest)
+        self.assertIn(str(source_repo), restored_bytes.decode())
+
+        registry = json.loads((restored_global / "workspaces.json").read_text())
+        checkout = registry["checkouts"][0]
+        self.assertEqual(checkout["repo_root"], str(restored_repo))
+        self.assertEqual(checkout["orbit_dir"], str(restored_orbit))
+        self.assertTrue(Path(checkout["repo_root"]).is_dir())
+        task_data = json.loads((restored_bundle / "task.json").read_text())
+        self.assertEqual(
+            task_data["worktree_path"],
+            f"{restored_orbit}/state/worktrees/run-0",
+        )
+        self.assertIn(str(restored_repo), (restored_orbit / "config.yaml").read_text())
 
     def test_snapshot_refuses_source_without_workspace_identity(self):
         # Both checkouts keep their ordinary files but name no workspace identity:
