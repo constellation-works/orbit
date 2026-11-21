@@ -1126,8 +1126,9 @@ function unavailableSourcesNode(unavailable) {
 
 function frictionUnavailableNode() {
   const node = el("div", {
-    class: "runs-source-warning",
+    class: "runs-source-warning runs-friction-warning",
     role: "status",
+    "aria-live": "polite",
     text: "Denials, tool-fail counts and long-run flags are unavailable: diagnostics friction could not be loaded. Runs are shown without them.",
   });
   node.dataset.key = "runs-friction-warning";
@@ -1170,10 +1171,12 @@ function runHeaderCell(label, key, opts = {}) {
 
 function runCountCell(value, kind, unavailable = false) {
   if (unavailable) {
+    const label = kind === "denials" ? "Denials" : "Tool fails";
     return el("span", {
       class: `num ${kind} unavailable`,
       text: "—",
       title: "Diagnostics friction is unavailable",
+      "aria-label": `${label} unavailable`,
     });
   }
   return el("span", {
@@ -1623,7 +1626,6 @@ export function renderRuns(runs) {
   }
   const unavailableNode = unavailableSourcesNode(unavailable);
   if (unavailableNode) frag.appendChild(unavailableNode);
-  if (!loading && (runs || []).some((run) => runFriction(run).unavailable)) frag.appendChild(frictionUnavailableNode());
   const limitNote = loading ? null : runsLimitNote(meta);
   if (limitNote) frag.appendChild(limitNote);
   if (loading) {
@@ -1670,6 +1672,7 @@ export function renderRuns(runs) {
       }));
     }
   }
+  if (top.some((run) => runFriction(run).unavailable)) frag.appendChild(frictionUnavailableNode());
   syncNodes(body, Array.from(frag.children));
 }
 

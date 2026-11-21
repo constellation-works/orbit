@@ -123,11 +123,17 @@
 }
 .runs-source-warning {
   padding: var(--space-8) var(--space-16);
-  border-bottom: 1px solid var(--border);
-  color: var(--state-failed);
-  background: rgba(239, 68, 68, 0.08);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  border-bottom: 1px solid var(--danger-line);
+  color: var(--danger-fg);
+  background: var(--danger-wash);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+/* Render below rows so diagnostics loss/recovery never shifts row positions. */
+.runs-friction-warning {
+  margin-top: -1px;
+  border-top: 1px solid var(--danger-line);
 }
 .runs-scope-note,
 .runs-limit-note {
@@ -211,6 +217,7 @@
 }
 .runs-row .duration { color: var(--fg-dim); text-align: right; }
 .runs-row .num { text-align: right; color: var(--fg-dim); }
+.runs-row .num.unavailable { color: var(--fg-mute); }
 .runs-row .duration, .runs-row .num { white-space: nowrap; }
 .runs-row .num.hot { color: var(--state-failed); }
 .runs-row .state { text-align: left; }
