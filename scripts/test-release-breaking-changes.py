@@ -845,6 +845,36 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
             "`orbit_task_show` `inputSchema{allOf0}` conditional `if` edited: "
             "instances it moves into `else` meet a stricter branch")})
 
+    def _assert_selector_edit_into_else_is_minor(self, report):
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(self.signals(report), {(
+            "ORB-54", "mcp-schema",
+            "`orbit_task_show` `inputSchema{allOf0}` conditional `if` edited: "
+            "instances it moves into `else` meet a stricter branch")})
+
+    def test_conditional_if_edit_into_const_literal_else_decides_minor(self):
+        # A payload equal to `{required: [b, d]}` passed `then`. With `c` also
+        # selecting `then` it falls into `else`, whose const object is
+        # `{required: [b]}`: literal equality rejects the payload.
+        report = self._write_nested_payload_conditional(
+            {"const": {"required": ["b", "d"]}}, {"const": {"required": ["b"]}})
+        self._assert_selector_edit_into_else_is_minor(report)
+
+    def test_conditional_if_edit_into_enum_literal_else_decides_minor(self):
+        # Same shape as the const case, with the object as one enum member.
+        report = self._write_nested_payload_conditional(
+            {"enum": [{"required": ["b", "d"]}]}, {"enum": [{"required": ["b"]}]})
+        self._assert_selector_edit_into_else_is_minor(report)
+
+    def test_conditional_if_edit_into_max_contains_branch_decides_minor(self):
+        # `[{b, d}, {b}]` matched `then`'s `contains` on one item only. In
+        # `else`, the weaker `contains` matches both items and breaks
+        # `maxContains: 1`.
+        report = self._write_nested_payload_conditional(
+            {"type": "array", "contains": {"required": ["b", "d"]}, "maxContains": 1},
+            {"type": "array", "contains": {"required": ["b"]}, "maxContains": 1})
+        self._assert_selector_edit_into_else_is_minor(report)
+
     def _commit_added_payload_then(self, then_required):
         tools = self.repo.mcp()
         tools[0]["inputSchema"]["properties"]["payload"] = {"required": ["b"]}

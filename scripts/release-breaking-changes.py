@@ -339,8 +339,13 @@ def schema_without_top_required(schema):
 # Weakening `required` inside these keywords can reject an instance the
 # stronger schema accepted: a `oneOf` branch can pick up a second match, a
 # weaker schema under `not` rejects more, and a weaker `if` moves instances
-# onto the other branch.
+# onto the other branch. `contains` joins them only beside `maxContains`: a
+# weaker `contains` matches more items and can exceed that cap.
 _NONMONOTONIC_REQUIRED_KEYWORDS = frozenset({"oneOf", "not", "if"})
+
+# Literal JSON values, not subschemas. Their objects are compared by exact
+# equality, so `{"required": ["b"]}` never stands in for `{"required": ["b", "d"]}`.
+_LITERAL_VALUE_KEYWORDS = frozenset({"const", "enum", "default", "examples"})
 
 
 def _string_list_set(value):
@@ -356,7 +361,9 @@ def nested_required_subset_only(target, source, under_nonmonotonic=False):
     of `source`'s at the same object, with every other keyword unchanged.
     That weakening cannot reject an instance `source` accepts under
     `properties`, `items`, `allOf` or `anyOf`. A difference inside `oneOf`,
-    `not` or `if` is not treated as redundant.
+    `not` or `if`, or inside `contains` beside `maxContains`, is not treated as
+    redundant. Literal values (`const`, `enum`, `default`, `examples`) match
+    only when exactly equal.
     """
     if _json_value_key(target) == _json_value_key(source):
         return True
@@ -380,10 +387,16 @@ def nested_required_subset_only(target, source, under_nonmonotonic=False):
     source_keys = set(source) - {"required"}
     if target_keys != source_keys:
         return False
+    max_contains = "maxContains" in target_keys
     for key in target_keys:
-        if not nested_required_subset_only(
-                target[key], source[key],
-                under_nonmonotonic or key in _NONMONOTONIC_REQUIRED_KEYWORDS):
+        if key in _LITERAL_VALUE_KEYWORDS:
+            if _json_value_key(target[key]) != _json_value_key(source[key]):
+                return False
+            continue
+        nonmonotonic = (under_nonmonotonic
+                        or key in _NONMONOTONIC_REQUIRED_KEYWORDS
+                        or (key == "contains" and max_contains))
+        if not nested_required_subset_only(target[key], source[key], nonmonotonic):
             return False
     return True
 
