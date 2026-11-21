@@ -142,13 +142,24 @@ fn remaining_millis(deadline: Instant) -> u64 {
 /// off, is admitted. Waits for the shared record no longer than `request`'s
 /// own timeout budget. A request admitted once that budget is spent is not
 /// charged: the caller returns its typed budget error without spawning `gh`.
+///
+/// The outcome agrees with the host record: a refusal decided with budget left
+/// is counted and returned as the typed throttle, and a caller returns it as
+/// is, whatever its own clock reads afterwards. A refusal decided once the
+/// budget is spent is not counted and comes back as the typed
+/// [`OrbitError::ProcessTimeout`], the same budget error a caller returns for
+/// a request admitted too late; a caller maps it to its own timeout outcome.
 pub fn admit_gh_request(caller: GithubCaller, request: &ExecRequest) -> Result<(), OrbitError> {
     let deadline = gh_request_deadline(request, Instant::now());
     admit_by_deadline(caller, request, deadline).map_err(|decided| {
-        // The caller checks its own budget after this returns, so a refusal
-        // decided once the budget is spent is its timeout: not counted.
-        let spent = deadline.is_some_and(store::budget_spent);
-        decided.deliver(request, !spent)
+        if deadline.is_some_and(store::budget_spent) {
+            return OrbitError::ProcessTimeout {
+                timeout_ms: request.timeout_ms.unwrap_or_default(),
+                detail: "the request's timeout budget ran out before the process could start"
+                    .to_string(),
+            };
+        }
+        decided.deliver(request, true)
     })
 }
 

@@ -1137,6 +1137,78 @@ fn refusal_decided_before_the_budget_ran_out_is_not_counted_when_it_becomes_a_ti
     assert_eq!(refused_by_delivery(spawn_records.path(), &spawn_account), 0);
 }
 
+/// Regression [ORB-26140]: `admit_gh_request` returns the outcome the host
+/// record agrees with. A refusal decided with budget left is counted and
+/// returned as the typed throttle; one decided once the budget is spent is
+/// not counted and comes back as the typed timeout, never an uncounted throttle.
+#[test]
+fn admit_gh_request_outcome_agrees_with_whether_the_refusal_was_counted() {
+    let policy = GithubQuotaPolicy::default();
+    let now = now();
+    let reset = now + 1800;
+    let hold = orbit_common::ProviderReadThrottle {
+        retry_after_seconds: None,
+        reset_epoch_seconds: Some(reset),
+        resource: Some(RESOURCE_CORE.to_string()),
+        principal: None,
+        request_id: None,
+    };
+    let seeded = |records: &Path, gh: &FakeGh| {
+        let mut request = gh.request(&["run", "view", "123"]);
+        request.timeout_ms = Some(60_000);
+        let account = github_quota::request_account_key(&request);
+        store(records).refresh_if_due(&policy, &account, now, &|| known(4000, reset));
+        store(records).record_throttle(&policy, &account, RESOURCE_CORE, &hold, now);
+        (request, account)
+    };
+    let refused_by_background = |records: &Path, account: &str| {
+        store(records)
+            .status(&policy, account, now)
+            .resources
+            .iter()
+            .find(|resource| resource.resource == RESOURCE_CORE)
+            .expect("the core resource is reported")
+            .refused
+            .background
+    };
+
+    let within_records = TempDir::new().unwrap();
+    let within_gh = FakeGh::new("{}", "ok");
+    let (within, within_account) = seeded(within_records.path(), &within_gh);
+    let refused = github_quota::with_scoped_guard(store(within_records.path()), policy, || {
+        github_quota::admit_gh_request(GithubCaller::Background, &within)
+    })
+    .expect_err("a live core hold refuses a read admitted within its budget");
+    assert_eq!(
+        refused_throttle(&refused).resource.as_deref(),
+        Some(RESOURCE_CORE)
+    );
+    assert_eq!(
+        refused_by_background(within_records.path(), &within_account),
+        1
+    );
+
+    // Armed last: the skewed clock stays on this thread afterwards.
+    let spent_records = TempDir::new().unwrap();
+    let spent_gh = FakeGh::new("{}", "ok");
+    let (spent, spent_account) = seeded(spent_records.path(), &spent_gh);
+    github_quota::advance_deadline_clock_after_next_refusal_decision(Duration::from_secs(120));
+    let admitted = github_quota::with_scoped_guard(store(spent_records.path()), policy, || {
+        github_quota::admit_gh_request(GithubCaller::Background, &spent)
+    });
+    assert!(
+        matches!(
+            admitted,
+            Err(orbit_common::OrbitError::ProcessTimeout { .. })
+        ),
+        "{admitted:?}"
+    );
+    assert_eq!(
+        refused_by_background(spent_records.path(), &spent_account),
+        0
+    );
+}
+
 /// Regression [ORB-26101]: the accounting a caller runs after its own child
 /// returns belongs to the original request deadline, not a fresh budget. A
 /// primary throttle reported with 50 ms of a 5 s budget left must give up on a
@@ -1263,9 +1335,11 @@ fn deadline_clipped_probe_leaves_known_quota_and_reserve_refusal_in_place() {
         github_quota::admit_gh_request(GithubCaller::Agent, &agent)
     })
     .expect_err("the agent reserve still applies after a clipped probe");
-    assert_eq!(
-        refused_throttle(&error).resource.as_deref(),
-        Some(RESOURCE_CORE)
+    // The clipped probe spent the whole budget, so the reserve's refusal is
+    // decided once the request's budget is gone: the typed timeout, uncounted.
+    assert!(
+        matches!(error, orbit_common::OrbitError::ProcessTimeout { .. }),
+        "{error:?}"
     );
     assert_eq!(
         gh.calls(),

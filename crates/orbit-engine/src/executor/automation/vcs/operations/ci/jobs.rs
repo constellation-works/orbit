@@ -616,8 +616,20 @@ pub(in crate::executor::automation::vcs::operations) fn ci_job_log(
                 orbit_tools::github_quota::GithubCaller::Delivery,
             );
             if let (Some(deadline), Some(pre_timeout)) = (deadline, pre_timeout) {
+                // A refusal the guard counted is returned as decided; only the
+                // uncounted spent-budget answer yields to the expiry.
+                if let Err(refusal) = &admitted
+                    && !matches!(refusal, OrbitError::ProcessTimeout { .. })
+                {
+                    return admitted;
+                }
                 let admit_elapsed_ms =
                     u64::try_from(admit_started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                let admit_elapsed_ms = if admitted.is_err() {
+                    admit_elapsed_ms.max(pre_timeout)
+                } else {
+                    admit_elapsed_ms
+                };
                 match deadline.remaining_after(pre_timeout, admit_elapsed_ms) {
                     Ok(remaining) => {
                         let mut request = admitted?;
