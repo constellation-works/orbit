@@ -316,7 +316,14 @@ function turnsProviderCard(payload) {
   if (pending) return pending;
   if (!Array.isArray(payload.provider_summary)) return card(title, null, [emptyNote("This host did not report provider turns.")], "mx-wide");
   const providers = payload.provider_summary;
-  if (!providers.some((entry) => entry.n > 0)) return card(title, null, [emptyNote("No measured tasks in this window.")], "mx-wide");
+  if (!providers.some((entry) => entry.n > 0)) {
+    const hasWindowMeasurements = payload.available_providers?.some((entry) => entry.coverage?.measured > 0);
+    const emptyText = payload.tags?.length && hasWindowMeasurements
+      ? "Provider comparison has no matching measurements among the selected tags in this window."
+      : "No measured tasks in this window.";
+    return card(title, null, [emptyNote(emptyText)], "mx-wide",
+      "Rate is measured tasks divided by provider tasks. Compared tags select matching tasks; the provider filter does not narrow this comparison.");
+  }
   const rows = providers.map((entry) => el("tr", { class: entry.thin ? "mx-dim" : "" }, [
     el("th", { scope: "row", text: entry.provider + (entry.thin ? " *" : "") }),
     ...[entry.n, fmtTurns(entry.median_turns), fmtTurns(entry.mean_turns), entry.measured_rate == null ? "—" : `${Math.round(entry.measured_rate * 100)}%`].map((value) => el("td", { class: "num", text: String(value) })),
