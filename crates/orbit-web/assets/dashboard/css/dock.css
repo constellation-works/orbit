@@ -250,17 +250,7 @@
 
 #residents-panel { display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
 #residents-panel > .body { flex: 1 1 auto; min-height: 0; min-width: 0; overflow-y: auto; padding: var(--space-10) 0; }
-.resident-start-dialog {
-  box-sizing: border-box; width: min(640px, calc(100vw - 32px)); max-width: none;
-  max-height: calc(100dvh - 32px); margin: auto; padding: var(--space-16);
-  border: 1px solid var(--border); border-radius: var(--radius);
-  background: var(--bg-elev); color: var(--fg); overflow-y: auto; overscroll-behavior: contain;
-}
-.resident-start-dialog::backdrop { background: rgb(0 0 0 / 0.6); }
-.resident-start .resident-form-actions {
-  position: sticky; bottom: -16px; padding: var(--space-10) 0;
-  background: var(--bg-elev); border-top: 1px solid var(--hair);
-}
+.resident-start-dialog { width: min(640px, calc(100vw - var(--space-32))); margin: auto; padding: 0; }
 .resident-start-status { flex-basis: 100%; overflow-wrap: anywhere; }
 @media (max-width: 1000px) {
   #residents-panel .operation-button, #residents-panel summary,

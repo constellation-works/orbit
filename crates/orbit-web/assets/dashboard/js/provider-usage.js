@@ -5,7 +5,7 @@
 // or the Pin button keeps it open. The readings ride the host resource poll
 // (`provider_limits` and `provider_pressures` in its payload), so they follow
 // the selected host and pause with it in a hidden tab.
-import { el, formatDateTime } from './common.js';
+import { el, escCloseButton, formatDateTime } from './common.js';
 
 const DIALOG_ID = 'provider-usage-dialog';
 // One dialog lists every provider; it opens from the `+N more` chip and, on
@@ -301,7 +301,7 @@ const ui = {
 function dialogNode() {
   let node = document.getElementById(DIALOG_ID);
   if (!node) {
-    node = el('div', { id: DIALOG_ID, class: 'usage-dialog', role: 'dialog' });
+    node = el('div', { id: DIALOG_ID, class: 'usage-dialog dialog-surface', role: 'dialog' });
     setHidden(node, true);
     document.body?.append(node);
   }
@@ -388,8 +388,8 @@ function pinButton() {
 
 function providerDialog(view) {
   return [
-    el('div', { class: 'usage-head' }, [
-      el('span', { class: 'usage-title', text: view.title }),
+    el('div', { class: 'usage-head dialog-header' }, [
+      el('h2', { text: view.title }),
       el('span', { class: `usage-pill ${view.pill.tone}`, text: view.pill.text }),
       ...(view.observed ? [el('span', { class: 'usage-observed', text: view.observed })] : []),
     ]),
@@ -406,7 +406,7 @@ function providerDialog(view) {
       el('div', { class: 'usage-rows', role: 'list' },
         view.rows.length ? view.rows.map(windowRow) : [el('p', { class: 'usage-note', text: 'No usage windows reported.' })]),
     ]),
-    el('div', { class: 'usage-foot' }, [
+    el('div', { class: 'usage-foot dialog-actions' }, [
       el('span', { class: 'usage-foot-text', text: view.held.length ? `Held back: ${view.held.join(', ')}` : 'No crews held back' }),
       pinButton(),
     ]),
@@ -415,14 +415,14 @@ function providerDialog(view) {
 
 function allDialog(view) {
   return [
-    el('div', { class: 'usage-head' }, [
-      el('span', { class: 'usage-title', text: view.title }),
+    el('div', { class: 'usage-head dialog-header' }, [
+      el('h2', { text: view.title }),
       el('span', { class: 'usage-observed', text: view.count }),
     ]),
     el('section', { class: 'usage-section' }, [
       el('div', { class: 'usage-rows', role: 'list' }, view.rows.map(providerRow)),
     ]),
-    el('div', { class: 'usage-foot' }, [
+    el('div', { class: 'usage-foot dialog-actions' }, [
       el('span', { class: 'usage-foot-text', text: 'Worst first' }),
       pinButton(),
     ]),
@@ -467,8 +467,11 @@ function fillDialog() {
   const dialog = dialogNode();
   dialog.setAttribute('role', 'dialog');
   dialog.setAttribute('aria-label', view.label);
-  dialog.className = `usage-dialog ${view.key === ALL_KEY ? 'usage-dialog-all' : 'usage-dialog-provider'}`;
-  dialog.replaceChildren(...(view.key === ALL_KEY ? allDialog(view) : providerDialog(view)));
+  dialog.className = `usage-dialog dialog-surface ${view.key === ALL_KEY ? 'usage-dialog-all' : 'usage-dialog-provider'}`;
+  const [header, ...rest] = view.key === ALL_KEY ? allDialog(view) : providerDialog(view);
+  const actions = rest.pop();
+  header.append(escCloseButton('Close usage (Esc)', { onClick: () => closeUsage({ restoreFocus: true }) }));
+  dialog.replaceChildren(header, el('div', { class: 'dialog-body' }, rest), actions);
 }
 
 function closeUsage({ restoreFocus = false } = {}) {

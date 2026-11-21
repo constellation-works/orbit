@@ -157,7 +157,7 @@
         </div>
       </nav>
       <div class="host-detail" id="host-detail" role="dialog" aria-label="Host resources" hidden></div>
-      <div class="usage-dialog" id="provider-usage-dialog" role="dialog" aria-label="Provider usage" hidden></div>
+      <div class="usage-dialog dialog-surface" id="provider-usage-dialog" role="dialog" aria-label="Provider usage" hidden></div>
 
       <div class="main-col">
         <!-- ORB-14680: the selected host's state. An unreachable, mismatched or
@@ -961,7 +961,7 @@
       <button type="button" class="sb-open" id="log-statusbar-open">Open log</button>
     </div>
     <div id="gantt-tooltip" role="tooltip" aria-hidden="true"></div>
-    <dialog id="resident-start-dialog" class="resident-start-dialog" aria-labelledby="resident-start-heading"></dialog>
+    <dialog id="resident-start-dialog" class="resident-start-dialog dialog-surface" aria-labelledby="resident-start-heading"></dialog>
     <!-- Posting is a modal dialog in the top layer, outside the dock pane so a
          hidden tab cannot keep it from opening. Severity defaults to the one
          kind that raises no banner, and the options keep the server's defaults. -->

@@ -2,7 +2,7 @@
 // from the shared blocks in settings-ui.js.
 // Rows come from /api/config/effective; the shared drawer writes via
 // PUT/DELETE /api/config/keys/:key and re-reads via context.reload.
-import { captureWorkspaceVisit, el, fetchJson, requestJson } from './common.js';
+import { captureWorkspaceVisit, el, escCloseButton, fetchJson, requestJson } from './common.js';
 import { settingsEditButton, settingsIcon, settingsKeyName, settingsLabelName, settingsLayerLabel, settingsReadOnlyAction, settingsRow, settingsRowSource, settingsSearchField, settingsSection, settingsSource, syncSettingsBarHeight } from './settings-ui.js';
 
 let drawer = null; // {row, scope, text, error, pending, visit, lockGlobal}
@@ -104,6 +104,7 @@ function openDrawer(row, context, lockGlobal) {
     text: isStructured(row) ? JSON.stringify(row.value ?? (isTable(row) ? {} : []), null, 2) : Array.isArray(row.value) ? row.value.join('\n') : display(row.value) === '–' ? '' : String(row.value ?? ''),
     error: null, pending: false, visit: captureWorkspaceVisit(), lockGlobal: !!(lockGlobal || row.global_only) };
   context.rerender?.();
+  document.querySelector('.config-drawer .settings-input')?.focus();
 }
 function shellQuote(text) {
   return `'${text.replace(/'/g, "'\\''")}'`;
@@ -353,28 +354,33 @@ function drawerNode(payload, context) {
   if (!drawer.visit.isCurrent()) { drawer = null; return null; }
   const session = drawer;
   const row = byKey(payload).get(session.row.key) || session.row;
-  const panel = el('aside', { class: 'config-drawer' });
+  const panel = el('aside', { class: 'config-drawer dialog-surface dialog-drawer' });
   panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', `Edit ${row.key}`);
-  panel.appendChild(el('h3', { text: row.label || row.key }));
-  panel.appendChild(el('div', { class: 'config-key mono', text: row.key }));
-  if (row.description) panel.appendChild(el('p', { text: row.description }));
-  if (row.detail) panel.appendChild(el('p', { class: 'drawer-detail', text: row.detail }));
-  if (row.allowed?.summary) panel.appendChild(el('div', { class: 'config-note drawer-allowed', text: `Accepts: ${row.allowed.summary}` }));
+  panel.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !session.pending) { event.preventDefault(); drawer = null; context.rerender?.(); }
+  });
+  panel.appendChild(el('header', { class: 'dialog-header' }, [el('h3', { text: row.label || row.key }), escCloseButton('Close editor (Esc)', { onClick: () => { drawer = null; context.rerender?.(); } })]));
+  const body = el('div', { class: 'dialog-body' });
+  panel.appendChild(body);
+  body.appendChild(el('div', { class: 'config-key mono', text: row.key }));
+  if (row.description) body.appendChild(el('p', { text: row.description }));
+  if (row.detail) body.appendChild(el('p', { class: 'drawer-detail', text: row.detail }));
+  if (row.allowed?.summary) body.appendChild(el('div', { class: 'config-note drawer-allowed', text: `Accepts: ${row.allowed.summary}` }));
   const chain = el('div', { class: 'drawer-chain' });
   chain.appendChild(el('div', { text: `built-in: ${display(row.built_in?.value)}` }));
   for (const s of row.shadowed_by || []) chain.appendChild(el('div', { text: `${s.layer}: ${display(s.value)}` }));
   chain.appendChild(el('div', { text: `effective (${row.source?.layer || row.state}): ${display(row.value)}` }));
   if (row.fallback) chain.appendChild(el('div', { text: `if removed → ${row.fallback.layer}: ${display(row.fallback.value)}` }));
-  panel.appendChild(chain);
+  body.appendChild(chain);
   for (const scope of ['workspace', 'global']) {
     const label = el('label', { class: 'drawer-scope' });
     const input = document.createElement('input'); input.type = 'radio'; input.name = 'drawer-scope'; input.value = scope;
     input.checked = session.scope === scope; input.disabled = session.lockGlobal && scope !== 'global';
     input.addEventListener('change', () => { session.scope = scope; context.rerender?.(); });
     label.append(input, document.createTextNode(scope === 'workspace' ? ' This workspace (.orbit/config.toml)' : ' Every workspace on this machine (~/.orbit/config.toml)'));
-    panel.appendChild(label);
+    body.appendChild(label);
   }
-  if (session.lockGlobal) panel.appendChild(el('div', { class: 'config-note', text: 'This key can only be written to the global file.' }));
+  if (session.lockGlobal) body.appendChild(el('div', { class: 'config-note', text: 'This key can only be written to the global file.' }));
   let field;
   if ((row.options || []).length) {
     const options = row.options;
@@ -396,16 +402,16 @@ function drawerNode(payload, context) {
     field = el('textarea', { class: 'settings-input' }); field.value = session.text; field.rows = isTableList(row) ? 8 : Array.isArray(row.value) ? 4 : 2;
     field.addEventListener('input', () => { session.text = field.value; const c = panel.querySelector('.drawer-cli'); if (c) c.textContent = cliCmd(row, session.scope, session.text); });
   }
-  panel.appendChild(field);
-  panel.appendChild(el('div', { class: 'drawer-cli mono', text: cliCmd(row, session.scope, session.text) }));
-  if (session.error) panel.appendChild(el('div', { class: 'config-warning', text: session.error }));
-  const actions = el('div', { class: 'drawer-actions' });
+  body.appendChild(field);
+  body.appendChild(el('div', { class: 'drawer-cli mono', text: cliCmd(row, session.scope, session.text) }));
+  if (session.error) body.appendChild(el('div', { class: 'config-warning', text: session.error }));
+  const actions = el('div', { class: 'dialog-actions' });
   const saveWith = (init) => () => submitDrawerMutation(session, context, (visit) =>
     requestJson(`/api/config/keys/${encodeURIComponent(row.key)}`, 'PUT', { value: parseDraft(row, session.text), scope: session.scope, ...(init ? { init } : {}) }, visit));
   // A first workspace write offers only the explicit choices, so no click
   // creates the policy file implicitly; Close leaves it uncreated.
   const choosesInit = session.scope === 'workspace' && workspacePolicyMissing(payload);
-  if (choosesInit) panel.appendChild(el('div', { class: 'config-note drawer-init-note', text: 'This workspace has no config policy file yet, and saving creates one. Seed from global copies the global policy (orbit config set --seed-from-global); Start empty uses built-in security defaults (--fresh).' }));
+  if (choosesInit) body.appendChild(el('div', { class: 'config-note drawer-init-note', text: 'This workspace has no config policy file yet, and saving creates one. Seed from global copies the global policy (orbit config set --seed-from-global); Start empty uses built-in security defaults (--fresh).' }));
   const saves = choosesInit
     ? [['Seed from global', 'seed-from-global'], ['Start empty', 'fresh']]
     : [['Save', null]];
