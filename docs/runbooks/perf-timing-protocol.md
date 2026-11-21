@@ -346,14 +346,19 @@ Paste this into the brief and fill the five slots:
 
 > **Measurement protocol.** Evidence follows `docs/runbooks/perf-timing-protocol.md` on the
 > ws_orbit owner host; the implementing leaf owns the serial run and holds the perf lane.
-> Fixture: `scripts/perf/fixture.py snapshot --workspace ws_orbit --git-metadata <checkout>`
-> taken at the start of the run, restored fresh for every round. Builds during
-> `implement_bundle` (HEAD is still the pinned base; the candidate is uncommitted):
-> `scripts/perf/build-pair.sh --base <merge-base commit> --candidate-worktree <checkout>`.
+> Fixture: `scripts/perf/fixture.py snapshot --workspace ws_orbit --git-metadata <checkout>
+> --out <scratch>/perf-<slug>/snapshot` taken at the start of the run, restored fresh for
+> every round. Builds during `implement_bundle` (HEAD is still the pinned base; the
+> candidate is uncommitted):
+> `scripts/perf/build-pair.sh --base <merge-base commit> --candidate-worktree <checkout>
+> --out <scratch>/perf-<slug>/builds`.
 > That snapshots the working tree without moving HEAD, the index or files, and
 > provenance marks the snapshot commit and tree. A rerun after the delivery commit
-> uses `--candidate <reviewed final head>` instead.
-> Measurement: `scripts/perf/paired.py --<SURFACE: cli|http> '<COMMAND OR PATH>' --parity
+> uses `--candidate <reviewed final head>` in place of `--candidate-worktree <checkout>`,
+> with the same `--base` and `--out`.
+> Measurement: `scripts/perf/paired.py --builds <scratch>/perf-<slug>/builds
+> --snapshot <scratch>/perf-<slug>/snapshot --out <scratch>/perf-<slug>/results
+> --<SURFACE: cli|http> '<COMMAND OR PATH>' --parity
 > '<PARITY COMMAND>' --parity-mask <MASK FIELDS> --rounds 3 --samples 10 --warmup 1 --gap-ms 250
 > --bound-ms <BOUND>`: base, candidate and unchanged-build control arms in balanced
 > interleaved rounds, per-round nearest-rank p95, per-arm median of round p95s, control
