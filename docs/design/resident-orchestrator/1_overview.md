@@ -2,7 +2,7 @@
 title: Resident Orchestrator — Overview
 owner: claude
 last_updated: 2026-11-08
-last_validated: 2026-11-08
+last_validated: 2026-11-20
 status: Draft
 stage: building
 next: "Re-file the slice 10 pilot (ORB-21251 archived 2026-11-03, not done) once a bounded mandate with an operator authority grant and a manager session is ready"
