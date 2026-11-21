@@ -80,5 +80,4 @@ pub fn register(registry: &mut ToolRegistry) {
     // Workflow ship, run reads and resume, and the auto-drain control come
     // from the shared operation registry.
     operation::register_noun(registry, &WORKFLOW);
-    // The implementer's mock self-check capture.
 }

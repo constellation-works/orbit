@@ -619,7 +619,7 @@
     "output": {
       "source": "run_log",
       "source_jobs": [],
-      "fallback_error": "execution failed: gh run view --log failed: failed to get run log: run 34060485218 is still in progress; logs will be available when it is complete; job log recovery failed: job log fallback read 1 of 1 candidate job(s): job 101560010340 (`docs`): execution failed: job log exceeded the 8 MiB source read limit; evidence is incomplete",
+      "fallback_error": "execution failed: gh run view --log failed: failed to get run log: run 34060485218 is still in progress; logs will be available when it is complete; job log recovery failed: job log fallback read 1 of 1 candidate job(s): job 101560010340 (`docs`): execution failed: gh api job logs exceeded the 8 MiB source read limit; evidence is incomplete",
       "parsed": {
         "log": "",
         "truncated": false,
