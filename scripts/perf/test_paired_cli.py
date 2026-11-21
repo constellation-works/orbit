@@ -781,6 +781,23 @@ class PairedCliParityTest(PairedCliTestCase):
                          str((out / "snapshot-manifest-summary.json").resolve()))
         self.assertIn('"verdict": "pass"', result.stdout)
 
+    def test_oversized_manifest_summary_is_refused_and_not_left_under_keep(self) -> None:
+        # Regression: the summary was written before its encoded size was checked,
+        # so an oversized file stayed at the evidence path after the refusal when
+        # --keep retained the output directory. Ten non-BMP labels encode past the
+        # 1 MiB artifact limit because json.dumps escapes each character.
+        extra = ["--keep"]
+        for index in range(10):
+            extra += ["--qualifying-task-count", f"{chr(0x1F600 + index) * 10_000}=1"]
+        result, out = self.run_paired(*extra)
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("snapshot-manifest-summary.json", result.stderr)
+        self.assertIn("1048576-byte artifact limit", result.stderr)
+        self.assertFalse((out / "snapshot-manifest-summary.json").exists(),
+                         "an oversized summary must not be left at the evidence path")
+        self.assertFalse((out / "parity.json").exists())
+        self.assertNotIn('"verdict": "pass"', result.stdout)
+
     def test_inherited_orbit_root_does_not_refuse_isolated_parity(self) -> None:
         # An ORBIT_ROOT exported by the invoking shell that encloses this run's
         # scratch must not make the harness refuse its own disposable restore.

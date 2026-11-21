@@ -269,5 +269,10 @@ def require_absent_or_empty(path: Path) -> None:
         path.rmdir()
 
 
+def json_text(value) -> str:
+    """The on-disk text of a JSON evidence file, so callers can size it before writing."""
+    return json.dumps(value, indent=2, sort_keys=True) + "\n"
+
+
 def write_json(path: Path, value) -> None:
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+    path.write_text(json_text(value))
