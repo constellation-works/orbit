@@ -1132,3 +1132,105 @@ fn valid_toml_table_comments_do_not_bypass_workspace_install_refusal() {
         assert!(!home.join("invoked-args").exists());
     }
 }
+
+/// [ORB-26149] Install shapes the pre-spawn guard used to miss: a child
+/// command's own flags after `rustup run <toolchain>`, the `toolchain add` and
+/// `toolchain update` aliases, an attached `-c<component>`, and a `+toolchain`
+/// proxy selection beside a toolchain file rustup would not read.
+#[cfg(unix)]
+#[test]
+fn rustup_install_shapes_that_write_docs_are_refused_before_spawn() {
+    let workspace = tempdir().expect("workspace");
+    let workspace = workspace
+        .path()
+        .canonicalize()
+        .expect("canonical workspace");
+    let bin = workspace.join("bin");
+    let rustup = install_fake_rustup(&bin);
+    let cargo = bin.join("cargo");
+    std::os::unix::fs::symlink(&rustup, &cargo).expect("cargo proxy");
+    fs::write(
+        workspace.join("rust-toolchain.toml"),
+        "[toolchain]\ntargets = [\"wasm32-unknown-unknown\"]\n",
+    )
+    .expect("toolchain file with no channel, profile or components");
+    let home = workspace.join(".orbit/tmp/missed-shapes");
+    fs::create_dir_all(&home).expect("rustup home");
+
+    let cases: [(&PathBuf, &[&str]); 6] = [
+        (
+            &rustup,
+            &["run", "--install", "nightly", "rustc", "--version"],
+        ),
+        (
+            &rustup,
+            &[
+                "run",
+                "--install",
+                "nightly",
+                "cargo",
+                "build",
+                "--profile",
+                "minimal",
+            ],
+        ),
+        (&rustup, &["toolchain", "add", "nightly"]),
+        (&rustup, &["toolchain", "update", "nightly"]),
+        (
+            &rustup,
+            &[
+                "toolchain",
+                "install",
+                "--profile",
+                "minimal",
+                "-crust-docs",
+                "nightly",
+            ],
+        ),
+        (&cargo, &["+nightly", "build"]),
+    ];
+    for (program, args) in cases {
+        let err = registry()
+            .execute(
+                "proc.spawn",
+                &rustup_context(&workspace, program, rustup_env(&home, &bin)),
+                json!({
+                    "program": program.display().to_string(),
+                    "args": args,
+                    "timeout_ms": 5000,
+                }),
+            )
+            .expect_err(&format!("{args:?} must be refused"));
+        assert_install_refused(err);
+        assert!(!docs_marker(&home).exists(), "{args:?}");
+        assert!(!home.join("invoked-args").exists(), "{args:?}");
+    }
+}
+
+/// [ORB-26149] `rustup default none` unsets the default toolchain and installs
+/// nothing, so the guard lets it run.
+#[cfg(unix)]
+#[test]
+fn rustup_default_none_is_not_refused() {
+    let workspace = tempdir().expect("workspace");
+    let workspace = workspace
+        .path()
+        .canonicalize()
+        .expect("canonical workspace");
+    let bin = workspace.join("bin");
+    let rustup = install_fake_rustup(&bin);
+    let home = workspace.join(".orbit/tmp/default-none");
+    fs::create_dir_all(&home).expect("rustup home");
+    registry()
+        .execute(
+            "proc.spawn",
+            &rustup_context(&workspace, &rustup, rustup_env(&home, &bin)),
+            json!({
+                "program": rustup.display().to_string(),
+                "args": ["default", "none"],
+                "timeout_ms": 5000,
+            }),
+        )
+        .expect("`rustup default none` installs nothing and must run");
+    assert!(home.join("invoked-args").is_file());
+}

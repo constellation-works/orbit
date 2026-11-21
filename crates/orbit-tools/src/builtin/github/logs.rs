@@ -604,6 +604,8 @@ fn stream_log_source(
     keep_source: bool,
 ) -> Result<(StreamedLog, Vec<u8>), OrbitError> {
     let deadline = crate::github_quota::gh_request_deadline(request, std::time::Instant::now());
+    let limit_error =
+        format!("{label} exceeded the 8 MiB source read limit; evidence is incomplete");
     let (result, read) = run_process_streaming_stdout(request, &NoSandbox, move |mut stdout| {
         use std::io::Read;
 
@@ -620,10 +622,7 @@ fn stream_log_source(
             }
             source_bytes += read;
             if source_bytes > super::MAX_CHECKOUT_LOG_SCAN_BYTES {
-                return Err(OrbitError::Execution(
-                    "job log exceeded the 8 MiB source read limit; evidence is incomplete"
-                        .to_string(),
-                ));
+                return Err(OrbitError::Execution(limit_error));
             }
             collector.push(&chunk[..read]);
             if keep_source {
@@ -865,28 +864,42 @@ impl FallbackJob {
     }
 }
 
-/// One verified fallback job's whole log (`request` is its guarded job-log
-/// read), served from the log cache when a current status request shows the job
-/// completed for this run under the caller's access and its log is already held
-/// for the resolved repository.
+/// Why one fallback job read produced no log.
+enum JobLogFailure {
+    /// Quota admission refused the job-log read before any download.
+    Admission(OrbitError),
+    /// The read ran, or its metadata check did, and failed.
+    Read(OrbitError),
+}
+
+/// One verified fallback job's whole log (`request` is its unguarded job-log
+/// read, admitted only when the log is actually downloaded), served from the
+/// log cache when a current status request shows the job completed for this
+/// run under the caller's access and its log is already held for the resolved
+/// repository.
 ///
 /// The same rules as [`run_scoped_log`] apply: a hit still needs the status
 /// request, a cold read of a completed job renders from the masked copy it
 /// stores, and every cache or metadata failure is a plain read. A failed,
 /// timed-out, over-limit or empty read never reaches the store. The key names
 /// the job log API apart from the run-scoped read's entries for the same job:
-/// the bytes differ, and so does the excerpt shape.
+/// the bytes differ, and so does the excerpt shape. A cache hit charges no
+/// job-log admission, since no job-log request is made.
 fn fallback_job_log(
     requests: &RunLogRequests,
     bounds: LogReadBounds,
     job: &FallbackJob,
     request: &ExecRequest,
     guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
-) -> Result<StreamedLog, OrbitError> {
+) -> Result<StreamedLog, JobLogFailure> {
     const LABEL: &str = "gh api job logs";
     let shape = ExcerptShape::TailWeighted;
     let selection = requests.selection.clone();
-    let plain = || stream_bounded_log(request, bounds, shape, LABEL, selection.clone());
+    let admit = || guard(request).map_err(JobLogFailure::Admission);
+    let plain = || {
+        stream_bounded_log(&admit()?, bounds, shape, LABEL, selection.clone())
+            .map_err(JobLogFailure::Read)
+    };
     let Some(cache) = &requests.cache else {
         return plain();
     };
@@ -898,7 +911,8 @@ fn fallback_job_log(
     if let Some(cached) = cache.get(&key) {
         return Ok(replay_cached_log(bounds, shape, selection, &cached));
     }
-    let read = stream_log_source(request, bounds, shape, LABEL, selection.clone(), true)?;
+    let read = stream_log_source(&admit()?, bounds, shape, LABEL, selection.clone(), true)
+        .map_err(JobLogFailure::Read)?;
     Ok(store_completed_log(
         &key, cache, bounds, shape, selection, read,
     ))
@@ -944,14 +958,13 @@ fn recover_from_job_logs(
     let mut selection_unsupported = false;
     let mut throttle = None;
     for job in jobs.iter().take(bounds.max_fallback_jobs) {
-        let request = match guard(&requests.job_log_request(job.id)) {
-            Ok(request) => request,
-            Err(error) => {
-                let throttle = throttle_of(&error).or(throttle);
-                return unrecovered(qualify(error.to_string()), selection_unsupported, throttle);
-            }
-        };
-        match fallback_job_log(requests, bounds, job, &request, guard) {
+        match fallback_job_log(
+            requests,
+            bounds,
+            job,
+            &requests.job_log_request(job.id),
+            guard,
+        ) {
             Ok(log) if !log.text.trim().is_empty() => {
                 return RunLogRead {
                     log,
@@ -974,7 +987,11 @@ fn recover_from_job_logs(
                 })
             }
             Ok(_) => attempts.push(format!("{} returned no log text", job.label())),
-            Err(error) => {
+            Err(JobLogFailure::Admission(error)) => {
+                let throttle = throttle_of(&error).or(throttle);
+                return unrecovered(qualify(error.to_string()), selection_unsupported, throttle);
+            }
+            Err(JobLogFailure::Read(error)) => {
                 throttle = throttle.or_else(|| throttle_of(&error));
                 attempts.push(format!("{}: {error}", job.label()));
             }
