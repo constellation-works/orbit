@@ -907,6 +907,16 @@ async function main() {
         });
         return;
       }
+      if (req.method === 'GET' && fixtureHosts.some((host) => (
+        host.reachable === false
+        && pathname === `/api/on/${encodeURIComponent(host.name)}/fleet/drains`
+      ))) {
+        // An unreachable seeded host has no readable drains. Answer locally so
+        // the fixture can show its unavailable host state without proxying a
+        // request to a backend that does not own this synthetic remote.
+        sendJson(res, { items: [] });
+        return;
+      }
       // Ranking routes: the implementers scorecard is the seed's `scorecard`;
       // reviewers and pilots come from the seed's `scorecards` map.
       const rankingRole = req.method === 'GET' && overlay === 'scorecard'
