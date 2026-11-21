@@ -9,8 +9,10 @@
 
 Three arms: the base and candidate binaries from build-pair.sh, and a control
 that is the base binary copied to a second path, so the unchanged-build spread
-is measured. Every round restores a fresh root from the snapshot. Holds the
-host-wide perf lane for the whole run. A match requires a successful
+is measured. Each parity observation and round starts from the same restored state:
+the first restore fills one fixed root and keeps a pristine copy of it, and later
+ones reset that root from the copy (--keep restores a separate root for each
+instead). Holds the host-wide perf lane for the whole run. A match requires a successful
 observation from every arm (parity command exit 0, and HTTP 2xx when that
 probe runs). A missing or failed observation refuses the run before sampling.
 Every arm command runs in its own process group with a deadline and a stdout
