@@ -148,7 +148,7 @@ let activeTab = "tasks";
 // Health: the rail subtab and the view
 // Incidents shows. Analytics: the rail subtab and the view Reliability shows.
 let activeDiagSubtab = "incidents";
-let activeJobsSubtab = "live";
+let activeJobsSubtab = "history";
 let activeIncidentsView = "incidents";
 let activeAnalyticsSubtab = "metrics";
 let activeReliabilityView = "pipeline";
@@ -2308,7 +2308,7 @@ function selectFleetScope(host, workspace) {
   refreshDashboard();
 }
 
-initOperations({ getTab: () => activeTab, selectFleetScope, getJobsSubtab: () => activeJobsSubtab, getWorkspaces: () => dashboardWorkspaces, getOperationsSubtab: () => activeOperationsSubtab });
+initOperations({ getTab: () => activeTab, selectFleetScope, getWorkspaces: () => dashboardWorkspaces, getOperationsSubtab: () => activeOperationsSubtab });
 initConfig();
 initFleetView({ selectScope: selectFleetScope });
 

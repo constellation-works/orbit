@@ -1,4 +1,4 @@
-// Job catalogue and live run operations [ORB-10875, ORB-10876].
+// Job catalogue operations [ORB-10875, ORB-10876].
 
 import { captureWorkspaceVisit, copyText, el, fetchJson, formatDayHeading, hostWriteRefusal, isAggregateView, postJson, requestPanel, relativeTime, setBadgeDescription } from './common.js';
 
@@ -23,7 +23,6 @@ import {
   runOperation,
   selectedWorkspace,
   selectionSnapshot,
-  taskLink,
   time,
   withInactivePlugins,
   workspaceSelectionReason
@@ -35,7 +34,7 @@ import { jobIdFromTarget, scopedRoutines, updateRoutineFailureBadge } from './op
 // filtered to the jobs the server reports as manual-runnable
 // (`manual_runnable` from /api/jobs, backed by
 // supports_no_input_submission). Delivery and other child-only or
-// task-input jobs never appear there; their runs stay in Live and History.
+// task-input jobs never appear there; their runs stay in History.
 
 const JOB_RUN_LIMIT = 100;
 export let lastJobs = null;
@@ -143,73 +142,6 @@ function jobCatalog(routinesPayload, runs, workspaceName, catalogJobs) {
   return catalog;
 }
 
-function jobRunningCard(run, workspaceId) {
-  const startedAt = run.started_at || run.scheduled_at || run.created_at;
-  return el("div", { class: "card card-dense operation-running-card" }, [
-    el("div", { class: "operation-running-head" }, [
-      outcomeDot(run.state),
-      el("strong", { class: "mono", text: run.job_id }),
-      el("span", { class: "operation-state running", text: run.state }),
-    ]),
-    el("div", { class: "operation-running-meta" }, [
-      el("span", { text: `started ${relativeTime(startedAt) || "—"}`, title: time(startedAt) }),
-      run.run_role ? el("span", { class: "mono", text: run.run_role }) : null,
-      run.resolved_crew ? el("span", { class: "mono", text: run.resolved_crew }) : null,
-      runLink(run.run_id, workspaceId),
-    ].filter(Boolean)),
-  ]);
-}
-
-// A run names the tasks it works on: `tasks` carries titles when the server
-// has them, `task_ids` is the fallback.
-function runTaskRefs(run) {
-  const refs = Array.isArray(run.tasks) ? run.tasks : (Array.isArray(run.task_ids) ? run.task_ids : []).map((id) => ({ id }));
-  return refs.filter((task) => task && task.id);
-}
-
-// One group per task, so a task's auto, gate and pr runs share a card. A run
-// naming several tasks appears under each. Runs with no task stay separate.
-function runningGroups(running) {
-  const byTask = new Map();
-  const untasked = [];
-  for (const run of running) {
-    const tasks = runTaskRefs(run);
-    if (!tasks.length) untasked.push(run);
-    for (const task of tasks) {
-      if (!byTask.has(task.id)) byTask.set(task.id, { task, runs: [] });
-      const group = byTask.get(task.id);
-      if (!group.task.title && task.title) group.task = task;
-      group.runs.push(run);
-    }
-  }
-  return { tasks: [...byTask.values()], untasked };
-}
-
-function runningTaskCard(group, workspaceId) {
-  const { task, runs } = group;
-  const startedAt = (run) => run.started_at || run.scheduled_at || run.created_at;
-  const oldest = runs.reduce((earliest, run) => (new Date(startedAt(run) || 0) < new Date(startedAt(earliest) || 0) ? run : earliest));
-  const card = el("div", { class: "card card-dense operation-running-card operation-running-task" }, [
-    el("div", { class: "operation-running-head" }, [
-      outcomeDot(oldest.state),
-      taskLink(task.id, workspaceId),
-      task.title ? el("span", { class: "operation-running-task-title", text: task.title, title: task.title }) : null,
-    ].filter(Boolean)),
-    el("div", { class: "operation-running-meta" }, [
-      el("span", { text: `started ${relativeTime(startedAt(oldest)) || "—"}`, title: time(startedAt(oldest)) }),
-      el("span", { text: `${runs.length} in flight` }),
-    ]),
-    el("ul", { class: "operation-running-steps" }, runs.map((run) => el("li", { class: "operation-running-step" }, [
-      el("span", { class: "mono", text: run.job_id }),
-      run.run_role ? el("span", { class: "mono", text: run.run_role }) : null,
-      run.resolved_crew ? el("span", { class: "mono", text: run.resolved_crew }) : null,
-      runLink(run.run_id, workspaceId),
-    ].filter(Boolean)))),
-  ]);
-  card.dataset.task = task.id;
-  return card;
-}
-
 function shellQuoteJob(text) {
   return `'${text.replace(/'/g, "'\\''")}'`;
 }
@@ -310,10 +242,9 @@ export function renderJobs(payload) {
   // A workspace change clears the cache mid-flight; a repaint then has
   // nothing to draw and must not dereference the cleared payload.
   if (!payload) return;
-  if (payload.view !== "live") lastJobs = payload;
-  const isLive = payload.view === "live";
-  const body = $(isLive ? "jobs-live-body" : "jobs-body");
-  const count = $(isLive ? "jobs-live-count" : "jobs-count");
+  lastJobs = payload;
+  const body = $("jobs-body");
+  const count = $("jobs-count");
   if (!body) return;
   body.textContent = "";
   const workspace = selectedWorkspace();
@@ -328,28 +259,6 @@ export function renderJobs(payload) {
   const hostRefusal = hostWriteRefusal();
   if (hostRefusal) body.appendChild(el("div", { class: "operations-readonly-note", text: hostRefusal }));
   const runs = Array.isArray(payload.runs?.items) ? payload.runs.items : Array.isArray(payload.runs) ? payload.runs : [];
-  const running = runs.filter((run) => run.state === "running" || run.state === "pending");
-  if (isLive) {
-    const groups = runningGroups(running);
-    const taskCount = groups.tasks.length;
-    const strip = el("section", { class: "operation-running" });
-    strip.setAttribute("aria-label", "Running now");
-    strip.appendChild(el("div", { class: "operation-running-title" }, [
-      el("strong", { text: "Running now" }),
-      el("span", { class: "mono", text: `${taskCount} task${taskCount === 1 ? "" : "s"}` }),
-      el("span", { class: "muted", text: running.length ? `(${running.length} run${running.length === 1 ? "" : "s"} in flight)` : "nothing in flight" }),
-    ]));
-    if (running.length) {
-      strip.appendChild(el("div", { class: "operation-running-grid" }, [
-        ...groups.tasks.map((group) => runningTaskCard(group, workspace.id)),
-        ...groups.untasked.map((run) => jobRunningCard(run, workspace.id)),
-      ]));
-    }
-    body.appendChild(strip);
-    if (payload.runs?.truncated) body.appendChild(el("p", { class: "operation-control-note", text: `${running.length} shown of ${payload.runs.total} runs in flight.` }));
-    count.textContent = `${running.length} run${running.length === 1 ? "" : "s"} in flight · ${workspace.name}`;
-    return;
-  }
   const catalog = jobCatalog(operationsState.lastOperations, runs, workspace.name, payload.catalogJobs);
   const failing = new Map((payload.failures?.failing || []).map((streak) => [streak.job_id, streak]));
   if (catalog.size === 0) {
@@ -371,37 +280,34 @@ export function renderJobs(payload) {
     body.appendChild(el("p", { class: "operation-control-note", text: `Catalogue projected from routine targets and the last ${JOB_RUN_LIMIT} runs.` }));
   }
   // The running figure describes the listed jobs, matching their Active column.
-  // Delivery and other non-runnable runs in flight are counted in Jobs › Live.
+  // Delivery and other non-runnable runs in flight are counted in Jobs › History › Running.
   const listedRunning = [...catalog.values()].reduce((sum, job) => sum + job.running, 0);
   $("jobs-count").textContent = `${catalog.size} job${catalog.size === 1 ? "" : "s"} · ${listedRunning} running · ${workspace.name}`;
 }
 
 export function fetchAndRenderJobs({ routinesRead = null } = {}) {
-  const live = operationsState.context.getJobsSubtab?.() === "live";
-  const bodyId = live ? "jobs-live-body" : "jobs-body";
-  const countId = live ? "jobs-live-count" : "jobs-count";
   if (!selectedWorkspace()) {
-    return requestPanel(bodyId, "unselected", () => Promise.resolve({ runs: [], view: live ? "live" : "catalogue" }), renderJobs, countId);
+    return requestPanel("jobs-body", "unselected", () => Promise.resolve({ runs: [] }), renderJobs, "jobs-count");
   }
-  return requestPanel(bodyId, "jobs",
+  return requestPanel("jobs-body", "jobs",
     () => Promise.all([
       // The chrome peek and catalogue use the same payload unless this view
       // explicitly requests the wider plugin-off inventory.
       routinesRead && withInactivePlugins("/api/routines") === "/api/routines"
         ? routinesRead : fetchJson(withInactivePlugins("/api/routines")),
-      fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}${live ? "&state=active" : ""}`),
+      fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}`),
       // The streak read must not take the catalogue down with it.
-      live ? null : fetchJson("/api/jobs/failure-streaks").catch(() => null),
+      fetchJson("/api/jobs/failure-streaks").catch(() => null),
       // Server-reported runnability decides which jobs the catalogue shows.
-      live ? null : fetchJson("/api/jobs"),
-    ]).then(([routines, runs, failures, catalogJobs]) => ({ routines, runs, failures, catalogJobs, view: live ? "live" : "catalogue" })),
+      fetchJson("/api/jobs"),
+    ]).then(([routines, runs, failures, catalogJobs]) => ({ routines, runs, failures, catalogJobs })),
     (payload) => {
-      // Only a fresh catalogue/live read adopts its routines snapshot. A
-      // repaint from cached jobs must retain a newer Routines readback.
+      // Only a fresh catalogue read adopts its routines snapshot. A repaint
+      // from cached jobs must retain a newer Routines readback.
       operationsState.lastOperations = payload.routines;
       noteCronZone(operationsState.lastOperations);
       updateRoutineFailureBadge(scopedRoutines(operationsState.lastOperations));
       if (payload.failures) updateJobFailureBadges(payload.failures.failing);
       renderJobs(payload);
-    }, countId);
+    }, "jobs-count");
 }

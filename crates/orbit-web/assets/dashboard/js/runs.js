@@ -17,7 +17,12 @@ const $ = (id) => document.getElementById(id);
 
 const CANCELLABLE_RUN_STATES = new Set(["pending", "running"]);
 const RESUMABLE_RUN_STATES = new Set(["failed", "interrupted", "timeout"]);
-const RUN_FILTERS = new Set(["all", "failed"]);
+const RUN_FILTERS = new Set(["running", "all", "failed"]);
+// Opening History shows what is in flight; All and Failed are the operator's choice.
+const DEFAULT_RUN_FILTER = "running";
+const RUN_FILTER_LABELS = [["running", "Running"], ["all", "All"], ["failed", "Failed"]];
+// Running lists pending and running runs: the API's `active` state.
+const IN_FLIGHT_RUN_STATES = new Set(["pending", "running"]);
 // One delivered task runs these three pipelines back to back; the list folds
 // them into one group per task.
 const PIPELINE_GROUP_JOBS = new Set(["task_auto_pipeline", "task_gate_pipeline", "task_pr_pipeline"]);
@@ -64,9 +69,9 @@ function parseRunIdParam(value) {
 
 function runFiltersFromAddress() {
   const params = new URLSearchParams(window.location.search);
-  const state = params.get("run_state") || "all";
+  const state = params.get("run_state") || DEFAULT_RUN_FILTER;
   return {
-    state: RUN_FILTERS.has(state) ? state : "all",
+    state: RUN_FILTERS.has(state) ? state : DEFAULT_RUN_FILTER,
     taskId: parseRunIdParam(params.get("task_id")),
     jobId: parseRunIdParam(params.get("job_id")),
   };
@@ -97,6 +102,18 @@ function isTaskId(value) {
   return Boolean(match) && !["ADR", "L", "F"].includes(match[1]);
 }
 
+/// Show the Running filter and write it to the address: the retired Jobs ›
+/// Live links and the rail's in-flight count open History through this.
+export function selectRunningRunFilter() {
+  runFilter = DEFAULT_RUN_FILTER;
+  persistRunFilters();
+}
+
+// The `state` the job-runs API takes for the selected filter.
+function runStateParam() {
+  return runFilter === "running" ? "active" : runFilter;
+}
+
 export function runsQueryKey() {
   return `${runFilter}\n${runTaskId}\n${runJobId}\n${getWindow()}`;
 }
@@ -106,11 +123,12 @@ export function runsQueryKey() {
 export function jobRunsQuery(limit) {
   const params = new URLSearchParams();
   params.set("limit", String(limit));
-  params.set("state", runFilter);
+  params.set("state", runStateParam());
   if (runTaskId) params.set("task_id", runTaskId);
   if (runJobId) params.set("job_id", runJobId);
+  // What is in flight now is not bounded by the history window.
   const selected = getWindow();
-  if (selected && selected !== "all") params.set("since", selected);
+  if (runFilter !== "running" && selected && selected !== "all") params.set("since", selected);
   return params.toString();
 }
 
@@ -827,12 +845,13 @@ function sortedRunsForDisplay(runs) {
 
 function runMatchesFilter(run) {
   if (runFilter === "failed") return RESUMABLE_RUN_STATES.has(run && run.state);
+  if (runFilter === "running") return IN_FLIGHT_RUN_STATES.has(run && run.state);
   return true;
 }
 
 function persistRunFilters() {
   const url = new URL(window.location.href);
-  if (runFilter === "all") url.searchParams.delete("run_state");
+  if (runFilter === DEFAULT_RUN_FILTER) url.searchParams.delete("run_state");
   else url.searchParams.set("run_state", runFilter);
   if (runTaskId) url.searchParams.set("task_id", runTaskId);
   else url.searchParams.delete("task_id");
@@ -854,7 +873,7 @@ function showRunsLoading() {
 }
 
 export function setRunFilter(value) {
-  runFilter = RUN_FILTERS.has(value) ? value : "all";
+  runFilter = RUN_FILTERS.has(value) ? value : DEFAULT_RUN_FILTER;
   persistRunFilters();
   clearRunsFetchTimer();
   showRunsLoading();
@@ -893,6 +912,15 @@ function applyRunQuery(raw) {
   if (runQueryTimer && typeof runQueryTimer.unref === "function") runQueryTimer.unref();
 }
 
+// The Running header: tasks with work in flight and the runs behind them.
+function formatInFlightCount(runs, meta) {
+  const tasks = new Set(runs.flatMap(runTaskIds)).size;
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  if (!runs.length) return "nothing in flight";
+  const base = `${plural(tasks, "task")}, ${plural(runs.length, "run")} in flight`;
+  return meta && meta.truncated && Number.isFinite(meta.total) ? `${base} · ${meta.total} total, newest shown` : base;
+}
+
 export function formatRunCount(shown, fetched, meta) {
   const capped = hasCtx("getRunsLimitCapped") && _runsCtx.getRunsLimitCapped();
   const limit = `${capped ? "server limit" : "limit"} ${meta?.limit || fetched}`;
@@ -917,7 +945,7 @@ function runsAreLoading(runs, meta) {
   if (!runs || runs.length === 0) return true;
   if (meta && meta.runsQuery && meta.runsQuery !== runsQueryKey()) return true;
   const loadedState = meta && meta.state;
-  return Boolean(loadedState && loadedState !== runFilter);
+  return Boolean(loadedState && loadedState !== runStateParam());
 }
 
 function windowPhrase() {
@@ -934,13 +962,15 @@ function runsEmptyText() {
   if (runFilter === "failed") {
     return `No failed, timed-out, or interrupted job runs${extra} (${windowPhrase()}).`;
   }
+  if (runFilter === "running") return `Nothing in flight${extra} in this workspace.`;
   return `No job runs${extra} in this workspace (${windowPhrase()}).`;
 }
 
 function runsScopeText() {
   let lead = "Every job run";
   if (runFilter === "failed") lead = "Failed, timed-out, and interrupted job runs";
-  const qualifiers = ["newest first", windowPhrase()];
+  if (runFilter === "running") lead = "Pending and running job runs";
+  const qualifiers = runFilter === "running" ? ["newest first", "whatever the time window"] : ["newest first", windowPhrase()];
   if (runTaskId) qualifiers.push(`task ${runTaskId}`);
   if (runJobId) qualifiers.push(`job ${runJobId}`);
   return `${lead}, ${qualifiers.join(", ")}.`;
@@ -1011,7 +1041,7 @@ function runFilterControls() {
   const controls = el("div", { class: "runs-filter", title: "Filter runs by state" });
   controls.setAttribute("role", "group");
   controls.setAttribute("aria-label", "Filter runs by state");
-  for (const [value, label] of [["all", "All"], ["failed", "Failed"]]) {
+  for (const [value, label] of RUN_FILTER_LABELS) {
     const button = el("button", {
       class: `runs-filter-button${runFilter === value ? " active" : ""}`,
       text: label,
@@ -1066,7 +1096,8 @@ function runsToolbar() {
   toolbar.dataset.hash = `runs-toolbar-${runFilter}-${getWindow()}`;
   toolbar.appendChild(runFilterControls());
   toolbar.appendChild(runsQueryInput());
-  toolbar.appendChild(runsWindowControls());
+  // Running ignores the window, so its control is withdrawn rather than left inert.
+  if (runFilter !== "running") toolbar.appendChild(runsWindowControls());
   return toolbar;
 }
 
@@ -1198,6 +1229,22 @@ function runFailedAtCell(run, { withJob = false } = {}) {
   if (where) cell.appendChild(el("span", { class: "run-failed-step", text: where }));
   if (failure.excerpt) cell.appendChild(el("span", { class: "run-failed-excerpt", text: failure.excerpt }));
   cell.title = failure.title;
+  return cell;
+}
+
+// The crew working an in-flight run, in the slot a failed run uses for its
+// error. Only the Running filter shows it; other states say what ended them.
+function runCrewCell(runs, { withJob = false } = {}) {
+  const cell = el("span", { class: "run-failed-at run-crew" });
+  const crews = runs.filter((run) => run.resolved_crew);
+  if (crews.length) cell.appendChild(el("span", { class: "run-crew-label", text: crews.length === 1 ? "Crew" : "Crews" }));
+  for (const run of crews) {
+    cell.appendChild(el("span", { class: "run-crew-entry" }, [
+      withJob ? el("span", { class: "run-crew-job", text: pipelineShortName(run.job_id) }) : null,
+      el("span", { class: "mono", text: run.resolved_crew }),
+    ].filter(Boolean)));
+  }
+  if (crews.length) cell.title = `Crew: ${crews.map((run) => `${pipelineShortName(run.job_id)} ${run.resolved_crew}`).join(", ")}`;
   return cell;
 }
 
@@ -1342,7 +1389,8 @@ function runGroupRow(group, attributed, listed) {
   });
   const failure = group.repeatedFailure ? { run: first } : groupFailure(group, failed, listed);
   let failedAt = el("span", { class: "run-failed-at" });
-  if (failure && failure.run) failedAt = runFailedAtCell(failure.run, { withJob: !group.repeatedFailure });
+  if (runFilter === "running") failedAt = runCrewCell(runs, { withJob: true });
+  else if (failure && failure.run) failedAt = runFailedAtCell(failure.run, { withJob: !group.repeatedFailure });
   else if (failure) failedAt = rootCauseFailedAtCell(failure.cause);
   if (group.repeatedFailure) {
     const oldest = runs[runs.length - 1];
@@ -1374,7 +1422,7 @@ function runGroupRow(group, attributed, listed) {
     el("span", { class: "run-actions" }),
   ]);
   row.dataset.key = `group-${key}`;
-  row.dataset.hash = `group-${key}-${expanded}-${ts}-${denials}-${toolFails}-${JSON.stringify(first.tasks)}-${runs.map((run) => `${runIdentity(run)}:${run.state}:${runFailureHash(run)}`).join("|")}-${failureHash}`;
+  row.dataset.hash = `group-${key}-${expanded}-${ts}-${denials}-${toolFails}-${JSON.stringify(first.tasks)}-${runs.map((run) => `${runIdentity(run)}:${run.state}:${runFailureHash(run)}`).join("|")}-${failureHash}-${runFilter === "running" ? runs.map((run) => run.resolved_crew || "").join("|") : ""}`;
   row.style.cursor = "pointer";
   makeRowDisclosure(row, toggle, {
     expanded,
@@ -1426,7 +1474,7 @@ function runRow(r, attributed, body, { child = false, sharedTaskInHeader = false
     attributed ? el("span", { class: "run-workspace", text: r.workspace_name || r.workspace_id, title: r.workspace_id }) : null,
     openButton,
     child && sharedTaskInHeader ? el("span", { class: "run-tasks", "aria-hidden": "true" }) : runTaskLinks(r),
-    runFailedAtCell(r),
+    runFilter === "running" ? runCrewCell([r]) : runFailedAtCell(r),
     runIdCell,
     el("span", { class: "when", text: formatAge(ts), title: ts ? formatDateTime(ts) : "" }),
     runCountCell(friction.denials, "denials"),
@@ -1439,7 +1487,7 @@ function runRow(r, attributed, body, { child = false, sharedTaskInHeader = false
   ];
   const row = el("div", { class: `runs-row${attributed ? " workspace-attributed" : ""}${child ? " runs-group-child" : ""}`, title: `${r.run_id} (click to inspect)` }, rowCells);
   row.dataset.key = `run-${runIdentity(r)}`;
-  row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${resumeRequestsInFlight.has(runIdentity(r)) ? "resuming" : ""}-${friction.denials}-${friction.toolFails}-${durationMs}-${formattedDuration}-${isLive ? "live" : ""}-${friction.longRun}-${child ? "child" : ""}-${runFailureHash(r)}`;
+  row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${resumeRequestsInFlight.has(runIdentity(r)) ? "resuming" : ""}-${friction.denials}-${friction.toolFails}-${durationMs}-${formattedDuration}-${isLive ? "live" : ""}-${friction.longRun}-${child ? "child" : ""}-${runFailureHash(r)}-${runFilter === "running" ? r.resolved_crew || "" : ""}`;
   row.style.cursor = "pointer";
   row.dataset.hash += `-${JSON.stringify(r.tasks)}-${JSON.stringify(r.task_ids)}-${child && sharedTaskInHeader ? "header-task" : ""}`;
   // A run row opens the run detail view rather than disclosing inline, so its
@@ -1464,7 +1512,9 @@ export function renderRuns(runs) {
   const sorted = sortedRunsForDisplay(filtered);
   const top = sorted;
   if ($("runs-count")) {
-    $("runs-count").textContent = loading ? "…" : formatRunCount(top.length, sorted.length, meta);
+    $("runs-count").textContent = loading ? "…"
+      : runFilter === "running" ? formatInFlightCount(top, meta)
+        : formatRunCount(top.length, sorted.length, meta);
   }
   frag.appendChild(runsToolbar());
   frag.appendChild(runsScopeNote());

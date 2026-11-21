@@ -50,6 +50,10 @@
 }
 .runs-row .run-failed-excerpt { color: var(--fg-dim); font-size: var(--text-sm); line-height: 1.35; overflow-wrap: anywhere; }
 .runs-row .run-failed-at.empty { color: var(--fg-mute); font-size: var(--text-sm); }
+/* An in-flight run names its crew where a failed one names its error. */
+.runs-row .run-crew { flex-direction: row; flex-wrap: wrap; gap: var(--space-2) var(--space-12); color: var(--fg-dim); font-size: var(--text-sm); }
+.runs-row .run-crew-entry { display: inline-flex; gap: var(--space-6); }
+.runs-row .run-crew-label, .runs-row .run-crew-job { color: var(--fg-mute); }
 .runs-row .run-failed-step,
 .runs-row .run-failed-at.empty { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A task's pipeline runs fold under one header row; opened, they indent below it. */

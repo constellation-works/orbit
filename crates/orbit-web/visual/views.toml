@@ -46,12 +46,12 @@ states = ["default", "error"]
 mask = []
 
 [[view]]
-id = "jobs-live"
+id = "jobs-history"
 app = "dashboard"
-title = "Jobs live"
-route = "#jobs/live"
+title = "Jobs history"
+route = "#jobs/history"
 fixture = "busy-workspace"
-ready = "#jobs-live-body"
+ready = "#runs-panel"
 responsive = true
 states = ["default", "empty"]
 mask = []
