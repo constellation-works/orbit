@@ -17,6 +17,8 @@ mod record;
 mod types;
 
 #[cfg(any(test, feature = "test-support"))]
+pub(super) use clock::reach_deadline;
+#[cfg(any(test, feature = "test-support"))]
 pub use clock::{
     advance_deadline_clock_after_next_refusal_decision, advance_deadline_clock_at_next_refusal,
 };

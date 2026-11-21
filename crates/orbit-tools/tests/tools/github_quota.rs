@@ -62,11 +62,12 @@ impl FakeGh {
         std::fs::write(dir.path().join("rate_limit"), rate_limit).unwrap();
         std::fs::write(dir.path().join("answer"), answer).unwrap();
         let program = dir.path().join("gh");
-        std::fs::write(
-            &program,
+        // The directory is written into the script, not derived with a
+        // `dirname` fork, so the call is logged as the probe's first act.
+        let script = format!(
             "#!/bin/sh\n\
              [ \"$1\" = --warm-up ] && exit 0\n\
-             dir=$(dirname \"$0\")\n\
+             dir='{}'\n\
              printf '%s\\n' \"$*\" >> \"$dir/calls\"\n\
              if [ \"$*\" = 'api rate_limit' ]; then\n\
                case $(cat \"$dir/rate_limit\") in\n\
@@ -98,9 +99,10 @@ impl FakeGh {
                echo 'gh: API rate limit exceeded for user ID 42. (HTTP 403)' >&2\n\
                exit 1\n\
              fi\n\
-             echo '{}'\n",
-        )
-        .unwrap();
+             echo '{{}}'\n",
+            dir.path().display()
+        );
+        std::fs::write(&program, script).unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -134,6 +136,22 @@ impl FakeGh {
             ]),
             debug: false,
         }
+    }
+
+    /// For [`github_quota::with_probe_timeout_when`]: turns true once this
+    /// `gh` has logged one more `api rate_limit` call than it had when this
+    /// was called, so a short budget ends only after the probe reached `gh`.
+    fn probe_logged(&self) -> impl Fn() -> bool + Send + Sync + 'static {
+        let calls = self.dir.path().join("calls");
+        let probes = move || {
+            std::fs::read_to_string(&calls)
+                .unwrap_or_default()
+                .lines()
+                .filter(|line| *line == "api rate_limit")
+                .count()
+        };
+        let before = probes();
+        move || probes() > before
     }
 
     fn calls(&self) -> Vec<String> {
@@ -545,8 +563,10 @@ fn slow_rate_limit_probe_bounds_to_request_timeout_and_skips_expired_request() {
     let mut request = gh.request(&["run", "view", "123"]);
     request.timeout_ms = Some(60);
     let started = std::time::Instant::now();
-    let result = github_quota::with_scoped_guard(store(records.path()), policy, || {
-        github_quota::run_gh_request(GithubCaller::Delivery, &request)
+    let result = github_quota::with_probe_timeout_when(gh.probe_logged(), || {
+        github_quota::with_scoped_guard(store(records.path()), policy, || {
+            github_quota::run_gh_request(GithubCaller::Delivery, &request)
+        })
     })
     .unwrap();
     assert!(
@@ -594,8 +614,10 @@ fn request_timed_out_before_spawn_is_not_charged_to_a_known_record() {
     let before = core(store(records.path()).status(&policy, &account, now()));
     assert_eq!(before.remaining, Some(4000));
 
-    let result = github_quota::with_scoped_guard(store(records.path()), policy, || {
-        github_quota::run_gh_request(GithubCaller::Delivery, &request)
+    let result = github_quota::with_probe_timeout_when(gh.probe_logged(), || {
+        github_quota::with_scoped_guard(store(records.path()), policy, || {
+            github_quota::run_gh_request(GithubCaller::Delivery, &request)
+        })
     })
     .unwrap();
     assert!(result.timed_out, "{result:?}");
@@ -711,8 +733,10 @@ fn admission_past_the_budget_is_not_charged_to_a_known_record() {
 
     // The unresponsive probe spends the whole 60 ms budget, so admission
     // returns with none left. Only the probe reached `gh`; nothing is charged.
-    github_quota::with_scoped_guard(store(records.path()), policy, || {
-        github_quota::admit_gh_request(GithubCaller::Delivery, &request)
+    github_quota::with_probe_timeout_when(gh.probe_logged(), || {
+        github_quota::with_scoped_guard(store(records.path()), policy, || {
+            github_quota::admit_gh_request(GithubCaller::Delivery, &request)
+        })
     })
     .unwrap();
     assert_eq!(gh.calls(), vec!["api rate_limit".to_string()]);
@@ -790,8 +814,10 @@ fn admission_returns_only_the_budget_left_and_never_a_request_past_it() {
     let gh = FakeGh::new("hang", "ok");
     let mut slow = gh.request(&["run", "view", "123"]);
     slow.timeout_ms = Some(60);
-    let error = github_quota::with_scoped_guard(store(records.path()), policy, || {
-        github_quota::admit_gh_request_within_budget(GithubCaller::Delivery, &slow)
+    let error = github_quota::with_probe_timeout_when(gh.probe_logged(), || {
+        github_quota::with_scoped_guard(store(records.path()), policy, || {
+            github_quota::admit_gh_request_within_budget(GithubCaller::Delivery, &slow)
+        })
     })
     .expect_err("a budget spent by the probe leaves no request to start");
     assert!(
@@ -1038,8 +1064,10 @@ fn expired_refusal_over_a_writable_hold_leaves_the_refusal_count() {
         &hold,
         now,
     );
-    let run = github_quota::with_scoped_guard(store(expired_records.path()), policy, || {
-        github_quota::run_gh_request(GithubCaller::Delivery, &expired)
+    let run = github_quota::with_probe_timeout_when(expired_gh.probe_logged(), || {
+        github_quota::with_scoped_guard(store(expired_records.path()), policy, || {
+            github_quota::run_gh_request(GithubCaller::Delivery, &expired)
+        })
     })
     .expect("an expired budget returns the timeout outcome, not the hold's throttle");
     assert!(run.timed_out && !run.success, "{run:?}");
@@ -1311,8 +1339,10 @@ fn deadline_clipped_probe_leaves_known_quota_and_reserve_refusal_in_place() {
 
     let mut short = request.clone();
     short.timeout_ms = Some(60);
-    let result = github_quota::with_scoped_guard(store(records.path()), policy, || {
-        github_quota::run_gh_request(GithubCaller::Delivery, &short)
+    let result = github_quota::with_probe_timeout_when(gh.probe_logged(), || {
+        github_quota::with_scoped_guard(store(records.path()), policy, || {
+            github_quota::run_gh_request(GithubCaller::Delivery, &short)
+        })
     })
     .unwrap();
     assert!(result.timed_out);
@@ -1331,8 +1361,10 @@ fn deadline_clipped_probe_leaves_known_quota_and_reserve_refusal_in_place() {
     // itself (clipped again here) and still meets the reserve.
     let mut agent = request.clone();
     agent.timeout_ms = Some(200);
-    let error = github_quota::with_scoped_guard(store(records.path()), policy, || {
-        github_quota::admit_gh_request(GithubCaller::Agent, &agent)
+    let error = github_quota::with_probe_timeout_when(gh.probe_logged(), || {
+        github_quota::with_scoped_guard(store(records.path()), policy, || {
+            github_quota::admit_gh_request(GithubCaller::Agent, &agent)
+        })
     })
     .expect_err("the agent reserve still applies after a clipped probe");
     // The clipped probe spent the whole budget, so the reserve's refusal is

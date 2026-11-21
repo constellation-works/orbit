@@ -154,7 +154,7 @@ pub(crate) fn read_rate_limit(request: &ExecRequest, deadline: Option<Instant>) 
     let clipped = probe
         .timeout_ms
         .is_some_and(|limit| limit < REFRESH_TIMEOUT_MS);
-    match run_process(&probe, &NoSandbox) {
+    match run_rate_limit_probe(&probe, clipped, deadline) {
         Ok(result) if result.success => parse_rate_limit(&result.stdout),
         // The caller's deadline, not the endpoint, ended the read.
         Ok(result) if result.timed_out && clipped => RateLimitAnswer::Clipped(
@@ -168,6 +168,129 @@ pub(crate) fn read_rate_limit(request: &ExecRequest, deadline: Option<Instant>) 
             "rate-limit read could not run: {}",
             orbit_common::security::redaction::redact_all(&error.to_string())
         )),
+    }
+}
+
+/// Run the rate-limit probe. A fixture inside `with_probe_timeout_when`
+/// moves a clipped probe's timeout from its wall-clock budget to an event.
+fn run_rate_limit_probe(
+    probe: &ExecRequest,
+    clipped: bool,
+    deadline: Option<Instant>,
+) -> Result<orbit_exec::ExecutionResult, orbit_common::OrbitError> {
+    #[cfg(any(test, feature = "test-support"))]
+    if clipped && let Some(fired) = probe_timeout::armed() {
+        return probe_timeout::run(probe, deadline, fired.as_ref());
+    }
+    #[cfg(not(any(test, feature = "test-support")))]
+    let _ = (clipped, deadline);
+    run_process(probe, &NoSandbox)
+}
+
+/// Run `f` with this thread's clipped rate-limit probes timing out when
+/// `fired` first returns true, instead of when their wall-clock budget runs
+/// out. Test fixtures only.
+///
+/// A fixture that gives a request a short budget and a `gh` that hangs on
+/// `api rate_limit` means "the budget ends while the probe is running". With
+/// the real timer, a loaded host can kill the probe before the fake `gh` has
+/// started, or has logged its call (ORB-26200). Pass a `fired` that turns true
+/// once the fake has logged the call: the probe is then stopped, reported as
+/// timed out, and this thread's admission deadline clock is moved to the
+/// request's deadline, which is where the real timeout leaves both. The probe
+/// keeps its production arguments, environment and supervision, and the
+/// endpoint's 15 s read limit still bounds a `fired` that never turns true.
+#[cfg(any(test, feature = "test-support"))]
+pub fn with_probe_timeout_when<T>(
+    fired: impl Fn() -> bool + Send + Sync + 'static,
+    f: impl FnOnce() -> T,
+) -> T {
+    let _armed = probe_timeout::arm(std::sync::Arc::new(fired));
+    f()
+}
+
+#[cfg(any(test, feature = "test-support"))]
+mod probe_timeout {
+    use std::cell::RefCell;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+
+    use orbit_common::OrbitError;
+    use orbit_exec::{ExecRequest, ExecutionResult, NoSandbox, Sandbox, StdinMode};
+
+    use super::REFRESH_TIMEOUT_MS;
+
+    pub(super) type Fired = Arc<dyn Fn() -> bool + Send + Sync>;
+
+    thread_local! {
+        static FIRED: RefCell<Option<Fired>> = const { RefCell::new(None) };
+    }
+
+    /// How often the watcher checks `fired`. It only bounds how soon the
+    /// probe stops after the event; no outcome depends on it.
+    const POLL: Duration = Duration::from_millis(1);
+
+    pub(super) struct Armed(Option<Fired>);
+
+    impl Drop for Armed {
+        fn drop(&mut self) {
+            let previous = self.0.take();
+            FIRED.with(|slot| *slot.borrow_mut() = previous);
+        }
+    }
+
+    pub(super) fn arm(fired: Fired) -> Armed {
+        Armed(FIRED.with(|slot| slot.borrow_mut().replace(fired)))
+    }
+
+    pub(super) fn armed() -> Option<Fired> {
+        FIRED.with(|slot| slot.borrow().clone())
+    }
+
+    pub(super) fn run(
+        probe: &ExecRequest,
+        deadline: Option<Instant>,
+        fired: &(dyn Fn() -> bool + Send + Sync),
+    ) -> Result<ExecutionResult, OrbitError> {
+        NoSandbox.validate(probe)?;
+        let stop = AtomicBool::new(false);
+        let done = AtomicBool::new(false);
+        let stdin_payload = match &probe.stdin_mode {
+            StdinMode::Bytes(bytes) => Some(bytes.clone()),
+            StdinMode::Inherit | StdinMode::Null => None,
+        };
+        let started = Instant::now();
+        let outcome = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                while !done.load(Ordering::Acquire) {
+                    if fired() {
+                        stop.store(true, Ordering::Release);
+                        return;
+                    }
+                    std::thread::sleep(POLL);
+                }
+            });
+            let outcome = orbit_exec::spawn_supervised_cancellable(
+                || NoSandbox.spawn(probe),
+                Some(REFRESH_TIMEOUT_MS),
+                stdin_payload,
+                Some(&stop),
+            );
+            done.store(true, Ordering::Release);
+            outcome
+        })?;
+        let mut result = outcome.result;
+        if stop.load(Ordering::Acquire) && !result.success {
+            // The event stands in for the deadline: the probe timed out, and
+            // the admission clock reads what it reads at the real timeout.
+            result.timed_out = true;
+            result.duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            if let Some(deadline) = deadline {
+                super::super::store::reach_deadline(deadline);
+            }
+        }
+        Ok(result)
     }
 }
 

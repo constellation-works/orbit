@@ -1371,8 +1371,19 @@ fn slow_quota_probe_consuming_source_deadline_prevents_spawning_gh() {
         || {
             let source = Source::new(root.path());
             spent.set(super::super::source::SOURCE_DEADLINE - Duration::from_millis(80));
-            github_quota::with_scoped_guard(store.clone(), policy, || {
-                source.ci_cover_pull_request("#1")
+            // The 80 ms budget ends once the probe has reached the fake `gh`,
+            // not on a wall-clock timer that a loaded host can win (ORB-26200).
+            let probe_calls = calls.clone();
+            let probe_logged = move || {
+                std::fs::read_to_string(&probe_calls)
+                    .unwrap_or_default()
+                    .lines()
+                    .any(|line| line == "api rate_limit")
+            };
+            github_quota::with_probe_timeout_when(probe_logged, || {
+                github_quota::with_scoped_guard(store.clone(), policy, || {
+                    source.ci_cover_pull_request("#1")
+                })
             })
         },
     )
