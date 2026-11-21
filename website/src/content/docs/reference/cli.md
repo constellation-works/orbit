@@ -268,20 +268,6 @@ With `decision_channel.enabled` on, work held on a human decision raises a
 | `orbit experiment show <id>` \| `list` | Show one experiment with its arms and event log, or list the workspace's experiments. |
 | `orbit experiment delete <id> --reason <text>` | Delete a finished experiment that never applied a treatment. |
 
-### Crew memory (experimental)
-
-[Crew memory](/how-to/crew-memory/) is off by default. Until
-`crew_memory.enabled` is `true`, only `show`, `history` and `export` work. An
-operator can
-[grant an agent read access](/how-to/crew-memory/#grant-an-agent-read-access).
-
-| Command | Purpose |
-|---|---|
-| `orbit memory show [<key>\|global] [--revision <n>]` \| `history <key>` | Show a memory space or summarise every space, or list a space's revisions and audit events. A space is keyed by model ID. |
-| `orbit memory export [--dir <dir>]` | Write every current space to Markdown files, in `.orbit/memory` by default. |
-| `orbit memory write <key> --file <path>` \| `reset <key>` \| `copy <from> <to>` | Replace a space with the given files, empty it, or copy one model's space to another. Operator only. |
-| `orbit memory proposals` \| `proposal accept <id> [--edit <file>]` \| `proposal reject <id> --reason <text>` | List open global-memory proposals with their evidence, accept one into a new global revision, or reject it with a reason. |
-
 ### Residents and evolution
 
 | Command | Purpose |

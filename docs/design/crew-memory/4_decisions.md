@@ -1,7 +1,7 @@
 ---
 title: Crew Memory — Decisions
 owner: claude
-last_updated: 2026-11-10
+last_updated: 2026-11-21
 last_validated: 2026-11-09
 status: Accepted
 feature: crew-memory
@@ -11,7 +11,7 @@ summary: "Why crew memory is experimental until a randomised readout favours it,
 tags: [crew-memory]
 paths: ["crates/orbit-core/src/application/crew_memory/**"]
 related_features: [experiments, project-learnings, agent-scorecards]
-related_artifacts: [ORB-23105, ORB-10736, ORB-23644]
+related_artifacts: [ORB-23105, ORB-10736, ORB-23644, ORB-26501]
 ---
 
 # Crew Memory — Decisions
@@ -34,6 +34,8 @@ How this differs from project learnings:
 1. Value is measured before adoption, by randomised assignment of tasks.
 2. Content is written by the model it serves, from scorecard evidence, not curated by hand.
 3. Delivery reuses the experiment overlay and admission receipt. There is no new search corpus, dashboard, hook installer or context-matching engine.
+
+**Superseded in part (2026-11-21):** after the no-difference readout the code was kept dormant, not removed; see [Keep the machinery dormant after the no-difference readout](#keep-the-machinery-dormant-after-the-no-difference-readout).
 
 ### Consequences
 
@@ -135,10 +137,37 @@ The dashboard uses a separate read-only board. It lists open proposals still ins
 
 On a narrow screen the sub-tab uses the Frictions inline accordion instead of the approved mock's separate detail view with a Back button. The task asks for the Frictions list + detail layout and shared components, and STD-07@1 §R30 asks for one component per element kind.
 
+**Superseded (2026-11-21):** the dashboard view and its routes were removed; the board projection stays for a future surface.
+
 ### Consequences
 
 - Viewing the dashboard never changes proposal state or adds history events.
 - Cost: until a CLI list or decision runs, a lapsed proposal shows as expired on the dashboard while its stored status is still open.
+
+## Keep the machinery dormant after the no-difference readout
+
+**Recorded:** 2026-11-21 · [ORB-26501] · supersedes in part [Experimental until a randomised readout favours it](#experimental-until-a-randomised-readout-favours-it) and [The dashboard reads memory and proposals but never decides or expires them](#the-dashboard-reads-memory-and-proposals-but-never-decides-or-expires-them)
+**Code anchors:** `crates/orbit-core/src/application/experiment/memory_arms.rs::crew_memory_experiment_running`, `crates/orbit-types/src/tool/mcp_toolset.rs::McpToolset::RunBound`
+
+### Context
+
+The live experiment exp-5342a4d6 (crew-memory-implementers-live) read out on 2026-11-21T17:41Z, over 419 tasks, with the verdict "no difference" ([ORB-26494]). First-pass acceptance went from 66.9% to 59.0%. Cost rose by $0.38 per task (interval −0.09 to +0.85) and implement tokens by 1.07M per task. Fewer recoveries and failed checks won back under 10% of that cost. Daniel decided to "conclude it with no winner and file the removal". The first decision above says a failed readout ends with the code removed, not left dormant. Daniel then narrowed the removal: "let's keep the machinery internally, and just cleanup anything external, e.g. config properties, memory knowledge in UI, tools, mcps, skill, website, etc. I want to keep it around to test other variations of it later on."
+
+### Decision
+
+Remove everything an operator or agent sees and keep the machinery dormant:
+
+- **Removed:** the `orbit memory` CLI, the `crew_memory.enabled` key (it now loads with a deprecation warning), the web routes and the dashboard Knowledge › Memory view, the operator-only verbs, the grant-based reader, and the skill, website and listed-tool mentions.
+- **Kept:** the store and its tables with their data, the write rules, the `memory` overlay with its capture and delivery, the readout fields and dreaming overhead, the dreaming routine, job and activity, and the run-bound `show`, `write` and `propose` operations with their admission rules.
+- **One switch.** The machinery runs only while a running `shadow` or `live` experiment has a memory arm, read from the store at each use. That was half of the old two-part gate.
+- **Run-bound tools.** The three tools sit in a toolset that no role, selection or `all` serves. Only a managed run whose dispatch stamp names a tool gets it. `orbit tool list` omits them, a grant or requirement naming one is refused unless Orbit mints the task itself, and core refuses the operator.
+
+### Consequences
+
+- A variant, such as the consolidation redesign in [specs/consolidation.md](./specs/consolidation.md), can run as a new experiment without restoring plumbing. A variant that wins needs its own design change for any operator surface.
+- Stored memory and the concluded experiments' readouts are unchanged; no migration drops a table.
+- Cost: dormant code still has to compile, pass tests and follow refactors, contrary to the [ORB-10736] precedent the first decision cited.
+- Cost: while a memory experiment runs, no operator command reads, resets or reviews memory, and a dreaming run's global proposals lapse unreviewed after four weeks. Inspecting memory means reading the store or the readout.
 
 ## Task References
 
@@ -147,5 +176,7 @@ On a narrow screen the sub-tab uses the Frictions inline accordion instead of th
 - [ORB-23644] — adds the read-only Knowledge › Memory dashboard sub-tab
 - [ORB-12718] — kept `.orbit/` untracked, including leftover learnings
 - [ORB-23687] — orders the recent proposal board so decided proposals stay ahead of expiries
+- [ORB-26494] — analyses the 2026-11-21 live readout
+- [ORB-26501] — removes the external surface and keeps the machinery dormant
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

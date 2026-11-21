@@ -3,8 +3,8 @@
 //! each carrying its frozen, score-blind evidence pack, and records what an
 //! earlier week's dreaming run left behind.
 //!
-//! The routine mints nothing while `crew_memory.enabled` is false or while
-//! no running (shadow or live) experiment in the workspace has a memory arm.
+//! The routine mints nothing while no running (shadow or live) experiment
+//! in the workspace has a memory arm.
 //! A key with an open dreaming task, with no enabled crew on its model, or
 //! whose pack holds no evidence a write could cite is skipped, and the skip
 //! is recorded in the key's audit. The mint's `dream_minted` event holds the pack's task
@@ -22,7 +22,6 @@ use orbit_types::task::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::operations::ENABLED_KEY;
 use super::validate::strip_score_blind_tokens;
 use super::{MemoryKey, MemoryLintVocabulary, memory_key};
 use crate::OrbitRuntime;
@@ -106,14 +105,6 @@ impl OrbitRuntime {
     pub fn crew_memory_dream(&self) -> Result<Value, OrbitError> {
         let now = Utc::now();
         let week = iso_week(now);
-        if !self.current_crew_memory_enabled() {
-            return Ok(json!({
-                "week": week,
-                "minted": [],
-                "skipped_reason": "disabled",
-                "message": format!("crew memory is disabled in this workspace (`{ENABLED_KEY}` is false); nothing was minted"),
-            }));
-        }
         let experiments = self.running_memory_experiments()?;
         if experiments.is_empty() {
             return Ok(json!({

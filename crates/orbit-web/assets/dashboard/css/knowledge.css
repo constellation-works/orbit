@@ -219,8 +219,7 @@
    instead of being clipped when the detail is taller than the screen. */
 /* The content column scrolls under a fixed 60px top bar, so the pane
    pins just inside the column's padding and fills what is left of it. */
-#friction-detail-panel,
-#memory-detail-panel {
+#friction-detail-panel {
   position: sticky;
   top: 16px;
   align-self: start;
@@ -228,8 +227,7 @@
   display: flex;
   flex-direction: column;
 }
-#friction-detail-panel > .body,
-#memory-detail-panel > .body {
+#friction-detail-panel > .body {
   overflow-y: auto;
   min-height: 0;
 }
@@ -241,8 +239,7 @@
    Tasks interaction pattern: the selected row owns an inline detail
    immediately beneath it, and the separate pane leaves the layout. */
 @media (max-width: 1000px) {
-  #friction-detail-panel,
-  #memory-detail-panel {
+  #friction-detail-panel {
     display: none;
   }
   .friction-row-toggle {
@@ -259,8 +256,7 @@
     overflow-y: visible;
   }
 }
-#friction-detail,
-#memory-detail {
+#friction-detail {
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -377,154 +373,3 @@
   color: var(--accent);
 }
 .knowledge-meta-card .knowledge-link-row:hover { text-decoration: underline; }
-
-/* Knowledge › Memory. Rows, pills, the detail head, the property card and the
-   one-column accordion are the Frictions components above; these rules only
-   lay out what Frictions has no counterpart for: memory files, the history
-   list, proposals and the "Show all" rows. */
-#memory-body { padding: 0; }
-.memory-row .meta .memory-usage { white-space: nowrap; }
-.memory-detail-wrap { display: flex; flex-direction: column; }
-/* .property-row aligns its items to the start, so the disclosure would size to
-   its nowrap summary's full width and overflow the card; stretch it into the
-   value column so the summary's ellipsis applies. */
-.knowledge-meta-card .memory-reason {
-  justify-self: stretch;
-  min-width: 0;
-}
-.knowledge-meta-card .memory-reason summary {
-  cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.knowledge-meta-card .memory-reason p {
-  margin: var(--space-6) 0 0;
-  white-space: pre-wrap;
-  color: var(--fg-soft);
-}
-.memory-file + .memory-file { margin-top: var(--space-20); }
-.memory-history .section-title { margin: 0 0 var(--space-10); }
-.memory-file-path {
-  margin: 0 0 var(--space-8);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  font-weight: 400;
-  color: var(--fg-dim);
-}
-.memory-actions,
-.memory-show-all-row {
-  display: flex;
-  padding: var(--space-12) var(--space-14);
-}
-.memory-actions { padding: 0 var(--space-24) var(--space-20); }
-.memory-history {
-  padding: var(--space-14) var(--space-24) var(--space-20);
-  border-top: 1px solid var(--hair);
-}
-.memory-history .memory-show-all-row { padding: var(--space-10) 0 0; }
-.memory-events {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-}
-.memory-event {
-  display: grid;
-  grid-template-columns: minmax(0, 150px) minmax(0, 140px) minmax(0, 1fr);
-  gap: var(--space-12);
-  padding: var(--space-6) 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-  font-size: var(--text-sm);
-  color: var(--fg-soft);
-  align-items: baseline;
-}
-.memory-event time,
-.memory-event-note {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--fg-dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.memory-history-empty {
-  font-size: var(--text-sm);
-  color: var(--fg-dim);
-}
-.memory-proposals { display: flex; flex-direction: column; }
-.memory-proposal { border-bottom: 1px solid var(--border); }
-.memory-proposal > summary {
-  display: grid;
-  gap: var(--space-4);
-  padding: var(--space-12) var(--space-24);
-  cursor: pointer;
-  list-style: none;
-}
-.memory-proposal > summary::-webkit-details-marker { display: none; }
-.memory-proposal > summary:hover { background: rgba(255, 255, 255, 0.02); }
-.memory-proposal[open] > summary { background: rgba(255, 255, 255, 0.03); }
-.memory-proposal-model,
-.memory-proposal-meta {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--fg-dim);
-}
-.memory-proposal-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--space-8);
-  flex-wrap: wrap;
-}
-.memory-proposal-title {
-  font-size: var(--text-md);
-  font-weight: 500;
-  color: var(--fg);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.memory-proposal-body {
-  display: grid;
-  gap: var(--space-12);
-  padding: var(--space-4) var(--space-24) var(--space-16);
-}
-.memory-proposal-body .markdown-body {
-  font-size: var(--text-md);
-  line-height: 1.6;
-  color: var(--fg-soft);
-}
-.memory-decision {
-  display: flex;
-  gap: var(--space-12);
-  font-size: var(--text-sm);
-  color: var(--fg-soft);
-}
-.memory-decision .label { color: var(--fg-dim); }
-.memory-proposal-body .knowledge-link-row,
-.knowledge-meta-card .knowledge-link-row {
-  text-decoration: none;
-}
-.memory-proposal-body .knowledge-link-row {
-  width: auto;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--accent);
-}
-.memory-proposal-body .knowledge-link-row:hover { text-decoration: underline; }
-.memory-closed > summary {
-  padding: var(--space-12) var(--space-24);
-  cursor: pointer;
-  font-size: var(--text-sm);
-  color: var(--fg-dim);
-}
-.memory-closed > .memory-history-empty { padding: 0 var(--space-24) var(--space-14); }
-@media (max-width: 520px) {
-  .memory-event { grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
-  .memory-proposal > summary,
-  .memory-proposal-body,
-  .memory-closed > summary { padding-left: var(--space-14); padding-right: var(--space-14); }
-  .memory-history { padding: var(--space-14); }
-  .memory-actions { padding: 0 var(--space-14) var(--space-14); }
-}

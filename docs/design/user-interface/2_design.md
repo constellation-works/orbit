@@ -98,7 +98,7 @@ Run detail joins each `child_dispatches` entry to its child run in that same res
 
 The `/api/diagnostics/friction` projection is memoized per workspace runtime, month and bounded row limit for 90 seconds, sharing one computation across overlapping Runs refreshes. Audit-derived CLI failure rows include an stderr excerpt: an 8 KiB prefix of the blob is read and redacted, then cut to the 2048-byte list-message cap, with `truncated: true` when the cap binds or the blob is longer than the prefix [ORB-15527]. Every other friction row's `stderr` is bounded the same way. Missing blobs produce empty stderr.
 
-Knowledge is a top-level dashboard tab with **Frictions** and **Memory** sub-tabs. Frictions handles friction triage; Memory is a read-only, per-workspace view of crew memory and global proposals [ORB-23644]. The retired native learning panels, routes, metrics, and mutations were removed by [ORB-10736].
+Knowledge is a top-level dashboard tab that holds Frictions, for friction triage. Its read-only Memory sub-tab for crew memory [ORB-23644] was removed with crew memory's external surface on 2026-11-21, which also dropped the sub-tab bar. The retired native learning panels, routes, metrics, and mutations were removed by [ORB-10736].
 
 Knowledge detail panels stay pinned while the artifact list scrolls after [ORB-10444]. The list grows well past a viewport, and scrolling it used to carry the pane the operator was reading out of view. The detail panel is sticky below the fixed chrome (header, tabs, health strip) and bounded to the remaining viewport height, so detail content taller than the screen scrolls inside the pane rather than being clipped. The single-column breakpoint unpins it, where the pane already stacks below the list.
 
@@ -704,7 +704,7 @@ Targeted axe scans cover contrast and scroll-region focus on the affected routes
 - [ORB-22445] — made the experiment detail render from the definition alone, keeping the last readout and a Retry notice when a refresh fails.
 - [ORB-22806] — removed the regression-risk marks comparison with prompt marks; its hash opens Hotspots.
 - [ORB-23511] — balanced the Health incident-class tiles on phones into two rows of two with a full-width deferred tile.
-- [ORB-23644] — added the read-only Knowledge › Memory sub-tab for crew memory spaces and proposals.
+- [ORB-23644] — added the read-only crew memory sub-tab under Knowledge (removed 2026-11-21).
 - [ORB-23883] — made the crew dropdown editable on the All workspaces task list, qualified per workspace.
 - [ORB-24178] — made run Cancel and Replay act on the runtime that holds the run, whatever workspace the request names.
 - [ORB-24677] — paged the Tasks board per status with true section totals.

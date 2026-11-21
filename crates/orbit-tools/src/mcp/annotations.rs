@@ -38,7 +38,6 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         | "orbit.friction.show"
         | "orbit.friction.stats"
         | "orbit.friction.tags"
-        | "orbit.memory.history"
         | "orbit.memory.show"
         | "orbit.notice.list"
         | "orbit.notice.show"
@@ -93,10 +92,7 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         "orbit.task.artifact.put" => A::destructive(true),
         // Replaces a memory space's files with a new revision; each call
         // appends another revision.
-        "orbit.memory.write" | "orbit.memory.proposal.accept" => A::destructive(false),
-        "orbit.memory.proposal.reject" => A::additive(false),
-        // Listing can withdraw newly expired proposals; a repeat changes none.
-        "orbit.memory.proposals" => A::destructive(true),
+        "orbit.memory.write" => A::destructive(false),
         "orbit.task.review_reset" => A::destructive(false),
         // Supersedes a recorded escalation; with `discard_candidate` it also
         // closes the published pull request.

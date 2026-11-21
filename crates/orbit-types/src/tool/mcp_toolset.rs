@@ -67,6 +67,11 @@ pub enum McpToolset {
     /// Tools no MCP server advertises: `orbit tool run` and managed
     /// activities reach them. Naming it in a selection advertises nothing.
     Local,
+    /// Tools only a managed run that may call them is served: a server
+    /// advertises one only when its dispatch stamp names it (`tool:<name>`).
+    /// No selection name, role or `all` enables it, so it is not in
+    /// [`Self::ALL`].
+    RunBound,
 }
 
 impl McpToolset {
@@ -152,6 +157,7 @@ impl McpToolset {
             Self::Notice => "notice",
             Self::Resident => "resident",
             Self::Local => "local",
+            Self::RunBound => "run-bound",
         }
     }
 
@@ -438,7 +444,11 @@ impl McpToolsetSelection {
     }
 
     /// Whether a named definition is included by its toolset or an explicit grant.
+    /// A [`McpToolset::RunBound`] definition only by its exact name.
     pub fn enables_tool(&self, toolset: McpToolset, name: &str) -> bool {
+        if toolset == McpToolset::RunBound {
+            return self.explicit_tools.contains(name);
+        }
         self.enables(toolset) || self.grants_tool(name)
     }
 
@@ -446,6 +456,9 @@ impl McpToolsetSelection {
     /// actions' toolsets is enabled, or a grant names it or one of its
     /// actions (`tool:orbit.decision:list`).
     pub fn enables_definition(&self, rules: &McpToolRules, name: &str) -> bool {
+        if rules.toolset == McpToolset::RunBound {
+            return self.enables_tool(rules.toolset, name);
+        }
         self.enables_tool(rules.toolset, name)
             || rules
                 .action_toolsets
@@ -478,13 +491,6 @@ impl McpToolsetSelection {
                     .strip_suffix('*')
                     .is_some_and(|prefix| name.starts_with(prefix))
             })
-    }
-
-    /// Whether every toolset is enabled, so nothing is withheld.
-    pub fn enables_all(&self) -> bool {
-        McpToolset::ALL
-            .into_iter()
-            .all(|toolset| self.enables(toolset))
     }
 
     /// The role this selection serves, when one was configured.

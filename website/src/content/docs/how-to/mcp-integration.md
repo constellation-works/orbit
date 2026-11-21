@@ -190,7 +190,7 @@ reports it as `mcp_toolset`.
 | `search` | `orbit.search` |
 | `exec` | `orbit.command.exec` |
 | `plugins` | Plugin tools |
-| `experiments` | `orbit.experiment.*`, and `orbit.memory.show`, `history`, `write`, `propose` |
+| `experiments` | `orbit.experiment.*` |
 | `analytics` | `orbit.agents.*` |
 | `decision-channel` | `orbit.decision.submit`, `orbit.decision.digest`. Only the bound channel plugin or the operator may call them. |
 | `notice` | `orbit.notice.post`, `close`, `list`, `show`: fleet notices |

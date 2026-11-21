@@ -97,7 +97,7 @@ What that buys, with no core change:
 - **No lock conflicts with delivery.** The lock index is per workspace. In the live workspace a replay candidate in `in-progress` would hold real `context_files` against real work.
 - **Clean records.** Hundreds of candidate tasks stay out of the live task list, search, attention list, scorecards, model ranking and experiment populations.
 - **A real task for every run.** The shipped activities (`worktree_setup`, `agent_implement`, `git_commit`, the review gate) work unchanged, because the candidate is an ordinary `backlog` task with no history.
-- **Leakage control by configuration.** The workspace's own `config.toml` turns off crew memory (`crew_memory.enabled`), mid-run steering (`workflow.mid_run_steering.enabled`) and experiments, and holds no workspace notices.
+- **Leakage control by configuration.** The workspace's own `config.toml` turns off mid-run steering (`workflow.mid_run_steering.enabled`) and experiments (which also keeps crew memory off, since it runs only under a memory-arm experiment), and holds no workspace notices.
 - **A capacity cap.** The workspace's drain has its own concurrency (§9).
 
 What it costs: a second clone with cold build caches; a `config.toml` that has to mirror the live workspace's validation commands, tag instructions and crews by hand (`config.toml` is read-only to a plugin: [plugins 1_scope.md §4.3](../plugins/1_scope.md)); and no priority relation between the two workspaces' drains.

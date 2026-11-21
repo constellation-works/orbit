@@ -142,14 +142,13 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (10)
+### Building (9)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Application Approvals](./design/application-approvals/1_scope.md) | Orbit slices 1-5 shipped; office profile remains ORB-20363, compatibility retirement ORB-21043 | claude |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | File phase 3: host scope and notifications | claude |
-| [Crew Memory](./design/crew-memory/1_overview.md) | Daniel: conclude exp-5342a4d6 (no difference) and decide the consolidation proposal (ORB-25838) | claude |
 | [Experiments](./design/experiments/1_scope.md) | The horizon decision-channel step remains unfiled | claude |
 | [Model Ranking](./design/model-ranking/1_overview.md) | R4 has no open task (ORB-23305 rejected): file the freeze and 4-week shadow run | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
@@ -211,11 +210,12 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [User Interface](./design/user-interface/1_overview.md) | — | gemini |
 | [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | — | Orbit |
 
-### Parked (3)
+### Parked (4)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Parked for free time (Daniel, 2026-11-02); on pickup settle open questions, file phase 1 | claude |
+| [Crew Memory](./design/crew-memory/1_overview.md) | Parked after exp-5342a4d6's no-difference readout (2026-11-21); on pickup, run a variant experiment on the dormant machinery, such as the consolidation redesign in specs/consolidation.md | claude |
 | [Path Leases](./design/path-leases/1_overview.md) | Restore the config keys, CLI and MCP tools withdrawn in ORB-22808 before any host enables leases | claude |
 | [Project Learnings](./design/project-learnings/4_decisions.md) | Retired by decision (ORB-10736); candidate to move under _archived | claude |
 
@@ -243,7 +243,7 @@ a conservative title/status fallback.
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Scope: let footprint admission run overlapping tasks together when the expected cost of repairing their landing conflicts fits an operator budget that can be high by day and low at night, scored per path from recorded conflict history | Draft | claude |
 | [Context Index](./design/context-index/1_overview.md) | An inverted index, built in the orbit-graph plugin, from the words of landed tasks to the symbols and files their merged diffs changed, queried with a new task's wording to predict its context_files, and shipped only if a time-split evaluation beats BM25 over code | Draft | claude |
 | [Crew Credentials](./design/crew-credentials/1_scope.md) | Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider | Draft | claude |
-| [Crew Memory](./design/crew-memory/1_overview.md) | Experimental: storage, gated memory delivery, weekly dreaming and operator review of global-memory proposals are built. Adoption depends on the memory-on vs memory-off experiment. | Accepted | claude |
+| [Crew Memory](./design/crew-memory/1_overview.md) | Parked: the memory-on vs memory-off experiment found no difference (2026-11-21), so the operator surface was removed and the storage, delivery and dreaming machinery kept dormant, switched on only by an experiment with a memory arm. | Accepted | claude |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Run the workspace drain on more than one host against one owner store — followers pull one task at a time from the owner's ready queue over federated MCP, validate where they built, and land through the owner. | Draft | claude |
 | [Distributions](./design/distributions/1_scope.md) | Scope: name the role of an app built on Orbit (a distribution), and let it choose which shipped default routines and auto-tasks its workspaces carry through a persistent seeding policy and a TOML preset | Implemented | claude |
 | [Eval Harness](./design/eval-harness/1_overview.md) | An evaluation plugin with two jobs: replay closed tasks against chosen crews and score the candidates, and bake off one new task across crews as candidate pull requests a person picks from | Draft | claude |

@@ -66,6 +66,7 @@ include!("ignored_crew_attribution.rs");
 include!("plugin_config.rs");
 include!("task_types.rs");
 include!("provider_limit.rs");
+include!("retired_crew_memory_key.rs");
 include!("retired_system_crew.rs");
 include!("mcp_toolsets.rs");
 include!("review_layers.rs");

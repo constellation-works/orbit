@@ -1,17 +1,19 @@
-//! Crew memory (experimental, off by default): per-model memory spaces and
-//! the global memory, held as append-only revisions in the owner store.
+//! Crew memory (dormant): per-model memory spaces and the global memory,
+//! held as append-only revisions in the owner store.
 //!
-//! Slice M1 holds the store, the write rules and the operator surface. Every
-//! writer goes through one write path, which refuses while
-//! `crew_memory.enabled` is false and runs `validate_memory_write`, the one
-//! place the five write rules live. Nothing here delivers memory to a
+//! It has no operator surface and no switch of its own: every part of it
+//! (write, delivery, capture, dreaming) runs only while a running experiment
+//! has a `memory` arm ([`crate::OrbitRuntime::crew_memory_experiment_running`]).
+//! Slice M1 holds the store and the write rules. Every writer goes through
+//! one write path, which refuses unless that experiment runs and runs
+//! `validate_memory_write`, the one place the five write rules live. Nothing here delivers memory to a
 //! prompt on its own: slice M2's `memory` experiment overlay renders a space
 //! with [`OrbitRuntime::render_crew_memory_delivery`](crate::OrbitRuntime)
 //! for a memory arm's dispatches. Slice M3 adds dreaming: the weekly
 //! `crew_memory_dream` routine (`dream`) and the agent tools' admission
 //! (`agent`), which binds a dreaming run's write and proposals to its own
-//! key and evidence pack. Slice M4 (`proposals`) adds operator review and
-//! four-week expiry, with atomic decision and revision audits.
+//! key and evidence pack. Slice M4 (`proposals`) holds the read of the
+//! proposed global notes and their four-week expiry.
 //! Design: `docs/design/crew-memory/2_design.md`.
 
 mod agent;
@@ -55,7 +57,7 @@ pub struct MemoryWrite {
 /// Who writes a revision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MemoryWriter {
-    /// An operator through the CLI. May cite no evidence.
+    /// An operator. May cite no evidence.
     Operator { actor: String },
     /// A dreaming task's run (slice M3): it must cite evidence from its
     /// evidence pack, and it writes only its task's `crew_memory_key`.

@@ -29,7 +29,7 @@
       "raw_font_sizes": 0
     },
     "crates/orbit-web/assets/dashboard/css/knowledge.css": {
-      "colour_literals": 9,
+      "colour_literals": 6,
       "raw_font_sizes": 0
     },
     "crates/orbit-web/assets/dashboard/css/log-tail.css": {

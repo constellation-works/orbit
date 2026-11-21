@@ -638,16 +638,9 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.experiment.reweight", Placement::Advertised),
     ("orbit.experiment.start", Placement::Advertised),
     ("orbit.experiment.update", Placement::Advertised),
-    // Crew memory copy, export and reset are operator CLI only (no MCP
-    // scope). Write and propose are listed by a server serving the
-    // `experiments` toolset, which a dreaming run's dispatch stamps.
-    ("orbit.memory.copy", Placement::Unadvertised),
-    ("orbit.memory.export", Placement::Unadvertised),
-    ("orbit.memory.proposal.accept", Placement::Unadvertised),
-    ("orbit.memory.proposal.reject", Placement::Unadvertised),
-    ("orbit.memory.proposals", Placement::Unadvertised),
+    // Crew memory write and propose are run-bound: listed only by a server
+    // whose dispatch stamp names them, which only a dreaming run's has.
     ("orbit.memory.propose", Placement::Advertised),
-    ("orbit.memory.reset", Placement::Unadvertised),
     ("orbit.memory.write", Placement::Advertised),
     // Listed only by a server that enables the opt-in `notice` toolset.
     ("orbit.notice.close", Placement::Advertised),

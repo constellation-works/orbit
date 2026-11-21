@@ -35,6 +35,10 @@ pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[(
 /// them errors; move each to its replacement before then [ORB-13992].
 pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
     (
+        "crew_memory.enabled",
+        "ignored: crew memory has no switch of its own; it runs only while an experiment with a memory arm is running. Remove this key",
+    ),
+    (
         "workflow.explore.enabled",
         "ignored: explorer delegation was removed; remove this key",
     ),

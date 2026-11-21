@@ -1799,9 +1799,19 @@ fn mcp_server_hides_uncallable_governed_tools_but_preserves_direct_call_denials(
     let response = client.tools_list();
     let names = tool_names(&response);
 
+    let run_bound = run_bound_tool_names();
     for definition in orbit_mcp::canonical_mcp_tool_definitions().expect("canonical definitions") {
         let canonical = definition.schema.name.as_str();
         let name = mcp_advertised_tool_name(canonical);
+        // A run-bound tool is served only to a managed run whose dispatch
+        // stamp names it, never to an operator or agent session.
+        if run_bound.contains(canonical) {
+            assert!(
+                !operator_names.contains(&name.as_str()) && !names.contains(&name.as_str()),
+                "run-bound {name} must not be listed"
+            );
+            continue;
+        }
         assert!(
             operator_names.contains(&name.as_str()),
             "operator missing {name}"
@@ -2959,6 +2969,19 @@ fn missing_artifact_names_the_listing_in_each_surface_syntax() {
     );
 }
 
+/// The builtin tools in the run-bound toolset, which no `mcp serve`
+/// selection enables.
+fn run_bound_tool_names() -> BTreeSet<String> {
+    let mut registry = orbit_tools::ToolRegistry::new();
+    registry.register_builtins();
+    registry
+        .all_schemas()
+        .into_iter()
+        .map(|schema| schema.name)
+        .filter(|name| registry.is_run_bound(name))
+        .collect()
+}
+
 /// [ORB-12254 / ORB-14449] Audit the canonical surface: optional selectors must
 /// resolve without one; required selectors fail closed. Task reads route by ID.
 fn every_workspace_scoped_tool_behavior_matches_its_advertised_selector_requirement() {
@@ -2984,10 +3007,11 @@ fn every_workspace_scoped_tool_behavior_matches_its_advertised_selector_requirem
     // Global-scope tools never go through the session-selector gate at all;
     // only `WorkspaceRequired` tools carry the selector contract this test
     // checks.
-    for definition in definitions
-        .iter()
-        .filter(|definition| definition.scope == orbit_types::tool::McpToolScope::WorkspaceRequired)
-    {
+    let run_bound = run_bound_tool_names();
+    for definition in definitions.iter().filter(|definition| {
+        definition.scope == orbit_types::tool::McpToolScope::WorkspaceRequired
+            && !run_bound.contains(definition.schema.name.as_str())
+    }) {
         let name = definition.schema.name.as_str();
         let advertised_name = orbit_types::tool::mcp_advertised_tool_name(name);
         let advertised_tool = advertised

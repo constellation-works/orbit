@@ -78,6 +78,9 @@ impl OrbitRuntime {
 
         let mut tools: Vec<ToolInfo> = registry_schemas
             .into_iter()
+            // A run-bound tool is served only to the managed runs that may
+            // call it; no operator listing shows it.
+            .filter(|schema| !self.tool_registry().is_run_bound(&schema.name))
             .map(|schema| {
                 let stored = stored_tools.iter().find(|s| s.name == schema.name);
                 let enabled = stored.is_none_or(|s| s.enabled);
@@ -108,7 +111,11 @@ impl OrbitRuntime {
 
     pub fn show_tool(&self, name: &str) -> Result<ToolInfo, OrbitError> {
         self.tool_registry().refuse_family_operation_name(name)?;
-        let Some(schema) = self.tool_registry().get_schema(name) else {
+        let schema = self
+            .tool_registry()
+            .get_schema(name)
+            .filter(|_| !self.tool_registry().is_run_bound(name));
+        let Some(schema) = schema else {
             // Disabled external tools are deliberately absent from the executable
             // registry. Their persisted catalog entry remains inspectable, using
             // the same active/enabled distinction as list_all_tools.

@@ -405,6 +405,13 @@ impl ToolRegistry {
         self.tools.get(name).and_then(|entry| entry.toolset)
     }
 
+    /// Whether `name` is a run-bound tool ([`McpToolset::RunBound`]): served
+    /// only to the managed runs whose dispatch stamp names it, never listed
+    /// for an operator and never grantable.
+    pub fn is_run_bound(&self, name: &str) -> bool {
+        self.mcp_toolset(name) == Some(McpToolset::RunBound)
+    }
+
     /// Advertised MCP scope of one entry, active or not.
     pub fn mcp_scope(&self, name: &str) -> Option<McpToolScope> {
         self.tools.get(name).and_then(|entry| entry.mcp_scope)

@@ -165,10 +165,6 @@ pub(crate) const DEFAULT_SKILL_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/skills/orbit-setup/references/automation.md"),
     ),
     (
-        "orbit-setup/references/crew-memory.md",
-        include_str!("../../assets/skills/orbit-setup/references/crew-memory.md"),
-    ),
-    (
         "orbit-setup/references/auto-tasks.md",
         include_str!("../../assets/skills/orbit-setup/references/auto-tasks.md"),
     ),

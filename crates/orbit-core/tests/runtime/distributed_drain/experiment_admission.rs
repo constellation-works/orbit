@@ -325,29 +325,6 @@ fn write_note(runtime: &OrbitRuntime, text: &str) {
         .unwrap();
 }
 
-fn set_crew_memory_enabled(runtime: &OrbitRuntime, enabled: bool) {
-    let path = runtime.shared_root().join("config.toml");
-    let text = std::fs::read_to_string(&path).unwrap();
-    let value = if enabled { "true" } else { "false" };
-    let mut updated = None;
-    for current in ["true", "false"] {
-        let needle = format!("[crew_memory]\nenabled = {current}");
-        if text.contains(&needle) {
-            updated = Some(text.replace(&needle, &format!("[crew_memory]\nenabled = {value}")));
-            break;
-        }
-    }
-    let updated = updated.expect("workspace config names crew_memory.enabled");
-    assert_ne!(
-        updated,
-        text,
-        "crew memory key at {} did not change",
-        path.display()
-    );
-    std::fs::write(&path, updated).unwrap();
-    assert_eq!(runtime.current_crew_memory_enabled(), enabled);
-}
-
 fn bind_leaf(pair: &Pair, leaf: &str, coordinator: Arc<dyn OwnerCoordinator>) -> OrbitRuntime {
     let admission = pair.admission(leaf);
     let receipt = admission.receipt.as_ref().unwrap();
@@ -460,21 +437,21 @@ fn assert_captured_owner_note(memory: &Value) {
 }
 
 /// An enabled capture stays on the receipt after the owner turns crew memory
-/// off. The next claimed dispatch, and an owner dispatch of the same capture,
-/// omit `crew_memory`. While the owner key stays on, the leaf still sends the
-/// captured owner bytes even though its own key is off. A follower checkout
+/// off by pausing its memory experiment. The next claimed dispatch, and an
+/// owner dispatch of the same capture, omit `crew_memory`. While the owner's
+/// experiment runs, the leaf still sends the captured owner bytes even though
+/// it runs no memory experiment itself. A follower checkout
 /// cannot write memory, so those bytes cannot have been read from its tables.
 /// A missing owner observation delivers nothing.
 fn owner_disable_suppresses_claimed_memory_delivery() {
     let pair = Pair::with_configs(
-        "[workflow]\ndefault_crew = \"sol\"\nlow_complexity_crews = [\"sol\"]\n[experiments]\nenabled = true\n[crew_memory]\nenabled = true\n",
-        "[workflow]\ndefault_crew = \"sol\"\nlow_complexity_crews = [\"sol\"]\n[experiments]\nenabled = false\n[crew_memory]\nenabled = true\n",
+        "[workflow]\ndefault_crew = \"sol\"\nlow_complexity_crews = [\"sol\"]\n[experiments]\nenabled = true\n",
+        "[workflow]\ndefault_crew = \"sol\"\nlow_complexity_crews = [\"sol\"]\n[experiments]\nenabled = false\n",
         &[None],
     );
     *pair.wire.refuse_settle.lock().unwrap() =
         Some("fixture holds settlement until the memory envelopes are checked".into());
     let owner = &pair.wire.owner;
-    write_note(owner, OWNER_NOTE);
     let actor = ExperimentActor {
         actor: "fixture operator".into(),
         reason: None,
@@ -495,8 +472,9 @@ fn owner_disable_suppresses_claimed_memory_delivery() {
         )
         .unwrap();
     owner
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor.clone())
         .unwrap();
+    write_note(owner, OWNER_NOTE);
     use orbit_store::contracts::ExperimentStoreBackend as _;
     let task = &pair.tasks[0];
     owner
@@ -585,8 +563,8 @@ fn owner_disable_suppresses_claimed_memory_delivery() {
     assert_eq!(claimed_memory.deliveries[0].model, SOL_MODEL);
     assert_eq!(claimed_memory.deliveries[0].block.model[0].text, OWNER_NOTE);
 
-    set_crew_memory_enabled(&pair.follower, false);
-    assert!(owner.current_crew_memory_enabled());
+    assert!(!pair.follower.crew_memory_experiment_running());
+    assert!(owner.crew_memory_experiment_running());
     let codex_dir = tempfile::tempdir().unwrap();
     let (program, stdin_path) = install_fake_codex(codex_dir.path());
     // SAFETY: this scenario row owns the process environment; RowHome restores
@@ -609,10 +587,13 @@ fn owner_disable_suppresses_claimed_memory_delivery() {
             .pointer("/crew_memory/model/0/text")
             .and_then(Value::as_str),
         Some(OWNER_NOTE),
-        "the leaf delivers the captured owner block while its own key is off: {delivered}"
+        "the leaf delivers the captured owner block while it runs no memory experiment: {delivered}"
     );
 
-    set_crew_memory_enabled(owner, false);
+    owner
+        .change_experiment(&experiment.id, ExperimentChange::Pause, actor)
+        .unwrap();
+    assert!(!owner.crew_memory_experiment_running());
     let suppressed = dispatch_envelope(&bound, &leaf, task, &stdin_path);
     assert!(
         suppressed.get("crew_memory").is_none(),
@@ -636,7 +617,7 @@ fn owner_disable_suppresses_claimed_memory_delivery() {
             .input
             .unwrap()["experiment_capture"],
         owner_capture,
-        "the owner run keeps the capture it froze while the key was on"
+        "the owner run keeps the capture it froze while crew memory was on"
     );
 }
 

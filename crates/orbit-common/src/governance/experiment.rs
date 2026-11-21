@@ -260,7 +260,7 @@ const START: OperationSpec<ExperimentVerb> = OperationSpec {
     verb: ExperimentVerb::Start,
     cli_path: &["start"],
     tool_name: "orbit.experiment.start",
-    tool_description: "Start a draft experiment, opening segment 1; from then on its definition is frozen. Refused unless experiments.enabled is true, while 3 experiments are already running, and unless the definition is complete: at least two arms with unique names, exactly one control, positive weights, a primary metric, config overlays only for keys on experiments.config_keys, and crew_memory.enabled true for a memory overlay. Operator only: an agent session is refused.",
+    tool_description: "Start a draft experiment, opening segment 1; from then on its definition is frozen. Refused unless experiments.enabled is true, while 3 experiments are already running, and unless the definition is complete: at least two arms with unique names, exactly one control, positive weights, a primary metric, and config overlays only for keys on experiments.config_keys. Operator only: an agent session is refused.",
     cli_about: "Start a draft experiment",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,

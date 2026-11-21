@@ -581,11 +581,6 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         JS,
         include_bytes!("../assets/dashboard/js/notices.js"),
     ),
-    (
-        "/static/js/memory.js",
-        JS,
-        include_bytes!("../assets/dashboard/js/memory.js"),
-    ),
 ];
 pub(super) const DASHBOARD_CSP: &str = concat!(
     "default-src 'self'; ",

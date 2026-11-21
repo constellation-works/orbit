@@ -143,8 +143,8 @@ impl OrbitRuntime {
     /// The crew memory an owner dispatch in `role` running `model` receives
     /// from a live memory arm: the admission capture's delivery for that
     /// role and model, else a fresh rendering (a reviewer or recovery crew
-    /// the admission did not draw). Nothing while `crew_memory.enabled` is
-    /// off, or when the dispatch records no model.
+    /// the admission did not draw). Nothing unless a running experiment has
+    /// a memory arm, or when the dispatch records no model.
     fn owner_memory_delivery(
         &self,
         assignment: &CapturedExperiment,
@@ -158,7 +158,7 @@ impl OrbitRuntime {
         let Some(key) = memory_key(model) else {
             return Ok(None);
         };
-        if !self.current_crew_memory_enabled() {
+        if !self.crew_memory_experiment_running() {
             return Ok(None);
         }
         if let Some(captured) = captured_memory_delivery(assignment, role, key.as_str()) {
@@ -171,11 +171,11 @@ impl OrbitRuntime {
     /// Crew memory a claimed dispatch receives from one live memory arm.
     ///
     /// The receipt's captured delivery is the only block this leaf may
-    /// send. Whether it sends that block follows the owner's current
-    /// `crew_memory.enabled`, observed once through the host-owned worker
-    /// channel. `observed` caches that answer for the rest of this
-    /// resolution. A disable, or an owner that cannot be observed, delivers
-    /// nothing and leaves the receipt unchanged.
+    /// send. Whether it sends that block follows whether the owner still has
+    /// a running memory experiment, observed once through the host-owned
+    /// worker channel. `observed` caches that answer for the rest of this
+    /// resolution. An owner with none, or one that cannot be observed,
+    /// delivers nothing and leaves the receipt unchanged.
     fn claimed_memory_delivery(
         &self,
         entry: &CapturedExperiment,
@@ -202,7 +202,7 @@ impl OrbitRuntime {
                     arm = %entry.arm,
                     role = role.as_str(),
                     model = key.as_str(),
-                    "claimed leaf receives no crew memory: the owner has crew memory disabled"
+                    "claimed leaf receives no crew memory: the owner has no running memory experiment"
                 );
                 None
             }
@@ -219,8 +219,8 @@ impl OrbitRuntime {
         }
     }
 
-    /// The owner's current `crew_memory.enabled`, or `None` when this leaf
-    /// cannot observe it. This is never the follower's own config.
+    /// Whether the owner has a running memory experiment now, or `None` when
+    /// this leaf cannot observe it. This is never the follower's own store.
     fn observe_owner_crew_memory_enabled(&self) -> Option<bool> {
         #[derive(serde::Deserialize)]
         struct OwnerCrewMemoryPolicy {
