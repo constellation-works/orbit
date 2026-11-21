@@ -35,6 +35,8 @@ use orbit_common::{OrbitError, PrivateVcsFailure, PrivateVcsFailureClass, Provid
 use orbit_exec::{ExecRequest, NoSandbox, run_process};
 use orbit_types::tool::ExecutionResult;
 
+#[cfg(any(test, feature = "test-support"))]
+pub use store::advance_deadline_clock_at_next_refusal;
 pub use store::{
     CallCounts, DEFAULT_AGENT_RESERVE_PERCENT, DEFAULT_BACKGROUND_RESERVE_PERCENT,
     DEFAULT_REFRESH_INTERVAL, GithubCaller, GithubQuotaPolicy, GithubQuotaStatus, GithubQuotaStore,
@@ -127,7 +129,7 @@ pub fn gh_request_deadline(request: &ExecRequest, started: Instant) -> Option<In
 fn remaining_millis(deadline: Instant) -> u64 {
     u64::try_from(
         deadline
-            .saturating_duration_since(Instant::now())
+            .saturating_duration_since(store::monotonic_now())
             .as_millis(),
     )
     .unwrap_or(u64::MAX)
