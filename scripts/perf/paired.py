@@ -55,6 +55,10 @@ DEFAULT_COMMAND_TIMEOUT_SECONDS = 300.0
 DEFAULT_OUTPUT_LIMIT_BYTES = 16 * 1024 * 1024
 TERM_GRACE_SECONDS = 5.0
 POST_EXIT_DRAIN_SECONDS = 5.0
+# Keep epoll's millisecond timeout conversion in range when the command
+# deadline is much farther away. pidfd readiness still wakes the selector as
+# soon as the child exits.
+SELECTOR_WAIT_SLICE_SECONDS = 1.0
 
 
 # ── statistics ───────────────────────────────────────────────────────────────
@@ -377,7 +381,10 @@ def run_supervised(argv: list[str], *, cwd, env, timeout: float, output_limit: i
                         break
                     limit = drain_until if exited_at is not None else deadline
                     # Without a pidfd, poll the leader every 10 ms.
-                    wait = min(limit - now, 0.01 if pidfd is None else limit - now)
+                    wait = min(
+                        limit - now,
+                        0.01 if pidfd is None else SELECTOR_WAIT_SLICE_SECONDS,
+                    )
                     for key, _mask in selector.select(max(wait, 0)):
                         if key.data != "stdout":
                             continue
