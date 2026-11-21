@@ -1308,7 +1308,12 @@ a.exec-origin.remote-run-link { color: var(--accent); }
   width: 400px;
   max-width: calc(100vw - 16px);
   max-height: min(560px, calc(100vh - 16px));
-
+  overflow: auto;
+  padding: var(--space-14) var(--space-16) var(--space-12);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--bg-elev);
+  color: var(--fg);
   box-shadow: 0 12px 32px color-mix(in srgb, var(--bg) 55%, transparent);
 }
 .host-detail[hidden] { display: none; }
