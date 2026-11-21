@@ -461,7 +461,7 @@
       },
       {
         "name": "view",
-        "description": "For list: bounded: bounded metadata, explicit workspace, pagination and display truncation.",
+        "description": "For list: bounded: bounded metadata with pagination and display truncation; requires an explicit `workspace`.",
         "param_type": "string",
         "required": false
       },
@@ -2355,7 +2355,7 @@
       },
       {
         "name": "view",
-        "description": "For list, show: bounded: bounded metadata, explicit workspace, pagination and display truncation.",
+        "description": "For list, show: bounded: bounded metadata with pagination and display truncation; requires an explicit `workspace`.",
         "param_type": "string",
         "required": false
       },
@@ -2865,7 +2865,7 @@
       },
       {
         "name": "view",
-        "description": "Bounded metadata view. The only accepted value is `bounded`.",
+        "description": "Bounded metadata view; when supplied, it requires an explicit `workspace`. Omit `view` to use the default task listing. The only accepted value is `bounded`.",
         "param_type": "string",
         "required": false
       },
@@ -3174,7 +3174,7 @@
       },
       {
         "name": "view",
-        "description": "Bounded metadata view. The only accepted value is `bounded`.",
+        "description": "Bounded metadata view; when supplied, it requires an explicit `workspace`. The only accepted value is `bounded`.",
         "param_type": "string",
         "required": false
       },

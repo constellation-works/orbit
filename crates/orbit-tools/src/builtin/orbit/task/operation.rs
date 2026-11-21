@@ -183,6 +183,7 @@ impl GuardedModes for TaskVerb {
                         "artifacts_offset",
                         "model",
                     ],
+                    "omit `view` to use the default full task record",
                 )),
                 Ok(false) => (input.get("snapshot") == Some(&Value::Bool(true)))
                     .then(|| snapshot(ctx, input.clone())),
@@ -204,6 +205,7 @@ impl GuardedModes for TaskVerb {
                         "priority",
                         "model",
                     ],
+                    "omit `view` to use the default task listing",
                 )),
                 Err(error) => Some(Err(error)),
             },

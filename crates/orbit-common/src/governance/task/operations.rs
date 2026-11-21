@@ -207,7 +207,13 @@ pub const TASK_HOST_HELP: &str = "Host that `--workspace` names (`orbit host lis
 const BOUNDED_VIEW_PARAM: ParamSpec = mcp_only(
     "view",
     ParamType::String,
-    "Bounded metadata view. The only accepted value is `bounded`.",
+    "Bounded metadata view; when supplied, it requires an explicit `workspace`. The only accepted value is `bounded`.",
+);
+
+const TASK_LIST_VIEW_PARAM: ParamSpec = mcp_only(
+    "view",
+    ParamType::String,
+    "Bounded metadata view; when supplied, it requires an explicit `workspace`. Omit `view` to use the default task listing. The only accepted value is `bounded`.",
 );
 
 const LIST: TaskOperation = TaskOperation {
@@ -386,7 +392,7 @@ const LIST: TaskOperation = TaskOperation {
             ParamType::StringList,
             "Name fields, or fetch one task with `orbit.task.show`; compact rows match `orbit tool run orbit.task.list`.",
         ),
-        BOUNDED_VIEW_PARAM,
+        TASK_LIST_VIEW_PARAM,
         mcp_only("offset", ParamType::Integer, "Bounded view list offset."),
         mcp_only(
             "search",

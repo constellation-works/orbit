@@ -44,6 +44,7 @@ impl GuardedModes for AutoTaskVerb {
                     input.clone(),
                     "auto_tasks",
                     &["workspace", "view", "offset", "limit", "model"],
+                    "omit `view` to use the default auto-task listing",
                 )),
                 Err(error) => Some(Err(error)),
             },
