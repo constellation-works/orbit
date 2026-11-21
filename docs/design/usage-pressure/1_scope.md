@@ -131,9 +131,11 @@ spend**, from the same provider-limit observations that gating reads.
    [ORB-17638] already persists a reassignment at this seam for auto-task crews.
 2. **Creation still draws.** The creation draw keeps its role: OS routing, `runs_on`, and a crew
    to show before the task runs. It uses pressure too, but admission makes the final choice.
-3. **Other pool draws share the seam.** Activity pools, review crew pools, finding-verification
-   partitions (removed in [ORB-22844]) and agent explore all call `weighted_draw`. They take the same multiplier through
-   one helper applied after limit narrowing, so no draw site computes pressure on its own.
+3. **Other pool draws share the seam.** Activity pools and review crew pools still call
+   `weighted_draw`. They take the same multiplier through one helper applied after limit
+   narrowing, so no active draw site computes pressure on its own. The original shared-seam
+   rollout also covered finding-verification partitions and agent explore; those paths were
+   later retired with [ORB-22844] and [ORB-20383], respectively.
 4. **Pull drains.** A follower spends its own login ([ORB-16324]). The owner must never weigh a
    follower's run with the owner's readings. On a claimed leaf, the follower re-draws eligible
    automatic sources (`pool:`, `purpose:`, or `default`) from its own readings; a `type:` source
@@ -199,8 +201,10 @@ Readings stay per host.
 2. **Pressure-weighted task draws (done: [ORB-17770]).** The `crew_selection` / `usage_pressure_*` keys, the
    multiplier in the creation draw, the admission re-draw of automatic assignments, run
    provenance and history. Default `static`.
-3. **Shared seam for other draws (done: [ORB-17771]).** Activity, review, finding-verification and explore pools take
-   the multiplier through the same helper.
+3. **Shared seam for other draws (done: [ORB-17771]).** The original rollout applied the
+   multiplier through one helper to activity, review, finding-verification and explore pools.
+   Activity and review draws remain active; finding-verification pools were retired with
+   [ORB-22844], and agent explore was removed with [ORB-20383].
 4. **Pull drains (done: [ORB-17773]).** The follower applies pressure from its own readings when it re-draws an
    eligible pulled leaf (`pool:`, `purpose:`, or `default`; a `type:` source keeps the owner's
    crew), and reports per-crew pressure in its crew window. The owner then offers first the tasks
@@ -258,6 +262,7 @@ as neutral 1.0 — so an older or `static` follower orders exactly as before.
 - [ORB-17773] — applies follower pressure to pull-drain draws and offers
 - [ORB-17774] — records Grok usage windows
 - [ORB-17775] — records Antigravity usage windows
+- [ORB-20383] — removes the explorer agent and its explore job
 - [ORB-22808] — removes the `usage_pressure_cap` and `usage_pressure_strength` keys and fixes both at 8 and 1.
 - [ORB-22844] — removes the finding-verification routine whose pool partitions the shared draw seam had served.
 
