@@ -31,9 +31,11 @@ impl TaskCommitBoundary {
     /// Perf tasks that already hold the lane on `machine_id`.
     ///
     /// A protecting claim on that machine always counts. When
-    /// `count_owner_local` is set, so do an in-flight perf task with no
+    /// `count_owner_local` is set, so do an `in-progress` perf task with no
     /// protecting claim, an owner-wave task still in `backlog`, and a carrier
-    /// the caller named. The candidate itself may appear; the screen skips it.
+    /// the caller named. A `review` task holds only through a protecting claim
+    /// or a carrier, so an idle review perf task releases the lane. The
+    /// candidate itself may appear; the screen skips it.
     /// Caller holds the admission section.
     pub(super) fn perf_lane_holders_locked(
         &self,
@@ -65,17 +67,20 @@ impl TaskCommitBoundary {
             return Ok(holders);
         }
         for task in in_flight_tasks {
-            if needs_perf_lane(&task.tags) && !protecting.contains(task.id.as_str()) {
+            if task.status == TaskStatus::InProgress
+                && needs_perf_lane(&task.tags)
+                && !protecting.contains(task.id.as_str())
+            {
                 holders.insert(task.id.clone());
             }
         }
-        // The owner wave has not loaded in-flight tasks. The index names them
-        // under this section; the envelope confirms the tag.
+        // The owner wave has not loaded in-flight tasks. The index names the
+        // in-progress ones under this section; the envelope confirms the tag.
         if in_flight_tasks.is_empty() {
             let ids = self.registry.indexed_task_ids_filtered(
                 &self.workspace_id,
                 &TaskIndexFilter {
-                    statuses: vec![TaskStatus::InProgress, TaskStatus::Review],
+                    statuses: vec![TaskStatus::InProgress],
                     any_tags: PERF_LANE_TAGS
                         .iter()
                         .map(|tag| (*tag).to_string())

@@ -6,7 +6,7 @@ use orbit_core::application::distributed::{PullCrewWindow, RESOURCE_THROTTLED};
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
 use orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA;
-use orbit_types::task::HostOs;
+use orbit_types::task::{HostOs, TaskStatus};
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_EVENT, BaselineRedHold, CONTRACT_REFUSAL_MARKER, DrainAdmissionPass,
     DrainPassCounters, DrainPassOutcome, JobRunTrigger, PullBreaker,
@@ -2836,6 +2836,70 @@ fn an_owner_wave_perf_task_holds_the_lane_for_a_pull_on_that_host() {
     );
 }
 
+/// Moves a backlog fixture task to `review` through the human update path,
+/// leaving it with no claim and no live run.
+fn move_to_review(owner: &OrbitRuntime, task: &str) {
+    for status in [TaskStatus::InProgress, TaskStatus::Review] {
+        owner
+            .update_task_as_human(
+                task,
+                TaskUpdateParams {
+                    status: Some(status),
+                    plan: Some("Verify completion evidence".into()),
+                    execution_summary: Some(String::new()),
+                    ..Default::default()
+                },
+                "human:fixture".into(),
+            )
+            .unwrap();
+    }
+}
+
+/// A perf task in `review` with no claim, no live run and no backlog wave no
+/// longer holds the lane: a pull on the owner host admits the disjoint perf
+/// task waiting in the backlog.
+fn a_review_perf_task_without_a_claim_releases_the_lane_to_an_owner_pull() {
+    let pair = Pair::new(0);
+    let (holder, waiting, _plain) = perf_and_plain(&pair);
+    move_to_review(&pair.wire.owner, &holder);
+    let local = Pair::follower_of(
+        pair._root.clone(),
+        pair.wire.owner.clone(),
+        pair.owner_repo.clone(),
+        pair.tasks.clone(),
+        OWNER,
+    );
+    *local.wire.local.lock().unwrap() = true;
+    let drain = local.start_drain();
+    let leaf = local.running_leaf(&drain, 1);
+    assert_eq!(
+        local.claimed_task(&leaf),
+        waiting,
+        "the waiting perf task takes the lane the review task no longer holds"
+    );
+    assert_eq!(pair.owner_status(&holder), "review");
+    assert!(pair.owner_has_claim_for_task(&waiting));
+    assert!(!pair.owner_has_claim_for_task(&holder));
+}
+
+/// The owner-wave twin of the pull case: a perf task in `review` with no
+/// claim does not stop the disjoint perf task waiting in the backlog from
+/// joining the wave.
+fn a_review_perf_task_without_a_claim_releases_the_lane_to_an_owner_wave() {
+    let pair = Pair::new(0);
+    let owner = &pair.wire.owner;
+    let (holder, waiting, _plain) = perf_and_plain(&pair);
+    move_to_review(owner, &holder);
+    let wave = action(
+        owner,
+        "classify_workspace_auto_tasks",
+        &json!({"max_active_leaf_runs": 1}),
+    )
+    .expect("classify");
+    assert_eq!(wave["loose_task_ids"], json!([waiting]), "{wave}");
+    assert_eq!(pair.owner_status(&holder), "review");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     pull_admission_preserves_execution_machine_name_scenarios,
@@ -2896,5 +2960,7 @@ crate::scenario_table!(
 crate::scenario_table!(
     pull_perf_lane_scenarios,
     a_pull_drain_admits_one_perf_task_per_host_and_still_admits_other_work,
-    an_owner_wave_perf_task_holds_the_lane_for_a_pull_on_that_host
+    an_owner_wave_perf_task_holds_the_lane_for_a_pull_on_that_host,
+    a_review_perf_task_without_a_claim_releases_the_lane_to_an_owner_pull,
+    a_review_perf_task_without_a_claim_releases_the_lane_to_an_owner_wave
 );
