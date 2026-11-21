@@ -212,11 +212,74 @@ def leader_exited(pid: int) -> bool:
     return info is not None
 
 
+def group_alive(pgid: int) -> bool:
+    """Whether any non-zombie process may still be running in `pgid` (STD-03 §R12).
+
+    Only an explicit kernel absence (`ESRCH`) or a complete `/proc` scan showing
+    only zombie members proves the group has exited; any uncertain or unreadable
+    probe counts as alive so the grace wait and final SIGKILL are never skipped.
+    """
+    if pgid <= 1:
+        return False
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    try:
+        with os.scandir("/proc") as entries:
+            pid_names = [entry.name for entry in entries if entry.name.isdigit()]
+    except OSError:
+        return True
+    found_member = False
+    unknown_member = False
+    for name in pid_names:
+        try:
+            with open(f"/proc/{name}/stat", "r", encoding="utf-8", errors="replace") as handle:
+                stat = handle.read()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except OSError:
+            unknown_member = True
+            continue
+        right_paren = stat.rfind(")")
+        if right_paren == -1:
+            unknown_member = True
+            continue
+        fields = stat[right_paren + 1 :].split()
+        if len(fields) < 3:
+            unknown_member = True
+            continue
+        try:
+            member_pgid = int(fields[2])
+        except ValueError:
+            unknown_member = True
+            continue
+        if member_pgid != pgid:
+            continue
+        found_member = True
+        if fields[0] not in ("Z", "X"):
+            return True
+    if unknown_member:
+        return True
+    if found_member:
+        return False
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
 def stop_group(process: subprocess.Popen, grace: float = TERM_GRACE_SECONDS) -> None:
     """SIGTERM the child's group, wait a bounded grace, SIGKILL the group, reap.
 
-    Must run while the leader is still unreaped. The group is always SIGKILLed
-    after the grace: survivors are not inferred from the leader's exit (§R12).
+    Must run while the leader is still unreaped, so its zombie pins the pgid
+    across the grace wait and final SIGKILL (§R12, §R14). Survival is probed
+    at the group level rather than inferred from the leader's exit.
     """
     try:
         try:
@@ -224,7 +287,7 @@ def stop_group(process: subprocess.Popen, grace: float = TERM_GRACE_SECONDS) -> 
         except ProcessLookupError:
             pass
         deadline = time.monotonic() + grace
-        while not leader_exited(process.pid) and time.monotonic() < deadline:
+        while group_alive(process.pid) and time.monotonic() < deadline:
             time.sleep(0.02)
     finally:
         try:

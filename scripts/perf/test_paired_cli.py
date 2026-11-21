@@ -48,6 +48,9 @@ case "$mode" in
   ignore-term)
     exec {python} -c 'import os, pathlib, signal, sys, time; marker=pathlib.Path(sys.argv[1]); marker.write_text(str(os.getpid())); signal.signal(signal.SIGTERM, lambda signum, frame: marker.with_suffix(".term").write_text(str(signum))); time.sleep(600)' "$marks/ignore-$role.pid"
     ;;
+  graceful-descendant)
+    exec {python} -I {graceful_driver} "$marks/graceful-$role"
+    ;;
   web)
     exec {python} -I {web_server} "$marks/web-$role.pid"
     ;;
@@ -78,6 +81,50 @@ case "$mode" in
     exit 3
     ;;
 esac
+"""
+
+
+# Leader exits immediately on SIGTERM while one descendant performs a short
+# graceful shutdown and a sibling ignores SIGTERM until the group is swept.
+GRACEFUL_DRIVER = r"""
+import os, pathlib, signal, subprocess, sys, time
+
+prefix = pathlib.Path(sys.argv[1])
+child_code = '''
+import os, pathlib, signal, sys, time
+prefix = pathlib.Path(sys.argv[1])
+mode = sys.argv[2]
+if mode == "graceful":
+    shutting_down = False
+    def handle_term(_signum, _frame):
+        global shutting_down
+        shutting_down = True
+    signal.signal(signal.SIGTERM, handle_term)
+    prefix.with_suffix(".graceful.pid").write_text(str(os.getpid()))
+    while not shutting_down:
+        time.sleep(0.02)
+    time.sleep(0.3)
+    prefix.with_suffix(".done").write_text("graceful-done\\n")
+else:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    prefix.with_suffix(".stubborn.pid").write_text(str(os.getpid()))
+    time.sleep(600)
+'''
+graceful = subprocess.Popen([sys.executable, "-I", "-c", child_code, str(prefix), "graceful"])
+stubborn = subprocess.Popen([sys.executable, "-I", "-c", child_code, str(prefix), "stubborn"])
+for suffix in (".graceful.pid", ".stubborn.pid"):
+    marker = prefix.with_suffix(suffix)
+    while not marker.exists() or not marker.read_text():
+        time.sleep(0.01)
+exiting = False
+def leader_term(_signum, _frame):
+    global exiting
+    exiting = True
+signal.signal(signal.SIGTERM, leader_term)
+prefix.with_suffix(".leader.pid").write_text(str(os.getpid()))
+while not exiting:
+    time.sleep(0.02)
+os._exit(0)
 """
 
 
@@ -203,12 +250,15 @@ def write_builds(builds: Path, marks: Path) -> dict[str, Path]:
     builds.mkdir()
     web_server = builds.parent / "web_server.py"
     web_server.write_text(WEB_SERVER)
+    graceful_driver = builds.parent / "graceful_driver.py"
+    graceful_driver.write_text(GRACEFUL_DRIVER)
     binaries = {}
     revisions = {}
     for role, commit in (("base", "a"), ("candidate", "c")):
         path = builds / role
         path.write_text(ARM_SCRIPT.format(
-            role=role, marks=marks, python=sys.executable, web_server=web_server))
+            role=role, marks=marks, python=sys.executable,
+            web_server=web_server, graceful_driver=graceful_driver))
         path.chmod(0o755)
         binaries[role] = path
         revisions[role] = {
@@ -482,6 +532,50 @@ class PairedCliSupervisionTest(PairedCliTestCase):
 
     def test_stalled_sample_command_is_refused_and_reaped(self) -> None:
         self.assert_stall_refused("stall", "--parity", "probe-same", surface=("--cli", "stall"))
+
+    def test_timed_out_cli_preserves_grace_after_leader_exits(self) -> None:
+        def cleanup_leaked_group() -> None:
+            marker_bytes = str(self.marks).encode()
+            for suffix in (".leader.pid", ".graceful.pid", ".stubborn.pid"):
+                pid_file = self.marks / f"graceful-base{suffix}"
+                if not pid_file.exists():
+                    continue
+                pid = int(pid_file.read_text())
+                try:
+                    cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+                except FileNotFoundError:
+                    continue
+                if marker_bytes in cmdline:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+        self.addCleanup(cleanup_leaked_group)
+
+        started = time.monotonic()
+        result, out = self.run_paired(
+            "--parity", "probe-same", "--command-timeout", "1",
+            surface=("--cli", "graceful-descendant"),
+        )
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("base", result.stderr)
+        self.assertIn("timed out after 1 s", result.stderr)
+        self.assertIn("--command-timeout", result.stderr)
+        self.assertLess(elapsed, 60, "the refusal must come within the command bound")
+        self.assertFalse((out / "paired-summary.json").exists())
+        self.assert_lane_released()
+
+        leader_pid = int((self.marks / "graceful-base.leader.pid").read_text())
+        graceful_pid = int((self.marks / "graceful-base.graceful.pid").read_text())
+        stubborn_pid = int((self.marks / "graceful-base.stubborn.pid").read_text())
+        self.assert_reaped([leader_pid, graceful_pid, stubborn_pid])
+        done_file = self.marks / "graceful-base.done"
+        self.assertTrue(
+            done_file.exists(),
+            "in-group descendant did not finish its graceful shutdown after leader exit",
+        )
+        self.assertEqual(done_file.read_text(), "graceful-done\n")
 
     def test_output_over_limit_is_refused(self) -> None:
         result, out = self.run_paired("--parity", "probe-flood", "--output-limit-bytes", "1024")
