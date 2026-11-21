@@ -1562,6 +1562,90 @@ class RelativeImportTests(unittest.TestCase):
              "            use super::super::super::adapter::Probe;\n        }\n    }\n}\n"),
         ], rejected=True)
 
+    def test_function_local_macro_forwarding_mod_does_not_mask_super(self):
+        # [ORB-26580] A `mod name { … }` token tree passed to a function-local
+        # macro (with `()`, `[]`, or `{}` delimiters) is macro input, not a
+        # real inline module unless expanded as one. Inside `application/probe.rs`,
+        # `super::super::adapter` climbs to `crate::adapter` and must be
+        # rejected, while `super::adapter` stays within `application`.
+        # Genuine function-local inline modules—even after `-> !` or inside
+        # `({ … })`—still add one module segment.
+        self.check_rows([
+            ("probe.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! forward {\n"
+             "        (mod $name:ident { $item:item }) => { $item };\n"
+             "    }\n"
+             "    forward!(mod envelope {\n"
+             "        use super::super::adapter::Probe;\n"
+             "    });\n"
+             "    let _ = Probe;\n"
+             "}\n"),
+            ("probe_braces.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! forward {\n"
+             "        (mod $name:ident { $item:item }) => { $item };\n"
+             "    }\n"
+             "    forward! {\n"
+             "        mod envelope {\n"
+             "            use super::super::adapter::Probe;\n"
+             "        }\n"
+             "    }\n"
+             "    let _ = Probe;\n"
+             "}\n"),
+            ("probe_brackets.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! forward {\n"
+             "        (mod $name:ident { $item:item }) => { $item };\n"
+             "    }\n"
+             "    forward![mod envelope {\n"
+             "        use super::super::adapter::Probe;\n"
+             "    }];\n"
+             "    let _ = Probe;\n"
+             "}\n"),
+            ("never_local_mod_escape.rs",
+             "pub fn probe() -> ! {\n"
+             "    mod inner {\n"
+             "        pub fn check() {\n"
+             "            let _ = super::super::super::adapter::Probe;\n"
+             "        }\n"
+             "    }\n"
+             "    loop {}\n"
+             "}\n"),
+        ], rejected=True)
+        self.check_rows([
+            ("probe_allowed.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! forward {\n"
+             "        (mod $name:ident { $item:item }) => { $item };\n"
+             "    }\n"
+             "    forward!(mod envelope {\n"
+             "        use super::adapter::Probe;\n"
+             "    });\n"
+             "    let _ = Probe;\n"
+             "}\n"),
+            ("never_local_mod.rs",
+             "pub fn probe() -> ! {\n"
+             "    mod inner {\n"
+             "        pub fn check() {\n"
+             "            let _ = super::super::adapter::Probe;\n"
+             "        }\n"
+             "    }\n"
+             "    loop {}\n"
+             "}\n"),
+            ("paren_block_local_mod.rs",
+             "pub fn probe() {\n"
+             "    let _ = ({\n"
+             "        mod inner {\n"
+             "            pub fn check() {\n"
+             "                let _ = super::super::adapter::Probe;\n"
+             "            }\n"
+             "        }\n"
+             "        1\n"
+             "    });\n"
+             "}\n"),
+        ], rejected=False)
+
     def test_tools_builtin_grouped_imports_rejected_in_either_spelling(self):
         # [ORB-26107] `r#builtin` names the same module as `builtin`. The
         # tokenizer once split the raw identifier into `r` and `#`, so a grouped
