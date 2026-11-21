@@ -10,8 +10,12 @@ source_root="$repo_root/crates/orbit-core/assets/skills"
 target_root="$repo_root/plugin/skills"
 
 skill_dirs=()
+# Entry names are taken with parameter expansion, not `$(basename ...)`: command
+# substitution strips trailing newlines, which would alias `orbit<LF>` to `orbit`
+# and turn a newline-only name into an empty path (ORB-26165).
 for entry in "$source_root"/*/; do
-  name="$(basename "$entry")"
+  name="${entry%/}"
+  name="${name##*/}"
   [[ "$name" == _* ]] && continue
   if [[ ! -f "$entry/SKILL.md" ]]; then
     echo "sync-plugin-skills: canonical skill is missing: ${entry}SKILL.md" >&2
@@ -29,7 +33,7 @@ target_entries=()
 if [[ -d "$target_root" ]]; then
   for entry in "$target_root"/* "$target_root"/.[!.]* "$target_root"/..?*; do
     [[ -e "$entry" || -L "$entry" ]] || continue
-    target_entries+=("$(basename "$entry")")
+    target_entries+=("${entry##*/}")
   done
 fi
 
@@ -81,7 +85,7 @@ for name in ${target_entries[@]+"${target_entries[@]}"}; do
     fi
   done
   if [[ "$is_canonical" -eq 0 ]]; then
-    rm -rf "$target_root/$name"
+    rm -rf -- "$target_root/$name"
   fi
 done
 for name in "${skill_dirs[@]}"; do
