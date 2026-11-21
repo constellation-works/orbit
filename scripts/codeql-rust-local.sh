@@ -8,7 +8,7 @@ Usage: scripts/codeql-rust-local.sh [--ram MB] [--toolchain VERSION] [--fresh] Q
 
 Run against this checkout using codeql and rustup already on PATH.
 Linux hosts only: elsewhere it exits 3 before preparing anything.
-Default: --ram 16384 --toolchain 1.97.0 (CodeQL 2.27.1 extractor).
+Default: --ram 16384 --toolchain 1.99.0 (CodeQL 2.27.5 extractor).
 On Linux, --ram is capped at 60% of /proc/meminfo MemTotal divided by slots,
 rounded down to MiB; a known-memory allocation below 2048 MiB is refused.
 Unreadable or invalid meminfo leaves the requested RAM unchanged.
@@ -35,7 +35,7 @@ fail() {
 }
 
 ram=16384
-toolchain=1.97.0
+toolchain=1.99.0
 query=
 fresh=
 while [[ $# -gt 0 ]]; do

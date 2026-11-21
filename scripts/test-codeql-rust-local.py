@@ -632,7 +632,7 @@ class LocalCodeqlTests(unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertEqual([call["name"] for call in self.calls()], ["codeql", "codeql"])
         self.assertIn("no rustup install ran", (self.run_dir(second) / "toolchain.log").read_text())
-        home = self.cache / "rust-1.97.0/rustup"
+        home = self.cache / "rust-1.99.0/rustup"
         self.assertTrue(all(call["env"]["RUSTUP_HOME"] == str(home) for call in self.calls()))
         self.assertEqual((home / "manifest.sha256").stat().st_mode & 0o222, 0)
         self.assert_selects_only_production_source()
@@ -640,14 +640,14 @@ class LocalCodeqlTests(unittest.TestCase):
 
     def test_corrupt_or_wrong_version_cache_is_reinstalled_whole(self):
         self.assertEqual(self.run_script("fixture.ql").returncode, 0)
-        home = self.cache / "rust-1.97.0/rustup"
-        library = home / "toolchains/1.97.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library"
+        home = self.cache / "rust-1.99.0/rustup"
+        library = home / "toolchains/1.99.0-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library"
         # A copy whose manifest is intact but whose rustc is another version.
-        shutil.copytree(self.cache / "rust-1.97.0", self.cache / "rust-1.98.1", symlinks=True)
+        shutil.copytree(self.cache / "rust-1.99.0", self.cache / "rust-1.98.1", symlinks=True)
         library.chmod(0o755)
         (library / "core/src").chmod(0o755)
         (library / "core/src/lib.rs").unlink()
-        for toolchain, damaged in (("1.97.0", "missing rust-src file"), ("1.98.1", "wrong version")):
+        for toolchain, damaged in (("1.99.0", "missing rust-src file"), ("1.98.1", "wrong version")):
             with self.subTest(damaged):
                 self.calls_file.write_text("")
                 result = self.run_script("--fresh", "--toolchain", toolchain, "fixture.ql")
@@ -675,9 +675,9 @@ class LocalCodeqlTests(unittest.TestCase):
 
     def test_warm_read_only_cache_is_used_without_writing(self):
         self.assertEqual(self.run_script("fixture.ql").returncode, 0)
-        for directory in (self.cache, self.cache / "rust-1.97.0", self.cache / "slots"):
+        for directory in (self.cache, self.cache / "rust-1.99.0", self.cache / "slots"):
             directory.chmod(0o555)
-        self.addCleanup(lambda: [d.chmod(0o755) for d in (self.cache, self.cache / "rust-1.97.0",
+        self.addCleanup(lambda: [d.chmod(0o755) for d in (self.cache, self.cache / "rust-1.99.0",
                                                           self.cache / "slots")])
         def snapshot(root):
             state = {}
