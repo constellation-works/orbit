@@ -33,6 +33,8 @@ import perf_common as common  # noqa: E402
 
 SCHEMA_VERSION = 1
 MANIFEST = "snapshot-manifest.json"
+MANIFEST_SUMMARY = "snapshot-manifest-summary.json"
+MAX_ARTIFACT_BYTES = 1_048_576
 RESTORE_MARKER = ".orbit-perf-root.json"
 # Columns that scope a row to a workspace. A row is kept when its value names
 # the fixture workspace (registry id, name or storage id) or is NULL (host
@@ -609,6 +611,33 @@ def verify_snapshot(snapshot: Path) -> dict:
         raise common.PerfRefusal(
             f"snapshot {snapshot} failed digest verification, refusing to restore: {shown}{more}")
     return manifest
+
+
+def manifest_evidence_summary(snapshot: Path, manifest: dict,
+                              revisions: dict[str, str],
+                              qualifying_task_counts: dict[str, int]) -> dict:
+    """Describe a verified host-side manifest without copying its file list."""
+    path = (snapshot / MANIFEST).resolve(strict=True)
+    digest = common.sha256_file(path)
+    workspace_id = manifest["source"]["registry_id"]
+    snapshot_epoch = manifest["snapshot_epoch"]
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "kind": "orbit-perf-snapshot-manifest-summary",
+        "manifest": {
+            "path_on_host": str(path),
+            "size_bytes": path.stat().st_size,
+            "sha256": digest,
+            "file_count": len(manifest["files"]),
+        },
+        "qualifying_task_counts": dict(sorted(qualifying_task_counts.items())),
+        "snapshot": {
+            "id": f"{workspace_id}:{snapshot_epoch}:{digest[:16]}",
+            "epoch": snapshot_epoch,
+            "source_workspace": workspace_id,
+        },
+        "revisions": dict(sorted(revisions.items())),
+    }
 
 
 def _path_rewrites(manifest: dict, into: Path) -> list[tuple[str, str]]:

@@ -418,7 +418,8 @@ class PairedCliParityTest(PairedCliTestCase):
             report["arms"]["candidate"]["command"]["output"])
 
     def test_identical_successful_observations_match_and_can_pass(self) -> None:
-        result, out = self.run_paired("--parity", "probe-same")
+        result, out = self.run_paired("--parity", "probe-same",
+                                     "--qualifying-task-count", "indexed_tasks=14819")
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         report = json.loads((out / "parity.json").read_text())
         self.assertIs(report["match"], True)
@@ -426,6 +427,18 @@ class PairedCliParityTest(PairedCliTestCase):
         self.assertEqual(report["differing_arms"], [])
         summary = json.loads((out / "paired-summary.json").read_text())
         self.assertEqual(summary["verdict"], "pass")
+        evidence = json.loads((out / "snapshot-manifest-summary.json").read_text())
+        self.assertEqual(evidence["manifest"]["file_count"], 1)
+        self.assertEqual(evidence["manifest"]["size_bytes"],
+                         Path(evidence["manifest"]["path_on_host"]).stat().st_size)
+        self.assertEqual(evidence["qualifying_task_counts"], {"indexed_tasks": 14819})
+        self.assertEqual(evidence["snapshot"]["source_workspace"], "test-ws")
+        self.assertEqual(evidence["revisions"]["base"], "a" * 40)
+        self.assertEqual(evidence["revisions"]["candidate"], "c" * 40)
+        self.assertLessEqual((out / "snapshot-manifest-summary.json").stat().st_size,
+                             1_048_576)
+        self.assertEqual(summary["snapshot"]["manifest_summary"],
+                         str((out / "snapshot-manifest-summary.json").resolve()))
         self.assertIn('"verdict": "pass"', result.stdout)
 
     def test_inherited_orbit_root_does_not_refuse_isolated_parity(self) -> None:

@@ -522,6 +522,7 @@ class Harness:
         self.masks = list(args.parity_mask or [])
         self.cli_args = shlex.split(args.cli) if args.cli else None
         self.http_path = args.http
+        self.qualifying_task_counts = dict(args.qualifying_task_count or [])
 
     def prepare(self, created: common.CreatedDirs) -> None:
         provenance = json.loads((self.builds / "provenance.json").read_text())
@@ -677,6 +678,20 @@ class Harness:
         return samples, {"arm": arm, "round": round_index, "before": before, "after": after}
 
     def run(self) -> int:
+        manifest_summary_path = self.out / fixture.MANIFEST_SUMMARY
+        common.write_json(
+            manifest_summary_path,
+            fixture.manifest_evidence_summary(
+                self.snapshot,
+                self.manifest,
+                {role: self.provenance["revisions"][role]["commit"]
+                 for role in ("base", "candidate")},
+                self.qualifying_task_counts,
+            ),
+        )
+        if manifest_summary_path.stat().st_size > fixture.MAX_ARTIFACT_BYTES:
+            raise common.PerfRefusal(
+                f"{manifest_summary_path} exceeds the {fixture.MAX_ARTIFACT_BYTES}-byte artifact limit")
         parity = self.parity()
         common.write_json(self.out / "parity.json", parity)
         if not parity["match"]:
@@ -727,7 +742,8 @@ class Harness:
             "binary_sha256": self.binary_sha,
             "snapshot": {"path": str(self.snapshot),
                          "snapshot_epoch": self.manifest["snapshot_epoch"],
-                         "source_workspace": self.manifest["source"]["registry_id"]},
+                         "source_workspace": self.manifest["source"]["registry_id"],
+                         "manifest_summary": str(manifest_summary_path)},
             "round_p95_ms": round_p95,
             "median_p95_ms": medians,
             "control_spread_ms": {"value": spread, "control_range": control_range,
@@ -760,6 +776,19 @@ def positive_float(value: str) -> float:
     return number
 
 
+def named_count(value: str) -> tuple[str, int]:
+    name, separator, raw_count = value.rpartition("=")
+    if not separator or not name.strip():
+        raise argparse.ArgumentTypeError("expected NAME=COUNT")
+    try:
+        count = int(raw_count)
+    except ValueError:
+        raise argparse.ArgumentTypeError("COUNT must be a non-negative integer") from None
+    if count < 0:
+        raise argparse.ArgumentTypeError("COUNT must be a non-negative integer")
+    return name, count
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--builds", required=True, help="build-pair.sh output directory")
@@ -779,6 +808,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--gap-ms", type=int, default=250)
     parser.add_argument("--bound-ms", type=float)
+    parser.add_argument("--qualifying-task-count", action="append", type=named_count,
+                        default=[], metavar="NAME=COUNT",
+                        help="record one checked fixture qualifying-task count; repeat as needed")
     parser.add_argument("--lane-wait", type=float,
                         default=float(os.environ.get("ORBIT_PERF_LANE_WAIT_SECONDS",
                                                      common.DEFAULT_LANE_WAIT_SECONDS)))
@@ -791,6 +823,9 @@ def main(argv: list[str] | None = None) -> int:
                              "its process group is killed and the run refused")
     parser.add_argument("--keep", action="store_true", help="keep restored roots and work dirs")
     args = parser.parse_args(argv)
+    count_names = [name for name, _count in args.qualifying_task_count]
+    if len(count_names) != len(set(count_names)):
+        parser.error("--qualifying-task-count names must be unique")
     if args.http and not args.http.startswith("/"):
         parser.error("--http takes a path starting with /")
     # An explicit value with no argv words is not an omitted command (ORB-26398).
