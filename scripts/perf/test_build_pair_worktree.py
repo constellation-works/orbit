@@ -135,6 +135,20 @@ class BuildPairWorktreeTest(unittest.TestCase):
         probe = _git(self.repo, "cat-file", "-t", str(before["head"]), check=False)
         self.assertEqual(probe.returncode, 0)
 
+    def test_nested_candidate_worktree_is_refused_with_root_path(self) -> None:
+        (self.repo / "tracked.txt").write_text("v2\n")
+        nested = self.repo / "nested"
+        nested.mkdir()
+        result = self.run_pair(
+            "--base", "HEAD",
+            "--candidate-worktree", str(nested),
+            "--out", str(self.out),
+        )
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn(str(self.repo.resolve()), result.stderr)
+        self.assertNotIn("same commit", result.stderr)
+        self.assertFalse(self.out.exists(), result.stderr)
+
     def test_same_commit_flags_still_refuse(self) -> None:
         result = self.run_pair("--base", "HEAD", "--candidate", "HEAD", "--out", str(self.out))
         self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
