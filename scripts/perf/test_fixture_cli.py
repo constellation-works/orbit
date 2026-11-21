@@ -804,8 +804,8 @@ class FixtureGitMetadataTests(unittest.TestCase):
             timeout=30,
         )
 
-    def init_primary_repo(self, repo: Path) -> tuple[str, str]:
-        self.git(repo.parent, "init", "-b", "agent-main", str(repo))
+    def init_primary_repo(self, repo: Path, *init_args: str) -> tuple[str, str]:
+        self.git(repo.parent, "init", "-b", "agent-main", *init_args, str(repo))
         self.git(repo, "config", "user.email", "fixture@example.invalid")
         self.git(repo, "config", "user.name", "Fixture Test")
         (repo / "shared.txt").write_text("base\n", encoding="utf-8")
@@ -936,6 +936,34 @@ class FixtureGitMetadataTests(unittest.TestCase):
             expected_branch="task-branch",
             expected_ls_files=["shared.txt", "task-file.txt", "task-staged.txt"],
         )
+
+    def test_snapshot_and_restore_linked_reftable_branch_and_index(self):
+        source_home = self.base / "source"
+        source_repo = source_home / "ws" / "orbit"
+        paths = _build_disposable_source(source_home, source_repo)
+        init = self.git(source_repo.parent, "init", "--ref-format=reftable", str(self.base / "probe"), check=False)
+        if init.returncode:
+            self.skipTest("Git does not support reftable repositories")
+        base_sha, _ = self.init_primary_repo(source_repo, "--ref-format=reftable")
+        linked = self.base / "linked"
+        self.git(source_repo, "worktree", "add", "-b", "task-branch", str(linked), base_sha)
+        self.git(linked, "update-ref", "refs/worktree/task-marker", base_sha)
+        (linked / "staged.txt").write_text("staged\n", encoding="utf-8")
+        self.git(linked, "add", "staged.txt")
+        snapshot = self.base / "snapshot"
+        env = _child_env(source_home)
+        res = self.run_fixture(env, "snapshot", "--workspace", "ws_fixture", "--global-root",
+                               str(paths["global_root"]), "--git-metadata", str(linked), "--out", str(snapshot))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.git(source_repo, "worktree", "remove", "--force", str(linked))
+        # The common store must also be unavailable to expose hidden bindings.
+        source_repo.rename(self.base / "source-repo-unavailable")
+        restored = self.base / "restored"
+        res = self.run_fixture(env, "restore", "--snapshot", str(snapshot), "--into", str(restored))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assert_standalone_restored_git(restored, base_sha, "task-branch", ["shared.txt", "staged.txt"])
+        self.assertEqual(self.git(restored / "checkout", "rev-parse", "refs/worktree/task-marker").stdout.strip(), base_sha)
+        self.assertNotEqual(self.git(restored / "checkout", "rev-parse", "--verify", "refs/worktree/primary-marker", check=False).returncode, 0)
 
     def test_snapshot_and_restore_preserve_linked_checkout_detached_commit_and_index(self):
         source_home = self.base / "source"

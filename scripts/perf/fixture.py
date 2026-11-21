@@ -487,12 +487,42 @@ def copy_git_metadata(snap: Snapshotter, out: Path, checkout: Path) -> dict:
         transform=make_transform(common_dir, skip_shared_index=linked),
     )
     if linked:
+        reftable = (selected_git_dir / "reftable").is_dir()
         snap.copy_tree(
             selected_git_dir,
             dest_root,
-            excludes=GIT_LINKED_WORKTREE_EXCLUDES,
+            excludes=GIT_LINKED_WORKTREE_EXCLUDES + (("reftable",) if reftable else ()),
             transform=make_transform(selected_git_dir, skip_shared_index=False),
         )
+        if reftable:
+            # Reftable keeps shared and per-worktree refs in separate stacks.
+            # Keep the shared stack, then replace its per-worktree refs and HEAD
+            # through Git so it writes a valid standalone stack in the snapshot.
+            dest_checkout = out / "checkout"
+            prefixes = ("refs/worktree", "refs/bisect", "refs/rewritten")
+
+            def git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+                return subprocess.run(["git", "-C", str(cwd), *args], check=check,
+                                      capture_output=True, text=True)
+
+            fmt = "%(refname)%00%(objectname)%00%(symref)"
+            for line in git(dest_checkout, "for-each-ref", f"--format={fmt}", *prefixes).stdout.splitlines():
+                name = line.split("\0", 1)[0]
+                git(dest_checkout, "update-ref", "--no-deref", "-d", name)
+            for line in git(checkout, "for-each-ref", f"--format={fmt}", *prefixes).stdout.splitlines():
+                name, oid, target = line.split("\0")
+                if target:
+                    git(dest_checkout, "symbolic-ref", name, target)
+                else:
+                    git(dest_checkout, "update-ref", name, oid)
+            head = git(checkout, "symbolic-ref", "-q", "HEAD", check=False)
+            if head.returncode == 0:
+                git(dest_checkout, "symbolic-ref", "HEAD", head.stdout.strip())
+            elif head.returncode == 1:
+                oid = git(checkout, "rev-parse", "--verify", "HEAD").stdout.strip()
+                git(dest_checkout, "update-ref", "--no-deref", "HEAD", oid)
+            else:
+                head.check_returncode()
     return {
         "checkout": str(checkout.resolve()),
         "git_dir": str(selected_git_dir),
