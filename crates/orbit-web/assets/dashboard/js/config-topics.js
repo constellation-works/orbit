@@ -106,6 +106,18 @@ function openDrawer(row, context, lockGlobal) {
   context.rerender?.();
   document.querySelector('.config-drawer .settings-input')?.focus();
 }
+// Closing the drawer rebuilds the page, so the Edit control that opened it is
+// gone. Focus goes to the rebuilt Edit control for the same key; a row that is
+// no longer shown keeps whatever focus the rerender left.
+function focusRowEdit(key) {
+  const row = [...document.querySelectorAll('#config-body [data-key]')].find((node) => node.dataset.key === key);
+  row?.querySelector('.settings-edit')?.focus();
+}
+function closeDrawer(session, context) {
+  drawer = null;
+  context.rerender?.();
+  focusRowEdit(session.row.key);
+}
 function shellQuote(text) {
   return `'${text.replace(/'/g, "'\\''")}'`;
 }
@@ -331,10 +343,14 @@ async function submitDrawerMutation(session, context, request) {
     if (!ownsDrawerMutation(session)) return;
     drawer = null;
     await context.reload();
+    focusRowEdit(session.row.key);
   } catch (error) {
     if (!ownsDrawerMutation(session)) return;
     session.pending = false; session.error = error.message || String(error);
     context.rerender?.();
+    // The rerender rebuilt the pressed Save or Remove control. Keep focus in the
+    // drawer, on the field the error is about, so Escape still reaches it.
+    document.querySelector('.config-drawer .settings-input')?.focus();
   }
 }
 
@@ -357,9 +373,9 @@ function drawerNode(payload, context) {
   const panel = el('aside', { class: 'config-drawer dialog-surface dialog-drawer' });
   panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', `Edit ${row.key}`);
   panel.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && !session.pending) { event.preventDefault(); drawer = null; context.rerender?.(); }
+    if (event.key === 'Escape' && !session.pending) { event.preventDefault(); closeDrawer(session, context); }
   });
-  panel.appendChild(el('header', { class: 'dialog-header' }, [el('h3', { text: row.label || row.key }), escCloseButton('Close editor (Esc)', { onClick: () => { drawer = null; context.rerender?.(); } })]));
+  panel.appendChild(el('header', { class: 'dialog-header' }, [el('h3', { text: row.label || row.key }), escCloseButton('Close editor (Esc)', { onClick: () => closeDrawer(session, context) })]));
   const body = el('div', { class: 'dialog-body' });
   panel.appendChild(body);
   body.appendChild(el('div', { class: 'config-key mono', text: row.key }));
@@ -409,7 +425,7 @@ function drawerNode(payload, context) {
   const saveWith = (init) => () => submitDrawerMutation(session, context, (visit) =>
     requestJson(`/api/config/keys/${encodeURIComponent(row.key)}`, 'PUT', { value: parseDraft(row, session.text), scope: session.scope, ...(init ? { init } : {}) }, visit));
   // A first workspace write offers only the explicit choices, so no click
-  // creates the policy file implicitly; Close leaves it uncreated.
+  // creates the policy file implicitly; closing the drawer leaves it uncreated.
   const choosesInit = session.scope === 'workspace' && workspacePolicyMissing(payload);
   if (choosesInit) body.appendChild(el('div', { class: 'config-note drawer-init-note', text: 'This workspace has no config policy file yet, and saving creates one. Seed from global copies the global policy (orbit config set --seed-from-global); Start empty uses built-in security defaults (--fresh).' }));
   const saves = choosesInit
@@ -427,9 +443,8 @@ function drawerNode(payload, context) {
   const remove = el('button', { class: 'settings-btn ghost', text: `Remove ${removeScope} value` }); remove.type = 'button'; remove.disabled = session.pending;
   remove.addEventListener('click', () => submitDrawerMutation(session, context, (visit) =>
     requestJson(`/api/config/keys/${encodeURIComponent(row.key)}?scope=${removeScope}`, 'DELETE', undefined, visit)));
-  const close = el('button', { class: 'settings-btn ghost', text: 'Close' }); close.type = 'button';
-  close.addEventListener('click', () => { drawer = null; context.rerender?.(); });
-  actions.append(remove, close); panel.appendChild(actions);
+  // The header's esc control is the drawer's one dismiss control [STD-07 §R44].
+  actions.append(remove); panel.appendChild(actions);
   return panel;
 }
 // The bulk-removal outcome. A clean removal expires on its own; one that names
