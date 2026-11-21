@@ -110,6 +110,19 @@ fn rejects_routines_directory_symlink() {
 }
 
 #[test]
+fn rejects_dangling_routines_directory_symlink() {
+    let root = tempdir().expect("temporary Orbit root");
+    symlink(root.path().join("missing"), root.path().join(ROUTINES_DIR))
+        .expect("dangling directory symlink");
+
+    let collection = collect(root.path());
+
+    assert!(collection.routines.is_empty());
+    assert_eq!(collection.errors.len(), 1);
+    assert!(collection.errors[0].message.contains("directly under"));
+}
+
+#[test]
 fn rejects_local_routines_directory_symlink() {
     let root = tempdir().expect("temporary Orbit root");
     let outside = tempdir().expect("outside directory");
