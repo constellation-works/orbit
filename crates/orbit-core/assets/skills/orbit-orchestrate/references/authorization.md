@@ -105,6 +105,7 @@ start in up to two reserved slots, and one waiting on
 that spent budget reads `cpu_light_budget_full`. A task whose frozen delivery
 batch is within two hours of its deadline already sorts ahead of same-priority
 backlog, so do not raise it to critical just to beat the throttle.
+Delivery-coverage auto-tasks accept `automation-coverage.json` only from their own Orbit run; dispatch them with `orbit run ship <task-id>` (a singleton run, no drain needed) instead of running them in a manual session.
 
 `--allow-crew` is an **allowlist**: it permits the named configured crews and
 excludes others. On an explicit `ship`, an excluded task is refused before its
