@@ -41,6 +41,30 @@ const SWEEP_ACTOR: &str = "sweep";
 /// Newest fires read per source when deciding a trip or a trial.
 const OBSERVED_FIRE_LIMIT: usize = 20;
 
+/// Server-computed trial phase of a routine's circuit breaker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BreakerTrialPhase {
+    /// No active or upcoming trial: breaker is closed, or an admitted trial
+    /// already finished and awaits the next sweep pass.
+    None,
+    /// Breaker is open with an upcoming or admitted trial that has not fired
+    /// yet.
+    Armed,
+    /// An admitted trial fire is currently running.
+    InFlight,
+}
+
+impl BreakerTrialPhase {
+    /// Stable lowercase token exposed in status JSON.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Armed => "armed",
+            Self::InFlight => "in_flight",
+        }
+    }
+}
+
 /// One fire of a routine as the breaker sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObservedFire {
@@ -221,13 +245,7 @@ fn open_gate(
     if let Some(trial_started_at) = breaker.trial_started_at.as_deref() {
         let trial_started_at = parse_rfc3339(trial_started_at)?;
         let fires = observed_fires(store, routine, dispatch)?;
-        // The trial is the first fire created after it was admitted.
-        let trial = fires
-            .iter()
-            .rev()
-            .filter(|fire| fire.created_at > trial_started_at)
-            .find(|fire| fire.outcome != ObservedOutcome::Ignored);
-        let Some(trial) = trial else {
+        let Some(trial) = select_trial_fire(&fires, trial_started_at) else {
             // Nothing has fired yet: the trial stays admitted, and a bypass
             // trial keeps asking for its immediate fire.
             return Ok(GateAttempt::Done(admitted_gate(
@@ -408,6 +426,83 @@ fn sweep_event(
     }
 }
 
+fn is_event_driven(routine: &LoadedRoutine) -> bool {
+    let trigger = &routine.definition.trigger;
+    trigger.deliveries_landed.is_some() || trigger.state.is_some() || trigger.condition.is_some()
+}
+
+/// The first non-ignored fire created after the trial was admitted.
+/// `fires` must be ordered newest first.
+fn select_trial_fire(
+    fires: &[ObservedFire],
+    trial_started_at: DateTime<Utc>,
+) -> Option<&ObservedFire> {
+    fires
+        .iter()
+        .rev()
+        .filter(|fire| fire.created_at > trial_started_at)
+        .find(|fire| fire.outcome != ObservedOutcome::Ignored)
+}
+
+/// Compute the server-side trial phase and expected fire instant (for an armed
+/// trial) using the same observed-fire logic as `open_gate`.
+///
+/// Event-driven routines (state, delivery, condition) wait for an event rather
+/// than a cron slot, so their expected fire instant is `None`.
+pub fn breaker_trial_status(
+    breaker: Option<&RoutineBreakerRecord>,
+    routine: &LoadedRoutine,
+    cron_fires: &[RoutineFireRecord],
+    automation_fires: &[RoutineFireRecord],
+    next_due: Option<&str>,
+    now_utc: DateTime<Utc>,
+) -> (BreakerTrialPhase, Option<String>) {
+    let Some(breaker) = breaker.filter(|breaker| breaker.state == RoutineBreakerState::Open) else {
+        return (BreakerTrialPhase::None, None);
+    };
+    let event_driven = is_event_driven(routine);
+    if let Some(trial_started_at) = breaker
+        .trial_started_at
+        .as_deref()
+        .and_then(|raw| parse_rfc3339(raw).ok())
+    {
+        let automation_runs = if event_driven {
+            observed_fires_from_records(automation_fires)
+        } else {
+            Vec::new()
+        };
+        let fires = merge_observed_fires(cron_fires, automation_runs);
+        return match select_trial_fire(&fires, trial_started_at) {
+            Some(fire) if fire.outcome == ObservedOutcome::InFlight => {
+                (BreakerTrialPhase::InFlight, None)
+            }
+            Some(_) => (BreakerTrialPhase::None, None),
+            None => {
+                let expected_at = if event_driven {
+                    None
+                } else if breaker.trial_reason.as_deref() == Some(BYPASS_TRIAL_REASON) {
+                    Some(now_utc.to_rfc3339())
+                } else {
+                    next_due.map(str::to_string)
+                };
+                (BreakerTrialPhase::Armed, expected_at)
+            }
+        };
+    }
+    if breaker.bypass_requested_at.is_some() {
+        let expected_at = (!event_driven).then(|| now_utc.to_rfc3339());
+        return (BreakerTrialPhase::Armed, expected_at);
+    }
+    let expected_at = (!event_driven)
+        .then(|| breaker.next_trial_at.clone())
+        .flatten();
+    if expected_at.is_some() || event_driven {
+        (BreakerTrialPhase::Armed, expected_at)
+    } else {
+        (BreakerTrialPhase::None, None)
+    }
+}
+
 /// The routine's newest fires, newest first: its cron fire rows and, for a
 /// state-, delivery- or condition-triggered routine, the runs its automation
 /// admitted. A run present in both is counted once.
@@ -416,33 +511,47 @@ fn observed_fires(
     routine: &LoadedRoutine,
     dispatch: &dyn RoutineDispatch,
 ) -> Result<Vec<ObservedFire>, OrbitError> {
-    let mut fires = Vec::new();
-    let mut runs = HashSet::new();
-    for fire in store.routine_recent_fires(&routine.definition.name, OBSERVED_FIRE_LIMIT)? {
-        let Ok(created_at) = parse_rfc3339(&fire.created_at) else {
-            continue;
-        };
-        if let Some(run_id) = &fire.run_id {
-            runs.insert(run_id.clone());
-        }
-        fires.push(ObservedFire {
-            created_at,
-            outcome: cron_fire_outcome(&fire),
-            run_id: fire.run_id.clone(),
-        });
-    }
-    let trigger = &routine.definition.trigger;
-    if trigger.deliveries_landed.is_some() || trigger.state.is_some() || trigger.condition.is_some()
-    {
-        fires.extend(
-            dispatch
-                .routine_runs(routine, OBSERVED_FIRE_LIMIT)?
-                .into_iter()
-                .filter(|fire| fire.run_id.as_ref().is_none_or(|id| !runs.contains(id))),
-        );
-    }
+    let cron_fires = store.routine_recent_fires(&routine.definition.name, OBSERVED_FIRE_LIMIT)?;
+    let automation_runs = if is_event_driven(routine) {
+        dispatch.routine_runs(routine, OBSERVED_FIRE_LIMIT)?
+    } else {
+        Vec::new()
+    };
+    Ok(merge_observed_fires(&cron_fires, automation_runs))
+}
+
+fn observed_fires_from_records(records: &[RoutineFireRecord]) -> Vec<ObservedFire> {
+    records
+        .iter()
+        .take(OBSERVED_FIRE_LIMIT)
+        .filter_map(|fire| {
+            let created_at = parse_rfc3339(&fire.created_at).ok()?;
+            Some(ObservedFire {
+                created_at,
+                outcome: cron_fire_outcome(fire),
+                run_id: fire.run_id.clone(),
+            })
+        })
+        .collect()
+}
+
+fn merge_observed_fires(
+    cron_fires: &[RoutineFireRecord],
+    automation_runs: Vec<ObservedFire>,
+) -> Vec<ObservedFire> {
+    let mut fires = observed_fires_from_records(cron_fires);
+    let runs: HashSet<String> = fires
+        .iter()
+        .filter_map(|fire| fire.run_id.clone())
+        .collect();
+    fires.extend(
+        automation_runs
+            .into_iter()
+            .take(OBSERVED_FIRE_LIMIT)
+            .filter(|fire| fire.run_id.as_ref().is_none_or(|id| !runs.contains(id))),
+    );
     fires.sort_by_key(|fire| std::cmp::Reverse(fire.created_at));
-    Ok(fires)
+    fires
 }
 
 fn cron_fire_outcome(fire: &RoutineFireRecord) -> ObservedOutcome {

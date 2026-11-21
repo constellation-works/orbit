@@ -36,6 +36,12 @@ pub struct RoutineStatus {
     pub failure_streak: RoutineFailureStreak,
     /// This host's circuit breaker for the routine, when it has ever tripped.
     pub breaker: Option<RoutineBreakerRecord>,
+    /// Server-computed trial phase of [`Self::breaker`], matching the
+    /// scheduler's observed-fire check.
+    pub breaker_trial_phase: BreakerTrialPhase,
+    /// When an armed trial is expected to fire (RFC 3339), or `None` when
+    /// no trial is armed or the routine waits for an event.
+    pub breaker_trial_expected_at: Option<String>,
     pub automation: Option<serde_json::Value>,
 }
 
@@ -193,7 +199,8 @@ pub enum RoutineField {
 }
 
 /// `{state, tripped, error_class, last_run_id, tripped_at, trips,
-/// next_trial_at, trial_started_at, trial_reason, bypass_requested_at}`:
+/// next_trial_at, trial_started_at, trial_reason, bypass_requested_at,
+/// trial_phase, trial_expected_at}`:
 /// the routine's circuit breaker on this host, or null when it never tripped.
 pub fn breaker_json(status: &RoutineStatus) -> Value {
     let Some(breaker) = &status.breaker else {
@@ -210,6 +217,8 @@ pub fn breaker_json(status: &RoutineStatus) -> Value {
         "trial_started_at": breaker.trial_started_at,
         "trial_reason": breaker.trial_reason,
         "bypass_requested_at": breaker.bypass_requested_at,
+        "trial_phase": status.breaker_trial_phase.as_str(),
+        "trial_expected_at": status.breaker_trial_expected_at,
     })
 }
 
