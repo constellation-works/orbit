@@ -353,9 +353,10 @@ td.codebase-empty { padding: var(--space-16) var(--space-14); }
 }
 
 /* Reliability > Tools summary: one column of cards. On a wide screen the
-   long per-tool failure table keeps the left column and the shorter cards
-   (unexpected failures by tool, categories, lifecycle diagnostics, durations,
-   MCP vs CLI) form a second column beside it instead of sitting below it. */
+   long tool-call failure card (By tool and By model tabs) keeps the left column
+   and the shorter cards (unexpected failures by tool, categories, lifecycle
+   diagnostics, durations) form a second column beside it instead of sitting
+   below it. */
 #audit-summary-body {
   padding: var(--space-16);
   display: flex;
@@ -370,31 +371,29 @@ td.codebase-empty { padding: var(--space-16) var(--space-14); }
      stretch to the shared bottom; earlier side cards keep their own heights.
      Margins rather than row gaps space the cards, so a card that is absent
      leaves no gap. */
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) {
+  #audit-summary-body:has(> [data-key="tool-call-failures"]) {
     display: grid;
     grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-    grid-template-rows: repeat(6, auto) 1fr;
+    grid-template-rows: repeat(5, auto) 1fr;
     column-gap: var(--space-16);
     row-gap: 0;
     padding-bottom: 0;
     align-items: start;
   }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > * { grid-column: 1 / -1; margin-bottom: var(--space-16); }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-panel-status] { grid-row: 1; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="tool-call-failures-by-tool"] { grid-column: 1; grid-row: 2 / -1; align-self: stretch; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="failures-by-tool"] { grid-column: 2; grid-row: 2; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="failure-categories"] { grid-column: 2; grid-row: 3; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="lifecycle-diagnostics"] { grid-column: 2; grid-row: 4; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="duration-by-tool"] { grid-column: 2; grid-row: 5; }
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > [data-key="mcp-vs-cli"] { grid-column: 2; grid-row: 6; }
+  #audit-summary-body:has(> [data-key="tool-call-failures"]) > * { grid-column: 1 / -1; margin-bottom: var(--space-16); }
+  #audit-summary-body:has(> [data-key="tool-call-failures"]) > [data-panel-status] { grid-row: 1; }
+  #audit-summary-body:has(> [data-key="tool-call-failures"]) > [data-key="tool-call-failures"] { grid-column: 1; grid-row: 2 / -1; align-self: stretch; }
+  #audit-summary-body:has(> [data-key="tool-call-failures"]) > [data-key="failures-by-tool"] { grid-column: 2; grid-row: 2; }
+  #audit-summary-body:has(> [data-key="tool-call-failures"]) > [data-key="failure-categories"] { grid-column: 2; grid-row: 3; }
+  #audit-summary-body:has(> [data-key="tool-call-failures"]) > [data-key="lifecycle-diagnostics"] { grid-column: 2; grid-row: 4; }
+  #audit-summary-body:has(> [data-key="tool-call-failures"]) > [data-key="duration-by-tool"] { grid-column: 2; grid-row: 5; }
   /* syncNodes preserves addCard order: side cards follow the table. A status
      note has no data-key and must not prevent the last card from stretching. */
-  #audit-summary-body:has(> [data-key="tool-call-failures-by-tool"]) > :is(
+  #audit-summary-body:has(> [data-key="tool-call-failures"]) > :is(
     [data-key="failures-by-tool"],
     [data-key="failure-categories"],
     [data-key="lifecycle-diagnostics"],
-    [data-key="duration-by-tool"],
-    [data-key="mcp-vs-cli"]
+    [data-key="duration-by-tool"]
   ):not(:has(~ [data-key])) { grid-row-end: -1; align-self: stretch; }
 }
 
@@ -404,6 +403,15 @@ td.codebase-empty { padding: var(--space-16) var(--space-14); }
   padding: var(--space-10) var(--space-12);
   border-bottom: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.02);
+}
+/* The tool-call failures card's header holds two rows: the title, then the
+   By tool | By model tab strip. Each row stays on one line at every width
+   (STD-07 §R39), so the strip never wraps under the title on a phone. */
+.audit-summary-card .card-title.card-title-controls {
+  display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-8);
+}
+.audit-summary-card .card-title-controls > span {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .audit-summary-card.lifecycle-failure-card .card-body {
   padding: var(--space-10) var(--space-12);

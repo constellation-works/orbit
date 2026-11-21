@@ -695,7 +695,8 @@ impl OrbitRuntime {
 
     /// Per-role aggregate of audit events at or after `since`, with the
     /// MCP-vs-CLI surface split (`mcp` = `subcommand='run-mcp'`, `cli` =
-    /// `subcommand='run'`). Drives the MCP-vs-CLI card.
+    /// `subcommand='run'`). No dashboard card reads it now; it stays as the raw,
+    /// un-normalized view beside the actor aggregate (ORB-10888).
     pub fn audit_event_aggregates_by_role(
         &self,
         since: &DateTime<Utc>,

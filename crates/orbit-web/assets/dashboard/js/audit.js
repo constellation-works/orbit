@@ -569,14 +569,29 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
 // reliability tables. Ordering and rates are the caller's; only the
 // presentation is bounded.
 const AUDIT_TOOL_FAILURES_VISIBLE_ROWS = 10;
-const AUDIT_TOOL_FAILURES_CARD_KEY = "tool-call-failures-by-tool";
-const AUDIT_TOOL_MODEL_FAILURES_CARD_KEY = "tool-call-failures-by-model";
+const AUDIT_TOOL_FAILURES_CARD_KEY = "tool-call-failures";
+// One card holds both tool-call failure tables; each tab keeps its own
+// "Show all" expansion under its own key.
+const AUDIT_TOOL_FAILURES_TOOL_TAB_KEY = "tool-call-failures-by-tool";
+const AUDIT_TOOL_FAILURES_MODEL_TAB_KEY = "tool-call-failures-by-model";
+const AUDIT_TOOL_FAILURES_TABS = [["tool", "By tool"], ["model", "By model"]];
 const expandedAuditSummaryCards = new Set();
+let auditToolFailuresTab = "tool";
 let lastAuditSummaryPayload = null;
 
 function toggleAuditSummaryCard(cardKey) {
   if (expandedAuditSummaryCards.has(cardKey)) expandedAuditSummaryCards.delete(cardKey);
   else expandedAuditSummaryCards.add(cardKey);
+  if (lastAuditSummaryPayload) {
+    renderAuditSummary(lastAuditSummaryPayload.data, lastAuditSummaryPayload.ctx);
+  }
+}
+
+// The tool-call failures tab is card state like the expansion set: it survives
+// the 30-second refresh and resets only when the page reloads.
+function pickAuditToolFailuresTab(tab) {
+  if (auditToolFailuresTab === tab) return;
+  auditToolFailuresTab = tab;
   if (lastAuditSummaryPayload) {
     renderAuditSummary(lastAuditSummaryPayload.data, lastAuditSummaryPayload.ctx);
   }
@@ -670,9 +685,16 @@ function renderAuditSummary(data, ctx) {
     cards.push(card);
   };
 
-  const createCard = (title, renderBody, scrollableBody = false) => {
+  const createCard = (title, renderBody, scrollableBody = false, titleControls = null) => {
     const card = el("div", { class: "card card-flush audit-summary-card" });
-    card.appendChild(el("div", { class: "card-title section-title", text: title }));
+    const head = el("div", { class: titleControls ? "card-title section-title card-title-controls" : "card-title section-title" });
+    if (titleControls) {
+      head.appendChild(el("span", { text: title, title }));
+      head.appendChild(titleControls);
+    } else {
+      head.textContent = title;
+    }
+    card.appendChild(head);
     const body = el("div", { class: "card-body" });
     if (scrollableBody) {
       body.tabIndex = 0;
@@ -708,11 +730,14 @@ function renderAuditSummary(data, ctx) {
   const title = $("audit-summary-title");
   if (title) title.textContent = `Tool calls ${windowLabel}`;
 
-  // The headline rate opens the per-tool panel it summarises (STD-07 §R29), so
-  // the panel also appears with no rows when only the rate is present.
+  // One card, two tabs: By tool (the default) and By model. The headline rate
+  // opens the By tool tab it summarises (STD-07 §R29), so the card also appears
+  // with no rows when only the rate is present.
   const failureRate = data.tool_call_failure_rate;
   const namedToolFailures = (data.tool_call_failures_by_tool || []).filter((row) => isNamedTool(row.tool));
-  if (failureRate || namedToolFailures.length) {
+  const namedModelFailures = (data.tool_call_failures_by_model || []).filter((row) => isNamedTool(row.tool));
+  if (failureRate || namedToolFailures.length || namedModelFailures.length) {
+    const tab = auditToolFailuresTab;
     const renderToolRows = boundedAuditSummaryTable(namedToolFailures, [
       { key: "tool", label: "tool" },
       { key: "failed", label: "failed", num: true },
@@ -720,32 +745,44 @@ function renderAuditSummary(data, ctx) {
       { key: "rate", label: "rate", num: true, format: (v) => formatFailureRatePct(v) },
       { key: "unexpected", label: "unexp.", num: true, secondary: true, title: "Failed calls classified as unexpected" },
       { key: "denied", label: "denied", num: true, title: "Calls recorded as denied; excluded from total and rate" },
-    ], filterByTool, AUDIT_TOOL_FAILURES_CARD_KEY, "tools");
+    ], filterByTool, AUDIT_TOOL_FAILURES_TOOL_TAB_KEY, "tools");
+    const renderModelRows = boundedAuditSummaryTable(namedModelFailures, [
+      { key: "model", label: "model", title: "Server-derived session model, not the authenticated role" },
+      { key: "tool", label: "tool" },
+      { key: "failed", label: "failed", num: true },
+      { key: "total", label: "total", num: true, secondary: true, title: "Successful + failed calls; denied calls excluded" },
+      { key: "rate", label: "rate", num: true, format: (v) => formatFailureRatePct(v) },
+      { key: "unexpected", label: "unexp.", num: true, secondary: true, title: "Failed calls classified as unexpected" },
+      { key: "denied", label: "denied", num: true, title: "Calls recorded as denied; excluded from total and rate" },
+    ], filterByTool, AUDIT_TOOL_FAILURES_MODEL_TAB_KEY, "models");
+    const tabGroup = el("div", { class: "mx-seg audit-tool-failures-tabs", role: "group", "aria-label": "Group tool call failures by" });
+    for (const [key, text] of AUDIT_TOOL_FAILURES_TABS) {
+      const on = key === tab;
+      const button = el("button", { class: on ? "mx-seg-btn on" : "mx-seg-btn", type: "button", text, "aria-pressed": on ? "true" : "false" });
+      button.addEventListener("click", () => pickAuditToolFailuresTab(key));
+      tabGroup.appendChild(button);
+    }
     addCard(AUDIT_TOOL_FAILURES_CARD_KEY, createCard(
-      `Tool call failures by tool · window ${windowLabel}`,
+      `Tool call failures · window ${windowLabel}`,
       (body) => {
+        if (tab === "model") {
+          renderModelRows(body);
+          return;
+        }
         if (failureRate) body.appendChild(toolCallFailureRateLine(failureRate));
         renderToolRows(body);
       },
       true,
-    ), [namedToolFailures, windowLabel, failureRate, expandedAuditSummaryCards.has(AUDIT_TOOL_FAILURES_CARD_KEY)]);
-  }
-
-  const namedModelFailures = (data.tool_call_failures_by_model || []).filter((row) => isNamedTool(row.tool));
-  if (namedModelFailures.length) {
-    addCard(AUDIT_TOOL_MODEL_FAILURES_CARD_KEY, createCard(
-      `Tool call failures by model · window ${windowLabel}`,
-      boundedAuditSummaryTable(namedModelFailures, [
-        { key: "model", label: "model", title: "Server-derived session model, not the authenticated role" },
-        { key: "tool", label: "tool" },
-        { key: "failed", label: "failed", num: true },
-        { key: "total", label: "total", num: true, secondary: true, title: "Successful + failed calls; denied calls excluded" },
-        { key: "rate", label: "rate", num: true, format: (v) => formatFailureRatePct(v) },
-        { key: "unexpected", label: "unexp.", num: true, secondary: true, title: "Failed calls classified as unexpected" },
-        { key: "denied", label: "denied", num: true, title: "Calls recorded as denied; excluded from total and rate" },
-      ], filterByTool, AUDIT_TOOL_MODEL_FAILURES_CARD_KEY, "models"),
-      true,
-    ), [namedModelFailures, windowLabel, expandedAuditSummaryCards.has(AUDIT_TOOL_MODEL_FAILURES_CARD_KEY)]);
+      tabGroup,
+    ), [
+      namedToolFailures,
+      namedModelFailures,
+      windowLabel,
+      failureRate,
+      tab,
+      expandedAuditSummaryCards.has(AUDIT_TOOL_FAILURES_TOOL_TAB_KEY),
+      expandedAuditSummaryCards.has(AUDIT_TOOL_FAILURES_MODEL_TAB_KEY),
+    ]);
   }
 
   const namedRates = (data.failure_rate_by_tool || []).filter((row) => isNamedTool(row.tool));
@@ -844,14 +881,6 @@ function renderAuditSummary(data, ctx) {
       ],
       filterByTool
     )), durations);
-  }
-
-  if (data.mcp_vs_cli_split) {
-    addCard("mcp-vs-cli", createCard("MCP vs CLI", renderTable(
-      data.mcp_vs_cli_split,
-      [{ key: "label", label: "surface" }, { key: "count", label: "count", num: true }],
-      null
-    )), data.mcp_vs_cli_split);
   }
 
   syncNodes(container, cards);
