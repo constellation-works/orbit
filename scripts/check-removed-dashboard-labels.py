@@ -5,8 +5,10 @@ From the delivery diff against the guardrails base (`CI_TEST_BASE`, with the
 merge-base fallback `scripts/ci-guardrails.sh` uses), take quoted multi-word
 labels on lines removed from `crates/orbit-web/assets/dashboard/**`, drop any
 label the same diff re-adds, and fail when the label is still present in
-current-state docs, the website or shipped skills. Legitimate keeps are
-recorded in `scripts/removed-dashboard-labels-allowlist.json`. An entry is
+current-state docs, the website or shipped skills. A label used as the prefix
+of a longer command inside inline or fenced code is not a label mention; an
+exact code value and visible prose still count. Legitimate keeps are recorded
+in `scripts/removed-dashboard-labels-allowlist.json`. An entry is
 judged only when this diff removes that same label: it is stale when the
 named document no longer contains it. An earlier delivery's entry is left
 alone, and a diff that removes no dashboard label does not judge the
@@ -51,6 +53,17 @@ CSS_CONTENT = re.compile(r"\bcontent\s*:")
 PROPERTY_BEFORE = re.compile(r"[{,]\s*$")
 PROPERTY_AFTER = re.compile(r"\s*:(?!:)")
 IDENTIFIER_WORD = re.compile(r"[a-z0-9_-]+")
+# Keep checking exact code values, but ignore a label used as the prefix of a
+# longer command inside Markdown code, such as `orbit host add`.
+MARKDOWN_CODE_SPAN = re.compile(r"(?<!`)(?P<ticks>`+)(?!`)(?P<code>.*?)(?<!`)(?P=ticks)(?!`)")
+MARKDOWN_FENCE_START = re.compile(r"^[ ]{0,3}(?P<marker>`{3,}|~{3,})")
+MARKDOWN_FENCE_CLOSE = re.compile(r"^[ ]{0,3}(?P<marker>`{3,}|~{3,})[ ]*$")
+CODE_PREFIX_SUFFIX = re.compile(r"\s+\S")
+COMMENT_ONLY_BLOCKS = {
+    ".js": ("/*", "*/"),
+    ".css": ("/*", "*/"),
+    ".html": ("<!--", "-->"),
+}
 
 
 def git(*arguments):
@@ -112,6 +125,14 @@ def is_class_or_property(line, match, words, suffix):
 
 def labels_in(line, path=""):
     suffix = os.path.splitext(path)[1]
+    stripped = line.lstrip()
+    if suffix == ".js" and stripped.startswith("//"):
+        return []
+    comment = COMMENT_ONLY_BLOCKS.get(suffix)
+    if comment is not None and stripped.startswith(comment[0]):
+        closing = stripped.find(comment[1], len(comment[0]))
+        if closing < 0 or not stripped[closing + len(comment[1]):].strip():
+            return []
     labels = []
     for match in QUOTED.finditer(line):
         value = next(group for group in match.groups() if group is not None)
@@ -189,10 +210,42 @@ def doc_hits(labels):
             lines = path.read_text(errors="replace").splitlines()
         except OSError:
             continue
+        fence = None
         for number, line in enumerate(lines, 1):
+            closing = MARKDOWN_FENCE_CLOSE.match(line)
+            if fence is not None:
+                if (closing is not None
+                        and closing.group("marker")[0] == fence[0]
+                        and len(closing.group("marker")) >= fence[1]):
+                    fence = None
+                    continue
+                fenced_code = True
+            else:
+                opening = MARKDOWN_FENCE_START.match(line)
+                if opening is not None:
+                    marker = opening.group("marker")
+                    fence = (marker[0], len(marker))
+                    continue
+                fenced_code = False
+            inline_spans = [(match.start(), match.end())
+                            for match in MARKDOWN_CODE_SPAN.finditer(line)]
             for label in labels:
-                if label in line:
+                for occurrence in re.finditer(re.escape(label), line):
+                    code_suffix = None
+                    if fenced_code:
+                        code_suffix = line[occurrence.end():]
+                    else:
+                        for start, end in inline_spans:
+                            if start <= occurrence.start() and occurrence.end() <= end:
+                                code_suffix = line[occurrence.end():end]
+                                break
+                    if HTML_CLASS_ATTR.search(line[:occurrence.start()]) is not None:
+                        continue
+                    if (code_suffix is not None
+                            and CODE_PREFIX_SUFFIX.match(code_suffix) is not None):
+                        continue
                     hits[label].append((relative, number))
+                    break
     return hits
 
 

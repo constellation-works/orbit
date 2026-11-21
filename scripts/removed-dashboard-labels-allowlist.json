@@ -1,1 +1,7 @@
-[]
+[
+  {
+    "label": "Registered hosts",
+    "doc": "website/src/content/docs/how-to/dashboard.md",
+    "reason": "The Fleet row uses this as a prose description of the hosts it covers, not as a dashboard control label."
+  }
+]
