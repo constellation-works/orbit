@@ -77,12 +77,7 @@ function runFiltersFromAddress() {
   };
 }
 
-/// Take the state filter and the task or job id filter from the address, for
-/// a load, Back or Forward onto Jobs › History. The chips, search field, list
-/// and address then agree: a change reloads the list, and an address that
-/// named something unusable is rewritten in place to what is shown.
-export function adoptRunFiltersFromAddress() {
-  const { state, taskId, jobId } = runFiltersFromAddress();
+function applyRunFilters({ state, taskId, jobId }) {
   const changed = state !== runFilter || taskId !== runTaskId || jobId !== runJobId;
   runFilter = state;
   runTaskId = taskId;
@@ -95,6 +90,14 @@ export function adoptRunFiltersFromAddress() {
   if (hasCtx("markRunsLoading")) showRunsLoading();
 }
 
+/// Take the state filter and the task or job id filter from the address, for
+/// a load, Back or Forward onto Jobs › History. The chips, search field, list
+/// and address then agree: a change reloads the list, and an address that
+/// named something unusable is rewritten in place to what is shown.
+export function adoptRunFiltersFromAddress() {
+  applyRunFilters(runFiltersFromAddress());
+}
+
 // Task ids are PREFIX-digits with a 2-5 letter prefix outside the ADR, L,
 // and F artifact namespaces. Anything else in the search field is a job id.
 function isTaskId(value) {
@@ -102,11 +105,10 @@ function isTaskId(value) {
   return Boolean(match) && !["ADR", "L", "F"].includes(match[1]);
 }
 
-/// Show the Running filter and write it to the address: the retired Jobs ›
-/// Live links and the rail's in-flight count open History through this.
+/// Show the unfiltered Running filter and write it to the address: the retired
+/// Jobs › Live links and the rail's in-flight count open History through this.
 export function selectRunningRunFilter() {
-  runFilter = DEFAULT_RUN_FILTER;
-  persistRunFilters();
+  applyRunFilters({ state: DEFAULT_RUN_FILTER, taskId: "", jobId: "" });
 }
 
 // The `state` the job-runs API takes for the selected filter.
