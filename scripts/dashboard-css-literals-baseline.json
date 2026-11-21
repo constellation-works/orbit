@@ -16,10 +16,6 @@
       "colour_literals": 27,
       "raw_font_sizes": 1
     },
-    "crates/orbit-web/assets/dashboard/css/dock.css": {
-      "colour_literals": 1,
-      "raw_font_sizes": 0
-    },
     "crates/orbit-web/assets/dashboard/css/drain.css": {
       "colour_literals": 1,
       "raw_font_sizes": 0
@@ -29,7 +25,7 @@
       "raw_font_sizes": 7
     },
     "crates/orbit-web/assets/dashboard/css/fleet.css": {
-      "colour_literals": 1,
+      "colour_literals": 0,
       "raw_font_sizes": 4
     },
     "crates/orbit-web/assets/dashboard/css/forecast.css": {
@@ -81,7 +77,7 @@
       "raw_font_sizes": 0
     },
     "crates/orbit-web/assets/dashboard/css/tasks.css": {
-      "colour_literals": 10,
+      "colour_literals": 9,
       "raw_font_sizes": 0
     }
   },

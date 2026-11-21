@@ -1538,20 +1538,21 @@ export function confirmForceOverride({ heading, guard, effect }) {
     forceDialogSequence += 1;
     const headingId = `force-override-heading-${forceDialogSequence}`;
     const bodyId = `force-override-body-${forceDialogSequence}`;
-    dialog.className = "force-override-dialog";
+    dialog.className = "force-override-dialog dialog-surface";
     dialog.setAttribute("aria-labelledby", headingId);
     dialog.setAttribute("aria-describedby", bodyId);
     const title = el("h3", { text: heading });
     title.id = headingId;
-    const copy = el("div", {}, [
+    const copy = el("div", { class: "dialog-body" }, [
       el("p", { text: guard }),
       el("p", { text: effect }),
     ]);
     copy.id = bodyId;
     const forceButton = el("button", { class: "action force", text: "Force", type: "button" });
     const cancelButton = el("button", { class: "action cancel", text: "Cancel", type: "button" });
-    const actions = el("div", { class: "force-override-actions" }, [forceButton, cancelButton]);
-    dialog.append(title, copy, actions);
+    const actions = el("div", { class: "force-override-actions dialog-actions" }, [forceButton, cancelButton]);
+    const closeButton = escCloseButton("Cancel (Esc)", { onClick: () => settle(false) });
+    dialog.append(el("header", { class: "dialog-header" }, [title, closeButton]), copy, actions);
     const previouslyFocused = document.activeElement;
     let settled = false;
     // Escape cancels even when focus has left the dialog (a viewport
@@ -1588,7 +1589,7 @@ export function confirmForceOverride({ heading, guard, effect }) {
         return;
       }
       if (event.key !== "Tab" || event.altKey || event.ctrlKey || event.metaKey) return;
-      const controls = [forceButton, cancelButton].filter((node) => !node.disabled);
+      const controls = [closeButton, forceButton, cancelButton].filter((node) => !node.disabled);
       if (!controls.length) return;
       const active = document.activeElement;
       if (event.shiftKey ? active === controls[0] : active === controls[controls.length - 1]) {

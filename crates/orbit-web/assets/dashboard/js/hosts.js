@@ -194,14 +194,14 @@ function renderDialog() {
   }
   if (!editing && !row) { selectedHost = null; if (dialog?.open) dialog.close(); return; }
   if (!dialog) {
-    dialog = el("dialog", { class: "fleet-dialog", id: "fleet-dialog", "aria-labelledby": "fleet-dialog-title" });
+    dialog = el("dialog", { class: "fleet-dialog dialog-surface", id: "fleet-dialog", "aria-labelledby": "fleet-dialog-title" });
     document.body.append(dialog);
     dialog.addEventListener("cancel", event => { event.preventDefault(); if (!editing?.pending) closeFleetDialog(); });
   }
   const restore = captureFocus(dialog);
   const openDetails = new Set([...dialog.querySelectorAll("details[open]")].map(node => node.querySelector("summary")?.textContent));
   const local = lastPayload.hosts.find(host => host.local);
-  const content = el("div", { class: "fleet-dialog-body" });
+  const content = el("div", { class: "fleet-dialog-body dialog-body" });
   const title = editing ? `${editing.kind === "add" ? "Add host" : editing.kind === "rename" ? "Rename" : "Remove"}${row ? ` · ${row.name}` : ""}` : row.name;
   if (editing && editing.kind !== "add" && !row) {
     content.append(el("p", { class: "config-note", role: "status", text: "Host removed. Waiting for the change to finish." }));
@@ -248,7 +248,7 @@ function renderDialog() {
       ]));
     }
   }
-  dialog.replaceChildren(el("header", { class: "fleet-dialog-head" }, [
+  dialog.replaceChildren(el("header", { class: "dialog-header" }, [
     el("h2", { id: "fleet-dialog-title", text: title }),
     escCloseButton("Close host details (Esc)", {
       description: "Close diagnostics and discard unsaved edits",
@@ -497,7 +497,7 @@ function addSection() {
       el("span", { class: "config-note", text: "Orbit logs in over SSH, reads the host's identity and writes the entry here. Nothing is written on that host." }),
     ]),
     el("div", { class: "host-fields" }, [ssh.label, name.label]),
-    el("div", { class: "config-editor-foot" }, [
+    el("div", { class: "config-editor-foot dialog-actions" }, [
       el("span", { class: "config-note", text: editing.pending ? "Probing the host…" : "" }),
       el("span", { class: "config-editor-actions" }, [
         submitButton(editing.pending ? "Adding…" : "Add"),
@@ -518,7 +518,7 @@ function renameEditor(row) {
   const name = textInput("host-input-name", "New name", row.name, editing.draft, "name");
   const form = el("form", { class: "config-editor host-editor" }, [
     el("div", { class: "host-fields" }, [name.label]),
-    el("div", { class: "config-editor-foot" }, [
+    el("div", { class: "config-editor-foot dialog-actions" }, [
       el("span", { class: "config-note", text: `Renames the entry only; ${row.machine_id} and its SSH target are unchanged.` }),
       el("span", { class: "config-editor-actions" }, [
         submitButton(editing.pending ? "Saving…" : "Save"),
@@ -550,7 +550,7 @@ function removeEditor(row) {
       text: `Remove ${row.name} (${row.machine_id}) from the host file? Nothing on that host changes.`,
     }));
   }
-  children.push(el("div", { class: "config-editor-foot" }, [
+  children.push(el("div", { class: "config-editor-foot dialog-actions" }, [
     el("span", { class: "config-note", text: editing.pending ? "Removing…" : "" }),
     el("span", { class: "config-editor-actions" }, [
       inUse

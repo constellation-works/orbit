@@ -245,13 +245,8 @@
 .config-row-error { color: var(--state-failed); font: var(--text-sm)/1.5 var(--font-sans); padding: 0 var(--space-16) var(--space-8); overflow-wrap: anywhere; }
 
 .drawer-detail { color: var(--fg-dim); }
-.drawer-actions { display: flex; gap: var(--space-8); flex-wrap: wrap; align-items: center; }
-.config-drawer {
-  position: sticky; bottom: 0; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-panel);
-  padding: var(--space-16); display: flex; flex-direction: column; gap: var(--space-8); max-height: 70vh; overflow: auto;
-}
-.config-drawer > h3 { margin: 0; color: var(--fg); font: 600 var(--text-base)/1.4 var(--font-sans); }
-.config-drawer > p { margin: 0; color: var(--fg-dim); font-size: var(--text-sm); }
+.config-drawer { display: flex; flex-direction: column; }
+.config-drawer .dialog-body > p { margin: 0; color: var(--fg-dim); font-size: var(--text-sm); }
 .config-drawer .settings-input { width: 100%; box-sizing: border-box; }
 .drawer-chain { font-size: var(--text-md); color: var(--fg-mute); }
 .drawer-scope { display: block; font-size: var(--text-md); }

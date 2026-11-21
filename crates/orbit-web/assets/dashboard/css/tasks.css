@@ -1246,26 +1246,8 @@ main.tasks-layout.task-page-mode > .task-detail-pane { grid-column: 1; grid-row:
 
 /* Force-override confirmation for a guard refusal: a modal <dialog> in the
    top layer, like task creation, so it moves no board layout. */
-.force-override-dialog {
-  box-sizing: border-box;
-  width: min(480px, calc(100vw - 32px));
-  max-width: none;
-  max-height: calc(100vh - 32px);
-  max-height: calc(100dvh - 32px);
-  margin: auto;
-  padding: var(--space-16);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-elev);
-  color: var(--fg);
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-.force-override-dialog::backdrop { background: rgb(0 0 0 / 0.6); }
-.force-override-dialog h3 { margin: 0 0 var(--space-8); }
-.force-override-dialog p { margin: var(--space-8) 0; overflow-wrap: anywhere; }
-.force-override-actions { display: flex; flex-wrap: wrap; gap: var(--space-8); margin-top: var(--space-12); }
+.force-override-dialog { width: min(480px, calc(100vw - var(--space-32))); margin: auto; padding: 0; }
+.force-override-dialog p { margin: 0; overflow-wrap: anywhere; }
 .force-override-actions .action { min-height: 36px; }
 
 /* Holding pilot findings use the shared warning palette and a text label. */

@@ -5,7 +5,7 @@
 // through the `orbit.resident.*` tools behind /api/residents; the server keeps
 // the mandate rules, so a refused write shows the server's own message.
 
-import { captureWorkspaceVisit, detailsPanel, el, fetchJson, infoHint, isAggregateView, makeToggleRow, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel, taskHref } from './common.js';
+import { captureWorkspaceVisit, detailsPanel, el, escCloseButton, fetchJson, infoHint, isAggregateView, makeToggleRow, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel, taskHref } from './common.js';
 import { actionReason, explainUnavailable, feedback, selectedWorkspaceName } from './operations-shared.js';
 
 const FEEDBACK = "resident-operation-feedback";
@@ -244,7 +244,7 @@ function startForm(payload) {
   const cancel = button("Cancel", "Cancel starting a resident");
   const status = el("p", { class: "resident-start-status", role: "status", "aria-live": "polite" });
   const form = el("form", { class: "resident-form resident-start", "aria-label": "Start a resident" }, [
-    el("h3", { id: "resident-start-heading", class: "resident-start-title", text: "Start a resident" }),
+    el("header", { class: "dialog-header" }, [el("h3", { id: "resident-start-heading", class: "resident-start-title", text: "Start a resident" }), escCloseButton("Close (Esc)", { onClick: () => { if (!submit.disabled) closeResidentStart(); } })]),
     el("fieldset", { class: "resident-step" }, [
       el("legend", { text: "1 · What it should do" }),
       field("Goal", input("goal", { maxlength: "240", required: "", placeholder: "One line: what the resident keeps true" })),
@@ -269,8 +269,11 @@ function startForm(payload) {
       field("Title", input("title"), "Optional; defaults to the goal."),
       routineNote(payload),
     ]),
-    el("div", { class: "resident-form-actions" }, [status, cancel, gated(payload, "resident_write", submit)]),
+    el("div", { class: "resident-form-actions dialog-actions" }, [status, cancel, gated(payload, "resident_write", submit)]),
   ]);
+  const body = el("div", { class: "dialog-body" });
+  for (const step of form.querySelectorAll(".resident-step")) body.append(step);
+  form.insertBefore(body, form.querySelector(".dialog-actions"));
   cancel.addEventListener("click", () => {
     closeResidentStart();
   });
