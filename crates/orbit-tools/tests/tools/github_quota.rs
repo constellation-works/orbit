@@ -1349,6 +1349,9 @@ fn deadline_clipped_probe_leaves_known_quota_and_reserve_refusal_in_place() {
 
     let mut short = request.clone();
     short.timeout_ms = Some(60);
+    // The probe ends as a timed-out process result, which the production
+    // classification must map to `Clipped`; a mapping to `Unknown` replaces
+    // the known record that the checks below read.
     let (probes, result) = run_with_simulated_clipped_probe(60, || {
         github_quota::with_scoped_guard(store(records.path()), policy, || {
             github_quota::run_gh_request(GithubCaller::Delivery, &short)
