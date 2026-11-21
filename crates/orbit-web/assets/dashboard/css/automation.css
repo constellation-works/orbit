@@ -125,7 +125,7 @@ body.operations-active .rail {
    grid (per pane via --ops-columns) with a switch or a button at the
    edge. Below 720px the header row goes and each cell labels itself. */
 .operations-routines-layout, .jobs-layout { grid-template-columns: minmax(0, 1fr); }
-#jobs-body, #jobs-live-body { padding: var(--space-12); background: var(--bg); }
+#jobs-body { padding: var(--space-12); background: var(--bg); }
 .operation-clock-panel .body { padding: var(--space-10) var(--space-12); }
 .operation-clock-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8) var(--space-20); min-width: 0; }
 .operation-clock-bar .operation-clock-summary { margin-bottom: 0; }
@@ -319,19 +319,6 @@ a.routine-fire:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .operation-timeline-tick.fires .operation-timeline-mark { background: var(--accent); }
 .operation-timeline-label { color: var(--fg-mute); font-size: var(--text-2xs); text-align: center; white-space: normal; overflow-wrap: anywhere; }
 .operation-timeline-tick.fires .operation-timeline-label { color: var(--fg); }
-.operation-running { margin-bottom: var(--space-12); }
-.operation-running-title { display: flex; align-items: center; gap: var(--space-8); margin-bottom: var(--space-8); color: var(--fg-dim); font: var(--text-xs) var(--font-sans); }
-.operation-running-title strong { color: var(--fg); font-size: var(--text-sm); font-weight: 600; }
-.operation-running-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--space-8); }
-.operation-running-card { display: flex; flex-direction: column; gap: var(--space-6); overflow-wrap: anywhere; }
-.operation-running-head { display: flex; align-items: center; gap: var(--space-8); min-width: 0; font-size: var(--text-sm); }
-.operation-running-head .operation-task-link { flex-shrink: 0; white-space: nowrap; }
-.operation-running-head strong { overflow-wrap: anywhere; }
-.operation-running-meta { display: flex; flex-wrap: wrap; gap: var(--space-4) var(--space-10); color: var(--fg-dim); font-size: var(--text-xs); }
-.operation-running-task-title { min-width: 0; overflow: hidden; color: var(--fg-dim); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
-.operation-running-steps { display: grid; gap: var(--space-4); margin: 0; padding: 0; list-style: none; }
-.operation-running-step { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-10); color: var(--fg-dim); font-size: var(--text-xs); }
-.operation-state.running { color: var(--priority-medium); border-color: var(--priority-medium); }
 .operation-command {
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); margin-bottom: var(--space-8); padding: var(--space-8) var(--space-10);
   border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--bg);

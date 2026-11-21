@@ -357,19 +357,10 @@
     </section>
     <section class="tab-pane" data-tab="jobs" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <nav class="subtabs view-tabs" id="jobs-subtabs" aria-label="Jobs views">
-        <button class="subtab active" data-subtab="live" type="button">Live</button>
-        <button class="subtab" data-subtab="history" type="button">History</button>
+        <button class="subtab active" data-subtab="history" type="button">History</button>
         <button class="subtab" data-subtab="catalogue" type="button">Catalogue</button>
       </nav>
-      <main class="operations-layout jobs-layout" id="jobs-live-main">
-        <section class="panel">
-          <header><span>Live</span><span class="count" id="jobs-live-count">-</span></header>
-          <div class="body" id="jobs-live-body">
-            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
-          </div>
-        </section>
-      </main>
-      <main class="jobs-layout" id="jobs-history-main" hidden>
+      <main class="jobs-layout" id="jobs-history-main">
         <section class="panel" id="runs-panel">
           <header><span>History</span><span class="count" id="runs-count">-</span></header>
           <div class="body" id="runs-body" tabindex="0" role="region" aria-label="Runs">

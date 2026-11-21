@@ -21,7 +21,7 @@
 
 import { el, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, setWorkspace, parseDashboardWindow, persistScopeToUrl, syncWindowSelectors, notifyScopeChange } from './common.js';
 import { renderIncidentWindowHeader } from './incidents.js';
-import { adoptRunFiltersFromAddress, renderRuns } from './runs.js';
+import { adoptRunFiltersFromAddress, renderRuns, selectRunningRunFilter } from './runs.js';
 import { AGENT_ROLES, adoptAgentsSpan, agentsSpan } from './agents.js';
 import { countViewsHashSuffix } from './metrics-running.js';
 import { initBackgroundNotifications, setDashboardTitle, startDashboardPolling } from './polling.js';
@@ -58,7 +58,9 @@ const COST_TABS = ["spend"];
 // Analytics › Reliability views: `#analytics/reliability[/tools]`.
 const RELIABILITY_VIEWS = ["pipeline", "tools"];
 const OPERATIONS_SUBTABS = ["routines", "auto-tasks", "scripts"];
-const JOBS_SUBTABS = ["live", "history", "catalogue"];
+const JOBS_SUBTABS = ["history", "catalogue"];
+// The retired Live subtab: its address opens History with Running selected.
+const RETIRED_JOBS_LIVE = "live";
 // Health views that replace the list panel with their own full-width <main>.
 const HEALTH_MAINS = {
   events: "diagnostics-events-main",
@@ -416,7 +418,7 @@ function setOperationsSubtabImpl(ctx, name) {
 }
 
 function setJobsSubtabImpl(ctx, name) {
-  if (!JOBS_SUBTABS.includes(name)) name = "live";
+  if (!JOBS_SUBTABS.includes(name)) name = "history";
   ctx.setJobsSubtab(name);
   for (const btn of document.querySelectorAll("#jobs-subtabs .subtab")) {
     const active = btn.dataset.subtab === name;
@@ -740,6 +742,10 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   };
   let hash;
   if (top === "jobs") {
+    if (segments[1] === RETIRED_JOBS_LIVE) {
+      selectRunningRunFilter();
+      segments[1] = "history";
+    }
     const sub = JOBS_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getJobsSubtab();
     adoptHashedWindow();
     // The state and task or job id filters ride in the query string. A load,
@@ -1022,7 +1028,8 @@ function initTabsImpl(ctx) {
   for (const tab of document.querySelectorAll(".tab[data-tab]")) {
     tab.addEventListener("click", (event) => {
       if (tab.dataset.tab === "jobs" && event.target?.closest?.("#rail-count-jobs")) {
-        setActiveTabImpl(ctx, "jobs/live", { refresh: false });
+        selectRunningRunFilter();
+        setActiveTabImpl(ctx, "jobs/history", { refresh: false });
         return;
       }
       // The failing-jobs pill opens the catalogue, where the badge names the job.

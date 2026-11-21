@@ -122,7 +122,7 @@ Confirm the selected workspace before you act.
 |---|---|
 | **[Tasks](#tasks)** | Tasks, with the ones waiting on you first. The right dock holds **Drain**, a live **Log**, **[Notices](#notices)**, and **[Residents](#residents)**. |
 | **Drain** | Only in windows 1315px wide or narrower, where it opens the dock's Drain tab in place of the task list. |
-| **[Jobs](#runs-and-errors)** | **Live** (runs pending or running now), **History** (every run, with run detail), and **Catalogue** (jobs you can run by hand). |
+| **[Jobs](#runs-and-errors)** | **History** (runs, opening on the ones pending or running now, with run detail) and **Catalogue** (jobs you can run by hand). |
 | **Leases** | Active and queued path leases by path: who holds each one, who waits, and recent landings that changed a leased path. Read-only. The rail hides it for a workspace where path leases are off. |
 | **Health** | What is broken now: **Incidents** (grouped failures, with **Events** and **Errors** tabs) and **Doctor**. |
 | **[Analytics](#analytics)** | How delivery is trending: **Metrics**, **Reliability**, **Codebase**, **Resources**, **Forecast**, **Cost**, **[Agents](#agents)**, and **Experiments**. |
@@ -489,9 +489,11 @@ first. Select a mandate to answer its requests and steer it:
 
 ## Runs and errors
 
-**Jobs › History** lists job runs for the selected workspace. Filter by
-**All** or **Failed**, narrow the list with a task ID or job ID, and pick a
-time window.
+**Jobs › History** lists job runs for the selected workspace. It opens on
+**Running**, the runs pending or running now, grouped by task with each run's
+crew and a count of tasks and runs in flight. Switch to **All** or **Failed**,
+narrow the list with a task ID or job ID, and pick a time window (**Running**
+ignores the window).
 
 Click a run for its steps, events, and child runs. A failed, timed-out, or
 interrupted run opens on the step it stopped at and the error it recorded.
@@ -512,6 +514,7 @@ These counts answer different questions:
 | Where | Counts |
 |---|---|
 | **Jobs** rail count | Job runs pending or running now, not tasks. It ignores the History window and filters. |
+| **Jobs › History**, **Running** | Runs pending or running now, whatever the window. |
 | **Jobs › History**, **Failed** | Failed, timed-out, and interrupted runs in the selected window. |
 | **Health → Incidents → Events** | Audited calls. It opens on **failure + denied**; choose **all** to list every status. |
 | **Health → Incidents → Errors** | Step and event failures in the selected window. |
