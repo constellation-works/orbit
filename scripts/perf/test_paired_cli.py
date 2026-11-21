@@ -443,6 +443,60 @@ class PairedCliSupervisionTest(PairedCliTestCase):
         self.assertEqual(
             {key: protocol[key] for key in expected}, expected)
 
+    def test_cancellation_during_process_acquisition(self) -> None:
+        # Trace Popen's return, before its caller can install a cleanup guard.
+        driver = """
+import os, runpy, signal, subprocess, sys
+script, kind, pidfile, signum = sys.argv[1:5]
+sys.argv = [script] + sys.argv[5:]
+spawned = None
+def trace(frame, event, arg):
+    global spawned
+    if spawned is not None and event == "call" and frame.f_code.co_name == "clean_root":
+        try:
+            os.kill(spawned, 0)
+        except ProcessLookupError:
+            state = "reaped"
+        else:
+            state = "live"
+        with open(pidfile + ".cleanup", "w") as output:
+            output.write(state)
+        sys.settrace(None)
+    if spawned is None and event == "return" and frame.f_code is subprocess.Popen.__init__.__code__:
+        args = frame.f_locals.get("args", [])
+        if (kind == "server" and "web" in args) or (kind == "arm" and "probe-stall" in args):
+            spawned = frame.f_locals["self"].pid
+            with open(pidfile, "w") as output:
+                output.write(str(spawned))
+            os.kill(os.getpid(), int(signum))
+    return trace
+sys.settrace(trace)
+runpy.run_path(script, run_name="__main__")
+"""
+        for kind, signum in (("arm", signal.SIGTERM), ("server", signal.SIGINT)):
+            with self.subTest(kind=kind):
+                out = Path(self.temp.name) / ("out-acquire-" + kind)
+                pidfile = Path(self.temp.name) / ("acquire-" + kind + ".pid")
+                surface = ("--http", "/slow") if kind == "server" else ("--cli", "stall")
+                args = self.paired_argv(out, surface, "--parity",
+                                        "probe-same" if kind == "server" else "probe-stall")
+                result = subprocess.run(
+                    [sys.executable, "-I", "-c", driver, str(PAIRED), kind,
+                     str(pidfile), str(signum), *args[3:]],
+                    cwd=REPO, env=self.paired_env(), capture_output=True, text=True, timeout=60,
+                )
+                self.assertTrue(pidfile.exists(), result.stderr)
+                pid = int(pidfile.read_text())
+                try:
+                    self.assertEqual(result.returncode, 128 + signum, result.stderr)
+                    self.assertTrue(process_gone(pid), f"owned leader {pid} survived cancellation")
+                    self.assertEqual(Path(str(pidfile) + ".cleanup").read_text(), "reaped")
+                    self.assert_lane_released()
+                    self.assertFalse(out.exists())
+                finally:
+                    if not process_gone(pid):
+                        os.killpg(pid, signal.SIGKILL)
+
     def test_cancelled_harness_stops_its_http_server(self) -> None:
         out = Path(self.temp.name) / "out-cancel"
         harness = subprocess.Popen(
