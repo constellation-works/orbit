@@ -953,6 +953,41 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "patch")
         self.assertEqual(report["signals"], [])
 
+    def test_mcp_output_type_widening_and_equivalent_rewrite(self):
+        tools = self.repo.mcp()
+        tools[0]["outputSchema"] = {"type": "object", "properties": {
+            "payload": {"type": "integer"}}}
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare output type fixture [ORB-64]")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        tools[0]["outputSchema"]["properties"]["payload"]["type"] = "number"
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: widen output type [ORB-65]")
+        report = self.report()
+        self.assertEqual(report["bump"], "minor")
+        self.assertIn(("ORB-65", "mcp-schema",
+                       '`orbit_task_show` `outputSchema.payload` type "integer" → "number"'),
+                      self.signals(report))
+
+        self.repo.git("tag", "-f", "v0.35.0")
+        tools[0]["outputSchema"]["properties"]["payload"]["type"] = ["integer", "number"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: rewrite equivalent output type [ORB-66]")
+        report = self.report()
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["signals"], [])
+
+        self.repo.git("tag", "-f", "v0.35.0")
+        tools[0]["inputSchema"]["properties"]["id"]["type"] = "integer"
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: narrow input type [ORB-67]")
+        report = self.report()
+        self.assertEqual(report["bump"], "minor")
+        self.assertIn(("ORB-67", "mcp-schema",
+                       '`orbit_task_show` `inputSchema.id` type "string" → "integer"'),
+                      self.signals(report))
+
     def test_removing_type_inside_oneof_decides_minor_with_additive_controls(self):
         tools = self.repo.mcp()
         tools[0]["inputSchema"] = {"oneOf": [{"type": "string"}, {"type": "integer"}]}
