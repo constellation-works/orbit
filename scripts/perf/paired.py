@@ -915,6 +915,24 @@ def named_count(value: str) -> tuple[str, int]:
     return name, count
 
 
+def parity_command_value(value: str) -> str:
+    """A --parity value must be one shell-quoted orbit command (ORB-26398, ORB-26439).
+
+    An omitted flag never reaches this check (argparse leaves it None), so an explicit
+    value that splits to no words is refused rather than standing in for no command.
+    """
+    try:
+        words = shlex.split(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"not a valid shell-quoted orbit command ({error}); check the quotes, "
+            "e.g. 'doctor --json'") from None
+    if not words:
+        raise argparse.ArgumentTypeError(
+            "takes an orbit command; leave it out to skip the parity command")
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--builds", required=True, help="build-pair.sh output directory")
@@ -924,7 +942,7 @@ def main(argv: list[str] | None = None) -> int:
     surface.add_argument("--cli", help="orbit arguments to time, e.g. 'doctor --json'")
     surface.add_argument("--http", help="GET path to time on each arm's own web serve")
     parser.add_argument(
-        "--parity",
+        "--parity", type=parity_command_value,
         help="orbit arguments run once per arm before sampling; a CLI match needs "
              "this command to exit 0 on every arm")
     parser.add_argument("--parity-mask", nargs="+", default=[],
@@ -954,9 +972,6 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--qualifying-task-count names must be unique")
     if args.http and not args.http.startswith("/"):
         parser.error("--http takes a path starting with /")
-    # An explicit value with no argv words is not an omitted command (ORB-26398).
-    if args.parity is not None and not shlex.split(args.parity):
-        parser.error("--parity takes an orbit command; leave it out to skip the parity command")
     os.umask(0o077)
     created = common.CreatedDirs(args.keep)
     ok = False
