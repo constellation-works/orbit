@@ -1543,6 +1543,60 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "minor")
         self.assertEqual(report["next_version"], "0.36.0")
 
+    def _write_independent_anyof_pair(self, members):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {"allOf": members}
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Prepare independent anyOf members [ORB-92] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+        return tools
+
+    def test_independent_anyof_sibling_under_allof_decides_by_direction(self):
+        # Each allOf member is its own conjunct, so a surviving anyOf at the
+        # same instance location is not the deleted sibling's counterpart.
+        first = {"anyOf": [{"type": "string"}, {"type": "boolean"}]}
+        second = {"anyOf": [{"type": "string"}, {"type": "integer"}]}
+        tools = self._write_independent_anyof_pair([first, second])
+        tools[0]["inputSchema"]["allOf"] = [first]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Drop the second anyOf member [ORB-93] (#2)")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
+        self.repo.git("tag", "-f", "v0.35.0")
+        tools[0]["inputSchema"]["allOf"] = [first, second]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add the second anyOf member [ORB-94] (#3)")
+        report = self.report()
+        self.assertEqual(self.signals(report), {
+            ("ORB-94", "mcp-schema", "`orbit_task_show` `inputSchema` anyOf constraint added")})
+        self.assertEqual(report["bump"], "minor")
+
+    def test_branch_removed_from_independent_anyof_sibling_decides_minor(self):
+        first = {"anyOf": [{"type": "string"}, {"type": "boolean"}]}
+        second = {"anyOf": [{"type": "string"}, {"type": "integer"}]}
+        tools = self._write_independent_anyof_pair([first, second])
+        tools[0]["inputSchema"]["allOf"] = [first, {"anyOf": [{"type": "string"}]}]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Narrow the second anyOf member [ORB-93] (#2)")
+        report = self.report()
+        self.assertEqual(self.signals(report), {
+            ("ORB-93", "mcp-schema",
+             "`orbit_task_show` `inputSchema{allOf1}{anyOf1}` anyOf alternative removed")})
+        self.assertEqual(report["bump"], "minor")
+
+    def test_reordering_independent_anyof_members_stays_patch(self):
+        first = {"anyOf": [{"type": "string"}, {"type": "boolean"}]}
+        second = {"anyOf": [{"type": "string"}, {"type": "integer"}]}
+        tools = self._write_independent_anyof_pair([first, second])
+        tools[0]["inputSchema"]["allOf"] = [second, first]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Reorder anyOf members [ORB-93] (#2)")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
     def test_removing_nested_input_mcp_applicator_is_additive(self):
         tools = self.repo.mcp()
         options = {

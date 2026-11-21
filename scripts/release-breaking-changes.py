@@ -465,15 +465,20 @@ def under_unmatched_alternative(path, unmatched):
 def alternative_path_map(before, after):
     """Pair anyOf/oneOf/allOf branches by content; track inserted and removed alternatives.
 
-    Returns (path_map, unmatched, removed): `path_map` translates a surviving
-    current branch prefix to its baseline prefix (and maps newly inserted
-    `allOf` branches to non-colliding synthetic prefixes), `unmatched` holds
-    inserted `anyOf`/`oneOf` current branch prefixes, and `removed` holds
-    (baseline prefix, keyword) pairs for `anyOf`/`oneOf` with no surviving
-    counterpart (outermost only).
+    Returns (path_map, unmatched, removed, paired): `path_map` translates a
+    surviving current branch prefix to its baseline prefix (and maps newly
+    inserted `allOf` branches to non-colliding synthetic prefixes),
+    `unmatched` holds inserted `anyOf`/`oneOf` current branch prefixes,
+    `removed` holds (baseline prefix, keyword) pairs for `anyOf`/`oneOf` with
+    no surviving counterpart (outermost only), and `paired` holds the
+    (current, baseline) applicator identities `(parent, keyword)` that the
+    comparison treats as the same `anyOf`/`oneOf`. Sibling applicators of one
+    keyword at the same flattened instance location stay distinct: each is a
+    separate conjunct, so only its own counterpart counts as surviving.
     """
     path_map, unmatched = {}, set()
     matched_baseline = set()
+    paired = set()
     alternatives = after.get("alternatives", {})
     allof_after = after.get("allof_branches", {})
     allof_before = before.get("allof_branches", {})
@@ -491,12 +496,14 @@ def alternative_path_map(before, after):
     for parent, keyword, new_branches in sorted(
             applicators, key=lambda item: (item[0].count("{"), item[0], item[1])):
         baseline_parent = remap_alternative_path(parent, path_map)
+        is_paired = False
         if under_unmatched_alternative(parent, unmatched):
             old_branches = []
         elif keyword == "allOf":
             old_branches = allof_before.get(baseline_parent, [])
         else:
             old_branches = before.get("alternatives", {}).get((baseline_parent, keyword), [])
+            is_paired = (baseline_parent, keyword) in before.get("alternatives", {})
             if not old_branches:
                 # An existing anyOf/oneOf wrapped into (or unwrapped from) a single
                 # allOf at the same instance location keeps its identity.
@@ -511,6 +518,9 @@ def alternative_path_map(before, after):
                 if len(same_loc_after) == 1 and len(same_loc_before) == 1:
                     baseline_parent = same_loc_before[0]
                     old_branches = before["alternatives"][(baseline_parent, keyword)]
+                    is_paired = True
+        if is_paired:
+            paired.add(((parent, keyword), (baseline_parent, keyword)))
         matches = match_schema_alternatives(old_branches, new_branches)
         for new_index in range(len(new_branches)):
             current = f"{parent}{{{keyword}{new_index}}}"
@@ -540,6 +550,7 @@ def alternative_path_map(before, after):
             remapped_parent = remap_alternative_path(parent, path_map)
             surviving_applicators.add((remapped_parent, keyword))
             surviving_applicators.add((loc_path(remapped_parent), keyword))
+    paired_baseline = {baseline for _, baseline in paired}
     before_applicators = set(before.get("alternatives", {}))
     for bp, kw in list(before_applicators):
         before_applicators.add((loc_path(bp), kw))
@@ -556,7 +567,7 @@ def alternative_path_map(before, after):
         # the same location. Count either keyword here: replacing anyOf with
         # oneOf (or vice versa) can still tighten the accepted schema.
         parent_loc = loc_path(parent)
-        if (parent, keyword) not in surviving_applicators and (parent_loc, keyword) not in surviving_applicators:
+        if (parent, keyword) not in paired_baseline:
             survivors_here = {
                 survivor_keyword
                 for survivor_parent, survivor_keyword in surviving_applicators
@@ -586,7 +597,7 @@ def alternative_path_map(before, after):
         if (parent, keyword, _json_value_key(branch)) in surviving_content:
             continue
         removed.append((baseline, keyword))
-    return path_map, unmatched, removed
+    return path_map, unmatched, removed, paired
 
 
 def _schema_type_names(schema):
@@ -839,7 +850,9 @@ def detect_mcp_changes(git, parent, commit, changed):
             report(f"tool `{name}` removed")
             continue
         before, after = old[name], new[name]
-        path_map, unmatched, removed = alternative_path_map(before, after)
+        path_map, unmatched, removed, paired = alternative_path_map(before, after)
+        paired_current = {current for current, _ in paired}
+        paired_baseline = {baseline for _, baseline in paired}
         for baseline, keyword in removed:
             report(f"`{name}` `{baseline}` {keyword} alternative removed")
         for current in sorted(unmatched, key=lambda path: (path.count("{"), path)):
@@ -1180,14 +1193,20 @@ def detect_mcp_changes(git, parent, commit, changed):
                 report(f"`{name}` `{dpath}[propertyNames]` propertyNames constraint removed "
                        "inside oneOf alternative")
 
-            # Newly added anyOf/oneOf applicator at an existing non-false location
-            # (when no anyOf/oneOf applicator existed at `loc` before; anyOf <-> oneOf
-            # replacement is already reported via alternative_path_map removals).
-            had_alt = any(location(bp) == loc for bp, _ in before.get("alternatives", {}))
-            if not had_alt:
+            # Newly added anyOf/oneOf applicator at an existing non-false location.
+            # Applicators pair by identity, not location: an independent sibling of
+            # the same keyword is a new conjunct even where one already constrained
+            # `loc`. Only when a baseline applicator at `loc` lost its counterpart
+            # is the addition a replacement (anyOf <-> oneOf), which the removals
+            # from alternative_path_map already report.
+            replaced_here = any(
+                location(bp) == loc and (bp, bkw) not in paired_baseline
+                for bp, bkw in before.get("alternatives", {}))
+            if not replaced_here:
                 for kw in ("anyOf", "oneOf"):
                     for ap, akw in after.get("alternatives", {}):
-                        if akw != kw or under_unmatched_alternative(ap, unmatched):
+                        if (akw != kw or (ap, akw) in paired_current
+                                or under_unmatched_alternative(ap, unmatched)):
                             continue
                         remapped_ap = remap_alternative_path(ap, path_map)
                         if location(remapped_ap) != loc:
