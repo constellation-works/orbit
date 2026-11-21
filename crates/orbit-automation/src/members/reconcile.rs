@@ -8,6 +8,7 @@ use crate::checkpoint::commit;
 use crate::delivery::digest;
 use chrono::{DateTime, Duration, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
+use orbit_types::workflow::automation;
 use orbit_types::workflow::automation::{members::*, *};
 use std::collections::BTreeSet;
 
@@ -232,7 +233,7 @@ pub(super) fn reconcile(
                 if retry_budget_remains {
                     active.attempt += 1;
                     active.action_id = None;
-                    active.action_key = format!("automation:{}:{}", active.id, active.attempt);
+                    active.action_key = automation::attempt_action_key(&active.id, active.attempt);
                     active.retry_after = now + Duration::minutes(5);
                 } else {
                     active.exhausted = true;

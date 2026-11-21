@@ -5,6 +5,7 @@ use crate::AutomationError;
 use crate::checkpoint::commit;
 use chrono::{DateTime, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
+use orbit_types::workflow::automation;
 use orbit_types::workflow::automation::*;
 
 /// Host-proven liveness and settlement facts for a claimed or admitted action.
@@ -137,7 +138,7 @@ fn settle_failed(
         if retry_budget_remains {
             attempt.attempt += 1;
             attempt.retry_after = Some(now + chrono::Duration::minutes(5));
-            attempt.action_key = format!("automation:{}:{}", attempt.batch.id, attempt.attempt);
+            attempt.action_key = automation::attempt_action_key(&attempt.batch.id, attempt.attempt);
             attempt.action_id = None;
             attempt.state = BatchState::Claimed;
         } else {
@@ -199,7 +200,7 @@ pub fn action_liveness(
             return Ok(ActionLiveness::default());
         }
         active.attempt -= 1;
-        active.action_key = format!("automation:{}:{}", active.batch.id, active.attempt);
+        active.action_key = automation::attempt_action_key(&active.batch.id, active.attempt);
         active.action_id = host.action_id(&active)?;
         if active.action_id.is_none() {
             return Ok(ActionLiveness::default());
