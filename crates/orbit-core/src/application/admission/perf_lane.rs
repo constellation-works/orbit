@@ -25,11 +25,15 @@ pub(crate) fn needs_perf_lane(task: &Task) -> bool {
 pub(crate) fn perf_lane_holder(
     live_claims: &BTreeSet<String>,
     task_lookup: &BTreeMap<String, Task>,
+    remote_claims: &BTreeSet<String>,
 ) -> Option<String> {
     task_lookup
         .values()
         .filter(|task| needs_perf_lane(task))
-        .find(|task| task.status == TaskStatus::InProgress || live_claims.contains(&task.id))
+        .find(|task| {
+            live_claims.contains(&task.id)
+                || (task.status == TaskStatus::InProgress && !remote_claims.contains(&task.id))
+        })
         .map(|task| task.id.clone())
 }
 

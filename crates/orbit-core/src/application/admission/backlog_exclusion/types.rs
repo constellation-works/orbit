@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use orbit_types::task::{Task, TaskReferenceIndex, TaskStatus};
@@ -212,6 +212,8 @@ pub(crate) struct BacklogSnapshot {
     /// selection, exclusion reasons, and the lock-wait diagnostic all name the
     /// same holder for the same selector [ORB-11973].
     pub(crate) lock_holders: BTreeMap<String, Vec<String>>,
+    /// Tasks with live execution claims on a different machine.
+    pub(crate) remote_claims: BTreeSet<String>,
     /// Backlog tasks minted over a frozen delivery batch that nears its
     /// admission deadline, with that deadline [ORB-14624]. They sort ahead of
     /// same-priority backlog in `admissible_leaves`.

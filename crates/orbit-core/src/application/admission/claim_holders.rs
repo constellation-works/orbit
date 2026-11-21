@@ -58,6 +58,18 @@ impl ClaimHolders {
         }
     }
 
+    /// Claims known to execute away from the local admission machine.
+    pub(crate) fn remote_claim_tasks(&self, local_machine: Option<&str>) -> BTreeSet<String> {
+        let Some(local_machine) = local_machine else {
+            return BTreeSet::new();
+        };
+        self.by_task
+            .values()
+            .filter(|claim| claim.executed_on.machine_id != local_machine)
+            .map(|claim| claim.task_id.clone())
+            .collect()
+    }
+
     /// Include frozen surfaces even when no active task envelope holds them.
     /// Known no-diff tasks hold no context lock; an unknown owner still does.
     pub(crate) fn extend_lock_holders(

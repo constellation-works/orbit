@@ -779,6 +779,11 @@ pub(super) fn backlog_snapshot_in_mode(
         admissible_leaves,
         excluded,
         lock_holders,
+        remote_claims: claims.remote_claim_tasks(
+            runtime
+                .automation_machine_identity()
+                .or(runtime.workspace_owner_machine_id()),
+        ),
         expiring_batches,
         dispatch_order,
         footprint_waits,

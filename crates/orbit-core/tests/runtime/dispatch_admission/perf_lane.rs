@@ -139,3 +139,70 @@ fn a_perf_task_waiting_on_the_lane_reports_it_when_no_slot_is_free() {
         "{detail}"
     );
 }
+
+#[test]
+fn perf_claim_only_holds_the_lane_on_its_execution_machine() {
+    if !isolated(
+        "dispatch_admission::perf_lane::perf_claim_only_holds_the_lane_on_its_execution_machine",
+    ) {
+        return;
+    }
+    use orbit_store::contracts::{
+        AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
+    };
+    for (machine, local) in [("remote", false), ("owner", true)] {
+        let (_root, runtime, repo) = runtime();
+        let runtime = runtime.with_automation_machine_identity(Some("owner".into()));
+        write_files(&repo, &["holder.rs", "candidate.rs"]);
+        let holder = seed(
+            &runtime,
+            Seed::named("holder")
+                .status(TaskStatus::InProgress)
+                .tags(&["performance"])
+                .files(&["holder.rs"]),
+        );
+        let candidate = seed(
+            &runtime,
+            Seed::named("candidate")
+                .tags(&["performance"])
+                .files(&["candidate.rs"]),
+        );
+        let claim = ExecutionClaim {
+            claim_id: "perf-claim".into(),
+            task_id: holder.id.clone(),
+            request_id: "request".into(),
+            executed_on: ExecutionLocation {
+                machine_id: machine.into(),
+                machine_name: None,
+            },
+            run_context: AdmissionRunContext {
+                run_id: "claim-run".into(),
+                job_name: "task_pipeline".into(),
+                machine_name: None,
+            },
+            footprint: vec!["file:holder.rs".into()],
+            reservation_id: "reservation".into(),
+            reservation_expires_at: (Utc::now() - chrono::Duration::minutes(1)).to_rfc3339(),
+            phase: ExecutionClaimPhase::Running,
+            repair: None,
+        };
+        let connection =
+            rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+        connection.execute("INSERT INTO task_coordination_rows(workspace_id, kind, row_id, payload_json, journal_id, created_at) VALUES (?1, 'distributed-execution-claim-v1', ?2, ?3, 'fixture', ?4)", rusqlite::params![runtime.workspace_id().unwrap(), claim.claim_id, serde_json::to_string(&claim).unwrap(), Utc::now().to_rfc3339()]).unwrap();
+        let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+        let wave = classify(&runtime, &drain);
+        let readiness = default_readiness(&runtime);
+        let entry = readiness_task(&readiness, &candidate.id);
+        if local {
+            let waiting = deferred(&wave, &candidate.id);
+            assert_eq!(waiting["reason"], "perf_lane_busy", "{wave:#}");
+            assert_eq!(waiting["blocking_task_ids"], json!([holder.id]));
+            assert_eq!(entry["reason"], "perf_lane_busy", "{entry}");
+            assert_eq!(entry["blocking_task_ids"], json!([holder.id]));
+        } else {
+            assert_eq!(wave["loose_task_ids"], json!([candidate.id]), "{wave:#}");
+            assert_eq!(entry["reason"], "ready", "{entry}");
+            assert_eq!(entry["eligible"], true, "{entry}");
+        }
+    }
+}
