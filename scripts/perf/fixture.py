@@ -522,8 +522,9 @@ def copy_git_metadata(snap: Snapshotter, out: Path, checkout: Path) -> dict:
         )
         if reftable:
             # Reftable keeps shared and per-worktree refs in separate stacks.
-            # Keep the shared stack, then replace its per-worktree refs and HEAD
-            # through Git so it writes a valid standalone stack in the snapshot.
+            # Keep the shared stack, then replace its per-worktree refs,
+            # pseudorefs and HEAD through Git so it writes a valid standalone
+            # stack in the snapshot.
             dest_checkout = out / "checkout"
             prefixes = ("refs/worktree", "refs/bisect", "refs/rewritten")
 
@@ -532,10 +533,20 @@ def copy_git_metadata(snap: Snapshotter, out: Path, checkout: Path) -> dict:
                                       capture_output=True, text=True)
 
             fmt = "%(refname)%00%(objectname)%00%(symref)"
-            for line in git(dest_checkout, "for-each-ref", f"--format={fmt}", *prefixes).stdout.splitlines():
+
+            def per_worktree_refs(cwd: Path) -> list[str]:
+                refs = git(cwd, "for-each-ref", f"--format={fmt}", *prefixes).stdout.splitlines()
+                root_refs = git(cwd, "for-each-ref", "--include-root-refs", f"--format={fmt}").stdout.splitlines()
+                refs.extend(
+                    line for line in root_refs
+                    if not line.startswith("refs/") and line.split("\0", 1)[0] != "HEAD"
+                )
+                return refs
+
+            for line in per_worktree_refs(dest_checkout):
                 name = line.split("\0", 1)[0]
                 git(dest_checkout, "update-ref", "--no-deref", "-d", name)
-            for line in git(checkout, "for-each-ref", f"--format={fmt}", *prefixes).stdout.splitlines():
+            for line in per_worktree_refs(checkout):
                 name, oid, target = line.split("\0")
                 if target:
                     git(dest_checkout, "symbolic-ref", name, target)

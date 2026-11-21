@@ -985,9 +985,12 @@ class FixtureGitMetadataTests(unittest.TestCase):
         init = self.git(source_repo.parent, "init", "--ref-format=reftable", str(self.base / "probe"), check=False)
         if init.returncode:
             self.skipTest("Git does not support reftable repositories")
-        base_sha, _ = self.init_primary_repo(source_repo, "--ref-format=reftable")
+        base_sha, primary_sha = self.init_primary_repo(source_repo, "--ref-format=reftable")
+        self.git(source_repo, "update-ref", "ORIG_HEAD", primary_sha)
+        self.git(source_repo, "update-ref", "CHERRY_PICK_HEAD", primary_sha)
         linked = self.base / "linked"
         self.git(source_repo, "worktree", "add", "-b", "task-branch", str(linked), base_sha)
+        self.git(linked, "update-ref", "ORIG_HEAD", base_sha)
         self.git(linked, "update-ref", "refs/worktree/task-marker", base_sha)
         (linked / "staged.txt").write_text("staged\n", encoding="utf-8")
         self.git(linked, "add", "staged.txt")
@@ -1005,6 +1008,8 @@ class FixtureGitMetadataTests(unittest.TestCase):
         self.assert_standalone_restored_git(restored, base_sha, "task-branch", ["shared.txt", "staged.txt"])
         self.assertEqual(self.git(restored / "checkout", "rev-parse", "refs/worktree/task-marker").stdout.strip(), base_sha)
         self.assertNotEqual(self.git(restored / "checkout", "rev-parse", "--verify", "refs/worktree/primary-marker", check=False).returncode, 0)
+        self.assertEqual(self.git(restored / "checkout", "rev-parse", "--verify", "ORIG_HEAD").stdout.strip(), base_sha)
+        self.assertNotEqual(self.git(restored / "checkout", "rev-parse", "--verify", "CHERRY_PICK_HEAD", check=False).returncode, 0)
 
     def test_snapshot_and_restore_preserve_linked_checkout_detached_commit_and_index(self):
         source_home = self.base / "source"
