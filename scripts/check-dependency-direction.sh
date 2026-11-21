@@ -605,7 +605,10 @@ def inline_module_suffixes(tokens):
             if (tok == "$" and idx + 1 < limit and ident.fullmatch(transcriber[idx + 1][0])
                     and not in_non_item and in_item_ctx):
                 var_name = transcriber[idx + 1][0]
-                emitted_vars.setdefault(var_name, set()).add(tuple(t_mods))
+                # `$name` in `mod $name { ... }` supplies the module name; it
+                # is not a separate emitted item at the surrounding depth.
+                if idx == 0 or transcriber[idx - 1][0] != "mod":
+                    emitted_vars.setdefault(var_name, set()).add(tuple(t_mods))
             if tok in matching:
                 is_rep = tok == "(" and idx >= 1 and transcriber[idx - 1][0] == "$"
                 is_meta_expr = tok == "{" and idx >= 1 and transcriber[idx - 1][0] == "$"
@@ -958,10 +961,13 @@ def inline_module_suffixes(tokens):
             emitted_vars = t_info["emitted_vars"]
             stripped = set()
             non_item_braces = set()
-            for mod_key, brace_abs, cvars in mod_matches:
+            for _, brace_abs, cvars in mod_matches:
                 if not any(v in emitted_vars for v in cvars):
                     non_item_braces.add(brace_abs)
-                elif not any(mod_key in mods for v in cvars for mods in emitted_vars.get(v, ())):
+                else:
+                    # These braces are matcher syntax. If the transcriber
+                    # emits the captured items, count its output module prefix
+                    # below instead of also counting the consumed input braces.
                     stripped.add(brace_abs)
             non_item_ranges = [
                 span for v, spans in bindings.items()
@@ -990,15 +996,41 @@ def inline_module_suffixes(tokens):
                     stripped |= sub_res["stripped"]
                     non_item_braces |= sub_res["non_item_braces"]
                     non_item_ranges.extend(sub_res["non_item_ranges"])
-            # Check if every emitted var is wrapped in a uniform literal `mod` prefix
+            # Keep a uniform module prefix for every emitted variable. Module
+            # names captured by the matcher resolve from the invocation; if a
+            # repeated capture has different names, its placeholder still
+            # preserves the module level needed for `super` resolution.
+            def resolved_mod_prefix(mods):
+                prefix = []
+                for kind, name in mods:
+                    if kind == "lit":
+                        prefix.append(name)
+                        continue
+                    spans = bindings.get(name, ())
+                    bound_names = []
+                    for span_start, span_end in spans:
+                        bound_name, bound_end = read_ident(tokens, span_start, span_end)
+                        if bound_name is None or bound_end != span_end:
+                            bound_names = []
+                            break
+                        bound_names.append(bound_name)
+                    if bound_names and all(bound_name == bound_names[0]
+                                           for bound_name in bound_names):
+                        prefix.append(bound_names[0])
+                    else:
+                        prefix.append(f"${name}")
+                return tuple(prefix)
+
             added_mods = ()
-            lit_prefixes = [
-                tuple(item[1] for item in mods if item[0] == "lit")
+            emitted_prefixes = [
+                resolved_mod_prefix(mods)
                 for v in emitted_vars if v in bindings
                 for mods in emitted_vars[v]
             ]
-            if lit_prefixes and all(p == lit_prefixes[0] for p in lit_prefixes) and lit_prefixes[0]:
-                added_mods = lit_prefixes[0]
+            if (emitted_prefixes
+                    and all(prefix == emitted_prefixes[0] for prefix in emitted_prefixes)
+                    and emitted_prefixes[0]):
+                added_mods = emitted_prefixes[0]
             return {
                 "non_item": False,
                 "stripped": stripped,

@@ -1784,6 +1784,25 @@ class RelativeImportTests(unittest.TestCase):
              "}\n"),
         ], rejected=True)
 
+    def test_metavariable_named_macro_wrapper_counts_inline_module_depth(self):
+        # A module emitted as `mod $name` contributes a lexical module level,
+        # just like a literal-name wrapper. Three `super` segments from the
+        # inner module reach application::adapter; four escape to crate::adapter.
+        self.check_rows([
+            ("named_wrap_ok.rs",
+             "macro_rules! named { ($n:ident, $i:item) => { mod $n { $i } }; }\n"
+             "named!(outer, mod inner {\n"
+             "    pub fn check() { let _ = super::super::super::adapter::Probe; }\n"
+             "});\n"),
+        ], rejected=False)
+        self.check_rows([
+            ("named_wrap_escape.rs",
+             "macro_rules! named { ($n:ident, $i:item) => { mod $n { $i } }; }\n"
+             "named!(outer, mod inner {\n"
+             "    pub fn check() { let _ = super::super::super::super::adapter::Probe; }\n"
+             "});\n"),
+        ], rejected=True)
+
     def test_large_token_tree_invocation_keeps_inline_module_depth(self):
         # [ORB-26595] A `$($t:tt)*` pass-through over about 2000 tokens nested
         # the arm matcher past Python's recursion limit and crashed the guard
