@@ -131,11 +131,16 @@ spend**, from the same provider-limit observations that gating reads.
    [ORB-17638] already persists a reassignment at this seam for auto-task crews.
 2. **Creation still draws.** The creation draw keeps its role: OS routing, `runs_on`, and a crew
    to show before the task runs. It uses pressure too, but admission makes the final choice.
-3. **Other pool draws share the seam.** Activity pools and review crew pools still call
-   `weighted_draw`. They take the same multiplier through one helper applied after limit
-   narrowing, so no active draw site computes pressure on its own. The original shared-seam
-   rollout also covered finding-verification partitions and agent explore; those paths were
-   later retired with [ORB-22844] and [ORB-20383], respectively.
+3. **Other pool draws share the seam.** Ordinary complexity/purpose activity pools and review
+   crew pools still call `weighted_draw`. They remove candidates covered by a provider limit
+   when another eligible candidate remains, then apply the same multiplier through one helper.
+   The final-recovery activity and escalation-triage purpose/inspection fallback draws also
+   call the shared draw, but do not narrow candidates by provider threshold. In those draws, a
+   non-exhausted reading above the threshold keeps its pressure-weighted tickets; only a live
+   exhausted reading can reduce its tickets to zero when another drawable candidate has
+   quota. No active draw site computes pressure on its own. The original shared-seam rollout also covered
+   finding-verification partitions and agent explore; those paths were later retired with
+   [ORB-22844] and [ORB-20383], respectively.
 4. **Pull drains.** A follower spends its own login ([ORB-16324]). The owner must never weigh a
    follower's run with the owner's readings. On a claimed leaf, the follower re-draws eligible
    automatic sources (`pool:`, `purpose:`, or `default`) from its own readings; a `type:` source
