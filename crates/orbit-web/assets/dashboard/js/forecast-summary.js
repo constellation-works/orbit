@@ -2,7 +2,7 @@
 // card: formatting, why an adjusted forecast is unavailable, the compact
 // summary and its link. Nothing here reads the page's selected view.
 
-import { el, scopedHashHref, relativeTime } from './common.js';
+import { el, scopedHashHref, relativeTime, formatDate } from './common.js';
 
 export const UNREPORTED_FORECAST_REASON = "Forecast unavailable, reason not reported";
 
@@ -315,9 +315,12 @@ export function forecastDrainScope(source) {
   const scheduled = held.filter((row) => row.drain_hold.kind === "scheduled");
   const excluded = held.filter((row) => row.drain_hold.kind === "excluded");
   const next = scheduled.map((row) => row.drain_hold.starts_at).filter(Boolean).sort()[0];
+  // The same dashboard-clock calendar day the Forecast table shows, not the
+  // UTC day of the `starts_at` string.
+  const nextDay = next ? formatDate(next) : "";
   const reasons = [...new Set(excluded.map((row) => row.drain_hold.reason === "no_drain_tag" ? "no-drain" : row.drain_hold.reason).filter(Boolean))];
   const compact = [
-    scheduled.length ? `${scheduled.length} scheduled${next ? ` · starts ${next.slice(0, 10)}` : ""}` : null,
+    scheduled.length ? `${scheduled.length} scheduled${nextDay && nextDay !== "-" ? ` · starts ${nextDay}` : ""}` : null,
     excluded.length ? `${excluded.length} excluded${reasons.length ? ` · ${reasons.join(", ")}` : ""}` : null,
   ].filter(Boolean).join(" · ");
   const lines = held.map((row) => `${row.drain_hold.kind === "scheduled" ? "Scheduled" : "Excluded"}: ${row.title || "Untitled task"} — ${row.drain_hold.detail || row.drain_hold.reason}`);

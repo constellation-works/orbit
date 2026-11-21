@@ -599,7 +599,9 @@ function buildAuditSummaryTable(items, cols, onRowClick) {
     const row = el("tr");
     if (onRowClick) {
       row.classList.add("clickable");
-      row.addEventListener("click", () => onRowClick(item));
+      // The row is the control. A cell title would be a native tooltip on
+      // that button; the cells already show their values.
+      makeToggleRow(row, { onToggle: () => onRowClick(item) });
     }
     for (const c of cols) {
       const val = c.format ? c.format(item[c.key]) : item[c.key];
@@ -607,7 +609,8 @@ function buildAuditSummaryTable(items, cols, onRowClick) {
         const value = col.format ? col.format(item[col.key]) : item[col.key];
         return `${col.title || col.label}: ${value ?? "-"}`;
       }).join("; ");
-      const td = el("td", { class: `${c.num ? "num" : ""} ${c.secondary ? "summary-secondary" : ""}`, text: val, title });
+      const td = el("td", { class: `${c.num ? "num" : ""} ${c.secondary ? "summary-secondary" : ""}`, text: val });
+      if (!onRowClick) td.title = title;
       if (c.render) td.textContent = c.render(item[c.key], item, td);
       td.dataset.column = c.key;
       row.appendChild(td);
@@ -1018,7 +1021,7 @@ function renderAudit(events, ctx) {
     const targetValue = ev.target_id || ev.target_type || "";
     const target = targetValue === ev.tool_name ? "" : targetValue;
     const cmd = ev.subcommand ? `${ev.command} ${ev.subcommand}` : ev.command;
-    const tr = el("tr", { class: "audit-row", title: `event ${ev.id}` });
+    const tr = el("tr", { class: "audit-row" });
     tr.dataset.key = `audit-${ev.id}`;
     // Expansion is part of the row's identity: without it the keyed diff reuses
     // the collapsed node and drops the `expanded` class and `aria-expanded`
@@ -1026,13 +1029,20 @@ function renderAudit(events, ctx) {
     // Include the displayed relative age so syncNodes rebuilds the row when
     // the age advances instead of reusing the first-render age forever.
     tr.dataset.hash = `${ev.id}-${ev.status}-${exit}-${expandedAuditIds.has(ev.id)}-${formatAge(ev.timestamp)}`;
-    tr.appendChild(el("td", { class: "c-time", text: formatAge(ev.timestamp), title: formatDateTime(ev.timestamp) }));
+    // The row is a button, so it carries no native tooltip. The event id, the
+    // absolute time and an unconfirmed caller stay in the accessible description.
+    const described = [`Event ${ev.id}`];
+    const when = formatDateTime(ev.timestamp);
+    if (when && when !== "-") described.push(when);
+    if (ev.role === "unverified") described.push("Caller identity has not been confirmed");
+    tr.setAttribute("aria-description", described.join(". "));
+    tr.appendChild(el("td", { class: "c-time", text: formatAge(ev.timestamp) }));
     const statusTd = el("td", { class: "c-status" });
     statusTd.appendChild(el("span", { class: `audit-status ${ev.status}`, text: ev.status }));
     tr.appendChild(statusTd);
-    tr.appendChild(el("td", { class: "c-role", text: auditActorLabel(ev.role), title: ev.role === "unverified" ? "unverified: caller identity has not been confirmed" : ev.role || "" }));
-    tr.appendChild(el("td", { class: "c-command", text: ev.tool_name || cmd || "-", title: ev.tool_name || cmd || "" }));
-    tr.appendChild(el("td", { class: "c-target", text: target, title: target }));
+    tr.appendChild(el("td", { class: "c-role", text: auditActorLabel(ev.role) }));
+    tr.appendChild(el("td", { class: "c-command", text: ev.tool_name || cmd || "-" }));
+    tr.appendChild(el("td", { class: "c-target", text: target }));
     tr.appendChild(el("td", { class: "num c-duration", text: fmtDuration(ev.duration_ms) }));
     tr.appendChild(el("td", { class: `${exitClass} c-exit`, text: exit == null ? "-" : String(exit) }));
     if (expandedAuditIds.has(ev.id)) tr.classList.add("expanded");

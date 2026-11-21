@@ -26,6 +26,12 @@ const NOTICE_MS = 10000;
 
 export function resetTopics() { drawer = null; bulkRemoval = null; workflowQuery = ''; workflowCollapsed = new Set(); workflowSearchCollapsed = new Set(); expandedValues = new Set(); rawScope = null; rawText = null; notice = null; landedOtherHash = null; }
 
+// The Machine page's key drawer is this module's state. config.js's host
+// poll must not rebuild the tab while it is open.
+export function topicDrawerOpen() {
+  return drawer != null;
+}
+
 export function flatten(payload) {
   return (payload?.sections || []).flatMap((s) => s.keys || []);
 }
@@ -98,21 +104,24 @@ const WORKFLOW_SECTIONS = [
   ['Steering', (k) => k.startsWith('workflow.mid_run_steering.')],
 ];
 
-function openDrawer(row, context, lockGlobal) {
+function openDrawer(row, context, lockGlobal, sectionTitle) {
   // The drawer rows stay reachable behind it, so an Edit on another row must
   // not replace a write still in flight: its result would be dropped.
   if (!context.canEdit || row.settable === false || drawer?.pending) return;
   drawer = { row, scope: (lockGlobal || row.global_only) ? 'global' : (row.source?.layer === 'global' ? 'global' : 'workspace'),
     text: isStructured(row) ? JSON.stringify(row.value ?? (isTable(row) ? {} : []), null, 2) : Array.isArray(row.value) ? row.value.join('\n') : display(row.value) === '–' ? '' : String(row.value ?? ''),
-    error: null, pending: false, visit: captureWorkspaceVisit(), lockGlobal: !!(lockGlobal || row.global_only) };
+    error: null, pending: false, visit: captureWorkspaceVisit(), lockGlobal: !!(lockGlobal || row.global_only),
+    sectionTitle: sectionTitle || null };
   context.rerender?.();
   document.querySelector('.config-drawer .settings-input')?.focus();
 }
 // Closing the drawer rebuilds the page, so the Edit control that opened it is
 // gone. Focus goes to the rebuilt Edit control for the same key; a row that is
 // no longer shown keeps whatever focus the rerender left.
-function focusRowEdit(key) {
-  const row = [...document.querySelectorAll('#config-body [data-key]')].find((node) => node.dataset.key === key);
+function focusRowEdit(key, sectionTitle) {
+  const rows = [...document.querySelectorAll('#config-body [data-key]')].filter((node) => node.dataset.key === key);
+  const section = sectionTitle ? sectionSlug(sectionTitle) : '';
+  const row = (section && rows.find((node) => node.id.startsWith(`key-${section}-`))) || rows[0];
   row?.querySelector('.settings-edit')?.focus();
 }
 function closeDrawer(session, context) {
@@ -121,7 +130,7 @@ function closeDrawer(session, context) {
   if (session.pending) return;
   drawer = null;
   context.rerender?.();
-  focusRowEdit(session.row.key);
+  focusRowEdit(session.row.key, session.sectionTitle);
 }
 function shellQuote(text) {
   return `'${text.replace(/'/g, "'\\''")}'`;
@@ -241,11 +250,23 @@ function tagsNode(entries) {
   return el('div', { class: 'settings-tags' }, entries.map(([text, note]) =>
     el('span', { class: 'badge mono', title: note == null ? text : `${text} ${note}` }, [text, note == null ? null : el('span', { class: 'settings-tag-note', text: note })])));
 }
-// A crew pool as tags, each with its share of the draw (`name:weight`, weight 1 when absent).
+// A missing weight is one ticket. Weight 0 parks the crew: it stays listed
+// and takes none of the draw (`CrewPoolEntry`).
+function poolWeight(raw) {
+  if (raw == null || String(raw).trim() === '') return 1;
+  const weight = Number(raw);
+  return Number.isFinite(weight) ? weight : 1;
+}
+// A crew pool as tags, each with its share of the draw (`name:weight`).
+// Shares use every weight, so a parked entry is 0% and the others split
+// only what still draws.
 function poolTags(values) {
-  const parts = values.map((v) => { const [name, w] = String(v).split(':'); return { name, weight: Number(w) || 1 }; });
+  const parts = values.map((v) => { const [name, w] = String(v).split(':'); return { name, weight: poolWeight(w) }; });
   const total = parts.reduce((sum, p) => sum + p.weight, 0);
-  return tagsNode(parts.map((p) => [p.name, `${total ? Math.round((p.weight / total) * 100) : 0}%`]));
+  return tagsNode(parts.map((p) => {
+    const share = total ? Math.round((p.weight / total) * 100) : 0;
+    return [p.name, p.weight === 0 ? `${share}% (parked)` : `${share}%`];
+  }));
 }
 // A table, or a list of tables, as key/value lines; past three the rest sit
 // behind an "N more" toggle whose state survives a re-render.
@@ -308,7 +329,7 @@ function valueMeta(row) {
 function rowNode(row, context, opts = {}) {
   let action = null;
   if (context.canEdit && row.settable !== false && !opts.readOnly) {
-    action = el('div', { class: 'settings-act' }, [settingsEditButton(() => openDrawer(row, context, opts.lockGlobal), `Edit ${row.key}`)]);
+    action = el('div', { class: 'settings-act' }, [settingsEditButton(() => openDrawer(row, context, opts.lockGlobal, opts.sectionTitle), `Edit ${row.key}`)]);
   } else if (row.read_only_reason || opts.readOnly) {
     action = settingsReadOnlyAction(row.read_only_reason);
   }
@@ -320,8 +341,25 @@ function rowNode(row, context, opts = {}) {
     dim: opts.inactive,
   });
   node.dataset.key = row.key;
-  node.id = `key-${row.key.replace(/[^a-z0-9]+/gi, '-')}`;
+  node.id = rowDomId(row.key, opts.sectionTitle, opts.usedIds);
   return node;
+}
+// One id per rendered row. The section keeps a key that also appears in
+// another section (Settings › Other lists some keys twice) from sharing an
+// id, and a suffix separates keys whose slugs collide (`a.b` and `a-b`).
+function rowDomId(key, sectionTitle, used) {
+  const slug = String(key).replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '') || 'key';
+  const section = sectionSlug(sectionTitle || 'settings');
+  let id = `key-${section}-${slug}`;
+  if (used) {
+    let n = 2;
+    while (used.has(id)) {
+      id = `key-${section}-${slug}-${n}`;
+      n += 1;
+    }
+    used.add(id);
+  }
+  return id;
 }
 function sectionSlug(title) {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -332,7 +370,8 @@ function keySection(title, rows, context, opts = {}) {
   const lead = opts.lead || [];
   if (!rows.length && !lead.length) body.appendChild(el('div', { class: 'settings-empty', text: 'No keys in this section.' }));
   body.append(...lead);
-  for (const r of rows) body.appendChild(rowNode(r, context, opts));
+  const used = new Set();
+  for (const r of rows) body.appendChild(rowNode(r, context, { ...opts, sectionTitle: title, usedIds: used }));
   return section;
 }
 
@@ -351,7 +390,7 @@ async function submitDrawerMutation(session, context, request) {
     // The reload can outlive its visit: a switch to another workspace while it
     // is in flight superseded it, and that visit's editor must keep focus. Only
     // an uninterrupted save returns focus to its Edit control.
-    if (session.visit.isCurrent() && !drawer) focusRowEdit(session.row.key);
+    if (session.visit.isCurrent() && !drawer) focusRowEdit(session.row.key, session.sectionTitle);
   } catch (error) {
     if (!ownsDrawerMutation(session)) return;
     session.pending = false; session.error = error.message || String(error);
@@ -656,7 +695,8 @@ export function renderMachine(body, payload, context, throttleNode) {
   const nodes = [];
   const identity = ['machine.id','machine.name','machine.task_prefix'].map((k) => map.get(k)).filter(Boolean);
   const idSec = settingsSection('Machine identity', { count: keyCount(identity.length) });
-  for (const r of identity) idSec.body.appendChild(rowNode(r, context, { lockGlobal: true, readOnly: r.key !== 'machine.name' }));
+  const identityUsed = new Set();
+  for (const r of identity) idSec.body.appendChild(rowNode(r, context, { lockGlobal: true, readOnly: r.key !== 'machine.name', sectionTitle: 'Machine identity', usedIds: identityUsed }));
   nodes.push(idSec.section);
   nodes.push(keySection('Auto-concurrency', flatten(eff).filter((r) => r.key.startsWith('machine.auto_concurrency.')), context, { lockGlobal: true }));
   nodes.push(keySection('Machine', flatten(eff).filter((r) => r.key.startsWith('machine.') && !r.key.startsWith('machine.auto_concurrency.') && !identity.includes(r)), context, { lockGlobal: true }));
@@ -771,7 +811,9 @@ export function renderOther(body, payload, context) {
   // raw-file reads, reloads and drawer rerenders. Other keys route elsewhere.
   const linked = new URLSearchParams((window.location.hash.split('?')[1] || '')).get('key');
   if (linked && window.location.hash !== landedOtherHash && rows.some((r) => r.key === linked)) {
-    const target = document.getElementById(`key-${linked.replace(/[^a-z0-9]+/gi, '-')}`);
+    // The Other list is rendered first, so a key that is also in the repeat
+    // section scrolls to that first copy. Ids differ per row.
+    const target = [...document.querySelectorAll('#config-body [data-key]')].find((node) => node.dataset.key === linked);
     if (target && typeof target.scrollIntoView === 'function') {
       target.scrollIntoView({ block: 'start' });
       landedOtherHash = window.location.hash;

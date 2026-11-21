@@ -15,7 +15,7 @@
 // module owns the tab, Crews and the throttle panel.
 
 import { captureFocus, captureWorkspaceVisit, el, fetchJson, formatDateTime, getWorkspace, hostWriteRefusal, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel, teardownNode } from './common.js';
-import { renderExecution, renderMachine, renderOther, renderReview, renderWorkflow, resetTopics, workspacePolicyMissing } from './config-topics.js';
+import { renderExecution, renderMachine, renderOther, renderReview, renderWorkflow, resetTopics, topicDrawerOpen, workspacePolicyMissing } from './config-topics.js';
 import { fetchHostResourcePayload, hostReading, hostVerdict, onHostResources } from './host-resources.js';
 import { renderSettingsBar, settingsEditButton, settingsKeyName, settingsRow, settingsRowSource, settingsSearchField, settingsSection, settingsSource, settingsSourceIsSet } from './settings-ui.js';
 
@@ -67,10 +67,13 @@ export function initConfig() {
     resetTopics();
   });
   // Live readings follow the topbar's poll. A rebuild would discard an open
-  // editor's focus, so it waits until nothing is being edited.
+  // editor's focus, undo history and IME input, so it waits until nothing is
+  // being edited. The Machine key drawer lives in config-topics, separate
+  // from this module's crew editor.
   onHostResources((host) => {
-    if (activeSubtab !== "machine" || !lastPayload || editing) return;
+    if (activeSubtab !== "machine" || !lastPayload) return;
     lastPayload = { ...lastPayload, host };
+    if (editing || topicDrawerOpen()) return;
     render(lastPayload);
   });
 }

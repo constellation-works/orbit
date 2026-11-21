@@ -206,7 +206,7 @@ function spaceRow(space, current) {
   const open = Number(space.open_proposals) || 0;
   const caps = space.caps || {};
   const button = el("button", { class: "title", text: space.key, type: "button" });
-  const row = el("div", { class: "knowledge-row memory-row", title: space.key }, [
+  const row = el("div", { class: "knowledge-row memory-row" }, [
     el("div", { class: "top" }, [
       el("span", { class: "id", text: revision }),
       el("span", { class: "spacer" }),

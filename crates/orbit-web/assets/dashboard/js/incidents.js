@@ -631,7 +631,9 @@ function visibleGroups(groups) {
 }
 
 function causeCodeNode(cause) {
-  return el("span", { class: "incident-code", text: cause.label, title: `Cause: ${cause.label}` });
+  // The label is already the visible text. A title restates it, and inside a
+  // signature row that title is a native tooltip on the row button (STD-07 §R41).
+  return el("span", { class: "incident-code", text: cause.label });
 }
 
 // A signature row. Beneath a cause header it is indented (`child`); a cause
@@ -661,9 +663,14 @@ function rowNode(group, axis, now, cap, { child = false, flat = false } = {}) {
       }),
     ]),
     track,
-    el("span", { class: "incident-count", text: countLabel(group), title: countTitle(group, cap) }),
-    el("span", { class: `incident-last${live ? " live" : ""}`, text: lastLabel, title: group.last ? `last seen ${formatDateTime(group.last)}` : "" }),
+    el("span", { class: "incident-count", text: countLabel(group) }),
+    el("span", { class: `incident-last${live ? " live" : ""}`, text: lastLabel }),
   ]);
+  const described = [
+    countTitle(group, cap),
+    group.last ? `Last seen ${formatDateTime(group.last)}` : "",
+  ].filter(Boolean).join(". ");
+  if (described) row.setAttribute("aria-description", described);
   row.dataset.key = `incident-${group.key}`;
   row.dataset.hash = JSON.stringify([selected, live, child, lastLabel, group.events, group.incidents.length, row.textContent]);
   row.incidentGroupKey = group.key;
