@@ -96,7 +96,7 @@ disk_gate() {
 snapshot_worktree() {
   local wt="$1"
   local head head_tree git_dir common_dir real_objects index objects tree commit
-  local src_index src_index_dir seed_git object_format shared dir
+  local src_index src_index_dir seed_git object_format shared dir name
   head="$(git -C "$wt" rev-parse --verify --quiet 'HEAD^{commit}' || true)"
   [[ -n "$head" ]] || refuse "cannot resolve HEAD to a commit in $wt"
   head_tree="$(git -C "$wt" rev-parse --verify --quiet 'HEAD^{tree}' || true)"
@@ -150,10 +150,17 @@ snapshot_worktree() {
     fi
     cat "$src_index" > "$seed_git/index"
     src_index_dir="$(cd "$(dirname "$src_index")" && pwd -P)"
+    # Copy each sidecar best-effort. ls-files below opens only the sidecar the
+    # copied index references, so a retired sidecar that Git expires or that
+    # cannot be read is skipped. If the referenced one is missing or unreadable,
+    # ls-files fails and the snapshot refuses.
     for dir in "$git_dir" "$src_index_dir" "$common_dir"; do
       for shared in "$dir"/sharedindex.*; do
         [[ -f "$shared" ]] || continue
-        cat "$shared" > "$seed_git/${shared##*/}"
+        name="${shared##*/}"
+        if [[ ! -e "$seed_git/$name" ]] && ! cat "$shared" > "$seed_git/$name" 2>/dev/null; then
+          rm -f "$seed_git/$name"
+        fi
       done
     done
     env -u GIT_INDEX_FILE -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
