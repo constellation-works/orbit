@@ -1,12 +1,13 @@
 use std::fs;
 
 use chrono::Utc;
+use orbit_core::AuditEventStatus;
 use orbit_core::application::auto_tasks::{SchedulerOptions, run_auto_task_scheduler_at};
 use orbit_types::workflow::AutoTaskSchedule;
 use serde_json::{Value, json};
 
 use super::auto_tasks;
-use super::support::{Fixture, isolated, json_ok};
+use super::support::{Fixture, error_code, isolated, json_ok};
 
 /// The dashboard's whole-value timing edits keep guards in durable definitions;
 /// stale editors cannot overwrite them. These six carrier shapes are posted
@@ -195,6 +196,237 @@ fn dashboard_timing_edits_persist_guards_and_refuse_stale_values() {
                     "a closed guard must not mint: {report:?}"
                 );
             }
+        },
+    );
+}
+
+fn denied_schedule_audits(fixture: &Fixture, operation: &str) -> Vec<orbit_core::AuditEvent> {
+    fixture
+        .runtime
+        .list_audit_events_with_kind(
+            None,
+            None,
+            Some(operation.into()),
+            Some(AuditEventStatus::Denied),
+            None,
+            20,
+        )
+        .unwrap()
+}
+
+fn arguments_of(event: &orbit_core::AuditEvent) -> Value {
+    serde_json::from_str(event.arguments_json.as_deref().unwrap_or("{}")).unwrap()
+}
+
+/// A mistyped nested trigger or schedule must still leave a denied audit for
+/// a non-operator, and an `invalid_schedule` refusal for an operator, without
+/// writing the definition.
+#[test]
+fn invalid_nested_timing_edits_audit_denials_and_refuse_operators() {
+    isolated(
+        "schedule_edit_guards::invalid_nested_timing_edits_audit_denials_and_refuse_operators",
+        || {
+            let fixture = Fixture::new();
+            fixture.job("task_pilot_pipeline");
+            let routines = fixture.work.join("routines");
+            fs::create_dir_all(&routines).unwrap();
+            fs::write(
+                routines.join("denied-routine.yaml"),
+                "schemaVersion: 1\nname: denied-routine\nenabled: true\ntarget: job:task_pilot_pipeline\ntrigger: {\"cron\":\"* * * * *\",\"missed_run\":\"skip\"}\n",
+            )
+            .unwrap();
+            auto_tasks::seed_auto_task_with_schedule(
+                &fixture,
+                "denied-auto",
+                AutoTaskSchedule::cron("* * * * *"),
+            );
+            let stored_schedule = serde_json::to_value(
+                fixture
+                    .runtime
+                    .auto_task_show("denied-auto")
+                    .unwrap()
+                    .unwrap()
+                    .schedule,
+            )
+            .unwrap();
+            let agent = fixture.server(false);
+            let operator = fixture.server(true);
+            let report = json_ok(operator.get("/api/routines?workspace=ws_http_fixture"));
+            let row = report["routines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["name"] == "denied-routine")
+                .unwrap();
+            let stored_trigger = row["trigger"].clone();
+            let routine_url = "/api/routines/trigger?workspace=ws_http_fixture";
+            let schedule_url = "/api/auto-tasks/schedule?workspace=ws_http_fixture";
+
+            let mut bad_trigger = stored_trigger.clone();
+            bad_trigger["cron"] = json!(15);
+            let mut bad_schedule = stored_schedule.clone();
+            bad_schedule["cron"] = json!(15);
+            let source = row["source"].clone();
+            let target = row["target"].clone();
+
+            let cases = [
+                (
+                    "routine.set_trigger",
+                    routine_url,
+                    "denied-routine",
+                    json!({
+                        "name": "denied-routine",
+                        "source": source.clone(),
+                        "target": target.clone(),
+                        "machine_name": "fixture",
+                        "expected_trigger": bad_trigger.clone(),
+                        "trigger": stored_trigger.clone(),
+                    }),
+                    "trigger",
+                    stored_trigger.clone(),
+                ),
+                (
+                    "routine.set_trigger",
+                    routine_url,
+                    "denied-routine",
+                    json!({
+                        "name": "denied-routine",
+                        "source": source.clone(),
+                        "target": target.clone(),
+                        "machine_name": "fixture",
+                        "expected_trigger": stored_trigger.clone(),
+                        "trigger": bad_trigger.clone(),
+                    }),
+                    "trigger",
+                    bad_trigger.clone(),
+                ),
+                (
+                    "auto_task.set_schedule",
+                    schedule_url,
+                    "denied-auto",
+                    json!({
+                        "name": "denied-auto",
+                        "expected_schedule": bad_schedule.clone(),
+                        "schedule": stored_schedule.clone(),
+                    }),
+                    "schedule",
+                    stored_schedule.clone(),
+                ),
+                (
+                    "auto_task.set_schedule",
+                    schedule_url,
+                    "denied-auto",
+                    json!({
+                        "name": "denied-auto",
+                        "expected_schedule": stored_schedule.clone(),
+                        "schedule": bad_schedule.clone(),
+                    }),
+                    "schedule",
+                    bad_schedule.clone(),
+                ),
+            ];
+
+            for (operation, url, name, body, argument, submitted) in &cases {
+                let before = denied_schedule_audits(&fixture, operation);
+                let denied = error_code(
+                    agent.send("POST", url, body.clone()),
+                    403,
+                    "authorization_denied",
+                );
+                assert_eq!(denied["operation"], json!(*operation), "{denied}");
+                let after = denied_schedule_audits(&fixture, operation);
+                assert_eq!(after.len(), before.len() + 1, "{operation}: {after:?}");
+                assert!(
+                    after.iter().all(|event| {
+                        event.command == "dashboard.operations"
+                            && event.target_id.as_deref() == Some(name)
+                            && event.workspace_id.as_deref() == Some("ws_http_fixture")
+                            && event.status == AuditEventStatus::Denied
+                    }),
+                    "{after:?}"
+                );
+                assert!(
+                    after
+                        .iter()
+                        .any(|event| arguments_of(event).get(*argument) == Some(submitted)),
+                    "{operation} denied row must record the submitted {argument}: {after:?}"
+                );
+            }
+
+            let routine_after = json_ok(operator.get("/api/routines?workspace=ws_http_fixture"));
+            let routine_now = routine_after["routines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["name"] == "denied-routine")
+                .unwrap()["trigger"]
+                .clone();
+            assert_eq!(
+                routine_now, stored_trigger,
+                "a denied trigger edit must not write"
+            );
+            let schedule_now = serde_json::to_value(
+                fixture
+                    .runtime
+                    .auto_task_show("denied-auto")
+                    .unwrap()
+                    .unwrap()
+                    .schedule,
+            )
+            .unwrap();
+            assert_eq!(
+                schedule_now, stored_schedule,
+                "a denied schedule edit must not write"
+            );
+
+            let routine_denials = denied_schedule_audits(&fixture, "routine.set_trigger").len();
+            let schedule_denials = denied_schedule_audits(&fixture, "auto_task.set_schedule").len();
+            for (operation, url, body) in [
+                ("routine.set_trigger", routine_url, cases[0].3.clone()),
+                ("routine.set_trigger", routine_url, cases[1].3.clone()),
+                ("auto_task.set_schedule", schedule_url, cases[2].3.clone()),
+                ("auto_task.set_schedule", schedule_url, cases[3].3.clone()),
+            ] {
+                let refused = error_code(operator.send("POST", url, body), 400, "invalid_schedule");
+                assert!(
+                    refused["error"]
+                        .as_str()
+                        .is_some_and(|error| error.starts_with("invalid request body:")),
+                    "{refused}"
+                );
+                assert_eq!(
+                    denied_schedule_audits(&fixture, operation).len(),
+                    if operation == "routine.set_trigger" {
+                        routine_denials
+                    } else {
+                        schedule_denials
+                    },
+                    "an operator refusal must not add a denied audit"
+                );
+            }
+            let routine_after_operator =
+                json_ok(operator.get("/api/routines?workspace=ws_http_fixture"));
+            assert_eq!(
+                routine_after_operator["routines"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["name"] == "denied-routine")
+                    .unwrap()["trigger"],
+                stored_trigger
+            );
+            assert_eq!(
+                serde_json::to_value(
+                    fixture
+                        .runtime
+                        .auto_task_show("denied-auto")
+                        .unwrap()
+                        .unwrap()
+                        .schedule,
+                )
+                .unwrap(),
+                stored_schedule
+            );
         },
     );
 }
