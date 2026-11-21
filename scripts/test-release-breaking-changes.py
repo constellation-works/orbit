@@ -975,6 +975,83 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["signals"], [])
         self.assertEqual(report["bump"], "patch")
 
+    def test_unreachable_literal_conditional_arms_stay_patch_and_reachable_decide_minor(self):
+        # Changes inside `then` under `if: false` or `else` under `if: true`
+        # (including alongside another allOf conditional sharing `[then]`/`[else]`)
+        # cannot reject any input and must stay patch with no MCP signal.
+        unreachable_cases = (
+            ("false-then-required", {"if": False, "then": {}}, {"if": False, "then": {"required": ["a"]}}),
+            ("false-then-type", {"if": False, "then": {}}, {"if": False, "then": {"type": "string"}}),
+            ("false-then-false", {"if": False, "then": {"type": "string"}}, {"if": False, "then": False}),
+            ("true-else-required", {"if": True, "else": {}}, {"if": True, "else": {"required": ["a"]}}),
+            ("empty-if-else-required", {"if": {}, "else": {}}, {"if": {}, "else": {"required": ["a"]}}),
+            (
+                "allof-sibling-false-then-required",
+                {"allOf": [{"if": False, "then": {}}, {"if": {"required": ["x"]}, "then": {}}]},
+                {"allOf": [{"if": False, "then": {"required": ["a"]}}, {"if": {"required": ["x"]}, "then": {}}]},
+            ),
+            (
+                "allof-sibling-true-else-required",
+                {"allOf": [{"if": True, "else": {}}, {"if": {"required": ["x"]}, "else": {}}]},
+                {"allOf": [{"if": True, "else": {"required": ["a"]}}, {"if": {"required": ["x"]}, "else": {}}]},
+            ),
+        )
+        for label, before, after in unreachable_cases:
+            with self.subTest(kind="unreachable", label=label):
+                self.assertTrue(schema_accepts_instance(before, {}))
+                self.assertTrue(schema_accepts_instance(after, {}))
+                tools = self.repo.mcp()
+                tools[0]["inputSchema"] = before
+                self.repo.write_mcp(tools)
+                self.repo.commit("chore: prepare unreachable conditional arm [ORB-26158]")
+                self.repo.git("tag", "-f", "v0.35.0")
+                tools[0]["inputSchema"] = after
+                self.repo.write_mcp(tools)
+                self.repo.commit("feat: edit unreachable conditional arm [ORB-26158]")
+                report = self.report()
+                self.assertEqual(report["signals"], [])
+                self.assertEqual(report["bump"], "patch")
+
+        # The same constraint edit in the reachable arm (or flipping `if` from
+        # false to true so the constrained `then` becomes reachable) rejects `{}`
+        # and must emit an MCP schema signal and recommend minor.
+        reachable_cases = (
+            (
+                "false-else-required",
+                {"if": False, "else": {}},
+                {"if": False, "else": {"required": ["a"]}},
+                "`orbit_task_show` property `inputSchema[else].a` newly required",
+            ),
+            (
+                "true-then-required",
+                {"if": True, "then": {}},
+                {"if": True, "then": {"required": ["a"]}},
+                "`orbit_task_show` property `inputSchema[then].a` newly required",
+            ),
+            (
+                "false-to-true-exposes-then-required",
+                {"if": False, "then": {"required": ["a"]}},
+                {"if": True, "then": {"required": ["a"]}},
+                "`orbit_task_show` `inputSchema` conditional `if` edited: "
+                "instances it moves into `then` meet a stricter branch and now requires `a`",
+            ),
+        )
+        for label, before, after, detail in reachable_cases:
+            with self.subTest(kind="reachable", label=label):
+                self.assertTrue(schema_accepts_instance(before, {}))
+                self.assertFalse(schema_accepts_instance(after, {}))
+                tools = self.repo.mcp()
+                tools[0]["inputSchema"] = before
+                self.repo.write_mcp(tools)
+                self.repo.commit("chore: prepare reachable conditional arm [ORB-26158]")
+                self.repo.git("tag", "-f", "v0.35.0")
+                tools[0]["inputSchema"] = after
+                self.repo.write_mcp(tools)
+                self.repo.commit("feat: edit reachable conditional arm [ORB-26158]")
+                report = self.report()
+                self.assertEqual(report["bump"], "minor")
+                self.assertEqual(self.signals(report), {("ORB-26158", "mcp-schema", detail)})
+
     def test_help_removal_is_found_when_repo_is_a_subdirectory(self):
         self.repo.write("tools/note.txt", "x\n")
         self.repo.remove(f"{GOLDENS}/task/show.txt")

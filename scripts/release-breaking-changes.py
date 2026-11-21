@@ -220,6 +220,13 @@ def detect_help_removals(git, parent, commit, changed):
     return found
 
 
+def is_always_true(schema):
+    """Whether a JSON Schema accepts every JSON instance."""
+    return (schema is True or schema == {}
+            or (isinstance(schema, dict) and set(schema) == {"required"}
+                and schema["required"] == []))
+
+
 def schema_facts(schema, path, facts):
     """Flatten the structural facts of a JSON schema; descriptions are skipped."""
     if isinstance(schema, bool):
@@ -257,8 +264,11 @@ def schema_facts(schema, path, facts):
     # enum; all three constrain instances like any inline schema. Per JSON
     # Schema, `then` and `else` apply only when `if` is present. `if` is a
     # selector, not a constraint: editing it moves instances between
-    # branches, so it has no monotonic breaking direction. Record it whole
-    # and let detect_mcp_changes judge which branch the moved instances land in.
+    # branches, so it has no monotonic breaking direction. Record all arms
+    # under `conditionals` so `detect_mcp_changes` can judge `if` edits,
+    # and flatten only reachable arms (`then` unless `if` is `false`,
+    # `else` unless `if` is always true) so edits inside unreachable arms
+    # never emit spurious signals.
     has_if = isinstance(schema.get("if"), (dict, bool))
     if has_if:
         facts.setdefault("conditionals", {})[path] = {
@@ -267,7 +277,11 @@ def schema_facts(schema, path, facts):
         facts.setdefault("property_names", {})[path] = schema["propertyNames"]
     subkeys = ["items", "additionalProperties", "propertyNames"]
     if has_if:
-        subkeys.extend(("then", "else"))
+        cond_if = schema["if"]
+        if cond_if is not False:
+            subkeys.append("then")
+        if not is_always_true(cond_if):
+            subkeys.append("else")
     for key in subkeys:
         if isinstance(schema.get(key), (dict, bool)):
             schema_facts(schema[key], f"{path}[{key}]", facts)
@@ -905,11 +919,6 @@ def detect_mcp_changes(git, parent, commit, changed):
 
     def location(raw):
         return re.sub(r"\{allOf(?:_new_)?\d+\}", "", raw)
-
-    def is_always_true(schema):
-        return (schema is True or schema == {}
-                or (isinstance(schema, dict) and set(schema) == {"required"}
-                    and schema["required"] == []))
 
     def effective_top_required(schema):
         if not isinstance(schema, dict):

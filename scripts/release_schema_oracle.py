@@ -287,7 +287,7 @@ def bounded_schema_pairs():
             yield {"oneOf": [old_c, {"type": "string"}]}, {"oneOf": [new_c, {"type": "string"}]}
 
     # Branch (`then` / `else`) edits including branch addition and removal.
-    for if_s in ({"required": ["a"]}, {"type": "object"}, True):
+    for if_s in ({"required": ["a"]}, {"type": "object"}, True, False):
         for old_b, new_b in product(cond_branches, repeat=2):
             for other in (None, {"required": ["c"]}):
                 old_t = make_cond(if_s, old_b, other)
