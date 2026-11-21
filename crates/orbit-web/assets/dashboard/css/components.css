@@ -884,9 +884,9 @@ a.progress-strip-hint:hover .progress-strip-label { text-decoration: underline; 
   background: var(--bg-elev); color: var(--fg);
 }
 .dialog-surface::backdrop { background: color-mix(in srgb, var(--bg) 60%, transparent); }
-.dialog-header { display: flex; align-items: center; gap: var(--space-10); min-width: 0; padding: var(--space-16); border-bottom: 1px solid var(--border); }
+.dialog-header { position: sticky; top: 0; z-index: 1; flex: none; display: flex; align-items: center; gap: var(--space-10); min-width: 0; padding: var(--space-16); background: var(--bg-elev); border-bottom: 1px solid var(--border); }
 .dialog-header :is(h2, h3) { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 var(--text-base)/1.4 var(--font-sans); }
 .dialog-body { display: grid; gap: var(--space-12); min-width: 0; padding: var(--space-16); }
-.dialog-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); padding: var(--space-12) var(--space-16); border-top: 1px solid var(--border); }
+.dialog-actions { position: sticky; bottom: 0; z-index: 1; flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); padding: var(--space-12) var(--space-16); background: var(--bg-elev); border-top: 1px solid var(--border); }
 .dialog-header .esc-close { margin-left: auto; flex: none; }
 .dialog-drawer { position: sticky; bottom: 0; max-height: 70vh; }
