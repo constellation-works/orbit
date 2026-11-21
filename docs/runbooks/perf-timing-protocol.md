@@ -291,10 +291,14 @@ values; `null` when unset), `rustc_wrapper`, `host`, `machine_id`, `created_at`.
 
 **`parity.json`** (`kind: orbit-perf-parity`): `command`, `http_path`, `masks`, `match`,
 `differing_arms`, `observation_failures` (arm to why that arm has no successful
-observation; empty when every arm succeeded), and `arms.<arm>` with `command` (`exit`,
-`output`) and, in HTTP mode, `http` (`status` and `body`, or `error` when the request
-failed); each output is `{format: json|text, value}` after masking. `match` is true only when
-`observation_failures` and `differing_arms` are both empty.
+observation; empty when every arm succeeded), and `arms.<arm>`. The top-level `command` is
+the `--parity` string, or `null` when no parity command was given. An arm record holds
+`command` (`exit`, `output`) only when `--parity` was supplied, and `http` (`status` and
+`body`, or `error` when the request failed) only in HTTP mode. So a CLI run without
+`--parity` leaves every arm record empty, which is a missing observation; an HTTP-only run
+without `--parity` has `command: null` and arm records holding `http` alone. Each output is
+`{format: json|text, value}` after masking. `match` is true only when `observation_failures`
+and `differing_arms` are both empty.
 
 **`raw.json`** (`kind: orbit-perf-raw`): `surface` and `samples`, one entry per sample
 including warmups: `arm`, `round`, `index`, `warmup`, `ms`, `exit`.
