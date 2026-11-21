@@ -22,6 +22,7 @@ See docs/runbooks/perf-timing-protocol.md.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import http.client
 import json
 import math
@@ -163,6 +164,40 @@ def install_cancel_handlers() -> None:
         signal.signal(signum, handler)
 
 
+@contextlib.contextmanager
+def defer_spawn_cancellation():
+    """Delay cancellation until the caller has acquired the Popen object.
+
+    Mask signals only while swapping handlers: the child must inherit the
+    original signal mask, so it can respond to group termination.
+    """
+    signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    previous = {}
+    pending = []
+
+    def defer(signum, _frame):
+        if not pending:
+            pending.append(signum)
+
+    old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, signals)
+    try:
+        for signum in signals:
+            previous[signum] = signal.signal(signum, defer)
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+    try:
+        yield
+    finally:
+        old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, signals)
+        try:
+            for signum, handler in previous.items():
+                signal.signal(signum, handler)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+        if pending:
+            os.kill(os.getpid(), pending[0])
+
+
 def leader_exited(pid: int) -> bool:
     """Whether our child `pid` exited, without reaping it.
 
@@ -233,17 +268,20 @@ def run_supervised(argv: list[str], *, cwd, env, timeout: float, output_limit: i
     `elapsed_ms` runs from spawn to the leader's exit.
     """
     started = time.perf_counter()
-    process = subprocess.Popen(
-        argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT if capture_stderr else subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    pending = bytearray()
-    ended = "exit"
-    exited_at: float | None = None
-    stdout = process.stdout
-    assert stdout is not None
+    process = None
+    stdout = None
     try:
+        with defer_spawn_cancellation():
+            process = subprocess.Popen(
+                argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT if capture_stderr else subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        pending = bytearray()
+        ended = "exit"
+        exited_at: float | None = None
+        stdout = process.stdout
+        assert stdout is not None
         try:
             pidfd = os.pidfd_open(process.pid)
         except (AttributeError, OSError):
@@ -298,11 +336,14 @@ def run_supervised(argv: list[str], *, cwd, env, timeout: float, output_limit: i
         else:
             process.wait(timeout=10)
     except BaseException:
-        if process.returncode is None:
+        if process is not None and process.returncode is None:
             stop_group(process)
         raise
     finally:
-        stdout.close()
+        if stdout is not None:
+            stdout.close()
+        elif process is not None and process.stdout is not None:
+            process.stdout.close()
     finish = exited_at if exited_at is not None and ended == "exit" else time.perf_counter()
     return SupervisedResult(ended, process.returncode if ended == "exit" else None,
                       bytes(pending[:output_limit]), (finish - started) * 1000,
@@ -325,14 +366,22 @@ class Server:
 
     def __init__(self, binary: Path, info: dict, env: dict):
         self.opener = urllib.request.build_opener(NoRedirect())
-        self.process = subprocess.Popen(
-            [str(binary), "web", "serve", "--no-open", "--port", "0",
-             "--workspace", info["workspace"]],
-            cwd=info["cwd"], env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        self.binary = binary
+        self.info = info
+        self.env = env
+        self.process = None
+
+    def start(self) -> None:
+        binary, info, env = self.binary, self.info, self.env
         try:
+            with defer_spawn_cancellation():
+                self.process = subprocess.Popen(
+                    [str(binary), "web", "serve", "--no-open", "--port", "0",
+                     "--workspace", info["workspace"]],
+                    cwd=info["cwd"], env=env,
+                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
             line = self._announcement(STARTUP_TIMEOUT_SECONDS)
             match = re.search(r"http://(\S+)", line)
             if not match:
@@ -340,7 +389,8 @@ class Server:
             self.base = "http://" + match.group(1).rstrip("/")
             self._wait_ready()
         except BaseException:
-            self.stop()
+            if self.process is not None:
+                self.stop()
             raise
 
     def _announcement(self, timeout: float) -> str:
@@ -391,7 +441,7 @@ class Server:
         return leader_exited(self.process.pid)
 
     def stop(self) -> None:
-        if getattr(self, "_stopped", False):
+        if self.process is None or getattr(self, "_stopped", False):
             return
         self._stopped = True
         try:
@@ -543,12 +593,14 @@ class Harness:
                 if self.http_path:
                     server = Server(self.binaries[arm], info, env)
                     try:
-                        status, body = server.get(self.http_path)
-                    except HttpRequestError as error:
-                        record["http"] = {"error": str(error)}
-                    else:
-                        record["http"] = {"status": status,
-                                          "body": normalize_output(body, self.masks, info["root"])}
+                        server.start()
+                        try:
+                            status, body = server.get(self.http_path)
+                        except HttpRequestError as error:
+                            record["http"] = {"error": str(error)}
+                        else:
+                            record["http"] = {"status": status,
+                                              "body": normalize_output(body, self.masks, info["root"])}
                     finally:
                         server.stop()
             finally:
@@ -603,6 +655,8 @@ class Harness:
                     ms = (time.perf_counter() - started) * 1000
                     return ms, 0 if 200 <= status < 300 else status
             try:
+                if server is not None:
+                    server.start()
                 total = self.args.warmup + self.args.samples
                 for index in range(total):
                     if index:
