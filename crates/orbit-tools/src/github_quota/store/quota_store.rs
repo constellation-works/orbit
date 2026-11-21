@@ -43,7 +43,7 @@ impl GithubQuotaStore {
         if let Some(deadline) = self.deadline {
             options.timeout = options
                 .timeout
-                .min(deadline.saturating_duration_since(Instant::now()));
+                .min(deadline.saturating_duration_since(monotonic_now()));
         }
         options
     }

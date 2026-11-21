@@ -1025,7 +1025,12 @@ fn slow_quota_probe_exhausting_budget_prevents_spawn_and_preserves_deadline() {
                 let records_deadline = tempfile::TempDir::new().unwrap();
                 let store_deadline = GithubQuotaStore::new(records_deadline.path().to_path_buf());
                 let policy = GithubQuotaPolicy::default();
+                let now_ms = std::rc::Rc::new(std::cell::Cell::new(1_000_u64));
+                let clock_now = std::rc::Rc::clone(&now_ms);
                 let clock_calls = std::rc::Rc::new(std::cell::Cell::new(0_u32));
+                let probe_seen = std::rc::Rc::new(std::cell::Cell::new(false));
+                let observed = std::rc::Rc::clone(&probe_seen);
+                let probe_now = std::rc::Rc::clone(&now_ms);
                 let mut input = fx.complete_ungated_input();
                 input["auto_fix"] = json!(true);
                 input["completion"] = json!("review");
@@ -1035,22 +1040,43 @@ fn slow_quota_probe_exhausting_budget_prevents_spawn_and_preserves_deadline() {
                     move || {
                         let call = clock_calls.get();
                         clock_calls.set(call + 1);
-                        if call == 0 { 1_000 } else { 1_920 }
+                        if call == 0 {
+                            clock_now.get()
+                        } else {
+                            // Leave 80 ms of the 1 s completion budget on the
+                            // first read; once the simulated probe fires,
+                            // `probe_now` advances to the 2,000 ms deadline.
+                            clock_now.get().max(1_920)
+                        }
                     },
                     |_, _| {},
                     || {
-                        github_quota::with_scoped_guard(store_deadline, policy, || {
-                            orbit_engine::test_support::with_vcs_retry_wait(
-                                |_| {},
-                                || action(&host, "pr_complete", &input),
-                            )
-                        })
+                        github_quota::with_simulated_clipped_probe(
+                            move |probe| {
+                                assert_eq!(probe.args, ["api", "rate_limit"]);
+                                assert_eq!(probe.timeout_ms, Some(80));
+                                observed.set(true);
+                                probe_now.set(2_000);
+                            },
+                            || {
+                                github_quota::with_scoped_guard(store_deadline, policy, || {
+                                    orbit_engine::test_support::with_vcs_retry_wait(
+                                        |_| {},
+                                        || action(&host, "pr_complete", &input),
+                                    )
+                                })
+                            },
+                        )
                     },
                 );
                 assert!(
                     started.elapsed() < std::time::Duration::from_secs(2),
                     "slow quota probe must be bounded by the 80 ms remaining deadline, took {:?}",
                     started.elapsed()
+                );
+                assert!(
+                    probe_seen.get(),
+                    "quota refresh must attempt the rate-limit probe"
                 );
                 let error = result.expect_err("slow quota probe exhausting budget must expire");
                 assert!(
@@ -1067,7 +1093,7 @@ fn slow_quota_probe_exhausting_budget_prevents_spawn_and_preserves_deadline() {
                 let calls = fs::read_to_string(fx.forge.join("calls")).unwrap();
                 assert_eq!(
                     calls.lines().collect::<Vec<_>>(),
-                    vec!["api rate_limit"],
+                    Vec::<&str>::new(),
                     "expired quota probe must prevent spawning the original pr view"
                 );
 
@@ -1075,28 +1101,47 @@ fn slow_quota_probe_exhausting_budget_prevents_spawn_and_preserves_deadline() {
                 fs::write(fx.forge.join("calls"), "").unwrap();
                 let records_log = tempfile::TempDir::new().unwrap();
                 let store_log = GithubQuotaStore::new(records_log.path().to_path_buf());
+                let log_now = std::rc::Rc::new(std::cell::Cell::new(1_000_u64));
+                let log_clock = std::rc::Rc::clone(&log_now);
+                let log_probe_seen = std::rc::Rc::new(std::cell::Cell::new(false));
+                let log_observed = std::rc::Rc::clone(&log_probe_seen);
+                let log_probe_now = std::rc::Rc::clone(&log_now);
                 let started = std::time::Instant::now();
                 let log_result = orbit_engine::test_support::with_prerequisite_clock(
-                    || 1_000,
+                    move || log_clock.get(),
                     |_, _| {},
                     || {
-                        github_quota::with_scoped_guard(store_log, policy, || {
-                            orbit_engine::run_private_vcs_operation(
-                                "ci.job_log",
-                                &json!({
-                                    "workspace_path": fx.repo,
-                                    "run_id": "700",
-                                    "job_id": "1100",
-                                    "deadline_ms": 1_080_u64,
-                                }),
-                            )
-                        })
+                        github_quota::with_simulated_clipped_probe(
+                            move |probe| {
+                                assert_eq!(probe.args, ["api", "rate_limit"]);
+                                assert_eq!(probe.timeout_ms, Some(80));
+                                log_observed.set(true);
+                                log_probe_now.set(1_080);
+                            },
+                            || {
+                                github_quota::with_scoped_guard(store_log, policy, || {
+                                    orbit_engine::run_private_vcs_operation(
+                                        "ci.job_log",
+                                        &json!({
+                                            "workspace_path": fx.repo,
+                                            "run_id": "700",
+                                            "job_id": "1100",
+                                            "deadline_ms": 1_080_u64,
+                                        }),
+                                    )
+                                })
+                            },
+                        )
                     },
                 );
                 assert!(
                     started.elapsed() < std::time::Duration::from_secs(2),
                     "log guard probe must be bounded by the 80 ms deadline, took {:?}",
                     started.elapsed()
+                );
+                assert!(
+                    log_probe_seen.get(),
+                    "quota refresh must attempt the rate-limit probe"
                 );
                 let log_error = log_result.expect_err("slow quota probe in ci_job_log must expire");
                 assert!(
@@ -1113,7 +1158,7 @@ fn slow_quota_probe_exhausting_budget_prevents_spawn_and_preserves_deadline() {
                 let calls = fs::read_to_string(fx.forge.join("calls")).unwrap();
                 assert_eq!(
                     calls.lines().collect::<Vec<_>>(),
-                    vec!["api rate_limit"],
+                    Vec::<&str>::new(),
                     "expired quota probe must prevent spawning gh run view --log"
                 );
             });
