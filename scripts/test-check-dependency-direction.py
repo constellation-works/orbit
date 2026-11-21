@@ -1784,6 +1784,29 @@ class RelativeImportTests(unittest.TestCase):
              "}\n"),
         ], rejected=True)
 
+    def test_large_token_tree_invocation_keeps_inline_module_depth(self):
+        # [ORB-26595] A `$($t:tt)*` pass-through over about 2000 tokens nested
+        # the arm matcher past Python's recursion limit and crashed the guard
+        # with a RecursionError. Such an invocation now falls back to the
+        # summary of its arms, which keeps the inline module's depth for an
+        # item-preserving macro: `super::super` stays in `application` (allowed)
+        # and three `super` segments reach `crate::adapter` (rejected).
+        def large_invocation(supers):
+            items = [f"    pub const C{index}: usize = {index};\n" for index in range(260)]
+            return ("macro_rules! keep_tt { ($($t:tt)*) => { $($t)* }; }\n"
+                    "keep_tt! {\n"
+                    + "".join(items)
+                    + "    mod inner {\n"
+                    f"        pub fn check() {{ let _ = {supers}::adapter::Probe; }}\n"
+                    "    }\n"
+                    "}\n")
+        self.check_rows([
+            ("keep_tt_large_ok.rs", large_invocation("super::super")),
+        ], rejected=False)
+        self.check_rows([
+            ("keep_tt_large_escape.rs", large_invocation("super::super::super")),
+        ], rejected=True)
+
     def test_tools_builtin_grouped_imports_rejected_in_either_spelling(self):
         # [ORB-26107] `r#builtin` names the same module as `builtin`. The
         # tokenizer once split the raw identifier into `r` and `#`, so a grouped
