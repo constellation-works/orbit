@@ -15,6 +15,7 @@ import hashlib
 import json
 import fcntl
 import os
+import selectors
 import shlex
 import signal
 import subprocess
@@ -45,6 +46,46 @@ def _fixture_getpwuid(uid):
 pwd.getpwuid = _fixture_getpwuid
 """
 PAIRED_BOOTSTRAP = PASSWD_HOME_PATCH + """
+import runpy, sys
+script = sys.argv[1]
+sys.argv = [script] + sys.argv[2:]
+runpy.run_path(script, run_name="__main__")
+"""
+
+# Seam for a regression that must exercise a live pidfd-backed wait. paired.py's
+# supervision loop can see an immediate-exit child as already exited and skip the
+# selector wait it is meant to cover (ORB-26488). This wraps the epoll selector's
+# `select` in the harness process only: for each registered process pidfd it
+# verifies the child has not exited, records the wait and the timeout it was asked
+# for, and only then publishes `release-<pid>` so the held child (ARM_SCRIPT
+# `held-*` modes) may exit, before calling the real `select`. The real epoll call
+# still runs, so a timeout outside its range still raises.
+HELD_PIDFD_WAIT_PATCH = r"""
+import json, os, select, selectors
+_marks = os.environ["PAIRED_TEST_MARKS"]
+_released = set()
+_real_select = selectors.EpollSelector.select
+def _held_select(self, timeout=None):
+    for key in list(self.get_map().values()):
+        if key.data != "exit":
+            continue
+        pid = None
+        with open("/proc/self/fdinfo/%d" % key.fd) as info:
+            for line in info:
+                if line.startswith("Pid:"):
+                    pid = int(line.split()[1])
+        if pid in _released:
+            continue
+        _released.add(pid)
+        live = select.select([key.fd], [], [], 0)[0] == []
+        with open(os.path.join(_marks, "pidfd-waits.jsonl"), "a") as record:
+            record.write(json.dumps({"pid": pid, "live": live, "timeout": timeout}) + "\n")
+        if live:
+            open(os.path.join(_marks, "release-%d" % pid), "w").close()
+    return _real_select(self, timeout)
+selectors.EpollSelector.select = _held_select
+"""
+HELD_PAIRED_BOOTSTRAP = PASSWD_HOME_PATCH + HELD_PIDFD_WAIT_PATCH + """
 import runpy, sys
 script = sys.argv[1]
 sys.argv = [script] + sys.argv[2:]
@@ -116,6 +157,24 @@ ARM_SCRIPT = """#!/bin/sh
 role={role}
 marks={marks}
 mode=$1
+case "$mode" in
+  held-*)
+    # Stay alive until the harness reports it is waiting on this process's
+    # pidfd (the `release-<pid>` marker, see HELD_PIDFD_WAIT_PATCH), then run the
+    # plain mode. The wait is bounded: an unreleased child fails visibly.
+    mode=${{mode#held-}}
+    printf '%s\\n' "$$" > "$marks/held-$mode-$role-$$.pid"
+    tries=0
+    while [ ! -e "$marks/release-$$" ]; do
+      tries=$((tries + 1))
+      if [ "$tries" -gt 500 ]; then
+        printf 'never released\\n' >&2
+        exit 4
+      fi
+      sleep 0.02
+    done
+    ;;
+esac
 case "$mode" in
   stall|probe-stall)
     # A descendant in the arm's group, then a leader that never finishes.
@@ -420,8 +479,9 @@ class PairedCliTestCase(unittest.TestCase):
         registry.write_text(json.dumps(
             {"checkouts": [{"orbit_dir": str(path)} for path in orbit_dirs]}))
 
-    def paired_argv(self, out: Path, surface: tuple[str, ...], *extra: str) -> list[str]:
-        return [sys.executable, "-I", "-c", PAIRED_BOOTSTRAP, str(PAIRED),
+    def paired_argv(self, out: Path, surface: tuple[str, ...], *extra: str,
+                    bootstrap: str = PAIRED_BOOTSTRAP) -> list[str]:
+        return [sys.executable, "-I", "-c", bootstrap, str(PAIRED),
                 "--builds", str(self.builds),
                 "--snapshot", str(self.snapshot),
                 "--out", str(out),
@@ -440,13 +500,15 @@ class PairedCliTestCase(unittest.TestCase):
         env["PAIRED_TEST_PASSWD_HOME"] = str(self.home)
         env["ORBIT_ROOT"] = str(self.home / ".orbit")
         env["ORBIT_PERF_LANE_LOCK"] = str(self.lane_lock)
+        env["PAIRED_TEST_MARKS"] = str(self.marks)
         return env
 
     def run_paired(self, *extra: str, surface: tuple[str, ...] = ("--cli", "timed"),
+                   bootstrap: str = PAIRED_BOOTSTRAP,
                    ) -> tuple[subprocess.CompletedProcess[str], Path]:
         out = Path(self.temp.name) / f"out-{len(extra)}-{extra[0] if extra else 'cli'}-{surface[-1]}"
         result = subprocess.run(
-            self.paired_argv(out, surface, *extra),
+            self.paired_argv(out, surface, *extra, bootstrap=bootstrap),
             cwd=REPO,
             env=self.paired_env(),
             capture_output=True,
@@ -785,11 +847,36 @@ class PairedCliSupervisionTest(PairedCliTestCase):
             {key: protocol[key] for key in expected}, expected)
 
     def test_large_command_timeout_allows_short_probe(self) -> None:
-        result, out = self.run_paired("--parity", "probe-same", "--command-timeout", "3000000")
+        # ORB-26412: epoll rejects a millisecond timeout this large, so the
+        # supervision loop must never hand it the whole command deadline. An
+        # immediate-exit probe can be seen as exited before the first selector
+        # wait, which skips the code under test (ORB-26488). Every probe here is
+        # therefore held alive until the harness is in a pidfd-backed wait.
+        if not (sys.platform.startswith("linux") and hasattr(os, "pidfd_open")
+                and hasattr(selectors, "EpollSelector")):
+            self.skipTest("requires Linux os.pidfd_open and epoll")
+        try:
+            os.close(os.pidfd_open(os.getpid()))
+        except OSError as error:
+            self.skipTest(f"pidfd_open is unavailable in this environment: {error}")
+        result, out = self.run_paired(
+            "--parity", "held-probe-same", "--command-timeout", "3000000",
+            surface=("--cli", "held-timed"), bootstrap=HELD_PAIRED_BOOTSTRAP)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         report = json.loads((out / "parity.json").read_text())
         self.assertIs(report["match"], True)
+        self.assertEqual(report["observation_failures"], {})
         self.assertEqual(report["limits"]["command_timeout_seconds"], 3_000_000.0)
+        held = {int(path.read_text()) for path in self.marks.glob("held-*.pid")}
+        self.assertGreaterEqual(len(held), 6, "three arms, held for parity and for sampling")
+        waits = [json.loads(line) for line in
+                 (self.marks / "pidfd-waits.jsonl").read_text().splitlines()]
+        waited = {wait["pid"]: wait for wait in waits}
+        self.assertLessEqual(held, set(waited), "every held probe needs a pidfd-backed wait")
+        for pid in held:
+            self.assertIs(waited[pid]["live"], True,
+                          f"probe exited before its pidfd wait: {waited[pid]}")
+            self.assertTrue((self.marks / f"release-{pid}").exists())
 
     def test_cancellation_during_process_acquisition(self) -> None:
         # Trace Popen's return, before its caller can install a cleanup guard.
