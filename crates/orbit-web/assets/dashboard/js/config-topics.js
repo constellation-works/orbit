@@ -239,7 +239,7 @@ function hasValue(v) {
 }
 function tagsNode(entries) {
   return el('div', { class: 'settings-tags' }, entries.map(([text, note]) =>
-    el('span', { class: 'settings-tag' }, [text, note == null ? null : el('span', { class: 'settings-tag-note', text: note })])));
+    el('span', { class: 'badge mono', title: note == null ? text : `${text} ${note}` }, [text, note == null ? null : el('span', { class: 'settings-tag-note', text: note })])));
 }
 // A crew pool as tags, each with its share of the draw (`name:weight`, weight 1 when absent).
 function poolTags(values) {

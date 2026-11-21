@@ -105,17 +105,17 @@ function syncAuditControls() {
 
 function scopeChip(label, value, onRemove) {
   const chip = el(onRemove ? "button" : "span", {
-    class: "scope-chip",
+    class: "chip scope-facet",
     ...(onRemove
       ? { "aria-description": `Remove ${label} filter` }
       : { title: `${label}: ${value}` }),
   });
   if (onRemove) chip.type = "button";
   chip.dataset.chip = label;
-  chip.appendChild(el("span", { class: "scope-chip-k", text: label }));
-  chip.appendChild(el("span", { class: "scope-chip-v", text: value }));
+  chip.appendChild(el("span", { class: "scope-key", text: label }));
+  chip.appendChild(el("span", { class: "chip-label", text: value }));
   if (onRemove) {
-    chip.appendChild(el("span", { class: "scope-chip-x", text: "×" }));
+    chip.appendChild(el("span", { class: "scope-remove", "aria-hidden": "true", text: "×" }));
     chip.addEventListener("click", (event) => {
       event.preventDefault();
       onRemove();
@@ -149,7 +149,7 @@ function renderScopeChips() {
       persistScopeToUrl();
       window.location.hash = buildAuditHash();
     });
-    if (windowLabel !== getWindow()) chip.classList.add("independent");
+    if (windowLabel !== getWindow()) chip.dataset.tone = "accent";
     host.appendChild(chip);
   }
   if (auditFilter.tool) {
@@ -536,7 +536,8 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
     const header = el("div", { class: "card-header" });
     header.appendChild(el("span", { class: "tool-name", text: row.tool, title: row.tool }));
     header.appendChild(el("span", {
-      class: "status-badge",
+      class: "badge mono",
+      "data-tone": severity === "critical" ? "danger" : severity === "warning" ? "warning" : null,
       text: `${(rate * 100).toFixed(1)}% Unexpected Failure Rate`,
     }));
     card.appendChild(header);

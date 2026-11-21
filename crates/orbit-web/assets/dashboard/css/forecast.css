@@ -193,19 +193,8 @@
 .rf-mode-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-mute); }
 .rf-mode-dot.enforce { background: var(--state-success); }
 .rf-mode-dot.shadow { background: var(--state-held); }
-.rf-mode-pills { display: flex; gap: var(--space-4); }
-.rf-mode-pill {
-  padding: var(--space-2) var(--space-6); border: 1px solid var(--border); border-radius: var(--radius-xs);
-  color: var(--fg-disabled); font: var(--text-xs) var(--font-mono);
-}
-.rf-mode-pill.on { border-color: transparent; background: var(--fg-mute); color: var(--bg); }
-.rf-mode-pill.on.enforce { background: var(--state-success); }
-.rf-mode-pill.on.shadow { background: var(--state-held); }
+.rf-mode-options { display: flex; flex-wrap: wrap; gap: var(--space-4); }
 .rf-live .drain-forecast { margin: 0; padding: 0; border: 0; }
-.rf-badge {
-  margin-left: var(--space-6); padding: var(--space-2) var(--space-6); border: 1px solid var(--warn-line); border-radius: var(--radius-xs);
-  background: var(--warn-wash); color: var(--warn-fg); font: var(--text-xs) var(--font-sans);
-}
 .rf-view .mx-table td.bad { color: var(--warn-fg); }
 .rf-view .mx-table td.rf-na { color: var(--fg-disabled); }
 .rf-misses { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--space-12); }

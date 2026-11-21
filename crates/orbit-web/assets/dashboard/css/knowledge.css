@@ -131,20 +131,8 @@
   flex-wrap: wrap;
   gap: var(--space-8);
 }
-.friction-tag-option {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-6);
-  padding: var(--space-4) var(--space-8);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-2xs);
-  color: var(--fg);
-  background: var(--bg);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  cursor: pointer;
-}
-.friction-tag-option input {
+.friction-tag-options input {
+  flex: none;
   accent-color: var(--accent);
 }
 
@@ -215,56 +203,12 @@
 .knowledge-detail-head .sub .dot {
   color: rgba(255, 255, 255, 0.15);
 }
-.knowledge-pill {
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  padding: var(--space-2) var(--space-6);
-  border-radius: var(--radius-2xs);
-  border: 1px solid var(--border);
-  color: var(--fg-dim);
-  background: var(--bg);
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-6);
-  white-space: nowrap;
-}
-.knowledge-pill::before {
-  content: "";
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--fg-dim);
-}
-.knowledge-pill.active::before,
-.knowledge-pill.accepted::before,
-.knowledge-pill.resolved::before { background: var(--status-done); }
-.knowledge-pill.proposed::before,
-.knowledge-pill.open::before { background: var(--status-proposed); }
-.knowledge-pill.triaged::before { background: var(--status-in-progress); }
-.knowledge-pill.superseded::before { background: var(--fg-dim); }
 
 .knowledge-tags {
   display: inline-flex;
   flex-wrap: wrap;
   gap: var(--space-4);
   min-width: 0;
-}
-.knowledge-tag {
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  padding: var(--space-2) var(--space-6);
-  border-radius: var(--radius-2xs);
-  background: var(--bg-elev);
-  color: var(--fg-dim);
-  border: 1px solid var(--border);
-}
-.knowledge-tag.path,
-.knowledge-tag.feature {
-  color: var(--fg);
-}
-.knowledge-tag.dim {
-  color: var(--fg-dim);
-  opacity: 0.75;
 }
 
 /* The friction list is long enough to

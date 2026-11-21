@@ -817,8 +817,8 @@ function footerNodes(payload, cap, ctx) {
 
 // ===== Detail panel.
 
-function pill(text, className) {
-  return el("span", { class: `incident-pill ${className}`, text });
+function incidentPill(text, tone) {
+  return el("span", { class: "pill", "data-tone": tone, text, title: text });
 }
 
 function summarySentence(group) {
@@ -1121,9 +1121,10 @@ function detailNode(group, groups, axis, now, ctx) {
   actions.push(auditButton(group, "Audit events", "incident-action"));
 
   const node = el("div", { class: "incident-detail" }, [
-    el("div", { class: "incident-pills" }, [
-      pill(CLASS_NAMES[group.cls] || incidentClassLabel(group.cls, group.sample.class_label), group.cls),
-      pill(live ? "Failed in the last hour" : `Quiet for ${formatAge(group.last)}`, live ? "live" : "quiet"),
+    el("div", { class: "incident-detail-meta" }, [
+      incidentPill(CLASS_NAMES[group.cls] || incidentClassLabel(group.cls, group.sample.class_label),
+        { unexpected: "danger", expected: "warning", denied: "accent", deferred: "held" }[group.cls]),
+      incidentPill(live ? "Failed in the last hour" : `Quiet for ${formatAge(group.last)}`, live ? "danger" : "muted"),
     ]),
     el("div", { class: "incident-detail-head" }, [
       el("h3", { class: "incident-detail-title", text: truncate(group.title, 240) }),

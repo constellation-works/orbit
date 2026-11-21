@@ -215,7 +215,7 @@ a.routine-fire:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .routine-failure-streak { color: var(--state-failed); }
 .routine-failures { margin-bottom: var(--space-12); padding: var(--space-10) var(--space-12); border: 1px solid var(--state-failed); border-radius: var(--radius); color: var(--state-failed); font: var(--text-sm)/1.5 var(--font-sans); overflow-wrap: anywhere; }
 /* A job whose recent runs failed in a row: a danger note under its row head. */
-.job-failure-badge {
+.job-failure-notice {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-4) var(--space-12); margin-top: var(--space-8); padding: var(--space-6) var(--space-10);
   border: 1px solid var(--danger-line); border-radius: var(--radius-xs); background: var(--danger-wash);
   color: var(--danger-fg); font: var(--text-sm)/1.45 var(--font-sans); min-width: 0;
@@ -226,7 +226,7 @@ a.routine-fire:focus-visible { outline: 2px solid var(--accent); outline-offset:
   flex: 1 1 18ch; min-width: 0; color: var(--fg); font-size: var(--text-sm);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.job-failure-badge .operation-run-link { color: var(--danger-fg); text-decoration: underline; }
+.job-failure-notice .operation-run-link { color: var(--danger-fg); text-decoration: underline; }
 .operation-run-link,
 .operation-task-link,
 .operation-job-link,
@@ -241,10 +241,10 @@ a.routine-fire:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .operation-link:hover {
   color: var(--accent-hover);
 }
-.operations-layout a:not(.operation-chip) {
+.operations-layout a:not(.badge, .pill) {
   color: var(--accent);
 }
-.operations-layout a:not(.operation-chip):hover {
+.operations-layout a:not(.badge, .pill):hover {
   color: var(--accent-hover);
 }
 .operation-feedback a {
@@ -253,13 +253,6 @@ a.routine-fire:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .operation-feedback a:hover {
   color: var(--accent-hover);
 }
-.operation-chip {
-  display: inline-flex; align-items: center; min-height: 18px; padding: 0 var(--space-6); border: 1px solid var(--border);
-  border-radius: var(--radius-xs); background: var(--bg); color: var(--fg-dim); font-size: var(--text-xs); text-decoration: none;
-}
-.operation-chip.crew { color: var(--accent-hi); }
-.operation-chip.paused { color: var(--fg-mute); border-style: dashed; }
-a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
 
 /* Keep the visible "Enable"/"Disable" text for readback tests; aria-label
    supplies the item-specific accessible name, and the text stays out of view. */

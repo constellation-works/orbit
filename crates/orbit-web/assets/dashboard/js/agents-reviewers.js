@@ -90,7 +90,7 @@ function rowTags(row) {
   const rate = statValue(row, "compared_accept_rate");
   const peers = statValue(row, "peer_accept_rate");
   const tag = el("span", {
-    class: "agents-tag agents-tag-accepts-often",
+    class: "badge", "data-tone": "warning",
     text: "accepts often",
     "aria-label": `Accepts ${rate}% of reviews on tiers other reviewers also judged; the other reviewers accept ${peers}% on the same tiers. Shown, not scored.`,
   });

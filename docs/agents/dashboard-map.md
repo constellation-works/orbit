@@ -35,14 +35,15 @@ Reuse a class from `crates/orbit-web/assets/dashboard/css/components.css` instea
 - `.section-title` — a titled section inside a panel.
 - `.panel` — a framed region with a header, an optional `.count`, and a `.body`.
 - `.card` — a distinct content item such as a chart, a comment or a selectable host. Use `.panel` for the enclosing view region. Add `.card-dense` for compact records or forms and `.card-flush` when child rows or a table supply their own insets. Use `.card-raised` on an already elevated surface, as in the task detail pane. Button cards share hover and keyboard focus styles. For a grouped list with sticky headings and sibling rows, `.card-groups` frames each run of `[data-group]` elements from `.group-header` through `.group-end`. Inside a card, frame only a distinct item, content kind or state (STD-07 §R31).
-- `.chip` — a filter chip. `.chip.active` is the selected one.
+- `.chip` — a filter, disclosure, or removable selection. Use `aria-pressed` for a toggle, a native checkbox for a multi-select, or `aria-expanded` for a disclosure with a chevron. Existing filters may set `.active` for their selected style. Use `.chip-quiet` for dashed secondary filters, `.chip-label` when the label shares the chip with another element, and `.chip-count` for a count inside a chip. A status filter uses `data-status` for the dot. Add `.mono` for a code or ID label. Chips also accept the `accent` and `warning` tones for a distinct scope or a pending count.
+- `.badge` — a compact qualifier or count, such as a workspace name, an OS requirement, a tag, or a warning count. Use `.mono` for code and identifiers and `data-ws-color` for workspace identity. The semantic `data-tone` values are `accent`, `success`, `warning`, `danger`, `held`, `muted` and `unknown` (dashed).
+- `.pill` — a short state with a dot. Build a task status with `statusPill` or a run state with `stateCell` in `common.js`. Both use the same type, height and spacing and read the palette through `data-status` or `data-state`. Use `data-tone` for other semantic states, including `held`. A live repair can add `data-live` to pulse its dot with reduced-motion support. Native status selects keep their editable control styling.
 - `.empty-state` — nothing to show. `.empty-state.compact` is the short form.
 - `.skeleton`, `.skeleton-row` and `.skeleton-state` — a loading placeholder.
 - `.status-dot` — a colored status dot (`.green`, `.red`, `.orange`).
 - `.disclosure` — a button that reads as its cell's text (`makeDisclosure`).
 - `.copy-id` — a click-to-copy identifier that still reads as mono text.
 - `.action` — a button by weight (`.approve`, `.ship`, `.reject`, `.archive`, `.comment`, `.save`, `.cancel`, `.run-cancel`, `.preview`). `.action-error` is the refusal under it.
-- `.pill` and `.state-label` — a short status with a dot.
 - `.band`, `.band-tabs` and `.band-tab` — a header band and its raised tabs.
 - `.card-table` — a table whose rows restack as cards on a phone.
 - `.panel-placeholder` — the per-workspace placeholder while All workspaces is selected.

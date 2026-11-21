@@ -79,10 +79,6 @@ export function armSwatch(className, extra = "") {
   return el("span", { class: `mx-swatch ${className}${extra}`, "aria-hidden": "true" });
 }
 
-export function experimentBadge(text, className) {
-  return el("span", { class: `ex-badge ${className}`, text });
-}
-
 export function experimentCard(title, children, { meta = null, className = "", hint = null } = {}) {
   return el("section", { class: `card mx-card ex-card ${className}`.trim(), "aria-label": title }, [
     el("div", { class: "mx-card-head" }, [

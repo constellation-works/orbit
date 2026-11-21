@@ -16,8 +16,8 @@ function buildTagRow(tags) {
   const wrap = el("div", { class: "detail-tag-row" });
   for (const tag of tags) {
     wrap.appendChild(isOsTag(tag)
-      ? el("span", { class: "chip os-chip", text: tag, title: `Admitted only on a host running ${tag.slice(3)}` })
-      : el("span", { class: "chip", text: tag }));
+      ? el("span", { class: "badge mono", "data-tone": "accent", text: tag, title: `Admitted only on a host running ${tag.slice(3)}` })
+      : el("span", { class: "badge mono", text: tag, title: tag }));
   }
   return wrap;
 }
@@ -243,9 +243,12 @@ function makeContextRow(entry, task) {
   if (state) link.setAttribute("aria-label", `${selector}: ${state}`);
   const rowChildren = [link];
   if (matches && matches.length) {
-    rowChildren.push(el("span", { class: "cf-pill cf-pill-contended", text: `held by ${matches.map(cfHolderLabel).join(", ")}` }));
+    const label = `held by ${matches.map(cfHolderLabel).join(", ")}`;
+    rowChildren.push(el("span", {
+      class: "pill", "data-tone": task.status === "backlog" ? "warning" : "danger", text: label, title: label,
+    }));
   } else if (matches === null && (task.status === "backlog" || task.status === "in-progress")) {
-    rowChildren.push(el("span", { class: "cf-pill cf-pill-unknown", text: "contention unknown" }));
+    rowChildren.push(el("span", { class: "pill", "data-tone": "unknown", text: "contention unknown" }));
   }
   const copyBtn = el("button", { class: "cf-copy", type: "button" }, [el("span", { text: "⧉", "aria-hidden": "true" })]);
   copyBtn.setAttribute("aria-label", `Copy ${selector}`);

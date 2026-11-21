@@ -373,9 +373,9 @@ export function buildTaskHistory(task) {
     for (const button of buttons) button.setAttribute("aria-pressed", String(activeOf(button)));
   };
   const chip = (key, label) => {
-    const button = el("button", { class: "history-chip" }, [
+    const button = el("button", { class: "chip" }, [
       historyText(label),
-      el("span", { class: "history-chip-count", text: String(counts[key] || 0) }),
+      el("span", { class: "chip-count", text: String(counts[key] || 0) }),
     ]);
     button.type = "button";
     button.dataset.filter = key;
@@ -388,7 +388,7 @@ export function buildTaskHistory(task) {
     return button;
   };
   const order = (newestFirst, label) => {
-    const button = el("button", { class: "history-order", text: label });
+    const button = el("button", { class: "chip", text: label });
     button.type = "button";
     button.dataset.order = newestFirst ? "newest" : "oldest";
     button.addEventListener("click", () => {

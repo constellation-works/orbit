@@ -248,16 +248,16 @@
               <section class="panel" id="log-panel">
                 <div class="log-foot log-filters">
                   <div class="log-filter-group" role="group" aria-label="Filter log lines">
-                    <button type="button" class="filter-pill on" data-filter="all" aria-pressed="true">All</button>
-                    <button type="button" class="filter-pill" data-filter="err" aria-pressed="false">Err <span class="filter-count" data-count="err">0</span></button>
-                    <button type="button" class="filter-pill" data-filter="deny" aria-pressed="false">Deny <span class="filter-count" data-count="deny">0</span></button>
-                    <button type="button" class="filter-pill" data-filter="warn" aria-pressed="false">Warn <span class="filter-count" data-count="warn">0</span></button>
-                    <button type="button" class="filter-pill on" id="log-show-agent" aria-label="Show agent stdout relays" aria-pressed="true">Agent</button>
+                    <button type="button" class="chip" data-filter="all" aria-pressed="true">All</button>
+                    <button type="button" class="chip" data-filter="err" aria-pressed="false">Err <span class="filter-count" data-count="err">0</span></button>
+                    <button type="button" class="chip" data-filter="deny" aria-pressed="false">Deny <span class="filter-count" data-count="deny">0</span></button>
+                    <button type="button" class="chip" data-filter="warn" aria-pressed="false">Warn <span class="filter-count" data-count="warn">0</span></button>
+                    <button type="button" class="chip" id="log-show-agent" aria-label="Show agent stdout relays" aria-pressed="true">Agent</button>
                   </div>
                   <div class="log-view-group">
-                    <button type="button" class="seg on" id="log-follow-tail" aria-description="Follow the tail" aria-pressed="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg>Follow</button>
-                    <button type="button" class="seg" id="log-wrap-lines" aria-description="Wrap lines" aria-pressed="false">Wrap</button>
-                    <button type="button" class="count" id="log-buffered-count" style="display: none;">0 buffered</button>
+                    <button type="button" class="chip" id="log-follow-tail" aria-description="Follow the tail" aria-pressed="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg>Follow</button>
+                    <button type="button" class="chip" id="log-wrap-lines" aria-description="Wrap lines" aria-pressed="false">Wrap</button>
+                    <button type="button" class="chip" data-tone="warning" id="log-buffered-count" style="display: none;">0 buffered</button>
                   </div>
                 </div>
                 <div class="log-caption">
@@ -493,7 +493,7 @@
         <section class="panel" id="reliability-panel">
           <header>
             <span>Pipeline reliability <span id="reliability-method"></span></span>
-            <span class="scope-badge independent" id="reliability-scope-badge">Fleet-wide</span>
+            <span class="badge" data-tone="accent" id="reliability-scope-badge">Fleet-wide</span>
             <span class="count" id="reliability-count">-</span>
           </header>
           <div class="scoreboard-controls" id="reliability-controls">

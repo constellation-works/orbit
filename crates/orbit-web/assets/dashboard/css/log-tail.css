@@ -186,27 +186,6 @@
   font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-dim);
 }
 
-/* ORB-11658: the log-foot controls are real <button>s so they are
-   focusable and announced as toggles; strip the user-agent chrome the
-   <span>s they replaced never carried. */
-.log-foot button { font: inherit; background: none; border: none; color: inherit; padding: 0; }
-.log-foot .filter-pill:focus-visible,
-.log-foot .seg:focus-visible,
-.log-foot .seg.right:focus-visible,
-.log-foot .count:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.log-foot .filter-pill, .log-foot .seg, .log-foot .count {
-  display: inline-flex; align-items: center; gap: var(--space-6); min-height: 30px; padding: 0 var(--space-10);
-  border: 1px solid var(--border); border-radius: var(--radius-sm); background: transparent;
-  color: var(--fg-dim); font-family: var(--font-sans); font-size: var(--text-sm); cursor: pointer; user-select: none;
-}
-.log-foot .filter-pill:hover, .log-foot .seg:hover, .log-foot .count:hover { color: var(--fg); border-color: var(--border-strong); }
-.log-foot .filter-pill.on, .log-foot .seg.on {
-  color: var(--fg-strong); background: var(--bg-selected); border-color: var(--border-strong);
-}
-.log-foot .count { color: var(--warn-fg); border-color: var(--warn-line); background: var(--warn-wash); }
 .filter-count { color: var(--fg-mute); font-variant-numeric: tabular-nums; }
 .filter-count.nonzero[data-count="warn"] { color: var(--warn-fg); }
 .filter-count.nonzero[data-count="err"] { color: var(--danger-fg); }

@@ -249,8 +249,8 @@ function autoTaskTrigger(definition) {
   return "schedule";
 }
 
-function autoTaskChip(text, tone = "") {
-  return el("span", { class: `operation-chip mono ${tone}`.trim(), text });
+function autoTaskBadge(text, tone) {
+  return el("span", { class: "badge mono", "data-tone": tone, text, title: text });
 }
 
 function autoTaskEditKey(definition) {
@@ -493,8 +493,8 @@ function autoTaskRow(payload, definition, workspaceId) {
           definition.condition?.stall ? el("span", { class: "operation-state blocked", text: "stalled" }) : null,
         ]),
         el("span", { class: "operation-cell-sub operation-chips" }, [
-          template.crew ? autoTaskChip(template.crew, "crew") : null,
-          template.priority ? autoTaskChip(template.priority) : null,
+          template.crew ? autoTaskBadge(template.crew, "accent") : null,
+          template.priority ? autoTaskBadge(template.priority) : null,
         ].filter(Boolean)),
       ], "operation-cell-identity"),
       operationCell("Trigger", [

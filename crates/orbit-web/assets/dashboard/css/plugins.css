@@ -21,12 +21,6 @@
 .plugin-status { text-transform: uppercase; font-size: var(--text-2xs); letter-spacing: 0.06em; color: var(--fg-dim); }
 .plugin-status.status-active { color: var(--state-succeeded, var(--accent)); }
 .plugin-status.status-inactive, .plugin-status.status-missing { color: var(--status-open); }
-.plugin-chip {
-  display: inline-flex; align-items: center; padding: var(--space-2) var(--space-6); border-radius: var(--radius-2xs);
-  border: 1px solid var(--border); color: var(--fg-dim); font: var(--text-2xs)/1.6 var(--font-mono);
-}
-.plugin-chip-warn { color: var(--status-open); border-color: var(--status-open); }
-.plugin-chip-idle { color: var(--fg-mute); }
 .plugin-description { margin: 0; color: var(--fg-dim); font-size: var(--text-sm); }
 .plugin-diagnostic { margin: 0; color: var(--status-open); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .plugin-enablement { display: flex; gap: var(--space-8) var(--space-20); flex-wrap: wrap; }

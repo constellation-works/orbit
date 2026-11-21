@@ -97,7 +97,7 @@ export function formatTaskCount(filteredCount, fetchedCount, meta) {
 // a tag outside the namespace reads as the wait it causes.
 function buildScheduledChip(task) {
   if (task.status !== "backlog" || !task.not_before || task.scheduled_hold === false || Date.parse(task.not_before) <= Date.now()) return null;
-  return el("span", { class: "scheduled-chip", title: "Waiting for the scheduled time; starts on the next admission pass afterwards" }, [
+  return el("span", { class: "pill", "data-state": "pending", title: "Waiting for the scheduled time; starts on the next admission pass afterwards" }, [
     "Scheduled ", absTimeNode(task.not_before),
   ]);
 }
@@ -108,11 +108,11 @@ function buildOsBadges(task) {
   const invalid = Array.isArray(requirement.invalid) ? requirement.invalid : [];
   const anyOf = Array.isArray(requirement.any_of) ? requirement.any_of : [];
   if (["unresolved", "conflict"].includes(requirement.state)) {
-    return [el("span", { class: "os-badge os-badge-invalid", text: requirement.state, title: requirement.describe })];
+    return [el("span", { class: "badge", "data-tone": "unknown", text: requirement.state, title: requirement.describe })];
   }
   return [
-    ...anyOf.map((os) => el("span", { class: "os-badge mono", text: os === "macos" ? "macOS" : os, title: `Runs on ${requirement.describe || os}` })),
-    ...invalid.map((tag) => el("span", { class: "os-badge os-badge-invalid mono", text: tag, title: "Unsupported OS tag: no host runs this task until it is retagged" })),
+    ...anyOf.map((os) => el("span", { class: "badge mono", "data-tone": "accent", text: os === "macos" ? "macOS" : os, title: `Runs on ${requirement.describe || os}` })),
+    ...invalid.map((tag) => el("span", { class: "badge mono", "data-tone": "unknown", text: tag, title: "Unsupported OS tag: no host runs this task until it is retagged" })),
   ];
 }
 
@@ -484,14 +484,14 @@ function buildBacklogReadiness(group, context) {
     ...DRAIN_POOLS.map(({ key, label }) => {
       const on = readyPoolFilter === key;
       const button = el("button", {
-        class: `ready-filter${on ? " active" : ""}`,
+        class: "chip",
         type: "button",
         "aria-pressed": on ? "true" : "false",
         "aria-description": on ? "Show every backlog task" : `Show only tasks ${label.toLowerCase()}`,
       }, [
         el("span", { class: "ready-filter-dot", "aria-hidden": "true" }),
-        el("strong", { class: "ready-filter-count", text: String(counts[key]) }),
-        el("span", { text: READY_POOL_WORDS[key] || label.toLowerCase() }),
+        el("span", { class: "chip-count", text: String(counts[key]) }),
+        el("span", { class: "chip-label", text: READY_POOL_WORDS[key] || label.toLowerCase() }),
       ]);
       button.dataset.pool = key;
       button.disabled = counts[key] === 0 && !on;
@@ -515,7 +515,7 @@ function buildHumanCrewBadge(task) {
   const human = humanCrewFor(task);
   if (!human) return null;
   return el("span", {
-    class: "human-crew-badge",
+    class: "badge", "data-tone": "accent",
     text: `for ${human.name}`,
     title: `Operator work for human crew ${human.name}: no drain or task pilot picks it up`,
   });
@@ -525,7 +525,7 @@ function buildHumanCrewBadge(task) {
 // The All workspaces row's workspace pill, in its workspace's palette colour
 // (the same one the Tasks workspace filter entry shows).
 function buildWorkspaceBadge(task) {
-  const badge = el("span", { class: "ws-badge mono", text: task.workspace_name, title: `Workspace: ${task.workspace_name}` });
+  const badge = el("span", { class: "badge", text: task.workspace_name, title: `Workspace: ${task.workspace_name}` });
   badge.dataset.wsColor = String(workspaceColor(task.workspace_id));
   return badge;
 }
@@ -738,7 +738,7 @@ export function renderTasks(tasks, context) {
           ...taskReadiness.buildPilotWarningBadge(t),
           ...taskReadiness.buildActiveTriageBadges(t),
           ...taskReadiness.buildDeliveryAttentionBadge(t),
-          ...prefixes.map((label) => el("span", { class: "title-tag", text: label, title: `[${label}]` })),
+          ...prefixes.map((label) => el("span", { class: "badge", text: label, title: `[${label}]` })),
         ].filter(Boolean);
         // The title is the row's disclosure: the row holds the copy-id button,
         // the crew select and the quick action, so it cannot be a button itself.

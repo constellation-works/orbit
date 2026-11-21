@@ -5,7 +5,7 @@
 // or the Pin button keeps it open. The readings ride the host resource poll
 // (`provider_limits` and `provider_pressures` in its payload), so they follow
 // the selected host and pause with it in a hidden tab.
-import { el, escCloseButton, formatDateTime } from './common.js';
+import { resourcePillTone, el, escCloseButton, formatDateTime } from './common.js';
 
 const DIALOG_ID = 'provider-usage-dialog';
 // One dialog lists every provider; it opens from the `+N more` chip and, on
@@ -390,7 +390,7 @@ function providerDialog(view) {
   return [
     el('div', { class: 'usage-head dialog-header' }, [
       el('h2', { text: view.title }),
-      el('span', { class: `usage-pill ${view.pill.tone}`, text: view.pill.text }),
+      el('span', { class: 'pill', 'data-tone': resourcePillTone(view.pill.tone), text: view.pill.text, title: view.pill.text }),
       ...(view.observed ? [el('span', { class: 'usage-observed', text: view.observed })] : []),
     ]),
     ...(view.pressure ? [el('section', { class: 'usage-section usage-pressure' }, [

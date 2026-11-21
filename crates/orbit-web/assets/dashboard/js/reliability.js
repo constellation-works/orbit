@@ -522,7 +522,8 @@ function renderReliabilityScope(payload) {
   const scope = payload && payload.scope === "workspace" ? "Workspace" : "Fleet-wide";
   const rel = reliabilityWindowFor(getWindow());
   badge.textContent = rel.independent ? `${scope} · independent ${rel.window}` : scope;
-  badge.className = "scope-badge independent";
+  badge.className = "badge";
+  badge.dataset.tone = "accent";
   badge.hidden = false;
   badge.title = rel.independent
     ? "Reliability is fleet-wide and cannot use the unbounded all window"

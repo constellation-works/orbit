@@ -386,7 +386,7 @@ export function buildHumanTaskPanel(task) {
   const commands = humanTaskCommands(desc);
   const panel = el("div", { class: "human-task-panel" });
   panel.appendChild(el("div", { class: "human-task-head" }, [
-    el("span", { class: "human-task-badge", text: `For you · ${crew.name}` }),
+    el("span", { class: "human-task-label", text: `For you · ${crew.name}` }),
     commands.length ? (() => { const b = el("button", { class: "action human-copy-all", type: "button", text: "Copy all commands" }); b.addEventListener("click", (e) => { e.stopPropagation(); copyWithFeedback(b, commands.join("\n")); }); return b; })() : null,
   ]));
   if (summary) panel.appendChild(el("p", { class: "human-task-summary", text: summary.replace(/^#+\s*/, "") }));

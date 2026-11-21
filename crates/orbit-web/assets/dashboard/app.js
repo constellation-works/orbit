@@ -481,14 +481,14 @@ function runDetailContext() {
 
 function knowledgeStatusPill(status) {
   const value = status || "active";
-  return el("span", { class: `knowledge-pill ${value}`, text: value });
+  return el("span", { class: "pill", "data-status": value, "data-tone": value === "active" ? "success" : null, text: value });
 }
 
 function knowledgeTagWrap(nodes) {
   const values = Array.isArray(nodes) ? nodes : [];
   return el("span", { class: "knowledge-tags" }, values.length > 0
     ? values
-    : [el("span", { class: "knowledge-tag dim", text: "-" })]);
+    : [el("span", { class: "badge", "data-tone": "muted", text: "-" })]);
 }
 
 function markdownPanel(body, fallbackClass) {
@@ -507,8 +507,8 @@ function markdownPanel(body, fallbackClass) {
 
 function frictionTagNodes(tags = []) {
   const values = Array.isArray(tags) ? tags : [];
-  if (values.length === 0) return [el("span", { class: "knowledge-tag dim", text: "-" })];
-  return values.map((tag) => el("span", { class: "knowledge-tag", text: tag, title: tag }));
+  if (values.length === 0) return [el("span", { class: "badge", "data-tone": "muted", text: "-" })];
+  return values.map((tag) => el("span", { class: "badge mono", text: tag, title: tag }));
 }
 
 function paintFrictionStat(id, value) {
@@ -866,7 +866,7 @@ function buildFrictionTagPicker(friction, detail) {
   const grid = el("div", { class: "friction-tag-options" });
   const checkboxes = new Map();
   if (options.length === 0) {
-    grid.appendChild(el("span", { class: "knowledge-tag dim", text: "-" }));
+    grid.appendChild(el("span", { class: "badge", "data-tone": "muted", text: "-" }));
   }
   for (const tag of options) {
     const id = `friction-tag-${friction.id}-${tag}`;
@@ -883,9 +883,9 @@ function buildFrictionTagPicker(friction, detail) {
       }
       patchFriction(friction, { tags }, checkbox, detail);
     });
-    const label = el("label", { class: "friction-tag-option", title: tag }, [
+    const label = el("label", { class: "chip mono" }, [
       checkbox,
-      el("span", { text: tag }),
+      el("span", { class: "chip-label", text: tag }),
     ]);
     grid.appendChild(label);
   }
@@ -937,7 +937,7 @@ async function resolveFriction(friction, btn, detail) {
 function buildKnowledgeValueList(values, opts = {}) {
   const wrap = el("div", { class: "knowledge-detail-list" });
   if (!values || values.length === 0) {
-    wrap.appendChild(el("span", { class: "knowledge-tag dim", text: "-" }));
+    wrap.appendChild(el("span", { class: "badge", "data-tone": "muted", text: "-" }));
     return wrap;
   }
   for (const value of values) {
@@ -950,7 +950,7 @@ function buildKnowledgeValueList(values, opts = {}) {
       });
       wrap.appendChild(btn);
     } else {
-      wrap.appendChild(el("span", { class: "knowledge-tag", text: value, title: value }));
+      wrap.appendChild(el("span", { class: "badge mono", text: value, title: value }));
     }
   }
   return wrap;

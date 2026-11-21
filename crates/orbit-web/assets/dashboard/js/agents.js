@@ -1044,7 +1044,7 @@ function rankingNode(ranking) {
 // so it has no score or rank.
 function unjudgedTag() {
   const tag = el("span", {
-    class: "agents-tag agents-tag-unjudged",
+    class: "badge", "data-tone": "muted",
     text: "unjudged",
   });
   tag.dataset.tag = "unjudged";

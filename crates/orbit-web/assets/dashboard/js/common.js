@@ -1278,6 +1278,11 @@ export function normalizeTaskStatus(status) {
   return String(status || "unknown").replaceAll("_", "-");
 }
 
+// Host and provider resource verdicts use the same marker palette.
+export function resourcePillTone(severity) {
+  return { critical: "danger", elevated: "warning", ok: "success", stale: "unknown", off: "unknown" }[severity];
+}
+
 export function statusPill(status) {
   status = normalizeTaskStatus(status);
   const pill = el("span", { class: "pill", text: status });
@@ -1304,7 +1309,7 @@ export function incidentClassLabel(key, label) {
 }
 
 export function stateCell(state) {
-  const node = el("span", { class: "state-label", text: state });
+  const node = el("span", { class: "pill", text: state });
   node.dataset.state = state;
   return node;
 }
