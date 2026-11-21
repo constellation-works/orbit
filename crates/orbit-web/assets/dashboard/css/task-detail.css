@@ -287,35 +287,6 @@
 .detail-tab-count:empty { display: none; }
 .detail-tabpanel { min-width: 0; }
 .detail-tabpanel[hidden] { display: none; }
-/* ORB-25102: on the comments tab the panel fills the detail to the pinned
-   Comment action, so a short thread meets the composer with no dead band;
-   the thread itself is uncapped (below) and the detail scrolls as a whole. */
-.task-detail-pane .task-detail > .detail-tabpanel[data-tab-panel="comments"]:not([hidden]) {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-.comments-tab-content {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-height: 0;
-}
-.comments-tab-content > .comments-panel {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-height: 0;
-}
-.comments-panel:not(.collapsed) .comment-thread {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-.comments-panel:not(.collapsed) .comment-thread > .comment-card:last-child {
-  flex-grow: 1;
-}
-
 .history-list { min-width: 0; }
 
 .task-run-list {
@@ -1543,11 +1514,8 @@ input.field-editor-input {
   .history-kv dd { margin-bottom: 6px; }
 }
 
-/* ORB-25102 (replaces the ORB-12645 cap): the comment thread grows with
-   the detail so no band sits between the last comment and the Comment
-   action; the detail scrolls as a whole and the sticky footer keeps the
-   Comment action visible. Per-card collapse and the ~72ch body measure
-   stay on the cards themselves. */
+/* The thread follows its content; the detail scrolls as a whole and the
+   sticky footer keeps the Comment action visible on long threads. */
 .comments-panel .comment-thread {
   display: flex;
   flex-direction: column;
@@ -1709,7 +1677,8 @@ input.field-editor-input {
   border-left: 1px solid var(--hair);
   padding-left: 10px;
   position: sticky;
-  top: 48px;
+  /* Leave room for the expanded header when its actions wrap onto a second row. */
+  top: 96px;
 }
 .comment-outline-title {
   font-size: 10px;
