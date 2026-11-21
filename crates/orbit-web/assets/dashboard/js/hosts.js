@@ -203,11 +203,14 @@ function renderDialog() {
   const local = lastPayload.hosts.find(host => host.local);
   const content = el("div", { class: "fleet-dialog-body dialog-body" });
   const title = editing ? `${editing.kind === "add" ? "Add host" : editing.kind === "rename" ? "Rename" : "Remove"}${row ? ` · ${row.name}` : ""}` : row.name;
+  let actions = null;
   if (editing && editing.kind !== "add" && !row) {
     content.append(el("p", { class: "config-note", role: "status", text: "Host removed. Waiting for the change to finish." }));
   } else if (editing) {
     content.append(el("span", { class: "muted", text: `Registry on ${local?.name || "the serving host"}` }));
-    content.append(editing.kind === "add" ? addSection() : editing.kind === "rename" ? renameEditor(row) : removeEditor(row));
+    const editor = editing.kind === "add" ? addSection() : editing.kind === "rename" ? renameEditor(row) : removeEditor(row);
+    content.append(editor.body);
+    actions = cancelOnEscape(editor.actions);
   } else {
     const names = new Map(lastPayload.hosts.map(host => [host.machine_id, host.name]));
     content.append(el("section", { class: "fleet-dialog-section" }, [
@@ -248,13 +251,18 @@ function renderDialog() {
       ]));
     }
   }
-  dialog.replaceChildren(el("header", { class: "dialog-header" }, [
-    el("h2", { id: "fleet-dialog-title", text: title }),
-    escCloseButton("Close host details (Esc)", {
-      description: "Close diagnostics and discard unsaved edits",
-      onClick: closeFleetDialog,
-    }),
-  ]), content);
+  const children = [
+    el("header", { class: "dialog-header" }, [
+      el("h2", { id: "fleet-dialog-title", text: title }),
+      escCloseButton("Close host details (Esc)", {
+        description: "Close diagnostics and discard unsaved edits",
+        onClick: closeFleetDialog,
+      }),
+    ]),
+    content,
+  ];
+  if (actions) children.push(actions);
+  dialog.replaceChildren(...children);
   for (const detail of dialog.querySelectorAll("details")) detail.open = openDetails.has(detail.querySelector("summary")?.textContent);
   if (!dialog.open) dialog.showModal();
   restore();
@@ -486,24 +494,26 @@ function actionsCell(row) {
 
 // ----------------------------------------------------------------- editors
 
+const EDITOR_FORM_ID = "fleet-host-editor-form";
+
+function editorActions(note, buttons) {
+  return el("div", { class: "config-editor-foot dialog-actions" }, [
+    el("span", { class: "config-note", text: note }),
+    el("span", { class: "config-editor-actions" }, buttons),
+  ]);
+}
+
 function addSection() {
   const section = el("div", { class: "host-add" });
   section.dataset.key = "host-add";
   const ssh = textInput("host-input-ssh", "SSH target", "alias or user@host", editing.draft, "ssh");
   const name = textInput("host-input-name", "Name (optional)", "defaults to the host's machine.name", editing.draft, "name");
-  const form = el("form", { class: "config-editor host-editor" }, [
+  const form = el("form", { id: EDITOR_FORM_ID, class: "config-editor host-editor" }, [
     el("div", { class: "config-editor-head" }, [
       el("span", { class: "settings-section-title", text: "Add a host" }),
       el("span", { class: "config-note", text: "Orbit logs in over SSH, reads the host's identity and writes the entry here. Nothing is written on that host." }),
     ]),
     el("div", { class: "host-fields" }, [ssh.label, name.label]),
-    el("div", { class: "config-editor-foot dialog-actions" }, [
-      el("span", { class: "config-note", text: editing.pending ? "Probing the host…" : "" }),
-      el("span", { class: "config-editor-actions" }, [
-        submitButton(editing.pending ? "Adding…" : "Add"),
-        actionButton("Cancel", closeEditor, "ghost"),
-      ]),
-    ]),
     editorError(),
   ]);
   form.addEventListener("submit", (event) => {
@@ -511,27 +521,32 @@ function addSection() {
     submitAdd(ssh.read(), name.read());
   });
   section.appendChild(cancelOnEscape(form));
-  return section;
+  return {
+    body: section,
+    actions: editorActions(editing.pending ? "Probing the host…" : "", [
+      submitButton(editing.pending ? "Adding…" : "Add", EDITOR_FORM_ID),
+      actionButton("Cancel", closeEditor, "ghost"),
+    ]),
+  };
 }
 
 function renameEditor(row) {
   const name = textInput("host-input-name", "New name", row.name, editing.draft, "name");
-  const form = el("form", { class: "config-editor host-editor" }, [
+  const form = el("form", { id: EDITOR_FORM_ID, class: "config-editor host-editor" }, [
     el("div", { class: "host-fields" }, [name.label]),
-    el("div", { class: "config-editor-foot dialog-actions" }, [
-      el("span", { class: "config-note", text: `Renames the entry only; ${row.machine_id} and its SSH target are unchanged.` }),
-      el("span", { class: "config-editor-actions" }, [
-        submitButton(editing.pending ? "Saving…" : "Save"),
-        actionButton("Cancel", closeEditor, "ghost"),
-      ]),
-    ]),
     editorError(),
   ]);
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     submitRename(row, name.read());
   });
-  return cancelOnEscape(form);
+  return {
+    body: cancelOnEscape(form),
+    actions: editorActions(`Renames the entry only; ${row.machine_id} and its SSH target are unchanged.`, [
+      submitButton(editing.pending ? "Saving…" : "Save", EDITOR_FORM_ID),
+      actionButton("Cancel", closeEditor, "ghost"),
+    ]),
+  };
 }
 
 function removeEditor(row) {
@@ -550,20 +565,19 @@ function removeEditor(row) {
       text: `Remove ${row.name} (${row.machine_id}) from the host file? Nothing on that host changes.`,
     }));
   }
-  children.push(el("div", { class: "config-editor-foot dialog-actions" }, [
-    el("span", { class: "config-note", text: editing.pending ? "Removing…" : "" }),
-    el("span", { class: "config-editor-actions" }, [
+  if (!inUse) children.push(editorError());
+  const confirm = el("div", { class: "config-editor host-editor host-remove-confirm" }, children);
+  confirm.setAttribute("role", "group");
+  confirm.setAttribute("aria-label", `Remove ${row.name}`);
+  return {
+    body: cancelOnEscape(confirm),
+    actions: editorActions(editing.pending ? "Removing…" : "", [
       inUse
         ? actionButton("Force remove", () => submitRemove(row, true), "primary host-confirm danger")
         : actionButton("Remove", () => submitRemove(row, false), "primary host-confirm"),
       actionButton("Cancel", closeEditor, "ghost"),
     ]),
-  ]));
-  if (!inUse) children.push(editorError());
-  const confirm = el("div", { class: "config-editor host-editor host-remove-confirm" }, children);
-  confirm.setAttribute("role", "group");
-  confirm.setAttribute("aria-label", `Remove ${row.name}`);
-  return cancelOnEscape(confirm);
+  };
 }
 
 function dependentLines(dependents) {
@@ -609,9 +623,10 @@ function actionButton(label, onClick, kind = "") {
   return button;
 }
 
-function submitButton(label) {
+function submitButton(label, formId) {
   const button = el("button", { class: "settings-btn primary host-submit", text: label });
   button.type = "submit";
+  if (formId) button.setAttribute("form", formId);
   const description = editing?.pending ? "Wait for the registry change to finish" : "Validate and save this change to the serving registry";
   button.setAttribute("aria-label", label);
   if (description && description !== label) {
@@ -634,7 +649,7 @@ function openEditor(next) {
 
 function focusEditor() {
   const body = dialog;
-  const target = body?.querySelector(".host-editor input") || body?.querySelector(".host-editor .host-confirm");
+  const target = body?.querySelector(".host-editor input") || body?.querySelector(".host-confirm");
   target?.focus?.();
 }
 
