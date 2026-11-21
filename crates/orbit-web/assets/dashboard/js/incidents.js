@@ -585,7 +585,7 @@ function classTilesNode(payload, window) {
         el("span", { class: "stat-tile-label-text", text: INCIDENT_CLASS_TITLES[key] }),
       ]),
       el("span", { class: "stat-tile-figure", text: number(incidents) }),
-      el("span", { class: "stat-tile-compare", text: `${plural(incidents, "incident")} · ${plural(events, "event")} · ${plural(runs, "run")}` }),
+      el("span", { class: "stat-tile-compare", text: `${plural(events, "event")} · ${plural(runs, "run")}` }),
       key === "diagnostic" ? el("span", { class: "stat-tile-note", text: "excluded from tool rates" }) : null,
     ]);
     tile.dataset.class = key;
