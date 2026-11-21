@@ -126,8 +126,11 @@ def publish_marker(path, text):
 IGNORE_TERM_DRIVER = MARKER_PUBLISH + r"""
 import os, pathlib, signal, sys, time
 pid_file = pathlib.Path(sys.argv[1])
-publish_marker(pid_file, str(os.getpid()))
+# The handler is installed before the PID is staged: publish_marker pauses before
+# it writes, and a supervision deadline that lands in that pause must still reach
+# this handler rather than the default disposition (ORB-26485).
 signal.signal(signal.SIGTERM, lambda signum, frame: publish_marker(pid_file.with_suffix(".term"), str(signum)))
+publish_marker(pid_file, str(os.getpid()))
 time.sleep(600)
 """
 
@@ -881,6 +884,42 @@ runpy.run_path(script, run_name="__main__")
         self.assert_reaped([leader_pid])
         self.assert_lane_released()
         self.assertFalse((out / "paired-summary.json").exists())
+
+    def test_sigterm_during_fixture_pid_staging_reaches_handler(self) -> None:
+        # ORB-26485: a supervision deadline can expire while the ignore-term fixture
+        # is still staging its PID. The `<pid>.tmp` sibling exists for the whole
+        # staging pause, so deliver the SIGTERM once it appears and require both
+        # markers to become complete. The handler must already be installed then.
+        pid_file = self.marks / "staged-base.pid"
+        fixture = subprocess.Popen(
+            [sys.executable, "-I", str(self.builds.parent / "ignore_term_driver.py"),
+             str(pid_file)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+        )
+
+        def cleanup() -> None:
+            if fixture.poll() is None:
+                fixture.kill()
+            fixture.communicate(timeout=30)
+        self.addCleanup(cleanup)
+
+        staging = pid_file.with_name(pid_file.name + ".tmp")
+        deadline = time.monotonic() + 60
+        while not staging.exists():
+            self.assertIsNone(fixture.poll(), "fixture exited before staging its PID")
+            self.assertLess(time.monotonic(), deadline, "fixture never started staging its PID")
+            time.sleep(0.001)
+        fixture.send_signal(signal.SIGTERM)
+
+        term_file = self.marks / "staged-base.term"
+        deadline = time.monotonic() + 60
+        while not (term_file.exists() and pid_file.exists()):
+            returncode = fixture.poll()
+            self.assertIsNone(returncode, f"fixture exited {returncode} before publishing its markers")
+            self.assertLess(time.monotonic(), deadline, "fixture markers never became readable")
+            time.sleep(0.001)
+        self.assertEqual(int(pid_file.read_text()), fixture.pid)
+        self.assertEqual(term_file.read_text(), str(signal.SIGTERM))
 
 
 class PairedCliSpacedPathTest(PairedCliTestCase):
