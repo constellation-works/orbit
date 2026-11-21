@@ -22,6 +22,7 @@ See docs/runbooks/perf-timing-protocol.md.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import math
 import os
@@ -308,6 +309,10 @@ def run_supervised(argv: list[str], *, cwd, env, timeout: float, output_limit: i
                       timeout, output_limit)
 
 
+class HttpRequestError(Exception):
+    """An arm HTTP server failed to return a complete HTTP response."""
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     """Keep the timed route's response instead of requesting its destination."""
 
@@ -373,11 +378,14 @@ class Server:
 
     def get(self, path: str) -> tuple[int, bytes]:
         try:
-            with self.opener.open(self.base + path, timeout=HTTP_TIMEOUT_SECONDS) as response:
-                return response.status, response.read()
-        except urllib.error.HTTPError as error:
-            with error:
-                return error.code, error.read()
+            try:
+                with self.opener.open(self.base + path, timeout=HTTP_TIMEOUT_SECONDS) as response:
+                    return response.status, response.read()
+            except urllib.error.HTTPError as error:
+                with error:
+                    return error.code, error.read()
+        except (urllib.error.URLError, http.client.HTTPException, OSError) as error:
+            raise HttpRequestError(f"{type(error).__name__}: {error}") from error
 
     def _leader_exited(self) -> bool:
         return leader_exited(self.process.pid)
@@ -427,13 +435,17 @@ def arm_observation_failure(record: dict) -> str | None:
     """
     if "command" not in record and "http" not in record:
         return "missing observation"
+    reasons: list[str] = []
     if "command" in record and record["command"].get("exit") != 0:
-        return f"command exited {record['command'].get('exit')}"
+        reasons.append(f"command exited {record['command'].get('exit')}")
     if "http" in record:
-        status = record["http"].get("status")
-        if not isinstance(status, int) or status < 200 or status >= 300:
-            return f"http status {status}"
-    return None
+        if "error" in record["http"]:
+            reasons.append(f"http error: {record['http']['error']}")
+        else:
+            status = record["http"].get("status")
+            if not isinstance(status, int) or status < 200 or status >= 300:
+                reasons.append(f"http status {status}")
+    return "; ".join(reasons) if reasons else None
 
 
 def parity_refusal_detail(parity: dict) -> str:
@@ -532,10 +544,13 @@ class Harness:
                     server = Server(self.binaries[arm], info, env)
                     try:
                         status, body = server.get(self.http_path)
+                    except HttpRequestError as error:
+                        record["http"] = {"error": str(error)}
+                    else:
+                        record["http"] = {"status": status,
+                                          "body": normalize_output(body, self.masks, info["root"])}
                     finally:
                         server.stop()
-                    record["http"] = {"status": status,
-                                      "body": normalize_output(body, self.masks, info["root"])}
             finally:
                 self.drop(info)
             arms[arm] = record
@@ -578,7 +593,13 @@ class Harness:
 
                 def timed():
                     started = time.perf_counter()
-                    status, _body = server.get(self.http_path)
+                    try:
+                        status, _body = server.get(self.http_path)
+                    except HttpRequestError as error:
+                        raise common.PerfRefusal(
+                            f"{arm} round {round_index} sample {len(samples)} failed: {error}; "
+                            "failing the run"
+                        ) from error
                     ms = (time.perf_counter() - started) * 1000
                     return ms, 0 if 200 <= status < 300 else status
             try:
