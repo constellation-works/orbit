@@ -49,6 +49,30 @@ class DashboardCssLiteralsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("0 colour literals and 0 raw font sizes", result.stdout)
 
+    def test_composite_base_token_and_equivalent_alpha_hints(self):
+        (self.root / "crates/orbit-web/assets/dashboard/css/base.css").write_text(
+            ":root { --outline: #fff thin; --accent-wash: rgba(122, 167, 255, 0.1); }\n",
+            encoding="utf-8",
+        )
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("0 colour literals and 0 raw font sizes", result.stdout)
+
+        self.stylesheet.write_text(
+            ".x { color: rgba(122,167,255,.104); background: rgb(122 167 255 / 10%); }\n",
+            encoding="utf-8",
+        )
+        result = self.run_guard()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(
+            "rgba(122,167,255,.104); use a colour token from",
+            result.stderr,
+        )
+        self.assertIn(
+            "rgb(122 167 255 / 10%); use var(--accent-wash), the base.css token with this value",
+            result.stderr,
+        )
+
     def test_reports_nested_rgb_declaration_as_colour_rise(self):
         self.stylesheet.write_text(
             ".x { color: rgb(calc(10 + var(--n)) 20 30); }\n",
