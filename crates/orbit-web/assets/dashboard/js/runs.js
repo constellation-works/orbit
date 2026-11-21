@@ -1387,7 +1387,10 @@ function runGroupRow(group, attributed, listed) {
   return row;
 }
 
-function runRow(r, attributed, body, { child = false } = {}) {
+// A task group's header carries the one task all its children share, so those
+// children leave the Task cell empty. A repeated-failure header spans tasks, so
+// its children keep their own links.
+function runRow(r, attributed, body, { child = false, sharedTaskInHeader = false } = {}) {
   const ts = r.finished_at || r.started_at || r.scheduled_at || r.created_at;
   const friction = runFriction(r);
   const { durationMs, isLive } = runDurationInfo(r);
@@ -1422,7 +1425,7 @@ function runRow(r, attributed, body, { child = false } = {}) {
     el("span", { class: "state" }, [stateCell(r.state)]),
     attributed ? el("span", { class: "run-workspace", text: r.workspace_name || r.workspace_id, title: r.workspace_id }) : null,
     openButton,
-    child ? el("span", { class: "run-tasks", "aria-hidden": "true" }) : runTaskLinks(r),
+    child && sharedTaskInHeader ? el("span", { class: "run-tasks", "aria-hidden": "true" }) : runTaskLinks(r),
     runFailedAtCell(r),
     runIdCell,
     el("span", { class: "when", text: formatAge(ts), title: ts ? formatDateTime(ts) : "" }),
@@ -1438,7 +1441,7 @@ function runRow(r, attributed, body, { child = false } = {}) {
   row.dataset.key = `run-${runIdentity(r)}`;
   row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${resumeRequestsInFlight.has(runIdentity(r)) ? "resuming" : ""}-${friction.denials}-${friction.toolFails}-${durationMs}-${formattedDuration}-${isLive ? "live" : ""}-${friction.longRun}-${child ? "child" : ""}-${runFailureHash(r)}`;
   row.style.cursor = "pointer";
-  row.dataset.hash += `-${JSON.stringify(r.tasks)}-${JSON.stringify(r.task_ids)}`;
+  row.dataset.hash += `-${JSON.stringify(r.tasks)}-${JSON.stringify(r.task_ids)}-${child && sharedTaskInHeader ? "header-task" : ""}`;
   // A run row opens the run detail view rather than disclosing inline, so its
   // button has no expansion state.
   makeRowDisclosure(row, openButton, { onToggle: (event) => {
@@ -1519,7 +1522,7 @@ export function renderRuns(runs) {
     }
     frag.appendChild(runGroupRow(entry, attributed, top));
     if (expandedRunGroups.has(entry.key)) {
-      for (const r of entry.runs) frag.appendChild(runRow(r, attributed, body, { child: true }));
+      for (const r of entry.runs) frag.appendChild(runRow(r, attributed, body, { child: true, sharedTaskInHeader: !entry.repeatedFailure }));
     }
   }
   syncNodes(body, Array.from(frag.children));
