@@ -539,14 +539,16 @@ tasks are finishing, and what each task costs in tokens and rework.
 | Trend | Counts |
 |---|---|
 | **Implementation time** | Wall-clock time of implementation runs, by complexity. **Succeeded** (default) counts runs that committed a candidate; **All** adds failed, cancelled, and no-diff runs. |
+| **Tasks completed** | Tasks that reached done, grouped by complexity, plus rejected and archived counts. |
 | **Tokens per task**, **Tokens** | Mean and total normalized tokens of the tasks that closed in each bucket. |
 | **Turns to first edit** | Tool calls before the first file edit in a task's first implement invocation. |
 | **Lines changed** | Lines added and deleted by landed deliveries. `workflow.test_paths` and `workflow.non_code_paths` set which paths count as tests or non-code. |
 | **Delivery friction** | Recoveries, PR auto-fixes, merge conflicts, failed CI, cost, and tokens. **Per done task** divides by the tasks done in the same bucket. |
 | **Defects** | Bug tasks filed, grouped by **Lineage** (what `regression_from` names as the cause) or **Origin** (the review or sweep that filed them). |
 
-Below the chart, **Actors within a complexity** always covers the last 30
-days and **Outcome by complexity** covers all time.
+On the **Implementation time** tab, **Actors within a complexity** always
+covers the last 30 days. On **Tasks completed**, **Outcome by complexity**
+shows the all-time distribution.
 
 ### Codebase
 
