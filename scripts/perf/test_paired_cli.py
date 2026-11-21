@@ -15,6 +15,7 @@ import hashlib
 import json
 import fcntl
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -256,9 +257,15 @@ def write_builds(builds: Path, marks: Path) -> dict[str, Path]:
     revisions = {}
     for role, commit in (("base", "a"), ("candidate", "c")):
         path = builds / role
+        # The arm script is shell source, so every interpolated path is quoted:
+        # a checkout or scratch path with a space must stay one word.
         path.write_text(ARM_SCRIPT.format(
-            role=role, marks=marks, python=sys.executable,
-            web_server=web_server, graceful_driver=graceful_driver))
+            role=role,
+            marks=shlex.quote(str(marks)),
+            python=shlex.quote(sys.executable),
+            web_server=shlex.quote(str(web_server)),
+            graceful_driver=shlex.quote(str(graceful_driver)),
+        ))
         path.chmod(0o755)
         binaries[role] = path
         revisions[role] = {
@@ -275,9 +282,12 @@ def write_builds(builds: Path, marks: Path) -> dict[str, Path]:
 
 
 class PairedCliTestCase(unittest.TestCase):
+    # Prefix of the disposable root under SCRATCH; subclasses may vary it.
+    root_prefix = "paired-cli-"
+
     def setUp(self) -> None:
         SCRATCH.mkdir(parents=True, exist_ok=True)
-        self.temp = tempfile.TemporaryDirectory(prefix="paired-cli-", dir=SCRATCH)
+        self.temp = tempfile.TemporaryDirectory(prefix=self.root_prefix, dir=SCRATCH)
         self.addCleanup(self.temp.cleanup)
         root = Path(self.temp.name)
         self.builds = root / "builds"
@@ -768,6 +778,36 @@ runpy.run_path(script, run_name="__main__")
         self.assert_reaped([leader_pid])
         self.assert_lane_released()
         self.assertFalse((out / "paired-summary.json").exists())
+
+
+class PairedCliSpacedPathTest(PairedCliTestCase):
+    # ORB-26414: the fake arms are shell scripts that name their marks
+    # directory, interpreter and helper scripts in shell source. A root path
+    # containing a space must not split those words, or the arms never record.
+    root_prefix = "paired cli spaced "
+
+    def test_stall_arm_records_markers_under_spaced_root(self) -> None:
+        result, out = self.run_paired("--parity", "probe-same", "--command-timeout", "1",
+                                      surface=("--cli", "stall"))
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("timed out after 1 s", result.stderr)
+        self.assertFalse((out / "paired-summary.json").exists())
+        leader, descendant = (int(pid) for pid in
+                              (self.marks / "stall-base.pids").read_text().split())
+        self.assert_reaped([leader, descendant])
+        self.assert_lane_released()
+
+    def test_http_arms_record_markers_under_spaced_root(self) -> None:
+        result, out = self.run_paired(surface=("--http", "/ok"))
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        report = json.loads((out / "parity.json").read_text())
+        self.assertIs(report["match"], True)
+        for arm in ("base", "candidate", "control"):
+            self.assertEqual(report["arms"][arm]["http"]["status"], 200)
+        pids = self.recorded_web_pids()
+        self.assertGreaterEqual(len(pids), 3)
+        self.assert_reaped(pids)
+        self.assert_lane_released()
 
 
 if __name__ == "__main__":
