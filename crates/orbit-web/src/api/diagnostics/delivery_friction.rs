@@ -43,7 +43,7 @@ use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_core::{OrbitRuntime, V2AuditEventFilter};
-use orbit_types::task::{Task, TaskStatus, UNSET_BUCKET, complexity_bucket, complexity_bucket_ord};
+use orbit_types::task::{Task, TaskStatus, complexity_bucket, complexity_bucket_ord};
 use orbit_types::workflow::{PR_AUTO_FIX_ADMITTED_EVENT, PrAutoFixAttempt, PrAutoFixBlocker};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -51,15 +51,12 @@ use std::sync::Arc;
 
 use super::super::{DiagnosticsQuery, map_runtime_error};
 use super::metrics::DiagnosticsRange;
-use super::trend::{TrendWindow, trend_range};
+use super::trend::{TrendWindow, comma_list, parse_complexities, trend_range};
 use crate::runtime_memo::DASHBOARD_POLL_MEMO_TTL;
 use crate::state::{DashboardState, Ws};
 
 /// A bucket whose denominator is below this many done tasks is sparse.
 const MIN_DONE: u64 = 3;
-/// Complexities a request may name; `unassessed` is an alias of the unset
-/// bucket.
-const COMPLEXITIES: [&str; 5] = ["low", "medium", "hard", "xhard", UNSET_BUCKET];
 /// The most crews one request may name.
 const MAX_CREWS: usize = 16;
 /// Audit rows read per page.
@@ -195,14 +192,6 @@ impl Filters {
 /// The crew filter's name for a task without a recorded crew.
 const UNKNOWN_CREW: &str = "unknown";
 
-fn comma_list(raw: Option<&str>) -> Vec<&str> {
-    raw.unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .collect()
-}
-
 fn parse_filters(q: &DeliveryFrictionQuery) -> Result<Filters, String> {
     let requested = comma_list(q.families.as_deref());
     let families = if requested.is_empty() {
@@ -220,26 +209,7 @@ fn parse_filters(q: &DeliveryFrictionQuery) -> Result<Filters, String> {
         }
         set.into_iter().collect()
     };
-    let requested = comma_list(q.complexity.as_deref());
-    let complexities = if requested.is_empty() {
-        None
-    } else {
-        let mut set = BTreeSet::new();
-        for value in requested {
-            let bucket = if value == "unassessed" {
-                UNSET_BUCKET
-            } else {
-                value
-            };
-            let Some(known) = COMPLEXITIES.iter().find(|known| **known == bucket) else {
-                return Err(format!(
-                    "unknown complexity '{value}': expected low, medium, hard, xhard or unassessed"
-                ));
-            };
-            set.insert(*known);
-        }
-        Some(set)
-    };
+    let complexities = parse_complexities(q.complexity.as_deref())?;
     let requested = comma_list(q.crew.as_deref());
     if requested.len() > MAX_CREWS {
         return Err(format!("too many crews: at most {MAX_CREWS} may be named"));

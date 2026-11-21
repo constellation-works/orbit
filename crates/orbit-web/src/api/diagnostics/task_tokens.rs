@@ -8,36 +8,22 @@
 //! managed invocation linked to it, whenever that invocation ran, so spend
 //! recorded while the task was in flight never lands in an earlier bucket.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use axum::extract::{Query, State};
-use axum::response::{IntoResponse, Json, Response};
+use axum::response::Response;
 use orbit_core::OrbitRuntime;
 use orbit_core::metrics::cost::{TaskTokenSpend, TaskTokenTotals};
-use orbit_types::task::{TaskStatus, UNSET_BUCKET, complexity_bucket_ord};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::sync::Arc;
 
-use super::super::{DiagnosticsQuery, map_runtime_error};
+use super::super::map_runtime_error;
 use super::metrics::DiagnosticsRange;
-use super::trend::{TrendWindow, trend_range};
-use crate::runtime_memo::DASHBOARD_POLL_MEMO_TTL;
+use super::trend::{
+    CohortCell, CohortFilters, CohortSeriesMap, CohortWindowData, MIN_TASKS, available_tags_json,
+    average, memoized_trend_response, sorted_counts, trimmed_non_empty,
+};
 use crate::state::{DashboardState, Ws};
-
-/// Complexities a request may name; `unassessed` is an alias of the unset
-/// bucket.
-const COMPLEXITIES: [&str; 5] = ["low", "medium", "hard", "xhard", UNSET_BUCKET];
-/// Series drawn even when the window holds none of their tasks.
-const STANDING_SERIES: [&str; 4] = ["low", "medium", "hard", "xhard"];
-/// A point averaging fewer tasks than this is marked thin.
-const MIN_TASKS: usize = 3;
-/// Tags one request may split on.
-const MAX_TAGS: usize = 8;
-/// Tags listed for the picker, most used first.
-const AVAILABLE_TAGS: usize = 200;
-/// How far before the oldest task's filing the invocation read starts.
-const SPEND_READ_SLACK: chrono::Duration = chrono::Duration::days(1);
 
 #[derive(Deserialize, Default)]
 pub(in crate::api) struct TaskTokensQuery {
@@ -63,82 +49,30 @@ pub(in crate::api) struct TaskTokensQuery {
 }
 
 struct Filters {
-    done_only: bool,
+    cohort: CohortFilters,
     implement_only: bool,
-    /// `None` draws every complexity present.
-    complexities: Option<BTreeSet<&'static str>>,
-    tags: Vec<String>,
     model: Option<String>,
 }
 
-fn comma_list(raw: Option<&str>) -> Vec<String> {
-    raw.unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
 fn parse_filters(q: &TaskTokensQuery) -> Result<Filters, orbit_core::OrbitError> {
-    let invalid = |message: String| orbit_core::OrbitError::InvalidInput(message);
-    let done_only = match q.outcome.as_deref().unwrap_or("done") {
-        "done" => true,
-        "all" => false,
-        other => {
-            return Err(invalid(format!(
-                "unknown outcome '{other}': expected done or all"
-            )));
-        }
-    };
+    let cohort = CohortFilters::parse(
+        q.outcome.as_deref(),
+        q.complexity.as_deref(),
+        q.tags.as_deref(),
+    )?;
     let implement_only = match q.scope.as_deref().unwrap_or("all") {
         "all" => false,
         "implement" => true,
         other => {
-            return Err(invalid(format!(
+            return Err(orbit_core::OrbitError::InvalidInput(format!(
                 "unknown scope '{other}': expected all or implement"
             )));
         }
     };
-    let requested = comma_list(q.complexity.as_deref());
-    let complexities = if requested.is_empty() {
-        None
-    } else {
-        let mut set = BTreeSet::new();
-        for value in &requested {
-            let value = if value == "unassessed" {
-                UNSET_BUCKET
-            } else {
-                value
-            };
-            let Some(known) = COMPLEXITIES.iter().find(|known| **known == value) else {
-                return Err(invalid(format!(
-                    "unknown complexity '{value}': expected low, medium, hard, xhard or unassessed"
-                )));
-            };
-            set.insert(*known);
-        }
-        Some(set)
-    };
-    let mut tags = comma_list(q.tags.as_deref());
-    tags.sort();
-    tags.dedup();
-    if tags.len() > MAX_TAGS {
-        return Err(invalid(format!(
-            "too many tags: at most {MAX_TAGS} may be compared"
-        )));
-    }
-    let model = q
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-        .map(str::to_string);
+    let model = trimmed_non_empty(q.model.as_deref());
     Ok(Filters {
-        done_only,
+        cohort,
         implement_only,
-        complexities,
-        tags,
         model,
     })
 }
@@ -152,54 +86,34 @@ pub(in crate::api) async fn diagnostics_task_tokens(
         Ok(filters) => filters,
         Err(error) => return map_runtime_error(error),
     };
-    let range = match trend_range(&DiagnosticsQuery {
-        outcome: None,
-        since: q.since,
-        month: q.month,
-        limit: None,
-    }) {
-        Ok(range) => range,
-        Err(error) => return map_runtime_error(error),
-    };
     // Normalized key over every parameter that changes the result. Filter
     // parsing above rejects invalid inputs before the memo, so errors are
     // never cached.
-    let complexities = filters
-        .complexities
-        .as_ref()
-        .map(|set| set.iter().copied().collect::<Vec<_>>().join(","))
-        .unwrap_or_default();
-    let key_payload = match serde_json::to_string(&(
-        &range.key,
-        if filters.done_only { "done" } else { "all" },
-        if filters.implement_only {
-            "implement"
-        } else {
-            "all"
+    memoized_trend_response(
+        &state,
+        runtime,
+        "task_tokens",
+        (q.since, q.month),
+        filters,
+        |range, filters| {
+            let complexities = filters.cohort.complexities_key();
+            let scope = if filters.implement_only {
+                "implement"
+            } else {
+                "all"
+            };
+            serde_json::to_string(&(
+                &range.key,
+                filters.cohort.outcome_label(),
+                scope,
+                &complexities,
+                &filters.cohort.tags,
+                &filters.model,
+            ))
         },
-        &complexities,
-        &filters.tags,
-        &filters.model,
-    )) {
-        Ok(payload) => payload,
-        Err(error) => {
-            return map_runtime_error(orbit_core::OrbitError::Execution(format!(
-                "failed to serialize task_tokens memo key: {error}"
-            )));
-        }
-    };
-    let key = ("task_tokens".to_string(), key_payload);
-    let compute_runtime = Arc::clone(&runtime);
-    match state
-        .metrics_trends_memo()
-        .get_or_compute(&runtime, key, DASHBOARD_POLL_MEMO_TTL, move || {
-            task_token_trend(&compute_runtime, &range, &filters)
-        })
-        .await
-    {
-        Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
-        Err(error) => map_runtime_error(error),
-    }
+        task_token_trend,
+    )
+    .await
 }
 
 /// What one task adds to the points it falls in.
@@ -240,26 +154,16 @@ impl Cell {
             Contribution::NoInvocations => self.no_invocations += 1,
         }
     }
+}
 
+impl CohortCell for Cell {
     fn is_empty(&self) -> bool {
         self.tokens.is_empty() && self.uncovered == 0 && self.no_invocations == 0
     }
 
     fn to_json(&self) -> Value {
-        let mut tokens = self.tokens.clone();
-        tokens.sort_unstable();
-        let n = tokens.len();
-        let (mean, median) = if n == 0 {
-            (Value::Null, Value::Null)
-        } else {
-            let sum: u128 = tokens.iter().map(|tokens| u128::from(*tokens)).sum();
-            let middle = if n % 2 == 1 {
-                tokens[n / 2] as f64
-            } else {
-                (tokens[n / 2 - 1] as f64 + tokens[n / 2] as f64) / 2.0
-            };
-            (json!(sum as f64 / n as f64), json!(middle))
-        };
+        let n = self.tokens.len();
+        let (mean, median) = average(self.tokens.iter().copied());
         json!({
             "n": n,
             "sum": self.tokens.iter().map(|tokens| u128::from(*tokens)).sum::<u128>() as f64,
@@ -272,118 +176,33 @@ impl Cell {
     }
 }
 
-struct Series {
-    points: Vec<Cell>,
-    /// Tasks in the lead buckets before the window, for the per-day view.
-    lead_points: Vec<Cell>,
-    total: Cell,
-}
-
-impl Series {
-    fn new(buckets: usize, lead: usize) -> Self {
-        Self {
-            points: vec![Cell::default(); buckets],
-            lead_points: vec![Cell::default(); lead],
-            total: Cell::default(),
-        }
-    }
-}
-
 fn task_token_trend(
     runtime: &OrbitRuntime,
     range: &DiagnosticsRange,
     filters: &Filters,
 ) -> Result<Value, orbit_core::OrbitError> {
-    let dates = runtime.task_terminal_dates(TrendWindow::read_since_with_day_lead(range))?;
-    let in_outcome = |status: TaskStatus| !filters.done_only || status == TaskStatus::Done;
-    let transitions: Vec<_> = dates
-        .dated
-        .iter()
-        .filter(|row| in_outcome(row.task.status))
-        .collect();
-    let window = TrendWindow::with_day_lead(range, transitions.first().map(|row| row.terminal_at));
-    let wanted = |complexity: &str| {
-        filters
-            .complexities
-            .as_ref()
-            .is_none_or(|selected| selected.contains(complexity))
-    };
-    let undated_tasks = dates
-        .undated
-        .iter()
-        .filter(|task| {
-            in_outcome(task.status)
-                && wanted(task.complexity.as_str())
-                && window.may_hold_undated(task.at)
-        })
-        .count();
-    let in_window: Vec<_> = transitions
-        .iter()
-        .filter_map(|row| {
-            window
-                .bucket_of(row.terminal_at)
-                .map(|index| (index, &row.task))
-        })
-        .filter(|(_, row)| wanted(row.complexity.as_str()))
-        .collect();
-    // A window with no tasks draws nothing, so its lead is never read.
-    let lead_rows: Vec<_> = if in_window.is_empty() {
-        Vec::new()
-    } else {
-        transitions
-            .iter()
-            .filter_map(|row| {
-                window
-                    .lead_bucket_of(row.terminal_at)
-                    .map(|index| (index, &row.task))
-            })
-            .filter(|(_, row)| wanted(row.complexity.as_str()))
-            .collect()
-    };
-    // No linked invocation predates its task, so the oldest task in the
-    // window bounds the invocation read, with a day's slack for clock skew
-    // between the hosts that stamp the two; an owner that omits `created_at`
-    // forces a full read.
-    let spend_since = in_window
-        .iter()
-        .chain(&lead_rows)
-        .map(|(_, row)| row.created_at)
-        .collect::<Option<Vec<_>>>()
-        .and_then(|created| created.into_iter().min())
-        .map(|oldest| oldest - SPEND_READ_SLACK);
-    let totals: BTreeMap<String, TaskTokenTotals> = if in_window.is_empty() {
+    let cohort_window = CohortWindowData::load(runtime, range, &filters.cohort, true)?;
+    let totals: BTreeMap<String, TaskTokenTotals> = if cohort_window.in_window.is_empty() {
         BTreeMap::new()
     } else {
-        runtime.task_token_totals(spend_since)?
+        runtime.task_token_totals(cohort_window.invocation_read_since())?
     };
 
-    let cohorts: &[&str] = if filters.tags.is_empty() {
-        &["all"]
-    } else {
-        &["with", "without"]
-    };
-    let bucket_count = window.bucket_count();
-    let lead_count = window.lead_count();
-    let mut series: BTreeMap<(String, &str), Series> = BTreeMap::new();
-    let standing = STANDING_SERIES.iter().filter(|complexity| {
-        filters
-            .complexities
-            .as_ref()
-            .is_none_or(|selected| selected.contains(*complexity))
-    });
-    for complexity in standing {
-        for cohort in cohorts {
-            series.insert(
-                (complexity.to_string(), cohort),
-                Series::new(bucket_count, lead_count),
-            );
-        }
-    }
+    let mut series = CohortSeriesMap::<Cell>::new(&filters.cohort, &cohort_window.window);
     let mut tag_counts: BTreeMap<&str, u64> = BTreeMap::new();
     let mut model_counts: BTreeMap<&str, u64> = BTreeMap::new();
     let mut overall = Cell::default();
     let mut other_model = 0u64;
-    for (index, row) in &in_window {
+    let contribution_for = |task: Option<&TaskTokenTotals>| {
+        Contribution::of(task.map(|task| {
+            if filters.implement_only {
+                &task.implement
+            } else {
+                &task.all
+            }
+        }))
+    };
+    for (index, row) in &cohort_window.in_window {
         let task = totals.get(&row.task_id);
         for tag in &row.tags {
             *tag_counts.entry(tag.as_str()).or_default() += 1;
@@ -400,28 +219,14 @@ fn task_token_trend(
             other_model += 1;
             continue;
         }
-        let cohort = if filters.tags.is_empty() {
-            "all"
-        } else if row.tags.iter().any(|tag| filters.tags.contains(tag)) {
-            "with"
-        } else {
-            "without"
-        };
-        let contribution = Contribution::of(task.map(|task| {
-            if filters.implement_only {
-                &task.implement
-            } else {
-                &task.all
-            }
-        }));
-        let entry = series
-            .entry((row.complexity.clone(), cohort))
-            .or_insert_with(|| Series::new(bucket_count, lead_count));
+        let cohort = filters.cohort.cohort_of(&row.tags);
+        let contribution = contribution_for(task);
+        let entry = series.entry_mut(&row.complexity, cohort);
         entry.points[*index].record(contribution);
         entry.total.record(contribution);
         overall.record(contribution);
     }
-    for (index, row) in &lead_rows {
+    for (index, row) in &cohort_window.lead_rows {
         let task = totals.get(&row.task_id);
         let implement_model = task.and_then(|task| task.implement_model.as_deref());
         if filters
@@ -431,72 +236,25 @@ fn task_token_trend(
         {
             continue;
         }
-        let cohort = if filters.tags.is_empty() {
-            "all"
-        } else if row.tags.iter().any(|tag| filters.tags.contains(tag)) {
-            "with"
-        } else {
-            "without"
-        };
-        let contribution = Contribution::of(task.map(|task| {
-            if filters.implement_only {
-                &task.implement
-            } else {
-                &task.all
-            }
-        }));
-        series
-            .entry((row.complexity.clone(), cohort))
-            .or_insert_with(|| Series::new(bucket_count, lead_count))
-            .lead_points[*index]
-            .record(contribution);
+        let cohort = filters.cohort.cohort_of(&row.tags);
+        series.entry_mut(&row.complexity, cohort).lead_points[*index]
+            .record(contribution_for(task));
     }
 
-    let mut series: Vec<_> = series.into_iter().collect();
-    series.sort_by(|((left, left_cohort), _), ((right, right_cohort), _)| {
-        complexity_bucket_ord(left)
-            .cmp(&complexity_bucket_ord(right))
-            .then_with(|| left_cohort.cmp(right_cohort))
-    });
-    let series: Vec<Value> = series
-        .into_iter()
-        .filter(|((complexity, _), series)| {
-            STANDING_SERIES.contains(&complexity.as_str()) || !series.total.is_empty()
-        })
-        .map(|((complexity, cohort), series)| {
-            json!({
-                "complexity": complexity,
-                "cohort": cohort,
-                "points": series.points.iter().map(Cell::to_json).collect::<Vec<_>>(),
-                "lead_points": series.lead_points.iter().map(Cell::to_json).collect::<Vec<_>>(),
-                "total": series.total.to_json(),
-            })
-        })
-        .collect();
-    let mut tags: Vec<(&str, u64)> = tag_counts.into_iter().collect();
-    tags.sort_by(|(left, left_n), (right, right_n)| right_n.cmp(left_n).then(left.cmp(right)));
-    tags.truncate(AVAILABLE_TAGS);
-    let mut models: Vec<(&str, u64)> = model_counts.into_iter().collect();
-    models.sort_by(|(left, left_n), (right, right_n)| right_n.cmp(left_n).then(left.cmp(right)));
-
+    let models = sorted_counts(model_counts);
     Ok(json!({
-        "window": window.to_json(),
-        "outcome": if filters.done_only { "done" } else { "all" },
+        "window": cohort_window.window.to_json(),
+        "outcome": filters.cohort.outcome_label(),
         "scope": if filters.implement_only { "implement" } else { "all" },
-        "tags": filters.tags,
+        "tags": filters.cohort.tags,
         "model": filters.model,
         "min_tasks": MIN_TASKS,
-        "bucket_starts": (0..bucket_count)
-            .map(|index| window.bucket_start(index).to_rfc3339())
-            .collect::<Vec<_>>(),
-        "series": series,
+        "bucket_starts": cohort_window.bucket_starts_json(),
+        "series": series.into_json(true),
         "total": overall.to_json(),
         "excluded_other_model": other_model,
-        "undated_tasks": undated_tasks,
-        "available_tags": tags
-            .into_iter()
-            .map(|(tag, tasks)| json!({ "tag": tag, "tasks": tasks }))
-            .collect::<Vec<_>>(),
+        "undated_tasks": cohort_window.undated_tasks,
+        "available_tags": available_tags_json(tag_counts),
         "available_models": models
             .into_iter()
             .map(|(model, tasks)| json!({ "model": model, "tasks": tasks }))
