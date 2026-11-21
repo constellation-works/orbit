@@ -3806,6 +3806,86 @@ class RemovedDashboardLabelTests(unittest.TestCase):
         self.assertIn(f"{self.DOC}:3", result.stderr)
         self.assertNotIn("action approve", result.stderr)
 
+    def test_cli_command_in_both_shipped_maintenance_copies_is_not_a_label(self):
+        label = "orbit host"
+        self.panel.write_text(f'export const title = "{label}";\n')
+        self.git("add", ".")
+        self.git("commit", "-qm", "dashboard label base")
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+        self.panel.write_text("export const title = 'New Panel';\n")
+
+        command_reference = "The owner must be registered with `orbit host add`.\n"
+        maintenance_paths = (
+            "crates/orbit-core/assets/skills/orbit-setup/references/maintenance.md",
+            "plugin/skills/orbit-setup/references/maintenance.md",
+        )
+        for relative in maintenance_paths:
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(command_reference)
+
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(label, result.stderr)
+
+    def test_code_command_prefix_is_ignored_but_exact_code_and_prose_still_count(self):
+        label = "orbit host"
+        self.panel.write_text(f'export const title = "{label}";\n')
+        self.git("add", ".")
+        self.git("commit", "-qm", "dashboard label base")
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+        self.panel.write_text("export const title = 'New Panel';\n")
+        self.doc.write_text(
+            f"The exact UI label is `{label}`.\n"
+            f"The CLI reference is `{label} add`.\n"
+            "```sh\n"
+            f"{label} add\n"
+            "```\n"
+            f"The {label} panel title is still visible prose.\n")
+
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(f"{self.DOC}:1", result.stderr)
+        self.assertIn(f"{self.DOC}:6", result.stderr)
+        self.assertNotIn(f"{self.DOC}:2", result.stderr)
+        self.assertNotIn(f"{self.DOC}:4", result.stderr)
+
+    def test_removed_dashboard_comments_do_not_supply_labels(self):
+        comment_labels = (
+            ("js-comments.js", '// `JavaScript comment label`\n'),
+            ("css-comments.css", '/* "CSS comment label" */\n'),
+            ("html-comments.html", '<!-- "HTML comment label" -->\n'),
+        )
+        for name, content in comment_labels:
+            path = self.root / self.PANEL.replace("panel.js", name)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+        self.doc.write_text(
+            "JavaScript comment label, CSS comment label, and HTML comment label.\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "comment-only dashboard labels base")
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+
+        self.panel.write_text("export const title = 'New Panel';\n")
+        for name, _ in comment_labels:
+            path = self.root / self.PANEL.replace("panel.js", name)
+            path.write_text("")
+
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_removed_dashboard_label_in_html_class_attribute_is_not_a_mention(self):
+        label = "fleet-phase visually-hidden"
+        self.panel.write_text(f'export const title = "{label}";\n')
+        self.git("add", ".")
+        self.git("commit", "-qm", "class-list label base")
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+        self.panel.write_text("export const title = 'New Panel';\n")
+        self.doc.write_text(f'<span class="{label}">idle</span>\n')
+
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 # These cases assert rendezvous, relative completion times or lane ordering.
 # Run them alone, as before. Other cases own independent roots, subprocess
