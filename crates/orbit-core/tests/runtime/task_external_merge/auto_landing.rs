@@ -24,7 +24,8 @@ crate::scenario_table!(
     an_authorised_conflicting_pull_request_records_its_follow_up_once,
     two_open_delivery_pull_requests_record_one_ambiguity_follow_up,
     alternating_blockers_on_one_head_record_each_code_once,
-    a_retargeted_pull_request_is_not_merged_and_lands_once_restored
+    a_retargeted_pull_request_is_not_merged_and_lands_once_restored,
+    second_read_rerun_or_changed_head_waits_while_forge_refusal_records_reason
 );
 
 /// A finished delivery run of `task` that carried `completion`.
@@ -397,5 +398,87 @@ fn alternating_blockers_on_one_head_record_each_code_once() {
             ("required_checks_failed", Some(moved.as_str())),
         ],
         "a new head records its own follow-up: {recorded:?}"
+    );
+}
+
+fn second_read_rerun_or_changed_head_waits_while_forge_refusal_records_reason() {
+    // ORB-26001: a pending rerun or moved head on the second blockers read in
+    // merge_delivery_pull_request must leave the merge unissued without
+    // recording `merge_refused`; a newly discovered conflict records
+    // `pull_request_conflicting`; an actual forge refusal records `merge_refused`
+    // with the forge's reason.
+
+    // 1. Pending rerun between Read #1 and Read #2 waits and lands once green.
+    let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Mergeable);
+    forge.script_pending_checks(&[&[], &["Test"]], &["Test"]);
+    delivery_run(&fx, &task, "done", JobRunState::Success, None);
+    tick(&fx, false, false);
+    assert!(
+        forge.merges().is_empty(),
+        "pending rerun on second read leaves merge unissued"
+    );
+    fx.assert_status(&task, TaskStatus::Review, "pending rerun waits in review");
+    assert!(
+        follow_ups(&fx, &task).is_empty(),
+        "pending rerun on second read records no follow-up: {:?}",
+        follow_ups(&fx, &task)
+    );
+    forge.script_pending_checks(&[], &[]);
+    tick(&fx, false, false);
+    assert_eq!(forge.merges(), vec![(LAND_PR, LAND_HEAD.to_string())]);
+    fx.assert_done(&task, "lands once rerun finishes");
+
+    // 2. Head moved between Read #1 and Read #2 leaves merge unissued with no
+    //    `merge_refused`, then evaluates and lands the new head on the next tick.
+    let moved = "5a".repeat(20);
+    let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Mergeable);
+    forge.script_head_answers(&[LAND_HEAD, &moved], &moved);
+    delivery_run(&fx, &task, "done", JobRunState::Success, None);
+    tick(&fx, false, false);
+    assert!(
+        forge.merges().is_empty(),
+        "changed head on second read leaves merge unissued"
+    );
+    fx.assert_status(&task, TaskStatus::Review, "changed head waits in review");
+    assert!(
+        follow_ups(&fx, &task).is_empty(),
+        "changed head on second read records no merge_refused follow-up: {:?}",
+        follow_ups(&fx, &task)
+    );
+    tick(&fx, false, false);
+    assert_eq!(forge.merges(), vec![(LAND_PR, moved)]);
+    fx.assert_done(&task, "new green head lands on the next pass");
+
+    // 3. Conflict discovered on Read #2 records `pull_request_conflicting`, not `merge_refused`.
+    let (fx, forge, task) = mergeability_land(
+        &[
+            MergeabilityAnswer::Mergeable,
+            MergeabilityAnswer::Conflicting,
+        ],
+        MergeabilityAnswer::Conflicting,
+    );
+    delivery_run(&fx, &task, "done", JobRunState::Success, None);
+    tick(&fx, false, false);
+    assert!(forge.merges().is_empty(), "conflicting PR never merges");
+    let recorded = follow_ups(&fx, &task);
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(recorded[0].code, "pull_request_conflicting");
+
+    // 4. Actual forge refusal from merge_pull_request still records `merge_refused` with its reason.
+    let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Mergeable);
+    forge.refuse_merge(Some("Required status check \"ci\" is expected"));
+    delivery_run(&fx, &task, "done", JobRunState::Success, None);
+    tick(&fx, false, false);
+    assert!(forge.merges().is_empty());
+    fx.assert_status(&task, TaskStatus::Review, "forge refusal stays in review");
+    let recorded = follow_ups(&fx, &task);
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(recorded[0].code, "merge_refused");
+    assert!(
+        recorded[0]
+            .detail
+            .contains("Required status check \"ci\" is expected"),
+        "forge refusal quotes its reason: {}",
+        recorded[0].detail
     );
 }

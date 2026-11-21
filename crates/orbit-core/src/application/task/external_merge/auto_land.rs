@@ -48,7 +48,7 @@ use orbit_types::workflow::handoff::{
 use orbit_types::workflow::{COMPLETION_HELD_EVENT, current_completion_hold};
 use serde::{Deserialize, Serialize};
 
-use super::land::OpenDelivery;
+use super::land::{DeliveryMergeOutcome, OpenDelivery};
 use crate::OrbitRuntime;
 use crate::application::task::{
     DeliveryCompletion, TaskJobPort, TaskRecordUpdateParams, TaskRecords, TaskReviewPort,
@@ -241,16 +241,11 @@ impl OrbitRuntime {
             )?;
             return Ok(None);
         }
-        if let Err(error) =
-            super::land::ensure_delivery_target_branch(&id, number, base.as_deref(), &expected_base)
+        if let Err(reason) =
+            super::land::ensure_delivery_target_branch(number, base.as_deref(), &expected_base)
         {
-            match error {
-                OrbitError::PolicyDenied(reason) => {
-                    self.record_follow_up(&task, &history, follow_up("merge_refused", reason))?;
-                    return Ok(None);
-                }
-                other => return Err(other),
-            }
+            self.record_follow_up(&task, &history, follow_up("merge_refused", reason))?;
+            return Ok(None);
         }
         if blockers.conflicting {
             self.record_follow_up(
@@ -330,8 +325,14 @@ impl OrbitRuntime {
             )?;
             return Ok(None);
         }
-        match self.merge_delivery_pull_request(&id, number, Some(&head), &expected_base) {
-            Ok(merge_commit) => {
+        match self.merge_delivery_pull_request(
+            &id,
+            number,
+            Some(&head),
+            &expected_base,
+            needs_passed_check,
+        )? {
+            DeliveryMergeOutcome::Merged { merge_commit } => {
                 // The work has landed; a settlement that fails here is read
                 // again from the merge by the next settlement pass.
                 if let Err(error) =
@@ -350,11 +351,50 @@ impl OrbitRuntime {
                     merge_commit,
                 }))
             }
-            Err(OrbitError::PolicyDenied(reason)) => {
+            // The head moved, checks restarted, or mergeability became
+            // unavailable before the merge request: wait so the next pass
+            // judges the current state instead of instructing manual merge.
+            DeliveryMergeOutcome::BlockersUnavailable { .. }
+            | DeliveryMergeOutcome::HeadChanged => Ok(None),
+            DeliveryMergeOutcome::Conflicting => {
+                self.record_follow_up(
+                    &task,
+                    &history,
+                    follow_up(
+                        "pull_request_conflicting",
+                        format!("pull request #{number} conflicts with its base"),
+                    ),
+                )?;
+                Ok(None)
+            }
+            DeliveryMergeOutcome::ChecksNotReady { failed, .. } => {
+                if !failed.is_empty() {
+                    self.record_follow_up(
+                        &task,
+                        &history,
+                        follow_up(
+                            "required_checks_failed",
+                            format!("required checks failed on pull request #{number}: {failed:?}"),
+                        ),
+                    )?;
+                }
+                Ok(None)
+            }
+            DeliveryMergeOutcome::TargetBranchChanged { reason } => {
                 self.record_follow_up(&task, &history, follow_up("merge_refused", reason))?;
                 Ok(None)
             }
-            Err(error) => Err(error),
+            DeliveryMergeOutcome::ForgeRefused { reason } => {
+                self.record_follow_up(
+                    &task,
+                    &history,
+                    follow_up(
+                        "merge_refused",
+                        format!("the forge refused to merge pull request #{number}: {reason}"),
+                    ),
+                )?;
+                Ok(None)
+            }
         }
     }
 

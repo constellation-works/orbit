@@ -93,8 +93,14 @@ pub(crate) struct ForgeState {
     pub(crate) no_required_checks: bool,
     /// Required checks the scripted head reports as failed.
     pub(crate) failed_checks: Vec<String>,
+    /// Required checks the scripted head reports as pending, and per-read overrides.
+    pub(crate) pending_checks: Vec<String>,
+    pub(crate) pending_check_answers: VecDeque<Vec<String>>,
     /// The scripted head's SHA once a test moves it; `LAND_HEAD` otherwise.
     pub(crate) head: Option<String>,
+    pub(crate) head_answers: VecDeque<String>,
+    /// Refusal reason returned by `merge_pull_request` instead of merging.
+    pub(crate) merge_refusal: Option<String>,
     pub(crate) merges: Vec<(u64, String)>,
     pub(crate) landed: Option<MergedPullRequest>,
 }
@@ -161,6 +167,28 @@ impl FakeForge {
     /// Move the scripted pull request's head to `head`.
     pub(crate) fn move_head(&self, head: &str) {
         self.0.lock().unwrap().head = Some(head.to_string());
+    }
+    /// Script the pending required checks returned by successive
+    /// `pull_request_blockers` reads, falling back to `fallback`.
+    pub(crate) fn script_pending_checks(&self, per_read: &[&[&str]], fallback: &[&str]) {
+        let mut state = self.0.lock().unwrap();
+        state.pending_check_answers = per_read
+            .iter()
+            .map(|checks| checks.iter().map(|name| (*name).to_string()).collect())
+            .collect();
+        state.pending_checks = fallback.iter().map(|name| (*name).to_string()).collect();
+    }
+    /// Script the head SHAs returned by successive `pull_request_blockers`
+    /// reads, falling back to `fallback` once exhausted.
+    pub(crate) fn script_head_answers(&self, heads: &[&str], fallback: &str) {
+        let mut state = self.0.lock().unwrap();
+        state.head_answers = heads.iter().map(|head| (*head).to_string()).collect();
+        state.head = Some(fallback.to_string());
+    }
+    /// Configure `merge_pull_request` to return a forge refusal reason, or
+    /// `None` to allow merges.
+    pub(crate) fn refuse_merge(&self, reason: Option<&str>) {
+        self.0.lock().unwrap().merge_refusal = reason.map(str::to_string);
     }
     pub(crate) fn reads(&self) -> u32 {
         self.0.lock().unwrap().reads
@@ -249,8 +277,16 @@ impl TaskPrForge for FakeForge {
                 blockers
             }
         };
-        blockers.head_sha = state.head.clone().unwrap_or_else(|| LAND_HEAD.into());
+        blockers.head_sha = state
+            .head_answers
+            .pop_front()
+            .or_else(|| state.head.clone())
+            .unwrap_or_else(|| LAND_HEAD.into());
         blockers.failed_required_checks = state.failed_checks.clone();
+        blockers.pending_required_checks = state
+            .pending_check_answers
+            .pop_front()
+            .unwrap_or_else(|| state.pending_checks.clone());
         Ok(Some(blockers))
     }
     fn merge_pull_request(
@@ -261,6 +297,9 @@ impl TaskPrForge for FakeForge {
         _: &orbit_types::workflow::MergeMessage,
     ) -> Result<PullRequestMergeOutcome, OrbitError> {
         let mut state = self.0.lock().unwrap();
+        if let Some(reason) = state.merge_refusal.clone() {
+            return Ok(PullRequestMergeOutcome::Refused { reason });
+        }
         state.merges.push((number, head_sha.into()));
         let pull = state.land_pull.clone().unwrap();
         state.landed = Some(MergedPullRequest {
