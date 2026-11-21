@@ -63,7 +63,12 @@ pickup. Do not confuse a task description with a design document or a transcript
   `build-pair.sh` and `paired.py` from the linked `agent-main` branch): paste its
   "Measurement protocol" paragraph and fill its slots (surface, command or
   path, parity mask, bound, artifact slug). It supplies everything listed
-  below. Otherwise, name the fixture artifact or exact seed and reset commands
+  below, including the `implement_bundle` build: pass
+  `--candidate-worktree <checkout>` to `build-pair.sh`, because HEAD is still
+  the pinned base and the candidate is uncommitted. The script snapshots that
+  working tree without moving HEAD, the index or files. A rerun after the
+  delivery commit passes `--candidate <reviewed final head>`.
+  For any other measurement, name the fixture artifact or exact seed and reset commands
   for a disposable workspace and data set, the exact build and measurement
   commands, and how to select the baseline revision and reviewed final candidate revision
   with matching build profiles and settings. Specify the bounded same-fixture
