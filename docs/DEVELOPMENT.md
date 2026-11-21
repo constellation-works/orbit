@@ -1056,7 +1056,7 @@ A script that starts `web serve` for screenshots, instead of a person pressing C
 - **Wait for the exit.** SIGTERM, a bounded wait for the exit, then SIGKILL (sent only to the verified PID) and a second bounded wait. A server that survives SIGKILL fails the run loudly and keeps `SERVER_PID` set for a retry; nothing blocks on an unbounded `wait`.
 - **Never delete artifacts.** Teardown touches only the process. Screenshots under `QA_BASE` stay for `orbit.task.artifact` action `put`; the managed-lane rule above still forbids raw removal.
 
-For a static Jobs screenshot, use the prepared Playwright kit and wait for the rendered panel instead of page or network quiescence. The capture deadline is 20 seconds from Chromium launch, including page creation and evidence writing. Browser cleanup has a separate five-second bound; the Node process exits after that bound even if Playwright retains open handles, allowing server teardown to start. Navigate with `waitUntil: "domcontentloaded"`, observe the real `/api/events/stream` response, then wait for `#runs-body .runs-row` to be visible and `#runs-count` to be populated. That pair means the Jobs › History request rendered (its default Running filter lists the runs in flight); the `EventSource` remains open. `browser.close()` runs in `finally`, then `qa_serve_stop` sends TERM, waits at most five seconds, escalates to KILL, reaps the exact server child and confirms its port closed. A screenshot from a static fixture that stubs `/api/events/stream` proves only the rendered state; keep event delivery, reconnect and resync checks on the real stream.
+For a static Jobs screenshot, use the prepared Playwright kit and wait for the rendered panel instead of page or network quiescence. The capture deadline is 20 seconds from Chromium launch, including page creation and evidence writing. Browser cleanup has a separate five-second bound; the Node process exits after that bound even if Playwright retains open handles, allowing server teardown to start. Navigate with `waitUntil: "domcontentloaded"`, observe the real `/api/events/stream` response, then wait for `#runs-body` to show its settled content: a `#runs-body .runs-row` when runs are in flight, or a `#runs-body .empty-state` on an idle workspace, where `#runs-count` reads "nothing in flight". Then wait for `#runs-count` to leave its placeholders (`-`, `—`) and its loading value (`…`). That pair means the Jobs › History request rendered (its default Running filter lists the runs in flight, or reports none); the `EventSource` remains open. `browser.close()` runs in `finally`, then `qa_serve_stop` sends TERM, waits at most five seconds, escalates to KILL, reaps the exact server child and confirms its port closed. A screenshot from a static fixture that stubs `/api/events/stream` proves only the rendered state; keep event delivery, reconnect and resync checks on the real stream.
 
 ```bash
 # Define once, after `qa workspace init`. Run the capture below as `bash script.sh` or in a ( ) subshell.
@@ -1165,16 +1165,18 @@ const capture = async () => {
   const stream = await streamPromise;
   if (stream.status() !== 200) throw new Error(`event stream returned ${stream.status()}`);
   void stream.finished().then(() => { streamClosed = true; }, () => { streamClosed = true; });
-  await page.waitForSelector('#runs-body .runs-row', { state: 'visible', timeout: remaining() });
+  // Settled means rows (runs in flight) or the empty state (an idle workspace):
+  // the Running filter renders no .runs-row when nothing is in flight.
+  await page.waitForSelector('#runs-body .runs-row, #runs-body .empty-state', { state: 'visible', timeout: remaining() });
   await page.waitForFunction(() => {
     const count = document.querySelector('#runs-count')?.textContent?.trim();
-    return Boolean(count && count !== '-');
+    return Boolean(count && !['-', '—', '…'].includes(count));
   }, undefined, { timeout: remaining() });
   await page.screenshot({ path: screenshotPath, fullPage: false, timeout: remaining() });
   if (streamClosed) throw new Error('dashboard event stream closed before screenshot capture');
   const evidence = {
     url: `${baseUrl}/#jobs/history`,
-    readiness: '#runs-body .runs-row visible and #runs-count populated',
+    readiness: '#runs-body .runs-row or .empty-state visible and #runs-count settled',
     event_stream_url: stream.url(),
     event_stream_status: stream.status(),
     event_stream_content_type: stream.headers()['content-type'],
