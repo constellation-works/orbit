@@ -3,6 +3,7 @@ import { bindTaskLink, el, formatDateTime, pinnedInfoHint } from './common.js';
 import { sparkline as lineSparkline } from './sparkline.js';
 import { COMPLEXITY_LABELS, delta, fmtMs, previousLabel, seriesLabel } from './metrics-running.js';
 import { fmtTokens } from './metrics-tokens.js';
+import { fmtTurns } from './metrics-turns.js';
 import { fmtLines } from './metrics-diff.js';
 import { fmtAmount } from './metrics-friction.js';
 
@@ -287,10 +288,10 @@ function tokenCoverageCard(payload) {
 
 function turnsCoverageCard(payload) {
   const title = "Measurement coverage";
-  const pending = panelStatus(title, payload);
+  const pending = panelStatus(title, payload, "mx-narrow");
   if (pending) return pending;
   const c = payload.coverage;
-  if (!c) return card(title, null, [emptyNote("This host did not report trace coverage.")]);
+  if (!c) return card(title, null, [emptyNote("This host did not report trace coverage.")], "mx-narrow");
   const rate = (n) => n == null ? "—" : n.toLocaleString(undefined, { style: "percent", maximumFractionDigits: 1 });
   const rows = [
     ["Measured", rate(c.measured_rate)],
@@ -304,9 +305,26 @@ function turnsCoverageCard(payload) {
     rows.push(["Unattributed", payload.excluded_unattributed], ["Another provider", payload.excluded_other_provider]);
   }
   const hasTasks = c.tasks || payload.excluded_unattributed || payload.excluded_other_provider;
-  return summaryCard(title, "", payload, ["Result", "Value"], hasTasks ? rows : [],
+  return summaryCard(title, "mx-narrow", payload, ["Result", "Value"], hasTasks ? rows : [],
     "No matching tasks closed in this window.",
     "Measured is the share of matching tasks with a first edit recorded. Trace coverage is the share of first implementation invocations with a populated trace. A provider filter excludes tasks with no attributable invocation.");
+}
+
+function turnsProviderCard(payload) {
+  const title = "Turns to first edit by provider";
+  const pending = panelStatus(title, payload, "mx-wide");
+  if (pending) return pending;
+  if (!Array.isArray(payload.provider_summary)) return card(title, null, [emptyNote("This host did not report provider turns.")], "mx-wide");
+  const providers = payload.provider_summary;
+  if (!providers.some((entry) => entry.n > 0)) return card(title, null, [emptyNote("No measured tasks in this window.")], "mx-wide");
+  const rows = providers.map((entry) => el("tr", { class: entry.thin ? "mx-dim" : "" }, [
+    el("th", { scope: "row", text: entry.provider + (entry.thin ? " *" : "") }),
+    ...[entry.n, fmtTurns(entry.median_turns), fmtTurns(entry.mean_turns), entry.measured_rate == null ? "—" : `${Math.round(entry.measured_rate * 100)}%`].map((value) => el("td", { class: "num", text: String(value) })),
+  ]));
+  const headers = ["Provider", "Measured", "Median", "Mean", "Rate"].map((label, i) => el("th", { scope: "col", class: i ? "num" : "", text: label }));
+  return card(title, null, [el("div", { class: "mx-table-wrap" }, [el("table", { class: "mx-table mx-panel-table" }, [el("thead", {}, [el("tr", {}, headers)]), el("tbody", {}, rows)])]),
+    el("div", { class: "mx-muted", text: `* Fewer than ${payload.min_tasks} measured tasks` })], "mx-wide",
+    "Rate is measured tasks divided by provider tasks. Compared tags select matching tasks; the provider filter does not narrow this comparison.");
 }
 
 function linesByCrewCard(payload) {
@@ -371,8 +389,8 @@ export function metricsPanelRows(trend, payload, rerender, { originLabels, linea
       return [["metrics-tokens", panelPair(tokenComplexityCard(tokens), tokenCoverageCard(tokens)),
         [tokens?.series?.map(({ complexity, cohort, total }) => [complexity, cohort, total]), tokens?.total, tokens?.excluded_other_model, tokens?.unavailable]]];
     case "turns":
-      return [["metrics-turns", turnsCoverageCard(turns),
-        [turns?.coverage, turns?.provider, turns?.excluded_unattributed, turns?.excluded_other_provider, turns?.unavailable, Boolean(turns)]]];
+      return [["metrics-turns", panelPair(turnsProviderCard(turns), turnsCoverageCard(turns)),
+        [turns?.provider_summary, turns?.min_tasks, turns?.coverage, turns?.provider, turns?.excluded_unattributed, turns?.excluded_other_provider, turns?.unavailable, Boolean(turns)]]];
     case "diff":
       return [["metrics-diff", panelPair(linesByCrewCard(diff), deliveriesCountedCard(diff)),
         [diff?.crews?.map(({ key, total }) => [key, total]), diff?.overall?.total.n, diff?.overall?.points.map(({ thin }) => thin), diff?.unavailable]]];

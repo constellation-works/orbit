@@ -69,7 +69,7 @@ The selected trend owns the panels below it. A poll or tab switch reads only the
 - **Tasks completed** compares current and previous done counts by complexity, plus rejected and archived totals. Outcome by complexity shows the all-time distribution in a separate panel.
 - **Defects** compares counts by origin with the previous window and shows counts by lineage. The lineage panel divides defects filed by tasks that reached done in the same window when the denominator is available and nonzero.
 - **Tokens per task** and **Tokens** show the median and mean tokens per complexity and tag cohort, plus counts of measured tasks and exclusions by reason.
-- **Turns to first edit** shows the measured rate, trace coverage and exclusions by reason.
+- **Turns to first edit** shows provider counts, median and mean turns and measured rates beside measurement coverage and exclusions by reason. Thin provider samples are marked; the comparison uses matching tags and remains independent of the provider selector.
 - **Lines changed** shows code and test lines added and deleted by crew, net lines, the delivery count and buckets below the sample threshold.
 - **Delivery friction** compares the selected families with the previous window in their reported units.
 

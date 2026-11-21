@@ -390,6 +390,7 @@ fn turns_to_edit_trend(
     }
     let mut tag_counts: BTreeMap<&str, u64> = BTreeMap::new();
     let mut provider_coverage: BTreeMap<String, Cell> = BTreeMap::new();
+    let mut provider_summary: BTreeMap<String, Cell> = BTreeMap::new();
     let mut overall = Cell::default();
     let mut other_provider = 0u64;
     let mut unattributed = 0u64;
@@ -411,6 +412,15 @@ fn turns_to_edit_trend(
             && !first.agent.is_empty()
         {
             provider_coverage
+                .entry(first.agent.clone())
+                .or_default()
+                .record(contribution);
+        }
+        if let Some(first) = first
+            && !first.agent.is_empty()
+            && (filters.tags.is_empty() || row.tags.iter().any(|tag| filters.tags.contains(tag)))
+        {
+            provider_summary
                 .entry(first.agent.clone())
                 .or_default()
                 .record(contribution);
@@ -497,6 +507,15 @@ fn turns_to_edit_trend(
             .into_iter()
             .map(|(tag, tasks)| json!({ "tag": tag, "tasks": tasks }))
             .collect::<Vec<_>>(),
+        "provider_summary": provider_summary.into_iter().map(|(provider, cell)| {
+            let (mean_turns, median_turns) = average(cell.samples.iter().map(|(turns, _)| *turns));
+            let n = cell.samples.len();
+            json!({
+                "provider": provider, "n": n, "mean_turns": mean_turns,
+                "median_turns": median_turns, "measured_rate": cell.coverage_json()["measured_rate"],
+                "thin": n > 0 && n < MIN_TASKS,
+            })
+        }).collect::<Vec<_>>(),
         "available_providers": providers
             .into_iter()
             .map(|(provider, coverage)| {
