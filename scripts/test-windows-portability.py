@@ -207,6 +207,40 @@ class PortabilityTests(unittest.TestCase):
         self.check_tree({"src/lib.rs": "#[cfg(unix)] " + IMPORT + "\n" + INCIDENTS[1]}, 1)
         self.check_tree({"src/lib.rs": "#[cfg(unix)] mod gated {}\n" + INCIDENTS[1]}, 1)
         self.check_tree({"src/lib.rs": "fn helper() { #[cfg(unix)] {" + IMPORT + "} }"}, 0)
+
+    def test_cfg_covers_every_brace_of_a_statement(self):
+        # A statement cfg applies through every top-level brace, then stops.
+        gated = (
+            "fn helper() {\n"
+            "    #[cfg(unix)]\n"
+            "    let value = if ready { 1 } else { std::os::unix::fs::symlink(a, b); };\n"
+            "}\n"
+        )
+        self.check_tree({"src/lib.rs": gated}, 0)
+        leaked = (
+            "fn helper() {\n"
+            "    #[cfg(unix)]\n"
+            "    let value = if ready { 1 } else { 2 };\n"
+            "    std::os::unix::fs::symlink(a, b);\n"
+            "}\n"
+        )
+        self.check_tree({"src/lib.rs": leaked}, 1)
+        if_stmt = (
+            "fn helper() {\n"
+            "    #[cfg(unix)]\n"
+            "    if ready { 1 } else { std::os::unix::fs::symlink(a, b); }\n"
+            "    std::os::unix::fs::symlink(a, b);\n"
+            "}\n"
+        )
+        result = self.check_tree({"src/lib.rs": if_stmt}, 1)
+        self.assertNotIn("src/lib.rs:3:", result.stderr)
+        self.assertIn("src/lib.rs:4:", result.stderr)
+        const_value = (
+            "#[cfg(unix)]\n"
+            "const VALUE: fn() = if ready { std::os::unix::fs::symlink }\n"
+            "    else { std::os::unix::fs::symlink };\n"
+        )
+        self.check_tree({"src/lib.rs": const_value}, 0)
         for source in (
             "struct Data { #[cfg(unix)] platform: (), on_windows: std::os::unix::net::UnixStream }",
             "struct Data(#[cfg(unix)] (), std::os::unix::net::UnixStream);",
