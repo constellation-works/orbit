@@ -1084,12 +1084,16 @@ def detect_mcp_changes(git, parent, commit, changed):
                     report(f"`{name}` `{dpath}` type constraint removed "
                            "inside oneOf alternative")
             elif old_types is not None and new_types is not None:
-                if not (old_types <= new_types):
+                # Output consumers may still validate against the old schema;
+                # newly permitted output types can therefore break them too.
+                if not (old_types <= new_types) or (
+                        loc.startswith("outputSchema") and not (new_types <= old_types)):
                     dpath = display_path_for(loc, before.get("type", {}), after_types)
                     if len(old_t_entries) == 1 and len(new_t_entries) == 1:
                         report(f"`{name}` `{dpath}` type {old_t_entries[0][1]} → {new_t_entries[0][1]}")
                     else:
-                        report(f"`{name}` `{dpath}` type constraint narrowed")
+                        change = "changed" if loc.startswith("outputSchema") else "narrowed"
+                        report(f"`{name}` `{dpath}` type constraint {change}")
                 elif new_types > old_types and inside_oneof(loc):
                     dpath = display_path_for(loc, before.get("type", {}))
                     report(f"`{name}` `{dpath}` type constraint relaxed "
