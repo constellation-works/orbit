@@ -145,8 +145,8 @@ CI tests do not turn a wall-clock measurement into a flaky correctness check.
 
 ## Find recent failures and causes
 
-The dashboard's **Tool call failures by tool** table retains the raw failed,
-total and rate columns. Failed means `status=failure`, including documented
+The dashboard's **Tool call failures** card, on its **By tool** tab, retains the raw
+failed, total and rate columns. Its **By model** tab splits the same calls by model. Failed means `status=failure`, including documented
 negative paths such as invalid input and missing records. Total counts only
 successful and failed invocations (`command=tool`, `run` or `run-mcp`); denied
 rows appear in their own column and are excluded from the rate. Unexpected

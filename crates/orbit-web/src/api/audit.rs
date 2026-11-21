@@ -244,7 +244,6 @@ struct AuditSummaryBundle {
     /// cannot render a self-reported count as an authenticated one; the
     /// buckets are disjoint, so summing them is the combined denominator.
     attribution_split: Vec<Value>,
-    mcp_vs_cli_split: Value,
 }
 
 /// Stable JSON fields for a computed bundle. `denial_threshold` is request
@@ -297,7 +296,6 @@ fn summary_payload(
         "tool_call_failures_by_model": bundle.tool_call_failures_by_model,
         "actor_split": bundle.actor_split,
         "attribution_split": bundle.attribution_split,
-        "mcp_vs_cli_split": bundle.mcp_vs_cli_split,
     })
 }
 
@@ -328,7 +326,6 @@ fn compute_audit_summary_bundle(
 
     let tool_aggs = runtime.audit_event_aggregates_by_tool(&since)?;
     let tool_model_aggs = runtime.audit_event_aggregates_by_tool_model(&since)?;
-    let role_aggs = runtime.audit_event_aggregates_by_role(&since)?;
     let actor_aggs = runtime.audit_event_aggregates_by_actor(&since)?;
 
     let unexpected_by_tool = raw_failure_counts_by_tool(&incidents, FailureClass::Unexpected);
@@ -440,13 +437,6 @@ fn compute_audit_summary_bundle(
         })
         .collect();
 
-    let mcp_count: i64 = role_aggs.iter().map(|r| r.mcp).sum();
-    let cli_count: i64 = role_aggs.iter().map(|r| r.cli).sum();
-    let mcp_vs_cli_split = json!([
-        {"label": "mcp", "count": mcp_count},
-        {"label": "cli", "count": cli_count},
-    ]);
-
     let failure_categories = failure_category_summaries(&incidents);
 
     Ok(AuditSummaryBundle {
@@ -477,7 +467,6 @@ fn compute_audit_summary_bundle(
         tool_call_failures_by_model,
         actor_split: actor_vec,
         attribution_split: attribution_vec,
-        mcp_vs_cli_split,
     })
 }
 
