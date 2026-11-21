@@ -204,49 +204,74 @@ fn a_refused_tag_instruction_stops_the_dispatch_before_the_provider_runs() {
     assert!(applied(&events).is_empty());
 }
 
+/// Single-quote `path` for `/bin/sh`. An apostrophe in a legal temporary
+/// directory name must not end the quoted string early (ORB-26234).
+fn sh_single_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', r"'\''"))
+}
+
+fn assert_steering_flag_keeps_instruction_contract(parent: &Path, enabled: bool) {
+    let case = format!("temp parent {}, steering {enabled}", parent.display());
+    let temp = tempfile::Builder::new().tempdir_in(parent).unwrap();
+    let prompt = temp.path().join("prompt");
+    let fake = fake_cli(
+        "claude",
+        &format!(
+            "#!/bin/sh\ncat > {}\necho '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n",
+            sh_single_quote(&prompt)
+        ),
+    )
+    .unwrap();
+    let (writer, _) = build_writer(temp.path(), "steering-prompt").unwrap();
+    let host = TagHost {
+        cli: ScriptHost::new(fake.cli_path()),
+        instructions: Ok(Vec::new()),
+        asked: Mutex::new(Vec::new()),
+        steering: enabled,
+    };
+    let mut spec = cli_agent_loop_spec(None);
+    spec.steering_guidance = true;
+    spec.steering_instruction = Some("checkpoint fixture".into());
+    let base = spec.instruction.clone();
+    let outcome = dispatch_v2_activity(V2DispatchInput {
+        activity_name: "agent_implement",
+        spec: &ActivityV2Spec::AgentLoop(spec),
+        fs_profile: None,
+        input: json!({"task_id": "fixture-task", "prompt": "hello"}),
+        audit: writer,
+        run_id: "steering-prompt",
+        host: Some(&host),
+    });
+    assert!(outcome.unwrap().success, "the dispatch succeeds ({case})");
+    let instruction = instruction_of(fs::read_to_string(prompt).ok());
+    if enabled {
+        assert!(instruction.starts_with(&base), "({case})");
+        assert!(instruction.ends_with("checkpoint fixture"), "({case})");
+        assert_ne!(
+            instruction,
+            format!("{base}\n\ncheckpoint fixture"),
+            "shared steering guidance reaches the provider ({case})"
+        );
+    } else {
+        assert_eq!(
+            instruction, base,
+            "disabled steering must leave provider instruction byte-identical ({case})"
+        );
+    }
+}
+
 #[test]
 fn provider_receives_byte_inert_instruction_when_steering_is_disabled() {
-    for enabled in [false, true] {
-        let temp = tempfile::tempdir().unwrap();
-        let prompt = temp.path().join("prompt");
-        let fake = fake_cli("claude", &format!(
-            "#!/bin/sh\ncat > '{}'\necho '{{\"schemaVersion\":1,\"status\":\"success\",\"result\":{{}},\"error\":null}}'\n", prompt.display()
-        )).unwrap();
-        let (writer, _) = build_writer(temp.path(), "steering-prompt").unwrap();
-        let host = TagHost {
-            cli: ScriptHost::new(fake.cli_path()),
-            instructions: Ok(Vec::new()),
-            asked: Mutex::new(Vec::new()),
-            steering: enabled,
-        };
-        let mut spec = cli_agent_loop_spec(None);
-        spec.steering_guidance = true;
-        spec.steering_instruction = Some("checkpoint fixture".into());
-        let base = spec.instruction.clone();
-        let outcome = dispatch_v2_activity(V2DispatchInput {
-            activity_name: "agent_implement",
-            spec: &ActivityV2Spec::AgentLoop(spec),
-            fs_profile: None,
-            input: json!({"task_id": "fixture-task", "prompt": "hello"}),
-            audit: writer,
-            run_id: "steering-prompt",
-            host: Some(&host),
-        });
-        assert!(outcome.unwrap().success);
-        let instruction = instruction_of(fs::read_to_string(prompt).ok());
-        if enabled {
-            assert!(instruction.starts_with(&base));
-            assert!(instruction.ends_with("checkpoint fixture"));
-            assert_ne!(
-                instruction,
-                format!("{base}\n\ncheckpoint fixture"),
-                "shared steering guidance reaches the provider"
-            );
-        } else {
-            assert_eq!(
-                instruction, base,
-                "disabled steering must leave provider instruction byte-identical"
-            );
+    let ordinary = tempfile::tempdir().unwrap();
+    // A legal Unix temporary directory whose name holds a space and an
+    // apostrophe: the fixture's shell script must quote the prompt path.
+    let quoted = tempfile::Builder::new()
+        .prefix("Lane's files ")
+        .tempdir()
+        .unwrap();
+    for parent in [ordinary.path(), quoted.path()] {
+        for enabled in [false, true] {
+            assert_steering_flag_keeps_instruction_contract(parent, enabled);
         }
     }
 }
