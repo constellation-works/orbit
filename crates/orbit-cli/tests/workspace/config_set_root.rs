@@ -92,6 +92,39 @@ impl Fixture {
 }
 
 #[test]
+fn config_get_toml_only_table_names_the_config_files_to_read() {
+    if crate::isolated_test::run_in_child(
+        "config_set_root::config_get_toml_only_table_names_the_config_files_to_read",
+    ) {
+        return;
+    }
+    let fixture = Fixture::layered();
+    let root = fixture.root.to_string_lossy().into_owned();
+    for json in [true, false] {
+        let mut args = vec!["--root", &root, "config", "get", "workflow.agent_corpus"];
+        if json {
+            args.push("--json");
+        }
+        let output = fixture.orbit(&args).failure().get_output().clone();
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if json {
+            let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+            assert_eq!(error["code"], "invalid_input");
+        }
+        for fact in [
+            "workflow.agent_corpus",
+            "TOML-only table",
+            "<workspace>/.orbit/config.toml",
+            "~/.orbit/config.toml",
+        ] {
+            assert!(stderr.contains(fact), "missing {fact:?}: {stderr}");
+        }
+        assert!(!stderr.contains("orbit config keys"), "{stderr}");
+    }
+}
+
+#[test]
 fn unknown_config_keys_offer_bounded_recovery_without_writes() {
     if crate::isolated_test::run_in_child(
         "config_set_root::unknown_config_keys_offer_bounded_recovery_without_writes",
