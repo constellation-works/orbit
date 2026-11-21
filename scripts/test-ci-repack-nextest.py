@@ -98,19 +98,40 @@ class RepackTests(unittest.TestCase):
 
     def test_unavailable_corrupt_and_failed_setup_never_publish_or_replace(self):
         # One-part transfer names: extract reads SOURCE.1 and pack writes
-        # DESTINATION.1.
+        # DESTINATION.1. Use a real tar stream so extract reaches the decoder
+        # exit-status check instead of failing earlier on tar parsing.
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode="w") as archive:
+            member = tarfile.TarInfo("target/debug/ok")
+            member.mode = 0o644
+            member.size = 2
+            archive.addfile(member, io.BytesIO(b"ok"))
+        valid_tar = stream.getvalue()
+        valid_tar_path = self.root / "valid.tar"
+        valid_tar_path.write_bytes(valid_tar)
         source = self.root / "source.zst.1"
-        subprocess.run(["zstd", "-q", "-o", str(source)], input=b"tar bytes", check=True)
+        subprocess.run(["zstd", "-q", "-o", str(source)], input=valid_tar, check=True)
         original = source.read_bytes()
+        trailing = subprocess.run(["zstd", "-q", "-c"], input=b"trailing",
+                                  capture_output=True, check=True).stdout
         absent = self.root / "no-tools"
         absent.mkdir()
         broken = self.root / "broken-tools"
         broken.mkdir()
         zstd = broken / "zstd"
-        zstd.write_text("#!/bin/sh\nexit 7\n")
+        zstd.write_text(
+            f"#!{sys.executable}\n"
+            "import sys\n"
+            f"if '-dc' in sys.argv:\n"
+            f"    sys.stdout.buffer.write(open({str(valid_tar_path)!r}, 'rb').read())\n"
+            "    sys.stdout.buffer.flush()\n"
+            "    raise SystemExit(7)\n"
+            "sys.stdin.buffer.read()\n"
+            "raise SystemExit(0)\n"
+        )
         zstd.chmod(0o755)
         corrupt = self.root / "truncated.zst.1"
-        corrupt.write_bytes(source.read_bytes()[:-3])
+        corrupt.write_bytes(original + trailing[:-3])
         for mode in ("pack", "extract"):
             for name, archive, env in (
                 ("unavailable", source, dict(os.environ, PATH=str(absent))),
@@ -126,7 +147,7 @@ class RepackTests(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     if mode == "pack":
                         self.assertFalse(list(self.root.glob(f"{mode}-{name}.zst*")))
-                    else:
+                    elif name == "unavailable":
                         self.assertEqual(list(destination.iterdir()), [])
                     self.assertFalse(list(self.root.glob("nextest-repack-*")))
         # Pack never replaces its input or an existing output: its first part

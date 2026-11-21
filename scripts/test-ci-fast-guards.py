@@ -379,6 +379,8 @@ exec {shlex.quote(sys.executable)} "$@"
         self.prepare_ci()
         self.init_ci_git()
         for path in ("scripts/new-guard.sh", ".github/new.yml", "Makefile",
+                     ".config/nextest.toml",
+                     "crates/orbit-engine/tests/engine/pr_landing/infrastructure/fixtures/legacy-codeql.yml",
                      "install.sh", "RELEASING.md", "docs/dev/qa/path-leases-listener-sudo.md",
                      "plugin/new.json", ".cargo/config.toml"):
             with self.subTest(path=path):
@@ -1233,13 +1235,12 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual([{key: row[key] for key in ("argv", *lint)} for row in builds],
                          [dict(argv=folded, **lint)])
         # The workspace test listing runs in the main shell; nextest keeps its priority.
-        listed = [row for row in observed if row["argv"][:2] == ["nextest", "list"]]
-        foreground = {key: listed[0][key] for key in ("idle", "nice", "nice_attempted")}
         # Cargo fingerprints this environment. The nextest listing must see
         # exactly the folded build's values, or it recompiles every workspace
         # member before it can run.
         listing = [row for row in observed if row["argv"][:2] == ["nextest", "list"]]
         self.assertEqual(len(listing), 1, observed)
+        foreground = {key: listing[0][key] for key in ("idle", "nice", "nice_attempted")}
         self.assertFalse(any("--doc" in row["argv"] for row in observed), observed)
         for row in listing:
             self.assertEqual({key: row[key] for key in lint}, lint, row)
@@ -1247,17 +1248,10 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         # reuses that pass's check of the workspace instead of repeating it.
         # Production code denies clippy::disallowed_methods through the
         # crate-root attributes, which override this `-A`.
-        production_lint = {
-            "RUSTC_WORKSPACE_WRAPPER": "clippy-driver",
-            "CLIPPY_ARGS": (
-                "-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__"
-                "-A__CLIPPY_HACKERY__clippy::disallowed_methods__CLIPPY_HACKERY__"
-            ),
-        }
         production = [row for row in observed if row["argv"][:1] in (["check"], ["doc"])]
         self.assertEqual([row["argv"][0] for row in production], ["check", "doc"], observed)
         for row in production:
-            self.assertEqual({key: row[key] for key in production_lint}, production_lint, row)
+            self.assertEqual({key: row[key] for key in lint}, lint, row)
         # The production clippy and documentation chain overlaps the
         # tests only at lowered priority, so it cannot take CPU time from their
         # deadline assertions; the tests themselves keep normal priority. The
@@ -3585,11 +3579,28 @@ class PythonPreflightTests(unittest.TestCase):
         scratch.mkdir(parents=True, exist_ok=True)
         self.temporary = tempfile.TemporaryDirectory(prefix="python-preflight-", dir=scratch)
         self.addCleanup(self.temporary.cleanup)
-        self.bin = Path(self.temporary.name)
-        self.log = self.bin / "cargo.log"
+        self.root = Path(self.temporary.name)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.scripts = self.root / "scripts"
+        self.scripts.mkdir()
+        (self.root / ".github/workflows").mkdir(parents=True)
+        shutil.copy2(SCRIPTS.parent / "Makefile", self.root / "Makefile")
+        shutil.copy2(SCRIPTS / "require-python.sh", self.scripts / "require-python.sh")
+        shutil.copy2(SCRIPTS / "ci-guardrails.sh", self.scripts / "ci-guardrails.sh")
+        self.stub_script("check-dependency-direction.sh",
+                         '#!/bin/sh\necho "check-dependency-direction.sh $*" >> "$GUARD_TEST_LOG"\n')
+        self.stub_script("build-budget.py",
+                         '#!/bin/sh\necho "build-budget.py $*" >> "$GUARD_TEST_LOG"\n')
+        self.log = self.root / "gate.log"
 
     def stub(self, name, text):
         path = self.bin / name
+        path.write_text(text)
+        path.chmod(0o755)
+
+    def stub_script(self, name, text):
+        path = self.scripts / name
         path.write_text(text)
         path.chmod(0o755)
 
@@ -3602,11 +3613,11 @@ class PythonPreflightTests(unittest.TestCase):
 
     def run_command(self, *command):
         return subprocess.run(list(command), env=self.env(), text=True, capture_output=True,
-                              cwd=SCRIPTS.parent)
+                              cwd=self.root)
 
     def test_python_39_fails_naming_minimum_and_interpreter(self):
         self.stub_python("3.9.6")
-        result = self.run_command("/bin/bash", str(SCRIPTS / "require-python.sh"))
+        result = self.run_command("/bin/bash", str(self.scripts / "require-python.sh"))
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "")
         self.assertEqual(len(result.stderr.strip().splitlines()), 1, result.stderr)
@@ -3617,25 +3628,26 @@ class PythonPreflightTests(unittest.TestCase):
         for version in ("3.11.0", "3.12.4", "3.14.4", "4.0.0"):
             with self.subTest(version=version):
                 self.stub_python(version)
-                result = self.run_command("/bin/bash", str(SCRIPTS / "require-python.sh"))
+                result = self.run_command("/bin/bash", str(self.scripts / "require-python.sh"))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout + result.stderr, "")
 
     def test_unreadable_version_and_missing_python_fail(self):
         self.stub("python3", "#!/bin/sh\nexit 1\n")
-        result = self.run_command("/bin/bash", str(SCRIPTS / "require-python.sh"))
+        result = self.run_command("/bin/bash", str(self.scripts / "require-python.sh"))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unknown version", result.stderr)
         (self.bin / "python3").unlink()
-        result = subprocess.run(["/bin/bash", str(SCRIPTS / "require-python.sh")],
+        result = subprocess.run(["/bin/bash", str(self.scripts / "require-python.sh")],
                                 env=dict(self.env(), PATH=str(self.bin)),
-                                text=True, capture_output=True)
+                                text=True, capture_output=True, cwd=self.root)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("no python3 is on PATH", result.stderr)
 
     def test_make_gates_stop_before_running_anything_else(self):
         self.stub_python("3.9.6")
         self.stub("cargo", '#!/bin/sh\necho "$@" >> "$GUARD_TEST_LOG"\n')
+        self.stub("rg", "#!/bin/sh\nexit 0\n")
         for target in ("ci-fast", "ci-lint"):
             with self.subTest(target=target):
                 result = self.run_command("make", target, f"CARGO={self.bin}/cargo")
@@ -3648,7 +3660,7 @@ class PythonPreflightTests(unittest.TestCase):
         self.stub_python("3.9.6")
         self.stub("rg", "#!/bin/sh\nexit 1\n")
         self.stub("cargo", '#!/bin/sh\necho "$@" >> "$GUARD_TEST_LOG"\n')
-        result = self.run_command("/bin/bash", str(SCRIPTS / "ci-guardrails.sh"), "--fast")
+        result = self.run_command("/bin/bash", str(self.scripts / "ci-guardrails.sh"), "--fast")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Python >= 3.11", result.stderr)
         self.assertFalse(self.log.exists(), "a gate ran before the Python preflight")

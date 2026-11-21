@@ -276,6 +276,8 @@ elif [[ "$fast" == true || ("$guards" == true && "${CI_SELF_TESTS:-all}" == chan
     while IFS= read -r -d '' path; do
       case "$path" in
         scripts/* | .github/* | Makefile | .cargo/* | Cargo.toml | Cargo.lock | \
+          .config/nextest.toml | \
+          crates/orbit-engine/tests/engine/pr_landing/infrastructure/fixtures/legacy-codeql.yml | \
           install.sh | RELEASING.md | docs/dev/qa/path-leases-listener-sudo.md | \
           docs/standards/* | AGENTS.md | CLAUDE.md | \
           plugin/* | npm/* | .agents/* | .claude-plugin/*)
@@ -608,6 +610,7 @@ if [[ "$static" == false && "$checks" == false ]]; then
     slot_prefix=exclusive-
     open_done_fifo
     run_exclusive_guard "$repo_root/scripts/test-build-budget.sh"
+    run_exclusive_guard "$repo_root/scripts/test-ci-await-jobs.py"
     run_exclusive_guard "$repo_root/scripts/test-ci-fast-guards.py"
     run_exclusive_guard "$repo_root/scripts/test-ci-workspace-cache.py"
     run_exclusive_guard "$repo_root/scripts/test-ci-test-affected.py"
@@ -715,7 +718,6 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/test-cross-revision-check.sh"
   run_guard "$repo_root/scripts/test-cleanup-branches.sh"
   run_guard "$repo_root/scripts/test-check-nextest-partitions.py"
-  run_guard "$repo_root/scripts/test-ci-await-jobs.py"
   run_guard "$repo_root/scripts/test-ci-p90.py"
   run_guard "$repo_root/scripts/test-audit-panics.py"
   run_guard "$repo_root/scripts/test-smoke-claude-mcp.py"

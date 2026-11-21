@@ -45,7 +45,7 @@ echo "smoke-plugin-install: plugin-invalid-install-is-refused: invalid plugin ca
 claude_home="$scratch_root/claude"
 codex_home="$scratch_root/codex"
 cursor_home="$scratch_root/cursor"
-plugin_version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$repo_root/plugin/plugin.json")"
+plugin_version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$repo_root/npm/package.json")"
 mkdir -p "$claude_home/plugins/cache/orbit/orbit/$plugin_version" \
   "$codex_home/plugins/cache/orbit/orbit/$plugin_version" \
   "$cursor_home/plugins/local"

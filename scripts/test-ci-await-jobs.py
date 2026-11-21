@@ -182,8 +182,18 @@ def sleep(seconds):
 sleep(0)
 sys.argv = sys.argv[1:]
 namespace = runpy.run_path(sys.argv[0])
-namespace["main"].__globals__["time"] = types.SimpleNamespace(
+globals_dict = namespace["main"].__globals__
+globals_dict["time"] = types.SimpleNamespace(
     monotonic=lambda: elapsed, sleep=sleep, time=time.time)
+delays = [float(item) for item in os.environ.get("CI_AWAIT_REQUEST_DELAYS", "").split(",") if item]
+if delays:
+    original_request = globals_dict["request_job_listing"]
+    def delayed_request(*args, **kwargs):
+        result = original_request(*args, **kwargs)
+        if delays:
+            sleep(delays.pop(0))
+        return result
+    globals_dict["request_job_listing"] = delayed_request
 try:
     raise SystemExit(namespace["main"]())
 finally:
@@ -481,11 +491,25 @@ finally:
     def test_a_listing_after_the_deadline_is_not_a_success(self):
         everything = [job("Test build"), job("Test shard 1/2"), job("Test shard 2/2")]
         uploaded = [job("Test build", "in_progress", steps=[(UPLOAD, "completed", "success")])]
-        for responses, kwargs in ((everything, {}), (uploaded, {"jobs": ["Test build"], "step": UPLOAD})):
-            with self.subTest(kwargs=kwargs):
-                result = self.wait(responses, timeout="0", **kwargs)
-                self.assertEqual(result.returncode, 1, result.stdout)
-                self.assertIn("timed out after 0 s", result.stderr)
+        self.artifacts = [{"name": "nextest-archive-1", "expired": False, "size_in_bytes": 8}]
+        cases = (
+            (everything, {}, "2", 1),
+            (uploaded, {"jobs": ["Test build"], "step": UPLOAD}, "2", 1),
+            (uploaded, {"jobs": ["Test build"], "step": UPLOAD,
+                        "artifact_names": ["nextest-archive-1"]}, "0.5,1", 2),
+        )
+        for responses, kwargs, delays, expected_requests in cases:
+            with self.subTest(kwargs=kwargs, delays=delays):
+                self.requests.clear()
+                self.env["CI_AWAIT_REQUEST_DELAYS"] = delays
+                try:
+                    result = self.wait(responses, timeout="1", virtual=True, **kwargs)
+                finally:
+                    self.env.pop("CI_AWAIT_REQUEST_DELAYS", None)
+                self.assertEqual(len(self.requests), expected_requests, self.requests)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("timed out after 1 s", result.stderr)
+                self.assertIn("successful only after the deadline", result.stderr)
                 self.assertNotIn("awaited jobs succeeded", result.stdout)
 
     def test_the_poll_sleep_does_not_outlast_the_deadline(self):
