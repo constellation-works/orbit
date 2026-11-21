@@ -51,6 +51,65 @@ sys.argv = [script] + sys.argv[2:]
 runpy.run_path(script, run_name="__main__")
 """
 
+# A dedicated Linux subreaper owns the entire cancellation fixture, including
+# sessions created by paired.py. Its direct children cannot have their PIDs
+# reused until waitpid reaps them; pidfds keep each signal bound to that child.
+# SIGUSR1 requests emergency cleanup, while the other signals are forwarded to
+# the harness so the cancellation assertions still exercise paired.py itself.
+CANCELLATION_OWNER = r"""
+import ctypes, os, signal, subprocess, sys, time
+if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
+    raise OSError(ctypes.get_errno(), "PR_SET_CHILD_SUBREAPER")
+harness = None
+abort = False
+def forward(signum, _frame):
+    global abort
+    if signum == signal.SIGUSR1:
+        abort = True
+    elif harness is not None:
+        try:
+            harness.send_signal(signum)
+        except ProcessLookupError:
+            pass
+for sig in (signal.SIGUSR1, signal.SIGTERM, signal.SIGINT):
+    signal.signal(sig, forward)
+harness = subprocess.Popen(sys.argv[1:])
+status = None
+while status is None and not abort:
+    status = harness.poll()
+    time.sleep(0.01)
+if status is None:
+    harness.kill()
+    status = harness.wait()
+# The harness is gone, so all surviving descendants eventually become our
+# direct children. Never reap a child before pinning and signalling it.
+deadline = time.monotonic() + 10
+while True:
+    children = open("/proc/self/task/%d/children" % os.getpid()).read().split()
+    if not children:
+        break
+    for child in children:
+        try:
+            fd = os.pidfd_open(int(child))
+            try:
+                signal.pidfd_send_signal(fd, signal.SIGKILL)
+            finally:
+                os.close(fd)
+        except ProcessLookupError:
+            pass
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            break
+        if pid == 0:
+            break
+    if time.monotonic() >= deadline:
+        raise RuntimeError("fixture descendants did not exit within 10 seconds")
+    time.sleep(0.01)
+sys.exit(status if status >= 0 else 128 - status)
+"""
+
 # Role is baked in so the control copy of the base binary agrees with base,
 # while the candidate binary can fail or differ on its own.
 ARM_SCRIPT = """#!/bin/sh
@@ -396,6 +455,22 @@ class PairedCliTestCase(unittest.TestCase):
             check=False,
         )
         return result, out
+
+    def start_cancellation_harness(self, out: Path, surface: tuple[str, ...],
+                                   *extra: str) -> subprocess.Popen:
+        owner = subprocess.Popen(
+            [sys.executable, "-I", "-c", CANCELLATION_OWNER,
+             *self.paired_argv(out, surface, *extra)],
+            cwd=REPO, env=self.paired_env(),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+
+        def cleanup() -> None:
+            if owner.poll() is None:
+                owner.send_signal(signal.SIGUSR1)
+            owner.communicate(timeout=30)
+        self.addCleanup(cleanup)
+        return owner
 
     def assert_lane_released(self) -> None:
         fd = os.open(self.lane_lock, os.O_RDWR)
@@ -749,17 +824,7 @@ runpy.run_path(script, run_name="__main__")
     def test_interrupt_during_server_stop_kills_group_and_preserves_cancellation(self) -> None:
         (self.marks / "ignore-web-term").touch()
         out = Path(self.temp.name) / "out-cancel"
-        harness = subprocess.Popen(
-            self.paired_argv(out, ("--http", "/slow")),
-            cwd=REPO, env=self.paired_env(),
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        )
-
-        def cleanup() -> None:
-            if harness.poll() is None:
-                harness.kill()
-            harness.communicate(timeout=30)
-        self.addCleanup(cleanup)
+        harness = self.start_cancellation_harness(out, ("--http", "/slow"))
 
         pid_file = self.marks / "web-base.pid"
 
@@ -837,18 +902,9 @@ runpy.run_path(script, run_name="__main__")
 
     def test_interrupt_during_supervised_stop_kills_group_and_preserves_cancellation(self) -> None:
         out = Path(self.temp.name) / "out-supervised-cancel"
-        harness = subprocess.Popen(
-            self.paired_argv(out, ("--cli", "ignore-term"),
-                             "--parity", "probe-same", "--command-timeout", "1"),
-            cwd=REPO, env=self.paired_env(),
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        )
-
-        def cleanup() -> None:
-            if harness.poll() is None:
-                harness.kill()
-            harness.communicate(timeout=30)
-        self.addCleanup(cleanup)
+        harness = self.start_cancellation_harness(
+            out, ("--cli", "ignore-term"),
+            "--parity", "probe-same", "--command-timeout", "1")
 
         pid_file = self.marks / "ignore-base.pid"
         deadline = time.monotonic() + 60
@@ -857,18 +913,6 @@ runpy.run_path(script, run_name="__main__")
             self.assertLess(time.monotonic(), deadline, "supervised child never started")
             time.sleep(0.01)
         leader_pid = int(pid_file.read_text())
-
-        def stop_leaked_child() -> None:
-            try:
-                cmdline = Path(f"/proc/{leader_pid}/cmdline").read_bytes()
-            except FileNotFoundError:
-                return
-            if str(pid_file).encode() in cmdline:
-                try:
-                    os.killpg(leader_pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-        self.addCleanup(stop_leaked_child)
 
         term_file = self.marks / "ignore-base.term"
         deadline = time.monotonic() + 60
@@ -884,6 +928,52 @@ runpy.run_path(script, run_name="__main__")
         self.assert_reaped([leader_pid])
         self.assert_lane_released()
         self.assertFalse((out / "paired-summary.json").exists())
+
+    def test_cancellation_setup_failure_reaps_owned_processes(self) -> None:
+        for method, marker in (
+            ("test_interrupt_during_server_stop_kills_group_and_preserves_cancellation", "web-base.pid"),
+            ("test_interrupt_during_supervised_stop_kills_group_and_preserves_cancellation", "ignore-base.pid"),
+        ):
+            with self.subTest(method=method):
+                case = type(self)(method)
+                case.setUp()
+                observed = []
+                owner = None
+                start = case.start_cancellation_harness
+                read_text = Path.read_text
+
+                def start_owner(*args, **kwargs):
+                    nonlocal owner
+                    owner = start(*args, **kwargs)
+                    return owner
+
+                def fail_pid_read(path, *args, **kwargs):
+                    if path == case.marks / marker:
+                        observed.append(int(read_text(path)))
+                        descendant = case.marks / "web-base.descendant.pid"
+                        if descendant.exists():
+                            observed.append(int(read_text(descendant)))
+                        children = Path(f"/proc/{owner.pid}/task/{owner.pid}/children")
+                        observed.extend(int(pid) for pid in read_text(children).split())
+                        raise ValueError("injected marker read failure")
+                    return read_text(path, *args, **kwargs)
+
+                def verify_cleanup():
+                    self.assertTrue(observed, "the failure must follow fixture startup")
+                    self.assertIsNotNone(owner.returncode)
+                    self.assert_reaped(observed)
+                    case.assert_lane_released()
+
+                case.addCleanup(verify_cleanup)
+                case.start_cancellation_harness = start_owner
+                started = time.monotonic()
+                try:
+                    with mock.patch.object(Path, "read_text", fail_pid_read):
+                        with self.assertRaisesRegex(ValueError, "injected marker read failure"):
+                            getattr(case, method)()
+                finally:
+                    self.assertTrue(case.doCleanups())
+                self.assertLess(time.monotonic() - started, 30)
 
     def test_sigterm_during_fixture_pid_staging_reaches_handler(self) -> None:
         # ORB-26485: a supervision deadline can expire while the ignore-term fixture
