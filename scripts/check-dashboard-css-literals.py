@@ -31,6 +31,8 @@ import argparse
 import json
 import re
 import sys
+from decimal import Decimal, InvalidOperation
+from fractions import Fraction
 from pathlib import Path
 
 SCHEMA_VERSION = 1
@@ -167,27 +169,41 @@ def colour_key(literal):
     """Canonical (red, green, blue, alpha) of a hex or rgb()/rgba() literal, else None."""
     text = literal.strip().lower()
     if text.startswith("#"):
+        if re.fullmatch(r"#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})", text) is None:
+            return None
         digits = text[1:]
         if len(digits) in (3, 4):
             digits = "".join(digit * 2 for digit in digits)
         if len(digits) not in (6, 8):
             return None
         channels = [int(digits[i:i + 2], 16) for i in range(0, len(digits), 2)]
-        alpha = 1.0
+        alpha = Fraction(1)
         if len(channels) == 4:
-            alpha = channels.pop() / 255
-        return (*channels, round(alpha, 2))
+            alpha = Fraction(channels.pop(), 255)
+        return (*channels, alpha)
     match = re.fullmatch(r"rgba?\((.*)\)", text)
     if match is None:
         return None
-    try:
-        parts = [float(part) for part in RGB_SEPARATORS.split(match.group(1).strip()) if part]
-    except ValueError:
-        return None
+    parts = [part for part in RGB_SEPARATORS.split(match.group(1).strip()) if part]
     if len(parts) not in (3, 4):
         return None
-    alpha = parts[3] if len(parts) == 4 else 1.0
-    return (*(round(part) for part in parts[:3]), round(alpha, 2))
+    try:
+        channels = []
+        for part in parts[:3]:
+            percentage = part.endswith("%")
+            channel = Decimal(part[:-1] if percentage else part)
+            if percentage:
+                channel = channel * 255 / 100
+            channels.append(min(255, max(0, int(round(channel)))))
+        alpha_part = parts[3] if len(parts) == 4 else "1"
+        alpha_percentage = alpha_part.endswith("%")
+        alpha = Fraction(Decimal(alpha_part[:-1] if alpha_percentage else alpha_part))
+        if alpha_percentage:
+            alpha /= 100
+        alpha = min(Fraction(1), max(Fraction(0), alpha))
+    except (InvalidOperation, ValueError, OverflowError):
+        return None
+    return (*channels, alpha)
 
 
 def colour_tokens(root):
