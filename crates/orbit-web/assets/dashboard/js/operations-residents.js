@@ -479,9 +479,7 @@ function mandateRow(mandate) {
     el("span", { class: "resident-id", text: mandate.task_id }),
   ];
   if (open) {
-    const pill = el("span", { class: "pill", text: `${open} open` });
-    pill.dataset.status = "open";
-    meta.push(pill);
+    meta.push(el("span", { class: "badge", "data-tone": "warning", text: `${open} open` }));
   }
   const statusAttrs = { class: "resident-row-status", text: status.text };
   if (status.text.length > 72) statusAttrs.title = status.text;
@@ -594,8 +592,7 @@ function checkpointBlock(checkpoint) {
     ]);
   }
   const outcome = checkpoint.outcome || "Outcome not recorded";
-  const probe = checkpoint.probe ? el("span", { class: "pill", text: "probe" }) : null;
-  if (probe) probe.dataset.status = "in_progress";
+  const probe = checkpoint.probe ? el("span", { class: "badge", "data-tone": "accent", text: "probe" }) : null;
   return el("div", { class: "resident-checkpoint" }, [
     el("p", { class: "resident-checkpoint-summary" }, [
       checkpoint.cycle ? el("span", { class: "resident-id", text: checkpoint.cycle }) : null,

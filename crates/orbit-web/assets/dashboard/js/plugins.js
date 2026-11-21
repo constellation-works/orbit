@@ -97,8 +97,8 @@ function pluginCard(plugin) {
     el('span', { class: 'plugin-name', text: plugin.name }),
     el('span', { class: 'plugin-version', text: `v${plugin.version || '—'}` }),
     el('span', { class: `plugin-status status-${plugin.status}`, text: plugin.status }),
-    plugin.pinned ? el('span', { class: 'plugin-chip', text: 'pinned' }) : null,
-    plugin.unsandboxed ? el('span', { class: 'plugin-chip plugin-chip-warn', text: 'unsandboxed' }) : null,
+    plugin.pinned ? el('span', { class: 'badge', text: 'pinned' }) : null,
+    plugin.unsandboxed ? el('span', { class: 'badge', 'data-tone': 'warning', text: 'unsandboxed' }) : null,
     certificationChip(plugin),
   ].filter(Boolean)));
   if (plugin.description) card.appendChild(el('p', { class: 'plugin-description', text: plugin.description }));
@@ -125,7 +125,7 @@ function pluginCard(plugin) {
 }
 
 const toolChip = tool =>
-  el('span', { class: `plugin-chip ${tool.active ? '' : 'plugin-chip-idle'}`, title: `${tool.execution_kind} · MCP ${tool.advertised_name || 'not advertised'}`, text: tool.name });
+  el('span', { class: 'badge mono', 'data-tone': tool.active ? null : 'muted', title: `${tool.name} · ${tool.execution_kind} · MCP ${tool.advertised_name || 'not advertised'}`, text: tool.name });
 
 // A plugin can expose dozens of tools. Past TOOL_PREVIEW the card shows the
 // first few, a filter, and a toggle that reveals the rest inside a bounded,
@@ -218,7 +218,7 @@ function certificationChip(plugin) {
   if (!plugin.certified_orbit_version) return null;
   const behind = certificationBehind(plugin.certified_orbit_version, plugin.host_orbit_version);
   return el('span', {
-    class: `plugin-chip plugin-certification${behind ? ' plugin-chip-warn' : ''}`,
+    class: 'badge plugin-certification', 'data-tone': behind ? 'warning' : null,
     text: `certified for ${plugin.certified_orbit_version}${behind ? ' · behind host' : ''}`,
     title: behind
       ? `Certification predates this host's Orbit ${plugin.host_orbit_version}; compatibility with this version has not been certified.`

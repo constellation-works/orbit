@@ -219,8 +219,11 @@ function settingCard(label, value, note, extra = null) {
 function settingsCards() {
   const { forecast } = view.payload;
   const mode = modeOf(view.payload);
-  const pills = el("div", { class: "rf-mode-pills", "aria-hidden": "true" }, MODES.map((name) =>
-    el("span", { class: `rf-mode-pill${name === mode.mode ? ` on ${name}` : ""}`, text: name })));
+  const pills = el("div", { class: "rf-mode-options", "aria-hidden": "true" }, MODES.map((name) =>
+    el("span", {
+      class: "badge", text: name,
+      "data-tone": name !== mode.mode ? "muted" : { enforce: "success", shadow: "held", off: "accent" }[name],
+    })));
   const modeValue = el("div", { class: "rf-setting-value" }, [
     el("span", { class: `rf-mode-dot ${mode.mode}`, "aria-hidden": "true" }),
     el("span", { text: mode.mode.charAt(0).toUpperCase() + mode.mode.slice(1) }),
@@ -298,8 +301,10 @@ function profileRow(profile) {
   const sparse = profile.sparse === true;
   const builds = Array.isArray(profile.build_like) ? profile.build_like.length : 0;
   const count = el("td", { class: "num" }, [
-    String(profile.delivery_count ?? "—"),
-    sparse ? el("span", { class: "rf-badge", text: "sparse", title: "Fewer deliveries than admission needs; it prices this key with its base class" }) : null,
+    el("span", { class: "profile-sample-count" }, [
+      String(profile.delivery_count ?? "—"),
+      sparse ? el("span", { class: "badge", "data-tone": "warning", text: "sparse", title: "Fewer deliveries than admission needs; it prices this key with its base class" }) : null,
+    ]),
   ]);
   return el("tr", { class: sparse ? "rf-sparse" : null }, [
     el("th", { scope: "row", text: String(profile.key?.work_class || "—") }),

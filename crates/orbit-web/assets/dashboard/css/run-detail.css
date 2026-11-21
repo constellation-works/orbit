@@ -122,7 +122,6 @@ a.failure-id-link:focus-visible {
 .waiting-task-link:hover { text-decoration: underline; }
 .child-dispatch-error { color: var(--state-failed); }
 .child-dispatch-summary { margin-bottom: var(--space-8); }
-.child-dispatch-row .state-label { color: var(--dot); }
 .child-dispatch-row .duration { white-space: nowrap; }
 .provider-process-message { overflow-wrap: anywhere; }
 
@@ -504,7 +503,7 @@ a.failure-id-link:focus-visible {
   }
   .step-row .idx { grid-area: idx; align-self: start; }
   .step-row .target { grid-area: target; white-space: normal; overflow-wrap: anywhere; }
-  .step-row > :has(> .state-label) { grid-area: state; }
+  .step-row > :has(> .pill[data-state]) { grid-area: state; }
   .step-row .duration { grid-area: duration; }
   .step-row .exit { grid-area: exit; }
 }

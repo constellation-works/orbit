@@ -27,7 +27,7 @@ import {
 } from './common.js';
 import { setActiveTab } from './router.js';
 import {
-  el, num, metricLabel, pluralCount, armColor, armIndex, armSwatch, experimentBadge, experimentCard, experimentEmpty,
+  el, num, metricLabel, pluralCount, armColor, armIndex, armSwatch, experimentCard, experimentEmpty,
   armCards, armEvidenceCard, forestCard, cumulativeCard, complexityCard, crewCard,
 } from './experiment-readout.js';
 import { draftActions, draftStartRenderState, lockedNote, syncExperimentAuthoring } from './experiment-form.js';
@@ -95,6 +95,11 @@ export function experimentsRoute(id = selectedId) {
 /// address in step without routing, which would refetch.
 export function onExperimentTabPick(listener) {
   tabPickListener = listener;
+}
+
+function experimentStatusPill(status) {
+  const state = { running: "running", paused: "pending", concluded: "success", abandoned: "disabled" }[status];
+  return el("span", { class: "pill", "data-state": state, text: status });
 }
 
 function clearExperiments() {
@@ -315,8 +320,8 @@ function listItem(experiment, authoring) {
     el("div", { class: "ex-item-head" }, [
       experimentLink(experiment.id, [experiment.name || experiment.id], "ex-item-name"),
       el("span", { class: "ex-badges" }, [
-        experimentBadge(experiment.status, `ex-status-${experiment.status}`),
-        experimentBadge(experiment.mode, `ex-mode-${experiment.mode}`),
+        experimentStatusPill(experiment.status),
+        el("span", { class: "badge", text: experiment.mode }),
       ]),
     ]),
     experiment.hypothesis ? el("p", { class: "ex-hypothesis", text: experiment.hypothesis }) : null,
@@ -482,7 +487,9 @@ function detailTabPanel(key, children) {
 function readoutVerdictBadge(experiment, verdict) {
   if (experiment.status !== "concluded") return null;
   const state = verdict?.state || "collecting";
-  return experimentBadge(`readout: ${verdict?.label || state}`, `ex-verdict ex-verdict-${state}`);
+  const label = `readout: ${verdict?.label || state}`;
+  const tone = { winner: "success", withheld: "warning", inconclusive: "warning" }[state];
+  return el("span", { class: "badge", "data-tone": tone, text: label, title: label });
 }
 
 // The headline answer: the operator's conclusion once there is one, otherwise
@@ -530,8 +537,8 @@ function headerCard(experiment, view, primary) {
         experiment.hypothesis ? pinnedInfoHint(experiment.hypothesis) : null,
       ]),
       el("span", { class: "ex-badges" }, [
-        experimentBadge(experiment.status, `ex-status-${experiment.status}`),
-        experimentBadge(experiment.mode, `ex-mode-${experiment.mode}`),
+        experimentStatusPill(experiment.status),
+        el("span", { class: "badge", text: experiment.mode }),
       ]),
     ]),
     el("div", { class: "ex-decision" }, [

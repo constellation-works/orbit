@@ -384,8 +384,10 @@ function seriesCards(all, hidden, workClass, u) {
           el("span", { text: `peak at +${peakCpu.minute ?? 0}m · mem p90 ${u.memText(peakMem.value)}` }),
         ]),
         el("span", { class: "stat-tile-note" }, [
-          el("span", { class: series.sparse ? "rp-n low" : "rp-n", text: `${series.deliveries} deliveries` }),
-          series.sparse ? el("span", { class: "rp-sparse-tag", text: "sparse" }) : null,
+          el("span", { class: "profile-sample-count" }, [
+            el("span", { class: series.sparse ? "rp-n low" : "rp-n", text: `${series.deliveries} deliveries` }),
+            series.sparse ? el("span", { class: "badge", "data-tone": "warning", text: "sparse" }) : null,
+          ]),
           el("span", { text: ` · to +${series.horizon}m` }),
         ]),
       ]);

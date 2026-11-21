@@ -811,7 +811,7 @@ function regressedTaskNode(task, regressedPaths) {
     el("span", { class: "codebase-task-title", text: task.title || "" }),
   ]);
   if (wide >= WIDE_TASK_PATHS) {
-    top.appendChild(el("span", { class: "codebase-tag wide", text: `${count(wide)} ranked paths`, title: "This task's regression sites fall under several ranked paths" }));
+    top.appendChild(el("span", { class: "badge", "data-tone": "warning", text: `${count(wide)} ranked paths`, title: "This task's regression sites fall under several ranked paths" }));
   }
   const item = el("li", { class: "codebase-task" }, [top]);
   const sites = Array.isArray(task.sites) ? task.sites : [];
@@ -1223,7 +1223,7 @@ function pairRow(pair) {
     el("div", { class: "codebase-pair-paths" }, [
       pathNode(left),
       el("span", { class: "codebase-pair-second" }, [el("span", { class: "codebase-pair-arrow", text: "↔ " }), pathNode(right)]),
-      expectedPair(pair.paths) ? el("span", { class: "codebase-tag", text: "expected: its tests" }) : null,
+      expectedPair(pair.paths) ? el("span", { class: "badge", text: "expected: its tests" }) : null,
     ]),
     el("div", { class: "codebase-pair-figure" }, [
       el("span", {}, [el("span", { class: "codebase-rate", text: pct(pair.rate) }), " ", el("span", { class: "codebase-frac", text: `${count(pair.numerator)}/${count(pair.denominator)}` })]),
@@ -1311,7 +1311,7 @@ function lockRow(row, byWait, maxTotal, recorded) {
     rateBar(byWait ? (Number(wait?.total_ms) || 0) / (maxTotal || 1) : row.rate),
     el("div", { class: "codebase-lock-line" }, [
       el("span", { class: "codebase-extra", text: line }),
-      recorded && wait && Number(wait.waiting) > 0 ? el("span", { class: "codebase-tag", text: `${count(wait.waiting)} still waiting` }) : null,
+      recorded && wait && Number(wait.waiting) > 0 ? el("span", { class: "badge", text: `${count(wait.waiting)} still waiting` }) : null,
     ]),
   ]);
   item.dataset.path = row.path;

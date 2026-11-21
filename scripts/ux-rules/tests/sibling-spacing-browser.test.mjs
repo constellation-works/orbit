@@ -1,6 +1,5 @@
-// Browser regressions for ui.sibling-spacing. Badge cases load the shipped
-// experiments.css so status, mode and verdict weights are the dashboard's,
-// not a copy of the rule. Needs the browser kit (PLAYWRIGHT_MODULE).
+// Browser regressions for ui.sibling-spacing using the dashboard component
+// stylesheet. Needs the browser kit (PLAYWRIGHT_MODULE).
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -18,11 +17,11 @@ import { check, rule } from "../ui/sibling-spacing.mjs";
 
 const ENABLED = Boolean(process.env.PLAYWRIGHT_MODULE);
 const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
-const CSS = ["base.css", "experiments.css"].map((name) =>
+const CSS = ["base.css", "components.css"].map((name) =>
   fileURLToPath(new URL(`../../../crates/orbit-web/assets/dashboard/css/${name}`, import.meta.url)),
 );
 
-const evidence = { roles: [], anomalies: [], states: [], ambiguous: [], views: [] };
+const evidence = { anomalies: [], states: [], ambiguous: [], views: [] };
 
 function targetFor(view, width) {
   return { id: `${view}|dark|${width}|default`, view, width, theme: "dark", state: "default" };
@@ -69,84 +68,12 @@ describe("ui.sibling-spacing", { concurrency: false }, () => {
   }
 
   for (const width of [1440, 375]) {
-    test(`status, mode and verdict badges are not one peer group at ${width}`, { skip: !ENABLED }, async () => {
-      const { page, result } = await measure(width, `
-        <span class="ex-badges" id="role-badges">
-          <span class="ex-badge ex-status-running" id="role-status">running</span>
-          <span class="ex-badge ex-mode-live" id="role-mode">live</span>
-          <span class="ex-badge ex-verdict ex-verdict-winner" id="role-verdict">winner</span>
-        </span>
-        <span id="plain-peers">
-          <span class="chip" id="plain-a">a</span>
-          <span class="chip" id="plain-b">b</span>
-          <span class="chip" id="plain-c">c</span>
-        </span>`, { css: CSS });
-      try {
-        const rendered = await page.evaluate(() => {
-          const rules = [];
-          for (const sheet of document.styleSheets) {
-            let cssRules = [];
-            try {
-              cssRules = [...sheet.cssRules];
-            } catch {
-              cssRules = [];
-            }
-            for (const candidate of cssRules) {
-              if (!candidate.selectorText || !/ex-badge|ex-verdict|ex-status-|ex-mode-/.test(candidate.selectorText)) continue;
-              rules.push({
-                selector: candidate.selectorText,
-                fontWeight: candidate.style.fontWeight,
-                font: candidate.style.font,
-              });
-            }
-          }
-          return {
-            rules,
-            badges: ["#role-status", "#role-mode", "#role-verdict"].map((selector) => {
-              const el = document.querySelector(selector);
-              const style = getComputedStyle(el);
-              return {
-                selector,
-                className: el.className,
-                text: el.textContent.trim(),
-                fontWeight: style.fontWeight,
-                fontSize: style.fontSize,
-                padding: style.padding,
-              };
-            }),
-          };
-        });
-        const bySelector = Object.fromEntries(rendered.badges.map((badge) => [badge.selector, badge]));
-        assert.equal(bySelector["#role-verdict"].fontWeight, "600");
-        assert.equal(bySelector["#role-status"].fontWeight, "400");
-        assert.equal(bySelector["#role-mode"].fontWeight, "400");
-        assert.equal(bySelector["#role-verdict"].className.includes("ex-verdict"), true);
-        const verdictRule = rendered.rules.find((item) => item.selector.split(",").map((part) => part.trim()).includes(".ex-verdict"));
-        assert.equal(verdictRule.fontWeight, "600");
-        assert.equal(result.status, "pass", JSON.stringify(result.measurements.failures));
-        assert.equal((result.measurements.failures ?? []).length, 0);
-        const split = coverageNamed(result, "distinct-kind").find((row) => row.parent === "#role-badges");
-        assert.ok(split, JSON.stringify(result.measurements.coverage));
-        assert.deepEqual(
-          split.kinds.map((item) => item.kind).sort(),
-          ["mode", "status", "verdict"],
-        );
-        assert.equal(split.kinds.every((item) => item.compared === false && item.count === 1), true);
-        const compared = coverageNamed(result, "compared").find((row) => row.parent === "#plain-peers");
-        assert.equal(compared.kind, "chip");
-        assert.equal(compared.count, 3);
-        evidence.roles.push({ width, rendered, coverage: result.measurements.coverage, status: result.status });
-      } finally {
-        await page.close();
-      }
-    });
-
     test(`padding, font-size and font-weight anomalies still fail inside one kind at ${width}`, { skip: !ENABLED }, async () => {
       const { page, result } = await measure(width, `
         <div id="pad-peers">
-          <span class="ex-badge ex-status-running" id="pad-a">running</span>
-          <span class="ex-badge ex-status-paused" id="pad-b">paused</span>
-          <span class="ex-badge ex-status-concluded" id="pad-c" style="padding: 4px 20px">concluded</span>
+          <span class="pill" data-state="running" id="pad-a">running</span>
+          <span class="pill" data-state="pending" id="pad-b">paused</span>
+          <span class="pill" data-state="success" id="pad-c" style="padding: 4px 20px">concluded</span>
         </div>
         <div id="size-peers">
           <span class="chip" id="size-a">a</span>
@@ -154,16 +81,16 @@ describe("ui.sibling-spacing", { concurrency: false }, () => {
           <span class="chip" id="size-c" style="font-size: 18px">c</span>
         </div>
         <div id="weight-peers">
-          <span class="ex-badge ex-status-running" id="weight-a">a</span>
-          <span class="ex-badge ex-status-running" id="weight-b">b</span>
-          <span class="ex-badge ex-status-running" id="weight-c" style="font-weight: 700">c</span>
+          <span class="pill" data-state="running" id="weight-a">a</span>
+          <span class="pill" data-state="running" id="weight-b">b</span>
+          <span class="pill" data-state="running" id="weight-c" style="font-weight: 700">c</span>
         </div>`, { css: CSS });
       try {
         assert.equal(result.status, "fail");
         for (const expected of [
-          { selector: "#pad-c", property: "padding", kind: "status", parent: "#pad-peers" },
+          { selector: "#pad-c", property: "padding", kind: "pill", parent: "#pad-peers" },
           { selector: "#size-c", property: "font_size", kind: "chip", parent: "#size-peers" },
-          { selector: "#weight-c", property: "font_weight", kind: "status", parent: "#weight-peers" },
+          { selector: "#weight-c", property: "font_weight", kind: "pill", parent: "#weight-peers" },
         ]) {
           const failure = failureNamed(result, expected.selector, expected.property);
           assert.ok(failure, JSON.stringify(result.measurements.failures));
@@ -246,9 +173,9 @@ describe("ui.sibling-spacing", { concurrency: false }, () => {
   test("an undocumented modifier is ambiguous and does not suppress other groups", { skip: !ENABLED }, async () => {
     const { page, result } = await measure(375, `
       <div id="ambiguous-badges">
-        <span class="ex-badge ex-status-running" id="amb-status">running</span>
-        <span class="ex-badge promo" id="amb-promo" style="font-weight: 700">promo</span>
-        <span class="ex-badge draft" id="amb-draft" style="font-weight: 400">draft</span>
+        <span class="badge" id="amb-status">running</span>
+        <span class="badge promo" id="amb-promo" style="font-weight: 700">promo</span>
+        <span class="badge draft" id="amb-draft" style="font-weight: 400">draft</span>
       </div>
       <div id="still-compared">
         <span class="chip" id="still-a">a</span>
@@ -286,7 +213,7 @@ describe("ui.sibling-spacing", { concurrency: false }, () => {
     }
   });
 
-  test("experiment detail badge groups at 1440 and 375 do not flag verdict weight", {
+  test("experiment detail badges share a style at 1440 and 375", {
     timeout: 300000,
     skip: !ENABLED,
   }, async () => {
@@ -322,33 +249,17 @@ describe("ui.sibling-spacing", { concurrency: false }, () => {
           };
         });
         const result = await check(ctx);
-        const badgeWeight = (result.measurements.failures ?? []).filter((failure) =>
-          failure.property === "font_weight"
-          && (String(failure.selector).includes("ex-badge")
-            || String(failure.kind) === "status"
-            || String(failure.kind) === "mode"
-            || String(failure.kind) === "verdict"));
         assert.equal(rendered.missing, false, JSON.stringify(rendered));
-        assert.equal(rendered.badges.length >= 3, true, JSON.stringify(rendered));
-        const verdict = rendered.badges.find((badge) => badge.className.split(/\s+/).includes("ex-verdict"));
-        const status = rendered.badges.find((badge) => badge.className.split(/\s+/).some((token) => token.startsWith("ex-status-")));
-        const mode = rendered.badges.find((badge) => badge.className.split(/\s+/).some((token) => token.startsWith("ex-mode-")));
-        assert.ok(verdict && status && mode, JSON.stringify(rendered));
-        assert.equal(verdict.fontWeight, "600", JSON.stringify(rendered));
-        assert.equal(status.fontWeight, "400", JSON.stringify(rendered));
-        assert.equal(mode.fontWeight, "400", JSON.stringify(rendered));
-        assert.equal(badgeWeight.length, 0, JSON.stringify({ badgeWeight, failures: result.measurements.failures }));
-        const split = (result.measurements.coverage ?? []).find((row) =>
-          row.coverage === "distinct-kind"
-          && (row.kinds ?? []).map((item) => item.kind).sort().join(",") === "mode,status,verdict");
-        assert.ok(split, JSON.stringify(result.measurements.coverage));
+        const badges = rendered.badges.filter((badge) => badge.className.split(/\s+/).includes("badge"));
+        assert.equal(badges.length, 2, JSON.stringify(rendered));
+        for (const property of ["fontWeight", "fontSize", "padding"]) {
+          assert.equal(badges[0][property], badges[1][property], JSON.stringify(rendered));
+        }
         evidence.views.push({
           width: target.width,
           status: result.status,
           fingerprint: result.fingerprint,
           rendered,
-          badgeWeight,
-          split,
           failureCount: (result.measurements.failures ?? []).length,
           failures: result.measurements.failures ?? [],
         });

@@ -76,8 +76,9 @@ function expiryLabel(notice, now = Date.now()) {
   return `expires in ${Math.floor(seconds / 86400)}d`;
 }
 
-function chip(label, className = "") {
-  return el("span", { class: `notice-chip${className ? ` ${className}` : ""}`, text: label });
+function noticeKindPill(kind) {
+  const tone = { warn: "warning", incident: "danger", maintenance: "warning", partial: "unknown" }[kind];
+  return el("span", { class: "pill", "data-tone": tone, text: kind || "notice" });
 }
 
 function noticeLink(notice) {
@@ -145,7 +146,7 @@ export function renderNoticeBanner(payload) {
   const now = Date.now();
   const rows = notices.map((notice) => {
     const row = el("div", { class: `notice-banner-row notice-${text(notice.kind)}` }, [
-      chip(text(notice.kind) || "notice", `notice-kind-${text(notice.kind)}`),
+      noticeKindPill(text(notice.kind)),
       el("span", { class: "notice-banner-title", text: text(notice.title) }),
       el("span", { class: "notice-banner-meta", text: [text(notice.scope), ageLabel(notice, now), expiryLabel(notice, now)].filter(Boolean).join(" · ") }),
       noticeLink(notice),
@@ -219,7 +220,7 @@ function coverageBannerRow(reasons, hasNotices) {
   const link = el("a", { class: "notice-banner-link", text: "Notices" });
   link.href = "#notices";
   const row = el("div", { class: "notice-banner-row notice-coverage-banner", role: "status" }, [
-    chip("partial", "notice-kind-partial"),
+    noticeKindPill("partial"),
     el("span", { class: "notice-banner-title", text: lead }),
     el("span", { class: "notice-banner-meta", text: reasons.join(" · ") }),
     link,
@@ -438,7 +439,7 @@ function noticeRow(notice, canWrite, now) {
     el("span", { class: "notice-title", text: text(notice.title) }),
   ]);
   const main = el("div", { class: "notice-row-main" }, [
-    el("span", { class: `notice-severity notice-severity-${kind}`, text: kind || "notice" }),
+    noticeKindPill(kind),
     toggle,
     el("span", { class: "notice-scope", text: text(notice.scope) || "workspace" }),
     el("span", { class: "notice-when", text: when }),

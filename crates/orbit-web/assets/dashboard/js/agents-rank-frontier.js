@@ -396,7 +396,7 @@ function tierTable(chart) {
     const name = el("span", { class: "agents-rank-model" }, [
       rankFormat.providerDot(point.model),
       el("span", { class: "agents-rank-model-name", text: point.model || "—", title: point.model || "" }),
-      point.frontier ? el("span", { class: "agents-rank-badge", text: "FRONTIER" }) : null,
+      point.frontier ? el("span", { class: "badge", "data-tone": "accent", text: "FRONTIER" }) : null,
     ]);
     const tr = el("tr", { class: point.underpriced ? "is-underpriced" : "" }, [
       el("td", {}, [name]),

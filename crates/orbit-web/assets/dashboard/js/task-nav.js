@@ -451,7 +451,7 @@ function renderChips(context) {
   const allOn = activeStatuses.size === statusOrder(context).length;
   const counts = statusCounts(context);
   const myWorkCount = taskList(context).filter(isMyWorkTask).length;
-  for (const chip of container.querySelectorAll(".chip")) {
+  for (const chip of container.querySelectorAll(".chip[data-status], .chip[data-role]")) {
     if (chip.dataset.role === "workspaces") continue;
     const status = chip.dataset.status;
     const isAll = chip.dataset.role === "all";
@@ -694,7 +694,7 @@ export function buildChips(context) {
   });
   secondary.append(allChip, notReady, pilotFilter);
   const more = el("button", {
-    class: "chip-more",
+    class: "chip chip-quiet",
     type: "button",
     "aria-controls": "task-filter-more",
     "aria-expanded": "false",

@@ -223,20 +223,6 @@ td.codebase-cell-td { padding: var(--space-6) var(--space-8); }
 .codebase-rate { font-family: var(--font-mono); font-size: var(--text-md); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--fg); }
 .codebase-frac { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--fg-dim); white-space: nowrap; }
 .codebase-extra { font-size: var(--text-sm); color: var(--fg-mute); }
-.codebase-tag {
-  display: inline-flex;
-  align-items: center;
-  min-height: 20px;
-  padding: 0 var(--space-8);
-  border: 1px solid #2a3038;
-  border-radius: var(--radius-xs);
-  background: #1a1f26;
-  font-size: var(--text-xs);
-  font-weight: 600;
-  color: var(--fg-dim);
-  white-space: nowrap;
-}
-.codebase-tag.wide { color: var(--status-proposed); border-color: var(--warn-line); background: var(--warn-wash); }
 .codebase-note { margin: 0; font-size: var(--text-md); line-height: 1.5; color: var(--fg-mute); }
 .codebase-empty { margin: 0; padding: var(--space-4) 0; font-size: var(--text-md); color: var(--fg-dim); }
 td.codebase-empty { padding: var(--space-16) var(--space-14); }
@@ -523,18 +509,6 @@ td.codebase-empty { padding: var(--space-16) var(--space-14); }
   overflow-wrap: anywhere;
   white-space: normal;
 }
-.health-card .status-badge {
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  font-weight: 600;
-  padding: var(--space-2) var(--space-6);
-  border-radius: var(--radius-xs);
-  background: rgba(255, 255, 255, 0.04);
-  white-space: nowrap;
-}
-.health-card.critical .status-badge { color: var(--state-failed); }
-.health-card.warning  .status-badge { color: var(--warn-fg); }
-.health-card.normal   .status-badge { color: var(--fg-dim); }
 .health-card .metric-trend {
   font-family: var(--font-sans);
   font-size: var(--text-xs);

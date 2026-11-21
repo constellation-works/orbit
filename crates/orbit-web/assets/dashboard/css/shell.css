@@ -360,20 +360,6 @@
 /* The select uses the rail width beside the Serving badge. A longer name ends
    in an ellipsis; its title keeps the whole name. */
 .rail-host .host-picker-control .host-select { flex: 1 1 0; min-width: 0; width: 0; padding-inline: var(--space-8); text-overflow: ellipsis; }
-/* Keep the badge shorter than the select, so changing hosts does not change
-   the host control's height. */
-.rail-host .host-serving-badge {
-  flex: none;
-  padding: var(--space-2) var(--space-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-control);
-  color: var(--fg-dim);
-  font-size: var(--text-2xs);
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
-}
 
 /* The rail's foot, pinned below the destinations: the host block, then the
    last refresh time (the destination rides in its title and accessible
@@ -563,18 +549,6 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 }
 .usage-dialog[hidden] { display: none; }
 .usage-head { flex-wrap: wrap; }
-.usage-pill {
-  padding: var(--space-2) var(--space-8);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  background: var(--bg-control);
-  color: var(--fg-dim);
-  font-size: var(--text-xs);
-}
-.usage-pill.ok { color: var(--status-done); }
-.usage-pill.elevated { border-color: var(--warn-line); background: var(--warn-wash); color: var(--warn-fg); }
-.usage-pill.critical { border-color: var(--danger-line); background: var(--danger-wash); color: var(--danger-fg); }
-.usage-pill.stale, .usage-pill.off { border-style: dashed; color: var(--fg-mute); }
 .usage-observed { margin-left: auto; color: var(--fg-mute); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 .usage-section { margin: 0 0 var(--space-12); }
 .usage-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-8); }
@@ -884,25 +858,6 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 }
 .workspace-scope-note.is-inactive { visibility: hidden; }
 
-.scope-badge {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--fg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-2xs);
-  padding: var(--space-2) var(--space-8);
-  white-space: nowrap;
-}
-.scope-badge.independent {
-  color: var(--accent-hi);
-  border-color: var(--accent);
-  background: rgba(110, 159, 255, 0.12);
-}
 .scope-chips {
   display: flex;
   flex-wrap: wrap;
@@ -910,94 +865,20 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   align-items: center;
   min-width: 0;
 }
-.scope-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-6);
-  font: inherit;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  line-height: 1.2;
-  padding: var(--space-4) var(--space-8);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-2xs);
-  background: var(--bg-elev);
-  color: var(--fg);
-  max-width: 100%;
-}
-button.scope-chip {
-  cursor: pointer;
-}
-button.scope-chip:hover {
-  border-color: var(--accent);
-}
-.scope-chip-k {
+.scope-facet { max-width: min(100%, 24ch); }
+.scope-key {
+  flex: none;
   color: var(--fg-dim);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   font-size: var(--text-2xs);
 }
-.scope-chip-v {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 14ch;
-}
-.scope-chip-x {
+.scope-remove {
+  flex: none;
   color: var(--fg-dim);
   font-size: var(--text-md);
   line-height: 1;
 }
-.scope-chip.independent {
-  border-color: var(--accent);
-  background: rgba(110, 159, 255, 0.12);
-}
-/* Title badges: a workspace name, an `os:` routing tag, a readiness gap. One
-   shape, sitting on the title's baseline. */
-.ws-badge,
-.os-badge,
-.readiness-badge {
-  display: inline-block;
-  margin-right: var(--space-6);
-  padding: 0 var(--space-6);
-  font-size: var(--text-xs);
-  line-height: 18px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  vertical-align: 1px;
-}
-.ws-badge { color: var(--fg-dim); }
-
-/* An `os:` routing tag: the host a task needs, set apart from plain labels. */
-.os-badge {
-  color: #a8c2f0;
-  background: #16213a;
-  border-color: #2a3b5e;
-}
-.os-badge-invalid {
-  color: var(--fg-dim);
-  background: transparent;
-  border-style: dashed;
-}
-
-/* Task readiness, in the os-badge slot: amber while a gap blocks automation,
-   muted when every gap is advisory, neutral while a task pilot prepares it. */
-.readiness-blocking {
-  color: var(--warn-fg);
-  background: var(--warn-wash);
-  border-color: var(--warn-line);
-}
-.readiness-advisory {
-  color: var(--fg-mute);
-  border-color: var(--border);
-}
-.readiness-preparing {
-  color: var(--fg-dim);
-  border-color: var(--fg-dim);
-  border-style: dashed;
-}
-
-
 main {
   display: grid;
   grid-template-columns: minmax(0, 2.5fr) minmax(0, 1fr);
@@ -1033,8 +914,7 @@ main {
   .workspace-select {
     max-width: 140px;
   }
-  .workspace-scope-note,
-  .scope-badge {
+  .workspace-scope-note {
     font-size: var(--text-2xs);
     padding: var(--space-2) var(--space-6);
   }
@@ -1046,21 +926,11 @@ main {
     flex-wrap: wrap;
     width: 100%;
   }
-  .scope-chip {
-    font-size: var(--text-2xs);
-    padding: var(--space-4) var(--space-6);
-  }
-  .scope-chip-v {
-    max-width: 10ch;
-  }
 }
 
 @media (max-width: 520px) {
   .workspace-scope-note {
     white-space: normal;
-  }
-  .scope-chip {
-    max-width: calc(50% - 6px);
   }
 }
 
@@ -1319,17 +1189,6 @@ a.exec-origin.remote-run-link { color: var(--accent); }
 .host-detail[hidden] { display: none; }
 .host-detail-head { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8) var(--space-10); margin-bottom: var(--space-12); }
 .host-detail-name { font-family: var(--font-mono); font-size: var(--text-md); font-weight: 600; color: var(--fg-strong); }
-.host-detail-pill {
-  padding: var(--space-2) var(--space-8);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  background: var(--bg-control);
-  color: var(--fg-dim);
-  font-size: var(--text-xs);
-}
-.host-detail-pill.elevated { border-color: var(--warn-line); background: var(--warn-wash); color: var(--warn-fg); }
-.host-detail-pill.critical { border-color: var(--danger-line); background: var(--danger-wash); color: var(--danger-fg); }
-.host-detail-pill.stale { border-style: dashed; color: var(--fg-mute); }
 .host-detail-age { margin-left: auto; color: var(--fg-mute); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 .host-detail-row { position: relative; margin: 0 0 var(--space-12); }
 .host-detail-row-head { display: flex; align-items: baseline; gap: var(--space-8); min-width: 0; }

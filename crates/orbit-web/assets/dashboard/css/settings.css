@@ -135,10 +135,6 @@
 .settings-row.overridden .settings-value, .settings-table-cell.overridden .settings-value { color: var(--fg-dim); text-decoration: line-through; }
 
 .settings-tags { display: flex; flex-wrap: wrap; gap: var(--space-4); }
-.settings-tag {
-  padding: var(--space-2) var(--space-8); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-sunk);
-  color: var(--fg-strong); font: var(--text-sm)/1.5 var(--font-mono); overflow-wrap: anywhere;
-}
 .settings-tag-note { margin-left: var(--space-6); color: var(--fg-mute); }
 .settings-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-2) var(--space-14); margin: 0; font: var(--text-sm)/1.5 var(--font-mono); }
 .settings-kv dt { max-width: 22ch; color: var(--fg-dim); overflow-wrap: anywhere; }
@@ -234,11 +230,7 @@
 .config-editor-actions { display: inline-flex; gap: var(--space-6); }
 .config-toggle { display: inline-flex; gap: var(--space-8); align-items: center; color: var(--fg-dim); font-size: var(--text-sm); }
 .config-chiplist { display: flex; flex-wrap: wrap; gap: var(--space-6); align-items: center; }
-.config-entry {
-  display: inline-flex; gap: var(--space-6); align-items: center; padding: var(--space-2) var(--space-6);
-  border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--fg); font-size: var(--text-sm);
-}
-.config-entry-remove { background: none; border: none; color: var(--fg-mute); cursor: pointer; padding: 0; }
+.config-entry-remove { flex: none; background: none; border: none; color: var(--fg-mute); cursor: pointer; padding: 0; }
 .config-entry-remove:hover { color: var(--state-failed); }
 .config-field { display: flex; gap: var(--space-10); align-items: center; flex-wrap: wrap; }
 .config-field-label { color: var(--fg-dim); font-size: var(--text-sm); min-width: 84px; }

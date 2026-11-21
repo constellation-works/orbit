@@ -223,7 +223,7 @@ function spaceRow(space, current) {
       }),
       space.writer ? el("span", { class: "dot", text: "·" }) : null,
       space.writer ? el("span", { text: writerLabel(space.writer) }) : null,
-      open > 0 ? el("span", { class: "knowledge-pill open", text: `${open} open`, title: `${open} open global proposals from ${space.key}` }) : null,
+      open > 0 ? el("span", { class: "badge", "data-tone": "warning", text: `${open} open`, title: `${open} open global proposals from ${space.key}` }) : null,
     ]),
   ]);
   if (current) row.classList.add("active");
@@ -244,7 +244,7 @@ function proposalsRow(current) {
     ]),
     button,
     el("div", { class: "meta" }, [
-      el("span", { class: `knowledge-pill ${open > 0 ? "open" : "closed"}`, text: `${open} open` }),
+      el("span", { class: "badge", "data-tone": open > 0 ? "warning" : "muted", text: `${open} open` }),
     ]),
   ]);
   if (current) row.classList.add("active");
@@ -362,7 +362,7 @@ function taskLinks(ids) {
   const values = Array.isArray(ids) ? ids : [];
   const wrap = el("div", { class: "value knowledge-detail-list" });
   if (values.length === 0) {
-    wrap.appendChild(el("span", { class: "knowledge-tag dim", text: "-" }));
+    wrap.appendChild(el("span", { class: "badge", "data-tone": "muted", text: "-" }));
     return wrap;
   }
   for (const id of values) {
@@ -473,7 +473,7 @@ function proposalItem(proposal) {
     el("span", { class: "memory-proposal-model", text: proposal.key }),
     el("strong", { class: "memory-proposal-title", text: proposalTitle(proposal.text) }),
     el("span", { class: "memory-proposal-meta" }, [
-      closed ? el("span", { class: `knowledge-pill ${proposal.status}`, text: proposal.status }) : null,
+      closed ? el("span", { class: "pill", "data-tone": proposal.status === "accepted" ? "success" : "muted", text: proposal.status }) : null,
       el("span", { text: dates.join(" · ") }),
     ]),
   ]);

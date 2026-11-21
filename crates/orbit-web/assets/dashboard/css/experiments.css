@@ -17,21 +17,6 @@
 
 /* Badges: status, mode and verdict carry a text label, never color alone. */
 .ex-badges { display: inline-flex; flex-wrap: wrap; gap: var(--space-6); }
-.ex-badge {
-  display: inline-flex; align-items: center; min-height: 22px; padding: 0 var(--space-8);
-  border: 1px solid var(--border-strong); border-radius: var(--radius-pill); background: var(--bg-sunk);
-  color: var(--fg-dim); font: var(--text-sm) var(--font-mono); white-space: nowrap;
-}
-.ex-status-running { color: var(--state-running); border-color: rgba(92, 200, 240, 0.4); }
-.ex-status-paused { color: var(--state-pending); border-color: rgba(242, 178, 76, 0.4); }
-.ex-status-concluded { color: var(--state-success); border-color: rgba(99, 210, 151, 0.4); }
-.ex-status-abandoned { color: var(--fg-mute); }
-.ex-mode-live { color: var(--fg); }
-.ex-verdict { color: var(--fg); font-weight: 600; }
-.ex-verdict-winner { color: var(--state-success); border-color: rgba(99, 210, 151, 0.4); }
-.ex-verdict-withheld, .ex-verdict-inconclusive { color: var(--warn-fg); border-color: rgba(242, 196, 109, 0.4); }
-.ex-verdict-collecting { color: var(--fg-dim); }
-
 /* List. */
 .ex-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: var(--space-16); }
 .ex-item { gap: var(--space-10); }

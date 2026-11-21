@@ -320,8 +320,7 @@
   flex-wrap: wrap;
   gap: var(--space-6);
 }
-/* Readiness: one entry per gap. The severity is the row chip (.readiness-badge);
-   the message and Fix line share one content column. Two sizes: 12px body, 11px secondary. */
+/* Each readiness gap pairs its severity badge with a message and Fix line. */
 .readiness-list {
   display: flex;
   flex-direction: column;
@@ -339,9 +338,7 @@
   font-size: var(--text-sm);
   color: var(--fg);
 }
-.readiness-gap .readiness-badge {
-  margin-right: 0;
-  font-size: var(--text-xs);
+.readiness-gap > .badge {
   justify-self: start;
 }
 .readiness-gap-body {
@@ -556,7 +553,7 @@
 .task-crew-control:hover { border-color: var(--fg-mute); }
 .task-crew-control .task-crew-select:disabled { cursor: default; }
 
-/* Tags close the row: dashed pills, with Edit after them; the open editor
+/* Tags close the row, with Edit after them; the open editor
    takes the whole line. */
 .task-levers-tags { display: flex; min-width: 0; }
 .task-levers-tags:has(.field-editor-input) { flex: 1 0 100%; }
@@ -569,14 +566,6 @@
   gap: var(--space-6) var(--space-10);
   min-height: 28px;
 }
-.task-levers .detail-tag-row .chip {
-  padding: 0 var(--space-10);
-  border: 1px dashed var(--border-strong);
-  color: var(--fg-dim);
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-}
-.task-levers .detail-tag-row .chip.os-chip { color: var(--accent); border-color: var(--accent-line); }
 .task-levers .field-empty { font-style: normal; }
 
 /* The pull request, the run, who carried the task and its readiness. */
@@ -734,13 +723,6 @@
 }
 .property-row.fact .fact-note { color: var(--fg-mute); }
 .property-row.fact .run-value .exec-origin { font-size: var(--text-sm); color: var(--fg-dim); }
-.detail-tag-row .chip {
-  cursor: default;
-}
-.detail-tag-row .chip.os-chip {
-  color: var(--accent);
-  border-color: var(--accent);
-}
 .external-ref-line {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
@@ -1248,18 +1230,15 @@ input.field-editor-input {
 .row-detail .file-list .selector-dim wbr { display: none; }
 .row-detail .file-list .selector-base { overflow-wrap: normal; }
 .row-detail .file-list .selector-root { color: var(--fg); font-weight: 600; }
-.cf-pill { flex: 0 0 auto; font-size: var(--text-xs); padding: var(--space-2) var(--space-8); border-radius: var(--radius-pill); border: 1px solid var(--warn-line); background: var(--warn-wash); color: var(--warn-fg); white-space: nowrap; }
-.cf-pill-unknown { border-color: var(--hair); background: transparent; color: var(--fg-dim); border-style: dashed; }
 .row-detail .file-list .context-contended-backlog .context-selector, .row-detail .file-list .context-contended-backlog .selector-base { color: var(--warn-fg); }
 .row-detail .file-list .context-contended-active .context-selector, .row-detail .file-list .context-contended-active .selector-base { color: var(--danger-fg); }
-.row-detail .file-list .context-contended-active .cf-pill { border-color: var(--danger-line); background: var(--danger-wash); color: var(--danger-fg); }
 .cf-copy { position: absolute; right: 6px; top: 2px; width: 20px; height: 20px; box-sizing: border-box; padding: 0; display: inline-flex; align-items: center; justify-content: center; opacity: 0; border: 1px solid var(--hair); background: var(--bg-control); color: var(--fg-dim); border-radius: var(--radius-xs); cursor: pointer; font: inherit; font-size: var(--text-xs); line-height: 1; }
 .cf-row:hover .cf-copy, .cf-row:focus-within .cf-copy, .cf-copy:focus-visible { opacity: 1; }
 .row-detail .file-list .context-selector:hover { text-decoration: underline; }
 .row-detail .file-list .context-selector:focus-visible, .cf-copy:focus-visible, .cf-copy-all:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .row-detail .file-list .context-contention-unknown .context-selector { text-decoration: underline dotted; }
 @media (max-width: 480px) { .cf-header { padding: var(--space-8) var(--space-10); } }
-@container cf-view (max-width: 480px) { .cf-row { flex-wrap: wrap; } .row-detail .file-list .context-selector { flex-basis: 140px; } .cf-pill { white-space: normal; overflow-wrap: anywhere; } }
+@container cf-view (max-width: 480px) { .cf-row { flex-wrap: wrap; } .row-detail .file-list .context-selector { flex-basis: 140px; } }
 
 /* ORB-17931: the History tab as a timeline. Rows sit on a vertical rail under
    a day heading; the node's icon and colour follow the event's category. */
@@ -1272,27 +1251,7 @@ input.field-editor-input {
   margin-bottom: var(--space-10);
 }
 .history-filters, .history-order-toggle { display: flex; flex-wrap: wrap; gap: var(--space-6); }
-.history-chip, .history-order {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-6);
-  height: 26px;
-  box-sizing: border-box;
-  padding: 0 var(--space-10);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-pill);
-  background: var(--bg-control);
-  color: var(--fg-dim);
-  font: inherit;
-  font-size: var(--text-sm);
-  cursor: pointer;
-}
-.history-chip[aria-pressed="true"], .history-order[aria-pressed="true"] {
-  border-color: var(--accent);
-  color: var(--fg);
-}
-.history-chip-count { color: var(--fg-mute); font-variant-numeric: tabular-nums; }
-.history-chip:focus-visible, .history-order:focus-visible, .history-toggle:focus-visible, .history-copy:focus-visible {
+.history-toggle:focus-visible, .history-copy:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -1408,15 +1367,6 @@ input.field-editor-input {
   font-size: var(--text-xs);
 }
 .history-flow { display: inline-flex; align-items: center; gap: var(--space-6); vertical-align: middle; }
-.history-flow .pill {
-  padding: var(--space-2) var(--space-8);
-  border: 1px solid var(--dot);
-  border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--dot) 14%, transparent);
-  color: var(--dot);
-  font-size: var(--text-sm);
-}
-.history-flow .pill::before { display: none; }
 .history-arrow { color: var(--fg-mute); }
 .history-toggle {
   display: inline-flex;
@@ -1529,16 +1479,6 @@ input.field-editor-input {
 }
 .comment-by { color: var(--fg); font-size: var(--text-sm); font-weight: 600; }
 .comment-by.agent { color: var(--accent-hover); }
-.comment-agent-pill {
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-xs);
-  padding: var(--space-2) var(--space-4);
-}
 .comment-at,
 .comment-age,
 .comment-size {
@@ -1884,7 +1824,7 @@ input.field-editor-input {
 .task-block-details .task-attention-actions { margin-top: var(--space-8); }
 .human-task-panel { display: grid; gap: var(--space-10); padding: var(--space-12) var(--space-14); border: 1px solid var(--warn-line, var(--border)); border-radius: var(--radius); background: var(--bg-elev); }
 .human-task-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-8); }
-.human-task-badge { font-size: var(--text-sm); font-weight: 600; color: var(--warn-fg, var(--fg-strong)); }
+.human-task-label { font-size: var(--text-sm); font-weight: 600; color: var(--warn-fg, var(--fg-strong)); }
 .human-task-summary { margin: 0; font-size: var(--text-md); line-height: 1.5; color: var(--fg-soft); overflow-wrap: anywhere; }
 .human-task-steps { margin: 0; padding-left: var(--space-20); display: grid; gap: var(--space-4); font-size: var(--text-md); line-height: 1.45; }
 .human-command { display: flex; align-items: flex-start; gap: var(--space-8); }

@@ -25,12 +25,6 @@
 .lease-principal { color: var(--fg); font-weight: 600; overflow-wrap: anywhere; }
 .lease-class, .lease-when, .lease-via { color: var(--fg-mute); font-size: var(--text-xs); }
 .lease-via { font-family: var(--font-mono); overflow-wrap: anywhere; }
-.lease-chip {
-  display: inline-flex; align-items: center; padding: 0 var(--space-6); border-radius: var(--radius-2xs);
-  border: 1px solid var(--border); color: var(--fg-dim); font: var(--text-2xs)/1.6 var(--font-mono);
-}
-.lease-chip-hard { color: var(--status-open); border-color: var(--status-open); }
-.lease-chip-advisory { color: var(--accent); border-color: var(--accent); }
 .lease-none { color: var(--fg-mute); font-size: var(--text-sm); }
 .lease-landing {
   border: 1px solid var(--hair); border-radius: var(--radius-2xs); background: var(--bg-elev);

@@ -291,19 +291,6 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-banner p { margin: 0; color: var(--warn-fg); font-size: var(--text-md); line-height: 1.5; }
 .agents-banner strong { font-weight: 600; }
 .agents-tags { display: flex; flex-wrap: wrap; gap: var(--space-4); margin-top: var(--space-4); }
-.agents-tag {
-  padding: 0 var(--space-6);
-  border: 1px solid var(--warn-line);
-  border-radius: var(--radius-2xs);
-  background: var(--warn-wash);
-  color: var(--warn-fg);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  letter-spacing: 0.04em;
-  line-height: 15px;
-  text-transform: uppercase;
-}
-.agents-tag-unjudged { border-color: var(--fg-disabled); background: transparent; color: var(--fg-mute); }
 .agents-score-value.agents-unjudged { color: var(--fg-mute); font-style: italic; }
 .agents-outcome-outcome_held_up { background: var(--status-done); }
 .agents-outcome-outcome_caught { background: var(--status-review); }
@@ -621,7 +608,6 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-rank-tier-table .agents-rank-model { flex-wrap: wrap; row-gap: var(--space-2); }
 .agents-rank-tier-table .agents-rank-model-name { max-width: calc(100% - 16px); }
 .agents-rank-tier-table tr.is-underpriced .agents-rank-model-name { color: var(--fg-dim); }
-.agents-rank-badge { flex: none; padding: var(--space-2) var(--space-6); color: var(--accent-hi); background: var(--accent-wash); border-radius: var(--radius-xs); font-family: var(--font-mono); font-size: var(--text-2xs); }
 .agents-rank-skipped { padding-top: var(--space-10); border-top: 1px solid var(--border); color: var(--fg-mute); font-size: var(--text-sm); }
 .agents-rank-skipped h5 { margin: 0 0 var(--space-6); color: var(--fg-dim); font-size: var(--text-sm); font-weight: 500; }
 .agents-rank-skipped ul { display: flex; flex-direction: column; gap: var(--space-4); margin: 0; padding: 0; list-style: none; }

@@ -92,7 +92,7 @@ export async function peekJobFailures(read = null) {
 // The warning on a catalogue row: how long it has failed, whether it is one
 // error or several, the latest error and a link to the newest failed run.
 function jobFailureBadge(streak, workspaceId) {
-  const badge = el("div", { class: "job-failure-badge", role: "status" }, [
+  const badge = el("div", { class: "job-failure-notice", role: "status" }, [
     el("strong", { class: "job-failure-title", text: failureStreakText(streak), title: time(streak.since) }),
     el("span", { class: "job-failure-kind", text: streak.same_error ? `same error ×${streak.count}` : "errors vary" }),
     streak.latest_error ? el("span", { class: "job-failure-error mono", text: streak.latest_error, title: streak.latest_error }) : null,
@@ -251,7 +251,7 @@ function jobRow(job, workspace, streak) {
         : routine.trigger?.state ? "on task change"
         : routine.trigger?.condition ? routineScheduleText(routine)
         : cronText(routine.cron, routine.next_evaluation?.at || routine.next_due);
-      const chip = el("a", { class: `operation-chip ${routine.enabled ? "" : "paused"}`.trim(), text: `${routine.name} · ${cadence}${routine.enabled ? "" : " · paused"}` });
+      const chip = el("a", { class: "badge", "data-tone": routine.enabled ? null : "unknown", text: `${routine.name} · ${cadence}${routine.enabled ? "" : " · paused"}` });
       chip.href = "#operations/routines";
       return chip;
     })

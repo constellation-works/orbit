@@ -288,7 +288,7 @@ export function tagPicker({ tags, offered, apply }) {
     }
   });
   const chips = tags.map((tag) => {
-    const chip = el("button", { class: "mx-chip", type: "button", "aria-description": `Stop comparing ${tag}`, "aria-label": `Remove tag ${tag}` }, [tag, el("span", { "aria-hidden": "true", text: "×" })]);
+    const chip = el("button", { class: "chip mono", type: "button", "aria-description": `Stop comparing ${tag}`, "aria-label": `Remove tag ${tag}` }, [el("span", { class: "chip-label", text: tag }), el("span", { "aria-hidden": "true", text: "×" })]);
     chip.addEventListener("click", () => apply({ tags: tags.filter((other) => other !== tag) }));
     return chip;
   });

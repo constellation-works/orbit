@@ -176,18 +176,18 @@ function encloses(selector, path) {
   return dir === "" || dir === "." || inner.startsWith(`${dir}/`);
 }
 
-function chip(label, className = "") {
-  return el("span", { class: `lease-chip${className ? ` ${className}` : ""}`, text: label });
+function leaseBadge(label, tone) {
+  return el("span", { class: "badge", "data-tone": tone, text: label });
 }
 
 function holder({ lease, via }, waiting) {
   const facts = [
-    chip(text(lease.mode) || "hard", lease.mode === "advisory" ? "lease-chip-advisory" : "lease-chip-hard"),
-    chip(`${text(lease.priority) || "normal"} priority`),
+    leaseBadge(text(lease.mode) || "hard", lease.mode === "advisory" ? "accent" : "warning"),
+    leaseBadge(`${text(lease.priority) || "normal"} priority`),
   ];
   // Absolute times, so a row kept across refreshes never reads stale.
   const at = waiting ? text(lease.queued_at) || text(lease.created_at) : text(lease.expires_at);
-  if (waiting) facts.push(chip(lease.queue_kind === "expansion" ? "expansion" : "request"));
+  if (waiting) facts.push(leaseBadge(lease.queue_kind === "expansion" ? "expansion" : "request"));
   const when = el("span", { class: "lease-when", text: `${waiting ? "queued" : "expires"} ${formatClock(at, { seconds: false })}` });
   when.title = formatDateTime(at, { seconds: true });
   const principal = text(lease.principal) || "unknown";

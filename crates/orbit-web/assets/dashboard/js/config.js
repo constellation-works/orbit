@@ -398,7 +398,9 @@ function chipListInput(initial, draft, field) {
   const draw = () => {
     node.replaceChildren();
     entries.forEach((entry, index) => {
-      const chip = el("span", { class: "config-entry mono", text: entry });
+      const chip = el("span", { class: "chip mono" }, [
+        el("span", { class: "chip-label", text: entry, title: entry }),
+      ]);
       const remove = el("button", { class: "config-entry-remove", text: "×", "aria-label": `Remove ${entry}` });
       remove.type = "button";
       remove.addEventListener("click", (event) => {

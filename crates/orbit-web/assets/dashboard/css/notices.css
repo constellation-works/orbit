@@ -18,17 +18,6 @@
 .notice-banner-title { font-weight: 600; overflow-wrap: anywhere; }
 .notice-banner-meta { color: var(--fg-mute); }
 .notice-banner-link { color: var(--accent); }
-.notice-chip {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  padding: var(--space-2) var(--space-8);
-  font-size: var(--text-xs);
-  color: var(--fg-mute);
-  white-space: nowrap;
-}
-.notice-kind-warn { color: var(--warn-fg); font-weight: 600; }
-.notice-kind-incident { color: var(--state-pending); }
-.notice-kind-maintenance { color: var(--accent); }
 /* Heading row: the page hint on the left, the Post control on the right.
    The hint is pinned to the viewport, so the panel can clip and scroll. */
 #notices-panel {
@@ -71,7 +60,6 @@
   color: var(--fg-dim);
   overflow-wrap: anywhere;
 }
-.notice-kind-partial { color: var(--state-pending); }
 .notice-coverage-banner .notice-banner-meta { overflow-wrap: anywhere; }
 
 /* The list: flat rows split by a visible edge, on the panel's own edges.
@@ -104,29 +92,7 @@
   cursor: pointer;
 }
 .notice-row-main:hover { background: var(--bg-hover); }
-.notice-severity {
-  grid-area: severity;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-8);
-  font-size: var(--text-sm);
-  color: var(--fg-mute);
-  text-transform: capitalize;
-}
-.notice-severity::before {
-  content: "";
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--fg-disabled);
-}
-.notice-severity-warn { color: var(--warn-fg); font-weight: 600; }
-.notice-severity-warn::before { background: var(--warn-fg); }
-.notice-severity-incident { color: var(--state-failed); font-weight: 600; }
-.notice-severity-incident::before { background: var(--state-failed); }
-.notice-severity-maintenance { color: var(--state-pending); }
-.notice-severity-maintenance::before { background: var(--state-pending); }
+.notice-row-main > .pill { grid-area: severity; justify-self: start; }
 .notice-row-toggle { grid-area: title; display: block; width: 100%; min-width: 0; }
 .notice-title {
   display: block;
@@ -263,7 +229,7 @@
      operator must act on, so its title wraps in full (STD-07 §R14). */
   .notice-banner { padding: var(--space-4) var(--space-12); }
   .notice-banner-row { flex-wrap: nowrap; gap: var(--space-8); padding: 0; }
-  .notice-banner-row > .notice-chip,
+  .notice-banner-row > .pill,
   .notice-banner-link { flex: 0 0 auto; white-space: nowrap; }
   .notice-banner-title {
     flex: 1 1 auto;

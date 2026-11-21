@@ -144,41 +144,65 @@ th,
 }
 
 .chip {
-  font: inherit;
-  font-size: var(--text-sm);
-  height: 28px;
   display: inline-flex;
   align-items: center;
   gap: var(--space-6);
-  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  height: calc(var(--space-24) + var(--space-4));
   padding: 0 var(--space-8);
-  border: 1px solid transparent;
+  --marker-line: var(--border);
+  --marker-bg: transparent;
+  --marker-fg: var(--fg-dim);
+  border: 1px solid var(--marker-line);
   border-radius: var(--radius-pill);
-  background: transparent;
-  color: var(--fg-dim);
-  cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  background: var(--marker-bg);
+  color: var(--marker-fg);
+  font: 400 var(--text-sm)/1 var(--font-sans);
+  white-space: nowrap;
 }
+button.chip, label.chip { cursor: pointer; }
+button.chip:disabled { opacity: 0.55; cursor: default; }
+.chip[hidden] { display: none; }
 .chip[data-status]::before {
   content: "";
-  width: 7px;
-  height: 7px;
+  flex: none;
+  width: var(--space-6);
+  height: var(--space-6);
   border-radius: 50%;
-  background: var(--dot, var(--fg-dim));
-  opacity: 0.45;
+  background: var(--dot);
+  opacity: 0.55;
 }
-.chip.active[data-status]::before { opacity: 1; }
-
-.chip:hover {
+.chip:hover:where(button:not(:disabled), label) {
   color: var(--fg);
+  border-color: var(--border-strong);
   background: var(--bg-hover);
 }
-
-.chip.active {
+.chip:is(.active, [aria-pressed="true"], :has(:checked)) {
   color: var(--fg);
-  border-color: var(--border);
-  background: #1f1f26;
+  border-color: var(--border-strong);
+  background: var(--bg-selected);
 }
+.chip:is(.active, [aria-pressed="true"])[data-status]::before { opacity: 1; }
+.chip:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chip.chip-quiet:not(.active) { border-style: dashed; }
+.chip[aria-expanded]::after {
+  content: "";
+  flex: none;
+  width: var(--space-6);
+  height: var(--space-6);
+  margin-top: calc(-1 * var(--space-2));
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg);
+}
+.chip[aria-expanded="true"]::after {
+  margin-top: var(--space-2);
+  transform: rotate(-135deg);
+}
+.chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.chip-count { color: var(--fg-mute); font-variant-numeric: tabular-nums; }
+.chip-count:empty { display: none; }
 
 .empty-state {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -472,39 +496,94 @@ th,
   white-space: pre-wrap;
 }
 
-.pill {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-6);
-  padding: 0;
-  font-size: var(--text-sm);
-  font-family: var(--font-sans);
-  font-weight: 450;
-  color: #c4c4cc;
+/* Pills carry state; badges qualify the adjacent label or show a count. */
+.pill,
+.badge {
+  --marker-line: var(--border-strong);
+  --marker-bg: var(--bg-control);
+  --marker-fg: var(--fg-soft);
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 var(--space-8);
+  border: 1px solid var(--marker-line);
+  background: var(--marker-bg);
+  color: var(--marker-fg);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+.pill {
+  --marker-dot: var(--marker-fg);
+  border-radius: var(--radius-pill);
+  font: 450 var(--text-sm)/var(--space-20) var(--font-sans);
+  text-decoration: none;
+}
+.pill[data-status],
+.pill[data-state] {
+  --marker-dot: var(--dot);
+  --marker-line: color-mix(in srgb, var(--dot) 42%, var(--border));
+  --marker-bg: color-mix(in srgb, var(--dot) 12%, transparent);
 }
 .pill::before {
   content: "";
-  width: 7px;
-  height: 7px;
+  display: inline-block;
+  width: var(--space-6);
+  height: var(--space-6);
+  margin-inline-end: var(--space-4);
   border-radius: 50%;
-  background: var(--dot, var(--fg-dim));
-  flex: 0 0 auto;
+  background: var(--marker-dot);
+  vertical-align: 0.12em;
 }
-.state-label {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-8);
-  color: #c4c4cc;
-  white-space: nowrap;
+a.pill:hover, a.badge:hover { text-decoration: underline; }
+.pill[data-live]::before { animation: pill-pulse 1.6s ease-in-out infinite; }
+@keyframes pill-pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) {
+  .pill[data-live]::before { animation: none; }
 }
-.state-label::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--dot, var(--fg-dim));
-  flex: 0 0 auto;
+
+.badge {
+  border-radius: var(--radius-xs);
+  font: 400 var(--text-xs)/var(--space-16) var(--font-sans);
+  text-decoration: none;
+}
+:is(.badge, .chip).mono { font-family: var(--font-mono); }
+:is(.pill, .badge, .chip)[data-tone="accent"] {
+  --marker-line: var(--accent-line);
+  --marker-bg: var(--accent-wash);
+  --marker-fg: var(--accent-hi);
+}
+:is(.pill, .badge)[data-tone="success"] {
+  --marker-line: color-mix(in srgb, var(--state-success) 42%, var(--border));
+  --marker-bg: color-mix(in srgb, var(--state-success) 12%, transparent);
+  --marker-fg: var(--state-success);
+}
+:is(.pill, .badge, .chip)[data-tone="warning"] {
+  --marker-line: var(--warn-line);
+  --marker-bg: var(--warn-wash);
+  --marker-fg: var(--warn-fg);
+}
+:is(.pill, .badge)[data-tone="danger"] {
+  --marker-line: var(--danger-line);
+  --marker-bg: var(--danger-wash);
+  --marker-fg: var(--danger-fg);
+}
+:is(.pill, .badge)[data-tone="held"] {
+  --marker-line: color-mix(in srgb, var(--state-held) 42%, var(--border));
+  --marker-bg: color-mix(in srgb, var(--state-held) 12%, transparent);
+  --marker-fg: var(--state-held);
+}
+:is(.pill, .badge)[data-tone="muted"],
+:is(.pill, .badge)[data-tone="unknown"] {
+  --marker-bg: transparent;
+  --marker-fg: var(--fg-mute);
+}
+:is(.pill, .badge)[data-tone="unknown"] { border-style: dashed; }
+.badge[data-ws-color] {
+  --marker-line: color-mix(in srgb, var(--ws) 45%, transparent);
+  --marker-bg: var(--ws-low);
+  --marker-fg: var(--ws);
 }
 
 /* Header band and raised tabs. A panel's title and controls sit on a darker

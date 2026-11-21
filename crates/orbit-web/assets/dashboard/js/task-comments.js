@@ -336,7 +336,7 @@ function buildCommentCard(task, comment, index) {
       class: isAgentComment(writer, task) ? "comment-by agent" : "comment-by",
       text: writer,
     }),
-    isAgentComment(writer, task) ? el("span", { class: "comment-agent-pill", text: "agent" }) : null,
+    isAgentComment(writer, task) ? el("span", { class: "badge", "data-tone": "accent", text: "agent" }) : null,
     absTimeNode(comment && comment.at, { class: "comment-at" }),
     clockStamp(
       el("span", { class: "comment-age", text: commentAge(comment && comment.at), title: formatDateTime(comment && comment.at) }),
