@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use super::super::super::completion_deadline::Deadline;
 use super::super::input::{number, required_string, text};
-use super::snapshot::{checked_run, poll_interval_ms, snapshot};
+use super::snapshot::{PullRequestSelector, checked_run, poll_interval_ms, snapshot};
 use super::support::{complete_list, unreadable};
 use super::workflow::gate_passed;
 
@@ -50,10 +50,12 @@ fn observe_once(
     let snapshot = snapshot(
         deadline,
         workspace,
-        &evidence.pr_number,
-        &evidence.head_sha,
-        &evidence.head_branch,
-        &evidence.base_branch,
+        PullRequestSelector {
+            pr: &evidence.pr_number,
+            head: &evidence.head_sha,
+            branch: &evidence.head_branch,
+            base: &evidence.base_branch,
+        },
         poll_interval_ms(input),
         pass,
     )?;

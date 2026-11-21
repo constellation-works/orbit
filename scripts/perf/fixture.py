@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import importlib
 import json
 import os
 import re
@@ -28,8 +29,9 @@ import time
 import urllib.parse
 from pathlib import Path
 
+# Loaded by name after the insert: `python3 -I` keeps this directory off sys.path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import perf_common as common  # noqa: E402
+common = importlib.import_module("perf_common")
 
 SCHEMA_VERSION = 1
 MANIFEST = "snapshot-manifest.json"

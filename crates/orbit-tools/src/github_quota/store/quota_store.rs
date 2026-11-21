@@ -14,6 +14,14 @@ pub struct GithubQuotaStore {
     deadline: Option<Instant>,
 }
 
+/// One read of a quota resource: who makes it, which resource it reads and the
+/// epoch second it is decided at.
+struct QuotaRead<'a> {
+    caller: GithubCaller,
+    resource: &'a str,
+    now: u64,
+}
+
 /// Directory under the Orbit data root.
 const STORE_DIRECTORY: [&str; 2] = ["state", "github-quota"];
 
@@ -237,7 +245,12 @@ impl GithubQuotaStore {
         now: u64,
         refresh: &dyn Fn() -> RateLimitAnswer,
     ) -> Result<(), QuotaRefusal> {
-        self.admit_charging(policy, account, caller, resource, now, refresh, true)
+        let read = QuotaRead {
+            caller,
+            resource,
+            now,
+        };
+        self.admit_charging(policy, account, read, refresh, true)
     }
 
     /// [`Self::admit`] for a caller that never spawns its protected call once
@@ -255,20 +268,27 @@ impl GithubQuotaStore {
         now: u64,
         refresh: &dyn Fn() -> RateLimitAnswer,
     ) -> Result<(), QuotaRefusal> {
-        self.admit_charging(policy, account, caller, resource, now, refresh, false)
+        let read = QuotaRead {
+            caller,
+            resource,
+            now,
+        };
+        self.admit_charging(policy, account, read, refresh, false)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn admit_charging(
         &self,
         policy: &GithubQuotaPolicy,
         account: &str,
-        caller: GithubCaller,
-        resource: &str,
-        now: u64,
+        read: QuotaRead<'_>,
         refresh: &dyn Fn() -> RateLimitAnswer,
         charge_expired: bool,
     ) -> Result<(), QuotaRefusal> {
+        let QuotaRead {
+            caller,
+            resource,
+            now,
+        } = read;
         self.refresh_if_due(policy, account, now, refresh);
         let decided = self.update(account, |record| {
             let refresh_in_flight = record.refresh_in_flight;
