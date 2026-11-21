@@ -165,7 +165,9 @@ repository root of the checkout that holds these scripts.
      run's containment reclaims what it leaves.
    - **HTTP mode** starts each arm's own `orbit web serve --no-open --port 0` (an
      ephemeral port) on its restored root, waits for its address and a first answer, times
-     paced GETs of the path, then stops and reaps the server.
+     paced GETs of the path, then stops and reaps the server. Parity and timed GETs
+     do not follow redirects: the requested path's status and body are the response,
+     and a redirect fails the non-2xx check.
    - **Parity.** `--parity` runs once per arm before sampling; in HTTP mode each arm's
      response body for the timed path is compared too. A match requires a successful
      observation from every arm. When `--parity` is set, that command must exit 0 on

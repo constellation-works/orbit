@@ -81,10 +81,26 @@ esac
 # stalls on `/slow` so the harness can be cancelled while it is serving.
 WEB_SERVER = """
 import http.server, os, sys, time
+from pathlib import Path
+marks = Path(sys.argv[1]).parent
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/slow":
             time.sleep(600)
+        if self.path == "/destination":
+            (marks / "destination-visited").write_text("yes")
+        redirect = self.path == "/redirect"
+        if self.path == "/redirect-after-parity":
+            counter = marks / "requests"
+            count = int(counter.read_text()) if counter.exists() else 0
+            counter.write_text(str(count + 1))
+            redirect = count >= 3
+        if redirect:
+            self.send_response(302)
+            self.send_header("Location", "/destination")
+            self.end_headers()
+            self.wfile.write(b"original redirect body")
+            return
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"ok")
@@ -246,6 +262,25 @@ class PairedCliParityTest(PairedCliTestCase):
         self.assertFalse((out / "paired-summary.json").exists(), result.stdout)
         self.assertNotIn('"verdict": "pass"', result.stdout)
         return report
+
+    def test_redirect_is_recorded_as_original_response_and_refused(self) -> None:
+        result, out = self.run_paired(surface=("--http", "/redirect"))
+        report = self.assert_no_passing_verdict(result, out)
+        for arm in ("base", "candidate", "control"):
+            self.assertEqual(report["arms"][arm]["http"], {
+                "status": 302,
+                "body": {"format": "text", "value": "original redirect body"},
+            })
+            self.assertEqual(report["observation_failures"][arm], "http status 302")
+        self.assertFalse((self.marks / "destination-visited").exists())
+
+    def test_redirect_during_sampling_is_refused(self) -> None:
+        result, out = self.run_paired(surface=("--http", "/redirect-after-parity"))
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("sample 0 exited 302", result.stderr)
+        self.assertTrue(json.loads((out / "parity.json").read_text())["match"])
+        self.assertFalse((out / "paired-summary.json").exists())
+        self.assertFalse((self.marks / "destination-visited").exists())
 
     def test_omitted_parity_does_not_match_different_timed_stdout(self) -> None:
         base = subprocess.run(
