@@ -25,11 +25,11 @@ if [[ "${#skill_dirs[@]}" -eq 0 ]]; then
   exit 1
 fi
 
-target_skill_dirs=()
+target_entries=()
 if [[ -d "$target_root" ]]; then
-  for entry in "$target_root"/*/ "$target_root"/.[!.]*/ "$target_root"/..?*/; do
-    [[ -d "$entry" ]] || continue
-    target_skill_dirs+=("$(basename "$entry")")
+  for entry in "$target_root"/* "$target_root"/.[!.]* "$target_root"/..?*; do
+    [[ -e "$entry" || -L "$entry" ]] || continue
+    target_entries+=("$(basename "$entry")")
   done
 fi
 
@@ -46,7 +46,7 @@ if [[ "${1:-}" == "--check" ]]; then
       drifted=1
     fi
   done
-  for name in ${target_skill_dirs[@]+"${target_skill_dirs[@]}"}; do
+  for name in ${target_entries[@]+"${target_entries[@]}"}; do
     is_canonical=0
     for canonical_name in "${skill_dirs[@]}"; do
       if [[ "$name" == "$canonical_name" ]]; then
@@ -72,7 +72,7 @@ if [[ "$#" -ne 0 ]]; then
 fi
 
 mkdir -p "$target_root"
-for name in ${target_skill_dirs[@]+"${target_skill_dirs[@]}"}; do
+for name in ${target_entries[@]+"${target_entries[@]}"}; do
   is_canonical=0
   for canonical_name in "${skill_dirs[@]}"; do
     if [[ "$name" == "$canonical_name" ]]; then

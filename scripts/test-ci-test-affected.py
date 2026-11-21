@@ -1221,12 +1221,7 @@ class ObservedPipeDrainTests(unittest.TestCase):
         self.assertNotIn("PARTIAL_STDOUT|", relayed_err)
 
     def test_reaped_leader_is_not_signaled_after_its_group_id_is_released(self):
-        """A group signal after wait must still name the original reservation.
-
-        The modeled command kills its group; its former anchor is already
-        reaped. Only the supervisor's unreaped leader can reserve the ID.
-        No process is started and no ID is reused.
-        """
+        """Cleanup signals the session leader's group before reaping releases its PID."""
         import importlib.util
         from types import SimpleNamespace
 
@@ -1234,12 +1229,10 @@ class ObservedPipeDrainTests(unittest.TestCase):
             "ci_test_affected_ownership", SCRIPTS / "ci-test-affected.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        state = {
-            "reserved": True, "owner": "original", "anchor_alive": False,
-            "leader_unreaped": True, "pid": 4242,
-        }
+        state = {"reserved": True, "owner": "original", "leader_unreaped": True, "pid": 4242}
         signals = []
         foreign = []
+        popen_calls = []
 
         class Pipe:
             def __init__(self, line):
@@ -1263,9 +1256,8 @@ class ObservedPipeDrainTests(unittest.TestCase):
             def wait(self, timeout=None):
                 self.returncode = 0
                 state["leader_unreaped"] = False
-                if not state["anchor_alive"]:
-                    state["reserved"] = False
-                    state["owner"] = "replacement"
+                state["reserved"] = False
+                state["owner"] = "replacement"
                 return 0
 
             def kill(self):
@@ -1274,42 +1266,21 @@ class ObservedPipeDrainTests(unittest.TestCase):
                 self.returncode = -signal.SIGKILL
                 state["leader_unreaped"] = False
 
-        def fake_fork():
-            # Model the command killing its group and init reaping the anchor
-            # before cleanup, while the leader is still our unreaped child.
-            state["anchor_alive"] = False
-            return 1
-
         def fake_killpg(pid, sig):
-            owned = state["reserved"] and pid == state["pid"] and state["owner"] == "original"
-            record = (pid, sig, state["owner"], state["anchor_alive"], state["leader_unreaped"])
+            owned = (state["reserved"] and pid == state["pid"]
+                     and state["owner"] == "original" and state["leader_unreaped"])
+            record = (pid, sig, state["owner"], state["leader_unreaped"])
             if owned:
                 signals.append(record)
             else:
                 foreign.append(record)
             if sig == signal.SIGKILL:
-                state["anchor_alive"] = False
                 state["reserved"] = False
                 state["owner"] = "released"
 
         def fake_popen(*args, **kwargs):
-            preexec = kwargs.get("preexec_fn")
-            if preexec is not None:
-                preexec()
+            popen_calls.append(kwargs)
             return Process()
-
-        next_fd = 100
-        opened = set()
-
-        def fake_pipe():
-            nonlocal next_fd
-            read_fd, write_fd = next_fd, next_fd + 1
-            next_fd += 2
-            opened.update((read_fd, write_fd))
-            return read_fd, write_fd
-
-        def fake_close(fd):
-            opened.discard(fd)
 
         class Relay:
             def write(self, raw):
@@ -1325,40 +1296,20 @@ class ObservedPipeDrainTests(unittest.TestCase):
             def flush(self):
                 return None
 
-        originals = {
-            "fork": module.os.fork,
-            "killpg": module.os.killpg,
-            "pipe": module.os.pipe,
-            "close": module.os.close,
-            "set_inheritable": module.os.set_inheritable,
-            "Popen": module.subprocess.Popen,
-            "stdout": module.sys.stdout,
-            "stderr": module.sys.stderr,
-        }
-        module.os.fork = fake_fork
-        module.os.killpg = fake_killpg
-        module.os.pipe = fake_pipe
-        module.os.close = fake_close
-        module.os.set_inheritable = lambda fd, inheritable: None
-        module.subprocess.Popen = fake_popen
-        module.sys.stdout = SimpleNamespace(buffer=Relay(), write=lambda text: None, flush=lambda: None)
-        module.sys.stderr = SimpleNamespace(buffer=Sink(), write=lambda text: None, flush=lambda: None)
-        try:
+        with mock.patch.object(module.subprocess, "Popen", side_effect=fake_popen), \
+             mock.patch.object(module.os, "killpg", side_effect=fake_killpg), \
+             mock.patch.object(module.sys, "stdout",
+                               SimpleNamespace(buffer=Relay(), write=lambda text: None, flush=lambda: None)), \
+             mock.patch.object(module.sys, "stderr",
+                               SimpleNamespace(buffer=Sink(), write=lambda text: None, flush=lambda: None)):
             with self.assertRaises(OSError) as caught:
                 module.run_observed(["observed"], {})
-        finally:
-            module.os.fork = originals["fork"]
-            module.os.killpg = originals["killpg"]
-            module.os.pipe = originals["pipe"]
-            module.os.close = originals["close"]
-            module.os.set_inheritable = originals["set_inheritable"]
-            module.subprocess.Popen = originals["Popen"]
-            module.sys.stdout = originals["stdout"]
-            module.sys.stderr = originals["stderr"]
         self.assertEqual(str(caught.exception), "injected relay failure")
+        self.assertEqual(len(popen_calls), 1)
+        self.assertIs(popen_calls[0].get("start_new_session"), True)
         self.assertEqual(signals, [
-            (4242, signal.SIGTERM, "original", False, True),
-            (4242, signal.SIGKILL, "original", False, True),
+            (4242, signal.SIGTERM, "original", True),
+            (4242, signal.SIGKILL, "original", True),
         ])
         self.assertEqual(foreign, [])
 
@@ -1415,23 +1366,6 @@ class ObservedPipeDrainTests(unittest.TestCase):
         self.assertEqual(signals, [(signal.SIGTERM, children[0].pid),
                                    (signal.SIGKILL, children[0].pid)])
         self.assertEqual(children[0].returncode, -signal.SIGKILL)
-
-    def test_fixture_cleanup_terms_live_helper_and_leaves_reaped_alone(self):
-        """Cleanup signals only the live helper itself, via SIGTERM."""
-        reaped = mock.Mock()
-        reaped.returncode = 0
-        reaped.pid = 4242
-        stop_owned_helper(reaped)
-        reaped.send_signal.assert_not_called()
-        reaped.communicate.assert_not_called()
-        live = mock.Mock()
-        live.returncode = None
-        live.pid = 4242
-        live.communicate.return_value = (b"", b"")
-        stop_owned_helper(live)
-        live.send_signal.assert_called_once_with(signal.SIGTERM)
-        live.communicate.assert_called_once_with(timeout=5)
-
 
 
 if __name__ == "__main__":

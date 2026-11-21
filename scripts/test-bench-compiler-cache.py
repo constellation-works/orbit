@@ -85,6 +85,9 @@ raise SystemExit("unexpected transport: " + name)
         (work / "cache").mkdir()
     elif scenario == "target-symlink":
         (work / "a-target").symlink_to(outside, target_is_directory=True)
+    elif scenario == "destination-symlink":
+        (work / "private").mkdir()
+        (work / "a-target").symlink_to(work / "private", target_is_directory=True)
     elif scenario == "source-symlink":
         (work / "a").symlink_to(outside, target_is_directory=True)
     elif scenario == "cache-target-overlap":
@@ -178,8 +181,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix="bench-containment-", dir=scratch) as directory:
         results = [check_benchmark(args.script.resolve(), Path(directory), scenario) for scenario in (
             "parent-escape", "ancestor-symlink-escape", "literal-external", "workdir-equality",
-            "dot-equality", "target-symlink", "source-symlink", "cache-target-overlap",
-            "cache-target-ancestor", "result-symlink", "private-nested", "private-dot", "private-symlink",
+            "dot-equality", "target-symlink", "destination-symlink", "source-symlink",
+            "cache-target-overlap", "cache-target-ancestor", "result-symlink",
+            "private-nested", "private-dot", "private-symlink",
             "private-empty", "existing-unowned", "existing-unowned-cache", "existing-unowned-file")]
     if args.report:
         args.report.write_text(json.dumps(results, indent=2) + "\n")
