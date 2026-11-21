@@ -1,3 +1,4 @@
+use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
@@ -144,12 +145,12 @@ pub(super) async fn show_host(
 /// any process starts and then only ever passed after `--`.
 pub(super) async fn add_host(
     State(state): State<DashboardState>,
-    Json(body): Json<Value>,
+    body: Result<Json<HostAddBody>, JsonRejection>,
 ) -> Response {
     if let Err(denial) = authorized_caller(&DASHBOARD_HOST_EDIT, state.operator_session()) {
         return authorization_denied(denial);
     }
-    let body: HostAddBody = match parse_body(body) {
+    let body = match parse_body(body) {
         Ok(body) => body,
         Err(response) => return *response,
     };
@@ -171,12 +172,12 @@ pub(super) async fn add_host(
 pub(super) async fn rename_host(
     State(state): State<DashboardState>,
     UrlPath(host): UrlPath<String>,
-    Json(body): Json<Value>,
+    body: Result<Json<HostRenameBody>, JsonRejection>,
 ) -> Response {
     if let Err(denial) = authorized_caller(&DASHBOARD_HOST_EDIT, state.operator_session()) {
         return authorization_denied(denial);
     }
-    let body: HostRenameBody = match parse_body(body) {
+    let body = match parse_body(body) {
         Ok(body) => body,
         Err(response) => return *response,
     };
@@ -252,16 +253,20 @@ fn failure(code: &str, message: String, extra: Option<(&str, Value)>) -> Respons
     (status_for(code), Json(body)).into_response()
 }
 
-/// A body with a missing, mistyped or unknown field is the CLI's
-/// `invalid_input`, not the framework's bare 422.
-fn parse_body<T: serde::de::DeserializeOwned>(body: Value) -> Result<T, Box<Response>> {
-    serde_json::from_value(body).map_err(|error| {
-        Box::new(failure(
+/// The body is deserialized by the extractor straight into the handler's
+/// closed request type. A missing, mistyped or unknown field is the CLI's
+/// `invalid_input`, not the framework's bare 422; any other rejection (bad
+/// syntax, wrong content type, oversized body) keeps the framework's answer.
+fn parse_body<T>(body: Result<Json<T>, JsonRejection>) -> Result<T, Box<Response>> {
+    match body {
+        Ok(Json(body)) => Ok(body),
+        Err(rejection @ JsonRejection::JsonDataError(_)) => Err(Box::new(failure(
             "invalid_input",
-            format!("invalid request body: {error}"),
+            format!("invalid request body: {}", rejection.body_text()),
             None,
-        ))
-    })
+        ))),
+        Err(rejection) => Err(Box::new(rejection.into_response())),
+    }
 }
 
 fn to_json(value: &impl serde::Serialize) -> Result<Value, OrbitError> {
