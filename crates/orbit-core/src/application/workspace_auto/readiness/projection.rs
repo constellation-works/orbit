@@ -166,7 +166,6 @@ pub(super) fn project_readiness_tasks(
                     | BacklogTaskExclusionReason::PrForgeRemoteMissing
                     | BacklogTaskExclusionReason::AwaitingFootprint
                     | BacklogTaskExclusionReason::AwaitingExclusiveSlot
-                    | BacklogTaskExclusionReason::PerfLaneBusy
                     | BacklogTaskExclusionReason::DeliveryJobUnavailable
                     // The one exclusion no later drain clears by itself, so
                     // readiness repeats the repair the drain recorded rather
