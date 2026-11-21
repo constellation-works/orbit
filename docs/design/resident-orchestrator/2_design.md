@@ -629,7 +629,7 @@ Measures that cannot be derived report `not_derivable`, never zero.
 `--mandate`, across mandates with workspace totals; `totals` is absent only for a `--baseline` run
 without `--mandate`, which reports the baseline alone. Without `--mandate`, only `resident`-tagged
 tasks that carry a `resident/mandate.json` artifact are counted as mandates; tagged tasks without
-the mandate artifact are excluded. `--mandate` checks the artifact only (`metrics.rs` explicit
+the mandate artifact are excluded. `--mandate` checks the artifact only (`metrics/measure.rs` explicit
 lookup): the named task counts when it carries the artifact, whatever its tags, and it is reported
 even when its active span does not overlap the window. Each mandate's active span is bounded by its activation (when
 `resident/mandate.json` was attached, or its earliest resident lifecycle event if the artifact was

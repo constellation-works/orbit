@@ -1,265 +1,19 @@
-//! `orbit resident metrics`: the four widening measures of design §9,
-//! derived read-only from task history, decision requests, checkpoints and
-//! audit rows. No new store: checkpoints and answers are assignment
-//! comments, cycles and actions are assignment history, escalations are
-//! decision requests.
-//!
-//! Definitions (design §9):
-//! - manual interventions: human writes on the assignment or watched tasks
-//!   that are not answers to a resident escalation and not grants —
-//!   requeues, cancels, manual status changes, operator steering comments,
-//!   unprompted relays (`resident.answer` without a `request_id`) and
-//!   `stop`/`takeover` writes — per mandate and per active mandate-day.
-//! - escalation load: resident-raised decision requests per mandate-day and
-//!   per human-day, median answer latency, share answered with the
-//!   recommended option, expired-unanswered count.
-//! - reversal rate: share of resident decisions and actions a human undid
-//!   within 7 days (the reversal window), each counted once.
-//! - recovery cost: cycles that ended without an agent checkpoint, time
-//!   from the dead cycle's start to the next good checkpoint, recovery
-//!   cycle slot minutes, repeated actions and human interventions needed.
-//!
-//! `--baseline <task>` computes the same measures for an interactive
-//! orchestration task; a measure it cannot derive is the string
-//! `not_derivable`, never zero.
-//!
-//! A referenced task (watched, related, a checkpoint subject or request
-//! task) that is not in this workspace is read through its registered
-//! owner on this machine: its history and decision requests count, its
-//! comments do not (no cross-workspace comment read exists). A reference
-//! no registered workspace holds is listed as unreachable and skipped, so
-//! one foreign or dangling id never fails the whole report [ORB-21642].
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::RegisteredTaskResolution;
-use orbit_types::task::{DecisionRequestState, Task, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
-    RESIDENT_AUTHORITY_CHANGED_EVENT, RESIDENT_CYCLE_GRANTED_EVENT, RESIDENT_MANDATE_ARTIFACT,
-    RESIDENT_TAG, ResidentComment, ResidentLiveCycle, ResidentMandate,
+    RESIDENT_MANDATE_ARTIFACT, RESIDENT_TAG, ResidentComment, ResidentMandate,
 };
 use serde_json::{Value, json};
 
-use super::control::{
-    RESIDENT_CONTROL_EVENT, ResidentControlAction, ResidentControlEntry, ResidentControlState,
-};
-use super::cycle::CYCLE_CHANGED;
-use super::due::{checkpoints, started_cycles};
-use super::resident_mandate_ended;
+use super::super::control::RESIDENT_CONTROL_EVENT;
+use super::super::due::{checkpoints, started_cycles};
+use super::report::MetricsReportKind;
+use super::{report, window};
 use crate::OrbitRuntime;
-use crate::application::statistics;
-
-/// The reversal window of design §9: a human undo within 7 days of the
-/// resident decision or action it undoes.
-const REVERSAL_WINDOW_DAYS: i64 = 7;
-/// Default metrics window when `--since` is absent.
-const DEFAULT_WINDOW_DAYS: i64 = 30;
-
-fn is_human_writer(by: &str) -> bool {
-    let by = by.trim();
-    by == "human" || by == "operator" || by.starts_with("human:") || by.starts_with("human-")
-}
-
-/// Custom process actor labels carry no human prefix. Count one only when the
-/// control record explicitly captured a human actor, while preserving the
-/// legacy label check and excluding system and agent writers.
-fn is_explicit_human_control_writer(entry: &TaskHistoryEntry) -> bool {
-    if entry.event != RESIDENT_CONTROL_EVENT {
-        return false;
-    }
-    let Some(note) = entry.note.as_deref() else {
-        return false;
-    };
-    let Ok(control) = serde_json::from_str::<ResidentControlEntry>(note) else {
-        return false;
-    };
-    let writer = entry.by.trim();
-    control.human_actor
-        && control.by == entry.by
-        && writer != "unknown"
-        && !orbit_types::identity::is_automation_actor(writer)
-}
-
-/// The action of a `resident_control` entry that counts as a manual
-/// intervention (design §9): a `stop` or a `takeover`. Wake, pause, resume
-/// and release do not count.
-fn counted_control_action(entry: &TaskHistoryEntry) -> Option<ResidentControlAction> {
-    let note: ResidentControlEntry = serde_json::from_str(entry.note.as_deref()?).ok()?;
-    matches!(
-        note.action,
-        ResidentControlAction::Stop | ResidentControlAction::Takeover
-    )
-    .then_some(note.action)
-}
-
-pub(super) fn parse_window_start(
-    since: Option<&str>,
-    now: DateTime<Utc>,
-) -> Result<DateTime<Utc>, OrbitError> {
-    let Some(raw) = since.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(now - Duration::days(DEFAULT_WINDOW_DAYS));
-    };
-    if let Ok(at) = DateTime::parse_from_rfc3339(raw) {
-        return Ok(at.with_timezone(&Utc));
-    }
-    if let Ok(day) = chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")
-        && let Some(at) = day.and_hms_opt(0, 0, 0)
-    {
-        return Ok(DateTime::from_naive_utc_and_offset(at, Utc));
-    }
-    let compact: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
-    let compact = compact.trim_end_matches('s');
-    let split = compact
-        .find(|c: char| c.is_ascii_alphabetic())
-        .ok_or_else(|| OrbitError::InvalidInput(format!("unrecognised `--since` window: {raw}")))?;
-    let (amount, unit) = compact.split_at(split);
-    let amount: i64 = amount
-        .parse()
-        .map_err(|_| OrbitError::InvalidInput(format!("unrecognised `--since` window: {raw}")))?;
-    if amount < 0 {
-        return Err(OrbitError::InvalidInput(format!(
-            "unrecognised `--since` window: {raw}"
-        )));
-    }
-    let span = match unit {
-        "m" | "min" | "minute" => Duration::try_minutes(amount),
-        "h" | "hour" => Duration::try_hours(amount),
-        "d" | "day" => Duration::try_days(amount),
-        "w" | "week" => Duration::try_weeks(amount),
-        _ => {
-            return Err(OrbitError::InvalidInput(format!(
-                "unrecognised `--since` window: {raw} (use e.g. 7d, 24h, 2w or an RFC 3339 instant)"
-            )));
-        }
-    };
-    span.and_then(|span| now.checked_sub_signed(span))
-        .ok_or_else(|| OrbitError::InvalidInput(format!("out of range `--since` window: {raw}")))
-}
-
-/// The median of `values` without reordering them: callers also report the
-/// samples in the order they were recorded.
-fn median_seconds(values: &[f64]) -> Option<f64> {
-    statistics::median(&mut values.to_vec())
-}
-
-fn active_days(span_start: DateTime<Utc>, span_end: DateTime<Utc>) -> f64 {
-    let seconds = (span_end - span_start).num_seconds().max(0) as f64;
-    (seconds / 86_400.0).ceil().max(1.0)
-}
-
-fn assignment_closed_at(task: &Task, history: &[TaskHistoryEntry]) -> Option<DateTime<Utc>> {
-    let is_closed =
-        |status: TaskStatus| resident_mandate_ended(status) || status == TaskStatus::Review;
-    if !is_closed(task.status) {
-        return None;
-    }
-    let mut closed_at = None;
-    for entry in history.iter().rev() {
-        if let Some(to_status) = entry.to_status {
-            if is_closed(to_status) {
-                closed_at = Some(entry.at);
-            } else {
-                break;
-            }
-        }
-    }
-    Some(closed_at.unwrap_or(task.updated_at))
-}
-
-fn mandate_activated_at(
-    task: &Task,
-    history: &[TaskHistoryEntry],
-    comments: &[orbit_types::task::TaskComment],
-    manifest_created_at: Option<DateTime<Utc>>,
-) -> DateTime<Utc> {
-    let first_cycle_at = history
-        .iter()
-        .filter(|entry| {
-            entry.event == RESIDENT_CYCLE_GRANTED_EVENT
-                || (entry.event == CYCLE_CHANGED
-                    && entry
-                        .note
-                        .as_deref()
-                        .and_then(|note| {
-                            serde_json::from_str::<Option<ResidentLiveCycle>>(note).ok()
-                        })
-                        .flatten()
-                        .is_some())
-        })
-        .map(|entry| entry.at)
-        .min();
-    let first_checkpoint_at = comments
-        .iter()
-        .filter(|comment| {
-            matches!(
-                ResidentComment::parse(&comment.message),
-                Ok(ResidentComment::Checkpoint(record)) if record.mandate == task.id.as_str()
-            )
-        })
-        .map(|comment| comment.at)
-        .min();
-    let first_authority_at = history
-        .iter()
-        .filter(|entry| entry.event == RESIDENT_AUTHORITY_CHANGED_EVENT)
-        .map(|entry| entry.at)
-        .min();
-    let first_control_at = history
-        .iter()
-        .filter(|entry| entry.event == RESIDENT_CONTROL_EVENT)
-        .map(|entry| entry.at)
-        .min();
-    let first_system_activation_at = history
-        .iter()
-        .filter(|entry| {
-            entry.by == "system"
-                && entry.to_status == Some(TaskStatus::InProgress)
-                && entry.event != "started"
-                && entry.decision.is_none()
-        })
-        .map(|entry| entry.at)
-        .min();
-    [
-        manifest_created_at,
-        first_cycle_at,
-        first_checkpoint_at,
-        first_authority_at,
-        first_control_at,
-        first_system_activation_at,
-    ]
-    .into_iter()
-    .flatten()
-    .min()
-    .unwrap_or(task.created_at)
-}
-
-fn mandate_ended_at(
-    task: &Task,
-    history: &[TaskHistoryEntry],
-    mandate: Option<&ResidentMandate>,
-    now: DateTime<Utc>,
-) -> Option<DateTime<Utc>> {
-    let stop_at = history
-        .iter()
-        .filter(|entry| entry.event == RESIDENT_CONTROL_EVENT)
-        .filter_map(|entry| {
-            let parsed =
-                serde_json::from_str::<ResidentControlEntry>(entry.note.as_deref()?).ok()?;
-            (parsed.state == ResidentControlState::Ended
-                || parsed.action == ResidentControlAction::Stop)
-                .then_some(entry.at)
-        })
-        .min();
-    let deadline_at = mandate
-        .and_then(|record| record.deadline)
-        .filter(|deadline| *deadline <= now);
-    let closed_at = assignment_closed_at(task, history);
-    [stop_at, deadline_at, closed_at]
-        .into_iter()
-        .flatten()
-        .min()
-}
 
 /// How one referenced task resolved for the metrics read.
 enum MetricsReference {
@@ -277,23 +31,23 @@ enum MetricsReference {
 }
 
 /// One mandate's (or one baseline task's) four measures over the window.
-struct MeasureInputs {
-    interventions: Vec<Value>,
+pub(super) struct MeasureInputs {
+    pub(super) interventions: Vec<Value>,
     intervention_times: Vec<DateTime<Utc>>,
-    escalations: Vec<orbit_types::task::DecisionRequest>,
-    reversed: usize,
-    reversal_total: usize,
-    reversed_subjects: Vec<String>,
-    crashed: usize,
-    recovery_seconds: Vec<f64>,
-    recovery_slot_minutes: f64,
-    repeated_actions: usize,
-    recovery_interventions: usize,
-    has_checkpoints: bool,
+    pub(super) escalations: Vec<orbit_types::task::DecisionRequest>,
+    pub(super) reversed: usize,
+    pub(super) reversal_total: usize,
+    pub(super) reversed_subjects: Vec<String>,
+    pub(super) crashed: usize,
+    pub(super) recovery_seconds: Vec<f64>,
+    pub(super) recovery_slot_minutes: f64,
+    pub(super) repeated_actions: usize,
+    pub(super) recovery_interventions: usize,
+    pub(super) has_checkpoints: bool,
     /// References read through their registered owner workspace.
-    foreign_references: Vec<Value>,
+    pub(super) foreign_references: Vec<Value>,
     /// References no registered workspace could supply.
-    unreachable_references: Vec<Value>,
+    pub(super) unreachable_references: Vec<Value>,
 }
 
 impl OrbitRuntime {
@@ -306,7 +60,7 @@ impl OrbitRuntime {
         baseline: Option<&str>,
     ) -> Result<Value, OrbitError> {
         let now = Utc::now();
-        let start = parse_window_start(since, now)?;
+        let start = window::parse_window_start(since, now)?;
         let window_days = ((now - start).num_seconds().max(0) as f64 / 86_400.0)
             .ceil()
             .max(1.0);
@@ -372,8 +126,8 @@ impl OrbitRuntime {
                 .get_task_artifact(task_id, RESIDENT_MANDATE_ARTIFACT)?
                 .and_then(|artifact| ResidentMandate::parse(&artifact.content).ok());
             let activated_at =
-                mandate_activated_at(&task, &history, &comments, manifest_created_at);
-            let ended_at = mandate_ended_at(&task, &history, parsed_mandate.as_ref(), now);
+                window::mandate_activated_at(&task, &history, &comments, manifest_created_at);
+            let ended_at = window::mandate_ended_at(&task, &history, parsed_mandate.as_ref(), now);
             if explicit_mandate.is_none()
                 && (ended_at.is_some_and(|end| end < start) || activated_at > now)
             {
@@ -381,7 +135,7 @@ impl OrbitRuntime {
             }
             let span_start = activated_at.max(start);
             let span_end = ended_at.map_or(now, |end| end.min(now));
-            let days = active_days(span_start, span_end);
+            let days = window::active_days(span_start, span_end);
             mandate_days += days;
             let inputs = self.measure_task(task_id, span_start, span_end, now)?;
             totals.reversed += inputs.reversed;
@@ -393,7 +147,13 @@ impl OrbitRuntime {
             totals.recovery_interventions += inputs.recovery_interventions;
             totals.has_checkpoints |= inputs.has_checkpoints;
             totals.intervention_times.extend(&inputs.intervention_times);
-            mandates.push(mandate_json(task_id, days, window_days, &inputs, false));
+            mandates.push(report::mandate_json(
+                task_id,
+                days,
+                window_days,
+                &inputs,
+                MetricsReportKind::Mandate,
+            ));
             totals.interventions.extend(inputs.interventions);
             totals.escalations.extend(inputs.escalations);
             totals.foreign_references.extend(inputs.foreign_references);
@@ -407,17 +167,23 @@ impl OrbitRuntime {
             "mandates": mandates,
         });
         if mandate.is_some() || baseline.is_none() {
-            value["totals"] = totals_json(window_days, mandate_days, &totals);
+            value["totals"] = report::totals_json(window_days, mandate_days, &totals);
         }
         if let Some(baseline_id) = baseline.map(str::trim).filter(|value| !value.is_empty()) {
             let task = self.get_task(baseline_id)?;
             let history = self.get_task_history(&task.id)?;
             let active_start = task.created_at.max(start);
-            let active_end = assignment_closed_at(&task, &history).map_or(now, |end| end.min(now));
-            let days = active_days(active_start, active_end);
+            let active_end =
+                window::assignment_closed_at(&task, &history).map_or(now, |end| end.min(now));
+            let days = window::active_days(active_start, active_end);
             let inputs = self.measure_task(&task.id.to_string(), active_start, active_end, now)?;
-            value["baseline"] =
-                mandate_json(&task.id.to_string(), days, window_days, &inputs, true);
+            value["baseline"] = report::mandate_json(
+                &task.id.to_string(),
+                days,
+                window_days,
+                &inputs,
+                MetricsReportKind::Baseline,
+            );
         }
         Ok(value)
     }
@@ -578,7 +344,7 @@ impl OrbitRuntime {
                     }
                     Ok(ResidentComment::Checkpoint(_) | ResidentComment::Request(_)) => {}
                     Err(_) => {
-                        if is_human_writer(&comment.by) {
+                        if window::is_human_writer(&comment.by) {
                             record_intervention(
                                 watched_id,
                                 comment.at,
@@ -596,13 +362,15 @@ impl OrbitRuntime {
                 None => self.get_task_history(watched_id)?,
             };
             for entry in history_read {
-                if !is_human_writer(&entry.by) && !is_explicit_human_control_writer(&entry) {
+                if !window::is_human_writer(&entry.by)
+                    && !window::is_explicit_human_control_writer(&entry)
+                {
                     continue;
                 }
                 // A human stop or takeover is an intervention. The other
                 // control actions (wake, pause, resume, release) are not.
                 if entry.event == RESIDENT_CONTROL_EVENT {
-                    if let Some(action) = counted_control_action(&entry) {
+                    if let Some(action) = window::counted_control_action(&entry) {
                         record_intervention(
                             watched_id,
                             entry.at,
@@ -750,7 +518,7 @@ impl OrbitRuntime {
             if at < span_start || at > span_end {
                 continue;
             }
-            let window_end = at + Duration::days(REVERSAL_WINDOW_DAYS);
+            let window_end = at + Duration::days(window::REVERSAL_WINDOW_DAYS);
             for decision in &checkpoint.decisions {
                 reversal_total += 1;
                 let undone = answers.iter().any(|(answer_at, reverses)| {
@@ -774,7 +542,7 @@ impl OrbitRuntime {
                     .into_iter()
                     .flatten()
                     .any(|entry| {
-                        is_human_writer(&entry.by)
+                        window::is_human_writer(&entry.by)
                             && entry.at > at
                             && entry.at <= window_end
                             && (matches!(
@@ -887,173 +655,4 @@ impl OrbitRuntime {
             unreachable_references,
         })
     }
-}
-
-fn escalation_json(
-    escalations: &[orbit_types::task::DecisionRequest],
-    active_days: f64,
-    human_days: f64,
-) -> Value {
-    let mut answered = Vec::new();
-    let mut open = 0usize;
-    let mut expired_unanswered = 0usize;
-    let mut superseded = 0usize;
-    for request in escalations {
-        match request.state {
-            DecisionRequestState::Answered => answered.push(request),
-            DecisionRequestState::Open => open += 1,
-            DecisionRequestState::Expired => expired_unanswered += 1,
-            DecisionRequestState::Superseded => superseded += 1,
-        }
-    }
-    let latencies: Vec<f64> = answered
-        .iter()
-        .filter_map(|request| {
-            request.resolution.as_ref().map(|resolution| {
-                (resolution.answered_at - request.raised_at)
-                    .num_seconds()
-                    .max(0) as f64
-            })
-        })
-        .collect();
-    let recommended_answered = answered
-        .iter()
-        .filter(|request| {
-            request.recommended.is_some()
-                && request.resolution.as_ref().map(|r| &r.answer_id) == request.recommended.as_ref()
-        })
-        .count();
-    let with_recommendation = answered
-        .iter()
-        .filter(|request| request.recommended.is_some())
-        .count();
-    json!({
-        "count": escalations.len(),
-        "total": escalations.len(),
-        "per_mandate_day": escalations.len() as f64 / active_days,
-        "per_human_day": escalations.len() as f64 / human_days,
-        "answered": answered.len(),
-        "open": open,
-        "expired_unanswered": expired_unanswered,
-        "superseded": superseded,
-        "median_answer_latency_seconds": median_seconds(&latencies),
-        "answer_latency_seconds": latencies,
-        "recommended_share": if with_recommendation > 0 {
-            json!(recommended_answered as f64 / with_recommendation as f64)
-        } else {
-            Value::Null
-        },
-        "share_answered_with_recommended": if with_recommendation > 0 {
-            json!(recommended_answered as f64 / with_recommendation as f64)
-        } else {
-            Value::Null
-        },
-        "requests": escalations.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
-    })
-}
-
-fn reversal_json(inputs: &MeasureInputs) -> Value {
-    json!({
-        "total": inputs.reversal_total,
-        "decisions_and_actions": inputs.reversal_total,
-        "reversed": inputs.reversed,
-        "reversal_count": inputs.reversed,
-        "rate": if inputs.reversal_total > 0 {
-            json!(inputs.reversed as f64 / inputs.reversal_total as f64)
-        } else {
-            Value::Null
-        },
-        "reversal_rate": if inputs.reversal_total > 0 {
-            json!(inputs.reversed as f64 / inputs.reversal_total as f64)
-        } else {
-            Value::Null
-        },
-        "reversal_window_days": REVERSAL_WINDOW_DAYS,
-        "reversed_subjects": inputs.reversed_subjects,
-    })
-}
-
-fn recovery_json(inputs: &MeasureInputs) -> Value {
-    json!({
-        "crashed_cycles": inputs.crashed,
-        "cycles_without_checkpoint": inputs.crashed,
-        "incomplete_checkpoints": inputs.crashed,
-        "time_to_next_good_checkpoint_seconds": {
-            "median": median_seconds(&inputs.recovery_seconds),
-            "max": inputs.recovery_seconds.iter().copied().fold(None::<f64>, |acc, v| {
-                Some(acc.map_or(v, |a: f64| a.max(v)))
-            }),
-            "samples": inputs.recovery_seconds,
-        },
-        "median_time_to_next_good_checkpoint_seconds": median_seconds(&inputs.recovery_seconds),
-        "recovery_slot_minutes": inputs.recovery_slot_minutes,
-        "repeated_actions": inputs.repeated_actions,
-        "human_interventions_needed": inputs.recovery_interventions,
-    })
-}
-
-fn mandate_json(
-    task_id: &str,
-    active_days: f64,
-    human_days: f64,
-    inputs: &MeasureInputs,
-    baseline: bool,
-) -> Value {
-    let interventions = json!({
-        "count": inputs.interventions.len(),
-        "total": inputs.interventions.len(),
-        "per_mandate": inputs.interventions.len(),
-        "per_mandate_day": inputs.interventions.len() as f64 / active_days,
-        "active_days": active_days,
-        "items": inputs.interventions,
-    });
-    let escalations = escalation_json(&inputs.escalations, active_days, human_days);
-    let references = json!({
-        "foreign": inputs.foreign_references,
-        "unreachable": inputs.unreachable_references,
-    });
-    if baseline && !inputs.has_checkpoints {
-        // An interactive loop leaves no checkpoint decisions and no cycle
-        // record: reversals and crash recovery cannot be derived.
-        return json!({
-            "task_id": task_id,
-            "baseline": true,
-            "active_days": active_days,
-            "interventions": interventions,
-            "manual_interventions": interventions,
-            "escalations": escalations,
-            "escalation_load": escalations,
-            "reversals": "not_derivable",
-            "reversal_rate": "not_derivable",
-            "recovery": "not_derivable",
-            "recovery_cost": "not_derivable",
-            "references": references,
-        });
-    }
-    let reversals = reversal_json(inputs);
-    let recovery = recovery_json(inputs);
-    json!({
-        "task_id": task_id,
-        "active_days": active_days,
-        "interventions": interventions.clone(),
-        "manual_interventions": interventions,
-        "escalations": escalations.clone(),
-        "escalation_load": escalations,
-        "reversals": reversals.clone(),
-        "reversal_rate": reversals,
-        "recovery": recovery.clone(),
-        "recovery_cost": recovery,
-        "references": references,
-    })
-}
-
-fn totals_json(window_days: f64, mandate_days: f64, totals: &MeasureInputs) -> Value {
-    // Workspace totals divide per-mandate-day rates by summed mandate active
-    // days (mandate-days), not by the calendar window. Per-human-day rates
-    // divide by the calendar window days (`human_days`).
-    let window_days = window_days.max(1.0);
-    let mandate_days = mandate_days.max(1.0);
-    let mut aggregate = mandate_json("totals", mandate_days, window_days, totals, false);
-    aggregate["task_id"] = Value::Null;
-    aggregate
 }

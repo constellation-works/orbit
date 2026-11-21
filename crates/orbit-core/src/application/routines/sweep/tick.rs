@@ -1,233 +1,25 @@
-//! The stateless scheduler tick [ORB-10021, ORB-12237]: what runs when the OS
-//! clock invokes `orbit clock tick` (`orbit sweep` is a compatibility alias).
-//! It never bootstraps a workspace from the caller's cwd, isolates per-routine
-//! failures into report rows, and returns `Err` only for infrastructure
-//! failures (registry unreadable, store unopenable) — an unconfigured host
-//! is a clean no-op, because launchd/systemd will invoke this forever.
-
-use crate::application::contracts::PullSettlementOutcome;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeSet, HashMap};
+use std::path::Path;
 use std::time::Instant;
 
-use super::RoutineMachineIdentity;
-use super::loader::{RoutineLoadError, RoutineWorkspaceProvider, collect_host_routines};
-use crate::OrbitRuntime;
+use chrono::Utc;
+use orbit_automation::routines::sweep::{TICK_DEADLINE, run_sweep_core};
+use orbit_common::OrbitError;
+use orbit_common::observability::log_rotation::{self, LogRotationConfig};
+use orbit_types::workspace::Workspace;
+
+use super::super::RoutineMachineIdentity;
+use super::super::loader::{RoutineLoadError, RoutineWorkspaceProvider, collect_host_routines};
+use super::dispatch::RuntimeDispatch;
+use super::{
+    AutoTaskSweepReport, ExternalMergeSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome,
+    workspaces,
+};
 use crate::application::auto_tasks::SchedulerOptions;
 use crate::application::auto_tasks::scheduler::run_auto_task_scheduler_with_cache;
 use crate::application::automation::SourceCache;
-use crate::application::job::run_owner_liveness;
-use crate::application::routines::clock::load_clock_settings;
-use crate::runtime::host_signal::{HostSignalProbe, ScheduledShutdown, default_host_signal_probe};
-use chrono::Utc;
-use orbit_automation::routines::breaker::{ObservedFire, ObservedOutcome};
-use orbit_automation::routines::sweep::TICK_DEADLINE;
-use orbit_automation::routines::sweep::run_sweep_core;
-pub use orbit_automation::routines::sweep::{
-    AutoTaskSweepReport, ExternalMergeSweepReport, RoutineDispatch, RoutineSweepReport,
-    RunOwnerLiveness, SweepOptions, SweepOutcome,
-};
-use orbit_common::OrbitError;
-use orbit_common::observability::log_rotation::{self, LogRotationConfig};
-use orbit_store::contracts::JobRunQuery;
-use orbit_types::workflow::{JobRun, JobRunState};
-use orbit_types::workspace::Workspace;
-use serde_json::json;
-
-/// Production dispatch over the per-workspace runtimes discovered this pass.
-pub(crate) struct RuntimeDispatch<'a> {
-    runtimes: BTreeMap<PathBuf, &'a OrbitRuntime>,
-    shown_runs: RefCell<HashMap<(PathBuf, String), JobRun>>,
-    source_cache: SourceCache,
-}
-
-impl RoutineDispatch for RuntimeDispatch<'_> {
-    fn evaluate_delivery(
-        &self,
-        routine: &super::loader::LoadedRoutine,
-        dry_run: bool,
-        now: chrono::DateTime<Utc>,
-    ) -> Result<orbit_types::workflow::automation::AutomationDiagnostic, OrbitError> {
-        let runtime = self
-            .runtimes
-            .get(&routine.source_orbit_dir)
-            .ok_or_else(|| OrbitError::Execution("routine source missing".into()))?;
-        crate::application::automation::evaluate_routine_with_cache(
-            runtime,
-            &routine.definition,
-            dry_run,
-            now,
-            Some(&self.source_cache),
-        )
-    }
-
-    fn evaluate_condition(
-        &self,
-        routine: &super::loader::LoadedRoutine,
-        dry_run: bool,
-        now: chrono::DateTime<Utc>,
-    ) -> Result<orbit_automation::condition::ConditionDiagnostic, OrbitError> {
-        let runtime = self
-            .runtimes
-            .get(&routine.source_orbit_dir)
-            .ok_or_else(|| OrbitError::Execution("routine source missing".into()))?;
-        crate::application::automation::condition::evaluate_routine_condition(
-            runtime,
-            &routine.definition,
-            dry_run,
-            now,
-        )
-    }
-
-    fn evaluate_guard(
-        &self,
-        routine: &super::loader::LoadedRoutine,
-        now: chrono::DateTime<Utc>,
-    ) -> orbit_automation::condition::GuardVerdict {
-        let Some(when) = routine.definition.trigger.when.as_deref() else {
-            return orbit_automation::condition::GuardVerdict::Open;
-        };
-        match self.runtimes.get(&routine.source_orbit_dir) {
-            Some(runtime) => crate::application::automation::condition::evaluate_guard(
-                runtime,
-                when,
-                "trigger.when",
-                orbit_automation::condition::ConditionCarrier::Routine,
-                now,
-            ),
-            None => orbit_automation::condition::GuardVerdict::unknown("routine source missing"),
-        }
-    }
-
-    fn submit(
-        &self,
-        source_orbit_dir: &Path,
-        job_name: &str,
-        actor: &str,
-        slot: &str,
-    ) -> Result<String, OrbitError> {
-        let runtime = self.runtimes.get(source_orbit_dir).ok_or_else(|| {
-            OrbitError::WorkspaceError(format!(
-                "no runtime for source workspace '{}'",
-                source_orbit_dir.display()
-            ))
-        })?;
-        // [ORB-11998] Carry the owning workspace's `.orbit` directory into the
-        // run explicitly, so the detached worker that ends up executing it can
-        // verify its own resolved workspace matches this one — instead of the
-        // run silently trusting whatever the worker's cwd/env resolved to.
-        let mut input = json!({});
-        input[crate::application::job::pipeline::ROUTINE_DISPATCH_ORBIT_DIR_FIELD] =
-            json!(source_orbit_dir.to_string_lossy());
-        let routine = actor.strip_prefix("routine/").unwrap_or(actor);
-        runtime
-            .submit_pipeline_run_with_trigger(
-                job_name,
-                input,
-                None,
-                Some(actor),
-                orbit_types::workflow::JobRunTrigger::routine(routine, slot),
-            )
-            .map(|invoke| invoke.run_id)
-    }
-
-    fn run_state(&self, source_orbit_dir: &Path, run_id: &str) -> Option<JobRunState> {
-        self.shown_job_run(source_orbit_dir, run_id)
-            .map(|run| run.state)
-    }
-
-    fn run_owner_liveness(&self, source_orbit_dir: &Path, run_id: &str) -> RunOwnerLiveness {
-        self.shown_job_run(source_orbit_dir, run_id)
-            // An unreadable run is not evidence that its worker stopped.
-            .map_or(RunOwnerLiveness::Unknown, |run| {
-                match run_owner_liveness(&run) {
-                    crate::application::job::RunOwnerLiveness::Alive => RunOwnerLiveness::Alive,
-                    crate::application::job::RunOwnerLiveness::Stopped => RunOwnerLiveness::Stopped,
-                    crate::application::job::RunOwnerLiveness::Unknown => RunOwnerLiveness::Unknown,
-                }
-            })
-    }
-
-    fn routine_runs(
-        &self,
-        routine: &super::loader::LoadedRoutine,
-        limit: usize,
-    ) -> Result<Vec<ObservedFire>, OrbitError> {
-        let Some(runtime) = self.runtimes.get(&routine.source_orbit_dir) else {
-            return Ok(Vec::new());
-        };
-        let runs = runtime
-            .stores()
-            .jobs()
-            .list_job_runs_filtered(&JobRunQuery {
-                job_id: Some(routine.definition.target.job_name().to_string()),
-                trigger_routine: Some(routine.definition.name.clone()),
-                limit: Some(limit),
-                include_steps: false,
-                ..JobRunQuery::default()
-            })?;
-        Ok(runs
-            .into_iter()
-            .map(|run| ObservedFire {
-                created_at: run.created_at,
-                outcome: match run.state {
-                    JobRunState::Pending | JobRunState::Running | JobRunState::Retrying => {
-                        ObservedOutcome::InFlight
-                    }
-                    JobRunState::Success | JobRunState::Held => ObservedOutcome::Succeeded,
-                    JobRunState::Skipped => ObservedOutcome::Ignored,
-                    JobRunState::Failed
-                    | JobRunState::Timeout
-                    | JobRunState::Cancelled
-                    | JobRunState::Interrupted => ObservedOutcome::Failed(None),
-                },
-                run_id: Some(run.run_id.to_string()),
-            })
-            .collect())
-    }
-
-    fn run_failure_class(&self, source_orbit_dir: &Path, run_id: &str) -> Option<String> {
-        let run = self
-            .runtimes
-            .get(source_orbit_dir)?
-            .stores()
-            .jobs()
-            .get_job_run(run_id)
-            .ok()
-            .flatten()?;
-        let code = run
-            .steps
-            .iter()
-            .filter(|step| step.state != JobRunState::Success)
-            .find_map(|step| step.typed_failure_code())
-            .map(|code| code.as_str().to_string());
-        Some(code.unwrap_or_else(|| run.state.to_string()))
-    }
-
-    fn host_orbit_build(&self) -> Option<String> {
-        let build = orbit_common::process::build::current_orbit_build();
-        Some(match build.source_commit {
-            Some(commit) => format!("{}+{commit}", build.version),
-            None => build.version,
-        })
-    }
-}
-
-impl RuntimeDispatch<'_> {
-    fn shown_job_run(&self, source_orbit_dir: &Path, run_id: &str) -> Option<JobRun> {
-        let key = (source_orbit_dir.to_path_buf(), run_id.to_string());
-        if let Some(run) = self.shown_runs.borrow().get(&key) {
-            return Some(run.clone());
-        }
-        let run = self
-            .runtimes
-            .get(source_orbit_dir)
-            .and_then(|runtime| runtime.show_job_run(run_id).ok())?;
-        self.shown_runs.borrow_mut().insert(key, run.clone());
-        Some(run)
-    }
-}
+use crate::runtime::host_signal::{HostSignalProbe, default_host_signal_probe};
 
 /// Run one sweep pass against the default global root with a caller-supplied
 /// workspace provider.
@@ -245,7 +37,7 @@ pub fn run_sweep_with_providers(
     // root seam) is left
     // untouched so tests never rotate real logs.
     log_rotation::rotate_and_prune(
-        &super::clock::sweep_log_path(&global_root),
+        &super::super::clock::sweep_log_path(&global_root),
         &LogRotationConfig::default(),
     );
     run_sweep_at_with_providers(&global_root, options, local_machine, workspace_provider)
@@ -302,17 +94,17 @@ pub(crate) fn run_sweep_at_with_providers_at(
         });
     };
 
-    let store = super::open_routine_store(global_root)?;
+    let store = super::super::open_routine_store(global_root)?;
     // The OS unit and due calculation share this host-local setting. A
     // configured five-minute clock therefore keeps a slot natural for two
     // five-minute intervals instead of retaining the old 120-second default.
-    let options = configured_sweep_options(global_root, options)?;
+    let options = workspaces::configured_sweep_options(global_root, options)?;
     // One runtime per active workspace; discovery and dispatch share them.
     let mut discovered = workspace_provider.discover_workspaces_until(global_root, deadline)?;
     let mut skipped_workspaces: BTreeSet<String> =
         discovered.skipped_workspaces.iter().cloned().collect();
     let mut load_errors: Vec<RoutineLoadError> = discovered.errors.clone();
-    let no_workspace_loaded = no_workspace_loaded_row(&discovered);
+    let no_workspace_loaded = workspaces::no_workspace_loaded_row(&discovered);
 
     // [ORB-14173] [ORB-16354] Replica checkouts contribute only their
     // host-local worktree GC and store GC routines; the rest are reported
@@ -327,8 +119,8 @@ pub(crate) fn run_sweep_at_with_providers_at(
                 .chain(&discovered.replicas)
                 .map(|(workspace, _)| workspace.name.clone()),
         );
-        super::loader::HostRoutines {
-            collection: super::loader::RoutineCollection::default(),
+        super::super::loader::HostRoutines {
+            collection: super::super::loader::RoutineCollection::default(),
             owner_only: Vec::new(),
         }
     };
@@ -341,14 +133,14 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // the leaf's worker and its drain are gone. Delivery starts nothing, so
     // a pending host shutdown does not hold it.
     if !options.dry_run {
-        each_workspace_in_tick(
+        workspaces::each_workspace_in_tick(
             discovered.entries.iter().chain(&discovered.replicas),
             deadline,
             &mut skipped_workspaces,
             None,
             None,
             |workspace, runtime| {
-                deliver_recorded_pull_settlements(workspace, runtime);
+                workspaces::deliver_recorded_pull_settlements(workspace, runtime);
                 Ok(())
             },
         );
@@ -359,8 +151,12 @@ pub(crate) fn run_sweep_at_with_providers_at(
     let clock_env_loaded = if options.dry_run {
         Vec::new()
     } else {
-        let loaded = load_clock_env_for(global_root, &mut discovered, &mut load_errors);
-        super::leases::sweep_owner_lease_lifetimes(&discovered, deadline, &mut skipped_workspaces);
+        let loaded = workspaces::load_clock_env_for(global_root, &mut discovered, &mut load_errors);
+        super::super::leases::sweep_owner_lease_lifetimes(
+            &discovered,
+            deadline,
+            &mut skipped_workspaces,
+        );
         loaded
     };
 
@@ -371,7 +167,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // and skips that workspace without failing routines or auto-tasks.
     let mut external_merge_settlements: Vec<ExternalMergeSweepReport> = Vec::new();
     if !options.dry_run {
-        each_workspace_in_tick(
+        workspaces::each_workspace_in_tick(
             discovered.entries.iter(),
             deadline,
             &mut skipped_workspaces,
@@ -395,7 +191,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // authorised delivery ended with nobody left to finish them. Runs after
     // settlement so a merge made elsewhere settles first. Owner entries only.
     if !options.dry_run {
-        each_workspace_in_tick(
+        workspaces::each_workspace_in_tick(
             discovered.entries.iter(),
             deadline,
             &mut skipped_workspaces,
@@ -404,6 +200,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
             |workspace, runtime| {
                 for landed in runtime.land_completion_authorized_tasks()? {
                     tracing::info!(
+                        target: "orbit_core::application::routines::sweep",
                         workspace = %workspace.name,
                         task_id = %landed.task_id,
                         pull_request = landed.pull_request,
@@ -421,7 +218,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // work, so it also runs before the host-shutdown hold. Owner entries
     // only.
     if !options.dry_run {
-        each_workspace_in_tick(
+        workspaces::each_workspace_in_tick(
             discovered.entries.iter(),
             deadline,
             &mut skipped_workspaces,
@@ -441,7 +238,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // like notice closure it runs before the host-shutdown hold. Owner
     // entries only; the expiry itself also refuses a replica runtime.
     if !options.dry_run {
-        each_workspace_in_tick(
+        workspaces::each_workspace_in_tick(
             discovered.entries.iter(),
             deadline,
             &mut skipped_workspaces,
@@ -469,7 +266,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // the host is back, each routine's own `missed_run` policy decides what
     // the held slots become, exactly as after any other downtime. The fixed
     // horizon is judged against this tick's clock.
-    if let Some(shutdown) = shutdown_holding_admission(host_signals, now_utc) {
+    if let Some(shutdown) = workspaces::shutdown_holding_admission(host_signals, now_utc) {
         let reason = shutdown.hold_reason();
         tracing::warn!(
             target: "orbit.core.sweep",
@@ -516,8 +313,12 @@ pub(crate) fn run_sweep_at_with_providers_at(
                 continue;
             }
             if let Err(error) = runtime.dispatch_landing_requests_at(now_utc) {
-                tracing::warn!(workspace = %workspace.name, %error,
-                    "sweep.owner_landing_dispatch_failed");
+                tracing::warn!(
+                    target: "orbit_core::application::routines::sweep",
+                    workspace = %workspace.name,
+                    %error,
+                    "sweep.owner_landing_dispatch_failed"
+                );
             }
         }
     }
@@ -578,7 +379,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
             task_id: None,
         });
     };
-    each_workspace_in_tick(
+    workspaces::each_workspace_in_tick(
         discovered.entries.iter(),
         deadline,
         &mut skipped_workspaces,
@@ -646,7 +447,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // run the current upgrade interrupted at most once, and audits every run it
     // skips (an earlier upgrade's, an elapsed or stopped drain, a superseded one).
     if !options.dry_run && orbit_common::fs::generation::pending_switch(global_root).is_none() {
-        each_workspace_in_tick(
+        workspaces::each_workspace_in_tick(
             discovered.entries.iter(),
             deadline,
             &mut skipped_workspaces,
@@ -674,7 +475,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // default) reads and writes nothing. Owner entries only; replicas never
     // submit.
     if !options.dry_run && orbit_common::fs::generation::pending_switch(global_root).is_none() {
-        each_workspace_in_tick(
+        workspaces::each_workspace_in_tick(
             discovered.entries.iter(),
             deadline,
             &mut skipped_workspaces,
@@ -700,7 +501,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // resumed from its checkpoints each tick, within its retry window; past
     // the window its tasks are blocked for a human.
     if !options.dry_run {
-        each_workspace_in_tick(
+        workspaces::each_workspace_in_tick(
             discovered.entries.iter(),
             deadline,
             &mut skipped_workspaces,
@@ -725,7 +526,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // [ORB-20158] A job run parked on an auto-task step is revisited when
     // due: the same logical run continues, it is never submitted again.
     if !options.dry_run {
-        each_workspace_in_tick(
+        workspaces::each_workspace_in_tick(
             discovered.entries.iter(),
             deadline,
             &mut skipped_workspaces,
@@ -754,7 +555,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
             // Recovery must be followed by evidence fulfilment per workspace;
             // both steps recheck the same tick deadline independently.
             let mut workspace_is_allowed = |workspace: &Workspace| {
-                tick_allows_workspace(deadline, workspace, &mut skipped_workspaces)
+                workspaces::tick_allows_workspace(deadline, workspace, &mut skipped_workspaces)
             };
             for (workspace, runtime) in &discovered.entries {
                 if !workspace_is_allowed(workspace) {
@@ -814,7 +615,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // reads. A recent hourly slot avoids history reads and simulation; all
     // failures stay local to this workspace and never fail the tick.
     if !options.dry_run {
-        each_workspace_in_tick(
+        workspaces::each_workspace_in_tick(
             discovered.entries.iter(),
             deadline,
             &mut skipped_workspaces,
@@ -830,7 +631,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
     // run per workspace, so the required command never runs under the sweep
     // lock. Admission reads the recorded verdict.
     if !options.dry_run {
-        each_workspace_in_tick(
+        workspaces::each_workspace_in_tick(
             discovered.entries.iter(),
             deadline,
             &mut skipped_workspaces,
@@ -878,172 +679,5 @@ pub(crate) fn run_sweep_at_with_providers_at(
         external_merge_settlements,
         deadline_exceeded,
         skipped_workspaces: skipped_workspaces.into_iter().collect(),
-    })
-}
-
-/// Load the `clock.env` values any discovered workspace's effective
-/// `execution.env.pass` lists or a crew's `env` reads. A refused or
-/// unreadable file is a load error row, not a failed tick: runs still start,
-/// and a Claude activity without its token then fails fast with an
-/// actionable error.
-fn load_clock_env_for(
-    global_root: &Path,
-    discovered: &mut super::loader::DiscoveredWorkspaces,
-    load_errors: &mut Vec<RoutineLoadError>,
-) -> Vec<String> {
-    let pass: BTreeSet<String> = discovered
-        .entries
-        .iter()
-        .chain(&discovered.replicas)
-        .flat_map(|(_, runtime)| runtime.child_env_default_names())
-        .collect();
-    let pass: Vec<String> = pass.into_iter().collect();
-    match orbit_common::security::operator_env::load_clock_env(global_root, &pass) {
-        Ok(defaults) => {
-            for (_, runtime) in discovered
-                .entries
-                .iter_mut()
-                .chain(&mut discovered.replicas)
-            {
-                runtime.context.apply_child_env_defaults(&defaults);
-            }
-            defaults.into_iter().map(|(name, _)| name).collect()
-        }
-        Err(error) => {
-            let path = orbit_common::security::operator_env::clock_env_file_path(global_root);
-            load_errors.push(RoutineLoadError {
-                source_workspace: orbit_common::security::operator_env::CLOCK_ENV_FILE_NAME
-                    .to_string(),
-                path: Some(path),
-                message: error.to_string(),
-            });
-            Vec::new()
-        }
-    }
-}
-
-fn tick_allows_workspace(
-    deadline: Instant,
-    workspace: &Workspace,
-    skipped: &mut BTreeSet<String>,
-) -> bool {
-    if Instant::now() < deadline {
-        return true;
-    }
-    skipped.insert(workspace.name.clone());
-    false
-}
-
-/// Run one sweep phase for each workspace while enforcing its deadline and
-/// standardizing failures into the phase's existing warning event.
-fn each_workspace_in_tick<'a, T>(
-    workspaces: impl Iterator<Item = &'a (Workspace, OrbitRuntime)>,
-    deadline: Instant,
-    skipped: &mut BTreeSet<String>,
-    failed_event: Option<&'static str>,
-    mut on_deadline: Option<&mut dyn FnMut(&Workspace)>,
-    mut phase: impl FnMut(&Workspace, &OrbitRuntime) -> Result<T, OrbitError>,
-) {
-    for (workspace, runtime) in workspaces {
-        if !tick_allows_workspace(deadline, workspace, skipped) {
-            if let Some(on_deadline) = &mut on_deadline {
-                on_deadline(workspace);
-            }
-            continue;
-        }
-
-        if let Err(error) = phase(workspace, runtime)
-            && let Some(event) = failed_event
-        {
-            tracing::warn!(
-                target: "orbit.core.sweep",
-                workspace = %workspace.name,
-                error = %error,
-                "{}",
-                event
-            );
-        }
-    }
-}
-
-/// Deliver one checkout's recorded pull settlements, logging what is still
-/// pending; the next tick retries it.
-fn deliver_recorded_pull_settlements(workspace: &Workspace, runtime: &OrbitRuntime) {
-    for entry in runtime.deliver_recorded_pull_settlements() {
-        match entry.outcome {
-            PullSettlementOutcome::Settled | PullSettlementOutcome::ClosedObsolete => {
-                tracing::info!(
-                    target: "orbit.core.sweep",
-                    workspace = %workspace.name,
-                    settlement = %entry.describe(),
-                    "sweep.pull_settlement_delivered",
-                )
-            }
-            PullSettlementOutcome::PendingDelivery
-            | PullSettlementOutcome::OwnerUnreachable
-            | PullSettlementOutcome::Pending
-            | PullSettlementOutcome::NoOwnerRoute => {
-                tracing::warn!(
-                    target: "orbit.core.sweep",
-                    workspace = %workspace.name,
-                    settlement = %entry.describe(),
-                    "sweep.pull_settlement_pending",
-                )
-            }
-            _ => {}
-        }
-    }
-}
-
-/// One fail-loud row when discovery found workspaces but opened none.
-fn no_workspace_loaded_row(discovered: &super::loader::DiscoveredWorkspaces) -> Option<String> {
-    if !discovered.entries.is_empty()
-        || !discovered.replicas.is_empty()
-        || discovered.errors.is_empty()
-    {
-        return None;
-    }
-    let first = &discovered.errors[0];
-    let binary_version = env!("CARGO_PKG_VERSION");
-    tracing::error!(
-        target: "orbit.core.sweep",
-        binary_version,
-        source_workspace = first.source_workspace.as_str(),
-        first_error = first.message.as_str(),
-        "sweep.no_workspace_loaded"
-    );
-    Some(format!(
-        "sweep.no_workspace_loaded: orbit {binary_version} loaded 0/{} workspaces; first error [{}]: {}",
-        discovered.errors.len(),
-        first.source_workspace,
-        first.message
-    ))
-}
-
-/// The pending shutdown when it falls inside the fixed hold horizon
-/// ([`crate::runtime::host_signal::HOST_SHUTDOWN_HOLD_MINUTES`]) of this tick.
-fn shutdown_holding_admission(
-    host_signals: &dyn HostSignalProbe,
-    now_utc: chrono::DateTime<Utc>,
-) -> Option<ScheduledShutdown> {
-    let shutdown = host_signals.scheduled_shutdown()?;
-    shutdown
-        .holds_admission(
-            now_utc,
-            crate::runtime::host_signal::HOST_SHUTDOWN_HOLD_MINUTES,
-        )
-        .then_some(shutdown)
-}
-
-/// Bind a routine sweep to the same cadence the host clock installer renders.
-/// Kept separate so the production path and its configuration test share one
-/// explicit boundary.
-pub(crate) fn configured_sweep_options(
-    global_root: &Path,
-    options: SweepOptions,
-) -> Result<SweepOptions, OrbitError> {
-    Ok(SweepOptions {
-        sweep_cadence_seconds: load_clock_settings(global_root)?.cadence_seconds,
-        ..options
     })
 }
