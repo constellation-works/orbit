@@ -4,43 +4,43 @@
 .run-meta-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 14px 16px;
-  margin: 12px 16px;
-  padding: 16px;
+  gap: var(--space-14) var(--space-16);
+  margin: var(--space-12) var(--space-16);
+  padding: var(--space-16);
   border: 1px solid var(--border);
   border-radius: var(--radius-panel);
   background: var(--bg-control);
-  font-size: 13.5px;
+  font-size: var(--text-md);
 }
 .run-meta-grid .label {
   color: var(--fg-dim);
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-weight: 500;
-  margin-bottom: 3px;
+  margin-bottom: var(--space-4);
 }
 .run-meta-grid .label::first-letter { text-transform: uppercase; }
 .run-failure, .run-hold {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin: 12px 16px 0;
-  padding: 14px 16px;
+  gap: var(--space-10);
+  margin: var(--space-12) var(--space-16) 0;
+  padding: var(--space-14) var(--space-16);
   border: 1px solid var(--danger-line);
-  border-radius: 10px;
+  border-radius: var(--radius-panel);
   background: #150d0d;
 }
-.run-failure-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; color: #ffd9d4; font-size: 14.5px; }
+.run-failure-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-4) var(--space-8); color: #ffd9d4; font-size: var(--text-base); }
 .run-failure-head strong { font-weight: 600; }
 .run-failure-where { color: #eac3bd; }
-.run-failure-code { margin-left: auto; color: #c99b94; font-size: 12px; }
+.run-failure-code { margin-left: auto; color: #c99b94; font-size: var(--text-sm); }
 .run-failure-message, .run-hold-message {
   margin: 0;
-  padding: 10px 12px;
+  padding: var(--space-10) var(--space-12);
   border: 1px solid #3a1c1a;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: #0d0808;
   color: #e0b0a9;
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -50,13 +50,13 @@
 .run-hold { border-color: var(--state-held); background: #15101f; color: var(--fg); }
 .run-hold strong { color: var(--state-held); }
 .run-hold-message { border-color: #3c2c55; background: #0d0914; color: #dac8fa; }
-.run-hold p { margin: 0; font-size: 13px; line-height: 1.55; }
+.run-hold p { margin: 0; font-size: var(--text-md); line-height: 1.55; }
 .run-cancelled { border-color: var(--state-cancelled); }
 .run-cancelled .run-failure-head { color: var(--state-cancelled); }
 .run-cancelled-reason,
 .run-failure-root {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-md);
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
@@ -85,43 +85,43 @@ a.failure-id-link:focus-visible {
 
 /* Child-run lineage (ORB-10971) */
 .child-dispatch-panel {
-  padding: 12px 16px;
+  padding: var(--space-12) var(--space-16);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   border-bottom: 1px solid var(--border);
 }
 .child-dispatch-panel .label {
   color: var(--fg-dim);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  margin-bottom: 6px;
+  margin-bottom: var(--space-6);
 }
 .child-dispatch-notice {
   color: var(--fg-dim);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.5;
-  margin-bottom: 6px;
+  margin-bottom: var(--space-6);
 }
 .child-dispatch-notice strong { color: var(--fg); }
 .child-dispatch-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
+  gap: var(--space-8);
+  margin-bottom: var(--space-4);
 }
 .child-dispatch-meta { color: var(--fg-dim); }
 .requests-held { border-left: 3px solid var(--state-held); overflow-wrap: anywhere; }
 .pilot-warning { border-left: 3px solid var(--warn-fg); overflow-wrap: anywhere; }
 .pilot-warning .child-dispatch-notice { margin-bottom: 0; color: var(--warn-fg); }
 .requests-held .child-dispatch-notice:last-child { margin-bottom: 0; }
-.settlement-remedy { margin: 0 0 8px; color: var(--fg-dim); line-height: 1.5; }
+.settlement-remedy { margin: 0 0 var(--space-8); color: var(--fg-dim); line-height: 1.5; }
 .waiting-task { color: var(--fg-dim); }
 .waiting-task-link { color: var(--accent); text-decoration: none; }
 .waiting-task-link:hover { text-decoration: underline; }
 .child-dispatch-error { color: var(--state-failed); }
-.child-dispatch-summary { margin-bottom: 8px; }
+.child-dispatch-summary { margin-bottom: var(--space-8); }
 .child-dispatch-row .state-label { color: var(--dot); }
 .child-dispatch-row .duration { white-space: nowrap; }
 .provider-process-message { overflow-wrap: anywhere; }
@@ -133,7 +133,7 @@ a.failure-id-link:focus-visible {
    column is narrow on a laptop. */
 .exec-origin {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--fg-dim);
   overflow-wrap: anywhere;
 }
@@ -145,43 +145,43 @@ a.failure-id-link:focus-visible {
    then a short value whose explanation is an info hint — so the Delivery tab
    scans like the task's Details. */
 .claim-panel {
-  font-size: 13px;
+  font-size: var(--text-md);
 }
 .claim-panel + .claim-panel {
-  margin-top: 16px;
-  padding-top: 16px;
+  margin-top: var(--space-16);
+  padding-top: var(--space-16);
   border-top: 1px solid var(--hair);
 }
 .claim-header {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 4px 12px;
-  margin-bottom: 12px;
+  gap: var(--space-4) var(--space-12);
+  margin-bottom: var(--space-12);
 }
-.claim-header .claim-id { font-family: var(--font-mono); font-size: 12px; color: var(--fg-dim); }
-.claim-header .claim-created { color: var(--fg-mute); font-size: 12px; }
+.claim-header .claim-id { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--fg-dim); }
+.claim-header .claim-created { color: var(--fg-mute); font-size: var(--text-sm); }
 .claim-line {
   position: relative;
   --hint-left: 126px;
   display: grid;
   grid-template-columns: 112px minmax(0, 1fr);
-  gap: 2px 14px;
-  padding: 3px 0;
+  gap: var(--space-2) var(--space-14);
+  padding: var(--space-4) 0;
   align-items: baseline;
 }
 .claim-line > .label {
   grid-row: 1 / span 2;
   color: var(--fg-mute);
-  font-size: 13px;
+  font-size: var(--text-md);
 }
 .claim-line > .label::first-letter { text-transform: uppercase; }
 .claim-line > :nth-child(2) { min-width: 0; color: var(--fg); overflow-wrap: anywhere; }
 .claim-line.mono-value > .value,
-.claim-line .mono, .claim-footprint .mono { font-family: var(--font-mono); font-size: 12px; }
+.claim-line .mono, .claim-footprint .mono { font-family: var(--font-mono); font-size: var(--text-sm); }
 .claim-line a { color: var(--accent); text-decoration: none; }
 .claim-line a:hover { text-decoration: underline; }
-.claim-line > .exec-origin { font-size: 12px; }
+.claim-line > .exec-origin { font-size: var(--text-sm); }
 .claim-line.expired > .value { color: var(--state-failed); }
 .claim-line.remote > .value { color: var(--fg-dim); }
 .claim-line.released > .value { color: var(--fg-mute); }
@@ -190,7 +190,7 @@ a.failure-id-link:focus-visible {
 .claim-status {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--space-8);
   color: var(--tone, var(--fg));
 }
 .claim-status::before {
@@ -210,33 +210,33 @@ a.failure-id-link:focus-visible {
 .claim-note {
   grid-column: 2;
   color: var(--fg-mute);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
 /* Labels stack above values once the column is too narrow for two; a
    112px label track leaves a machine id or selector unreadable. */
 @media (max-width: 480px) {
-  .claim-line { grid-template-columns: 1fr; gap: 2px; --hint-left: 0; }
+  .claim-line { grid-template-columns: 1fr; gap: var(--space-2); --hint-left: 0; }
   .claim-line > .label { grid-row: auto; }
   .claim-note { grid-column: 1; }
 }
 @container task-pane (max-width: 400px) {
-  .claim-line { grid-template-columns: 1fr; gap: 2px; --hint-left: 0; }
+  .claim-line { grid-template-columns: 1fr; gap: var(--space-2); --hint-left: 0; }
   .claim-line > .label { grid-row: auto; }
   .claim-note { grid-column: 1; }
 }
 /* The handoff's delivery facts lead the claim, then the attempt that
    produced them; each group opens on a small subhead. */
 .claim-group + .claim-group {
-  margin-top: 12px;
-  padding-top: 12px;
+  margin-top: var(--space-12);
+  padding-top: var(--space-12);
   border-top: 1px solid var(--hair);
 }
 .claim-subhead {
-  margin: 0 0 4px;
+  margin: 0 0 var(--space-4);
   color: var(--fg-dim);
-  font-size: 11.5px;
+  font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -245,7 +245,7 @@ a.failure-id-link:focus-visible {
 .claim-disclosure > summary {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   color: var(--accent);
   cursor: pointer;
   list-style: none;
@@ -261,14 +261,14 @@ a.failure-id-link:focus-visible {
   transition: transform 0.15s ease;
 }
 .claim-disclosure[open] > summary::after { transform: rotate(45deg); }
-.claim-disclosure > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.claim-disclosure > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-2xs); }
 .claim-footprint {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-4);
   max-height: 180px;
-  margin-top: 8px;
-  padding: 10px 12px;
+  margin-top: var(--space-8);
+  padding: var(--space-10) var(--space-12);
   overflow-y: auto;
   background: var(--bg-well);
   border: 1px solid var(--hair);
@@ -277,27 +277,27 @@ a.failure-id-link:focus-visible {
   overflow-wrap: anywhere;
 }
 .landing-evidence {
-  margin-top: 12px;
-  padding-top: 12px;
+  margin-top: var(--space-12);
+  padding-top: var(--space-12);
   border-top: 1px solid var(--hair);
 }
 .landing-evidence > summary {
   display: flex;
   width: 100%;
   color: var(--fg-dim);
-  font-size: 13px;
+  font-size: var(--text-md);
 }
 .landing-evidence > summary::after { order: -1; }
-.claim-disclosure-meta { margin-left: auto; color: var(--fg-mute); font-size: 12px; }
+.claim-disclosure-meta { margin-left: auto; color: var(--fg-mute); font-size: var(--text-sm); }
 .landing-evidence-body {
-  margin: 10px 0 0;
-  padding: 12px 14px;
+  margin: var(--space-10) 0 0;
+  padding: var(--space-12) var(--space-14);
   max-height: 220px;
   overflow: auto;
   background: var(--bg-well);
   border: 1px solid var(--hair);
   border-radius: var(--radius-sm);
-  font-size: 11.5px;
+  font-size: var(--text-sm);
   line-height: 1.55;
   color: var(--fg-soft);
   white-space: pre-wrap;
@@ -307,14 +307,14 @@ a.failure-id-link:focus-visible {
   border: 1px solid var(--danger-line);
   border-radius: var(--radius-sm);
   background: var(--danger-wash);
-  padding: 8px 12px;
-  margin: 8px 0;
+  padding: var(--space-8) var(--space-12);
+  margin: var(--space-8) 0;
   color: var(--fg);
 }
 .claim-warning .label {
   color: var(--danger-fg);
-  font-size: 12px;
-  margin-right: 8px;
+  font-size: var(--text-sm);
+  margin-right: var(--space-8);
 }
 /* The owner actions are one card, apart from the claim's facts and from the
    task's own actions under the tabs: approval, then recovery with a single
@@ -322,9 +322,9 @@ a.failure-id-link:focus-visible {
 .claim-actions {
   position: relative;
   display: grid;
-  gap: 14px;
-  margin-top: 16px;
-  padding: 14px 16px 16px;
+  gap: var(--space-14);
+  margin-top: var(--space-16);
+  padding: var(--space-16);
   background: var(--bg-well);
   border: 1px solid var(--hair);
   border-radius: var(--radius);
@@ -332,11 +332,11 @@ a.failure-id-link:focus-visible {
 .claim-actions-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
 }
 .claim-actions-title {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-md);
   font-weight: 600;
   color: var(--fg-strong);
 }
@@ -344,11 +344,11 @@ a.failure-id-link:focus-visible {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 12px;
+  gap: var(--space-6) var(--space-12);
 }
-.claim-recovery { display: grid; gap: 10px; }
+.claim-recovery { display: grid; gap: var(--space-10); }
 .claim-approval + .claim-recovery {
-  padding-top: 12px;
+  padding-top: var(--space-12);
   border-top: 1px solid var(--hair);
 }
 .claim-recovery > .claim-subhead { margin: 0; }
@@ -356,32 +356,32 @@ a.failure-id-link:focus-visible {
   display: grid;
   grid-template-columns: 76px minmax(0, 1fr);
   align-items: center;
-  gap: 4px 12px;
+  gap: var(--space-4) var(--space-12);
 }
-.claim-reason-label { color: var(--fg-mute); font-size: 12.5px; }
+.claim-reason-label { color: var(--fg-mute); font-size: var(--text-sm); }
 .claim-reason-problem {
   grid-column: 2;
   color: var(--danger-fg);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .claim-reason-problem:empty { display: none; }
 .claim-action-group {
   display: grid;
   grid-template-columns: 76px minmax(0, 1fr);
   align-items: baseline;
-  gap: 4px 12px;
+  gap: var(--space-4) var(--space-12);
 }
-.claim-action-group-label { color: var(--fg-mute); font-size: 12.5px; }
-.claim-action-group-body { display: grid; gap: 4px; min-width: 0; }
+.claim-action-group-label { color: var(--fg-mute); font-size: var(--text-sm); }
+.claim-action-group-body { display: grid; gap: var(--space-4); min-width: 0; }
 .claim-action-buttons {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-8);
 }
 .claim-action-hint {
   color: var(--fg-mute);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.45;
 }
 @container task-pane (max-width: 400px) {
@@ -400,9 +400,9 @@ a.failure-id-link:focus-visible {
   color: var(--fg);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  padding: 0 12px;
+  padding: 0 var(--space-12);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   font-weight: 500;
   cursor: pointer;
 }
@@ -435,9 +435,9 @@ a.failure-id-link:focus-visible {
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0 10px;
+  padding: 0 var(--space-10);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   min-width: 0;
 }
 .claim-reason:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -448,9 +448,9 @@ a.failure-id-link:focus-visible {
   color: var(--fg);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  padding: 0 8px;
+  padding: 0 var(--space-8);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--text-sm);
 }
 .claim-status-picker:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .claim-status-picker:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -460,14 +460,14 @@ a.failure-id-link:focus-visible {
    why, and the server refuses the call either way. */
 .claim-action-denied {
   color: var(--fg-mute);
-  font-size: 12px;
+  font-size: var(--text-sm);
   font-style: italic;
   overflow-wrap: anywhere;
 }
 .claim-feedback {
-  padding: 6px 10px;
-  margin-bottom: 8px;
-  font-size: 12px;
+  padding: var(--space-6) var(--space-10);
+  margin-bottom: var(--space-8);
+  font-size: var(--text-sm);
   border-left: 2px solid var(--border);
   overflow-wrap: anywhere;
 }
@@ -475,16 +475,16 @@ a.failure-id-link:focus-visible {
 .claim-feedback.error { border-left-color: var(--state-failed); }
 .claim-feedback.stale { border-left-color: var(--state-running); }
 .claim-feedback.uncertain { border-left-color: var(--state-failed); }
-.claim-feedback .claim-note { margin-top: 2px; }
-.claim-retry { margin-bottom: 8px; }
+.claim-feedback .claim-note { margin-top: var(--space-2); }
+.claim-retry { margin-bottom: var(--space-8); }
 
 .step-row, .step-header {
   display: grid;
   grid-template-columns: 60px 1fr 100px 80px 80px;
-  gap: 12px;
-  padding: 8px 16px;
+  gap: var(--space-12);
+  padding: var(--space-8) var(--space-16);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
   align-items: center;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   cursor: pointer;
@@ -509,7 +509,7 @@ a.failure-id-link:focus-visible {
     grid-template-areas:
       "idx target target target"
       "idx state duration exit";
-    row-gap: 4px;
+    row-gap: var(--space-4);
   }
   .step-row .idx { grid-area: idx; align-self: start; }
   .step-row .target { grid-area: target; white-space: normal; overflow-wrap: anywhere; }
@@ -519,31 +519,31 @@ a.failure-id-link:focus-visible {
 }
 
 .step-detail {
-  padding: 12px 20px;
+  padding: var(--space-12) var(--space-20);
   background: #050505;
   border-bottom: 1px solid var(--border);
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
+  gap: var(--space-10);
 }
-.step-logs-empty { color: var(--fg-dim); font-size: 12px; }
+.step-logs-empty { color: var(--fg-dim); font-size: var(--text-sm); }
 
 .step-log-section {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
+  gap: var(--space-8);
 }
 .step-log-section > .label,
 .step-log-head .label {
   color: var(--fg-dim);
-  font-size: 11px;
+  font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
 .step-log-block {
   min-width: 0;
   border: 1px solid var(--border);
-  border-radius: 2px;
+  border-radius: var(--radius-2xs);
   background: var(--bg);
 }
 .step-log-block.stderr {
@@ -557,11 +557,11 @@ a.failure-id-link:focus-visible {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 6px 10px;
+  gap: var(--space-12);
+  padding: var(--space-6) var(--space-10);
   border-bottom: 1px solid var(--border);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .step-log-head .meta {
   flex: 1;
@@ -571,16 +571,16 @@ a.failure-id-link:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.log-wrap-toggle { height: 24px; font-size: 11px; }
+.log-wrap-toggle { height: 24px; font-size: var(--text-xs); }
 .log-wrap-toggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
 .step-log-block pre {
   margin: 0;
-  padding: 8px 10px;
+  padding: var(--space-8) var(--space-10);
   max-height: 260px;
   overflow-x: auto;
   overflow-y: auto;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 1.45;
   color: var(--fg);
   white-space: pre;
@@ -597,10 +597,10 @@ a.failure-id-link:focus-visible {
 .back-action {
   font: inherit;
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   height: 30px;
-  padding: 0 12px;
-  border-radius: 7px;
+  padding: 0 var(--space-12);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   background: transparent;
   border: 1px solid var(--border);
@@ -616,8 +616,8 @@ a.back-action { display: inline-flex; align-items: center; box-sizing: border-bo
 .run-detail-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 16px 0 16px;
+  gap: var(--space-8);
+  padding: var(--space-8) var(--space-16) 0;
   flex-wrap: wrap;
 }
 .run-detail-actions .run-replay {
@@ -626,25 +626,25 @@ a.back-action { display: inline-flex; align-items: center; box-sizing: border-bo
 
 /* Run Detail — Gantt timeline */
 .gantt-panel {
-  padding: 12px 16px 16px 16px;
+  padding: var(--space-16);
   border-bottom: 1px solid var(--border);
 }
 .gantt-panel .gantt-header {
-  margin-bottom: 10px;
+  margin-bottom: var(--space-10);
 }
 .gantt-svg {
   width: 100%;
   display: block;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-2xs);
 }
-.gantt-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 10px; font-size: 11px; }
+.gantt-legend { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8) var(--space-16); margin-top: var(--space-10); font-size: var(--text-xs); }
 .gantt-retry-key { color: var(--state-failed); }
 .gantt-svg .gantt-axis-line { stroke: var(--border); stroke-width: 1px; }
-.gantt-svg .gantt-axis-label { fill: var(--fg-dim); font-size: 9px; }
+.gantt-svg .gantt-axis-label { fill: var(--fg-dim); font-size: var(--text-2xs); }
 .gantt-svg .gantt-lane-bg { fill: rgba(255, 255, 255, 0.02); }
 .gantt-svg .gantt-lane-bg.alt { fill: rgba(255, 255, 255, 0.04); }
-.gantt-svg .gantt-lane-label { fill: var(--fg-dim); font-size: 11px; font-family: var(--font-mono); }
+.gantt-svg .gantt-lane-label { fill: var(--fg-dim); font-size: var(--text-xs); font-family: var(--font-mono); }
 .gantt-svg .gantt-bar {
   cursor: pointer;
   stroke: rgba(0, 0, 0, 0.3);
@@ -662,37 +662,37 @@ a.back-action { display: inline-flex; align-items: center; box-sizing: border-bo
   pointer-events: none;
   background: var(--bg-elev);
   border: 1px solid var(--accent);
-  padding: 6px 10px;
+  padding: var(--space-6) var(--space-10);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
   color: var(--fg);
   white-space: pre;
   z-index: 200;
   display: none;
-  border-radius: 2px;
+  border-radius: var(--radius-2xs);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
 }
 
 .knowledge-panel {
-  padding: 12px 16px;
+  padding: var(--space-12) var(--space-16);
   border-bottom: 1px solid var(--border);
 }
 .knowledge-panel .knowledge-header {
-  margin-bottom: 10px;
+  margin-bottom: var(--space-10);
 }
 .knowledge-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
+  gap: var(--space-12);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .knowledge-grid .label {
   color: var(--fg-dim);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  margin-bottom: 2px;
+  margin-bottom: var(--space-2);
 }
 .knowledge-grid .value { color: var(--fg); }
 .knowledge-grid .value.ratio { color: var(--accent-hover); }
@@ -713,8 +713,8 @@ td.run-event-detail details[open] summary::before { content: "▾ "; }
 td.run-event-detail details[open] summary { color: var(--fg); }
 /* The opened fields are an inset panel, so they cannot read as the next event row. */
 td.run-event-detail pre {
-  margin: 6px 0 6px 12px;
-  padding: 8px 10px;
+  margin: var(--space-6) 0 var(--space-6) var(--space-12);
+  padding: var(--space-8) var(--space-10);
   border: 1px solid var(--border);
   border-left: 2px solid var(--border-strong);
   border-radius: var(--radius-sm);
@@ -725,7 +725,7 @@ td.run-event-detail pre {
   color: var(--fg);
 }
 
-.run-agent-effort { display: block; color: var(--muted); font-size: 11px; white-space: normal; overflow-wrap: anywhere; }
+.run-agent-effort { display: block; color: var(--muted); font-size: var(--text-xs); white-space: normal; overflow-wrap: anywhere; }
 
 .run-failure-message { padding: 0; border: 0; background: none; font-family: var(--font-sans); max-height: none; }
 .run-failure-diagnostic { min-width: 0; }

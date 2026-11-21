@@ -5,23 +5,23 @@
   grid-template-columns:
     104px minmax(156px, 1.2fr) minmax(124px, 1.3fr) minmax(184px, 1.2fr)
     56px 68px 84px 84px 96px;
-  gap: 12px;
+  gap: var(--space-12);
   min-height: 42px;
-  padding: 4px 16px;
+  padding: var(--space-4) var(--space-16);
   align-items: center;
   border-bottom: 1px solid var(--hair);
 }
 /* The header row takes its type from the shared `.col-head`. */
-.runs-row:not(.runs-header) { font-size: 13px; }
+.runs-row:not(.runs-header) { font-size: var(--text-md); }
 .runs-row:not(.runs-header):hover { background: var(--bg-hover); }
 .runs-row:not(.runs-header) .id,
 .runs-row:not(.runs-header) .run-id,
 .runs-row:not(.runs-header) .duration,
 .runs-row:not(.runs-header) .num {
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
 }
-.runs-row .run-actions button { font-family: var(--font-sans); font-size: 12.5px; }
+.runs-row .run-actions button { font-family: var(--font-sans); font-size: var(--text-sm); }
 #runs-body { overflow-x: auto; }
 .runs-row.workspace-attributed {
   grid-template-columns:
@@ -34,50 +34,50 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.run-tasks { display: flex; flex-direction: column; gap: 4px; min-width: 0; max-width: 100%; }
+.run-tasks { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; max-width: 100%; }
 .run-task-link { display: flex; flex-direction: column; min-width: 0; color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
 .run-task-link:hover { text-decoration: underline; }
-.run-task-id { font-family: var(--font-mono); font-size: 12px; }
+.run-task-id { font-family: var(--font-mono); font-size: var(--text-sm); }
 .run-task-title { color: var(--fg-dim); }
 .runs-row .run-task-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Keep the actionable failure readable across the row, below its fields. */
-.runs-row .run-failed-at { display: flex; flex-direction: column; min-width: 0; gap: 2px; grid-column: 2 / -1; grid-row: 2; }
+.runs-row .run-failed-at { display: flex; flex-direction: column; min-width: 0; gap: var(--space-2); grid-column: 2 / -1; grid-row: 2; }
 .runs-row .run-failed-at:empty { display: none; }
 .runs-row .run-failed-step {
   color: var(--state-failed);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
-.runs-row .run-failed-excerpt { color: var(--fg-dim); font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
-.runs-row .run-failed-at.empty { color: var(--fg-mute); font-size: 12px; }
+.runs-row .run-failed-excerpt { color: var(--fg-dim); font-size: var(--text-sm); line-height: 1.35; overflow-wrap: anywhere; }
+.runs-row .run-failed-at.empty { color: var(--fg-mute); font-size: var(--text-sm); }
 .runs-row .run-failed-step,
 .runs-row .run-failed-at.empty { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A task's pipeline runs fold under one header row; opened, they indent below it. */
 .runs-row.runs-group { background: var(--bg-elev); }
 .runs-row.runs-group:hover { background: var(--bg-hover); }
 .runs-row .run-group-toggle { font-family: var(--font-sans); text-align: left; cursor: pointer; }
-.runs-row .run-group-count { color: var(--fg-mute); font-size: 12px; }
+.runs-row .run-group-count { color: var(--fg-mute); font-size: var(--text-sm); }
 .runs-row.runs-group-child { box-shadow: inset 3px 0 0 var(--hair); }
-.runs-row.runs-group-child > .id { padding-left: 14px; }
+.runs-row.runs-group-child > .id { padding-left: var(--space-14); }
 .runs-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 12px;
-  margin: 12px 16px 4px;
+  gap: var(--space-8) var(--space-12);
+  margin: var(--space-12) var(--space-16) var(--space-4);
 }
 .runs-filter,
 .runs-window {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-2);
   width: fit-content;
   margin: 0;
-  padding: 3px;
+  padding: var(--space-4);
   border: 1px solid var(--hair);
   border-radius: var(--radius);
   background: var(--bg);
-  font-size: 13px;
+  font-size: var(--text-md);
 }
 .runs-query {
   height: 28px;
@@ -87,18 +87,18 @@
   box-sizing: border-box;
   border: 1px solid var(--hair);
   border-radius: var(--radius);
-  padding: 0 10px;
+  padding: 0 var(--space-10);
   background: var(--bg);
   color: var(--fg);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-md);
 }
 .runs-query::placeholder { color: var(--fg-mute); }
 .runs-filter-button {
   height: 28px;
   border: 0;
-  border-radius: 6px;
-  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-12);
   background: transparent;
   color: var(--fg-dim);
   font: inherit;
@@ -111,32 +111,32 @@
   font-weight: 600;
 }
 .runs-source-warning {
-  padding: 8px 16px;
+  padding: var(--space-8) var(--space-16);
   border-bottom: 1px solid var(--border);
   color: var(--state-failed);
   background: rgba(239, 68, 68, 0.08);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .runs-scope-note,
 .runs-limit-note {
-  padding: 6px 16px 10px;
+  padding: var(--space-8) var(--space-16);
   border-bottom: 1px solid var(--hair);
   color: var(--fg-mute);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 1.5;
 }
 .runs-limit-note {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px 12px;
+  gap: var(--space-8) var(--space-12);
   color: var(--accent);
 }
 .runs-limit-note .runs-load-more {
   height: 26px;
-  padding: 0 10px;
-  font-size: 12px;
+  padding: 0 var(--space-10);
+  font-size: var(--text-sm);
   font-family: var(--font-sans);
   font-weight: 500;
   border: 1px solid var(--border);
@@ -176,7 +176,7 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  gap: 2px;
+  gap: var(--space-2);
 }
 .runs-row .run-lineage {
   width: fit-content;
@@ -188,7 +188,7 @@
   background: transparent;
   color: var(--fg-dim);
   font: inherit;
-  font-size: 9px;
+  font-size: var(--text-2xs);
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -207,22 +207,22 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin-left: 6px;
+  margin-left: var(--space-6);
   color: var(--priority-medium);
   font-weight: 700;
 }
 .runs-row .run-actions {
   display: flex;
-  gap: 4px;
+  gap: var(--space-4);
   justify-content: flex-end;
   min-height: 26px;
 }
 .runs-row .run-actions .action {
   font-family: var(--font-sans);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   height: 28px;
-  padding: 0 10px;
-  border-radius: 7px;
+  padding: 0 var(--space-10);
+  border-radius: var(--radius-sm);
   white-space: nowrap;
 }
 .runs-row .run-actions .run-cancel {
@@ -299,10 +299,10 @@
     align-self: stretch;
     display: flex;
     align-items: center;
-    margin-top: -4px;
-    margin-bottom: -4px;
-    padding-top: 4px;
-    padding-bottom: 4px;
+    margin-top: calc(-1 * var(--space-4));
+    margin-bottom: calc(-1 * var(--space-4));
+    padding-top: var(--space-4);
+    padding-bottom: var(--space-4);
   }
   .runs-row.runs-header > :first-child {
     z-index: 3;
@@ -332,10 +332,10 @@
     align-self: stretch;
     display: flex;
     align-items: center;
-    margin-top: -4px;
-    margin-bottom: -4px;
-    padding-top: 4px;
-    padding-bottom: 4px;
+    margin-top: calc(-1 * var(--space-4));
+    margin-bottom: calc(-1 * var(--space-4));
+    padding-top: var(--space-4);
+    padding-bottom: var(--space-4);
   }
   .runs-row.workspace-attributed.runs-header > :first-child {
     z-index: 3;
@@ -384,9 +384,9 @@
       "runid runid runid"
       "denials toolfails duration"
       "actions actions actions";
-    column-gap: 12px;
+    column-gap: var(--space-12);
     row-gap: 0;
-    padding: 8px 16px;
+    padding: var(--space-8) var(--space-16);
   }
   .runs-row > :first-child,
   .runs-row.workspace-attributed > :first-child {
@@ -414,15 +414,15 @@
   .runs-row .num.denials { grid-area: denials; text-align: left; }
   .runs-row .num.tool-fails { grid-area: toolfails; text-align: left; }
   .runs-row .duration { grid-area: duration; }
-  .runs-row .run-actions { grid-area: actions; min-height: 0; margin-top: 4px; }
+  .runs-row .run-actions { grid-area: actions; min-height: 0; margin-top: var(--space-4); }
   .runs-row .num.denials::before { content: "denials "; font-family: var(--font-sans); }
   .runs-row .num.tool-fails::before { content: "tool fails "; font-family: var(--font-sans); }
   .runs-row.runs-header {
     display: flex;
     flex-wrap: wrap;
-    gap: 2px 14px;
+    gap: var(--space-2) var(--space-14);
     min-height: 0;
-    padding: 8px 16px;
+    padding: var(--space-8) var(--space-16);
   }
   .runs-row.runs-header::before { content: "Sort by"; color: var(--fg-mute); }
   .runs-row.runs-header > span { text-align: left; }
@@ -430,8 +430,8 @@
 }
 
 /* Repeated failures retain the same row grid as individual runs. */
-.run-repeat-job { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
-.runs-row .run-failure-range { color: var(--fg-mute); font-size: 12px; overflow-wrap: anywhere; }
+.run-repeat-job { display: flex; flex-direction: column; min-width: 0; gap: var(--space-2); }
+.runs-row .run-failure-range { color: var(--fg-mute); font-size: var(--text-sm); overflow-wrap: anywhere; }
 @media (max-width: 600px) {
   .runs-row .run-repeat-job { grid-area: job; }
 }

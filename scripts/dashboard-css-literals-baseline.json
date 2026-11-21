@@ -22,7 +22,7 @@
     },
     "crates/orbit-web/assets/dashboard/css/drain.css": {
       "colour_literals": 1,
-      "raw_font_sizes": 28
+      "raw_font_sizes": 0
     },
     "crates/orbit-web/assets/dashboard/css/experiments.css": {
       "colour_literals": 10,
@@ -44,10 +44,6 @@
       "colour_literals": 9,
       "raw_font_sizes": 31
     },
-    "crates/orbit-web/assets/dashboard/css/leases.css": {
-      "colour_literals": 0,
-      "raw_font_sizes": 10
-    },
     "crates/orbit-web/assets/dashboard/css/log-tail.css": {
       "colour_literals": 8,
       "raw_font_sizes": 12
@@ -66,11 +62,11 @@
     },
     "crates/orbit-web/assets/dashboard/css/run-detail.css": {
       "colour_literals": 29,
-      "raw_font_sizes": 48
+      "raw_font_sizes": 0
     },
     "crates/orbit-web/assets/dashboard/css/runs.css": {
       "colour_literals": 9,
-      "raw_font_sizes": 16
+      "raw_font_sizes": 0
     },
     "crates/orbit-web/assets/dashboard/css/scoreboard.css": {
       "colour_literals": 1,
@@ -86,11 +82,11 @@
     },
     "crates/orbit-web/assets/dashboard/css/task-detail.css": {
       "colour_literals": 13,
-      "raw_font_sizes": 105
+      "raw_font_sizes": 0
     },
     "crates/orbit-web/assets/dashboard/css/tasks.css": {
       "colour_literals": 10,
-      "raw_font_sizes": 32
+      "raw_font_sizes": 0
     }
   },
   "schema_version": 1
