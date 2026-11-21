@@ -1756,8 +1756,10 @@ function readsOnThisClock(oldNode, newNode) {
 
 function clockReading(node) {
   if (typeof node.querySelectorAll !== "function") return null;
-  const titles = Array.from(node.querySelectorAll("[title]"), (titled) => titled.getAttribute("title"));
-  return JSON.stringify([node.textContent, node.getAttribute("title"), titles]);
+  // aria-description can carry a time too (audit event and incident rows), so
+  // it reads like a title: a zone switch rebuilds a row whose time changed.
+  const described = Array.from(node.querySelectorAll("[title], [aria-description]"), (item) => [item.getAttribute("title"), item.getAttribute("aria-description")]);
+  return JSON.stringify([node.textContent, node.getAttribute("title"), node.getAttribute("aria-description"), described]);
 }
 
 // One entry per admission a follower's settle-only pass carried (`orbit run

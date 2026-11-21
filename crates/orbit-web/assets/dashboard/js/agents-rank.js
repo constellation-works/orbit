@@ -377,8 +377,9 @@ function breakdownId(model) {
   const slug = basis.replace(/[^A-Za-z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "model";
   // The slug collapses `.` and `-` onto the same character, so `gpt-5.1` and
   // `gpt-5-1` would share an id. The hex of the original string keeps them apart.
+  // Each code point is six digits, so no two strings share a hex run.
   let hex = "";
-  for (const ch of basis) hex += ch.codePointAt(0).toString(16).padStart(2, "0");
+  for (const ch of basis) hex += ch.codePointAt(0).toString(16).padStart(6, "0");
   return `agents-rank-breakdown-${slug}-${hex}`;
 }
 
