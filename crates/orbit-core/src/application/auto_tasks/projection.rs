@@ -8,6 +8,7 @@ use crate::runtime::audit::run_logs::bounded_redacted_text;
 use crate::{OrbitRuntime, Task};
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_types::workflow::automation;
 use orbit_types::workflow::{
     AutoTaskCursor, AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy,
 };
@@ -231,7 +232,7 @@ fn delivery_last_fire_json(
         } else if attempt.attempt > 1
             && (attempt.retry_after.is_some() || attempt.reissue.is_some())
         {
-            let key = format!("automation:{}:{}", attempt.batch.id, attempt.attempt - 1);
+            let key = automation::attempt_action_key(&attempt.batch.id, attempt.attempt - 1);
             tasks
                 .automation_task_for_key(&key)?
                 .map(|task| task.id)

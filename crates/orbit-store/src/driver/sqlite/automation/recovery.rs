@@ -7,6 +7,7 @@ use crate::Store;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_common::storage::sqlite::sqlite_store_error;
+use orbit_types::workflow::automation;
 use orbit_types::workflow::automation::recovery::{
     HistoryReplayRecord, RecoveryRecord, ReissuedAction,
 };
@@ -472,7 +473,7 @@ fn validate_reissue(
         || claim.reason.is_some()
         || claim.retry_after.is_some()
         || claim.attempt != settled.attempt.saturating_add(1)
-        || claim.action_key != format!("automation:{}:{}", claim.batch.id, claim.attempt)
+        || claim.action_key != automation::attempt_action_key(&claim.batch.id, claim.attempt)
     {
         return Err(invalid());
     }

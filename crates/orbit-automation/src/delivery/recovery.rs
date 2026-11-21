@@ -18,6 +18,7 @@
 use crate::{AutomationError, DeferredReason};
 use chrono::{DateTime, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
+use orbit_types::workflow::automation;
 use orbit_types::workflow::automation::recovery::*;
 use orbit_types::workflow::automation::*;
 
@@ -271,7 +272,7 @@ fn reissue(
     attempt.attempt = from_attempt
         .checked_add(1)
         .ok_or_else(|| AutomationError::Deferred(DeferredReason::AttemptExhausted))?;
-    attempt.action_key = format!("automation:{}:{}", attempt.batch.id, attempt.attempt);
+    attempt.action_key = automation::attempt_action_key(&attempt.batch.id, attempt.attempt);
     attempt.state = BatchState::Claimed;
     attempt.retry_after = None;
     attempt.reissue = Some(authorization.clone());
