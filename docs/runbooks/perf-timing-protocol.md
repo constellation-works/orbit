@@ -155,10 +155,17 @@ repository root of the checkout that holds these scripts.
      ephemeral port) on its restored root, waits for its address and a first answer, times
      paced GETs of the path, then stops and reaps the server.
    - **Parity.** `--parity` runs once per arm before sampling; in HTTP mode each arm's
-     response body for the timed path is compared too. JSON outputs are compared after the
-     `--parity-mask` fields (key names at any depth, or dotted paths) are removed and the
-     root path is replaced by `<root>`. A difference writes `parity.json` and exits 2
-     without sampling. Mask only timing fields; a mask that hides a behaviour change
+     response body for the timed path is compared too. A match requires a successful
+     observation from every arm. When `--parity` is set, that command must exit 0 on
+     every arm. When `--http` is set, that probe must return a 2xx status. At least one
+     of those observations has to be present, so omitting `--parity` in CLI mode is a
+     missing observation, not an agreement. Identical non-zero exits are a failed probe,
+     not a match, even when stdout is empty on every arm. JSON outputs are compared after
+     the `--parity-mask` fields (key names at any depth, or dotted paths) are removed and
+     the root path is replaced by `<root>`. A missing observation, a failed probe or a
+     difference writes
+     `parity.json` with `match` false and exits 2 without sampling, so no bounded timing
+     verdict is issued. Mask only timing fields; a mask that hides a behaviour change
      defeats the check.
    - **Host pressure.** `/proc/loadavg` and the number of Orbit-managed processes (those
      carrying `ORBIT_MANAGED_RUN_CONTEXT`) are read before and after each round.
@@ -247,8 +254,11 @@ databases are copied whole with the online backup API.
 values; `null` when unset), `rustc_wrapper`, `host`, `machine_id`, `created_at`.
 
 **`parity.json`** (`kind: orbit-perf-parity`): `command`, `http_path`, `masks`, `match`,
-`differing_arms`, and `arms.<arm>` with `command` (`exit`, `output`) and, in HTTP mode,
-`http` (`status`, `body`); each output is `{format: json|text, value}` after masking.
+`differing_arms`, `observation_failures` (arm to why that arm has no successful
+observation; empty when every arm succeeded), and `arms.<arm>` with `command` (`exit`,
+`output`) and, in HTTP mode, `http` (`status`, `body`); each output is
+`{format: json|text, value}` after masking. `match` is true only when
+`observation_failures` and `differing_arms` are both empty.
 
 **`raw.json`** (`kind: orbit-perf-raw`): `surface` and `samples`, one entry per sample
 including warmups: `arm`, `round`, `index`, `warmup`, `ms`, `exit`.
@@ -318,7 +328,7 @@ Tasks land in `proposed`. Do not approve them.
 | `… failed digest verification, refusing to restore: …` | A snapshot file was changed, removed or added after the snapshot | Take a fresh snapshot |
 | `… built identical binaries …` | The two revisions differ only in metadata | Pick revisions whose content differs |
 | `base and candidate resolve to the same commit …` | Same commit given twice | Check the revision selectors |
-| `parity mismatch between arms …` | Outputs differ after masking | Read `parity.json`; fix the behaviour change, or mask only a timing field |
+| `parity mismatch between arms …` | An arm has no successful observation (missing `--parity` in CLI mode, or a probe that did not exit 0 / return 2xx), or outputs differ after masking | Read `parity.json` (`observation_failures` and `differing_arms`); fix the probe or the behaviour change, or mask only a timing field |
 | `perf lane busy: <holder>` | Another perf run holds the lane | Wait for it, or raise `--lane-wait` |
 | `disk gate: … at or above 80% …` | The parent filesystem is too full | Free space per RB-11, then rerun |
 

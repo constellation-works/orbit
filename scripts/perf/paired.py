@@ -9,7 +9,10 @@
 Three arms: the base and candidate binaries from build-pair.sh, and a control
 that is the base binary copied to a second path, so the unchanged-build spread
 is measured. Every round restores a fresh root from the snapshot. Holds the
-host-wide perf lane for the whole run. See docs/runbooks/perf-timing-protocol.md.
+host-wide perf lane for the whole run. A match requires a successful
+observation from every arm (parity command exit 0, and HTTP 2xx when that
+probe runs). A missing or failed observation refuses the run before sampling.
+See docs/runbooks/perf-timing-protocol.md.
 """
 
 from __future__ import annotations
@@ -243,6 +246,37 @@ def normalize_output(raw: bytes, masks: list[str], root: str) -> dict:
     return {"format": "json", "value": mask_value(parsed, masks)}
 
 
+def arm_observation_failure(record: dict) -> str | None:
+    """Why `record` is not a successful observation, or None when it is.
+
+    A match needs one from every arm. CLI mode with no `--parity` stores an
+    empty record: that is a missing observation, not an agreement. A parity
+    command must exit 0, and an HTTP probe must return a 2xx status. Identical
+    non-zero exits are a failed probe even when stdout is empty on every arm.
+    """
+    if "command" not in record and "http" not in record:
+        return "missing observation"
+    if "command" in record and record["command"].get("exit") != 0:
+        return f"command exited {record['command'].get('exit')}"
+    if "http" in record:
+        status = record["http"].get("status")
+        if not isinstance(status, int) or status < 200 or status >= 300:
+            return f"http status {status}"
+    return None
+
+
+def parity_refusal_detail(parity: dict) -> str:
+    """The parenthetical of a parity refusal, covering failures and differences."""
+    parts: list[str] = []
+    failures = parity.get("observation_failures") or {}
+    if failures:
+        rendered = ", ".join(f"{arm}: {failures[arm]}" for arm in ARMS if arm in failures)
+        parts.append(f"no successful observation ({rendered})")
+    if parity["differing_arms"]:
+        parts.append(f"{', '.join(parity['differing_arms'])} differ from base")
+    return "; ".join(parts) if parts else "match is false"
+
+
 # ── run ──────────────────────────────────────────────────────────────────────
 
 
@@ -323,16 +357,23 @@ class Harness:
             finally:
                 self.drop(info)
             arms[arm] = record
+        failures = {}
+        for arm in ARMS:
+            reason = arm_observation_failure(arms[arm])
+            if reason:
+                failures[arm] = reason
         reference = json.dumps(arms["base"], sort_keys=True)
         differing = [arm for arm in ARMS if json.dumps(arms[arm], sort_keys=True) != reference]
+        # Identical failures compare equal, so content equality alone is not a match.
         return {
             "schemaVersion": SCHEMA_VERSION,
             "kind": "orbit-perf-parity",
             "command": self.args.parity,
             "http_path": self.http_path,
             "masks": self.masks,
-            "match": not differing,
+            "match": not failures and not differing,
             "differing_arms": differing,
+            "observation_failures": failures,
             "arms": arms,
         }
 
@@ -379,8 +420,9 @@ class Harness:
         common.write_json(self.out / "parity.json", parity)
         if not parity["match"]:
             raise common.PerfRefusal(
-                f"parity mismatch between arms ({', '.join(parity['differing_arms'])} differ from "
-                f"base); refusing to sample. See {self.out / 'parity.json'}")
+                "parity mismatch between arms "
+                f"({parity_refusal_detail(parity)}); refusing to sample. "
+                f"See {self.out / 'parity.json'}")
         order = round_order(self.args.rounds)
         seen = {arm: 0 for arm in ARMS}
         raw: list[dict] = []
@@ -457,7 +499,10 @@ def main(argv: list[str] | None = None) -> int:
     surface = parser.add_mutually_exclusive_group(required=True)
     surface.add_argument("--cli", help="orbit arguments to time, e.g. 'doctor --json'")
     surface.add_argument("--http", help="GET path to time on each arm's own web serve")
-    parser.add_argument("--parity", help="orbit arguments run once per arm before sampling")
+    parser.add_argument(
+        "--parity",
+        help="orbit arguments run once per arm before sampling; a CLI match needs "
+             "this command to exit 0 on every arm")
     parser.add_argument("--parity-mask", nargs="+", default=[],
                         help="JSON field names (or dotted paths) removed before comparing")
     parser.add_argument("--rounds", type=positive, default=3)
