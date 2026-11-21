@@ -768,6 +768,57 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["signals"], [])
         self.assertEqual(report["bump"], "patch")
 
+    def test_conditional_if_edit_into_weaker_nested_required_else_stays_patch(self):
+        # Requests that have `a` and lack `c` leave `then`, which requires
+        # payload `b` and `d`, and land in `else`, which requires only `b`.
+        report = self._write_nested_payload_conditional(
+            {"required": ["b", "d"]}, {"required": ["b"]})
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_conditional_if_edit_into_stricter_nested_required_else_decides_minor(self):
+        # `{a, payload: {b}}` was valid under `then`. With `c` also selecting
+        # `then` it falls into `else` and its payload now lacks `d`.
+        report = self._write_nested_payload_conditional(
+            {"required": ["b"]}, {"required": ["b", "d"]})
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+        self.assertEqual(self.signals(report), {(
+            "ORB-54", "mcp-schema",
+            "`orbit_task_show` `inputSchema{allOf0}` conditional `if` edited: "
+            "instances it moves into `else` meet a stricter branch")})
+
+    def _commit_added_payload_then(self, then_required):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["properties"]["payload"] = {"required": ["b"]}
+        tools[0]["inputSchema"]["allOf"] = [{
+            "if": {"required": ["a"]},
+            "else": {"properties": {"payload": {"required": []}}},
+        }]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Require payload b at the root [ORB-53] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+        tools[0]["inputSchema"]["allOf"][0]["then"] = {
+            "properties": {"payload": {"required": then_required}},
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add then payload requirement [ORB-54] (#2)")
+        return self.report()
+
+    def test_added_then_repeating_enclosing_nested_requirement_stays_patch(self):
+        report = self._commit_added_payload_then(["b"])
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_added_then_with_new_nested_requirement_decides_minor(self):
+        report = self._commit_added_payload_then(["c"])
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(self.signals(report), {(
+            "ORB-54", "mcp-schema",
+            "`orbit_task_show` `inputSchema{allOf0}` conditional `then` branch added")})
+
     def test_adding_conditional_contract_decides_minor(self):
         self._write_guarded_request_schema()
         report = self.report("--range", "v0.35.0~1..v0.35.0")
