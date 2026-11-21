@@ -138,22 +138,6 @@ impl FakeGh {
         }
     }
 
-    /// For [`github_quota::with_probe_timeout_when`]: turns true once this
-    /// `gh` has logged one more `api rate_limit` call than it had when this
-    /// was called, so a short budget ends only after the probe reached `gh`.
-    fn probe_logged(&self) -> impl Fn() -> bool + Send + Sync + 'static {
-        let calls = self.dir.path().join("calls");
-        let probes = move || {
-            std::fs::read_to_string(&calls)
-                .unwrap_or_default()
-                .lines()
-                .filter(|line| *line == "api rate_limit")
-                .count()
-        };
-        let before = probes();
-        move || probes() > before
-    }
-
     fn calls(&self) -> Vec<String> {
         std::fs::read_to_string(self.dir.path().join("calls"))
             .unwrap_or_default()
@@ -172,6 +156,23 @@ fn refused_throttle(error: &orbit_common::OrbitError) -> orbit_common::ProviderR
         .private_vcs_failure()
         .and_then(|failure| failure.read_throttle.clone())
         .unwrap_or_else(|| panic!("expected a typed throttle, got {error}"))
+}
+
+fn run_with_simulated_clipped_probe<T>(
+    expected_timeout_ms: u64,
+    body: impl FnOnce() -> T,
+) -> (usize, T) {
+    let probes = std::rc::Rc::new(std::cell::Cell::new(0_usize));
+    let observed = std::rc::Rc::clone(&probes);
+    let output = github_quota::with_simulated_clipped_probe(
+        move |probe| {
+            assert_eq!(probe.args, ["api", "rate_limit"]);
+            assert_eq!(probe.timeout_ms, Some(expected_timeout_ms));
+            observed.set(observed.get() + 1);
+        },
+        body,
+    );
+    (probes.get(), output)
 }
 
 /// Criterion 1 and the `github.*` execution point: at the agent reserve,
@@ -563,23 +564,24 @@ fn slow_rate_limit_probe_bounds_to_request_timeout_and_skips_expired_request() {
     let mut request = gh.request(&["run", "view", "123"]);
     request.timeout_ms = Some(60);
     let started = std::time::Instant::now();
-    let result = github_quota::with_probe_timeout_when(gh.probe_logged(), || {
+    let (probes, result) = run_with_simulated_clipped_probe(60, || {
         github_quota::with_scoped_guard(store(records.path()), policy, || {
             github_quota::run_gh_request(GithubCaller::Delivery, &request)
         })
-    })
-    .unwrap();
+    });
+    let result = result.unwrap();
     assert!(
         started.elapsed() < Duration::from_secs(2),
         "probe must respect the 60 ms request timeout instead of waiting 15 s, took {:?}",
         started.elapsed()
     );
+    assert_eq!(probes, 1, "the clipped rate-limit probe must be attempted");
     assert!(result.timed_out);
     assert!(!result.success);
-    assert_eq!(
-        gh.calls(),
-        vec!["api rate_limit".to_string()],
-        "an expired budget after admission must not spawn the original request"
+    assert!(
+        gh.calls().is_empty(),
+        "an expired budget after admission must not spawn the original request: {:?}",
+        gh.calls()
     );
 
     // Zero budget must not spawn even the probe.
@@ -614,14 +616,19 @@ fn request_timed_out_before_spawn_is_not_charged_to_a_known_record() {
     let before = core(store(records.path()).status(&policy, &account, now()));
     assert_eq!(before.remaining, Some(4000));
 
-    let result = github_quota::with_probe_timeout_when(gh.probe_logged(), || {
+    let (probes, result) = run_with_simulated_clipped_probe(60, || {
         github_quota::with_scoped_guard(store(records.path()), policy, || {
             github_quota::run_gh_request(GithubCaller::Delivery, &request)
         })
-    })
-    .unwrap();
+    });
+    let result = result.unwrap();
     assert!(result.timed_out, "{result:?}");
-    assert_eq!(gh.calls(), vec!["api rate_limit".to_string()]);
+    assert_eq!(probes, 1);
+    assert!(
+        gh.calls().is_empty(),
+        "the expired request must not spawn gh: {:?}",
+        gh.calls()
+    );
     let after = core(store(records.path()).status(&policy, &account, now()));
     assert_eq!(
         after.remaining,
@@ -732,14 +739,15 @@ fn admission_past_the_budget_is_not_charged_to_a_known_record() {
     let core = |status: github_quota::GithubQuotaStatus| status.resources[0].clone();
 
     // The unresponsive probe spends the whole 60 ms budget, so admission
-    // returns with none left. Only the probe reached `gh`; nothing is charged.
-    github_quota::with_probe_timeout_when(gh.probe_logged(), || {
+    // returns with none left. Only the simulated probe ran; nothing is charged.
+    let (probes, admitted) = run_with_simulated_clipped_probe(60, || {
         github_quota::with_scoped_guard(store(records.path()), policy, || {
             github_quota::admit_gh_request(GithubCaller::Delivery, &request)
         })
-    })
-    .unwrap();
-    assert_eq!(gh.calls(), vec!["api rate_limit".to_string()]);
+    });
+    admitted.unwrap();
+    assert_eq!(probes, 1);
+    assert!(gh.calls().is_empty(), "{:?}", gh.calls());
     let after = core(store(records.path()).status(&policy, &account, now()));
     assert_eq!(after.remaining, Some(4000), "{after:?}");
     assert_eq!(
@@ -814,12 +822,12 @@ fn admission_returns_only_the_budget_left_and_never_a_request_past_it() {
     let gh = FakeGh::new("hang", "ok");
     let mut slow = gh.request(&["run", "view", "123"]);
     slow.timeout_ms = Some(60);
-    let error = github_quota::with_probe_timeout_when(gh.probe_logged(), || {
+    let (probes, admitted) = run_with_simulated_clipped_probe(60, || {
         github_quota::with_scoped_guard(store(records.path()), policy, || {
             github_quota::admit_gh_request_within_budget(GithubCaller::Delivery, &slow)
         })
-    })
-    .expect_err("a budget spent by the probe leaves no request to start");
+    });
+    let error = admitted.expect_err("a budget spent by the probe leaves no request to start");
     assert!(
         matches!(
             error,
@@ -827,7 +835,8 @@ fn admission_returns_only_the_budget_left_and_never_a_request_past_it() {
         ),
         "{error:?}"
     );
-    assert_eq!(gh.calls(), vec!["api rate_limit".to_string()]);
+    assert_eq!(probes, 1);
+    assert!(gh.calls().is_empty(), "{:?}", gh.calls());
 
     let mut zero = gh.request(&["run", "view", "456"]);
     zero.timeout_ms = Some(0);
@@ -1064,14 +1073,15 @@ fn expired_refusal_over_a_writable_hold_leaves_the_refusal_count() {
         &hold,
         now,
     );
-    let run = github_quota::with_probe_timeout_when(expired_gh.probe_logged(), || {
+    let (probes, run) = run_with_simulated_clipped_probe(60, || {
         github_quota::with_scoped_guard(store(expired_records.path()), policy, || {
             github_quota::run_gh_request(GithubCaller::Delivery, &expired)
         })
-    })
-    .expect("an expired budget returns the timeout outcome, not the hold's throttle");
+    });
+    let run = run.expect("an expired budget returns the timeout outcome, not the hold's throttle");
     assert!(run.timed_out && !run.success, "{run:?}");
-    assert_eq!(expired_gh.calls(), vec!["api rate_limit".to_string()]);
+    assert_eq!(probes, 1);
+    assert!(expired_gh.calls().is_empty(), "{:?}", expired_gh.calls());
     assert_eq!(
         refused_by_delivery(expired_records.path(), &expired_account),
         0,
@@ -1339,14 +1349,15 @@ fn deadline_clipped_probe_leaves_known_quota_and_reserve_refusal_in_place() {
 
     let mut short = request.clone();
     short.timeout_ms = Some(60);
-    let result = github_quota::with_probe_timeout_when(gh.probe_logged(), || {
+    let (probes, result) = run_with_simulated_clipped_probe(60, || {
         github_quota::with_scoped_guard(store(records.path()), policy, || {
             github_quota::run_gh_request(GithubCaller::Delivery, &short)
         })
-    })
-    .unwrap();
+    });
+    let result = result.unwrap();
     assert!(result.timed_out);
-    assert_eq!(gh.calls(), vec!["api rate_limit".to_string()]);
+    assert_eq!(probes, 1, "first clipped probe must be attempted");
+    assert!(gh.calls().is_empty(), "{:?}", gh.calls());
 
     let status = store(records.path()).status(&policy, &account, now);
     let core = &status.resources[0];
@@ -1361,12 +1372,12 @@ fn deadline_clipped_probe_leaves_known_quota_and_reserve_refusal_in_place() {
     // itself (clipped again here) and still meets the reserve.
     let mut agent = request.clone();
     agent.timeout_ms = Some(200);
-    let error = github_quota::with_probe_timeout_when(gh.probe_logged(), || {
+    let (probes, admitted) = run_with_simulated_clipped_probe(200, || {
         github_quota::with_scoped_guard(store(records.path()), policy, || {
             github_quota::admit_gh_request(GithubCaller::Agent, &agent)
         })
-    })
-    .expect_err("the agent reserve still applies after a clipped probe");
+    });
+    let error = admitted.expect_err("the agent reserve still applies after a clipped probe");
     // The clipped probe spent the whole budget, so the reserve's refusal is
     // decided once the request's budget is gone: the typed timeout, uncounted.
     assert!(
@@ -1374,13 +1385,13 @@ fn deadline_clipped_probe_leaves_known_quota_and_reserve_refusal_in_place() {
         "{error:?}"
     );
     assert_eq!(
-        gh.calls(),
-        vec!["api rate_limit".to_string(), "api rate_limit".to_string()],
+        probes, 1,
         "a clipped probe must leave the interval due for the next caller"
     );
+    assert!(gh.calls().is_empty(), "{:?}", gh.calls());
 }
 
-/// Regression [ORB-26220]: a clipped probe inside `with_probe_timeout_when`
+/// Regression [ORB-26220]: a clipped probe inside `with_simulated_clipped_probe`
 /// must not leave this thread's admission clock advanced once it returns. A
 /// 60 ms read that follows on the same thread still runs its `gh api
 /// rate_limit` probe instead of timing out before spawn.
@@ -1396,30 +1407,29 @@ fn clipped_probe_does_not_leak_its_deadline_into_a_later_short_read() {
     // Observed long enough ago that every read below finds the refresh due.
     store(records.path()).refresh_if_due(&policy, &account, now - 120, &|| known(4000, now + 1800));
 
-    // The probe's clipped read finishes about 100 ms into a 200 ms budget.
-    let result = github_quota::with_probe_timeout_when(gh.probe_logged(), || {
+    let (probes, result) = run_with_simulated_clipped_probe(200, || {
         github_quota::with_scoped_guard(store(records.path()), policy, || {
             github_quota::run_gh_request(GithubCaller::Delivery, &long)
         })
-    })
-    .unwrap();
+    });
+    let result = result.unwrap();
     assert!(result.timed_out, "{result:?}");
-    assert_eq!(gh.calls(), vec!["api rate_limit".to_string()]);
+    assert_eq!(probes, 1);
 
     let mut short = gh.request(&["run", "view", "123"]);
     short.timeout_ms = Some(60);
-    let result = github_quota::with_probe_timeout_when(gh.probe_logged(), || {
+    let (probes, result) = run_with_simulated_clipped_probe(60, || {
         github_quota::with_scoped_guard(store(records.path()), policy, || {
             github_quota::run_gh_request(GithubCaller::Delivery, &short)
         })
-    })
-    .unwrap();
+    });
+    let result = result.unwrap();
     assert!(result.timed_out, "{result:?}");
     assert_eq!(
-        gh.calls(),
-        vec!["api rate_limit".to_string(), "api rate_limit".to_string()],
+        probes, 1,
         "a 60 ms read after a clipped probe must still run its rate-limit probe"
     );
+    assert!(gh.calls().is_empty(), "{:?}", gh.calls());
 }
 
 /// A run-scoped log admitted with one call left above the agent reserve comes
