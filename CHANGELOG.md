@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 0.52.0 — 2026-11-21
+
+### Breaking Changes
+
+- **Refused-model review holds**: An after-landing review hold can now record the refused Muse model in `model_refused`, which older binaries reject as an unknown field. ([ORB-25562])
+  Holds with `model_refused` refused by older binaries → upgrade every host that reads review state to 0.52.0+
+- **Job runs read only `crew_model`**: Store schema 94 backfills `crew_model` from `implementer_model`, and job-run records no longer accept the `implementer_model` alias. ([ORB-25763])
+  `implementer_model` job-run alias removed → use `crew_model`
+- **`cli_command` executor type removed**: Job and activity definitions that still say `executor_type: cli_command` now fail to load. ([ORB-25764])
+  `cli_command` executor type removed → use `local_shell`
+- **Store schema 95 for drain intent**: The store schema rises to 95 with an additive `drain_intents` table, which older binaries can read but neither record nor show. ([ORB-25965])
+  Drain intent ignored by older binaries → use Orbit 0.52.0+ on every host that starts or stops drains
+
+### Highlights
+
+- **Standing drain**: Each workspace records whether its drain is on or paused, and by whom. An opt-in keeper, off by default, resubmits one bounded drain on the clock tick while work waits. ([ORB-25991])
+- **Carbon crew**: A built-in `carbon` crew runs Gemini 4 Carbon through Antigravity and joins the xhard pool when `agy` is installed. ([ORB-25944])
+- **GitHub quota reserve**: Orbit tracks each host's GitHub REST quota and holds background and agent reads back so delivery keeps a reserve. ([ORB-25868])
+- **Faster aggregate board**: The five-section aggregate task board now loads in under 200 ms at p95 on a twelve-workspace host. ([ORB-25654])
+- **Residents can re-pilot and requeue**: Resident cycles holding the dispatch right can re-pilot and requeue tasks, as they already ship and land them. ([ORB-25959])
+
 ## 0.51.1 — 2026-11-17
 
 ### Highlights
