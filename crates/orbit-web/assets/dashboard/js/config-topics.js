@@ -343,7 +343,10 @@ async function submitDrawerMutation(session, context, request) {
     if (!ownsDrawerMutation(session)) return;
     drawer = null;
     await context.reload();
-    focusRowEdit(session.row.key);
+    // The reload can outlive its visit: a switch to another workspace while it
+    // is in flight superseded it, and that visit's editor must keep focus. Only
+    // an uninterrupted save returns focus to its Edit control.
+    if (session.visit.isCurrent() && !drawer) focusRowEdit(session.row.key);
   } catch (error) {
     if (!ownsDrawerMutation(session)) return;
     session.pending = false; session.error = error.message || String(error);
