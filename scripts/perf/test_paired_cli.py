@@ -82,13 +82,26 @@ esac
 WEB_SERVER = """
 import http.server, os, sys, time
 from pathlib import Path
-marks = Path(sys.argv[1]).parent
+pid_file = Path(sys.argv[1])
+marks = pid_file.parent
+role = pid_file.stem.removeprefix("web-")
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/slow":
             time.sleep(600)
         if self.path == "/destination":
             (marks / "destination-visited").write_text("yes")
+        disconnect = self.path == "/disconnect" or (
+            self.path == "/disconnect-candidate" and role == "candidate"
+        )
+        if self.path == "/disconnect-after-parity":
+            counter = marks / "disconnect-requests"
+            count = int(counter.read_text()) if counter.exists() else 0
+            counter.write_text(str(count + 1))
+            disconnect = count >= 3
+        if disconnect:
+            self.close_connection = True
+            return
         redirect = self.path == "/redirect"
         if self.path == "/redirect-after-parity":
             counter = marks / "requests"
@@ -107,8 +120,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
-with open(sys.argv[1], "w") as handle:
+with open(pid_file, "w") as handle:
     handle.write(str(os.getpid()))
+with open(marks / "web-all.pids", "a") as handle:
+    handle.write(f"{os.getpid()}\\n")
 print(f"http://127.0.0.1:{server.server_address[1]}", flush=True)
 server.serve_forever()
 """
@@ -251,6 +266,11 @@ class PairedCliTestCase(unittest.TestCase):
                             f"arm processes still running: {pids}")
             time.sleep(0.05)
 
+    def recorded_web_pids(self) -> list[int]:
+        pids_file = self.marks / "web-all.pids"
+        self.assertTrue(pids_file.exists(), "expected fake web servers to record PIDs")
+        return [int(line) for line in pids_file.read_text().splitlines() if line.strip()]
+
 
 class PairedCliParityTest(PairedCliTestCase):
     def assert_no_passing_verdict(
@@ -281,6 +301,46 @@ class PairedCliParityTest(PairedCliTestCase):
         self.assertTrue(json.loads((out / "parity.json").read_text())["match"])
         self.assertFalse((out / "paired-summary.json").exists())
         self.assertFalse((self.marks / "destination-visited").exists())
+
+    def test_http_disconnect_during_parity_writes_refusal_report_and_reaps_server(self) -> None:
+        result, out = self.run_paired(surface=("--http", "/disconnect"))
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertFalse((out / "raw.json").exists())
+        for arm in ("base", "candidate", "control"):
+            self.assertIn(arm, report["observation_failures"])
+            self.assertIn("RemoteDisconnected", report["observation_failures"][arm])
+            self.assertIn("RemoteDisconnected", report["arms"][arm]["http"].get("error", ""))
+        pids = self.recorded_web_pids()
+        self.assertEqual(len(pids), 3)
+        self.assert_reaped(pids)
+        self.assert_lane_released()
+
+    def test_single_arm_http_disconnect_during_parity_writes_arm_failure_and_reaps_server(self) -> None:
+        result, out = self.run_paired(surface=("--http", "/disconnect-candidate"))
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertFalse((out / "raw.json").exists())
+        self.assertIn("RemoteDisconnected", report["observation_failures"].get("candidate", ""))
+        self.assertNotIn("base", report["observation_failures"])
+        self.assertNotIn("control", report["observation_failures"])
+        self.assertIn("candidate", report["differing_arms"])
+        self.assertEqual(report["arms"]["base"]["http"]["status"], 200)
+        self.assertEqual(report["arms"]["control"]["http"]["status"], 200)
+        self.assertIn("RemoteDisconnected", report["arms"]["candidate"]["http"].get("error", ""))
+        pids = self.recorded_web_pids()
+        self.assertEqual(len(pids), 3)
+        self.assert_reaped(pids)
+        self.assert_lane_released()
+
+    def test_http_disconnect_during_sampling_is_refused(self) -> None:
+        result, out = self.run_paired(surface=("--http", "/disconnect-after-parity"))
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("RemoteDisconnected", result.stderr)
+        self.assertTrue(json.loads((out / "parity.json").read_text())["match"])
+        self.assertFalse((out / "paired-summary.json").exists())
+        pids = self.recorded_web_pids()
+        self.assertEqual(len(pids), 4)
+        self.assert_reaped(pids)
+        self.assert_lane_released()
 
     def test_omitted_parity_does_not_match_different_timed_stdout(self) -> None:
         base = subprocess.run(

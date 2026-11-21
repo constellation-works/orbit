@@ -270,8 +270,8 @@ values; `null` when unset), `rustc_wrapper`, `host`, `machine_id`, `created_at`.
 **`parity.json`** (`kind: orbit-perf-parity`): `command`, `http_path`, `masks`, `match`,
 `differing_arms`, `observation_failures` (arm to why that arm has no successful
 observation; empty when every arm succeeded), and `arms.<arm>` with `command` (`exit`,
-`output`) and, in HTTP mode, `http` (`status`, `body`); each output is
-`{format: json|text, value}` after masking. `match` is true only when
+`output`) and, in HTTP mode, `http` (`status` and `body`, or `error` when the request
+failed); each output is `{format: json|text, value}` after masking. `match` is true only when
 `observation_failures` and `differing_arms` are both empty.
 
 **`raw.json`** (`kind: orbit-perf-raw`): `surface` and `samples`, one entry per sample
