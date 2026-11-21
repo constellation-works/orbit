@@ -99,7 +99,9 @@ const WORKFLOW_SECTIONS = [
 ];
 
 function openDrawer(row, context, lockGlobal) {
-  if (!context.canEdit || row.settable === false) return;
+  // The drawer rows stay reachable behind it, so an Edit on another row must
+  // not replace a write still in flight: its result would be dropped.
+  if (!context.canEdit || row.settable === false || drawer?.pending) return;
   drawer = { row, scope: (lockGlobal || row.global_only) ? 'global' : (row.source?.layer === 'global' ? 'global' : 'workspace'),
     text: isStructured(row) ? JSON.stringify(row.value ?? (isTable(row) ? {} : []), null, 2) : Array.isArray(row.value) ? row.value.join('\n') : display(row.value) === '–' ? '' : String(row.value ?? ''),
     error: null, pending: false, visit: captureWorkspaceVisit(), lockGlobal: !!(lockGlobal || row.global_only) };
@@ -114,6 +116,9 @@ function focusRowEdit(key) {
   row?.querySelector('.settings-edit')?.focus();
 }
 function closeDrawer(session, context) {
+  // A write in flight keeps its editor open: its result, success or refusal,
+  // lands in this drawer, and dismissing it would drop that result.
+  if (session.pending) return;
   drawer = null;
   context.rerender?.();
   focusRowEdit(session.row.key);
