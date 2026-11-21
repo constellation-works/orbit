@@ -107,6 +107,15 @@ snapshot_worktree() {
   real_objects="$common_dir/objects"
   [[ -d "$real_objects" ]] || refuse "no object store at $real_objects"
 
+  # mktemp places the temporary index and objects on TMPDIR's filesystem
+  # (or /tmp), which need not be the builds directory. Refuse before creating
+  # them. disk_gate "$out" still runs before that directory is created.
+  local snapshot_fs="${TMPDIR:-}"
+  if [[ -z "$snapshot_fs" ]]; then
+    snapshot_fs="/tmp"
+  fi
+  disk_gate "$snapshot_fs/orbit-perf-worktree-snapshot"
+
   snapshot_scratch="$(mktemp -d)"
   index="$snapshot_scratch/index"
   objects="$snapshot_scratch/objects"

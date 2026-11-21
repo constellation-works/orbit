@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -250,6 +251,81 @@ class BuildPairWorktreeTest(unittest.TestCase):
 
         leaked = _git(self.repo, "cat-file", "-t", candidate["commit"], check=False)
         self.assertNotEqual(leaked.returncode, 0, leaked.stderr)
+
+    def test_snapshot_filesystem_threshold_refuses_before_object_writes(self) -> None:
+        # A git ahead of PATH records every invocation and delegates. The
+        # refusal must name the snapshot filesystem and must not reach the
+        # commands that write the temporary index or objects.
+        (self.repo / "tracked.txt").write_text("dirty\n")
+        snap_fs = self.root / "snapfs"
+        snap_fs.mkdir()
+        log = self.root / "git-invocations.log"
+        real_git = shutil.which("git")
+        self.assertIsNotNone(real_git)
+        bindir = self.root / "bin"
+        bindir.mkdir()
+        wrapper = bindir / "git"
+        wrapper.write_text(
+            "#!/bin/sh\n"
+            'printf "%s\\n" "$*" >> "$GIT_INVOCATION_LOG"\n'
+            'exec "$ORBIT_PERF_TEST_REAL_GIT" "$@"\n'
+        )
+        wrapper.chmod(0o755)
+        before = _fingerprint(self.repo)
+        _freeze_git(self.repo)
+        env = self.env()
+        env["ORBIT_PERF_SIMULATE_DISK_PCENT"] = "80"
+        env["TMPDIR"] = str(snap_fs)
+        env["PATH"] = str(bindir) + os.pathsep + env["PATH"]
+        env["GIT_INVOCATION_LOG"] = str(log)
+        env["ORBIT_PERF_TEST_REAL_GIT"] = str(real_git)
+        result = subprocess.run(
+            [str(BUILD_PAIR),
+             "--base", "HEAD",
+             "--candidate-worktree", str(self.repo),
+             "--out", str(self.out)],
+            cwd=REPO,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+        _thaw_git(self.repo)
+        recorded = log.read_text() if log.exists() else ""
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout + recorded)
+        self.assertIn("disk gate", result.stderr)
+        self.assertIn(str(snap_fs), result.stderr)
+        self.assertIn("at or above 80%", result.stderr)
+        self.assertFalse(self.out.exists(), result.stderr)
+        self.assertEqual(list(snap_fs.iterdir()), [], recorded)
+        for token in ("update-index", "add --all", "write-tree", "commit-tree"):
+            self.assertNotIn(token, recorded, recorded)
+        self.assertEqual(_fingerprint(self.repo), before)
+
+    def test_builds_destination_disk_gate_refuses_before_create(self) -> None:
+        (self.repo / "tracked.txt").write_text("v2\n")
+        _git(self.repo, "add", "--", "tracked.txt")
+        _git(self.repo, "commit", "-m", "second")
+        env = self.env()
+        env["ORBIT_PERF_SIMULATE_DISK_PCENT"] = "80"
+        result = subprocess.run(
+            [str(BUILD_PAIR),
+             "--base", "HEAD~1",
+             "--candidate", "HEAD",
+             "--out", str(self.out)],
+            cwd=REPO,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("disk gate", result.stderr)
+        self.assertIn("at or above 80%", result.stderr)
+        self.assertIn(f"created nothing for {self.out.resolve()}", result.stderr)
+        self.assertFalse(self.out.exists(), result.stderr)
 
     def test_both_candidate_forms_are_refused(self) -> None:
         result = self.run_pair(
