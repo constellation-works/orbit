@@ -97,9 +97,31 @@ other host activity also contributes to pressure. For example, a 33 GiB snapshot
 at or above 20%. These host-dependent figures are not a guarantee. No reset overlaps
 sampling. With
 `--keep`, separate full restores are retained for diagnosis and cost more IO.
-The drain pauses admission when host IO-full pressure reaches 20% and resumes below
-10%; this run does not exempt its IO or change those thresholds. Monitor
-`/proc/pressure/io` and schedule or investigate runs that sustain pressure.
+This run does not exempt its IO or change those thresholds, which are fixed rather than
+settings. Monitor `/proc/pressure/io` and schedule or investigate runs that sustain
+pressure.
+
+The IO hold reads Linux `/proc/pressure/io` `full avg60`, the share of the last minute in
+which every runnable task was stalled on disk I/O. It applies only while
+`workflow.resource_throttle.enabled` is on (the default), applies to every drain on the
+host, and stops only new admissions: running work continues.
+
+- **Start.** A reading at or above 20% is `critical` at once, but it holds admission only
+  once readings have stayed at or above 20% across the 10-second sustain window
+  (`RESOURCE_SUSTAIN_WINDOW` in `crates/orbit-runtime/src/host_resource/mod.rs`). The window
+  opens at the first such reading, and the hold starts at the first reading at least 10
+  seconds later, timed by each sample's observation time. A reading below 20% before then
+  restarts the window.
+- **Reset.** A sample older than 15 seconds, an invalid reading (outside 0–100) or a gap of
+  more than 15 seconds between samples resets the window and drops any hold.
+- **Clear.** While held, readings at or above 10% keep the hold. The first reading below 10%
+  clears it at once, with no sustain needed.
+
+Clearing the IO hold lifts only that hold. Admission still waits for every other constraint:
+the other held resources (memory, CPU and disk each hold on their own marks, and
+`resource_throttle.resources` names each one), the perf lane above (`perf_lane_busy`), file
+locks, dependencies and workspace claims, and, under auto-concurrency `enforce`, forecast
+capacity. A drain can stay idle after the IO reading falls below 10%.
 
 ### Disk gate and cleanup
 
