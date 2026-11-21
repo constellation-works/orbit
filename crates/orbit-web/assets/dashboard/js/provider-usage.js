@@ -294,7 +294,7 @@ const chipClasses = (chip, kind) => `host-resource provider-usage ${kind} ${chip
 // share the all-providers key).
 const ui = {
   key: null, pinned: false, anchor: null, host: null, signature: '', views: new Map(), chips: new Map(),
-  pointerInside: false, openTimer: null, closeTimer: null, suppressFocus: false, bound: false, pinButton: null,
+  pointerInside: false, openTimer: null, closeTimer: null, suppressFocus: false, bound: false, closeButton: null, pinButton: null,
   focusedChip: null,
 };
 
@@ -470,7 +470,8 @@ function fillDialog() {
   dialog.className = `usage-dialog dialog-surface ${view.key === ALL_KEY ? 'usage-dialog-all' : 'usage-dialog-provider'}`;
   const [header, ...rest] = view.key === ALL_KEY ? allDialog(view) : providerDialog(view);
   const actions = rest.pop();
-  header.append(escCloseButton('Close usage (Esc)', { onClick: () => closeUsage({ restoreFocus: true }) }));
+  ui.closeButton = escCloseButton('Close usage (Esc)', { onClick: () => closeUsage({ restoreFocus: true }) });
+  header.append(ui.closeButton);
   dialog.replaceChildren(header, el('div', { class: 'dialog-body' }, rest), actions);
 }
 
@@ -552,10 +553,10 @@ function bindChip(node, key) {
     else openUsage(key, node, true);
   });
   on(node, 'keydown', event => {
-    // Tab moves into the open dialog, which sits at the end of the page.
-    if (event.key !== 'Tab' || event.shiftKey || ui.key !== key || !ui.pinButton) return;
+    // Tab enters the dialog at its first control, the header's Close button.
+    if (event.key !== 'Tab' || event.shiftKey || ui.key !== key || !ui.closeButton) return;
     event.preventDefault?.();
-    ui.pinButton.focus?.();
+    ui.closeButton.focus?.();
   });
 }
 
@@ -576,9 +577,22 @@ function bindOnce() {
   });
   on(dialog, 'keydown', event => {
     if (event.key !== 'Tab' || !ui.anchor) return;
-    // Back to the chip; a forward Tab then continues past it.
-    if (event.shiftKey) event.preventDefault?.();
-    focusQuietly(ui.anchor);
+    const active = document.activeElement;
+    if (event.shiftKey) {
+      if (active === ui.closeButton) {
+        event.preventDefault?.();
+        focusQuietly(ui.anchor);
+      } else if (active === ui.pinButton) {
+        event.preventDefault?.();
+        ui.closeButton?.focus?.();
+      }
+    } else if (active === ui.closeButton) {
+      event.preventDefault?.();
+      ui.pinButton?.focus?.();
+    } else if (active === ui.pinButton) {
+      event.preventDefault?.();
+      focusQuietly(ui.anchor);
+    }
   });
   on(document, 'keydown', event => {
     if (event.key === 'Escape' && ui.key) closeUsage({ restoreFocus: true });
@@ -651,7 +665,8 @@ export function renderProviderUsage(payload, host = document.getElementById('pro
 
   const refocus = document.activeElement?.dataset?.usageKey;
   // Changed readings rebuild the open dialog, and with it the focused control.
-  const dialogFocused = !!ui.key && !!dialogNode().contains?.(document.activeElement);
+  const focusedDialogControl = document.activeElement === ui.closeButton ? 'close'
+    : document.activeElement === ui.pinButton ? 'pin' : null;
   // The rebuilt chips are under the same pointer, but the removed ones never
   // report it leaving.
   ui.pointerInside = !!(ui.key && (ui.anchor?.matches?.(':hover') || dialogNode().matches?.(':hover')));
@@ -679,7 +694,8 @@ export function renderProviderUsage(payload, host = document.getElementById('pro
       setHidden(dialogNode(), false);
       placeDialog();
       syncExpanded();
-      if (dialogFocused) focusQuietly(ui.pinButton);
+      if (focusedDialogControl === 'close') ui.closeButton?.focus?.();
+      else if (focusedDialogControl === 'pin') ui.pinButton?.focus?.();
     } else closeUsage();
   } else if (ui.key) closeUsage();
   if (refocus && ui.chips.has(refocus)) focusQuietly(ui.chips.get(refocus).find(node => node === visibleChip(refocus)));
