@@ -39,7 +39,7 @@ Borders delineate structure without heavy contrast.
 - **Base Size:** `14px` (`--text-base`) with `1.5` line height.
 
 ### Type-Size Scale
-All `font-size` declarations in the dashboard use the ten integer steps in `base.css`. Half-pixel sizes (`9.5px`, `10.5px`, `11.5px`, `12.5px`, `13.5px`, `14.5px`) are excluded from the scale; snap them to the adjacent step for their role so sub-pixel drift does not accumulate.
+The design rule is that every `font-size` declaration in the dashboard uses one of the ten integer steps in `base.css`. Half-pixel sizes (`9.5px`, `10.5px`, `11.5px`, `12.5px`, `13.5px`, `14.5px`) are excluded from the scale; snap them to the adjacent step for their role so sub-pixel drift does not accumulate. Off-scale sizes that remain in a stylesheet are existing debt that the ratchet admits by count, not a sign that the stylesheet follows the scale (see [Token enforcement](#token-enforcement)).
 
 | Token | Value | Common uses (and off-scale snaps) |
 |---|---|---|
@@ -57,7 +57,7 @@ All `font-size` declarations in the dashboard use the ten integer steps in `base
 Relative `em` sizing stays allowed only where scaling a glyph proportionally with its host text (for example `.copy-id::after` at `0.85em`).
 
 ### Spacing Scale
-All `padding`, `margin` and `gap` declarations use the twelve steps in `base.css`. Intermediate literals (`3px`, `5px`, `7px`, `9px`, `11px`, `18px`, `22px`, `28px`) snap to the nearest step without changing visible rhythm, and container padding stays symmetric (`top == bottom`, `left == right` per STD-07 R1). (`1px` grid gaps over a `--border` background are structural hairlines, not spacing steps.)
+The design rule is that every `padding`, `margin` and `gap` declaration uses one of the twelve steps in `base.css`. The ratchet counts only colour literals and font sizes, so literal spacing values that remain in the stylesheets are not tracked by it. Intermediate literals (`3px`, `5px`, `7px`, `9px`, `11px`, `18px`, `22px`, `28px`) snap to the nearest step without changing visible rhythm, and container padding stays symmetric (`top == bottom`, `left == right` per STD-07 R1). (`1px` grid gaps over a `--border` background are structural hairlines, not spacing steps.)
 
 | Token | Value | Role |
 |---|---|---|
@@ -80,7 +80,7 @@ All `padding`, `margin` and `gap` declarations use the twelve steps in `base.css
 - **Gaps between controls:** `--space-8` (`8px`) between sibling buttons, filters, chips and inputs in a toolbar or action row; `--space-6` (`6px`) inside a control (icon + label) or between tightly paired inline actions; `--space-4` (`4px`) for dot-to-label or compact tag clusters; `--space-12` (`12px`) or `--space-16` (`16px`) between adjacent cards or form groups.
 
 ### Radius Scale
-All `border-radius` declarations use the six steps in `base.css` (with `50%` reserved for 1:1 circles such as status dots and avatars).
+The design rule is that every `border-radius` declaration uses one of the six steps in `base.css` (with `50%` reserved for 1:1 circles such as status dots and avatars). The ratchet does not count radius values, so literal radii that remain in the stylesheets are not tracked by it.
 
 | Token | Value | Common uses (and off-scale snaps) |
 |---|---|---|
@@ -138,7 +138,26 @@ Detail panes and side panels list facts as label/value pairs (for example a "Sho
 - **Numbers:** Numeric values stay right-aligned when they sit beside their label, so digits line up down the list.
 
 ### Token enforcement
-Colour values and font sizes are defined once in `crates/orbit-web/assets/dashboard/css/base.css`; every other stylesheet uses `var(--…)`. `scripts/check-dashboard-css-literals.py` runs in CI and counts colour literals and raw font sizes per stylesheet against `scripts/dashboard-css-literals-baseline.json`. A new literal fails and names the base.css token with the same value when one exists. A removed literal must lower the baseline in the same change, so the counts only go down.
+Colour values and font sizes are defined once in `crates/orbit-web/assets/dashboard/css/base.css`. The design rule is that every other stylesheet uses `var(--…)` for both. The rule is not yet met: stylesheets still hold literals, and the ratchet admits them by count. A stylesheet can pass CI while it still contains colour literals and raw font sizes.
+
+`scripts/check-dashboard-css-literals.py` runs in CI through `scripts/ci-guardrails.sh`, with no arguments. For each stylesheet under `crates/orbit-web/assets/dashboard/` except `base.css`, it counts two kinds and compares each count with `scripts/dashboard-css-literals-baseline.json`:
+
+- `colour_literals`: hex (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`), `rgb()`, `rgba()`, `hsl()` and `hsla()` values. Selectors such as `#face` and comments are not counted.
+- `raw_font_sizes`: `font-size` values that are not `var(--…)`. The CSS-wide keywords (`inherit`, `initial`, `unset`, `revert`, `revert-layer`) are not counted. The `font` shorthand and a size held in a custom property are not counted either.
+
+The comparison is per file and per kind. A file's colour count and its size count are checked separately, and a change in one file never offsets a change in another.
+
+- **Rise:** a count above its baseline fails. The message lists every occurrence of that kind in the file. A colour that equals a `base.css` colour names that token (`var(--bg)`); any other colour, and every raw size, gets a pointer to the token scale instead.
+- **Fall:** a count below its baseline also fails until the baseline is lowered in the same change, so a removed literal must lower its count.
+- **New stylesheet:** a file with no baseline entry has a baseline of zero, so its first literal fails.
+- **Equal-count substitution:** the guard compares numbers, not values. Replacing a file's only colour with a different colour and its only raw size with a different size passes. A one-colour, one-size fixture changed to `#fff` and `19px` exits 0. Only review of the diff catches that substitution.
+
+The intent is that the counts only go down. Check mode alone does not hold that line, because it accepts any baseline that matches the current counts; the baseline writer's refusal, described below, and review of the baseline diff are the other controls.
+
+#### Baseline writer
+`--write-baseline` rewrites the baseline with the current counts. It compares only against the baseline file already on disk in the checkout, not against `main` or the base revision. It refuses any per-file, per-kind rise against that file and lists the occurrences it refuses. If the baseline file is missing, it writes without any comparison.
+
+Check mode reads the same file in the checkout. A rise hand-edited into `scripts/dashboard-css-literals-baseline.json` therefore passes CI, and running `--write-baseline` afterwards accepts it too. Only a review of the baseline diff against the base revision catches such a raise.
 
 ## Mechanism-specific sections
 
