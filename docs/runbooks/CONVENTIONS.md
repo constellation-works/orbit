@@ -112,7 +112,7 @@ The generator's `runbook_group` function maps filenames to exactly one audience 
 - **Operate Orbit** is the default for runbooks about installed Orbit, including onboarding,
   health checks, state recovery, and runtime administration.
 - **Develop and release** contains these authoring conventions and the explicitly mapped
-  build-budget, compiler-cache, CodeQL, website-validation, web-memory-soak,
+  build-budget, compiler-cache, CodeQL, perf-timing-protocol, website-validation, web-memory-soak,
   full-QA-sweep, and release procedures.
 
 When adding a contributor or release procedure, add its filename to the generator's
