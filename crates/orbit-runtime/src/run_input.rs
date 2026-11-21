@@ -2,18 +2,11 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-/// Environment marker emitted only for an Orbit-managed activity together
-/// with the owning run id. Both values form the managed-run trust boundary:
-/// the marker alone is not enough to attribute work to a run or to grant
-/// managed-child behavior.
+/// Environment marker emitted with the owning run ID for a managed activity.
 pub const ORBIT_MANAGED_RUN_CONTEXT_ENV: &str = "ORBIT_MANAGED_RUN_CONTEXT";
 
-/// Return the trusted managed run id from the activity envelope.
-///
-/// A managed child may have a deliberately narrower process view than its
-/// host worker (for example, under Bubblewrap's private PID namespace). Keep
-/// the marker and non-blank run id coupled so callers can make decisions at
-/// that authority boundary without trusting a standalone environment marker.
+/// Read the managed run ID declared by this process for routing and attribution.
+/// Children can change their environment, so this ID cannot authenticate a resident.
 pub fn managed_run_context_run_id_from_env() -> Option<String> {
     let managed = std::env::var(ORBIT_MANAGED_RUN_CONTEXT_ENV)
         .ok()
@@ -37,7 +30,7 @@ pub fn managed_run_context_task_id_from_env() -> Option<String> {
         .and_then(|value| non_empty(&value).map(ToOwned::to_owned))
 }
 
-/// Whether this process is a trusted child of an Orbit-managed run.
+/// Whether this process declares a managed run context.
 pub fn managed_run_context_from_env() -> bool {
     managed_run_context_run_id_from_env().is_some()
 }

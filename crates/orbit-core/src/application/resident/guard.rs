@@ -2,8 +2,9 @@
 //! the action ledger that makes a recovery cycle skip what its dead
 //! predecessor already did.
 //!
-//! A call is a resident cycle call when the trusted run binding (never tool
-//! input) names a `resident_cycle_pipeline` run. Reads always pass. Every
+//! A run scope naming a `resident_cycle_pipeline` run subjects its calls to
+//! the cycle guard. Exercising a resident right on an operator-only operation
+//! also requires the broker to authenticate that run. Reads always pass. Every
 //! write needs the run to hold its mandate's live cycle and a recorded grant;
 //! a right-gated write needs the right in that grant (observe-only grants
 //! hold none), and any `workspace` the call names must be the assignment's
@@ -273,8 +274,33 @@ impl OrbitRuntime {
         Some(covered)
     }
 
-    /// Admit one tool call made under the trusted `run_id`, before it runs.
+    /// Admit the call before dispatch. Only the authenticated resident broker may
+    /// substitute a cycle's grant for operator authority.
     pub(crate) fn admit_resident_cycle_call(
+        &self,
+        run_id: Option<&str>,
+        brokered_resident: bool,
+        tool: &str,
+        class: ResidentCallClass,
+        input: &Value,
+    ) -> Result<ResidentCallAdmission, OrbitError> {
+        let right_gated =
+            crate::runtime::authorization::is_resident_cycle_right_gated_operation(tool);
+        if right_gated && run_id.is_some() && !brokered_resident {
+            return Err(OrbitError::CapabilityDenied(format!(
+                "a managed run may call '{tool}' only through its resident cycle's broker"
+            )));
+        }
+        let admission = self.check_resident_cycle_grant(run_id, tool, class, input)?;
+        if right_gated && brokered_resident && matches!(admission, ResidentCallAdmission::Proceed) {
+            return Err(OrbitError::CapabilityDenied(format!(
+                "the resident cycle did not admit '{tool}'"
+            )));
+        }
+        Ok(admission)
+    }
+
+    fn check_resident_cycle_grant(
         &self,
         run_id: Option<&str>,
         tool: &str,

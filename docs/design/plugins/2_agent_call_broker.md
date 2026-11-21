@@ -164,6 +164,10 @@ naming a resident cycle's run, the nested `orbit` forwards the call. The broker 
 job run it serves is a cycle, then runs the ship through the tool host for that run, so the cycle guard
 decides the live grant, the `dispatch` right and the workspace and writes the action ledger row.
 
+For ship, land, re-pilot and requeue, the managed-run environment is a routing hint. Only the
+broker's authenticated run can exercise the resident exemption. An in-process call still faces
+the operator capability check and cannot use a resident grant or replay its ledger entries.
+
 **A resident cycle's re-pilot and requeue.** `orbit.task.recover` action `repilot` submits a pilot run
 whose worker, like a ship's leaf, must start beside the cycle's read-only sandbox, and action `requeue`
 restores a held task and its preserved candidate, which the read-only sandbox cannot write. The nested `orbit` forwards both

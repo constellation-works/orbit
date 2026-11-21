@@ -330,7 +330,9 @@ impl BrokerDispatch for RunDispatch {
                         return crate::adapter::tool_host::build_orbit_tool_host(
                             &self.runtime,
                             run.task_id.clone(),
-                            Some(run_id.to_string()),
+                            crate::adapter::tool_host::ToolHostRun::BrokeredResident(
+                                run_id.to_string(),
+                            ),
                             session_context,
                         )
                         .execute(

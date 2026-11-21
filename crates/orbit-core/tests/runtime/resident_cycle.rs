@@ -41,7 +41,8 @@ const CONFIG: &str = "[workflow]\ndefault_crew = \"sol\"\n\n\
      [crews.other]\nprovider = \"codex\"\nmodel = \"test\"\n\n\
      [crews.dk]\nkind = \"human\"\ndescription = \"Daniel's own work\"\n";
 
-const TOOL_ENV: [&str; 8] = [
+const TOOL_ENV: [&str; 9] = [
+    "ORBIT_PLUGIN_BROKER",
     "ORBIT_MANAGED_RUN_CONTEXT",
     "ORBIT_RUN_ID",
     "ORBIT_TASK_ID",
@@ -66,7 +67,13 @@ struct Fixture {
 fn fixture() -> Fixture {
     crate::scenarios::require_isolated_mutable_fixture("resident_cycle::fixture");
     let env = std::cell::RefCell::new(Some(orbit_common::test_env::unset(TOOL_ENV)));
-    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    // The default macOS temp path leaves too little room for the broker socket.
+    let temp_root = if cfg!(target_os = "macos") {
+        PathBuf::from("/tmp")
+    } else {
+        orbit_common::test_env::bulk_write_temp_dir()
+    };
+    let root = TempDir::new_in(temp_root).unwrap();
     let global = root.path().join("global");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(&global).unwrap();
@@ -146,13 +153,59 @@ fn call(
 }
 
 impl Fixture {
-    /// Run `body` as a managed activity of `run_id`: the envelope Orbit
-    /// stamps into an agent it spawns, the only source of a call's run binding.
+    /// Declare the client's run for routing, without an authenticated broker.
     fn as_cycle_agent<T>(&self, run_id: &str, body: impl FnOnce() -> T) -> T {
+        self.with_cycle_environment(run_id, None, body)
+    }
+
+    #[cfg(unix)]
+    fn as_brokered_cycle<T>(&self, mandate: &str, run_id: &str, body: impl FnOnce() -> T) -> T {
+        use orbit_engine::{PluginBrokerHandle, PluginBrokerRun};
+        use orbit_tools::plugin::BrokeredCaller;
+        use orbit_types::policy::ResolvedFsProfile;
+        let run = PluginBrokerRun {
+            run_id: run_id.into(),
+            job_run_id: Some(run_id.into()),
+            task_id: Some(mandate.into()),
+            activity_name: "resident_cycle".into(),
+            agent_name: Some("codex".into()),
+            model_name: None,
+            workspace: Some(self.runtime.workspace_id().unwrap()),
+            allowed_tools: [
+                "orbit.workflow:ship",
+                "orbit.workflow:land",
+                "orbit.task.recover:repilot",
+                "orbit.task.recover:requeue",
+            ]
+            .map(String::from)
+            .into(),
+            tool_deny_policy: None,
+            caller: BrokeredCaller {
+                worktree: std::env::current_dir().unwrap(),
+                fs_profile: ResolvedFsProfile {
+                    name: "test".into(),
+                    read: vec![],
+                    modify: vec![],
+                },
+                proc_allowed_programs: vec![],
+                proc_disallowed_programs: None,
+            },
+        };
+        let broker = orbit_core::test_support::start_test_run_broker(&self.runtime, run).unwrap();
+        self.with_cycle_environment(run_id, Some(broker.socket_path().to_str().unwrap()), body)
+    }
+
+    fn with_cycle_environment<T>(
+        &self,
+        run_id: &str,
+        socket: Option<&str>,
+        body: impl FnOnce() -> T,
+    ) -> T {
         self.env.borrow_mut().take();
         let managed = orbit_common::test_env::scoped(TOOL_ENV.into_iter().map(|name| match name {
             "ORBIT_MANAGED_RUN_CONTEXT" => (name, Some("1")),
             "ORBIT_RUN_ID" => (name, Some(run_id)),
+            "ORBIT_PLUGIN_BROKER" => (name, socket),
             _ => (name, None),
         }));
         let result = body();
@@ -1149,6 +1202,7 @@ fn leaf_diagnostics(fx: &Fixture, run_id: &str) -> String {
 /// whatever the grant. The grant still decides: no right, a foreign workspace,
 /// a lapsed cycle and a managed run that is no cycle start nothing. The worker
 /// is its own run, so it does not inherit the cycle's run binding.
+#[cfg(unix)]
 #[test]
 fn a_cycle_with_dispatch_ships_a_leaf_run_and_every_other_caller_is_refused() {
     let fx =
@@ -1202,7 +1256,7 @@ fn a_cycle_with_dispatch_ships_a_leaf_run_and_every_other_caller_is_refused() {
     fx.grant(&mandate, &["dispatch"]);
     let run = fx.cycle_run(&mandate, "resident-cycle-ship");
     fx.begin_cycle(&run, Utc::now());
-    let shipped = fx.as_cycle_agent(&run, || {
+    let shipped = fx.as_brokered_cycle(&mandate, &run, || {
         let error = ship(&task, "ws_not_granted").expect_err("a foreign workspace is refused");
         assert!(error.contains("resident_scope_refused"), "{error}");
         assert!(leaf_runs().is_empty(), "a refused ship starts nothing");
@@ -1253,7 +1307,7 @@ fn a_cycle_with_dispatch_ships_a_leaf_run_and_every_other_caller_is_refused() {
     // After its cycle, the same run is no longer dispatching anything.
     let later = leaf("After the cycle");
     fx.runtime.finish_resident_cycle(&run).unwrap();
-    fx.as_cycle_agent(&run, || {
+    fx.as_brokered_cycle(&mandate, &run, || {
         let error = ship(&later, &workspace).expect_err("a lapsed cycle may only read");
         assert!(error.contains("resident_cycle_stale"), "{error}");
     });
@@ -1263,7 +1317,7 @@ fn a_cycle_with_dispatch_ships_a_leaf_run_and_every_other_caller_is_refused() {
     fx.grant(&promote_only, &["promote"]);
     let run = fx.cycle_run(&promote_only, "resident-cycle-no-dispatch");
     fx.begin_cycle(&run, Utc::now());
-    fx.as_cycle_agent(&run, || {
+    fx.as_brokered_cycle(&promote_only, &run, || {
         let error = ship(&later, &workspace).expect_err("promote does not dispatch");
         assert!(error.contains("resident_right_refused"), "{error}");
         assert!(error.contains("dispatch"), "{error}");

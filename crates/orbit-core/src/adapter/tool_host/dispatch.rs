@@ -49,16 +49,16 @@ fn agent_detail_surface(session: &ToolSessionContext) -> AgentDetailSurface {
 pub(super) fn execute(
     runtime: &OrbitRuntime,
     task_scope: &OrbitTaskScope,
+    brokered_resident: bool,
     caller: ToolCaller<'_>,
     action: OrbitBuiltinAction,
     input: Value,
 ) -> Result<Value, OrbitError> {
     let (input, mut redaction_report) =
         super::artifact_redaction::sanitize_tool_input(action, input)?;
-    // A resident cycle's agent reaches tools only within its cycle's grant;
-    // the trusted run binding, never input, says whether this is one.
     let ticket = match runtime.admit_resident_cycle_call(
         task_scope.run_id.as_deref(),
+        brokered_resident,
         super::resident_guard::resident_guard_tool_name(action),
         super::resident_guard::resident_guard_class(action, &input),
         &input,
@@ -70,7 +70,7 @@ pub(super) fn execute(
     // The cycle guard ledgers a right-gated write only for a live cycle that
     // holds the right, so a ledgered call stands in for the operator check
     // the handler would otherwise repeat.
-    let resident_cycle_admitted = ticket.is_some();
+    let resident_cycle_admitted = brokered_resident && ticket.is_some();
     let mut result = execute_admitted(
         runtime,
         task_scope,
