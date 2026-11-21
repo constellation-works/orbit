@@ -87,7 +87,7 @@ const CLAIM_TOKEN_PARAM: ParamSpec = mcp_only(
 const VIEW_PARAM: ParamSpec = mcp_only(
     "view",
     ParamType::String,
-    "bounded: bounded metadata with pagination and display truncation; requires an explicit `workspace`. Omit `view` for the existing unbounded response.",
+    "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
 );
 
 const AUTO: OperationSpec<WorkflowVerb> = OperationSpec {

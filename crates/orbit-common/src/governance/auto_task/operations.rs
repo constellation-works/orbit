@@ -310,7 +310,7 @@ const LIST: AutoTaskOperation = AutoTaskOperation {
         mcp_only(
             "view",
             ParamType::String,
-            "bounded: bounded metadata with pagination and display truncation; requires an explicit `workspace`. Omit `view` for the existing unbounded response.",
+            "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
         ),
         mcp_only("offset", ParamType::Integer, "Bounded list offset"),
         mcp_only("limit", ParamType::Integer, "Bounded page size"),

@@ -667,7 +667,7 @@
         },
         "view": {
           "type": "string",
-          "description": "Bounded metadata view; when supplied, it requires an explicit `workspace`. Omit `view` to use the default task listing. The only accepted value is `bounded`."
+          "description": "Bounded metadata view; requires `workspace`. The only accepted value is `bounded`."
         },
         "offset": {
           "type": "integer",
@@ -736,7 +736,7 @@
         },
         "view": {
           "type": "string",
-          "description": "Bounded metadata view."
+          "description": "Bounded metadata view; requires `workspace`."
         },
         "limit": {
           "type": "integer",
