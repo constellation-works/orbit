@@ -21,9 +21,15 @@
 //!   revision that run published: settlement rejects any other, so a moved
 //!   branch records `publication_identity_changed` and merges nothing.
 //!
-//! Checks still running, or mergeability GitHub has not computed yet, wait for
-//! the next pass. The pass runs on every owner sweep tick, so a pull request
-//! whose checks pass is merged within one tick interval.
+//! The owner sweep runs this phase for each owner workspace it reaches while
+//! the per-tick deadline remains. An invocation that finds the host sweep lock
+//! busy exits without running phases. A workspace reached after the deadline
+//! is skipped for that tick. A later tick retries a skipped workspace only if
+//! it acquires the lock and reaches the workspace before its own deadline;
+//! checks still running or mergeability GitHub has not computed are also
+//! checked again when a later tick reaches the workspace.
+//! Successive ticks can skip the same workspace, so there is no elapsed-time
+//! upper bound for a skipped workspace.
 //!
 //! A task that cannot be merged does not sit silently: the pass appends one
 //! [`LANDING_FOLLOW_UP_EVENT`] entry naming a typed `code`, the `owner` of the
