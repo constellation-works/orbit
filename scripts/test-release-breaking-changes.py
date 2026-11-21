@@ -346,6 +346,24 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(len(missed), 0, f"{len(missed)} unsound schema pairs; "
                          f"first counterexamples (old, new, instance): {list(missed.items())[:10]}")
 
+    def test_schema_oracle_unknown_keyword_refusal_and_semantics(self):
+        with self.assertRaises(ValueError):
+            schema_accepts_instance({"items": {"type": "string"}}, ["a"])
+        # then/else without if have no effect in JSON Schema.
+        self.assertTrue(schema_accepts_instance({"then": {"type": "string"}}, 1))
+        self.assertFalse(schema_accepts_instance(
+            {"if": {"required": ["a"]}, "then": {"required": ["b"]}, "else": {"required": ["c"]}},
+            {"a": 1},
+        ))
+        self.assertTrue(schema_accepts_instance(
+            {"if": {"required": ["a"]}, "then": {"required": ["b"]}, "else": {"required": ["c"]}},
+            {"c": 1},
+        ))
+        self.assertFalse(schema_accepts_instance(
+            {"allOf": [{"type": "object"}, {"propertyNames": {"enum": ["a", "b"]}}]},
+            {"c": 1},
+        ))
+
     def test_schema_bump_and_deny_unknown_field_decide_minor(self):
         # The v0.35.0..v0.36.0 shape: a SQLite migration and a new optional
         # field on the persisted task envelope, next to an additive MCP field.
@@ -593,6 +611,7 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         }]
         self.repo.write_mcp(tools)
         self.repo.commit("feat: Add conditional contract [ORB-53] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
 
     def _assert_conditional_change_is_breaking(self, mutate, detail):
         self._write_conditional_schema()
@@ -675,6 +694,7 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         }]
         self.repo.write_mcp(tools)
         self.repo.commit("feat: Add guarded request contract [ORB-53] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
 
     def test_conditional_if_edit_into_stricter_else_decides_minor(self):
         self._write_guarded_request_schema()
@@ -715,6 +735,46 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         tools[0]["inputSchema"]["allOf"][0]["if"]["required"].append("view")
         self.repo.write_mcp(tools)
         self.repo.commit("feat: Narrow conditional selector [ORB-54] (#2)")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
+    def test_adding_conditional_contract_decides_minor(self):
+        self._write_guarded_request_schema()
+        report = self.report("--range", "v0.35.0~1..v0.35.0")
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual([(s["task"], s["signal"]) for s in report["signals"]],
+                         [("ORB-53", "mcp-schema")])
+
+    def test_allof_reorder_and_moving_shared_branch_requirement_to_root_stay_patch(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {
+            "type": "object",
+            "allOf": [
+                {"if": {"required": ["fields"]},
+                 "then": {"required": ["id", "view"]},
+                 "else": {"required": ["id", "view"]}},
+                {"properties": {"id": {"type": "string"}, "view": {"type": "string"},
+                                "fields": {"type": "array"}}},
+            ],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Prepare allOf conditional baseline [ORB-53] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        tools[0]["inputSchema"] = {
+            "type": "object",
+            "required": ["id", "view"],
+            "allOf": [
+                {"properties": {"id": {"type": "string"}, "view": {"type": "string"},
+                                "fields": {"type": "array"}}},
+                {"if": {"required": ["fields"]},
+                 "then": {},
+                 "else": {}},
+            ],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Reorder allOf and hoist shared requirement [ORB-54] (#2)")
         report = self.report()
         self.assertEqual(report["signals"], [])
         self.assertEqual(report["bump"], "patch")
