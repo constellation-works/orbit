@@ -595,12 +595,13 @@ start_check_chain() {
 
 # Exclusive self-tests run one at a time, at normal priority, in a lane that
 # starts after formatting. Each one asserts elapsed time or timeouts, measures
-# build-budget admission, or drives a real Cargo target; the rendezvous and
-# deadline checks in ci-fast-guards count too. Everything beside them, the guard
-# pool and in full mode the workflow test build, starts at lowered priority to
-# reduce CPU contention with the suites. The lane joins after the pool and
-# before the workspace tests start. Each suite is mostly one process, so the
-# lane leaves most of the host to that lowered work.
+# build-budget admission, or drives a real Cargo target; this includes the
+# installer security guard's progressing slow-stream fixture. The rendezvous
+# and deadline checks in ci-fast-guards count too. Everything beside them, the
+# guard pool and in full mode the workflow test build, starts at lowered
+# priority to reduce CPU contention with the suites. The lane joins after the
+# pool and before the workspace tests start. Each suite is mostly one process,
+# so the lane leaves most of the host to that lowered work.
 guard_phase_started=$SECONDS
 if [[ "$static" == false && "$checks" == false ]]; then
   exclusive_started=$SECONDS
@@ -613,6 +614,7 @@ if [[ "$static" == false && "$checks" == false ]]; then
     run_exclusive_guard "$repo_root/scripts/test-ci-await-jobs.py"
     run_exclusive_guard "$repo_root/scripts/test-ci-fast-guards.py"
     run_exclusive_guard "$repo_root/scripts/test-ci-workspace-cache.py"
+    run_exclusive_guard "$repo_root/scripts/test-installer-security.sh"
     run_exclusive_guard "$repo_root/scripts/test-ci-test-affected.py"
     run_exclusive_guard "$repo_root/scripts/test-codeql-rust-local.py"
     run_exclusive_guard "$repo_root/scripts/test-compiler-cache.sh"
@@ -695,7 +697,6 @@ if [[ "$checks" == false ]]; then
   # Fixture self-tests that assert no elapsed time or timeout and touch no real
   # Cargo target. Full CI always runs these; fast mode selects them by inputs.
   # The exclusive suites run in their own lane, above.
-  run_guard "$repo_root/scripts/test-installer-security.sh"
   run_guard "$repo_root/scripts/test-mcp-registry-publish-workflow.sh"
   run_guard "$repo_root/scripts/test-check-unused-dependencies.py"
   run_guard "$repo_root/scripts/test-release-workflow.py"

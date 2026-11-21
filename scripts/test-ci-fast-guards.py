@@ -707,30 +707,41 @@ log("end {name}")
         self.assertRegex(result.stderr, r"ci-guardrails: test-build-budget\.sh [0-9.]+ s")
 
     def test_exclusive_self_tests_run_one_at_a_time_beside_a_lowered_pool(self):
+        """Local and hosted modes keep the slow installer guard exclusive."""
         self.prepare_ci()
         events = self.root / "events"
         priorities = self.root / "priorities"
         # Pool members hold, so the exclusive lane overlaps them. Each records its
         # own priority, so a pool member at normal priority beside the lane shows.
-        pool = ("test-installer-security.sh", "check-orphan-modules.sh", "test-cross-revision-check.sh")
+        pool = ("check-orphan-modules.sh", "test-cross-revision-check.sh",
+                "test-release-workflow.py")
         for name in pool:
             self.write_priority_stub(name, priorities, hold=0.5)
         # The first exclusive suite holds, so a second one started beside it
         # would show its start before the first one's end; the correct order never does.
-        exclusive = ("test-build-budget.sh", "test-compiler-cache.sh")
+        exclusive = ("test-build-budget.sh", "test-installer-security.sh",
+                     "test-compiler-cache.sh")
         self.write_priority_stub(exclusive[0], priorities, events, hold=0.5)
         self.write_priority_stub(exclusive[1], priorities, events)
-        result = self.run_guard("ci-guardrails.sh", "--fast",
-                                env_overrides={"CI_TEST_BASE": "missing-delivery-base"})
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(events.read_text().splitlines(),
-                         [f"{edge} {name}" for name in exclusive for edge in ("start", "end")])
-        observed = dict(json.loads(line) for line in priorities.read_text().splitlines())
-        # Exclusive suites keep the caller's priority; everything in the pool,
-        # which shares the host with them, runs lowered.
-        self.assertEqual(observed, {**{name: True for name in pool},
-                                    **{name: False for name in exclusive}})
-        self.assertRegex(result.stderr, r"ci-guardrails-phase: exclusive-self-tests wall_seconds=\d+ exit=0")
+        self.write_priority_stub(exclusive[2], priorities, events)
+        for mode, env_overrides in (("--fast", {"CI_TEST_BASE": "missing-delivery-base"}),
+                                    ("--guards-core", {"CI_SELF_TESTS": "all"})):
+            with self.subTest(mode=mode):
+                events.write_text("")
+                priorities.write_text("")
+                result = self.run_guard("ci-guardrails.sh", mode,
+                                        env_overrides=env_overrides)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(events.read_text().splitlines(),
+                                 [f"{edge} {name}" for name in exclusive
+                                  for edge in ("start", "end")])
+                observed = dict(json.loads(line) for line in priorities.read_text().splitlines())
+                # Exclusive suites keep the caller's priority; everything in the pool,
+                # which shares the host with them, runs lowered.
+                self.assertEqual(observed, {**{name: True for name in pool},
+                                            **{name: False for name in exclusive}})
+                self.assertRegex(result.stderr,
+                                 r"ci-guardrails-phase: exclusive-self-tests wall_seconds=\d+ exit=0")
 
     def test_pool_width_is_the_build_budget_cargo_jobs(self):
         self.prepare_ci()
@@ -738,12 +749,12 @@ log("end {name}")
         left, right = self.root / "left.fifo", self.root / "right.fifo"
         os.mkfifo(left)
         os.mkfifo(right)
-        installer, mcp = "test-installer-security.sh", "test-mcp-registry-publish-workflow.sh"
+        orphan, mcp = "check-orphan-modules.sh", "test-mcp-registry-publish-workflow.sh"
         third = "test-check-unused-dependencies.py"
         # Two cargo jobs admit two members at once. The pair rendezvous and
         # hold, so the third starts only after one of them has ended, and
         # never while both still hold the two slots.
-        self.write_overlapping_member(installer, events, outgoing=left, incoming=right, hold=0.5)
+        self.write_overlapping_member(orphan, events, outgoing=left, incoming=right, hold=0.5)
         self.write_overlapping_member(mcp, events, outgoing=right, incoming=left, hold=0.5)
         self.write_event_stub(third, events)
         result = self.run_guard("ci-guardrails.sh", "--fast",
@@ -751,10 +762,10 @@ log("end {name}")
                                                "ORBIT_CARGO_JOBS": "2"})
         self.assertEqual(result.returncode, 0, result.stderr)
         log = events.read_text().splitlines()
-        self.assertLess(log.index(f"start {installer}"), log.index(f"start {third}"), log)
+        self.assertLess(log.index(f"start {orphan}"), log.index(f"start {third}"), log)
         self.assertLess(log.index(f"start {mcp}"), log.index(f"start {third}"), log)
         self.assertTrue(
-            log.index(f"end {installer}") < log.index(f"start {third}")
+            log.index(f"end {orphan}") < log.index(f"start {third}")
             or log.index(f"end {mcp}") < log.index(f"start {third}"),
             log)
         running = 0
