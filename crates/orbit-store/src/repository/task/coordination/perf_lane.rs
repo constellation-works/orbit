@@ -8,19 +8,43 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
-use orbit_types::task::{PERF_LANE_TAGS, Task, TaskStatus, needs_perf_lane, validate_orb_task_id};
+use orbit_types::task::{
+    PERF_LANE_TAGS, Task, TaskEnvelopeV2, TaskStatus, needs_perf_lane, validate_orb_task_id,
+};
 
 use super::TaskCommitBoundary;
 use crate::contracts::{ExecutionClaim, TaskIndexFilter};
+use crate::repository::task::v2_bundle::TaskBundleStoreV2;
 
 impl TaskCommitBoundary {
-    /// Whether `task_id`'s settled envelope needs the perf lane. An id this
-    /// partition does not hold, or one still being written, does not.
+    /// Read `task_id`'s settled envelope from whichever workspace partition on
+    /// this host holds it.
+    fn read_envelope_across_partitions(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<TaskEnvelopeV2>, OrbitError> {
+        let foreign_partition = match self.registry.find_task_binding(task_id)? {
+            Some(binding) if binding.partition_id != self.workspace_id => {
+                Some(binding.partition_id)
+            }
+            _ => None,
+        };
+        match foreign_partition {
+            Some(partition_id) => TaskBundleStoreV2::new(self.registry.clone(), partition_id)
+                .read_envelope_if_settled(task_id),
+            None => self.bundle_store.read_envelope_if_settled(task_id),
+        }
+    }
+
+    /// Whether `task_id`'s settled envelope needs the perf lane, resolving its
+    /// partition through the registry so claims from another workspace on this
+    /// host are checked against their own partition. An unknown id, or one
+    /// still being written, returns `false`.
     pub(super) fn task_needs_perf_lane(&self, task_id: &str) -> Result<bool, OrbitError> {
         if validate_orb_task_id(task_id).is_err() {
             return Ok(false);
         }
-        let envelope = match self.bundle_store.read_envelope_if_settled(task_id) {
+        let envelope = match self.read_envelope_across_partitions(task_id) {
             Ok(envelope) => envelope,
             Err(OrbitError::NotFound { .. }) => None,
             Err(error) => return Err(error),
@@ -28,11 +52,13 @@ impl TaskCommitBoundary {
         Ok(envelope.is_some_and(|task| needs_perf_lane(&task.tags)))
     }
 
-    /// Perf tasks that already hold the lane on `machine_id`.
+    /// Perf tasks that already hold the lane on `machine_id` across every
+    /// workspace partition on this owner host.
     ///
-    /// A protecting claim on that machine always counts. When
+    /// A protecting claim on that machine in any partition always counts. When
     /// `count_owner_local` is set, so do an `in-progress` perf task with no
-    /// protecting claim, an owner-wave task still in `backlog`, and a carrier
+    /// protecting claim (in this or any other partition), an owner-wave perf
+    /// task still in `backlog` (in this or any other partition), and a carrier
     /// the caller named. A `review` task holds only through a protecting claim
     /// or a carrier, so an idle review perf task releases the lane. The
     /// candidate itself may appear; the screen skips it.
@@ -74,21 +100,27 @@ impl TaskCommitBoundary {
                 holders.insert(task.id.clone());
             }
         }
-        // The owner wave has not loaded in-flight tasks. The index names the
-        // in-progress ones under this section; the envelope confirms the tag.
-        if in_flight_tasks.is_empty() {
-            let ids = self.registry.indexed_task_ids_filtered(
-                &self.workspace_id,
-                &TaskIndexFilter {
-                    statuses: vec![TaskStatus::InProgress],
-                    any_tags: PERF_LANE_TAGS
-                        .iter()
-                        .map(|tag| (*tag).to_string())
-                        .collect(),
-                    ..TaskIndexFilter::default()
-                },
-            )?;
-            for id in ids {
+        // Scan indexed in-progress perf tasks across partitions whose
+        // in-flight tasks were not preloaded above; the envelope confirms the
+        // tag.
+        let filter = TaskIndexFilter {
+            statuses: vec![TaskStatus::InProgress],
+            any_tags: PERF_LANE_TAGS
+                .iter()
+                .map(|tag| (*tag).to_string())
+                .collect(),
+            ..TaskIndexFilter::default()
+        };
+        let mut partitions = self.registry.partition_ids()?;
+        partitions.insert(self.workspace_id.clone());
+        for partition_id in partitions {
+            if partition_id == self.workspace_id && !in_flight_tasks.is_empty() {
+                continue;
+            }
+            for id in self
+                .registry
+                .indexed_task_ids_filtered(&partition_id, &filter)?
+            {
                 if !protecting.contains(id.as_str()) && self.cached_needs_perf_lane(&id, &known)? {
                     holders.insert(id);
                 }
@@ -99,6 +131,7 @@ impl TaskCommitBoundary {
                 holders.insert(task_id.clone());
             }
         }
+        holders.extend(self.other_partition_owner_wave_perf_tasks_locked()?);
         for task_id in carriers {
             if self.cached_needs_perf_lane(task_id, &known)? {
                 holders.insert(task_id.clone());

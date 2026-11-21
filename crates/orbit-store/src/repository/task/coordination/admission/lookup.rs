@@ -44,6 +44,32 @@ impl TaskCommitBoundary {
         })
     }
 
+    /// Protecting claims for this partition (for workspace-local footprint
+    /// guards) together with protecting claims across all partitions on this
+    /// host (for machine-wide perf-lane serialization), each claim decoded once.
+    pub(crate) fn partition_and_host_protecting_claims(
+        &self,
+    ) -> Result<(Vec<ExecutionClaim>, Vec<ExecutionClaim>), OrbitError> {
+        self.enter_ordinary(|| {
+            let mut local = Vec::new();
+            let mut host = Vec::new();
+            for (workspace_id, row) in self
+                .store
+                .host_execution_claim_rows_protecting_footprint()?
+            {
+                let claim: ExecutionClaim = decode_claim(&row.payload_json)?;
+                if !claim.phase.protects_footprint() {
+                    continue;
+                }
+                if workspace_id == self.workspace_id {
+                    local.push(claim.clone());
+                }
+                host.push(claim);
+            }
+            Ok((local, host))
+        })
+    }
+
     /// One claim by its indexed identity, after settling any pending commit.
     fn execution_claim(&self, claim_id: &str) -> Result<Option<ExecutionClaim>, OrbitError> {
         self.coordination_row(CLAIM_KIND, claim_id)?
