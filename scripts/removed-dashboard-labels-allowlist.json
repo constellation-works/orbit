@@ -1,1 +1,7 @@
-[]
+[
+  {
+    "label": "Registered hosts",
+    "doc": "website/src/content/docs/how-to/dashboard.md",
+    "reason": "The Fleet row describes what the page lists (registered hosts with their health, drains and capacity), not the hosts list's removed aria-label."
+  }
+]

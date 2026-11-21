@@ -3,9 +3,12 @@
 
 From the delivery diff against the guardrails base (`CI_TEST_BASE`, with the
 merge-base fallback `scripts/ci-guardrails.sh` uses), take quoted multi-word
-labels on lines removed from `crates/orbit-web/assets/dashboard/**`, drop any
-label the same diff re-adds, and fail when the label is still present in
-current-state docs, the website or shipped skills. Legitimate keeps are
+labels on lines removed from `crates/orbit-web/assets/dashboard/**` (comment
+lines are never copy), drop any label the same diff re-adds, and fail when the
+label is still mentioned in current-state docs, the website or shipped skills.
+A doc occurrence is not a mention when it is the prefix of a longer code span
+or fenced-code line, such as the CLI command `orbit host add` for the label
+"orbit host", or when it sits inside an HTML `class` attribute. Legitimate keeps are
 recorded in `scripts/removed-dashboard-labels-allowlist.json`. An entry is
 judged only when this diff removes that same label: it is stale when the
 named document no longer contains it. An earlier delivery's entry is left
@@ -51,6 +54,13 @@ CSS_CONTENT = re.compile(r"\bcontent\s*:")
 PROPERTY_BEFORE = re.compile(r"[{,]\s*$")
 PROPERTY_AFTER = re.compile(r"\s*:(?!:)")
 IDENTIFIER_WORD = re.compile(r"[a-z0-9_-]+")
+# A whole-line JS/CSS or HTML comment. Its quoted runs name code, commands or
+# history, never visible copy.
+COMMENT_LINE = re.compile(r"^\s*(?://|/\*|\*|<!--)")
+# Markdown inline code span (a run of backticks closed by the same run) and a
+# fenced code block delimiter.
+CODE_SPAN = re.compile(r"(`+)(.+?)\1")
+FENCE = re.compile(r"^\s*(```|~~~)")
 
 
 def git(*arguments):
@@ -113,6 +123,8 @@ def is_class_or_property(line, match, words, suffix):
 def labels_in(line, path=""):
     suffix = os.path.splitext(path)[1]
     labels = []
+    if COMMENT_LINE.match(line):
+        return labels
     for match in QUOTED.finditer(line):
         value = next(group for group in match.groups() if group is not None)
         label = " ".join(value.split())
@@ -181,6 +193,35 @@ def doc_paths():
     return paths
 
 
+def continues_with_token(text, end):
+    # True when `text` goes on past `end` with whitespace and another token.
+    rest = text[end:]
+    return rest[:1].isspace() and bool(rest.strip())
+
+
+def is_mention(line, label, in_fence):
+    # A label occurrence that only begins a longer command or code fragment
+    # (`orbit host add` for "orbit host") names that command, not the
+    # dashboard label; one inside an HTML class attribute is markup. Any other
+    # occurrence, including prose and a code span that is exactly the label,
+    # is a mention.
+    spans = [(match.start(2), match.end(2)) for match in CODE_SPAN.finditer(line)]
+    start = line.find(label)
+    while start != -1:
+        end = start + len(label)
+        if in_fence:
+            command_prefix = continues_with_token(line, end)
+        else:
+            command_prefix = any(
+                first <= start and end <= last
+                and continues_with_token(line[:last], end)
+                for first, last in spans)
+        if not command_prefix and not HTML_CLASS_ATTR.search(line[:start]):
+            return True
+        start = line.find(label, start + 1)
+    return False
+
+
 def doc_hits(labels):
     hits = {label: [] for label in labels}
     for path in doc_paths():
@@ -189,9 +230,13 @@ def doc_hits(labels):
             lines = path.read_text(errors="replace").splitlines()
         except OSError:
             continue
+        in_fence = False
         for number, line in enumerate(lines, 1):
+            if FENCE.match(line):
+                in_fence = not in_fence
+                continue
             for label in labels:
-                if label in line:
+                if label in line and is_mention(line, label, in_fence):
                     hits[label].append((relative, number))
     return hits
 

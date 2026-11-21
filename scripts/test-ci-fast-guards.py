@@ -3806,6 +3806,47 @@ class RemovedDashboardLabelTests(unittest.TestCase):
         self.assertIn(f"{self.DOC}:3", result.stderr)
         self.assertNotIn("action approve", result.stderr)
 
+    def rebase_fixture(self, panel_source, doc_text):
+        self.panel.write_text(panel_source)
+        self.doc.write_text(doc_text)
+        self.git("add", ".")
+        self.git("commit", "-qm", "fixture rebase")
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+
+    def test_cli_command_prefix_is_not_a_mention_but_ui_prose_is(self):
+        # ORB-26248: promotion PR #10360 failed because docs naming the CLI
+        # command `orbit host add` matched the removed label "orbit host".
+        label = "orbit host"
+        cli_doc = ("# Overview\n\nRegister it with `orbit host add`.\n\n"
+                   "```sh\norbit host add peer --url https://peer\n```\n")
+        self.rebase_fixture(f'export const title = "{label}";\n', cli_doc)
+        self.panel.write_text("export const title = 'New Panel';\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.doc.write_text(cli_doc + f"\nThe {label} card lists peers.\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(f'"{label}"', result.stderr)
+        self.assertIn(f"{self.DOC}:9", result.stderr)
+        self.assertNotIn(f"{self.DOC}:3", result.stderr)
+        self.assertNotIn(f"{self.DOC}:6", result.stderr)
+        self.doc.write_text(cli_doc + f"\nThe card is titled `{label}`.\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(f"{self.DOC}:9", result.stderr)
+
+    def test_comment_runs_and_doc_class_attributes_are_not_labels(self):
+        # ORB-26248: a backticked command in a removed JS comment and a class
+        # list matched in a mock's class attribute both failed PR #10360.
+        self.rebase_fixture(
+            "// Rows are `orbit host list --json` output.\n"
+            "field('phase', 'Phase', value, live ? 'fleet-phase' : 'fleet-phase visually-hidden');\n",
+            "# Overview\n\nRun `orbit host list --json`.\n\n"
+            '<span class="fleet-field fleet-phase visually-hidden">idle</span>\n')
+        self.panel.write_text("export const title = 'New Panel';\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 # These cases assert rendezvous, relative completion times or lane ordering.
 # Run them alone, as before. Other cases own independent roots, subprocess
