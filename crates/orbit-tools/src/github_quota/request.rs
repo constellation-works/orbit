@@ -151,6 +151,13 @@ pub(crate) fn read_rate_limit(request: &ExecRequest, deadline: Option<Instant>) 
             "rate-limit read skipped: timeout budget exhausted".to_string(),
         );
     };
+    #[cfg(any(test, feature = "test-support"))]
+    if simulated_probe::fire(&probe) {
+        if let Some(deadline) = deadline {
+            super::store::reach_deadline(deadline);
+        }
+        return RateLimitAnswer::Clipped("simulated caller timeout".to_string());
+    }
     let clipped = probe
         .timeout_ms
         .is_some_and(|limit| limit < REFRESH_TIMEOUT_MS);
@@ -168,6 +175,45 @@ pub(crate) fn read_rate_limit(request: &ExecRequest, deadline: Option<Instant>) 
             "rate-limit read could not run: {}",
             orbit_common::security::redaction::redact_all(&error.to_string())
         )),
+    }
+}
+
+/// Simulate a clipped probe after observing its request, with a fixed admission
+/// clock until the probe consumes its deadline. Test fixtures only.
+#[cfg(any(test, feature = "test-support"))]
+pub fn with_simulated_clipped_probe<T>(
+    observe: impl Fn(&ExecRequest) + 'static,
+    body: impl FnOnce() -> T,
+) -> T {
+    simulated_probe::with(observe, || super::store::with_fixed_clock(body))
+}
+
+#[cfg(any(test, feature = "test-support"))]
+mod simulated_probe {
+    use orbit_exec::ExecRequest;
+    use std::{cell::RefCell, rc::Rc};
+    type Observer = Rc<dyn Fn(&ExecRequest)>;
+    thread_local! { static OBSERVER: RefCell<Option<Observer>> = const { RefCell::new(None) }; }
+    pub(super) fn with<T>(observe: impl Fn(&ExecRequest) + 'static, body: impl FnOnce() -> T) -> T {
+        struct Reset(Option<Observer>);
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                OBSERVER.with(|slot| {
+                    slot.replace(self.0.take());
+                });
+            }
+        }
+        let _reset = Reset(OBSERVER.with(|slot| slot.replace(Some(Rc::new(observe)))));
+        body()
+    }
+    pub(super) fn fire(request: &ExecRequest) -> bool {
+        let observer = OBSERVER.with(|slot| slot.borrow().clone());
+        if let Some(observer) = observer {
+            observer(request);
+            true
+        } else {
+            false
+        }
     }
 }
 
