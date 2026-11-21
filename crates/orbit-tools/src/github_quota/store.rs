@@ -325,6 +325,13 @@ pub(super) fn monotonic_now() -> Instant {
     Instant::now()
 }
 
+/// Whether less than one whole millisecond of the budget ending at `deadline`
+/// remains: the point where a caller's floored remaining budget reads zero and
+/// it returns its timeout instead of spawning.
+pub(super) fn budget_spent(deadline: Instant) -> bool {
+    deadline.saturating_duration_since(monotonic_now()) < Duration::from_millis(1)
+}
+
 /// A deadline clock a fixture can advance while a record's refusal is being
 /// evaluated, the instant between the record lock and the deadline check.
 #[cfg(any(test, feature = "test-support"))]
@@ -334,6 +341,7 @@ mod refusal_clock {
 
     thread_local! {
         static ADVANCE_AT_REFUSAL: Cell<Option<Duration>> = const { Cell::new(None) };
+        static ADVANCE_AFTER_DECISION: Cell<Option<Duration>> = const { Cell::new(None) };
         static OFFSET: Cell<Duration> = const { Cell::new(Duration::ZERO) };
     }
 
@@ -342,8 +350,19 @@ mod refusal_clock {
         ADVANCE_AT_REFUSAL.set(Some(by));
     }
 
+    pub(super) fn arm_after_decision(by: Duration) {
+        OFFSET.set(Duration::ZERO);
+        ADVANCE_AFTER_DECISION.set(Some(by));
+    }
+
     pub(super) fn at_refusal_evaluation() {
         if let Some(by) = ADVANCE_AT_REFUSAL.take() {
+            OFFSET.set(by);
+        }
+    }
+
+    pub(super) fn after_refusal_decision() {
+        if let Some(by) = ADVANCE_AFTER_DECISION.take() {
             OFFSET.set(by);
         }
     }
@@ -359,6 +378,15 @@ mod refusal_clock {
 #[cfg(any(test, feature = "test-support"))]
 pub fn advance_deadline_clock_at_next_refusal(by: Duration) {
     refusal_clock::arm(by);
+}
+
+/// Make this thread's next refusal, once its decision is published and before
+/// its caller delivers it, advance the admission deadline clock by `by` for the
+/// rest of the thread, so a request deadline crosses after the quota decision.
+/// Test fixtures only.
+#[cfg(any(test, feature = "test-support"))]
+pub fn advance_deadline_clock_after_next_refusal_decision(by: Duration) {
+    refusal_clock::arm_after_decision(by);
 }
 
 /// The directory of host-shared quota records.
@@ -598,7 +626,10 @@ impl GithubQuotaStore {
 
     /// [`Self::admit`] for a caller that never spawns its protected call once
     /// the store's deadline has passed: a read admitted at or after that
-    /// deadline is not counted or debited, since no call follows it.
+    /// deadline is not counted or debited, since no call follows it. A refusal
+    /// is returned uncounted: the caller delivers it only while its budget
+    /// remains and then records it with [`Self::record_refusal`], so a deadline
+    /// crossed between the decision and delivery leaves no refusal behind.
     pub fn admit_unless_expired(
         &self,
         policy: &GithubQuotaPolicy,
@@ -628,18 +659,19 @@ impl GithubQuotaStore {
             let entry = record.resources.entry(resource.to_string()).or_default();
             entry.roll_window(now);
             let refusal = entry.refusal(policy, caller, resource, now);
-            // The deadline is read under the record lock, after the refusal is
-            // evaluated, so a read that ran out of budget while waiting for it,
-            // probing or deciding is neither charged nor counted as refused:
-            // its caller returns the timeout instead.
-            let expired = !charge_expired && self.deadline.is_some_and(|at| monotonic_now() >= at);
             if let Some(refusal) = refusal {
-                if !expired {
+                // A deadline-bound caller counts the refusal itself once it
+                // knows the budget survived to deliver it.
+                if charge_expired {
                     entry.refused.bump(caller);
                 }
                 return Err(refusal);
             }
-            if expired {
+            // The deadline is read under the record lock, after the refusal is
+            // evaluated, so a read that ran out of budget while waiting for it,
+            // probing or deciding is not charged: its caller returns the
+            // timeout instead.
+            if !charge_expired && self.deadline.is_some_and(budget_spent) {
                 return Ok(());
             }
             entry.calls.bump(caller);
@@ -651,6 +683,10 @@ impl GithubQuotaStore {
             }
             Ok(())
         });
+        #[cfg(any(test, feature = "test-support"))]
+        if matches!(decided, Ok(Err(_))) {
+            refusal_clock::after_refusal_decision();
+        }
         match decided {
             Ok(decision) => decision,
             Err(error) => {
@@ -676,6 +712,21 @@ impl GithubQuotaStore {
                     }
                 }
             }
+        }
+    }
+
+    /// Count one read of `resource` by `caller` that [`Self::admit_unless_expired`]
+    /// refused and its caller is delivering. An unwritable record counts
+    /// nothing, as for any refusal the store decides from a read-only copy.
+    pub fn record_refusal(&self, account: &str, caller: GithubCaller, resource: &str, now: u64) {
+        let counted = self.update(account, |record| {
+            let entry = record.resources.entry(resource.to_string()).or_default();
+            entry.roll_window(now);
+            entry.refused.bump(caller);
+        });
+        if let Err(error) = counted {
+            tracing::warn!(target: "orbit_tools::github_quota", %error,
+                "GitHub quota record unavailable; refusal not counted");
         }
     }
 

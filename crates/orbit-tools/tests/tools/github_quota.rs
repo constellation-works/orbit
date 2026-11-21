@@ -1051,6 +1051,92 @@ fn expired_refusal_over_a_writable_hold_leaves_the_refusal_count() {
     );
 }
 
+/// Regression [ORB-26134]: a finite read whose budget runs out after the quota
+/// decision a writable live core hold produced, and before the wrapper delivers
+/// it, returns its timeout, spawns no protected call and leaves the core
+/// refusal count unchanged. The same hold surfaced as a typed throttle within
+/// the budget counts the refusal exactly once.
+#[test]
+fn refusal_decided_before_the_budget_ran_out_is_not_counted_when_it_becomes_a_timeout() {
+    let policy = GithubQuotaPolicy::default();
+    let now = now();
+    let reset = now + 1800;
+    let hold = orbit_common::ProviderReadThrottle {
+        retry_after_seconds: None,
+        reset_epoch_seconds: Some(reset),
+        resource: Some(RESOURCE_CORE.to_string()),
+        principal: None,
+        request_id: None,
+    };
+    let seeded = |records: &Path, gh: &FakeGh| {
+        let mut request = gh.request(&["run", "view", "123"]);
+        request.timeout_ms = Some(60_000);
+        let account = github_quota::request_account_key(&request);
+        store(records).refresh_if_due(&policy, &account, now, &|| known(4000, reset));
+        store(records).record_throttle(&policy, &account, RESOURCE_CORE, &hold, now);
+        (request, account)
+    };
+    let refused_by_delivery = |records: &Path, account: &str| {
+        store(records)
+            .status(&policy, account, now)
+            .resources
+            .iter()
+            .find(|resource| resource.resource == RESOURCE_CORE)
+            .expect("the core resource is reported")
+            .refused
+            .delivery
+    };
+
+    // Budget left: the typed throttle is returned and counted once.
+    let within_records = TempDir::new().unwrap();
+    let within_gh = FakeGh::new("{}", "ok");
+    let (within, within_account) = seeded(within_records.path(), &within_gh);
+    let refused = github_quota::with_scoped_guard(store(within_records.path()), policy, || {
+        github_quota::admit_gh_request_within_budget(GithubCaller::Delivery, &within)
+    })
+    .expect_err("a live core hold refuses a read admitted within its budget");
+    assert_eq!(
+        refused_throttle(&refused).resource.as_deref(),
+        Some(RESOURCE_CORE)
+    );
+    assert_eq!(
+        refused_by_delivery(within_records.path(), &within_account),
+        1
+    );
+
+    // The deadline crosses after the hold's refusal is decided: both
+    // child-spawning entry points return their timeout and count nothing.
+    // Armed last: the skewed clock stays on this thread afterwards.
+    let run_records = TempDir::new().unwrap();
+    let run_gh = FakeGh::new("{}", "ok");
+    let (run_request, run_account) = seeded(run_records.path(), &run_gh);
+    github_quota::advance_deadline_clock_after_next_refusal_decision(Duration::from_secs(120));
+    let run = github_quota::with_scoped_guard(store(run_records.path()), policy, || {
+        github_quota::run_gh_request(GithubCaller::Delivery, &run_request)
+    })
+    .expect("a budget spent after the decision returns the timeout, not the hold's throttle");
+    assert!(run.timed_out && !run.success, "{run:?}");
+    assert!(run_gh.calls().is_empty(), "{:?}", run_gh.calls());
+    assert_eq!(refused_by_delivery(run_records.path(), &run_account), 0);
+
+    let spawn_records = TempDir::new().unwrap();
+    let spawn_gh = FakeGh::new("{}", "ok");
+    let (spawn_request, spawn_account) = seeded(spawn_records.path(), &spawn_gh);
+    github_quota::advance_deadline_clock_after_next_refusal_decision(Duration::from_secs(120));
+    let admitted = github_quota::with_scoped_guard(store(spawn_records.path()), policy, || {
+        github_quota::admit_gh_request_within_budget(GithubCaller::Delivery, &spawn_request)
+    });
+    assert!(
+        matches!(
+            admitted,
+            Err(orbit_common::OrbitError::ProcessTimeout { .. })
+        ),
+        "{admitted:?}"
+    );
+    assert!(spawn_gh.calls().is_empty(), "{:?}", spawn_gh.calls());
+    assert_eq!(refused_by_delivery(spawn_records.path(), &spawn_account), 0);
+}
+
 /// Regression [ORB-26101]: the accounting a caller runs after its own child
 /// returns belongs to the original request deadline, not a fresh budget. A
 /// primary throttle reported with 50 ms of a 5 s budget left must give up on a

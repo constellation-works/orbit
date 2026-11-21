@@ -35,13 +35,15 @@ use orbit_common::{OrbitError, PrivateVcsFailure, PrivateVcsFailureClass, Provid
 use orbit_exec::{ExecRequest, NoSandbox, run_process};
 use orbit_types::tool::ExecutionResult;
 
-#[cfg(any(test, feature = "test-support"))]
-pub use store::advance_deadline_clock_at_next_refusal;
 pub use store::{
     CallCounts, DEFAULT_AGENT_RESERVE_PERCENT, DEFAULT_BACKGROUND_RESERVE_PERCENT,
     DEFAULT_REFRESH_INTERVAL, GithubCaller, GithubQuotaPolicy, GithubQuotaStatus, GithubQuotaStore,
     GithubResourceStatus, ObservedQuota, QuotaRefusal, QuotaRefusalReason, RESOURCE_CORE,
     RESOURCE_GRAPHQL, RateLimitAnswer,
+};
+#[cfg(any(test, feature = "test-support"))]
+pub use store::{
+    advance_deadline_clock_after_next_refusal_decision, advance_deadline_clock_at_next_refusal,
 };
 
 /// The process's guard: `None` until [`enable_host_guard`].
@@ -141,11 +143,13 @@ fn remaining_millis(deadline: Instant) -> u64 {
 /// own timeout budget. A request admitted once that budget is spent is not
 /// charged: the caller returns its typed budget error without spawning `gh`.
 pub fn admit_gh_request(caller: GithubCaller, request: &ExecRequest) -> Result<(), OrbitError> {
-    admit_by_deadline(
-        caller,
-        request,
-        gh_request_deadline(request, Instant::now()),
-    )
+    let deadline = gh_request_deadline(request, Instant::now());
+    admit_by_deadline(caller, request, deadline).map_err(|decided| {
+        // The caller checks its own budget after this returns, so a refusal
+        // decided once the budget is spent is its timeout: not counted.
+        let spent = deadline.is_some_and(store::budget_spent);
+        decided.deliver(request, !spent)
+    })
 }
 
 /// [`admit_gh_request`] for a caller that spawns the child itself: returns
@@ -167,20 +171,48 @@ pub fn admit_gh_request_within_budget(
     }
     let deadline = gh_request_deadline(request, Instant::now());
     let admitted = admit_by_deadline(caller, request, deadline);
-    // As in `run_gh_request`, a spent budget wins over the refusal it caused.
+    // As in `run_gh_request`, a spent budget wins over the refusal it caused,
+    // and a refusal is counted only once it is certain to be delivered.
     let bounded = remaining_request_budget(request, deadline).ok_or_else(exhausted)?;
-    admitted?;
+    admitted.map_err(|decided| decided.deliver(request, true))?;
     Ok(bounded)
+}
+
+/// A local refusal decided under the record lock and not yet counted: counting
+/// waits until the caller knows its budget survived to deliver the typed
+/// throttle, so a refusal that becomes a timeout leaves the count unchanged.
+struct DecidedRefusal {
+    refusal: QuotaRefusal,
+    store: GithubQuotaStore,
+    account: String,
+    now: u64,
+}
+
+impl DecidedRefusal {
+    /// The typed throttle for `request`, counting the refusal first when
+    /// `counted`.
+    fn deliver(self, request: &ExecRequest, counted: bool) -> OrbitError {
+        if counted {
+            self.store.record_refusal(
+                &self.account,
+                self.refusal.caller,
+                &self.refusal.resource,
+                self.now,
+            );
+        }
+        refusal_error(&self.refusal, request)
+    }
 }
 
 /// Admit `request` against `deadline`. A read admitted once the deadline has
 /// passed is not charged: every caller checks its own budget after admission
-/// and returns instead of spawning `gh`, so no protected call follows it.
+/// and returns instead of spawning `gh`, so no protected call follows it. A
+/// refusal comes back uncounted for the caller to [`DecidedRefusal::deliver`].
 fn admit_by_deadline(
     caller: GithubCaller,
     request: &ExecRequest,
     deadline: Option<Instant>,
-) -> Result<(), OrbitError> {
+) -> Result<(), Box<DecidedRefusal>> {
     let Some((store, policy)) = active_guard() else {
         return Ok(());
     };
@@ -190,16 +222,17 @@ fn admit_by_deadline(
     let account = request::request_account(request);
     let store = store.bounded_by(deadline);
     let probe = || request::read_rate_limit(request, deadline);
+    let now = now_epoch_seconds();
     store
-        .admit_unless_expired(
-            &policy,
-            &account,
-            caller,
-            resource,
-            now_epoch_seconds(),
-            &probe,
-        )
-        .map_err(|refusal| refusal_error(&refusal, request))
+        .admit_unless_expired(&policy, &account, caller, resource, now, &probe)
+        .map_err(|refusal| {
+            Box::new(DecidedRefusal {
+                refusal,
+                store,
+                account,
+                now,
+            })
+        })
 }
 
 /// Record what `result` of an admitted `request` says about the quota: an
@@ -298,13 +331,14 @@ pub fn run_gh_request(
     let deadline = gh_request_deadline(request, started);
     let admitted = admit_by_deadline(caller, request, deadline);
     // The budget is checked before a refusal propagates: a refusal decided
-    // once the budget is spent is the timeout, not a throttle to wait out.
+    // once the budget is spent is the timeout, not a throttle to wait out, and
+    // only a refusal that survives this check is counted.
     let Some(bounded_request) = remaining_request_budget(request, deadline) else {
         return Ok(timed_out_before_start(
             u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         ));
     };
-    admitted?;
+    admitted.map_err(|decided| decided.deliver(request, true))?;
     let result = run_process(&bounded_request, &NoSandbox)?;
     if !result.success {
         observe_gh_failure_by_deadline(&bounded_request, &result.stderr, deadline);
