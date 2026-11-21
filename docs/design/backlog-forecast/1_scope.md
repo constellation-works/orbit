@@ -3,7 +3,7 @@ title: "Scope: backlog forecast v2 from drain admission"
 owner: claude
 last_updated: 2026-11-20
 last_validated: 2026-11-08
-status: Draft
+status: Accepted
 stage: building
 next: "Residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) are not filed"
 feature: backlog-forecast
@@ -15,7 +15,7 @@ tags: [backlog-forecast, backlog-forecast-v2, analytics-metrics]
 
 # Scope: backlog forecast v2 from drain admission
 
-Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with six implementation tasks below. The per-task riskiness estimator shipped in [ORB-18690], [ORB-18686] shipped the admission factor, [ORB-18687] shipped review-mode sampling, [ORB-18688] shipped attempt outcomes and blocked returns, [ORB-18689] shipped enforce-mode resource fit as `MODEL_VERSION` **6**, [ORB-18853] keeps sub-second and same-instant blocked returns drawable as `MODEL_VERSION` **7**, [ORB-18856] counts censored blocked waits in return-wait totals as `MODEL_VERSION` **8**, [ORB-18691] ships one generation of regression rework and donor-based arrivals as `MODEL_VERSION` **9**, and [ORB-18859] stores retry-inclusive per-task work and spend as `MODEL_VERSION` **10** (see [Shipped so far](#shipped-so-far)). [ORB-20673] shifts each attempt by a residual correction as `MODEL_VERSION` **15**, [ORB-20728] counts one residual per distinct task as `MODEL_VERSION` **16**, [ORB-20729] applies that correction to the full-script total as `MODEL_VERSION` **17**, [ORB-21949] fits it and scores task-level calibration on one forecast per task, withholding a cohort whose held-out p90 coverage drops, as `MODEL_VERSION` **18**, and [ORB-25278] removes its cohort-center spread stretch and adds a held-out p50 check as `MODEL_VERSION` **20**, and [ORB-25806] recovers in-origin defect records and reports adjusted totals over a bounded share of fix-history gaps as `MODEL_VERSION` **21**. The explicitly listed residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) remain planned. “v2” names the feature revision; implementations increment `MODEL_VERSION` from the value they find.
+Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with the implementation tasks listed below. The per-task riskiness estimator shipped in [ORB-18690], [ORB-18686] shipped the admission factor, [ORB-18687] shipped review-mode sampling, [ORB-18688] shipped attempt outcomes and blocked returns, [ORB-18689] shipped enforce-mode resource fit as `MODEL_VERSION` **6**, [ORB-18853] keeps sub-second and same-instant blocked returns drawable as `MODEL_VERSION` **7**, [ORB-18856] counts censored blocked waits in return-wait totals as `MODEL_VERSION` **8**, [ORB-18691] ships one generation of regression rework and donor-based arrivals as `MODEL_VERSION` **9**, and [ORB-18859] stores retry-inclusive per-task work and spend as `MODEL_VERSION` **10** (see [Shipped so far](#shipped-so-far)). [ORB-20673] shifts each attempt by a residual correction as `MODEL_VERSION` **15**, [ORB-20728] counts one residual per distinct task as `MODEL_VERSION` **16**, [ORB-20729] applies that correction to the full-script total as `MODEL_VERSION` **17**, [ORB-21949] fits it and scores task-level calibration on one forecast per task, withholding a cohort whose held-out p90 coverage drops, as `MODEL_VERSION` **18**, and [ORB-25278] removes its cohort-center spread stretch and adds a held-out p50 check as `MODEL_VERSION` **20**, and [ORB-25806] recovers in-origin defect records and reports adjusted totals over a bounded share of fix-history gaps as `MODEL_VERSION` **21**. The explicitly listed residual rules (review phases, shadow resource-fit, follower capacity, richer calibration) remain planned. “v2” names the feature revision; implementations increment `MODEL_VERSION` from the value they find.
 
 Bearing: Orbit records managed invocations, task status history, leaf occupancy, admission decisions and host resource profiles. The shared service is `crates/orbit-core/src/application/backlog_forecast/`, with sampling in `backlog_forecast/model.rs`, scenario aggregation in `backlog_forecast/simulation.rs`, synthetic bundles in `backlog_forecast/rework.rs`, and scoring in `backlog_forecast/scoring.rs`. It serves the owner sweep clock and `crates/orbit-web/src/api/diagnostics/backlog_forecast/`. The drain already owns the admission rules this forecast must reuse ([auto-concurrency](../auto-concurrency/2_design.md), [distributed drain](../distributed-drain/1_overview.md)).
 
@@ -135,7 +135,7 @@ with empty selectors made the whole workspace unavailable.
   rework is unsupported (`regression_rework.available` is false), even when
   another pool is bounded. It is present only when every included member's
   rework is supported (a risk probability and a supported pool) and at least
-  one of those pools is bounded.
+  one of those pools is bounded. [ORB-25886] aligned this contract with that rule.
 - **Storage.** Stored model-13 rows stay readable and scored under their
   own version. While 14 was current, the default read served only a
   model-14 snapshot, so a fresh model-13 row was recomputed live, under
@@ -498,7 +498,7 @@ An owner-local forecast uses the owner's execution data. A live pull/follower dr
 
 Riskiness is its own task API/UI feature, consumed unchanged by the forecast. It estimates the chance that a completed task is later named by at least one `regression_from` relation. It is an observed, windowed probability, not a causal assessment or a replacement for admission. Reuse the shared `CodebaseFacts` and `RegressionFilter` of `application/codebase/`, and the landed-delivery diff rows of `diff_stats.rs`; do not scrape rendered prompt marks or rebuild a competing regression ledger.
 
-Use a 30-day window and a minimum support of 5 (configurable as `workflow.regression_risk.window_days` and `min_support` until [ORB-22806] fixed them), not the mark threshold/max-files truncation. Each completed task is one denominator observation, and one numerator observation if any regression link names it, however many fixes/files it has. Retain the existing durable done-time/window semantics. Expose support/window and the observation cutoff: recent deliveries have had less time to reveal defects, and unfiled regressions are invisible.
+Use a 30-day window and a minimum support of 5 (fixed defaults since [ORB-22806] removed the `workflow.regression_risk.*` keys), not the mark threshold/max-files truncation. Each completed task is one denominator observation, and one numerator observation if any regression link names it, however many fixes/files it has. Retain the existing durable done-time/window semantics. Expose support/window and the observation cutoff: recent deliveries have had less time to reveal defects, and unfiled regressions are invisible.
 
 Estimator **2** ([ORB-19361]) fits risk on task size alone. Backtests over eleven weekly folds of Orbit's own history (about 4,550 test tasks, 13.8% regressed) gave AUC 0.64 for estimator 1 (the maximum shrunk per-file rate plus a crew × complexity odds shift, with a Brier score worse than the constant base rate), 0.704 for the declared file count, 0.714 for the diff's file count and 0.737 for lines changed; a crew term added +0.004, within noise, and per-file attribution added nothing over size.
 
@@ -635,7 +635,7 @@ No unanswered v2 scope decisions. Cluster telemetry/scheduling, shared reviewer/
 
 ## Tasks
 
-All six implementation tasks carry `backlog-forecast-v2` and depend on this scope. Scheduling tasks sharing the model/service lock footprint serialize; riskiness can proceed separately. Each updates this doc to identify the behavior it actually shipped.
+The implementation tasks below implement this scope. Scheduling tasks sharing the model/service lock footprint serialize; riskiness can proceed separately. Each updates this doc to identify the behavior it actually shipped.
 
 | Task | Deliverable |
 |---|---|
@@ -652,6 +652,7 @@ All six implementation tasks carry `backlog-forecast-v2` and depend on this scop
 | [ORB-20728] | Shipped: the residual correction keeps one residual per distinct task (the latest eligible forecast), so `n` and weight count independent tasks and a repeated snapshot cannot meet the minimum of 8 (model 16). |
 | [ORB-20729] | Shipped: the residual correction is applied to the full-script total and distributed over its steps, matching the full-task totals it is trained on (model 17). |
 | [ORB-21949] | Shipped: the correction and task-level calibration read one forecast per task (the first taken before work started), calibration reports per-complexity hit rates, and a cohort whose leave-one-out p90 coverage falls below the base and 90% is withheld (model 18). |
+| [ORB-25278] | Shipped: the residual correction shifts each draw by the fitted p50 alone, with no cohort-centre stretch, and checks that p50 on held-out tasks (model 20). |
 | [ORB-25806] | Shipped: in-origin defect-record fixes recovered from the origin's measured delivery, adjusted totals reported over a disclosed `bounded_gap` of at most 10% of a pool's fix observations, and labeled calibration series (model 21, regression rework factor 3). |
 
 ## Task References
@@ -679,6 +680,9 @@ All six implementation tasks carry `backlog-forecast-v2` and depend on this scop
 - [ORB-20729] — applies the residual correction to the full-script total (model 17).
 - [ORB-21949] — fits and scores task-level calibration on the first not-started forecast per task (model 18).
 - [ORB-21950] — scores the pre-regression baseline calibration independently while adjusted totals are withheld.
+- [ORB-22806] — removes the regression-risk prompt marks and the `workflow.regression_risk.*` keys, fixing riskiness at a 30-day window and minimum support of 5.
+- [ORB-25278] — replaces the residual correction's cohort-centre stretch with a pure p50 shift, checked on held-out tasks (model 20).
 - [ORB-25806] — recovers in-origin defect records and bounds fix-history gaps so the adjusted forecast can be reported and scored (model 21).
+- [ORB-25886] — aligns the response contract's regression qualifiers with the model 21 bounded-gap rule.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

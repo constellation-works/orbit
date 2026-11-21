@@ -1,8 +1,8 @@
 ---
 title: "Scope: operator-granted tools for the implementing activity (`granted_tools`)"
 owner: claude
-last_updated: 2026-11-09
-last_validated: 2026-11-09
+last_updated: 2026-11-20
+last_validated: 2026-11-20
 status: Implemented
 stage: shipped
 next: "—"
@@ -15,7 +15,7 @@ tags: [granted-tools]
 
 # Scope: operator-granted tools for the implementing activity (`granted_tools`)
 
-Status: Implemented — all six implementation phases are shipped. Grants are
+Status: Implemented — all six implementation phases are shipped, as scoped by [ORB-18317]. Grants are
 operator-only, owner-host-only and frozen for a dispatched attempt. Every
 currently denied implementer tool is mutating: grants authorize reviewed
 proposals, never live mutations. See the shipped
