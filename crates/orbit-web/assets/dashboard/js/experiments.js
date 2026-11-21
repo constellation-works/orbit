@@ -296,8 +296,8 @@ function listItem(experiment, authoring) {
       el("span", { class: "ex-arm-name" }, [
         armSwatch(armColor(index)),
         el("span", { text: arm.name }),
-        arm.control ? el("span", { class: "mx-sc-tag", text: "control" }) : null,
-        arm.retired_segment != null ? el("span", { class: "mx-sc-tag", text: `retired at ${arm.retired_segment}` }) : null,
+        arm.control ? el("span", { class: "stat-tile-tag", text: "control" }) : null,
+        arm.retired_segment != null ? el("span", { class: "stat-tile-tag", text: `retired at ${arm.retired_segment}` }) : null,
       ]),
       bar,
       el("span", {

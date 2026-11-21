@@ -560,7 +560,12 @@ function classTilesNode(payload, window) {
   const byClass = payload.incidents_by_class || {};
   const eventsByClass = payload.raw_events_by_class || {};
   const runsByClass = payload.affected_runs_by_class || {};
-  const tiles = el("div", { class: "incident-tiles", role: "group", "aria-label": "Incident class" });
+  const row = el("div", {
+    class: "stat-tiles-row",
+    "data-select": "single",
+    role: "group",
+    "aria-label": "Incident class",
+  });
   const facts = [];
   for (const key of CLASS_ORDER) {
     const category = categories[key] || {};
@@ -570,25 +575,25 @@ function classTilesNode(payload, window) {
     facts.push([key, incidents, events, runs]);
     const on = incidentClass === key;
     const tile = el("button", {
-      class: `incident-tile ${key}${on ? " on" : ""}`,
+      class: `stat-tile incident-${key}`,
       type: "button",
       "aria-pressed": on ? "true" : "false",
       "aria-description": `${incidentClassLabel(key, (payload.class_labels || {})[key])}: ${plural(incidents, "incident")} ${windowPhrase(window)}`,
     }, [
-      el("span", { class: "incident-tile-label" }, [el("span", { class: "incident-dot", "aria-hidden": "true" }), INCIDENT_CLASS_TITLES[key]]),
-      el("span", { class: "incident-tile-count" }, [
-        el("span", { class: "incident-tile-number", text: number(incidents) }),
-        el("span", { text: incidents === 1 ? " incident" : " incidents" }),
+      el("span", { class: "stat-tile-label" }, [
+        el("span", { class: "incident-dot", "aria-hidden": "true" }),
+        el("span", { class: "stat-tile-label-text", text: INCIDENT_CLASS_TITLES[key] }),
       ]),
-      el("span", { class: "incident-tile-sub", text: `${plural(events, "event")} · ${plural(runs, "run")}` }),
-      key === "diagnostic" ? el("span", { class: "incident-tile-note", text: "excluded from tool rates" }) : null,
+      el("span", { class: "stat-tile-figure", text: number(incidents) }),
+      el("span", { class: "stat-tile-compare", text: `${plural(incidents, "incident")} · ${plural(events, "event")} · ${plural(runs, "run")}` }),
+      key === "diagnostic" ? el("span", { class: "stat-tile-note", text: "excluded from tool rates" }) : null,
     ]);
     tile.dataset.class = key;
     tile.addEventListener("click", () => selectClass(key));
-    tiles.appendChild(tile);
+    row.appendChild(tile);
   }
 
-  const children = [tiles];
+  const children = [el("div", { class: "stat-tiles" }, [row])];
   if (payload.truncated) {
     children.push(el("p", {
       class: "incident-scan-note",

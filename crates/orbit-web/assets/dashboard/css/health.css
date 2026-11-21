@@ -6,34 +6,12 @@
    border, and "no data" is neutral grey. A withheld rate must never be
    able to pass for a confident one at a glance. */
 .rel-summary {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: var(--space-10);
   padding: var(--space-14) var(--space-16);
   border-bottom: 1px solid var(--border);
   background: var(--bg);
 }
-.rel-tile {
-  display: flex; flex-direction: column; gap: var(--space-4);
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xs);
-  padding: var(--space-10) var(--space-12);
-  min-width: 0;
-}
-.rel-tile-label {
-  font-family: var(--font-sans); font-size: var(--text-xs); font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg-dim);
-}
-.rel-tile-value {
-  font-family: var(--font-mono); font-size: var(--text-xl); color: var(--fg);
-}
-.rel-tile-hint {
-  font-family: var(--font-sans); font-size: var(--text-xs); color: var(--fg-dim);
-  overflow-wrap: anywhere;
-}
 .rel-rate {
-  font-family: var(--font-mono); font-size: var(--text-xl); color: var(--fg);
+  font-family: var(--font-mono); color: var(--fg);
 }
 .rel-rate-low {
   font-size: var(--text-sm); color: var(--fg-dim);
@@ -116,25 +94,12 @@ td .rel-rate { font-size: var(--text-sm); }
 .incident-modes .mx-seg-btn { min-width: 44px; min-height: 36px; }
 
 .incident-classes { display: flex; flex-direction: column; gap: var(--space-10); padding: var(--space-14) var(--space-16) 0; }
-.incident-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--space-10); }
-.incident-tile {
-  display: flex; flex-direction: column; gap: var(--space-6); min-width: 0; padding: var(--space-14) var(--space-16);
-  border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--bg);
-  color: var(--fg); font: inherit; text-align: left; cursor: pointer;
-}
-.incident-tile:hover { border-color: #3a424d; }
-.incident-tile[aria-pressed="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-wash); }
-.incident-tile-label { display: flex; align-items: center; gap: var(--space-8); color: var(--fg-dim); font: var(--text-md) var(--font-sans); }
-.incident-tile-count { display: flex; align-items: baseline; gap: var(--space-6); color: var(--fg-dim); font: var(--text-md) var(--font-sans); }
-.incident-tile-number { color: var(--fg); font: 600 26px/1.1 var(--font-sans); font-variant-numeric: tabular-nums; }
-.incident-tile-sub { color: var(--fg-mute); font: var(--text-sm) var(--font-mono); overflow-wrap: anywhere; }
-.incident-tile-note { color: var(--fg-mute); font: var(--text-sm) var(--font-sans); }
 .incident-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--dot, var(--fg-mute)); }
-.incident-tile.unexpected { --dot: var(--state-failed); }
-.incident-tile.expected { --dot: var(--status-proposed); }
-.incident-tile.denied { --dot: var(--state-held); }
-.incident-tile.diagnostic { --dot: var(--fg-mute); }
-.incident-tile.deferred { --dot: var(--state-held); }
+.stat-tile.incident-unexpected { --dot: var(--state-failed); }
+.stat-tile.incident-expected { --dot: var(--status-proposed); }
+.stat-tile.incident-denied { --dot: var(--state-held); }
+.stat-tile.incident-diagnostic { --dot: var(--fg-mute); }
+.stat-tile.incident-deferred { --dot: var(--state-held); }
 .incident-scan-note { margin: 0; color: var(--state-pending); font: var(--text-sm)/1.5 var(--font-sans); }
 
 .incident-layout {
@@ -319,7 +284,6 @@ td .rel-rate { font-size: var(--text-sm); }
 .incident-evidence td { font: var(--text-xs)/1.5 var(--font-mono); }
 .incident-evidence td.stderr { min-width: 14rem; white-space: normal; overflow-wrap: anywhere; }
 .incident-actions { display: flex; flex-wrap: wrap; gap: var(--space-8); padding-top: var(--space-14); border-top: 1px solid var(--border); }
-.incident-tile:focus-visible,
 .incident-action:focus-visible, .incident-related-item:focus-visible,
 .incident-link-button:focus-visible, .incident-copy:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
@@ -336,12 +300,6 @@ td .rel-rate { font-size: var(--text-sm); }
 @container diagnostics-card (max-width: 640px) {
   .incident-classes { padding-left: var(--space-12); padding-right: var(--space-12); }
   .incident-layout { padding: var(--space-12); gap: var(--space-12); }
-  /* The first four classes sit as two equal-height rows of two; the odd fifth
-     tile spans the width at its own height [ORB-23511]. */
-  .incident-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: var(--space-8); }
-  .incident-tile:last-child:nth-child(odd) { grid-column: 1 / -1; }
-  .incident-tile { padding: var(--space-12); }
-  .incident-tile-number { font-size: var(--text-2xl); }
   .incident-axis-row, .incident-cause-head, .incident-row { grid-template-columns: minmax(0, 1fr) auto auto; gap: var(--space-6) var(--space-12); }
   .incident-row > .incident-main, .incident-cause-head > .incident-main { grid-column: 1 / -1; }
   .incident-row.child { padding-left: var(--space-24); }
@@ -690,30 +648,7 @@ td .rel-rate { font-size: var(--text-sm); }
 .mx-chip:hover { border-color: var(--accent); }
 .mx-blurb { margin: calc(-1 * var(--space-4)) 0 0; color: var(--fg-mute); font: var(--text-md) var(--font-sans); }
 
-/* Series cards double as the legend and the series toggles. */
-.mx-trends, .rp-card { container-type: inline-size; }
-.mx-series { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--space-12); }
-/* Prevent a 4-tile series grid from wrapping 3+1 (leaving an orphan) at mid widths.
-   A size query measures the container's content box, which already excludes the card's
-   padding and border. Four 170px tiles with 3 gaps of 12px need 716px, so two columns
-   apply below that. The bound is 715.98px, not 716px: Chromium's comparison allows one
-   1/64px layout unit of slack, and 715.98px still matches the widest width below 716px. */
-@container (max-width: 715.98px) {
-  .mx-series:has(> .mx-sc:nth-child(4):last-child):not(:has(> .mx-sc-breakdown)) {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-.mx-series > .mx-sc-breakdown { grid-column: 1 / -1; }
-.mx-sc {
-  appearance: none; text-align: left; cursor: pointer; color: inherit; font: inherit;
-  display: flex; flex-direction: column; gap: var(--space-6); min-width: 0;
-  background: var(--bg-sunk); border: 1px solid var(--hair); border-radius: var(--radius); padding: var(--space-12) var(--space-14);
-}
-.mx-sc:hover, .mx-sc.on { border-color: var(--border-strong); }
-.mx-sc.off { opacity: 0.42; }
-.mx-sc-static { cursor: default; }
-.mx-sc-static:hover { border-color: var(--hair); }
-.mx-sc-breakdown-list { display: flex; flex-direction: column; width: 100%; }
+/* Series rows inside a grouped stat tile. The tiles themselves are .stat-tile. */
 .mx-series-row {
   appearance: none; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
   gap: var(--space-4) var(--space-12); min-width: 0; padding: var(--space-8) 0; border: 0; border-top: 1px solid var(--hair);
@@ -726,21 +661,15 @@ td .rel-rate { font-size: var(--text-sm); }
 .mx-series-row-sub, .mx-series-row-foot { grid-column: 1 / -1; min-width: 0; overflow-wrap: anywhere; }
 .mx-series-row-sub { color: var(--fg-mute); font: var(--text-sm) var(--font-sans); }
 .mx-series-row-foot { color: var(--fg-mute); font: var(--text-sm) var(--font-mono); }
-.mx-sc-label { display: flex; align-items: center; gap: var(--space-8); color: var(--fg-soft); font: var(--text-md) var(--font-sans); }
-.mx-sc-tag { color: var(--fg-mute); font: var(--text-xs) var(--font-mono); }
-.mx-sc-value { color: var(--fg); font: 600 26px var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
-.mx-sc-delta { display: flex; flex-wrap: wrap; gap: var(--space-6); font: var(--text-sm) var(--font-sans); }
-.mx-sc-sub { color: var(--fg-mute); }
-.mx-sc-foot { color: var(--fg-mute); font: var(--text-sm) var(--font-mono); }
 .mx-card .good { color: var(--state-success); }
 .mx-card .bad { color: var(--warn-fg); }
 .mx-card .flat { color: var(--fg-mute); }
 .mx-swatch { display: inline-block; flex: 0 0 auto; width: 16px; height: 3px; border-radius: var(--radius-2xs); background: var(--mx-c); }
 .mx-swatch.bar { width: 10px; height: 10px; }
-.mx-swatch.dashed, .mx-sc .mx-swatch.dashed {
+.mx-swatch.dashed, .stat-tile .mx-swatch.dashed {
   background: repeating-linear-gradient(90deg, var(--mx-c) 0 5px, transparent 5px 8px);
 }
-.mx-sc .mx-swatch { background: var(--mx-c); }
+.stat-tile .mx-swatch { background: var(--mx-c); }
 
 /* Chart: y axis | plot (gridlines, bars, lines, dots, tooltip) over the
    runs strip and the x axis; a transparent column per bucket takes hover. */
@@ -903,9 +832,6 @@ td .rel-rate { font-size: var(--text-sm); }
 @media (max-width: 600px) {
   .panel > .body.metrics-body { padding: var(--space-10); gap: var(--space-12); }
   .mx-card { padding: var(--space-12); }
-  .mx-series { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-8); }
-  .mx-sc { padding: var(--space-10) var(--space-12); }
-  .mx-sc-value { font-size: var(--text-2xl); }
   .mx-chart-body { gap: var(--space-6); }
   .mx-y-wrap { flex-basis: 32px; }
   .mx-notes { padding-left: 0; }
@@ -943,7 +869,7 @@ td .rel-rate { font-size: var(--text-sm); }
   margin-left: var(--space-6); padding: 0 var(--space-6); border: 1px dashed var(--warn-fg); border-radius: var(--radius-xs);
   color: var(--warn-fg); font: var(--text-xs) var(--font-sans);
 }
-.mx-sc.rp-sparse .mx-swatch { opacity: 0.55; }
+.stat-tile.rp-sparse .mx-swatch { opacity: 0.55; }
 .rp-charts { display: flex; flex-direction: column; gap: var(--space-10); min-width: 0; }
 .rp-frame { position: relative; min-width: 0; border-radius: var(--radius-xs); }
 .rp-frame:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

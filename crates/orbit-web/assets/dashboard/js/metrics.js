@@ -478,52 +478,60 @@ function groupedSeriesCard(card) {
     });
     return button;
   });
-  return el("div", { class: "mx-sc mx-sc-static mx-sc-breakdown", role: "group", "aria-label": card.label }, [
-    el("span", { class: "mx-sc-label", text: card.label }),
-    el("div", { class: "mx-sc-breakdown-list" }, rows),
+  return el("div", { class: "stat-tile stat-tile-stack", role: "group", "aria-label": card.label }, [
+    el("span", { class: "stat-tile-label", text: card.label }),
+    el("div", { class: "stat-tile-stack-list" }, rows),
   ]);
 }
 
+/// A blank or em-dash figure is unknown (STD-07 R16). Zero and other text are readings.
+function figureState(value) {
+  return value == null || value === "—" || value === "Unknown" ? "unknown" : null;
+}
+
 function seriesCards(cards) {
-  return el("div", { class: "mx-series", role: "group", "aria-label": "Series" }, cards.map((card) => {
-    if (card.grouped) return groupedSeriesCard(card);
-    // A figure derived from the series, not a series: no toggle.
-    if (card.static) {
-      return el("div", { class: "mx-sc mx-sc-static", role: "group", "aria-label": card.label }, [
-        el("span", { class: "mx-sc-label", text: card.label }),
-        el("span", { class: "mx-sc-value", text: card.value }),
-        el("span", { class: "mx-sc-delta" }, [el("span", { class: "mx-sc-sub", text: card.sub })]),
-        el("span", { class: "mx-sc-foot", text: card.foot }),
+  return el("div", { class: "stat-tiles" }, [
+    el("div", { class: "stat-tiles-row", role: "group", "aria-label": "Series" }, cards.map((card) => {
+      if (card.grouped) return groupedSeriesCard(card);
+      // A figure derived from the series, not a series: no toggle.
+      if (card.static) {
+        return el("div", { class: "stat-tile", role: "group", "aria-label": card.label, "data-state": figureState(card.value) }, [
+          el("span", { class: "stat-tile-label", text: card.label }),
+          el("span", { class: "stat-tile-figure", text: card.value }),
+          el("span", { class: "stat-tile-compare" }, [el("span", { text: card.sub })]),
+          el("span", { class: "stat-tile-note", text: card.foot }),
+        ]);
+      }
+      const button = el("button", {
+        class: `stat-tile mx-s-${card.swatch || card.key}${card.on ? "" : " off"}`,
+        type: "button",
+        "aria-pressed": card.on ? "true" : "false",
+        "aria-description": card.on ? `Hide ${card.label}` : `Show ${card.label}`,
+        "data-state": figureState(card.value),
+      }, [
+        el("span", { class: "stat-tile-label" }, [
+          el("span", { class: `mx-swatch${card.bar ? " bar" : ""}${card.dashed ? " dashed" : ""}`, "aria-hidden": "true" }),
+          el("span", { class: "stat-tile-label-text", text: card.label }),
+          card.tag && card.tag !== card.label.toLowerCase() ? el("span", { class: "stat-tile-tag", text: card.tag }) : null,
+        ]),
+        card.value != null ? el("span", { class: "stat-tile-figure", text: card.value }) : null,
+        card.delta || card.sub ? el("span", { class: "stat-tile-compare" }, [
+          card.delta ? el("span", { class: card.delta.cls, text: card.delta.text }) : null,
+          card.sub ? el("span", { text: card.sub }) : null,
+        ]) : null,
+        card.foot ? el("span", { class: "stat-tile-note", text: card.foot }) : null,
       ]);
-    }
-    const button = el("button", {
-      class: `mx-sc mx-s-${card.swatch || card.key}${card.on ? " on" : " off"}`,
-      type: "button",
-      "aria-pressed": card.on ? "true" : "false",
-      "aria-description": card.on ? `Hide ${card.label}` : `Show ${card.label}`,
-    }, [
-      el("span", { class: "mx-sc-label" }, [
-        el("span", { class: `mx-swatch${card.bar ? " bar" : ""}${card.dashed ? " dashed" : ""}`, "aria-hidden": "true" }),
-        card.label,
-        card.tag && card.tag !== card.label.toLowerCase() ? el("span", { class: "mx-sc-tag", text: card.tag }) : null,
-      ]),
-      card.value != null ? el("span", { class: "mx-sc-value", text: card.value }) : null,
-      card.delta || card.sub ? el("span", { class: "mx-sc-delta" }, [
-        card.delta ? el("span", { class: card.delta.cls, text: card.delta.text }) : null,
-        card.sub ? el("span", { class: "mx-sc-sub", text: card.sub }) : null,
-      ]) : null,
-      card.foot ? el("span", { class: "mx-sc-foot", text: card.foot }) : null,
-    ]);
-    button.addEventListener("click", () => {
-      const shown = view.shown[shownKey()];
-      const next = { ...shown, [card.key]: !card.on };
-      // The chart always keeps one series.
-      if (!cards.some((other) => (other.key === card.key ? !card.on : other.on))) return;
-      view.shown[shownKey()] = next;
-      rerender();
-    });
-    return button;
-  }));
+      button.addEventListener("click", () => {
+        const shown = view.shown[shownKey()];
+        const next = { ...shown, [card.key]: !card.on };
+        // The chart always keeps one series.
+        if (!cards.some((other) => (other.key === card.key ? !card.on : other.on))) return;
+        view.shown[shownKey()] = next;
+        rerender();
+      });
+      return button;
+    })),
+  ]);
 }
 
 function pendingTrend(title, blurb, payload) {

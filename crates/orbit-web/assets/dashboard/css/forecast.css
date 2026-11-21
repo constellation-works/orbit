@@ -59,12 +59,7 @@
 .fc-scenario .mx-seg-btn { min-height: 44px; padding: 0 var(--space-14); }
 .fc-scenario .mx-seg-btn:disabled { color: var(--fg-mute); cursor: not-allowed; }
 
-/* Totals: three p50 – p90 ranges. Read-outs, not series toggles. */
-.fc-figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-12); }
-.mx-sc.fc-fig { cursor: default; padding: var(--space-16) var(--space-16); }
-.mx-sc.fc-fig:hover { border-color: var(--hair); }
-.fc-total-value { color: var(--fg); font: 500 26px var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
-.fc-total-value.fc-total-unknown { color: var(--fg-dim); }
+/* Totals: three p50 – p90 ranges, drawn as stat tiles. */
 /* One status line, amber, with its reason a tab away. */
 .fc-warning { margin: 0; color: var(--warn-fg); font: var(--text-md)/1.5 var(--font-sans); }
 .fc-warning::before {

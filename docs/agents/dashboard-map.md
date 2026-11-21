@@ -29,7 +29,28 @@ Forecast coverage must describe the same population as its totals. The With prop
 
 ## Shared components
 
-Dialogs and drawers use `dialog-surface` in `css/components.css`, with `dialog-header`, `dialog-body` and `dialog-actions` for their regions. Add `dialog-drawer` for a sticky drawer and use `escCloseButton` in the header where closing is available. Callers own focus, Escape, dismissal and native modal behavior; use `showModal()` for an inert background. The provider usage popover and inline configuration drawer retain their existing nonmodal behavior.
+Reuse a class from `crates/orbit-web/assets/dashboard/css/components.css` instead of adding a per-view look. The kinds:
+
+- `th` and `.col-head` — a column head, in a real table or a grid header row.
+- `.section-title` — a titled section inside a panel.
+- `.panel` — a framed region with a header, an optional `.count`, and a `.body`.
+- `.chip` — a filter chip. `.chip.active` is the selected one.
+- `.empty-state` — nothing to show. `.empty-state.compact` is the short form.
+- `.skeleton`, `.skeleton-row` and `.skeleton-state` — a loading placeholder.
+- `.status-dot` — a colored status dot (`.green`, `.red`, `.orange`).
+- `.disclosure` — a button that reads as its cell's text (`makeDisclosure`).
+- `.copy-id` — a click-to-copy identifier that still reads as mono text.
+- `.action` — a button by weight (`.approve`, `.ship`, `.reject`, `.archive`, `.comment`, `.save`, `.cancel`, `.run-cancel`, `.preview`). `.action-error` is the refusal under it.
+- `.pill` and `.state-label` — a short status with a dot.
+- `.band`, `.band-tabs` and `.band-tab` — a header band and its raised tabs.
+- `.card-table` — a table whose rows restack as cards on a phone.
+- `.panel-placeholder` — the per-workspace placeholder while All workspaces is selected.
+- `.info-hint` — the circled "i" (`infoHint`, and `pinnedInfoHint` for a bubble no scroll box clips).
+- `.progress-strip` — one strip for a lifecycle, a run's stages, or claim delivery. View CSS does not restyle it.
+- `.stat-tiles`, `.stat-tiles-row` and `.stat-tile` — one figure with a label. Put the row inside `.stat-tiles`. The row's column count is always a divisor of the tile count (1–16), so the last line never holds one leftover tile. A tile is `.stat-tile-label`, `.stat-tile-figure`, an optional `.stat-tile-compare` and an optional `.stat-tile-note`. `data-state="unknown"` is an empty or unknown figure, not a filler zero. A single-select filter row sets `data-select="single"` and presses one button; a series the chart can hide uses `.off` instead. `.stat-tile-stack` is the one grouped breakdown that spans the row. `.stat-tile-tag` is the small mono tag, including on a label that is not itself a tile. Use this for a figure-plus-label readout (friction counts, reliability rates, Health incident classes, Metrics and Resources series, forecast totals, experiment arm readouts, codebase file signals). A titled chart, table or form region is a card (`.mx-card`), not a stat tile.
+- `.dialog-surface`, with `.dialog-header`, `.dialog-body` and `.dialog-actions`. Add `.dialog-drawer` for a sticky drawer and use `escCloseButton` in the header where closing is available. Callers own focus, Escape, dismissal and native modal behavior; use `showModal()` for an inert background. The provider usage popover and inline configuration drawer retain their existing nonmodal behavior.
+
+The top-bar search fields are one control, not a kind to copy.
 
 ## How a view is registered and served
 

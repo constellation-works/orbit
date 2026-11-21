@@ -140,25 +140,31 @@ export function armCards(experiment, readout, primary, color) {
     }).filter(Boolean);
     const estimateDifference = num(difference?.overall?.estimate);
     const verdict = forestVerdict(orientedInterval(difference?.overall?.interval, primary?.better === "lower" ? -1 : 1));
-    return el("div", { class: `mx-sc ex-arm${state.startsWith("winner") ? " ex-arm-winner" : ""}`, role: "group", "aria-label": `Arm ${arm.name}` }, [
-      el("span", { class: "mx-sc-label" }, [
+    const figure = estimate ? fmtValue(estimate.mean, unit) : "—";
+    return el("div", {
+      class: `stat-tile ex-arm${state.startsWith("winner") ? " ex-arm-winner" : ""}`,
+      role: "group",
+      "aria-label": `Arm ${arm.name}`,
+      "data-state": estimate ? null : "unknown",
+    }, [
+      el("span", { class: "stat-tile-label" }, [
         armSwatch(armColor(color(arm.name))),
-        el("span", { class: "ex-arm-title", text: arm.name }),
-        el("span", { class: "mx-sc-tag", text: `weight ${arm.weight}` }),
-        arm.drifted ? el("span", { class: "mx-sc-tag ex-warn-text", text: "drifted" }) : null,
-        deliveryIsLow(arm.delivery, readout) ? el("span", { class: "mx-sc-tag ex-warn-text", text: "low delivery" }) : null,
+        el("span", { class: "stat-tile-label-text ex-arm-title", text: arm.name }),
+        el("span", { class: "stat-tile-tag", text: `weight ${arm.weight}` }),
+        arm.drifted ? el("span", { class: "stat-tile-tag ex-warn-text", text: "drifted" }) : null,
+        deliveryIsLow(arm.delivery, readout) ? el("span", { class: "stat-tile-tag ex-warn-text", text: "low delivery" }) : null,
         el("span", { class: `ex-arm-verdict ex-arm-verdict-${state.replace(/\W+/g, "-").replace(/-$/, "")}`, text: state }),
       ]),
       el("span", { class: "ex-arm-figure" }, [
-        el("span", { class: "mx-sc-value", text: estimate ? fmtValue(estimate.mean, unit) : "—" }),
+        el("span", { class: "stat-tile-figure", text: figure }),
         estimateDifference != null ? el("span", {
           class: `ex-arm-diff ex-forest-${verdict}`,
           text: `${fmtValue(estimateDifference, unit, { diff: true })} vs control`,
           title: FOREST_VERDICTS[verdict],
         }) : null,
       ]),
-      el("span", { class: "mx-sc-foot", text: interval ? `95% ${interval}` : "no interval yet" }),
-      el("span", { class: "mx-sc-sub ex-arm-n" }, [
+      interval ? el("span", { class: "stat-tile-note", text: `95% ${interval}` }) : null,
+      el("span", { class: "stat-tile-compare ex-arm-n" }, [
         `n ${arm.n}`,
         estimate ? ` · ${estimate.n} settled` : "",
         estimate?.open ? ` · ${estimate.open} open` : "",
@@ -168,7 +174,7 @@ export function armCards(experiment, readout, primary, color) {
   });
   const title = primary ? `Arms · ${metricLabel(primary.metric)}` : "Arms";
   const meta = primary ? `${primary.kind === "rate" ? "rate" : "mean"}, ${primary.better} is better · ${unitLabel(primary.unit)}` : "no primary metric";
-  return experimentCard(title, [el("div", { class: "mx-series ex-arms" }, cards)], { meta });
+  return experimentCard(title, [el("div", { class: "stat-tiles" }, [el("div", { class: "stat-tiles-row" }, cards)])], { meta });
 }
 
 // One row per arm of what sits behind its card: delivery,
@@ -313,7 +319,7 @@ export function forestCard(experiment, readout, color) {
     return el("div", { class: "ex-forest-group" }, [
       el("div", { class: "ex-forest-metric" }, [
         el("span", { class: "ex-forest-name", text: metricLabel(metric.metric) }),
-        ...tags.map((tag) => el("span", { class: "mx-sc-tag", text: tag })),
+        ...tags.map((tag) => el("span", { class: "stat-tile-tag", text: tag })),
       ]),
       el("div", { class: "ex-forest-rows", role: "list" }, rows),
     ]);

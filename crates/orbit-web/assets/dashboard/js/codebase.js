@@ -780,19 +780,23 @@ function fileHead(model, path) {
 function fileTiles(model, path) {
   const { data, signals, index, limit } = model;
   const hits = index.get(path) || {};
-  const node = el("section", { class: "codebase-file-tiles", "aria-label": "Signals" });
+  const row = el("div", { class: "stat-tiles-row" });
+  const node = el("section", { class: "stat-tiles", "aria-label": "Signals" }, [row]);
   const keys = signals.length ? signals : ["regressions", "footprint_misses", "blocked"];
   for (const key of keys) {
     const hit = hits[key];
-    const tile = el("div", { class: `codebase-file-tile${hit ? "" : " absent"}` }, [
-      el("span", { class: "codebase-tile-label" }, [signalDot(key), SIGNAL_INFO[key].label]),
-      el("span", { class: "codebase-tile-big", text: hit ? pct(hit.row.rate) : "—" }),
-      el("span", { class: "codebase-tile-sub" }, hit
+    const tile = el("div", { class: "stat-tile", "data-state": hit ? null : "unknown" }, [
+      el("span", { class: "stat-tile-label" }, [
+        signalDot(key),
+        el("span", { class: "stat-tile-label-text", text: SIGNAL_INFO[key].label }),
+      ]),
+      el("span", { class: "stat-tile-figure", text: hit ? pct(hit.row.rate) : "—" }),
+      el("span", { class: "stat-tile-compare" }, hit
         ? [`${count(hit.row.numerator)} of ${count(hit.row.denominator)} ${SIGNAL_INFO[key].unit} · `, el("span", { class: "codebase-tile-rank", text: `#${hit.rank}` }), ` of ${count(rowsOf(data, key).length)}`]
         : [`not in the top ${count(limit)}`]),
     ]);
     tile.dataset.signal = key;
-    node.appendChild(tile);
+    row.appendChild(tile);
   }
   return keyed(node, "file-tiles", { path, keys, hits, limit, lengths: keys.map((key) => rowsOf(data, key).length) });
 }

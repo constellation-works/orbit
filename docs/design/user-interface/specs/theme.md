@@ -54,7 +54,7 @@ The design rule is that every `font-size` declaration in the dashboard uses one 
 | `--text-3xl` | `24px` | Large callout figures and empty-state icons. |
 | `--text-4xl` | `28px` | Hero KPI numbers (covers `28px`–`30px`). |
 
-Proposed step (not added): `--text-kpi` at `26px`, between `--text-3xl` and `--text-4xl`, for the callout figures Health and Forecast keep as a literal (`incident-tile-number`, `mx-sc-value`, `fc-total-value`). Adding it would change `base.css`, which this migration does not own.
+Stat-tile figures use `--text-2xl`. A 26px `--text-kpi` step was considered for the old per-view figures and was not added: those figures are the shared stat tile.
 
 Relative `em` sizing stays allowed only where scaling a glyph proportionally with its host text (for example `.copy-id::after` at `0.85em`).
 

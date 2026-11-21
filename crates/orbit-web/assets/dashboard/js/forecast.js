@@ -621,9 +621,17 @@ function rangeText(quantiles, fmt) {
 }
 
 function totalTile(label, value, lines, className) {
-  return el("div", { class: `mx-sc fc-fig fc-total ${className}`, role: "group", "aria-label": label }, [
-    el("span", { class: "mx-sc-label" }, [label, pinnedInfoHint(lines.filter(Boolean).join("\n"))]),
-    el("span", { class: value.known ? "fc-total-value" : "fc-total-value fc-total-unknown", text: value.text }),
+  return el("div", {
+    class: `stat-tile ${className}`,
+    role: "group",
+    "aria-label": label,
+    "data-state": value.known ? null : "unknown",
+  }, [
+    el("span", { class: "stat-tile-label" }, [
+      el("span", { class: "stat-tile-label-text", text: label }),
+      pinnedInfoHint(lines.filter(Boolean).join("\n")),
+    ]),
+    el("span", { class: "stat-tile-figure", text: value.text }),
   ]);
 }
 
@@ -770,12 +778,16 @@ function totalsNodes(scenario) {
   }
   if (!info) {
     const boundedGap = forecastBoundedGap(source);
-    const figures = el("section", { class: "fc-figures", "aria-label": "Totals" }, adjustedTiles(scenario, boundedGap));
+    const figures = el("section", { class: "stat-tiles", "aria-label": "Totals" }, [
+      el("div", { class: "stat-tiles-row" }, adjustedTiles(scenario, boundedGap)),
+    ]);
     if (boundedGap) figures.dataset.boundedGap = "true";
     return [figures, boundedGapNote(boundedGap), subsetNote(source)];
   }
   const hasBaseline = Boolean(forecastBaselineFigures(source.pre_regression_baseline));
-  const figures = el("section", { class: hasBaseline ? "fc-figures fc-baseline" : "fc-figures", "aria-label": "Totals" }, withheldTiles(scenario));
+  const figures = el("section", { class: "stat-tiles", "aria-label": "Totals" }, [
+    el("div", { class: "stat-tiles-row" }, withheldTiles(scenario)),
+  ]);
   if (hasBaseline) figures.dataset.forecastBaseline = "pre-regression";
   return [
     figures,
