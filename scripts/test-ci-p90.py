@@ -89,6 +89,17 @@ class CiP90ReplayTests(unittest.TestCase):
         self.assertEqual(missing.returncode, 3, missing.stderr)
         self.assertIn("gh failed", missing.stderr)
 
+        # A gh that is on PATH but not executable raises PermissionError, not FileNotFoundError.
+        unrunnable = self.root / "unrunnable-bin"
+        unrunnable.mkdir()
+        (unrunnable / "gh").write_text("#!/bin/sh\nexit 0\n")
+        (unrunnable / "gh").chmod(0o644)
+        denied = subprocess.run([sys.executable, str(SCRIPT), "--limit", "1"],
+                                capture_output=True, text=True,
+                                env=dict(os.environ, PATH=str(unrunnable)))
+        self.assertEqual(denied.returncode, 3, denied.stderr)
+        self.assertIn("gh failed", denied.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

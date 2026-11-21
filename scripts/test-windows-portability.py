@@ -207,6 +207,18 @@ class PortabilityTests(unittest.TestCase):
         self.check_tree({"src/lib.rs": "#[cfg(unix)] " + IMPORT + "\n" + INCIDENTS[1]}, 1)
         self.check_tree({"src/lib.rs": "#[cfg(unix)] mod gated {}\n" + INCIDENTS[1]}, 1)
         self.check_tree({"src/lib.rs": "fn helper() { #[cfg(unix)] {" + IMPORT + "} }"}, 0)
+        # An item with a const qualifier ends its gate at its body brace, as a plain fn does.
+        for item in ("const unsafe fn gated() {}", 'const extern "C" fn gated() {}'):
+            with self.subTest(item=item):
+                self.check_tree({"src/lib.rs": "#[cfg(unix)] " + item + "\n" + INCIDENTS[1]}, 1)
+        for source in (
+            "struct Data { #[cfg(unix)] platform: (), on_windows: std::os::unix::net::UnixStream }",
+            "struct Data(#[cfg(unix)] (), std::os::unix::net::UnixStream);",
+            "enum Data { #[cfg(unix)] Platform, OnWindows(std::os::unix::net::UnixStream) }",
+        ):
+            with self.subTest(source=source):
+                self.check_tree({"src/lib.rs": source}, 1)
+                self.check_tree({"src/lib.rs": "#[cfg(unix)] " + source}, 0)
 
     def test_cfg_covers_every_brace_of_a_statement(self):
         # A statement cfg applies through every top-level brace, then stops.
@@ -241,14 +253,6 @@ class PortabilityTests(unittest.TestCase):
             "    else { std::os::unix::fs::symlink };\n"
         )
         self.check_tree({"src/lib.rs": const_value}, 0)
-        for source in (
-            "struct Data { #[cfg(unix)] platform: (), on_windows: std::os::unix::net::UnixStream }",
-            "struct Data(#[cfg(unix)] (), std::os::unix::net::UnixStream);",
-            "enum Data { #[cfg(unix)] Platform, OnWindows(std::os::unix::net::UnixStream) }",
-        ):
-            with self.subTest(source=source):
-                self.check_tree({"src/lib.rs": source}, 1)
-                self.check_tree({"src/lib.rs": "#[cfg(unix)] " + source}, 0)
 
     def test_grouped_aliased_and_fully_qualified_imports_and_calls(self):
         sources = (

@@ -72,7 +72,7 @@ def item_body_brace(head):
     while index < len(head):
         token = head[index]
         nxt = head[index + 1] if index + 1 < len(head) else None
-        if token == "const" and nxt == "fn":
+        if token == "const" and nxt in ("fn", "unsafe", "extern"):
             index += 1
             continue
         if token in ("async", "unsafe") and nxt in ("fn", "trait", "impl", "mod", "extern", "const"):

@@ -89,8 +89,8 @@ def run_gh(command):
     """Run `gh`. Exit 3 on failure, which is not the over-budget status."""
     try:
         result = subprocess.run(command, capture_output=True, text=True)
-    except FileNotFoundError:
-        print("ci-p90: gh failed: gh is not on PATH", file=sys.stderr)
+    except OSError as error:
+        print(f"ci-p90: gh failed: could not run gh ({error})", file=sys.stderr)
         raise SystemExit(3) from None
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "gh exited nonzero").strip()
