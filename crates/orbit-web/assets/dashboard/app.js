@@ -1758,7 +1758,9 @@ function fetchAndRenderRuns() {
       }))
     : Promise.all([
         fetchJson(`/api/job-runs?${query}`),
-        fetchJson(`/api/diagnostics/friction?limit=${DIAG_LIMIT}`),
+        // Friction only annotates runs: a failed read leaves them listed with the
+        // friction columns marked unavailable (null), never as zero.
+        fetchJson(`/api/diagnostics/friction?limit=${DIAG_LIMIT}`).catch(() => null),
       ]).then(([payload, frictionRows]) => ({
         runs: listItems(payload), frictionRows, meta: payload, unavailable: [],
       })), ({ runs, frictionRows, meta, unavailable }) => {

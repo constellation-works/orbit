@@ -764,7 +764,15 @@ function addFrictionRowToSummary(summary, row) {
   summary.longRun = summary.longRun || frictionRowLooksLongRun(row);
 }
 
+// `frictionRows === null` means the diagnostics friction read failed: the runs
+// stay listed and their friction columns read as unavailable, not as zero.
 export function mergeRunsWithFriction(runs, frictionRows) {
+  if (frictionRows === null) {
+    return (runs || []).map((run) => ({
+      ...run,
+      diagnostics_friction: { ...emptyRunFrictionSummary(run), unavailable: true },
+    }));
+  }
   const byRun = new Map();
   for (const row of frictionRows || []) {
     const runId = frictionRunId(row);
@@ -1116,6 +1124,17 @@ function unavailableSourcesNode(unavailable) {
   return node;
 }
 
+function frictionUnavailableNode() {
+  const node = el("div", {
+    class: "runs-source-warning",
+    role: "status",
+    text: "Denials, tool-fail counts and long-run flags are unavailable: diagnostics friction could not be loaded. Runs are shown without them.",
+  });
+  node.dataset.key = "runs-friction-warning";
+  node.dataset.hash = "runs-friction-warning";
+  return node;
+}
+
 function setRunSort(key) {
   if (runSort.key === key) {
     runSort = { key, dir: runSort.dir === "asc" ? "desc" : "asc" };
@@ -1149,7 +1168,14 @@ function runHeaderCell(label, key, opts = {}) {
   return cell;
 }
 
-function runCountCell(value, kind) {
+function runCountCell(value, kind, unavailable = false) {
+  if (unavailable) {
+    return el("span", {
+      class: `num ${kind} unavailable`,
+      text: "—",
+      title: "Diagnostics friction is unavailable",
+    });
+  }
   return el("span", {
     class: `num ${kind}${value > 0 ? " hot" : ""}`,
     text: String(value || 0),
@@ -1427,6 +1453,7 @@ function runGroupRow(group, attributed, listed) {
   const ts = latest.finished_at || latest.started_at || latest.scheduled_at || latest.created_at;
   const failed = runs.filter(runIsResumable);
   const frictions = runs.map(runFriction);
+  const frictionUnavailable = frictions.some((f) => f.unavailable);
   const denials = frictions.reduce((sum, f) => sum + (f.denials || 0), 0);
   const toolFails = frictions.reduce((sum, f) => sum + (f.toolFails || 0), 0);
   const jobNames = runs.map((run) => run.job_id).join(", ");
@@ -1466,13 +1493,13 @@ function runGroupRow(group, attributed, listed) {
     failedAt,
     el("span", { class: "run-id-cell" }, [el("span", { class: "run-group-count", text: group.repeatedFailure ? "—" : `${runs.length} runs` })]),
     el("span", { class: "when", text: formatAge(ts), title: ts ? formatDateTime(ts) : "" }),
-    runCountCell(denials, "denials"),
-    runCountCell(toolFails, "tool-fails"),
+    runCountCell(denials, "denials", frictionUnavailable),
+    runCountCell(toolFails, "tool-fails", frictionUnavailable),
     el("span", { class: "duration", text: "—" }),
     el("span", { class: "run-actions" }),
   ]);
   row.dataset.key = `group-${key}`;
-  row.dataset.hash = `group-${key}-${expanded}-${ts}-${denials}-${toolFails}-${JSON.stringify(group.inFlight ? groupTaskRun(group).tasks : first.tasks)}-${runs.map((run) => `${runIdentity(run)}:${run.state}:${runFailureHash(run)}`).join("|")}-${failureHash}-${runFilter === "running" ? runs.map((run) => run.resolved_crew || "").join("|") : ""}`;
+  row.dataset.hash = `group-${key}-${expanded}-${ts}-${denials}-${toolFails}-${frictionUnavailable}-${JSON.stringify(group.inFlight ? groupTaskRun(group).tasks : first.tasks)}-${runs.map((run) => `${runIdentity(run)}:${run.state}:${runFailureHash(run)}`).join("|")}-${failureHash}-${runFilter === "running" ? runs.map((run) => run.resolved_crew || "").join("|") : ""}`;
   row.style.cursor = "pointer";
   makeRowDisclosure(row, toggle, {
     expanded,
@@ -1538,8 +1565,8 @@ function runRow(r, attributed, body, { child = false, sharedTaskInHeader = false
     runFilter === "running" ? runCrewCell([r]) : runFailedAtCell(r),
     runIdCell,
     el("span", { class: "when", text: formatAge(ts), title: ts ? formatDateTime(ts) : "" }),
-    runCountCell(friction.denials, "denials"),
-    runCountCell(friction.toolFails, "tool-fails"),
+    runCountCell(friction.denials, "denials", friction.unavailable),
+    runCountCell(friction.toolFails, "tool-fails", friction.unavailable),
     runDurationCell(r),
     el("span", { class: "run-actions" }, [
       runIsCancellable(r) ? buildCancelRunButton(r, body) : null,
@@ -1549,7 +1576,7 @@ function runRow(r, attributed, body, { child = false, sharedTaskInHeader = false
   const row = el("div", { class: `runs-row${attributed ? " workspace-attributed" : ""}${child ? " runs-group-child" : ""}`, title: `${r.run_id} (click to inspect)` }, rowCells);
   // A run shared by several tasks is listed under each, so its key names the group.
   row.dataset.key = `run-${runIdentity(r)}${groupKey ? `@${groupKey}` : ""}`;
-  row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${resumeRequestsInFlight.has(runIdentity(r)) ? "resuming" : ""}-${friction.denials}-${friction.toolFails}-${durationMs}-${formattedDuration}-${isLive ? "live" : ""}-${friction.longRun}-${child ? "child" : ""}-${runFailureHash(r)}-${runFilter === "running" ? r.resolved_crew || "" : ""}`;
+  row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${resumeRequestsInFlight.has(runIdentity(r)) ? "resuming" : ""}-${friction.denials}-${friction.toolFails}-${friction.unavailable ? "friction-unavailable" : ""}-${durationMs}-${formattedDuration}-${isLive ? "live" : ""}-${friction.longRun}-${child ? "child" : ""}-${runFailureHash(r)}-${runFilter === "running" ? r.resolved_crew || "" : ""}`;
   row.style.cursor = "pointer";
   row.dataset.hash += `-${JSON.stringify(r.tasks)}-${JSON.stringify(r.task_ids)}-${child && sharedTaskInHeader ? "header-task" : ""}-${groupTaskId}`;
   // A run row opens the run detail view rather than disclosing inline, so its
@@ -1596,6 +1623,7 @@ export function renderRuns(runs) {
   }
   const unavailableNode = unavailableSourcesNode(unavailable);
   if (unavailableNode) frag.appendChild(unavailableNode);
+  if (!loading && (runs || []).some((run) => runFriction(run).unavailable)) frag.appendChild(frictionUnavailableNode());
   const limitNote = loading ? null : runsLimitNote(meta);
   if (limitNote) frag.appendChild(limitNote);
   if (loading) {
