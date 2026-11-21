@@ -24,7 +24,14 @@ spec:
     still match what that task recorded, the sweep reports a `rejected_owner`
     skip naming the rejected task instead of re-filing it, and files it again
     once the rule or location changes. A rejection that names a covering task
-    is a duplicate verdict and does not suppress. Duplicate-check failures are bounded retryable
+    is a duplicate verdict and does not suppress. A CodeQL alert whose rule
+    the CodeQL bundle installed on this (owner) host does not offer, or any
+    CodeQL alert when no bundle answers on the owner's validation PATH, still
+    files its repair task, but that task depends on one proposed prerequisite
+    per host and hosted bundle version ("CodeQL bundle <version> needed on
+    <host>"), reused while it stays open, so no drain admits the repair until
+    the bundle is installed. The hosted/installed version drift is raised once
+    as an open friction record that operator attention lists. Duplicate-check failures are bounded retryable
     errors and happen before any task is filed. Filed tasks require no tools.
   input_schema_json:
     type: object
@@ -98,5 +105,13 @@ spec:
         description: >
           The alert and distinct-path caps that split one cause into several
           remediation groups so each leaf task stays executable.
+      codeql_bundle_prerequisites:
+        type: array
+        description: >
+          One entry per CodeQL bundle prerequisite this run held repairs behind:
+          its task id, whether this run created it, the host, the hosted and
+          installed bundle versions (null when none is installed), the missing
+          rule ids and the drift friction record's id. A held entry in `filed`
+          names its prerequisite in `held_by`.
   action: file_dependabot_alert_tasks
   config: {}

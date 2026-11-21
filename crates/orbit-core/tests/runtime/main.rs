@@ -144,6 +144,8 @@ mod script_file_inputs;
 mod script_grant_request;
 mod script_roots;
 mod search_hydration;
+// The installed-CodeQL fixture is a POSIX shell script.
+#[cfg(unix)]
 mod security_alert_sweep;
 mod session_events;
 mod shared_root_identity;

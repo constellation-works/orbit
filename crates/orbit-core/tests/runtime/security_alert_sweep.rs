@@ -1,12 +1,19 @@
 //! Security sweeps apply the fixed moderate floor, report what it excluded, and
 //! consolidate historical per-alert tasks without losing duplicate owners.
 //! Regression for the moderate alerts silently omitted on 2026-10-06/07.
+//! Code scanning repairs whose rule the owner's installed CodeQL bundle lacks
+//! are held behind one bundle prerequisite (ORB-26147, ORB-26162).
 
+use std::path::Path;
+
+use orbit_core::OrbitRuntime;
+use orbit_core::adapter::command::ToolEntryPoint;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus};
+use orbit_core::{TaskComplexity, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
 use orbit_types::task::{CodeScanningAlertEvidence, TaskDecision, TaskRelation, TaskRelationType};
+use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::{Value, json};
 
 fn fixture() -> (tempfile::TempDir, OrbitRuntime) {
@@ -17,8 +24,58 @@ fn fixture() -> (tempfile::TempDir, OrbitRuntime) {
         std::fs::create_dir_all(path).unwrap();
         std::fs::write(path.join("config.toml"), "").unwrap();
     }
+    // Every rule these fixtures report is offered by the installed bundle,
+    // so filing does not depend on the host's own CodeQL installation.
+    install_codeql_bundle(
+        root.path(),
+        "2.27.1",
+        &[
+            "rust/cleartext-logging",
+            "rust/path-injection",
+            "rust/example",
+        ],
+    );
     let runtime = OrbitRuntime::from_roots(&global_root, &workspace_root).unwrap();
     (root, runtime)
+}
+
+/// A `codeql` CLI reporting `version` and resolving one query per rule,
+/// placed ahead of the owner's resolved validation PATH.
+fn install_codeql_bundle(root: &Path, version: &str, rules: &[&str]) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let bin = root.join("codeql-bin");
+    let queries = root.join("codeql-queries");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(&queries).unwrap();
+    let paths = rules
+        .iter()
+        .enumerate()
+        .map(|(index, rule)| {
+            let path = queries.join(format!("Query{index}.ql"));
+            std::fs::write(
+                &path,
+                format!("/**\n * @name Fixture\n * @kind problem\n * @id {rule}\n */\nselect 1\n"),
+            )
+            .unwrap();
+            path.display().to_string()
+        })
+        .collect::<Vec<_>>();
+    let script = format!(
+        "#!/bin/sh\ncase \"$1\" in\n  version) printf '%s\\n' '{}' ;;\n  resolve) printf '%s\\n' '{}' ;;\n  *) exit 2 ;;\nesac\n",
+        json!({"version": version}),
+        json!(paths),
+    );
+    let cli = bin.join("codeql");
+    std::fs::write(&cli, script).unwrap();
+    std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(
+        root.join("repo/.orbit/config.toml"),
+        format!(
+            "[workflow.validation_env]\npath = [{:?}]\n",
+            bin.display().to_string()
+        ),
+    )
+    .unwrap();
 }
 
 fn snapshot() -> Value {
@@ -1100,6 +1157,203 @@ fn mixed_legacy_and_typed_code_scanning_evidence_with_missing_guid_consolidates(
     );
 }
 
+fn held_code_alert(number: u64, rule: &str, path: &str, message: &str) -> Value {
+    let mut alert = code_alert(number, rule, path, 12);
+    alert["tool_version"] = json!("2.27.5");
+    alert["message"] = json!(message);
+    alert
+}
+
+fn drift_frictions(runtime: &OrbitRuntime) -> Vec<Value> {
+    let response = runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.attention",
+            json!({"kind": "friction_untriaged"}),
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+            ToolSessionContext {
+                effective_capabilities: [McpCapability::Operator].into(),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .value;
+    response["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| {
+            item["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("CodeQL bundle drift"))
+        })
+        .cloned()
+        .collect()
+}
+
+fn task_ids_tagged(runtime: &OrbitRuntime, tag: &str) -> Vec<String> {
+    let mut ids = runtime
+        .list_tasks()
+        .unwrap()
+        .into_iter()
+        .filter(|task| task.tags.iter().any(|candidate| candidate == tag))
+        .map(|task| task.id.to_string())
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids
+}
+
+/// ORB-26147: hosted CodeQL 2.27.5 raised `rust/unsafe-deserialization`,
+/// which the host's 2.27.1 bundle does not offer; the sweep filed a drainable
+/// repair that could only block `validation_unavailable`.
+fn code_scanning_rule_missing_from_installed_bundle_waits_on_one_prerequisite() {
+    let (_root, runtime) = fixture();
+    let rule = "rust/unsafe-deserialization";
+    let snapshot = code_alerts_snapshot(vec![
+        code_alert(484, "rust/cleartext-logging", "crates/a/src/lib.rs", 12),
+        held_code_alert(
+            505,
+            rule,
+            "crates/a/src/lib.rs",
+            "Deserializes untrusted data",
+        ),
+        held_code_alert(
+            506,
+            rule,
+            "crates/b/src/lib.rs",
+            "Deserializes request bodies",
+        ),
+    ]);
+    let first = file(&runtime, snapshot.clone(), None);
+    assert_eq!(first["filed_count"], 3, "{first}");
+    let prerequisites = first["codeql_bundle_prerequisites"].as_array().unwrap();
+    assert_eq!(
+        prerequisites.len(),
+        1,
+        "one prerequisite per host and version: {first}"
+    );
+    assert_eq!(prerequisites[0]["created"], true);
+    assert_eq!(prerequisites[0]["hosted_version"], "2.27.5");
+    assert_eq!(prerequisites[0]["installed_version"], "2.27.1");
+    let prerequisite_id = prerequisites[0]["task_id"].as_str().unwrap().to_string();
+    let prerequisite = runtime.get_task(&prerequisite_id).unwrap();
+    assert_eq!(prerequisite.status, TaskStatus::Proposed);
+    assert!(
+        prerequisite.title.contains("CodeQL bundle 2.27.5"),
+        "{}",
+        prerequisite.title
+    );
+
+    let filed = first["filed"].as_array().unwrap();
+    for entry in filed {
+        let task = runtime
+            .get_task(entry["task_id"].as_str().unwrap())
+            .unwrap();
+        if entry["rule_id"] == rule {
+            assert_eq!(entry["held_by"], prerequisite_id.as_str(), "{entry}");
+            assert_eq!(
+                task.dependencies()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+                vec![prerequisite_id.clone()],
+                "a held repair is not drainable until its prerequisite is done"
+            );
+        } else {
+            // The rule the bundle offers files exactly as before.
+            assert!(entry.get("held_by").is_none(), "{entry}");
+            assert!(entry.get("held_for_codeql_bundle").is_none(), "{entry}");
+            assert!(task.dependencies().is_empty());
+            assert!(
+                !task
+                    .description
+                    .contains("Waiting on the local CodeQL bundle")
+            );
+            assert_eq!(task.status, TaskStatus::Backlog);
+        }
+    }
+
+    let drift = drift_frictions(&runtime);
+    assert_eq!(drift.len(), 1, "{drift:?}");
+    let reason = drift[0]["reason"].as_str().unwrap();
+    for named in [
+        "2.27.5",
+        "2.27.1",
+        prerequisites[0]["host"].as_str().unwrap(),
+    ] {
+        assert!(reason.contains(named), "the drift names {named}: {reason}");
+    }
+
+    // A second sweep over the same alerts files nothing new.
+    let tasks_before = runtime.list_tasks().unwrap().len();
+    let second = file(&runtime, snapshot, None);
+    assert_eq!(second["filed_count"], 0, "{second}");
+    assert_eq!(second["codeql_bundle_prerequisites"], json!([]), "{second}");
+    assert_eq!(runtime.list_tasks().unwrap().len(), tasks_before);
+    assert_eq!(drift_frictions(&runtime).len(), 1);
+
+    // A later alert of a missing rule joins the same prerequisite.
+    let third = file(
+        &runtime,
+        code_alerts_snapshot(vec![held_code_alert(
+            507,
+            "rust/another-new-query",
+            "crates/c/src/lib.rs",
+            "New finding",
+        )]),
+        None,
+    );
+    assert_eq!(third["filed_count"], 1, "{third}");
+    assert_eq!(third["codeql_bundle_prerequisites"][0]["created"], false);
+    assert_eq!(third["filed"][0]["held_by"], prerequisite_id.as_str());
+    assert_eq!(
+        task_ids_tagged(&runtime, "codeql-bundle-prerequisite"),
+        vec![prerequisite_id]
+    );
+    assert_eq!(drift_frictions(&runtime).len(), 1);
+}
+
+/// With no CodeQL CLI on the owner's validation PATH, every CodeQL repair is
+/// held the way a missing rule is.
+fn code_scanning_without_installed_bundle_waits_on_a_prerequisite() {
+    let (root, runtime) = fixture();
+    drop(runtime);
+    let empty = root.path().join("no-codeql");
+    std::fs::create_dir_all(&empty).unwrap();
+    std::fs::write(root.path().join("repo/.orbit/config.toml"), "").unwrap();
+    let runtime = OrbitRuntime::from_roots(
+        &root.path().join("home/.orbit"),
+        &root.path().join("repo/.orbit"),
+    )
+    .unwrap();
+    let path = format!("{}:/usr/bin:/bin", empty.display());
+    let _env = orbit_common::test_env::scoped([("PATH", Some(path.as_str()))]);
+
+    let mut alert = code_alert(484, "rust/cleartext-logging", "crates/a/src/lib.rs", 12);
+    alert["tool_version"] = json!("2.27.5");
+    let first = file(&runtime, code_alerts_snapshot(vec![alert.clone()]), None);
+    assert_eq!(first["filed_count"], 1, "{first}");
+    let prerequisites = first["codeql_bundle_prerequisites"].as_array().unwrap();
+    assert_eq!(prerequisites.len(), 1, "{first}");
+    assert_eq!(prerequisites[0]["installed_version"], Value::Null);
+    let prerequisite_id = prerequisites[0]["task_id"].as_str().unwrap();
+    assert_eq!(first["filed"][0]["held_by"], prerequisite_id);
+    let drift = drift_frictions(&runtime);
+    assert_eq!(drift.len(), 1, "{drift:?}");
+    assert!(
+        drift[0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("none installed"),
+        "{drift:?}"
+    );
+
+    let second = file(&runtime, code_alerts_snapshot(vec![alert]), None);
+    assert_eq!(second["filed_count"], 0, "{second}");
+    assert_eq!(drift_frictions(&runtime).len(), 1);
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     consolidation_retires_every_duplicate_alert_owner_once_scenarios,
@@ -1114,5 +1368,7 @@ crate::scenario_table!(
     rejected_source_uses_supersedes_before_legacy_consolidation_comments,
     typed_code_scanning_evidence_consolidates_despite_edited_prose,
     sweep_tasks_seed_file_selectors_from_alert_locations,
-    sweep_tasks_drop_missing_and_git_orbit_paths
+    sweep_tasks_drop_missing_and_git_orbit_paths,
+    code_scanning_rule_missing_from_installed_bundle_waits_on_one_prerequisite,
+    code_scanning_without_installed_bundle_waits_on_a_prerequisite
 );
