@@ -1,7 +1,7 @@
 // Window summaries and breakdowns beneath the selected Metrics trend.
 import { bindTaskLink, el, formatDateTime, pinnedInfoHint } from './common.js';
 import { sparkline as lineSparkline } from './sparkline.js';
-import { COMPLEXITY_LABELS, delta, fmtMs, previousLabel, seriesLabel } from './metrics-running.js';
+import { COMPLEXITY_LABELS, delta, fmtMs, previousLabel, seriesLabel, tasks } from './metrics-running.js';
 import { fmtTokens } from './metrics-tokens.js';
 import { fmtTurns } from './metrics-turns.js';
 import { fmtLines } from './metrics-diff.js';
@@ -293,8 +293,11 @@ function turnsCoverageCard(payload) {
   const c = payload.coverage;
   if (!c) return card(title, null, [emptyNote("This host did not report trace coverage.")], "mx-narrow");
   const rate = (n) => n == null ? "—" : n.toLocaleString(undefined, { style: "percent", maximumFractionDigits: 1 });
+  // The overall sample size sits beside the measured rate (STD-07 §R29). The
+  // API's coverage cohort is already scoped to the selected provider.
+  const measured = c.tasks ? `${rate(c.measured_rate)} (${c.measured} of ${tasks(c.tasks)})` : rate(c.measured_rate);
   const rows = [
-    ["Measured", rate(c.measured_rate)],
+    ["Measured", measured],
     ["Trace coverage", rate(c.trace_rate)],
     ["Empty or unavailable trace", c.empty_trace],
     ["Incomplete trace", c.incomplete_trace ?? "—"],
