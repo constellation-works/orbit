@@ -426,12 +426,47 @@ def crate_module_parts(file_path):
 def inline_module_suffixes(tokens):
     """Extra module names at each token from inline `mod name { … }` items.
 
-    A `mod name { … }` item adds a segment wherever it sits, including inside a
-    function body, because the compiler gives it its own module. Function,
-    impl and use-tree braces add none, and `mod name;` adds none. This
-    tokenizer spells a raw identifier as `r`, `#`, then the name.
+    A `mod name { … }` item adds a segment wherever it sits inside module or
+    block braces, including inside a function body, because the compiler gives
+    it its own module. Tokens inside a macro invocation, `macro_rules!`
+    definition, attribute, or non-brace delimiters (`(...)` and `[...]`) do
+    not declare inline modules, and `mod name;` adds none. This tokenizer
+    spells a raw identifier as `r`, `#`, then the name.
     """
     ident = re.compile(r"[^\W\d]\w*$")
+    keywords = {
+        "as", "async", "await", "break", "const", "continue", "crate", "dyn",
+        "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in",
+        "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return",
+        "self", "Self", "static", "struct", "super", "trait", "true", "type",
+        "unsafe", "use", "where", "while", "yield", "try",
+    }
+    matching = {"(": ")", "[": "]", "{": "}"}
+
+    def is_macro_name_end(name_index):
+        if name_index < 0 or not ident.fullmatch(tokens[name_index][0]):
+            return False
+        if (name_index >= 2 and tokens[name_index - 1][0] == "#"
+                and tokens[name_index - 2][0] == "r"):
+            return True
+        return tokens[name_index][0] not in keywords
+
+    def opens_non_item_group(delim_index):
+        tok = tokens[delim_index][0]
+        if tok == "[" and delim_index >= 1:
+            if tokens[delim_index - 1][0] == "#":
+                return True
+            if (delim_index >= 2 and tokens[delim_index - 1][0] == "!"
+                    and tokens[delim_index - 2][0] == "#"):
+                return True
+        if (delim_index >= 2 and tokens[delim_index - 1][0] == "!"
+                and is_macro_name_end(delim_index - 2)):
+            return True
+        if (delim_index >= 3 and ident.fullmatch(tokens[delim_index - 1][0])
+                and tokens[delim_index - 2][0] == "!"
+                and tokens[delim_index - 3][0] == "macro_rules"):
+            return True
+        return False
 
     def opened_module(mod_index):
         cursor = mod_index + 1
@@ -450,26 +485,30 @@ def inline_module_suffixes(tokens):
 
     suffixes = []
     extras = []
-    open_depths = []
+    frames = []
     opens = {}
-    depth = 0
     for index, (name, _) in enumerate(tokens):
         suffixes.append(tuple(extras))
-        if name == "mod" and (index == 0 or tokens[index - 1][0] != "::"):
+        in_non_item = bool(frames) and frames[-1][1]
+        in_brace_or_top = not frames or frames[-1][0] == "}"
+        if (name == "mod" and not in_non_item and in_brace_or_top
+                and (index == 0 or tokens[index - 1][0] not in ("::", "#"))):
             opened = opened_module(index)
             if opened is not None:
                 opens[opened[1]] = opened[0]
-        if name == "{":
-            depth += 1
-            if index in opens:
-                extras.append(opens[index])
-                open_depths.append(depth)
-        elif name == "}":
-            if open_depths and open_depths[-1] == depth:
-                open_depths.pop()
-                extras.pop()
-            if depth:
-                depth -= 1
+        if name in matching:
+            non_item = in_non_item or opens_non_item_group(index)
+            mod_name = opens.get(index) if (name == "{" and not non_item) else None
+            if mod_name is not None:
+                extras.append(mod_name)
+            frames.append((matching[name], non_item, mod_name))
+        elif name in (")", "]", "}") and any(frame[0] == name for frame in frames):
+            while frames:
+                close, _, mod_name = frames.pop()
+                if mod_name is not None:
+                    extras.pop()
+                if close == name:
+                    break
     return suffixes
 
 
