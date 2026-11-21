@@ -1527,6 +1527,28 @@ class RelativeImportTests(unittest.TestCase):
              "        super::super::super::adapter::Probe;\n    }\n}\n"),
         ], rejected=True)
 
+    def test_inline_module_inside_function_body_resolves_at_its_lexical_depth(self):
+        # [ORB-26562] A `mod` item declared inside a function body adds a module
+        # segment, as one in a module body does. In `mod outer { fn local() {
+        # mod inner { … } } }` under application/probe.rs, `super` climbs
+        # inner -> outer -> probe -> application, so three segments reach
+        # application (allowed) and four reach crate::adapter (rejected). A `fn`
+        # in the same body adds no segment, so two `super` segments from it reach
+        # application and three reach crate::adapter.
+        self.check_rows([
+            ("probe.rs", "mod outer {\n    fn local() {\n        mod inner {\n"
+             "            use super::super::super::adapter::Probe;\n"
+             "            fn probe() { let _ = Probe; }\n        }\n    }\n}\n"),
+            ("body_fn.rs", "mod outer {\n    fn local() {\n        fn inner() {\n"
+             "            use super::super::adapter::Probe;\n        }\n    }\n}\n"),
+        ], rejected=False)
+        self.check_rows([
+            ("escape.rs", "mod outer {\n    fn local() {\n        mod inner {\n"
+             "            use super::super::super::super::adapter::Probe;\n        }\n    }\n}\n"),
+            ("escape_body_fn.rs", "mod outer {\n    fn local() {\n        fn inner() {\n"
+             "            use super::super::super::adapter::Probe;\n        }\n    }\n}\n"),
+        ], rejected=True)
+
     def test_tools_builtin_grouped_imports_rejected_in_either_spelling(self):
         # [ORB-26107] `r#builtin` names the same module as `builtin`. The
         # tokenizer once split the raw identifier into `r` and `#`, so a grouped

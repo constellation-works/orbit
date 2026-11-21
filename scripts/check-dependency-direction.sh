@@ -426,9 +426,10 @@ def crate_module_parts(file_path):
 def inline_module_suffixes(tokens):
     """Extra module names at each token from inline `mod name { … }` items.
 
-    A `mod` counts only at the enclosing module's brace depth, so function,
-    impl and use-tree braces do not add a segment. `mod name;` adds none.
-    This tokenizer spells a raw identifier as `r`, `#`, then the name.
+    A `mod name { … }` item adds a segment wherever it sits, including inside a
+    function body, because the compiler gives it its own module. Function,
+    impl and use-tree braces add none, and `mod name;` adds none. This
+    tokenizer spells a raw identifier as `r`, `#`, then the name.
     """
     ident = re.compile(r"[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -454,9 +455,7 @@ def inline_module_suffixes(tokens):
     depth = 0
     for index, (name, _) in enumerate(tokens):
         suffixes.append(tuple(extras))
-        body = open_depths[-1] if open_depths else 0
-        if (name == "mod" and depth == body
-                and (index == 0 or tokens[index - 1][0] != "::")):
+        if name == "mod" and (index == 0 or tokens[index - 1][0] != "::"):
             opened = opened_module(index)
             if opened is not None:
                 opens[opened[1]] = opened[0]
