@@ -255,6 +255,8 @@ impl ResourceRecord {
         resource: &str,
         now: u64,
     ) -> Option<QuotaRefusal> {
+        #[cfg(any(test, feature = "test-support"))]
+        refusal_clock::at_refusal_evaluation();
         if let Some(until) = self.active_hold(now) {
             return Some(QuotaRefusal {
                 caller,
@@ -312,6 +314,51 @@ pub struct GithubResourceStatus {
     pub calls: CallCounts,
     /// Reads refused locally in the current window.
     pub refused: CallCounts,
+}
+
+/// The monotonic instant admission and the request-budget checks compare with a
+/// request's deadline.
+pub(super) fn monotonic_now() -> Instant {
+    #[cfg(any(test, feature = "test-support"))]
+    return refusal_clock::now();
+    #[cfg(not(any(test, feature = "test-support")))]
+    Instant::now()
+}
+
+/// A deadline clock a fixture can advance while a record's refusal is being
+/// evaluated, the instant between the record lock and the deadline check.
+#[cfg(any(test, feature = "test-support"))]
+mod refusal_clock {
+    use std::cell::Cell;
+    use std::time::{Duration, Instant};
+
+    thread_local! {
+        static ADVANCE_AT_REFUSAL: Cell<Option<Duration>> = const { Cell::new(None) };
+        static OFFSET: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+    }
+
+    pub(super) fn arm(by: Duration) {
+        OFFSET.set(Duration::ZERO);
+        ADVANCE_AT_REFUSAL.set(Some(by));
+    }
+
+    pub(super) fn at_refusal_evaluation() {
+        if let Some(by) = ADVANCE_AT_REFUSAL.take() {
+            OFFSET.set(by);
+        }
+    }
+
+    pub(super) fn now() -> Instant {
+        Instant::now() + OFFSET.get()
+    }
+}
+
+/// Make this thread's next refusal evaluation advance the admission deadline
+/// clock by `by` for the rest of the thread, so a request deadline crosses
+/// during that evaluation. Test fixtures only.
+#[cfg(any(test, feature = "test-support"))]
+pub fn advance_deadline_clock_at_next_refusal(by: Duration) {
+    refusal_clock::arm(by);
 }
 
 /// The directory of host-shared quota records.
@@ -580,11 +627,13 @@ impl GithubQuotaStore {
             let refresh_in_flight = record.refresh_in_flight;
             let entry = record.resources.entry(resource.to_string()).or_default();
             entry.roll_window(now);
-            // The deadline is read under the record lock, so a read that ran
-            // out of budget while waiting for it or probing is neither charged
-            // nor counted as refused: its caller returns the timeout instead.
-            let expired = !charge_expired && self.deadline.is_some_and(|at| Instant::now() >= at);
-            if let Some(refusal) = entry.refusal(policy, caller, resource, now) {
+            let refusal = entry.refusal(policy, caller, resource, now);
+            // The deadline is read under the record lock, after the refusal is
+            // evaluated, so a read that ran out of budget while waiting for it,
+            // probing or deciding is neither charged nor counted as refused:
+            // its caller returns the timeout instead.
+            let expired = !charge_expired && self.deadline.is_some_and(|at| monotonic_now() >= at);
+            if let Some(refusal) = refusal {
                 if !expired {
                     entry.refused.bump(caller);
                 }

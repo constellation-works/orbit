@@ -632,6 +632,63 @@ fn request_timed_out_before_spawn_is_not_charged_to_a_known_record() {
     assert_eq!(counted.remaining, Some(3999));
 }
 
+/// Regression [ORB-26133]: a healthy known record whose read's deadline passes
+/// while the record's refusal is being evaluated returns the pre-spawn timeout,
+/// spawns nothing and leaves the call counts and remaining quota untouched. The
+/// same healthy read with budget left charges exactly once.
+#[test]
+fn deadline_crossed_during_refusal_evaluation_is_not_charged_to_a_healthy_record() {
+    let policy = GithubQuotaPolicy::default();
+    let core = |records: &Path, account: &str| {
+        store(records)
+            .status(&policy, account, now())
+            .resources
+            .iter()
+            .find(|resource| resource.resource == RESOURCE_CORE)
+            .expect("the core resource is reported")
+            .clone()
+    };
+
+    // A healthy read with budget left charges once.
+    let ran_records = TempDir::new().unwrap();
+    let ran_gh = FakeGh::new("{}", "ok");
+    let mut ran = ran_gh.request(&["run", "view", "123"]);
+    ran.timeout_ms = Some(60_000);
+    let ran_account = github_quota::request_account_key(&ran);
+    store(ran_records.path())
+        .refresh_if_due(&policy, &ran_account, now(), &|| known(4000, now() + 1800));
+    github_quota::with_scoped_guard(store(ran_records.path()), policy, || {
+        github_quota::run_gh_request(GithubCaller::Delivery, &ran)
+    })
+    .unwrap();
+    let counted = core(ran_records.path(), &ran_account);
+    assert_eq!(counted.calls.delivery, 1);
+    assert_eq!(counted.remaining, Some(3999));
+
+    // Armed last: the skewed clock stays on this thread afterwards.
+    let expired_records = TempDir::new().unwrap();
+    let expired_gh = FakeGh::new("{}", "ok");
+    let mut expired = expired_gh.request(&["run", "view", "123"]);
+    expired.timeout_ms = Some(60_000);
+    let account = github_quota::request_account_key(&expired);
+    store(expired_records.path())
+        .refresh_if_due(&policy, &account, now(), &|| known(4000, now() + 1800));
+    github_quota::advance_deadline_clock_at_next_refusal(Duration::from_secs(120));
+    let result = github_quota::with_scoped_guard(store(expired_records.path()), policy, || {
+        github_quota::run_gh_request(GithubCaller::Delivery, &expired)
+    })
+    .unwrap();
+    assert!(result.timed_out && !result.success, "{result:?}");
+    assert!(expired_gh.calls().is_empty(), "{:?}", expired_gh.calls());
+    let after = core(expired_records.path(), &account);
+    assert_eq!(
+        after.remaining,
+        Some(4000),
+        "a request that never ran is free"
+    );
+    assert_eq!(after.calls.delivery, 0);
+}
+
 /// Regression [ORB-26122]: `admit_gh_request` (delivery completion reads and
 /// auto-task source reads) admitted after its budget ran out must not charge a
 /// known record. Both callers then return their typed budget error without
