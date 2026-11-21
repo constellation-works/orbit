@@ -307,6 +307,21 @@ def schema_without_required(schema):
     return schema
 
 
+def schema_without_top_required(schema):
+    """Drop `required` at the schema's own instance level, keeping nested ones.
+
+    Only the schema's own `required` and that of its `allOf` children apply to
+    the same instance; a `required` under `properties`, `items` and the like
+    constrains a nested object and must keep counting as a constraint.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    stripped = {key: value for key, value in schema.items() if key != "required"}
+    if isinstance(stripped.get("allOf"), list):
+        stripped["allOf"] = [schema_without_top_required(child) for child in stripped["allOf"]]
+    return stripped
+
+
 def schema_required_names(schema):
     """Collect required property names anywhere in an alternative branch."""
     if isinstance(schema, list):
@@ -810,7 +825,7 @@ def detect_mcp_changes(git, parent, commit, changed):
             return False
         if effective_top_required(schema) - already_required:
             return True
-        return constrains_instances(schema_without_required(schema))
+        return constrains_instances(schema_without_top_required(schema))
 
     def expand_type_names(type_json):
         names = json.loads(type_json)
@@ -1236,8 +1251,8 @@ def detect_mcp_changes(git, parent, commit, changed):
                     if new_if_req is not None:
                         guaranteed.update(new_if_req)
                 extra = sorted(effective_top_required(target) - effective_top_required(source) - guaranteed)
-                target_rest = schema_without_required(target)
-                source_rest = schema_without_required(source)
+                target_rest = schema_without_top_required(target)
+                source_rest = schema_without_top_required(source)
                 stricter = (constrains_instances(target_rest)
                             and _json_value_key(target_rest) != _json_value_key(source_rest))
                 if extra or stricter or target is False:
