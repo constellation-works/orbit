@@ -1,20 +1,20 @@
 /* Tasks dock: auto-drain status and Start a window. */
 /* Every card header: title left, a muted note or count right. */
 #dock-pane-drain .panel > header {
-  align-items: baseline; gap: 4px 12px; padding: 14px 18px; border-bottom: 1px solid var(--hair);
+  align-items: baseline; gap: var(--space-4) var(--space-12); padding: var(--space-14) var(--space-16); border-bottom: 1px solid var(--hair);
 }
-.drain-title { margin: 0; color: var(--fg-strong); font: 600 14px var(--font-sans); letter-spacing: 0; }
+.drain-title { margin: 0; color: var(--fg-strong); font: 600 var(--text-base) var(--font-sans); letter-spacing: 0; }
 #dock-pane-drain .panel > header .count { color: var(--fg-mute); }
 /* A pause sign: a ring with two bars. */
-.drain-banner-icon.small { position: relative; flex: 0 0 auto; width: 14px; height: 14px; margin-top: 2px; border: 1.5px solid var(--warn-fg); border-radius: 50%; }
-.drain-banner-icon.small::before, .drain-banner-icon.small::after { content: ""; position: absolute; top: 3.2px; width: 1.5px; height: 4.6px; border-radius: 1px; background: var(--warn-fg); }
+.drain-banner-icon.small { position: relative; flex: 0 0 auto; width: 14px; height: 14px; margin-top: var(--space-2); border: 1.5px solid var(--warn-fg); border-radius: 50%; }
+.drain-banner-icon.small::before, .drain-banner-icon.small::after { content: ""; position: absolute; top: 3.2px; width: 1.5px; height: 4.6px; border-radius: var(--radius-2xs); background: var(--warn-fg); }
 .drain-banner-icon.small::before { left: 3.6px; }
 .drain-banner-icon.small::after { right: 3.6px; }
 /* The phase pill: a dot and a word, tinted by state. */
 .drain-phase {
-  display: inline-flex; align-items: center; gap: 7px; min-height: 22px; padding: 0 9px;
-  border: 1px solid var(--border); border-radius: 999px; background: var(--bg-control);
-  color: var(--fg-dim); font: 500 12px var(--font-sans);
+  display: inline-flex; align-items: center; gap: var(--space-6); min-height: 22px; padding: 0 var(--space-10);
+  border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--bg-control);
+  color: var(--fg-dim); font: 500 var(--text-sm) var(--font-sans);
 }
 .drain-phase[data-drain-state="draining"] { color: var(--state-running); border-color: color-mix(in srgb, var(--state-running) 40%, transparent); background: color-mix(in srgb, var(--state-running) 10%, var(--bg-elev)); }
 .drain-phase[data-drain-state="winding_down"] { color: var(--warn-fg); border-color: var(--warn-line); background: var(--warn-wash); }
@@ -26,11 +26,11 @@
 @keyframes drain-pulse { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--state-running) 25%, transparent); } }
 @media (prefers-reduced-motion: reduce) { .drain-dot.draining, [data-drain-state="draining"] > .drain-dot { animation: none; } }
 
-.dock-drain-state { color: var(--state-running); font-size: 11px; }
+.dock-drain-state { color: var(--state-running); font-size: var(--text-xs); }
 .dock-seg[data-drain-state="winding_down"] .dock-drain-state { color: var(--warn-fg); }
 .dock-seg[data-drain-state="per-workspace"] .dock-drain-state { color: var(--fg-dim); }
 
-#auto-drain-body { display: flex; flex-direction: column; gap: 16px; padding: 16px 18px 18px; min-width: 0; }
+#auto-drain-body { display: flex; flex-direction: column; gap: var(--space-16); padding: var(--space-16); min-width: 0; }
 
 /* The title and the phase (dot and word) lead; the target select takes the
    rest of the row. Every member keeps its full size wherever the row fits
@@ -55,7 +55,7 @@
 #auto-drain-panel #auto-drain-target {
   --drain-target-floor: 150px;
   flex: 0 1 auto; width: auto; min-width: var(--drain-target-floor); max-width: none;
-  margin: 0 0 0 auto; padding: 0 24px 0 8px; text-overflow: ellipsis;
+  margin: 0 0 0 auto; padding: 0 var(--space-24) 0 var(--space-8); text-overflow: ellipsis;
   direction: rtl; text-align: left; -webkit-appearance: none; appearance: none;
   background-color: var(--bg-elev);
   background-image: linear-gradient(45deg, transparent 50%, var(--fg-dim) 50%), linear-gradient(135deg, var(--fg-dim) 50%, transparent 50%);
@@ -71,8 +71,8 @@
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
   overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
 }
-.drain-when { color: var(--fg-dim); font: 400 12px var(--font-sans); font-variant-numeric: tabular-nums; white-space: nowrap; flex: 0 0 auto; }
-.drain-when::before { content: "·"; margin-right: 8px; }
+.drain-when { color: var(--fg-dim); font: 400 var(--text-sm) var(--font-sans); font-variant-numeric: tabular-nums; white-space: nowrap; flex: 0 0 auto; }
+.drain-when::before { content: "·"; margin-right: var(--space-8); }
 .drain-when:only-child::before { content: none; }
 /* The panel's "Updated." / "Refreshing…" note stays out of the card;
    only the first load and a failed refresh show. */
@@ -82,7 +82,7 @@
 /* The live window: one row of figures, number then word. One line at every
    card width: shrinks, then drops pilots, then reviewers. Recovery stays.
    A dropped figure stays in the row's name and title. */
-.drain-window-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
+.drain-window-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-8); min-width: 0; }
 /* The deadline shares the row (ORB-25031) when the figures and deadline fit
    the available width. Fitting depends on that width and the figures' own
    width, not a fixed card threshold: at any width where the row does not
@@ -91,16 +91,16 @@
    rather than clip when even they alone are too wide. A wrapped deadline
    in the dock's 320-440px range drops its divider dot (the 440px rule
    below); a deadline on its own still drops it via :only-child above. */
-.drain-window-stats { flex: 0 1 auto; min-width: 0; position: relative; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 0; white-space: nowrap; min-height: 24px; }
-.drain-window-stat { display: flex; align-items: baseline; gap: 5px; min-width: 0; flex: 0 0 auto; }
-.drain-window-stat dd { order: 1; margin: 0; color: var(--fg-strong); font: 600 20px var(--font-sans); line-height: 1.2; font-variant-numeric: tabular-nums; }
-.drain-window-stat dt { order: 2; color: var(--fg-dim); font: 400 12.5px var(--font-sans); white-space: nowrap; }
+.drain-window-stats { flex: 0 1 auto; min-width: 0; position: relative; display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-4) var(--space-12); margin: 0; white-space: nowrap; min-height: 24px; }
+.drain-window-stat { display: flex; align-items: baseline; gap: var(--space-4); min-width: 0; flex: 0 0 auto; }
+.drain-window-stat dd { order: 1; margin: 0; color: var(--fg-strong); font: 600 var(--text-2xl) var(--font-sans); line-height: 1.2; font-variant-numeric: tabular-nums; }
+.drain-window-stat dt { order: 2; color: var(--fg-dim); font: 400 var(--text-sm) var(--font-sans); white-space: nowrap; }
 @container drain-card (max-width: 440px) {
   .drain-window-summary .drain-when::before { content: none; }
-  .drain-window-stats { gap: 4px 8px; }
-  .drain-window-stat { gap: 4px; }
-  .drain-window-stat dd { font-size: 16px; }
-  .drain-window-stat dt { font-size: 11px; }
+  .drain-window-stats { gap: var(--space-4) var(--space-8); }
+  .drain-window-stat { gap: var(--space-4); }
+  .drain-window-stat dd { font-size: var(--text-lg); }
+  .drain-window-stat dt { font-size: var(--text-xs); }
 }
 @container drain-card (max-width: 300px) {
   .drain-window-stat[data-stat="pilots"] {
@@ -114,34 +114,34 @@
     overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
   }
 }
-.drain-notices { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.drain-notices { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
 
 /* Workspace leaf slots: a bar of one segment per slot (or one fill past 24),
    then why nothing more starts beside the count, and a mix of pipelines. */
 /* position: the hover help under a message spans the whole card. */
-.drain-capacity { display: flex; flex-direction: column; gap: 7px; min-width: 0; position: relative; }
+.drain-capacity { display: flex; flex-direction: column; gap: var(--space-8); min-width: 0; position: relative; }
 /* The bar is its own hint: no icon, and a tap target taller than the bar's 8px. */
-.info-hint.info-hint-pinned.drain-capacity-hint { display: block; width: auto; height: auto; margin: -8px 0; padding: 8px 0; border-radius: 0; color: inherit; }
+.info-hint.info-hint-pinned.drain-capacity-hint { display: block; width: auto; height: auto; margin: calc(-1 * var(--space-8)) 0; padding: var(--space-8) 0; border-radius: 0; color: inherit; }
 .info-hint.info-hint-pinned.drain-capacity-hint::before { content: none; }
 /* Free capacity is outlined in --fg-disabled (3.6:1 on the card): the darker
    wells and hairlines vanished, so an idle drain read as an empty card. */
-.drain-capacity-bar { display: flex; gap: 3px; height: 8px; border-radius: 4px; background: var(--border-strong); box-shadow: inset 0 0 0 1px var(--fg-disabled); overflow: hidden; }
+.drain-capacity-bar { display: flex; gap: var(--space-2); height: 8px; border-radius: var(--radius-xs); background: var(--border-strong); box-shadow: inset 0 0 0 1px var(--fg-disabled); overflow: hidden; }
 .drain-capacity-bar.segmented { background: transparent; box-shadow: none; }
-.drain-capacity-seg { flex: 1 1 0; min-width: 2px; border-radius: 2px; background: var(--border-strong); box-shadow: inset 0 0 0 1px var(--fg-disabled); }
+.drain-capacity-seg { flex: 1 1 0; min-width: 2px; border-radius: var(--radius-2xs); background: var(--border-strong); box-shadow: inset 0 0 0 1px var(--fg-disabled); }
 .drain-capacity-seg.used { background: var(--state-running); box-shadow: none; }
 .drain-capacity-seg.over, .drain-capacity-over { background: repeating-linear-gradient(135deg, var(--status-proposed) 0 3px, #3a2a12 3px 6px); box-shadow: none; }
-.drain-capacity-used { background: var(--state-running); border-radius: 3px; }
-.drain-capacity-over { border-radius: 3px; }
+.drain-capacity-used { background: var(--state-running); border-radius: var(--radius-xs); }
+.drain-capacity-over { border-radius: var(--radius-xs); }
 /* The message stays on one line beside the count. Its wording is short enough
    to fit (see autoDrainCapacity); the ellipsis only guards a narrower dock, and
    the hover help beside it carries the full detail. */
 .drain-slots-row { display: flex; align-items: baseline; min-width: 0; }
-.drain-slots { margin: 0; min-width: 0; color: var(--fg-dim); font-size: 12.5px; line-height: 1.45; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.drain-slots { margin: 0; min-width: 0; color: var(--fg-dim); font-size: var(--text-sm); line-height: 1.45; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .drain-slots.held { color: var(--warn-fg); }
-.drain-pipeline-occupancy { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.drain-pipeline-occupancy { display: flex; flex-wrap: wrap; gap: var(--space-6); margin: 0; padding: 0; list-style: none; }
 .drain-pipeline {
-  padding: 1px 7px; border: 1px solid var(--hair); border-radius: 4px; background: var(--bg-well);
-  color: var(--fg-dim); font-size: 11px; line-height: 18px; overflow-wrap: anywhere;
+  padding: var(--space-2) var(--space-8); border: 1px solid var(--hair); border-radius: var(--radius-xs); background: var(--bg-well);
+  color: var(--fg-dim); font-size: var(--text-xs); line-height: 18px; overflow-wrap: anywhere;
 }
 
 /* Admission forecast: a divider, then one row per resource — its name, the
@@ -149,47 +149,47 @@
    older record, its peak as a meter), and on the right the peak and when,
    with the amount and the distance to the ceiling beneath — then who was
    held. */
-.drain-forecast { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding-top: 16px; border-top: 1px solid var(--hair); }
+.drain-forecast { display: flex; flex-direction: column; gap: var(--space-12); min-width: 0; padding-top: var(--space-16); border-top: 1px solid var(--hair); }
 .drain-forecast:first-child { padding-top: 0; border-top: 0; }
-.drain-forecast-built, .drain-forecast-retained { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.drain-forecast-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 10px; }
+.drain-forecast-built, .drain-forecast-retained { display: flex; flex-direction: column; gap: var(--space-12); min-width: 0; }
+.drain-forecast-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-2) var(--space-10); }
 /* The header and peaks open the Resource forecast as one link. */
 .drain-forecast-link {
-  display: flex; flex-direction: column; gap: 12px; min-width: 0;
-  color: inherit; text-decoration: none; cursor: pointer; border-radius: 4px;
+  display: flex; flex-direction: column; gap: var(--space-12); min-width: 0;
+  color: inherit; text-decoration: none; cursor: pointer; border-radius: var(--radius-xs);
 }
 .drain-forecast-link:hover { text-decoration: none; }
 .drain-forecast-link:hover .drain-forecast-go { color: var(--accent); }
 .drain-forecast-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .drain-forecast-go { color: var(--fg-mute); }
-.drain-section-label { color: var(--fg-soft); font: 500 13px var(--font-sans); }
-.drain-forecast-meta { color: var(--fg-mute); font-size: 12px; font-variant-numeric: tabular-nums; }
+.drain-section-label { color: var(--fg-soft); font: 500 var(--text-md) var(--font-sans); }
+.drain-forecast-meta { color: var(--fg-mute); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 .drain-forecast-mode.shadow { color: var(--fg-dim); }
-.drain-forecast-peaks { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 14px 16px; align-items: center; margin: 0; }
+.drain-forecast-peaks { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: var(--space-14) var(--space-16); align-items: center; margin: 0; }
 .drain-forecast-peak { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; min-width: 0; }
-.drain-forecast-peak dt { color: var(--fg-soft); font: 400 13px var(--font-sans); }
+.drain-forecast-peak dt { color: var(--fg-soft); font: 400 var(--text-md) var(--font-sans); }
 .drain-forecast-peak dd { margin: 0; min-width: 0; }
-.drain-forecast-meter { position: relative; display: block; height: 10px; border-radius: 5px; background: var(--bg-selected); }
-.drain-forecast-fill { position: absolute; inset: 0 auto 0 0; border-radius: 5px; background: var(--accent); }
-.drain-forecast-tick { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--fg); }
+.drain-forecast-meter { position: relative; display: block; height: 10px; border-radius: var(--radius-xs); background: var(--bg-selected); }
+.drain-forecast-fill { position: absolute; inset: 0 auto 0 0; border-radius: var(--radius-xs); background: var(--accent); }
+.drain-forecast-tick { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; border-radius: var(--radius-2xs); background: var(--fg); }
 .drain-forecast-peak.over .drain-forecast-fill { background: var(--warn-fg); }
 .drain-forecast-figure { display: flex; flex-direction: column; min-width: 200px; text-align: right; font-variant-numeric: tabular-nums; }
-.drain-forecast-figure-main { color: var(--fg-strong); font-size: 13px; white-space: nowrap; }
+.drain-forecast-figure-main { color: var(--fg-strong); font-size: var(--text-md); white-space: nowrap; }
 .drain-forecast-threshold { color: var(--fg-mute); }
-.drain-forecast-figure-sub { color: var(--fg-mute); font-size: 12px; }
+.drain-forecast-figure-sub { color: var(--fg-mute); font-size: var(--text-sm); }
 .drain-forecast-figure-sub:empty { display: none; }
 .drain-forecast-peak.over .drain-forecast-figure-main { color: var(--warn-fg); }
-.drain-forecast-spark { position: relative; display: block; padding-top: 13px; }
+.drain-forecast-spark { position: relative; display: block; padding-top: var(--space-14); }
 /* A series draws its chart; the meter after it is for the Tasks dock. */
 .drain-forecast-spark + .drain-forecast-meter { display: none; }
-.drain-forecast-spark-label { position: absolute; top: 0; transform: translateX(-50%); color: var(--fg-mute); font: 400 10.5px/12px var(--font-mono); white-space: nowrap; }
+.drain-forecast-spark-label { position: absolute; top: 0; transform: translateX(-50%); color: var(--fg-mute); font: 400 var(--text-2xs)/12px var(--font-mono); white-space: nowrap; }
 .drain-forecast-spark-label.start { transform: none; }
 .drain-forecast-spark-label.end { transform: translateX(-100%); }
-.drain-forecast-spark-plot { position: relative; display: block; height: 28px; border-radius: 4px; background: var(--bg-well); box-shadow: inset 0 0 0 1px var(--hair); }
+.drain-forecast-spark-plot { position: relative; display: block; height: 28px; border-radius: var(--radius-xs); background: var(--bg-well); box-shadow: inset 0 0 0 1px var(--hair); }
 .drain-forecast-spark-svg { position: absolute; inset: 0; display: block; width: 100%; height: 100%; overflow: visible; }
 .drain-forecast-spark-line { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
 .drain-forecast-spark-limit { stroke: var(--fg-strong); stroke-width: 1; stroke-dasharray: 3 3; }
-.drain-forecast-spark-peak { position: absolute; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--bg-well); }
+.drain-forecast-spark-peak { position: absolute; width: 6px; height: 6px; margin: 0; transform: translate(-50%, -50%); border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--bg-well); }
 /* A shadow forecast is what enforce would have done: hatched and dimmed,
    like its shadow badge. */
 .drain-forecast-spark.hypothetical .drain-forecast-spark-plot { background-image: repeating-linear-gradient(135deg, transparent 0 4px, var(--hair) 4px 5px); }
@@ -199,13 +199,13 @@
 .drain-forecast-peak.over .drain-forecast-spark-line { stroke: var(--warn-fg); }
 .drain-forecast-peak.over .drain-forecast-spark-peak { background: var(--warn-fg); }
 .drain-forecast-peak.over .drain-forecast-spark-label { color: var(--warn-fg); }
-.drain-forecast-tasks { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
-.drain-forecast-task { color: var(--fg-dim); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.drain-forecast-tasks { display: flex; flex-direction: column; gap: var(--space-4); margin: 0; padding: 0; list-style: none; }
+.drain-forecast-task { color: var(--fg-dim); font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere; }
 .drain-forecast-task.admitted { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.drain-forecast-ended { margin: 0; color: var(--fg-mute); font-size: 12px; }
+.drain-forecast-ended { margin: 0; color: var(--fg-mute); font-size: var(--text-sm); }
 .drain-forecast-task.held { color: var(--warn-fg); }
-.drain-forecast-task a { font-family: var(--font-mono); font-size: 11.5px; }
-.drain-forecast-retained:not(:first-child) { padding-top: 10px; border-top: 1px dashed var(--hair); }
+.drain-forecast-task a { font-family: var(--font-mono); font-size: var(--text-sm); }
+.drain-forecast-retained:not(:first-child) { padding-top: var(--space-10); border-top: 1px dashed var(--hair); }
 /* The default backlog forecast under the admission block links to Analytics
    › Forecast. Its adjusted state shows a Backlog label and the time, cost and
    token rows. Each is a flat line with a dot at p50 and colour strongest
@@ -214,106 +214,106 @@
    but draws no forecast rows; a baseline-only forecast draws muted bars
    without a visible label. */
 .drain-backlog-forecast {
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding-top: 10px;
-  border-top: 1px dashed var(--hair); color: inherit; font-size: 12.5px; line-height: 1.45;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-10); padding-top: var(--space-10);
+  border-top: 1px dashed var(--hair); color: inherit; font-size: var(--text-sm); line-height: 1.45;
   text-decoration: none;
 }
 .drain-backlog-forecast:hover { text-decoration: none; }
 .drain-backlog-forecast:hover .drain-backlog-forecast-go { color: var(--accent); }
-.drain-backlog-forecast:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+.drain-backlog-forecast:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: var(--radius-xs); }
 /* The rows take the line under the label, ordered after the arrow, so the
    arrow ends the label row instead of wrapping alone [ORB-20480]. */
 .drain-backlog-forecast-go { margin-left: auto; color: var(--fg-mute); }
 .drain-backlog-forecast.unavailable { color: var(--fg-mute); }
-.drain-backlog-forecast .drain-forecast-peaks.drain-backlog-forecast-bars { order: 1; flex: 1 1 100%; grid-template-columns: max-content minmax(0, 1fr) auto; gap: 10px 14px; margin-top: 8px; }
+.drain-backlog-forecast .drain-forecast-peaks.drain-backlog-forecast-bars { order: 1; flex: 1 1 100%; grid-template-columns: max-content minmax(0, 1fr) auto; gap: var(--space-10) var(--space-14); margin-top: var(--space-8); }
 .drain-backlog-forecast .drain-backlog-forecast-bars .drain-forecast-figure { grid-column: auto; min-width: 0; }
 .drain-backlog-forecast-meter { --mark: var(--accent); position: relative; display: block; height: 10px; }
 .drain-backlog-forecast-meter::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: var(--hair); }
 .drain-backlog-forecast-band {
-  position: absolute; top: 2px; bottom: 2px; border-radius: 3px;
+  position: absolute; top: 2px; bottom: 2px; border-radius: var(--radius-xs);
   background: linear-gradient(to right, transparent, color-mix(in srgb, var(--mark) 70%, transparent) var(--center, 50%), transparent);
 }
-.drain-backlog-forecast-p50 { position: absolute; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: var(--mark); box-shadow: 0 0 0 2px var(--bg); }
+.drain-backlog-forecast-p50 { position: absolute; top: 50%; width: 6px; height: 6px; margin: 0; transform: translate(-50%, -50%); border-radius: 50%; background: var(--mark); box-shadow: 0 0 0 2px var(--bg); }
 .drain-backlog-forecast-bars.baseline .drain-backlog-forecast-meter { --mark: var(--fg-dim); }
 .drain-backlog-forecast-bars.baseline .drain-forecast-figure-main { color: var(--fg-dim); }
 .drain-backlog-forecast:hover .drain-backlog-forecast-bars:not(.baseline) .drain-forecast-figure-main { color: var(--accent); }
-.drain-backlog-forecast-legend { order: 2; flex: 1 1 100%; color: var(--fg-mute); font-size: 12px; text-align: right; }
-.drain-backlog-forecast-legend::before { content: ""; display: inline-block; width: 2px; height: 10px; margin-right: 6px; vertical-align: -1px; border-radius: 1px; background: var(--fg); }
+.drain-backlog-forecast-legend { order: 2; flex: 1 1 100%; color: var(--fg-mute); font-size: var(--text-sm); text-align: right; }
+.drain-backlog-forecast-legend::before { content: ""; display: inline-block; width: 2px; height: 10px; margin-right: var(--space-6); vertical-align: -1px; border-radius: var(--radius-2xs); background: var(--fg); }
 /* In a narrow card the figures drop under the chart, right-aligned. */
 @container drain-card (max-width: 520px) {
-  .drain-forecast-peaks { grid-template-columns: 56px minmax(0, 1fr); row-gap: 6px; }
+  .drain-forecast-peaks { grid-template-columns: 56px minmax(0, 1fr); row-gap: var(--space-6); }
   .drain-forecast-figure { grid-column: 2; min-width: 0; }
 }
 
 /* Holds the operator cannot clear from here: amber boxes. */
 .drain-throttle-line, .drain-provider-limit-note, .drain-provider-auth, .drain-crew-note, .drain-pilot-note {
-  margin: 0; padding: 9px 11px; border: 1px solid var(--warn-line); border-radius: 8px;
-  background: var(--warn-wash); color: var(--warn-fg); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere;
+  margin: 0; padding: var(--space-10) var(--space-12); border: 1px solid var(--warn-line); border-radius: var(--radius);
+  background: var(--warn-wash); color: var(--warn-fg); font-size: var(--text-md); line-height: 1.5; overflow-wrap: anywhere;
 }
 /* Current host throttle beside admission status. */
 .drain-throttle-line { display: block; }
 /* A provider-limit note the operator can dismiss until its limits change. */
-.drain-provider-limit-note { display: flex; align-items: flex-start; gap: 8px; }
+.drain-provider-limit-note { display: flex; align-items: flex-start; gap: var(--space-8); }
 .drain-provider-limit-text { flex: 1 1 auto; min-width: 0; }
 .drain-note-dismiss {
-  flex: 0 0 auto; display: inline-grid; place-items: center; width: 20px; height: 20px; margin: 0 -4px 0 0;
-  padding: 0; border: 0; border-radius: 4px; background: transparent; color: inherit; opacity: 0.75; cursor: pointer;
+  flex: 0 0 auto; display: inline-grid; place-items: center; width: 20px; height: 20px; margin: 0 calc(-1 * var(--space-4)) 0 0;
+  padding: 0; border: 0; border-radius: var(--radius-xs); background: transparent; color: inherit; opacity: 0.75; cursor: pointer;
 }
 /* The cross is drawn in CSS so the note's text stays the limits alone. */
 .drain-note-dismiss::before, .drain-note-dismiss::after {
-  content: ""; grid-area: 1 / 1; width: 11px; height: 1.6px; border-radius: 1px; background: currentColor;
+  content: ""; grid-area: 1 / 1; width: 11px; height: 1.6px; border-radius: var(--radius-2xs); background: currentColor;
 }
 .drain-note-dismiss::before { transform: rotate(45deg); }
 .drain-note-dismiss::after { transform: rotate(-45deg); }
 .drain-note-dismiss:hover { opacity: 1; background: var(--warn-line); }
 .drain-note-dismiss:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; opacity: 1; }
 .drain-provider-auth {
-  display: flex; flex-direction: column; gap: 4px; list-style: none;
+  display: flex; flex-direction: column; gap: var(--space-4); list-style: none;
 }
 .drain-provider-auth-fix { font-family: var(--font-mono, ui-monospace, monospace); }
 
 /* The footer: the window's run and auto-concurrency, Stop, then its help. */
-.drain-foot { display: flex; flex-direction: column; gap: 8px; padding-top: 16px; border-top: 1px solid var(--hair); }
-.drain-foot-row { position: relative; --hint-left: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
-.drain-foot-meta { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; color: var(--fg-mute); font-size: 12px; }
-.drain-foot-meta a { font-family: var(--font-mono); font-size: 12px; }
+.drain-foot { display: flex; flex-direction: column; gap: var(--space-8); padding-top: var(--space-16); border-top: 1px solid var(--hair); }
+.drain-foot-row { position: relative; --hint-left: 0; display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); min-width: 0; }
+.drain-foot-meta { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-10); min-width: 0; color: var(--fg-mute); font-size: var(--text-sm); }
+.drain-foot-meta a { font-family: var(--font-mono); font-size: var(--text-sm); }
 
-.drain-foot-row > .drain-stop-control { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; margin-left: auto; }
+.drain-foot-row > .drain-stop-control { display: inline-flex; align-items: center; gap: var(--space-6); flex: 0 0 auto; margin-left: auto; }
 .drain-stop-control > .drain-stop { flex: 0 0 auto; margin-left: 0; }
 .drain-stop-control > .info-hint.info-hint-pinned { margin: -15px -15px -15px -9px; }
-.drain-stop-note { margin: 0; color: var(--fg-mute); font-size: 12px; line-height: 1.45; }
+.drain-stop-note { margin: 0; color: var(--fg-mute); font-size: var(--text-sm); line-height: 1.45; }
 .drain-stop-note.disabled-reason { color: var(--warn-fg); }
 .drain-stop-note[hidden] { display: none; }
 
 /* Windows waiting for the live one's slot, listed under its footer. */
-.drain-queued { display: flex; flex-direction: column; gap: 8px; padding-top: 14px; border-top: 1px solid var(--hair); }
-.drain-queued-title { margin: 0; color: var(--fg-mute); font: 500 12px/1.4 var(--font-sans); letter-spacing: 0.02em; text-transform: uppercase; }
-.drain-queued-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.drain-queued-row { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px dashed var(--border-strong); border-radius: 8px; background: var(--bg-well); }
-.drain-queued-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; }
-.drain-queued-head a { font-family: var(--font-mono); font-size: 12px; }
-.drain-queued-state { color: var(--fg-dim); font-size: 12px; }
-.drain-queued-head > .drain-queued-cancel { flex: 0 0 auto; margin-left: auto; font-size: 12px; min-height: 26px; padding: 2px 12px; }
-.drain-queued-facts { display: flex; flex-wrap: wrap; gap: 2px 14px; color: var(--fg); font-size: 12.5px; font-variant-numeric: tabular-nums; }
-.drain-queued-start, .drain-queued-env { color: var(--fg-mute); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
-.drain-queued-flag { margin: 0; padding: 7px 10px; border: 1px solid var(--warn-line); border-radius: 6px; background: var(--warn-wash); color: var(--warn-fg); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.drain-queued { display: flex; flex-direction: column; gap: var(--space-8); padding-top: var(--space-14); border-top: 1px solid var(--hair); }
+.drain-queued-title { margin: 0; color: var(--fg-mute); font: 500 var(--text-sm)/1.4 var(--font-sans); letter-spacing: 0.02em; text-transform: uppercase; }
+.drain-queued-list { display: flex; flex-direction: column; gap: var(--space-8); margin: 0; padding: 0; list-style: none; }
+.drain-queued-row { display: flex; flex-direction: column; gap: var(--space-6); padding: var(--space-10) var(--space-12); border: 1px dashed var(--border-strong); border-radius: var(--radius); background: var(--bg-well); }
+.drain-queued-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-10); min-width: 0; }
+.drain-queued-head a { font-family: var(--font-mono); font-size: var(--text-sm); }
+.drain-queued-state { color: var(--fg-dim); font-size: var(--text-sm); }
+.drain-queued-head > .drain-queued-cancel { flex: 0 0 auto; margin-left: auto; font-size: var(--text-sm); min-height: 26px; padding: var(--space-2) var(--space-12); }
+.drain-queued-facts { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-14); color: var(--fg); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.drain-queued-start, .drain-queued-env { color: var(--fg-mute); font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere; }
+.drain-queued-flag { margin: 0; padding: var(--space-8) var(--space-10); border: 1px solid var(--warn-line); border-radius: var(--radius-sm); background: var(--warn-wash); color: var(--warn-fg); font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere; }
 
 /* Start a window. */
-.drain-start-toggle { display: none; align-items: center; justify-content: space-between; width: 100%; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--fg-strong); font: 600 14px var(--font-sans); cursor: pointer; }
+.drain-start-toggle { display: none; align-items: center; justify-content: space-between; width: 100%; min-height: 44px; padding: 0; border: 0; background: transparent; color: var(--fg-strong); font: 600 var(--text-base) var(--font-sans); cursor: pointer; }
 .drain-start-toggle::after { content: "›"; color: var(--fg-dim); font-weight: 400; }
 .drain-start-toggle[aria-expanded="true"]::after { transform: rotate(90deg); }
-.drain-start-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
-.drain-start-sub { color: var(--fg-mute); font: 400 12.5px var(--font-sans); font-variant-numeric: tabular-nums; }
-#auto-drain-quick-start-body { display: flex; flex-direction: column; gap: 18px; padding: 18px 18px 0; min-width: 0; }
-.drain-field { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.drain-field-label { color: var(--fg-soft); font: 400 13px var(--font-sans); }
+.drain-start-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: var(--radius-xs); }
+.drain-start-sub { color: var(--fg-mute); font: 400 var(--text-sm) var(--font-sans); font-variant-numeric: tabular-nums; }
+#auto-drain-quick-start-body { display: flex; flex-direction: column; gap: var(--space-16); padding: var(--space-16) var(--space-16) 0; min-width: 0; }
+.drain-field { display: flex; flex-direction: column; gap: var(--space-8); min-width: 0; }
+.drain-field-label { color: var(--fg-soft); font: 400 var(--text-md) var(--font-sans); }
 /* The label line: its help is an info hint whose bubble spans the line. */
 .drain-field-head { position: relative; --hint-left: 0; display: flex; align-items: center; min-width: 0; }
-.drain-field-hint { margin: -2px 0 0; color: var(--fg-mute); font-size: 12.5px; line-height: 1.45; }
+.drain-field-hint { margin: calc(-1 * var(--space-2)) 0 0; color: var(--fg-mute); font-size: var(--text-sm); line-height: 1.45; }
 .drain-field-hint.warn { color: var(--warn-fg); }
 /* A label and its hint on the left, the control on the right. */
-.drain-field.drain-field-row { flex-direction: row; align-items: center; justify-content: space-between; gap: 16px; }
-.drain-field-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.drain-field.drain-field-row { flex-direction: row; align-items: center; justify-content: space-between; gap: var(--space-16); }
+.drain-field-text { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
 .drain-step:focus-visible, .drain-stepper-value:focus-visible,
 .drain-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
@@ -322,23 +322,23 @@
    Parallel tasks' "auto (5)" placeholder. */
 .drain-stepper {
   flex: 0 0 auto; display: inline-flex; align-items: stretch; height: 36px; overflow: hidden;
-  border: 1px solid var(--border); border-radius: 8px; background: var(--bg-well);
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-well);
 }
-.drain-step { width: 36px; padding: 0; border: 0; background: transparent; color: var(--fg-soft); font: 18px var(--font-sans); cursor: pointer; }
+.drain-step { width: 36px; padding: 0; border: 0; background: transparent; color: var(--fg-soft); font: var(--text-xl) var(--font-sans); cursor: pointer; }
 .drain-step:hover { color: var(--fg-strong); background: var(--bg-control); }
 .drain-stepper-value {
   width: 72px; min-width: 0; padding: 0; border: 0;
-  background: transparent; color: var(--fg-strong); font-size: 14px; text-align: center; appearance: textfield; -moz-appearance: textfield;
+  background: transparent; color: var(--fg-strong); font-size: var(--text-base); text-align: center; appearance: textfield; -moz-appearance: textfield;
 }
 .drain-stepper-value::-webkit-outer-spin-button, .drain-stepper-value::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .drain-stepper-value::placeholder { color: var(--fg-dim); }
-#auto-drain-concurrency-problem, #auto-drain-duration-problem { margin-top: -10px; }
+#auto-drain-concurrency-problem, #auto-drain-duration-problem { margin-top: calc(-1 * var(--space-10)); }
 #auto-drain-concurrency-problem[hidden], #auto-drain-duration-problem[hidden] { display: none; }
 
 /* Auto-fix: a checkbox drawn as a switch. */
 .drain-switch {
   appearance: none; -webkit-appearance: none; position: relative; flex: 0 0 auto;
-  width: 40px; height: 24px; margin: 2px 0 0; border-radius: 12px; background: var(--border-strong);
+  width: 40px; height: 24px; margin: var(--space-2) 0 0; border-radius: var(--radius-pill); background: var(--border-strong);
   cursor: pointer; transition: background .15s ease;
 }
 .drain-switch::after {
@@ -358,23 +358,23 @@
 .drain-start-card { overflow: clip; }
 .drain-start-foot {
   position: sticky; bottom: 0; z-index: 1;
-  display: flex; flex-direction: column; gap: 12px; margin: 0 -18px; padding: 16px 18px 18px;
+  display: flex; flex-direction: column; gap: var(--space-12); margin: 0 calc(-1 * var(--space-16)); padding: var(--space-16);
   border-top: 1px solid var(--hair); background: var(--bg-well);
 }
-.drain-start-held { display: flex; align-items: flex-start; gap: 8px; margin: 0; color: var(--warn-fg); font-size: 12.5px; line-height: 1.45; }
+.drain-start-held { display: flex; align-items: flex-start; gap: var(--space-8); margin: 0; color: var(--warn-fg); font-size: var(--text-sm); line-height: 1.45; }
 /* The Tasks dock's simple Start card: a footer that ends the card rather
    than sticking to the pane. */
 #auto-drain-quick-start .drain-start-foot { position: static; }
-#auto-drain-quick-start .drain-start-foot > .operation-button.drain-start { width: 100%; min-height: 44px; font-size: 14px; }
+#auto-drain-quick-start .drain-start-foot > .operation-button.drain-start { width: 100%; min-height: 44px; font-size: var(--text-base); }
 
-.drain-col-side > .operation-feedback:not(:empty) { flex: 0 0 auto; min-height: 0; padding: 8px 18px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-panel); white-space: pre-line; overflow-wrap: anywhere; }
+.drain-col-side > .operation-feedback:not(:empty) { flex: 0 0 auto; min-height: 0; padding: var(--space-8) var(--space-16); background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-panel); white-space: pre-line; overflow-wrap: anywhere; }
 
 /* Settlement report shown on the runs table after cancelling a drain run. */
-.run-cancel-notice { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.run-cancel-notice { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-12); }
 
 #auto-drain-panel { container: drain-card / inline-size; }
 
-.drain-approval-summary { color: var(--fg-dim); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.drain-approval-summary { color: var(--fg-dim); font-size: var(--text-sm); line-height: 1.5; overflow-wrap: anywhere; }
 .drain-approval-summary a { color: var(--warn-fg); text-decoration: underline; }
 
 .drain-backlog-forecast-gap { order: 2; flex: 1 1 100%; color: var(--warn-fg); overflow-wrap: anywhere; }

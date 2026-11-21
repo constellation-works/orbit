@@ -5,53 +5,53 @@
 .leases-layout { grid-template-columns: minmax(0, 1fr); align-content: start; }
 .tab-pane[data-tab="leases"] .panel { min-width: 0; }
 #leases-panel > .body, #lease-landings-panel > .body {
-  padding: 12px; background: var(--bg); display: flex; flex-direction: column; gap: 10px; min-width: 0;
+  padding: var(--space-12); background: var(--bg); display: flex; flex-direction: column; gap: var(--space-10); min-width: 0;
 }
 .leases-explainer {
-  margin: 0; padding: 10px 16px; border-bottom: 1px solid var(--hair);
-  color: var(--fg-dim); font-size: 12px; background: var(--bg);
+  margin: 0; padding: var(--space-10) var(--space-16); border-bottom: 1px solid var(--hair);
+  color: var(--fg-dim); font-size: var(--text-sm); background: var(--bg);
 }
-.lease-summary { margin: 0; color: var(--fg-dim); font-size: 12px; }
-.lease-table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+.lease-summary { margin: 0; color: var(--fg-dim); font-size: var(--text-sm); }
+.lease-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); table-layout: fixed; }
 .lease-table th {
-  text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border);
-  color: var(--fg-mute); font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+  text-align: left; padding: var(--space-6) var(--space-10); border-bottom: 1px solid var(--border);
+  color: var(--fg-mute); font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
 }
 .lease-table th:first-child { width: 34%; }
-.lease-table td { padding: 8px 10px; border-bottom: 1px solid var(--hair); vertical-align: top; min-width: 0; }
-.lease-path { color: var(--fg); font: 12px/1.5 var(--font-mono); overflow-wrap: anywhere; }
-.lease-holders { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.lease-holder { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: baseline; }
+.lease-table td { padding: var(--space-8) var(--space-10); border-bottom: 1px solid var(--hair); vertical-align: top; min-width: 0; }
+.lease-path { color: var(--fg); font: var(--text-sm)/1.5 var(--font-mono); overflow-wrap: anywhere; }
+.lease-holders { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-6); }
+.lease-holder { display: flex; flex-wrap: wrap; gap: var(--space-4) var(--space-6); align-items: baseline; }
 .lease-principal { color: var(--fg); font-weight: 600; overflow-wrap: anywhere; }
-.lease-class, .lease-when, .lease-via { color: var(--fg-mute); font-size: 11px; }
+.lease-class, .lease-when, .lease-via { color: var(--fg-mute); font-size: var(--text-xs); }
 .lease-via { font-family: var(--font-mono); overflow-wrap: anywhere; }
 .lease-chip {
-  display: inline-flex; align-items: center; padding: 0 6px; border-radius: 2px;
-  border: 1px solid var(--border); color: var(--fg-dim); font: 10px/1.6 var(--font-mono);
+  display: inline-flex; align-items: center; padding: 0 var(--space-6); border-radius: var(--radius-2xs);
+  border: 1px solid var(--border); color: var(--fg-dim); font: var(--text-2xs)/1.6 var(--font-mono);
 }
 .lease-chip-hard { color: var(--status-open); border-color: var(--status-open); }
 .lease-chip-advisory { color: var(--accent); border-color: var(--accent); }
-.lease-none { color: var(--fg-mute); font-size: 12px; }
+.lease-none { color: var(--fg-mute); font-size: var(--text-sm); }
 .lease-landing {
-  border: 1px solid var(--hair); border-radius: 2px; background: var(--bg-elev);
-  padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; min-width: 0;
+  border: 1px solid var(--hair); border-radius: var(--radius-2xs); background: var(--bg-elev);
+  padding: var(--space-8) var(--space-10); display: flex; flex-direction: column; gap: var(--space-4); min-width: 0;
 }
-.lease-landing-head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; font-size: 12px; }
-.lease-commit, .lease-id { color: var(--fg); font: 11px/1.5 var(--font-mono); overflow-wrap: anywhere; }
+.lease-landing-head { display: flex; flex-wrap: wrap; gap: var(--space-4) var(--space-8); align-items: baseline; font-size: var(--text-sm); }
+.lease-commit, .lease-id { color: var(--fg); font: var(--text-xs)/1.5 var(--font-mono); overflow-wrap: anywhere; }
 .lease-landing-on { color: var(--fg-dim); }
-.lease-task { color: var(--accent); font: 11px/1.5 var(--font-mono); }
+.lease-task { color: var(--accent); font: var(--text-xs)/1.5 var(--font-mono); }
 .lease-task:hover { color: var(--accent-hover); }
-.lease-landing-meta { color: var(--fg-mute); font-size: 11px; }
-.lease-landing-paths { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 2px 12px; }
-.lease-landing-paths .lease-path { font-size: 11px; }
+.lease-landing-meta { color: var(--fg-mute); font-size: var(--text-xs); }
+.lease-landing-paths { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-12); }
+.lease-landing-paths .lease-path { font-size: var(--text-xs); }
 
 @media (max-width: 760px) {
   .lease-table, .lease-table tbody, .lease-table tr, .lease-table td { display: block; width: 100%; }
   .lease-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-  .lease-table tr { border: 1px solid var(--hair); border-radius: 2px; margin-bottom: 8px; background: var(--bg-elev); }
-  .lease-table td { border-bottom: none; padding: 6px 10px; }
+  .lease-table tr { border: 1px solid var(--hair); border-radius: var(--radius-2xs); margin-bottom: var(--space-8); background: var(--bg-elev); }
+  .lease-table td { border-bottom: none; padding: var(--space-6) var(--space-10); }
   .lease-table td::before {
-    content: attr(data-label); display: block; margin-bottom: 2px;
-    color: var(--fg-mute); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+    content: attr(data-label); display: block; margin-bottom: var(--space-2);
+    color: var(--fg-mute); font-size: var(--text-xs); letter-spacing: 0.06em; text-transform: uppercase;
   }
 }
