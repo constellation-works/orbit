@@ -3,9 +3,12 @@
 //! open and unmerged with the task in review [ORB-14849].
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use chrono::Utc;
+use orbit_core::OrbitError;
 use orbit_core::TaskStatus;
+use orbit_core::runtime::task_pr_forge::{ForgePullRequest, MergedPullRequest, TaskPrForge};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate, execute_deterministic_action};
 use orbit_types::task::{ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM};
 use orbit_types::workflow::{JobRunState, REVIEW_CONTRACT_VERSION};
@@ -404,8 +407,47 @@ struct Stranded {
     refused: String,
 }
 
+/// A forge on which the reviewed PR #42 already merged as [`EXTERNAL_MERGE`].
+struct MergedForge;
+
+const EXTERNAL_MERGE: &str = "94016e8238aa0cb5e1b3c9e4d2f7a6b8c0d1e2f3";
+
+impl TaskPrForge for MergedForge {
+    fn open_pull_requests(&self, _: &Path) -> Result<Vec<ForgePullRequest>, OrbitError> {
+        Ok(Vec::new())
+    }
+    fn merged_pull_request(
+        &self,
+        _: &Path,
+        number: u64,
+    ) -> Result<Option<MergedPullRequest>, OrbitError> {
+        Ok((number == 42).then(|| MergedPullRequest {
+            pull: ForgePullRequest {
+                number,
+                head_branch: "candidate".into(),
+                body: String::new(),
+                author: "orbit-bot".into(),
+            },
+            url: "https://github.com/owner/repo/pull/42".into(),
+            base_branch: "main".into(),
+            head_sha: "0123456789abcdef0123456789abcdef01234567".into(),
+            merge_commit: EXTERNAL_MERGE.into(),
+            merged_at: Utc::now(),
+        }))
+    }
+    fn authenticated_login(&self, _: &Path) -> Result<String, OrbitError> {
+        Ok("orbit-bot".into())
+    }
+    fn close_pull_request(&self, _: &Path, _: u64, _: &str) -> Result<(), OrbitError> {
+        Ok(())
+    }
+}
+
 fn stranded(verdict: &str) -> Stranded {
-    let mut fixture = Fixture::before_landing();
+    stranded_on(verdict, Fixture::before_landing())
+}
+
+fn stranded_on(verdict: &str, mut fixture: Fixture) -> Stranded {
     let bare = fixture._root.path().join("origin.git");
     git(
         fixture._root.path(),
@@ -526,6 +568,77 @@ fn an_incomplete_before_landing_review_pushes_its_reviewer_commit_and_merges_not
     );
 }
 
+/// The PR merged outside Orbit while the review ran [ORB-26599]: the settle
+/// comment and the refusal name the merge, claim no open or unmerged PR, name
+/// the unpushed reviewer commit and its worktree, and leave no pending
+/// decision; the failure handoff pushes nothing.
+fn a_before_landing_review_of_a_pr_merged_outside_orbit_says_so_and_names_the_stranded_commit() {
+    let mut fixture = Fixture::before_landing();
+    fixture.runtime = fixture
+        .runtime
+        .clone()
+        .with_task_pr_forge(Arc::new(MergedForge));
+    let stranded = stranded_on("incomplete", fixture);
+    let reviewer_commit = git(&stranded.fixture.repo, &["rev-parse", "HEAD"]);
+
+    assert!(
+        stranded.refused.contains(EXTERNAL_MERGE)
+            && !stranded.refused.contains("stays open and unmerged")
+            && orbit_types::workflow::HeldFailure::of(None, Some(&stranded.refused)).is_none(),
+        "{}",
+        stranded.refused
+    );
+    let comments = stranded
+        .fixture
+        .runtime
+        .get_task_comments(&stranded.fixture.task_id)
+        .unwrap();
+    let verdict = comments
+        .iter()
+        .rfind(|comment| {
+            comment
+                .message
+                .starts_with("before-landing review settled attempt")
+        })
+        .unwrap_or_else(|| panic!("{comments:#?}"));
+    assert!(
+        verdict
+            .message
+            .contains("PR #42 already merged outside Orbit")
+            && verdict.message.contains(EXTERNAL_MERGE)
+            && verdict.message.contains(&reviewer_commit)
+            && verdict
+                .message
+                .contains(&stranded.fixture.repo.display().to_string())
+            && !verdict.message.contains("stays open and unmerged")
+            && !verdict.message.contains("An operator decides"),
+        "{}",
+        verdict.message
+    );
+
+    let handoff = stranded.handoff();
+    assert_eq!(handoff["decision"], "landing_review_failure", "{handoff}");
+    assert_eq!(handoff["reviewer_push"], Value::Null, "{handoff}");
+    assert_eq!(stranded.remote("refs/heads/candidate"), stranded.published);
+    let comments = stranded
+        .fixture
+        .runtime
+        .get_task_comments(&stranded.fixture.task_id)
+        .unwrap();
+    let handoff_note = comments
+        .iter()
+        .rfind(|comment| comment.message.starts_with("Before-landing review ended"))
+        .unwrap_or_else(|| panic!("{comments:#?}"));
+    assert!(
+        handoff_note
+            .message
+            .contains("already merged outside Orbit")
+            && !handoff_note.message.contains("stays open and unmerged"),
+        "{}",
+        handoff_note.message
+    );
+}
+
 /// The push is conditional on the head the review reviewed: a branch that moved
 /// since keeps its new head, the reviewer commit stays local, and the handoff
 /// still leaves the PR open in review.
@@ -592,5 +705,6 @@ crate::scenario_table!(
     an_incomplete_review_with_a_reason_a_record_or_a_revision_still_counts,
     an_incomplete_before_landing_review_pushes_its_reviewer_commit_and_merges_nothing,
     a_reviewer_commit_is_not_pushed_over_a_pr_branch_that_moved,
+    a_before_landing_review_of_a_pr_merged_outside_orbit_says_so_and_names_the_stranded_commit,
     a_rejected_before_landing_review_pushes_nothing
 );
