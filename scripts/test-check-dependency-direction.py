@@ -1527,6 +1527,19 @@ class RelativeImportTests(unittest.TestCase):
              "        super::super::super::adapter::Probe;\n    }\n}\n"),
         ], rejected=True)
 
+    def test_inline_module_with_unicode_identifier_resolves_at_its_lexical_depth(self):
+        # [ORB-26563] `mod détours` is a compiler-valid inline module. Two
+        # `super` segments there name application::adapter (allowed); three
+        # name crate::adapter and stay rejected.
+        self.check_rows([
+            ("probe.rs", "mod détours {\n    use super::super::adapter::Probe;\n"
+             "    fn probe() { let _ = Probe; }\n}\n"),
+        ], rejected=False)
+        self.check_rows([
+            ("escape.rs", "mod détours {\n    use super::super::super::adapter::Probe;\n"
+             "    fn probe() { let _ = Probe; }\n}\n"),
+        ], rejected=True)
+
     def test_inline_module_inside_function_body_resolves_at_its_lexical_depth(self):
         # [ORB-26562] A `mod` item declared inside a function body adds a module
         # segment, as one in a module body does. In `mod outer { fn local() {
