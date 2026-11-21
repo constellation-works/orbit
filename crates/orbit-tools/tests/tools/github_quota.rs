@@ -1715,6 +1715,113 @@ fn clipped_release_with_explicit_null_previous_claim_still_reconciles() {
     );
 }
 
+/// Regression [ORB-26137]: ambiguous clipped-release bytes at the active
+/// generation (malformed, or a payload naming another generation) are
+/// diagnostic evidence. The due claim that advances the generation, and the
+/// ordinary update after it, must leave those bytes on disk while accounting
+/// and refresh proceed normally.
+#[test]
+fn ambiguous_clipped_release_survives_claim_advance_and_later_updates() {
+    let ambiguous: [&[u8]; 2] = [
+        b"{\"generation\":",
+        br#"{"generation":7,"previous_claim":null}"#,
+    ];
+    for ambiguous_bytes in ambiguous {
+        let records = TempDir::new().unwrap();
+        let policy = GithubQuotaPolicy::default();
+        let now = now();
+        let reset = now + 1800;
+        store(records.path()).refresh_if_due(&policy, ACCOUNT, now - 120, &|| known(3500, reset));
+        run_contended_clipped_probe(records.path(), policy, ACCOUNT, now);
+
+        let marker = records.path().join(format!(".{ACCOUNT}.clipped.2.json"));
+        std::fs::write(&marker, ambiguous_bytes).unwrap();
+
+        // One refresh interval later the claim is due and advances to generation 3.
+        let later = now + policy.refresh_interval.as_secs();
+        let probes = AtomicUsize::new(0);
+        store(records.path()).refresh_if_due(&policy, ACCOUNT, later, &|| {
+            probes.fetch_add(1, Ordering::SeqCst);
+            known(3400, reset)
+        });
+        assert_eq!(
+            probes.load(Ordering::SeqCst),
+            1,
+            "the due claim must refresh once"
+        );
+        assert_eq!(
+            std::fs::read(&marker).unwrap(),
+            ambiguous_bytes,
+            "ambiguous release bytes must survive the claim advancing to the next generation"
+        );
+
+        store(records.path())
+            .admit(
+                &policy,
+                ACCOUNT,
+                GithubCaller::Agent,
+                RESOURCE_CORE,
+                later,
+                &|| unreachable!("the generation-3 claim is fresh"),
+            )
+            .expect("fresh observation above reserve must admit agent read");
+        assert_eq!(
+            std::fs::read(&marker).unwrap(),
+            ambiguous_bytes,
+            "ambiguous release bytes must survive a later ordinary update"
+        );
+        let status = store(records.path()).status(&policy, ACCOUNT, later);
+        let core = status
+            .resources
+            .iter()
+            .find(|resource| resource.resource == RESOURCE_CORE)
+            .unwrap();
+        assert_eq!(core.remaining, Some(3399));
+        assert_eq!(core.calls.agent, 1);
+    }
+}
+
+/// Regression [ORB-26137]: a clipped-release marker at the previous generation
+/// is removed only once its payload proves it is a well-formed release for that
+/// generation. An ordinary update after the record advanced must leave
+/// ambiguous bytes at that path in place.
+#[test]
+fn ambiguous_previous_generation_marker_survives_ordinary_update() {
+    let ambiguous: [&[u8]; 2] = [
+        b"{\"generation\":",
+        br#"{"generation":7,"previous_claim":null}"#,
+    ];
+    for ambiguous_bytes in ambiguous {
+        let records = TempDir::new().unwrap();
+        let policy = GithubQuotaPolicy::default();
+        let now = now();
+        let reset = now + 1800;
+        // Three completed refreshes, one interval apart, leave the record at generation 3.
+        for at in [now - 120, now - 60, now] {
+            store(records.path()).refresh_if_due(&policy, ACCOUNT, at, &|| known(3500, reset));
+        }
+
+        let marker = records.path().join(format!(".{ACCOUNT}.clipped.2.json"));
+        std::fs::write(&marker, ambiguous_bytes).unwrap();
+
+        store(records.path())
+            .admit(
+                &policy,
+                ACCOUNT,
+                GithubCaller::Agent,
+                RESOURCE_CORE,
+                now,
+                &|| unreachable!("the generation-3 observation is fresh"),
+            )
+            .expect("fresh observation above reserve must admit agent read");
+        assert_eq!(
+            std::fs::read(&marker).unwrap(),
+            ambiguous_bytes,
+            "ambiguous previous-generation release bytes must survive an ordinary update"
+        );
+    }
+}
+
 /// Regression [ORB-26114]: a writable/searchable quota directory that denies
 /// listing (`0o300`) must still reconcile a staged clipped release by name,
 /// refresh once at the same logical instant, admit an agent once the new

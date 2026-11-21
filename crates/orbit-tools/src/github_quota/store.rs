@@ -541,9 +541,12 @@ impl GithubQuotaStore {
         Some(release)
     }
 
-    /// Reconcile a staged clipped-claim release for the active generation under
-    /// the exclusive lock, returning marker paths (including any superseded
-    /// previous generation) to unlink after the updated record is committed.
+    /// Reconcile staged clipped-claim releases under the exclusive lock, returning
+    /// the marker paths to unlink after the updated record is committed. A marker
+    /// is unlinked only when its payload decodes as a release for its own
+    /// generation: the active generation's release also settles its claim, and
+    /// the previous generation's is superseded. Malformed or generation-mismatched
+    /// bytes stay on disk for diagnosis.
     ///
     /// Accesses known generation paths directly by name so reconciliation stays
     /// O(1) independent of unrelated directory entries and succeeds when the
@@ -551,7 +554,11 @@ impl GithubQuotaStore {
     fn reconcile_clipped_releases(&self, account: &str, record: &mut QuotaRecord) -> Vec<PathBuf> {
         let mut markers = Vec::new();
         if record.refresh_generation > 1 {
-            markers.push(self.clipped_release_path(account, record.refresh_generation - 1));
+            let superseded = record.refresh_generation - 1;
+            let path = self.clipped_release_path(account, superseded);
+            if self.read_clipped_release(&path, superseded).is_some() {
+                markers.push(path);
+            }
         }
         if record.refresh_generation == 0 {
             return markers;
@@ -601,15 +608,8 @@ impl GithubQuotaStore {
             self.lock_options(),
             || {
                 let mut record = Self::load(&path)?;
-                let previous_generation = record.refresh_generation;
-                let mut markers = self.reconcile_clipped_releases(account, &mut record);
+                let markers = self.reconcile_clipped_releases(account, &mut record);
                 let output = change(&mut record);
-                if record.refresh_generation != previous_generation && previous_generation > 0 {
-                    let superseded = self.clipped_release_path(account, previous_generation);
-                    if !markers.contains(&superseded) {
-                        markers.push(superseded);
-                    }
-                }
                 let text = serde_json::to_string(&record).map_err(io::Error::other)?;
                 orbit_common::fs::io::atomic_write_text_volatile(&path, &text)?;
                 for marker in markers {
