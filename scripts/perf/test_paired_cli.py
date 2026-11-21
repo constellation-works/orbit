@@ -420,6 +420,17 @@ class PairedCliParityTest(PairedCliTestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertIs(json.loads((out / "parity.json").read_text())["match"], True)
 
+    def test_explicit_empty_parity_command_is_refused_in_http_mode(self) -> None:
+        # ORB-26398: an explicit empty `--parity` names no command, so it must not
+        # stand in for an omitted one and let HTTP-only observations match.
+        result, out = self.run_paired("--parity", "", surface=("--http", "/ok"))
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("--parity", result.stderr)
+        self.assertNotIn('"verdict": "pass"', result.stdout)
+        self.assertFalse(out.exists(), "a refused usage error creates no output")
+        self.assertFalse((self.marks / "web-all.pids").exists(),
+                         "no arm server may start for an empty parity command")
+
 
 class PairedCliSupervisionTest(PairedCliTestCase):
     def assert_stall_refused(self, mode: str, *extra: str, surface=("--cli", "timed")) -> None:

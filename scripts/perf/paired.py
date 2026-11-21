@@ -585,7 +585,7 @@ class Harness:
             env = fixture.isolated_env(info)
             record: dict = {}
             try:
-                if self.args.parity:
+                if self.args.parity is not None:
                     _ms, code, stdout = self.cli_once(arm, info, env, shlex.split(self.args.parity),
                                                       "parity command")
                     record["command"] = {"exit": code,
@@ -793,6 +793,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.http and not args.http.startswith("/"):
         parser.error("--http takes a path starting with /")
+    # An explicit value with no argv words is not an omitted command (ORB-26398).
+    if args.parity is not None and not shlex.split(args.parity):
+        parser.error("--parity takes an orbit command; leave it out to skip the parity command")
     os.umask(0o077)
     created = common.CreatedDirs(args.keep)
     ok = False
