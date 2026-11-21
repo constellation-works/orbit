@@ -39,6 +39,7 @@ pub use display::{
     FireField, RoutineFailureStreak, RoutineField, RoutineStatus, breaker_json, project_fire,
 };
 pub use fires::recent_fires;
+pub use orbit_automation::routines::breaker::{BreakerTrialPhase, breaker_trial_status};
 pub use report::{RoutineStatusReport, routine_statuses_with_providers};
 pub use toggle::{
     RoutineBreakerAction, RoutineBreakerOutcome, control_listed_routine_breaker, pause_routine,

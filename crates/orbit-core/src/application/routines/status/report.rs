@@ -219,8 +219,16 @@ pub fn routine_statuses_with_providers(
             cron_fires.first().cloned(),
             automation_fires.first().cloned(),
         );
-        let (recent_fires, failure_streak) = fire_history(cron_fires, automation_fires);
         let breaker = breakers.get(&routine.definition.name).cloned();
+        let (breaker_trial_phase, breaker_trial_expected_at) = breaker_trial_status(
+            breaker.as_ref(),
+            &routine,
+            &cron_fires,
+            &automation_fires,
+            next_due.as_deref(),
+            now_utc,
+        );
+        let (recent_fires, failure_streak) = fire_history(cron_fires, automation_fires);
         statuses.push(RoutineStatus {
             routine,
             paused_at,
@@ -231,6 +239,8 @@ pub fn routine_statuses_with_providers(
             recent_fires,
             failure_streak,
             breaker,
+            breaker_trial_phase,
+            breaker_trial_expected_at,
             automation,
         });
     }

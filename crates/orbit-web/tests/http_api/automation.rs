@@ -3,7 +3,10 @@ use std::fs;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::AutoTaskAddParams;
-use orbit_store::contracts::{RoutineFireIntentParams, RoutineFireState, RoutineStoreBackend};
+use orbit_store::contracts::{
+    RoutineBreakerEvent, RoutineBreakerRecord, RoutineBreakerState, RoutineFireIntentParams,
+    RoutineFireState, RoutineStoreBackend,
+};
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::automation::members::{
     MemberAssessment, MemberAttempt, MemberState, StateMember, StateTriggerKind,
@@ -915,6 +918,350 @@ fn routine_health_memo_ignores_unrelated_audit_writes_but_sees_new_fires() {
                 !read()["routines"][0]["paused_at"].is_null(),
                 "a pause invalidates the memo at once"
             );
+        },
+    );
+}
+
+#[test]
+fn routine_breaker_status_reports_server_computed_trial_phase_and_expected_time() {
+    isolated(
+        "automation::routine_breaker_status_reports_server_computed_trial_phase_and_expected_time",
+        || {
+            let fixture = Fixture::new();
+            for job in [
+                "cron_pipeline",
+                "task_pilot_pipeline",
+                "delivery_pipeline",
+                "cond_pipeline",
+            ] {
+                fixture.job(job);
+            }
+            let machine = fixture.runtime.automation_machine_identity().unwrap();
+            let routines = fixture.work.join("routines");
+            fs::create_dir_all(&routines).unwrap();
+            fs::write(
+                routines.join("cron_trial.yaml"),
+                "schemaVersion: 1\nname: cron_trial\nenabled: true\ntarget: job:cron_pipeline\ntrigger: {cron: '0 * * * *'}\n",
+            )
+            .unwrap();
+            fs::write(
+                routines.join("state_watch.yaml"),
+                format!(
+                    "schemaVersion: 1\nname: state_watch\nenabled: true\ntarget: job:task_pilot_pipeline\ntrigger:\n  state:\n    kind: preparation_eligible\n    owner_machine: {machine}\n    branch: agent-main\n    debounce_minutes: 2\n    max_wait_minutes: 10\n    max_items: 50\n    retries: 1\n    deadline_minutes: 90\n"
+                ),
+            )
+            .unwrap();
+            fs::write(
+                routines.join("delivery_watch.yaml"),
+                "schemaVersion: 1\nname: delivery_watch\nenabled: true\ntarget: job:delivery_pipeline\ntrigger:\n  deliveries_landed: {branch: agent-main, threshold: 1, max_wait_minutes: 10, coverage: landed_code_review_v1, max_items: 20, retries: 0}\n",
+            )
+            .unwrap();
+            fs::write(
+                routines.join("cond_watch.yaml"),
+                "schemaVersion: 1\nname: cond_watch\nenabled: true\ntarget: job:cond_pipeline\ntrigger:\n  condition:\n    scope: task\n    when: \"task.status == 'done'\"\n",
+            )
+            .unwrap();
+
+            let store =
+                orbit_store::compose::routine_store(&fixture.global.join("orbit.db")).unwrap();
+            let now = Utc::now();
+            let admitted_at = now - Duration::minutes(2);
+            let set_breaker = |record: RoutineBreakerRecord, event: &str| {
+                store
+                    .routine_breaker_transition(
+                        &record,
+                        &RoutineBreakerEvent {
+                            routine_name: record.routine_name.clone(),
+                            event: event.into(),
+                            actor: "sweep".into(),
+                            detail: record.trial_reason.clone(),
+                            run_id: None,
+                            at: now.to_rfc3339(),
+                        },
+                    )
+                    .unwrap();
+            };
+
+            // 1. Armed cron trial with no non-ignored fire after admission.
+            record_fire(
+                store.as_ref(),
+                &fixture,
+                "cron_trial",
+                admitted_at - Duration::hours(1),
+                1,
+                RoutineFireState::Failed,
+            );
+            record_fire(
+                store.as_ref(),
+                &fixture,
+                "cron_trial",
+                admitted_at + Duration::seconds(10),
+                1,
+                RoutineFireState::Skipped,
+            );
+            let updated_at = admitted_at.to_rfc3339();
+            let cron_record = RoutineBreakerRecord {
+                routine_name: "cron_trial".into(),
+                source_workspace: "fixture".into(),
+                state: RoutineBreakerState::Open,
+                error_class: Some("failed".into()),
+                last_run_id: Some("jrun-prev".into()),
+                tripped_at: Some((admitted_at - Duration::minutes(20)).to_rfc3339()),
+                trips: 1,
+                next_trial_at: Some((admitted_at - Duration::minutes(5)).to_rfc3339()),
+                orbit_build: None,
+                trial_started_at: Some(admitted_at.to_rfc3339()),
+                trial_reason: Some("backoff".into()),
+                bypass_requested_at: None,
+                floor_at: None,
+                updated_at: updated_at.clone(),
+            };
+            set_breaker(cron_record.clone(), "trial");
+
+            let server = fixture.server(false);
+            let row = |name: &str| -> Value {
+                let payload = json_ok(server.get("/api/routines?workspace=ws_http_fixture"));
+                payload["routines"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|entry| entry["name"] == name)
+                    .unwrap_or_else(|| panic!("missing routine {name}: {payload}"))
+                    .clone()
+            };
+
+            let armed_cron = row("cron_trial");
+            let breaker = &armed_cron["breaker"];
+            assert_eq!(breaker["state"], "open");
+            assert_eq!(breaker["tripped"], true);
+            assert_eq!(breaker["error_class"], "failed");
+            assert_eq!(breaker["last_run_id"], "jrun-prev");
+            assert_eq!(breaker["trips"], 1);
+            assert_eq!(breaker["next_trial_at"], updated_at);
+            assert_eq!(breaker["trial_started_at"], admitted_at.to_rfc3339());
+            assert_eq!(breaker["trial_reason"], "backoff");
+            assert!(breaker["bypass_requested_at"].is_null());
+            assert_eq!(breaker["trial_phase"], "armed", "{breaker}");
+            assert_eq!(
+                breaker["trial_expected_at"], armed_cron["next_due"],
+                "{armed_cron}"
+            );
+
+            // 2. In-flight cron trial once a non-skipped fire is created after admission.
+            let trial_slot = (admitted_at + Duration::seconds(30)).to_rfc3339();
+            store
+                .routine_record_fire_intent(&RoutineFireIntentParams {
+                    routine_name: "cron_trial".into(),
+                    slot: trial_slot.clone(),
+                    attempt: 1,
+                    source_workspace: "fixture".into(),
+                })
+                .unwrap();
+            store
+                .routine_mark_fire_dispatched("cron_trial", &trial_slot, 1, "jrun-cron-trial")
+                .unwrap();
+            let global = orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
+            global
+                .with_transaction(|tx| {
+                    tx.connection()
+                        .execute(
+                            "UPDATE routine_fires SET created_at = ?1, updated_at = ?1 \
+                             WHERE routine_name = 'cron_trial' AND slot = ?1 AND attempt = 1",
+                            [&trial_slot],
+                        )
+                        .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                    Ok(())
+                })
+                .unwrap();
+            let in_flight_cron = row("cron_trial");
+            assert_eq!(
+                in_flight_cron["breaker"]["trial_phase"], "in_flight",
+                "{in_flight_cron}"
+            );
+            assert!(
+                in_flight_cron["breaker"]["trial_expected_at"].is_null(),
+                "{in_flight_cron}"
+            );
+
+            // 3. Settled trial awaiting sweep and closed breaker report "none".
+            store
+                .routine_mark_fire_outcome(
+                    "cron_trial",
+                    &trial_slot,
+                    1,
+                    RoutineFireState::Succeeded,
+                    None,
+                )
+                .unwrap();
+            let settled_cron = row("cron_trial");
+            assert_eq!(
+                settled_cron["breaker"]["trial_phase"], "none",
+                "{settled_cron}"
+            );
+            assert!(settled_cron["breaker"]["trial_expected_at"].is_null());
+
+            let closed_at = now + Duration::seconds(1);
+            set_breaker(
+                RoutineBreakerRecord {
+                    state: RoutineBreakerState::Closed,
+                    trips: 0,
+                    next_trial_at: None,
+                    trial_started_at: None,
+                    trial_reason: None,
+                    bypass_requested_at: None,
+                    floor_at: Some(closed_at.to_rfc3339()),
+                    updated_at: closed_at.to_rfc3339(),
+                    ..cron_record.clone()
+                },
+                "closed",
+            );
+            let closed_cron = row("cron_trial");
+            assert_eq!(closed_cron["breaker"]["tripped"], false);
+            assert_eq!(closed_cron["breaker"]["trial_phase"], "none");
+            assert!(closed_cron["breaker"]["trial_expected_at"].is_null());
+
+            // 4. Backoff-waiting and bypassed cron routine keep an expected instant.
+            let reopened_at = now + Duration::seconds(2);
+            let future_trial = (now + Duration::minutes(25)).to_rfc3339();
+            set_breaker(
+                RoutineBreakerRecord {
+                    state: RoutineBreakerState::Open,
+                    next_trial_at: Some(future_trial.clone()),
+                    trial_started_at: None,
+                    trial_reason: None,
+                    bypass_requested_at: None,
+                    updated_at: reopened_at.to_rfc3339(),
+                    ..cron_record.clone()
+                },
+                "tripped",
+            );
+            let backoff_cron = row("cron_trial");
+            assert_eq!(backoff_cron["breaker"]["trial_phase"], "armed");
+            assert_eq!(backoff_cron["breaker"]["trial_expected_at"], future_trial);
+
+            assert!(
+                store
+                    .routine_breaker_bypass("cron_trial", "human:test")
+                    .unwrap()
+            );
+            let pending_bypass_cron = row("cron_trial");
+            assert_eq!(pending_bypass_cron["breaker"]["trial_phase"], "armed");
+            let expected_bypass = DateTime::parse_from_rfc3339(
+                pending_bypass_cron["breaker"]["trial_expected_at"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap()
+            .with_timezone(&Utc);
+            assert!(
+                expected_bypass >= now - Duration::seconds(5)
+                    && expected_bypass <= Utc::now() + Duration::seconds(5),
+                "bypassed cron trial expects immediate next-tick execution: {pending_bypass_cron}"
+            );
+
+            // 5. Event-driven routines (state, delivery, condition): bypassed trials stay armed
+            //    with null expected time (waiting for an event), then switch to in_flight once
+            //    an automation-admitted run starts after trial_started_at.
+            let workspace_id = fixture.runtime.workspace_id().unwrap();
+            for (index, (name, job_id, trigger)) in [
+                (
+                    "state_watch",
+                    "task_pilot_pipeline",
+                    JobRunTrigger::state_routine("state_watch", "consumer-state"),
+                ),
+                (
+                    "delivery_watch",
+                    "delivery_pipeline",
+                    JobRunTrigger::state_routine("delivery_watch", "consumer-delivery"),
+                ),
+                (
+                    "cond_watch",
+                    "cond_pipeline",
+                    JobRunTrigger::condition_routine("cond_watch", "consumer-cond", "fire-1"),
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let seed_at = Utc::now() + Duration::seconds(index as i64 * 10);
+                set_breaker(
+                    RoutineBreakerRecord {
+                        routine_name: name.into(),
+                        source_workspace: "fixture".into(),
+                        state: RoutineBreakerState::Open,
+                        error_class: Some("failed".into()),
+                        last_run_id: None,
+                        tripped_at: Some((now - Duration::minutes(30)).to_rfc3339()),
+                        trips: 1,
+                        next_trial_at: Some((now + Duration::minutes(15)).to_rfc3339()),
+                        orbit_build: None,
+                        trial_started_at: None,
+                        trial_reason: None,
+                        bypass_requested_at: None,
+                        floor_at: None,
+                        updated_at: seed_at.to_rfc3339(),
+                    },
+                    "tripped",
+                );
+                assert!(store.routine_breaker_bypass(name, "human:test").unwrap());
+                let pending = row(name);
+                assert_eq!(pending["breaker"]["trial_phase"], "armed", "{pending}");
+                assert!(
+                    pending["breaker"]["trial_expected_at"].is_null(),
+                    "event-driven pending bypass has no scheduled instant: {pending}"
+                );
+
+                let event_admitted = seed_at + Duration::seconds(5);
+                set_breaker(
+                    RoutineBreakerRecord {
+                        routine_name: name.into(),
+                        source_workspace: "fixture".into(),
+                        state: RoutineBreakerState::Open,
+                        error_class: Some("failed".into()),
+                        last_run_id: None,
+                        tripped_at: Some((now - Duration::minutes(30)).to_rfc3339()),
+                        trips: 1,
+                        next_trial_at: Some((now + Duration::minutes(15)).to_rfc3339()),
+                        orbit_build: None,
+                        trial_started_at: Some(event_admitted.to_rfc3339()),
+                        trial_reason: Some("bypass".into()),
+                        bypass_requested_at: None,
+                        floor_at: None,
+                        updated_at: event_admitted.to_rfc3339(),
+                    },
+                    "trial",
+                );
+                let armed = row(name);
+                assert_eq!(armed["breaker"]["trial_phase"], "armed", "{armed}");
+                assert!(
+                    armed["breaker"]["trial_expected_at"].is_null(),
+                    "event-driven armed bypass waits for an event: {armed}"
+                );
+
+                let mut run =
+                    fixture.seed_run(&format!("jrun-{name}-trial"), job_id, JobRunState::Running);
+                run.created_at = event_admitted + Duration::seconds(5);
+                run.started_at = Some(run.created_at);
+                let mut pipeline =
+                    PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+                pipeline.trigger = Some(trigger);
+                fixture
+                    .runtime
+                    .sqlite_store()
+                    .unwrap()
+                    .upsert_job_run_for_workspace(&workspace_id, &run, Some(&pipeline))
+                    .unwrap();
+
+                let running = within_routine_freshness(
+                    || row(name),
+                    |entry| entry["breaker"]["trial_phase"] == "in_flight",
+                );
+                assert_eq!(running["breaker"]["trial_phase"], "in_flight", "{running}");
+                assert!(
+                    running["breaker"]["trial_expected_at"].is_null(),
+                    "{running}"
+                );
+            }
         },
     );
 }

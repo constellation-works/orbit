@@ -1,7 +1,7 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-11-18
+last_updated: 2026-11-20
 last_validated: 2026-10-19
 status: Accepted
 feature: routines
@@ -1049,7 +1049,21 @@ logs every transition to `routine_breaker_events` (`tripped`, `trial`,
   dashboard refuses a routine of another source workspace (`workspace_mismatch`).
 - **Status.** `orbit routine list`, `orbit routine show` and the dashboard show a
   tripped routine as `tripped` with its error class and next trial time instead
-  of a failure streak; `orbit routine show` lists the breaker events.
+  of a failure streak; `orbit routine show` lists the breaker events. In status
+  JSON, `breaker` keeps its existing fields (`state`, `tripped`, `error_class`,
+  `last_run_id`, `tripped_at`, `trips`, `next_trial_at`, `trial_started_at`,
+  `trial_reason`, `bypass_requested_at`) and adds two server-computed trial
+  fields derived from the same observed-fire check the scheduler uses (cron
+  fires and automation-admitted runs for state-, delivery- and
+  condition-triggered routines): `trial_phase` (`none` when closed or a
+  finished trial awaits the next sweep, `armed` when a trial is upcoming or
+  admitted with no non-ignored fire yet, `in_flight` while the trial fire or
+  run is executing) and `trial_expected_at` (the expected fire instant for an
+  armed cron trial — `next_trial_at` during backoff, `next_due` after
+  scheduled admission, or current time for a bypass — and `null` when
+  `trial_phase` is not `armed` or the routine waits for an event). The
+  dashboard Next hour timeline renders breaker trials solely from
+  `trial_phase` and `trial_expected_at`.
 
 ---
 
