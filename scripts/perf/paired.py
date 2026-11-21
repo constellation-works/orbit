@@ -5,6 +5,7 @@
               (--cli '<orbit args>' | --http '<GET path>')
               [--parity '<orbit args>' --parity-mask <field>...]
               [--rounds 3] [--samples 10] [--warmup 1] [--gap-ms 250] [--bound-ms <n>]
+              [--command-timeout 300] [--output-limit-bytes 16777216]
 
 Three arms: the base and candidate binaries from build-pair.sh, and a control
 that is the base binary copied to a second path, so the unchanged-build spread
@@ -12,6 +13,9 @@ is measured. Every round restores a fresh root from the snapshot. Holds the
 host-wide perf lane for the whole run. A match requires a successful
 observation from every arm (parity command exit 0, and HTTP 2xx when that
 probe runs). A missing or failed observation refuses the run before sampling.
+Every arm command runs in its own process group with a deadline and a stdout
+cap; a stalled or flooding command is killed with its group and refuses the
+run. SIGTERM, SIGHUP or SIGINT stops every child, `web serve` included.
 See docs/runbooks/perf-timing-protocol.md.
 """
 
@@ -42,6 +46,13 @@ SCHEMA_VERSION = 1
 ARMS = ("base", "candidate", "control")
 STARTUP_TIMEOUT_SECONDS = 60.0
 HTTP_TIMEOUT_SECONDS = 300.0
+# Every arm command (parity or sample) is a supervised child with a deadline and
+# a stdout cap (STD-03 §R11–R15, §R22). Both are recorded in parity.json and
+# paired-summary.json.
+DEFAULT_COMMAND_TIMEOUT_SECONDS = 300.0
+DEFAULT_OUTPUT_LIMIT_BYTES = 16 * 1024 * 1024
+TERM_GRACE_SECONDS = 5.0
+POST_EXIT_DRAIN_SECONDS = 5.0
 
 
 # ── statistics ───────────────────────────────────────────────────────────────
@@ -109,17 +120,192 @@ def network_isolation() -> tuple[list[str], dict]:
     """A prefix that runs a command without network, when the host allows it."""
     for prefix in (["unshare", "--map-current-user", "--net"], ["unshare", "-rn"]):
         try:
-            probe = subprocess.run([*prefix, "true"], capture_output=True, text=True, timeout=10)
-        except (OSError, subprocess.TimeoutExpired) as error:
+            probe = run_supervised([*prefix, "true"], cwd=None, env=None,
+                                   timeout=10, output_limit=4096, capture_stderr=True)
+        except OSError as error:
             last = str(error)
             continue
-        if probe.returncode == 0:
+        if probe.ended == "exit" and probe.returncode == 0:
             return prefix, {"isolated": True, "method": " ".join(prefix)}
-        last = probe.stderr.strip()
+        last = probe.describe() if probe.ended != "exit" else \
+            probe.stdout.decode("utf-8", "replace").strip()
     return [], {"isolated": False, "reason": f"unshare unavailable: {last}"}
 
 
 # ── processes ────────────────────────────────────────────────────────────────
+
+
+class HarnessCancelled(BaseException):
+    """The harness got SIGTERM or SIGHUP; `finally` blocks stop every child."""
+
+    def __init__(self, signum: int):
+        super().__init__(signal.Signals(signum).name)
+        self.signum = signum
+
+
+def install_cancel_handlers() -> None:
+    """Turn SIGTERM and SIGHUP into `HarnessCancelled` (SIGINT already raises).
+
+    Unwinding runs every child's stop and the lane release, so cancelling the
+    harness also stops its arm commands and `web serve` groups (STD-03 §R12).
+    A repeated signal during that cleanup is ignored rather than cutting it short.
+    """
+    state = {"cancelled": False}
+
+    def handler(signum, _frame):
+        if state["cancelled"]:
+            return
+        state["cancelled"] = True
+        raise HarnessCancelled(signum)
+
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, handler)
+
+
+def leader_exited(pid: int) -> bool:
+    """Whether our child `pid` exited, without reaping it.
+
+    `WNOWAIT` leaves an exited leader as a zombie, which pins its process
+    group id until it is reaped, so a group signal never lands on a reused id
+    (STD-03 §R14).
+    """
+    try:
+        info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except ChildProcessError:
+        return True
+    return info is not None
+
+
+def stop_group(process: subprocess.Popen, grace: float = TERM_GRACE_SECONDS) -> None:
+    """SIGTERM the child's group, wait a bounded grace, SIGKILL the group, reap.
+
+    Must run while the leader is still unreaped. The group is always SIGKILLed
+    after the grace: survivors are not inferred from the leader's exit (§R12).
+    """
+    try:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        deadline = time.monotonic() + grace
+        while not leader_exited(process.pid) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    finally:
+        process.wait(timeout=10)
+
+
+class SupervisedResult:
+    """How one supervised command ended (STD-03 §R13)."""
+
+    def __init__(self, ended: str, returncode: int | None, stdout: bytes,
+                 elapsed_ms: float, timeout: float, output_limit: int):
+        self.ended = ended  # "exit" | "timeout" | "output_limit"
+        self.returncode = returncode
+        self.stdout = stdout
+        self.elapsed_ms = elapsed_ms
+        self.timeout = timeout
+        self.output_limit = output_limit
+
+    def describe(self) -> str:
+        if self.ended == "timeout":
+            return f"timed out after {self.timeout:g} s; its process group was killed"
+        if self.ended == "output_limit":
+            return (f"wrote more than {self.output_limit} bytes of stdout; "
+                    "its process group was killed")
+        if self.returncode is not None and self.returncode < 0:
+            return f"was killed by signal {-self.returncode}"
+        return f"exited {self.returncode}"
+
+
+def run_supervised(argv: list[str], *, cwd, env, timeout: float, output_limit: int,
+                   capture_stderr: bool = False) -> SupervisedResult:
+    """Run `argv` as its own process-group leader, draining stdout while waiting.
+
+    The command has a wall-clock deadline and a stdout byte cap; reaching
+    either SIGTERMs, then SIGKILLs, its whole group. A clean exit still sweeps
+    the group, so a descendant left behind (one holding stdout open, say) is
+    killed. Every path reaps the leader before returning or raising.
+    `elapsed_ms` runs from spawn to the leader's exit.
+    """
+    started = time.perf_counter()
+    process = subprocess.Popen(
+        argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT if capture_stderr else subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    pending = bytearray()
+    ended = "exit"
+    exited_at: float | None = None
+    stdout = process.stdout
+    assert stdout is not None
+    try:
+        try:
+            pidfd = os.pidfd_open(process.pid)
+        except (AttributeError, OSError):
+            pidfd = None
+        try:
+            deadline = time.monotonic() + timeout
+            drain_until: float | None = None
+            open_stdout = True
+            with selectors.DefaultSelector() as selector:
+                selector.register(stdout, selectors.EVENT_READ, "stdout")
+                if pidfd is not None:
+                    selector.register(pidfd, selectors.EVENT_READ, "exit")
+                while True:
+                    now = time.monotonic()
+                    if exited_at is None and leader_exited(process.pid):
+                        exited_at = time.perf_counter()
+                        # Descendants could keep stdout open; sweep them now,
+                        # while the zombie leader still pins the group id.
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        drain_until = now + POST_EXIT_DRAIN_SECONDS
+                        if pidfd is not None:
+                            selector.unregister(pidfd)
+                    if exited_at is not None and (not open_stdout or now >= drain_until):
+                        break
+                    if exited_at is None and now >= deadline:
+                        ended = "timeout"
+                        break
+                    limit = drain_until if exited_at is not None else deadline
+                    # Without a pidfd, poll the leader every 10 ms.
+                    wait = min(limit - now, 0.01 if pidfd is None else limit - now)
+                    for key, _mask in selector.select(max(wait, 0)):
+                        if key.data != "stdout":
+                            continue
+                        chunk = os.read(stdout.fileno(), 65536)
+                        if not chunk:
+                            selector.unregister(stdout)
+                            open_stdout = False
+                            continue
+                        pending.extend(chunk)
+                        if len(pending) > output_limit:
+                            ended = "output_limit"
+                    if ended == "output_limit":
+                        break
+        finally:
+            if pidfd is not None:
+                os.close(pidfd)
+        if ended != "exit" or exited_at is None:
+            stop_group(process)
+        else:
+            process.wait(timeout=10)
+    except BaseException:
+        if process.returncode is None:
+            stop_group(process)
+        raise
+    finally:
+        stdout.close()
+    finish = exited_at if exited_at is not None and ended == "exit" else time.perf_counter()
+    return SupervisedResult(ended, process.returncode if ended == "exit" else None,
+                      bytes(pending[:output_limit]), (finish - started) * 1000,
+                      timeout, output_limit)
 
 
 class Server:
@@ -185,39 +371,15 @@ class Server:
             return error.code, error.read()
 
     def _leader_exited(self) -> bool:
-        """Whether the leader exited, without reaping it.
-
-        `WNOWAIT` leaves an exited leader as a zombie, which pins its process
-        group id until `stop` reaps it, so no group signal can land on a
-        reused id (STD-03 §R14).
-        """
-        try:
-            info = os.waitid(os.P_PID, self.process.pid,
-                             os.WEXITED | os.WNOHANG | os.WNOWAIT)
-        except ChildProcessError:
-            return True
-        return info is not None
+        return leader_exited(self.process.pid)
 
     def stop(self) -> None:
         if getattr(self, "_stopped", False):
             return
         self._stopped = True
         try:
-            try:
-                os.killpg(self.process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            deadline = time.monotonic() + 10
-            while not self._leader_exited() and time.monotonic() < deadline:
-                time.sleep(0.05)
-            # The leader is still unreaped, so the group id is still ours:
-            # this also ends any child that outlived the leader.
-            try:
-                os.killpg(self.process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            stop_group(self.process, grace=10)
         finally:
-            self.process.wait(timeout=10)
             if self.process.stdout is not None:
                 self.process.stdout.close()
 
@@ -327,13 +489,23 @@ class Harness:
         if not self.args.keep:
             fixture.clean_root(Path(info["root"]))
 
-    def cli_once(self, arm: str, info: dict, env: dict, argv: list[str]) -> tuple[float, int, bytes]:
-        started = time.perf_counter()
-        result = subprocess.run(
+    def limits(self) -> dict:
+        return {"command_timeout_seconds": self.args.command_timeout,
+                "output_limit_bytes": self.args.output_limit_bytes}
+
+    def cli_once(self, arm: str, info: dict, env: dict, argv: list[str],
+                 what: str) -> tuple[float, int, bytes]:
+        """One supervised arm command; a timeout or output overflow refuses the run."""
+        result = run_supervised(
             [*self.net_prefix, str(self.binaries[arm]), *argv],
-            cwd=info["cwd"], env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            cwd=info["cwd"], env=env,
+            timeout=self.args.command_timeout, output_limit=self.args.output_limit_bytes,
         )
-        return (time.perf_counter() - started) * 1000, result.returncode, result.stdout
+        if result.ended != "exit":
+            flag = "--command-timeout" if result.ended == "timeout" else "--output-limit-bytes"
+            raise common.PerfRefusal(
+                f"{arm} {what} {result.describe()} ({flag}); failing the run")
+        return result.elapsed_ms, result.returncode, result.stdout
 
     def parity(self) -> dict:
         arms = {}
@@ -343,7 +515,8 @@ class Harness:
             record: dict = {}
             try:
                 if self.args.parity:
-                    _ms, code, stdout = self.cli_once(arm, info, env, shlex.split(self.args.parity))
+                    _ms, code, stdout = self.cli_once(arm, info, env, shlex.split(self.args.parity),
+                                                      "parity command")
                     record["command"] = {"exit": code,
                                          "output": normalize_output(stdout, self.masks, info["root"])}
                 if self.http_path:
@@ -371,6 +544,7 @@ class Harness:
             "command": self.args.parity,
             "http_path": self.http_path,
             "masks": self.masks,
+            "limits": self.limits(),
             "match": not failures and not differing,
             "differing_arms": differing,
             "observation_failures": failures,
@@ -385,8 +559,11 @@ class Harness:
         gap = self.args.gap_ms / 1000
         try:
             if self.cli_args is not None:
-                timed = lambda: self.cli_once(arm, info, env, self.cli_args)[:2]  # noqa: E731
                 server = None
+
+                def timed():
+                    return self.cli_once(arm, info, env, self.cli_args,
+                                         f"round {round_index} sample {len(samples)}")[:2]
             else:
                 server = Server(self.binaries[arm], info, env)
 
@@ -457,7 +634,8 @@ class Harness:
             "surface": surface,
             "protocol": {"rounds": self.args.rounds, "samples": self.args.samples,
                          "warmup": self.args.warmup, "gap_ms": self.args.gap_ms,
-                         "aggregation": "per-round nearest-rank p95; per-arm median of round p95s"},
+                         "aggregation": "per-round nearest-rank p95; per-arm median of round p95s",
+                         **self.limits()},
             "round_order": order,
             "revisions": {role: {k: self.provenance["revisions"][role][k]
                                  for k in ("commit", "tree", "binary_sha256")}
@@ -491,6 +669,13 @@ def positive(value: str) -> int:
     return number
 
 
+def positive_float(value: str) -> float:
+    number = float(value)
+    if not number > 0 or math.isinf(number):
+        raise argparse.ArgumentTypeError("must be a finite number above 0")
+    return number
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--builds", required=True, help="build-pair.sh output directory")
@@ -513,6 +698,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lane-wait", type=float,
                         default=float(os.environ.get("ORBIT_PERF_LANE_WAIT_SECONDS",
                                                      common.DEFAULT_LANE_WAIT_SECONDS)))
+    parser.add_argument("--command-timeout", type=positive_float,
+                        default=DEFAULT_COMMAND_TIMEOUT_SECONDS,
+                        help="seconds one parity or CLI sample command may run before its "
+                             "process group is killed and the run refused")
+    parser.add_argument("--output-limit-bytes", type=positive, default=DEFAULT_OUTPUT_LIMIT_BYTES,
+                        help="stdout bytes one parity or CLI sample command may write before "
+                             "its process group is killed and the run refused")
     parser.add_argument("--keep", action="store_true", help="keep restored roots and work dirs")
     args = parser.parse_args(argv)
     if args.http and not args.http.startswith("/"):
@@ -520,6 +712,7 @@ def main(argv: list[str] | None = None) -> int:
     os.umask(0o077)
     created = common.CreatedDirs(args.keep)
     ok = False
+    install_cancel_handlers()
     try:
         with common.Lane("paired.py", args.lane_wait) as lane:
             harness = Harness(args)
@@ -531,6 +724,12 @@ def main(argv: list[str] | None = None) -> int:
     except common.PerfRefusal as refusal:
         print(f"paired.py: {refusal}", file=sys.stderr)
         return 2
+    except HarnessCancelled as cancelled:
+        print(f"paired.py: cancelled by {cancelled}; stopped every arm process", file=sys.stderr)
+        return 128 + cancelled.signum
+    except KeyboardInterrupt:
+        print("paired.py: cancelled by SIGINT; stopped every arm process", file=sys.stderr)
+        return 128 + signal.SIGINT
     finally:
         work = Path(args.out).absolute() / ".work"
         if ok and not args.keep and work in created.paths:

@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
-"""CLI regression: paired.py must not pass parity without a successful observation.
+"""CLI regressions for paired.py: parity and child-process supervision.
 
 Drives ``scripts/perf/paired.py`` with fake arm binaries. A match requires an
 actual successful observation from every arm. Missing observations, failed
 probes and differing observations refuse the run before a bounded verdict.
+A stalled parity or sample command, or one that floods stdout, is refused
+within its bound with its whole process group reaped and the lane released;
+cancelling the harness stops the HTTP server it started (ORB-26380).
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import fcntl
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -25,8 +31,22 @@ SCRATCH = REPO / ".orbit" / "tmp"
 # while the candidate binary can fail or differ on its own.
 ARM_SCRIPT = """#!/bin/sh
 role={role}
+marks={marks}
 mode=$1
 case "$mode" in
+  stall|probe-stall)
+    # A descendant in the arm's group, then a leader that never finishes.
+    sleep 600 &
+    printf '%s %s\\n' "$$" "$!" > "$marks/$mode-$role.pids"
+    sleep 600
+    ;;
+  probe-flood)
+    head -c 200000 /dev/zero
+    exit 0
+    ;;
+  web)
+    exec {python} -I {web_server} "$marks/web-$role.pid"
+    ;;
   probe-same)
     printf 'observed\\n'
     exit 0
@@ -55,6 +75,36 @@ case "$mode" in
     ;;
 esac
 """
+
+
+# Stands in for `orbit web serve`: announces its address, answers `/`, and
+# stalls on `/slow` so the harness can be cancelled while it is serving.
+WEB_SERVER = """
+import http.server, os, sys, time
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/slow":
+            time.sleep(600)
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"ok")
+    def log_message(self, *args):
+        pass
+server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+with open(sys.argv[1], "w") as handle:
+    handle.write(str(os.getpid()))
+print(f"http://127.0.0.1:{server.server_address[1]}", flush=True)
+server.serve_forever()
+"""
+
+
+def process_gone(pid: int) -> bool:
+    """Whether `pid` is gone or a zombie awaiting its (non-harness) reaper."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return True
+    return stat.rsplit(")", 1)[1].split()[0] in ("Z", "X")
 
 
 def sha256_file(path: Path) -> str:
@@ -101,13 +151,16 @@ def write_snapshot(snapshot: Path) -> None:
         json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
 
-def write_builds(builds: Path) -> dict[str, Path]:
+def write_builds(builds: Path, marks: Path) -> dict[str, Path]:
     builds.mkdir()
+    web_server = builds.parent / "web_server.py"
+    web_server.write_text(WEB_SERVER)
     binaries = {}
     revisions = {}
     for role, commit in (("base", "a"), ("candidate", "c")):
         path = builds / role
-        path.write_text(ARM_SCRIPT.format(role=role))
+        path.write_text(ARM_SCRIPT.format(
+            role=role, marks=marks, python=sys.executable, web_server=web_server))
         path.chmod(0o755)
         binaries[role] = path
         revisions[role] = {
@@ -123,7 +176,7 @@ def write_builds(builds: Path) -> dict[str, Path]:
     return binaries
 
 
-class PairedCliParityTest(unittest.TestCase):
+class PairedCliTestCase(unittest.TestCase):
     def setUp(self) -> None:
         SCRATCH.mkdir(parents=True, exist_ok=True)
         self.temp = tempfile.TemporaryDirectory(prefix="paired-cli-", dir=SCRATCH)
@@ -133,24 +186,33 @@ class PairedCliParityTest(unittest.TestCase):
         self.snapshot = root / "snapshot"
         self.snapshot.mkdir()
         write_snapshot(self.snapshot)
-        self.binaries = write_builds(self.builds)
+        self.marks = root / "marks"
+        self.marks.mkdir()
+        self.binaries = write_builds(self.builds, self.marks)
         self.lane_lock = root / "lane.lock"
 
-    def run_paired(self, *extra: str) -> tuple[subprocess.CompletedProcess[str], Path]:
-        out = Path(self.temp.name) / f"out-{len(extra)}-{extra[0] if extra else 'cli'}"
+    def paired_argv(self, out: Path, surface: tuple[str, ...], *extra: str) -> list[str]:
+        return [sys.executable, "-I", str(PAIRED),
+                "--builds", str(self.builds),
+                "--snapshot", str(self.snapshot),
+                "--out", str(out),
+                "--rounds", "1", "--samples", "1", "--warmup", "0", "--gap-ms", "0",
+                "--lane-wait", "5", "--bound-ms", "600000",
+                *surface, *extra]
+
+    def paired_env(self) -> dict[str, str]:
         # A private lock: this regression must not take the host perf lane.
         env = os.environ.copy()
         env["ORBIT_PERF_LANE_LOCK"] = str(self.lane_lock)
+        return env
+
+    def run_paired(self, *extra: str, surface: tuple[str, ...] = ("--cli", "timed"),
+                   ) -> tuple[subprocess.CompletedProcess[str], Path]:
+        out = Path(self.temp.name) / f"out-{len(extra)}-{extra[0] if extra else 'cli'}-{surface[-1]}"
         result = subprocess.run(
-            [sys.executable, "-I", str(PAIRED),
-             "--builds", str(self.builds),
-             "--snapshot", str(self.snapshot),
-             "--out", str(out),
-             "--rounds", "1", "--samples", "1", "--warmup", "0", "--gap-ms", "0",
-             "--lane-wait", "5", "--bound-ms", "600000",
-             "--cli", "timed", *extra],
+            self.paired_argv(out, surface, *extra),
             cwd=REPO,
-            env=env,
+            env=self.paired_env(),
             capture_output=True,
             text=True,
             timeout=120,
@@ -158,6 +220,23 @@ class PairedCliParityTest(unittest.TestCase):
         )
         return result, out
 
+    def assert_lane_released(self) -> None:
+        fd = os.open(self.lane_lock, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # raises if still held
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+    def assert_reaped(self, pids: list[int]) -> None:
+        deadline = time.monotonic() + 10
+        while not all(process_gone(pid) for pid in pids):
+            self.assertLess(time.monotonic(), deadline,
+                            f"arm processes still running: {pids}")
+            time.sleep(0.05)
+
+
+class PairedCliParityTest(PairedCliTestCase):
     def assert_no_passing_verdict(
         self, result: subprocess.CompletedProcess[str], out: Path,
     ) -> dict:
@@ -228,6 +307,86 @@ class PairedCliParityTest(unittest.TestCase):
         summary = json.loads((out / "paired-summary.json").read_text())
         self.assertEqual(summary["verdict"], "pass")
         self.assertIn('"verdict": "pass"', result.stdout)
+
+
+class PairedCliSupervisionTest(PairedCliTestCase):
+    def assert_stall_refused(self, mode: str, *extra: str, surface=("--cli", "timed")) -> None:
+        started = time.monotonic()
+        result, out = self.run_paired(*extra, "--command-timeout", "1", surface=surface)
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("base", result.stderr)
+        self.assertIn("timed out after 1 s", result.stderr)
+        self.assertIn("--command-timeout", result.stderr)
+        self.assertLess(elapsed, 60, "the refusal must come within the command bound")
+        self.assertFalse((out / "paired-summary.json").exists())
+        self.assert_lane_released()
+        leader, descendant = (int(pid) for pid in
+                              (self.marks / f"{mode}-base.pids").read_text().split())
+        self.assert_reaped([leader, descendant])
+
+    def test_stalled_parity_command_is_refused_and_reaped(self) -> None:
+        self.assert_stall_refused("probe-stall", "--parity", "probe-stall")
+
+    def test_stalled_sample_command_is_refused_and_reaped(self) -> None:
+        self.assert_stall_refused("stall", "--parity", "probe-same", surface=("--cli", "stall"))
+
+    def test_output_over_limit_is_refused(self) -> None:
+        result, out = self.run_paired("--parity", "probe-flood", "--output-limit-bytes", "1024")
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("wrote more than 1024 bytes of stdout", result.stderr)
+        self.assertIn("--output-limit-bytes", result.stderr)
+        self.assert_lane_released()
+
+    def test_reported_limits_are_recorded(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-same", "--command-timeout", "30", "--output-limit-bytes", "4096")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        expected = {"command_timeout_seconds": 30.0, "output_limit_bytes": 4096}
+        self.assertEqual(json.loads((out / "parity.json").read_text())["limits"], expected)
+        protocol = json.loads((out / "paired-summary.json").read_text())["protocol"]
+        self.assertEqual(
+            {key: protocol[key] for key in expected}, expected)
+
+    def test_cancelled_harness_stops_its_http_server(self) -> None:
+        out = Path(self.temp.name) / "out-cancel"
+        harness = subprocess.Popen(
+            self.paired_argv(out, ("--http", "/slow")),
+            cwd=REPO, env=self.paired_env(),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+
+        def cleanup() -> None:
+            if harness.poll() is None:
+                harness.kill()
+            harness.communicate(timeout=30)
+        self.addCleanup(cleanup)
+
+        pid_file = self.marks / "web-base.pid"
+        deadline = time.monotonic() + 60
+        while not (pid_file.exists() and pid_file.read_text()):
+            self.assertIsNone(harness.poll(), "harness exited before its server started")
+            self.assertLess(time.monotonic(), deadline, "server never started")
+            time.sleep(0.05)
+        server_pid = int(pid_file.read_text())
+
+        def stop_leaked_server() -> None:
+            # Only a server this test started: its cmdline names our pid file.
+            try:
+                cmdline = Path(f"/proc/{server_pid}/cmdline").read_bytes()
+            except FileNotFoundError:
+                return
+            if str(pid_file).encode() in cmdline:
+                os.kill(server_pid, signal.SIGKILL)
+        self.addCleanup(stop_leaked_server)
+        time.sleep(0.5)  # let the harness reach its stalled GET
+        harness.send_signal(signal.SIGTERM)
+        _stdout, stderr = harness.communicate(timeout=60)
+        self.assertEqual(harness.returncode, 128 + signal.SIGTERM, stderr)
+        self.assertIn("cancelled by SIGTERM", stderr)
+        self.assert_reaped([server_pid])
+        self.assert_lane_released()
+        self.assertFalse(out.exists(), "a cancelled run leaves no partial output")
 
 
 if __name__ == "__main__":
