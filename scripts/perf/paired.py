@@ -805,8 +805,9 @@ class Harness:
 
     def run(self) -> int:
         manifest_summary_path = self.out / fixture.MANIFEST_SUMMARY
-        common.write_json(
-            manifest_summary_path,
+        # Size the encoded text before writing it: a refused summary must never sit
+        # at the evidence path, and --keep retains the output directory after a refusal.
+        manifest_summary_text = common.json_text(
             fixture.manifest_evidence_summary(
                 self.snapshot,
                 self.manifest,
@@ -815,9 +816,13 @@ class Harness:
                 self.qualifying_task_counts,
             ),
         )
-        if manifest_summary_path.stat().st_size > fixture.MAX_ARTIFACT_BYTES:
+        encoded_bytes = len(manifest_summary_text.encode("utf-8"))
+        if encoded_bytes > fixture.MAX_ARTIFACT_BYTES:
             raise common.PerfRefusal(
-                f"{manifest_summary_path} exceeds the {fixture.MAX_ARTIFACT_BYTES}-byte artifact limit")
+                f"{manifest_summary_path} would be {encoded_bytes} bytes, over the "
+                f"{fixture.MAX_ARTIFACT_BYTES}-byte artifact limit; nothing was written. "
+                "Shorten the --qualifying-task-count names to fit")
+        manifest_summary_path.write_text(manifest_summary_text)
         parity = self.parity()
         common.write_json(self.out / "parity.json", parity)
         if not parity["match"]:
