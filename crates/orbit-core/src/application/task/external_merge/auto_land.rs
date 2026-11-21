@@ -392,25 +392,32 @@ impl OrbitRuntime {
         )
     }
 
-    /// Append `follow_up` unless the newest one already names this code and head
-    /// (and, for an ambiguity, the same set of pull requests).
+    /// Append `follow_up` unless this code was already recorded for its head,
+    /// even when another reason was recorded in between. An ambiguity is written
+    /// again only when its set of pull requests changes, so it is judged against
+    /// the newest ambiguity alone.
     fn record_follow_up(
         &self,
         task: &Task,
         history: &[TaskHistoryEntry],
         follow_up: LandingFollowUp,
     ) -> Result<(), OrbitError> {
-        let newest = history
+        let mut recorded = history
             .iter()
             .rev()
             .filter(|entry| entry.event == LANDING_FOLLOW_UP_EVENT)
-            .find_map(|entry| serde_json::from_str::<LandingFollowUp>(entry.note.as_deref()?).ok());
-        if newest.as_ref().is_some_and(|recorded| {
-            recorded.code == follow_up.code
-                && recorded.head_sha == follow_up.head_sha
-                && (follow_up.code != AMBIGUOUS_DELIVERY_CODE
-                    || recorded.detail == follow_up.detail)
-        }) {
+            .filter_map(|entry| {
+                serde_json::from_str::<LandingFollowUp>(entry.note.as_deref()?).ok()
+            });
+        let already_recorded = if follow_up.code == AMBIGUOUS_DELIVERY_CODE {
+            recorded
+                .find(|entry| entry.code == AMBIGUOUS_DELIVERY_CODE)
+                .is_some_and(|entry| entry.detail == follow_up.detail)
+        } else {
+            recorded
+                .any(|entry| entry.code == follow_up.code && entry.head_sha == follow_up.head_sha)
+        };
+        if already_recorded {
             return Ok(());
         }
         let note = serde_json::to_string(&follow_up)
