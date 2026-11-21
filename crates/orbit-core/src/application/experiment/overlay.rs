@@ -440,7 +440,15 @@ impl OrbitRuntime {
                 continue;
             };
             for tool in &tools.add {
-                if let Some(reason) = granted_tool_refusal(self, tool)? {
+                // A run-bound tool is registered and active, so
+                // `granted_tool_refusal` admits it; only the managed runs
+                // Orbit starts for it may be served it, never an arm's tasks.
+                let reason = if self.tool_registry().is_run_bound(tool) {
+                    Some("it is served only to the runs Orbit starts for it".to_string())
+                } else {
+                    granted_tool_refusal(self, tool)?
+                };
+                if let Some(reason) = reason {
                     return Err(refuse(format!("arm `{arm}` adds tool `{tool}`: {reason}")));
                 }
             }
