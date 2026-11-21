@@ -13,8 +13,9 @@ use orbit_tools::OrbitTaskScope;
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
-/// Who is calling, from the session's run binding: a claimed leaf's worker binding, or the run this tool context names with
-/// the task its managed environment names. Never from input.
+/// Who is calling, from the session's run binding: a claimed leaf's worker
+/// binding, or the run this tool context names with the task its managed
+/// environment names. Never from input.
 fn memory_tool_caller(
     task_scope: &OrbitTaskScope,
     session: &ToolSessionContext,

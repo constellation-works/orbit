@@ -6,8 +6,9 @@
 //! has a `memory` arm ([`crate::OrbitRuntime::crew_memory_experiment_running`]).
 //! Slice M1 holds the store and the write rules. Every writer goes through
 //! one write path, which refuses unless that experiment runs and runs
-//! `validate_memory_write`, the one place the five write rules live. Nothing here delivers memory to a
-//! prompt on its own: slice M2's `memory` experiment overlay renders a space
+//! `validate_memory_write`, the one place the five write rules live. Nothing
+//! here delivers memory to a prompt on its own: slice M2's `memory`
+//! experiment overlay renders a space
 //! with [`OrbitRuntime::render_crew_memory_delivery`](crate::OrbitRuntime)
 //! for a memory arm's dispatches. Slice M3 adds dreaming: the weekly
 //! `crew_memory_dream` routine (`dream`) and the agent tools' admission

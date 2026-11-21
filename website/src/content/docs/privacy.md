@@ -71,8 +71,8 @@ GitHub or perform delivery are shipped disabled until you enable them. When
 selected by the seeding policy, the local `worktree-gc` and `task-pilot`
 routines seed enabled, as does a local experiment routine that does nothing
 unless a running experiment has a memory arm. Agent memory notes are written
-and stored, in your workspace's local store, only while such an experiment
-runs. The local `host-health`
+only while such an experiment runs, and notes already written stay in your
+workspace's local store after it ends. The local `host-health`
 auto-task seeds disabled, like the other shipped auto-tasks. Unattended scheduled runs require the
 host's Orbit scheduler clock to be enabled.
 

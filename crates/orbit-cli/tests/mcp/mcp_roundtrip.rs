@@ -2969,7 +2969,36 @@ fn missing_artifact_names_the_listing_in_each_surface_syntax() {
     );
 }
 
-/// The builtin tools in the run-bound toolset, which no `mcp serve`
+/// [ORB-26501] A run-bound tool is served only to the dispatch stamp Orbit
+/// writes for a managed run. An operator's `--toolset tool:<name>` names it
+/// to no effect, while that stamp still lists it.
+#[test]
+fn operator_toolset_grant_does_not_serve_a_run_bound_tool() {
+    let advertised = orbit_types::tool::mcp_advertised_tool_name("orbit.memory.show");
+    let workspace = McpWorkspace::init();
+
+    let mut operator = workspace.serve_with_args(&["--toolset", "tool:orbit.memory.show"]);
+    let operator_list = operator.tools_list();
+    assert!(
+        !tool_names(&operator_list).contains(&advertised.as_str()),
+        "an operator's tool grant must not list the run-bound {advertised}"
+    );
+
+    let mut stamped = workspace.serve_with_args_and_env(
+        &[],
+        &[(
+            orbit_common::security::child_env::ACTIVITY_MCP_TOOLSETS_ENV,
+            "core,tool:orbit.memory.show",
+        )],
+    );
+    let stamped_list = stamped.tools_list();
+    assert!(
+        tool_names(&stamped_list).contains(&advertised.as_str()),
+        "a managed run's dispatch stamp must list {advertised}"
+    );
+}
+
+/// The builtin tools in the run-bound toolset, which no operator's `mcp serve`
 /// selection enables.
 fn run_bound_tool_names() -> BTreeSet<String> {
     let mut registry = orbit_tools::ToolRegistry::new();
