@@ -1071,6 +1071,41 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "patch")
         self.assertEqual(report["signals"], [])
 
+    def test_conditional_selector_edit_inside_oneof_needs_a_constraining_arm(self):
+        # With empty `then` and no `else` the branch accepts every instance in
+        # both revisions, so moving the selector changes nothing (ORB-26156).
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {"oneOf": [
+            {"if": {"required": ["a"]}, "then": {}}, {"type": "string"}]}
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare unconstrained oneOf conditional [ORB-26156]")
+        self.repo.git("tag", "-f", "v0.35.0")
+        tools[0]["inputSchema"]["oneOf"][0]["if"]["required"] = ["b"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Move unconstrained selector [ORB-26157]")
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
+        # A constrained arm makes the selector decide which instances are held
+        # to it: {"a": 1} matched only the second branch before; once the
+        # selector also needs `b` the first branch accepts it too, so oneOf
+        # rejects it.
+        tools[0]["inputSchema"]["oneOf"] = [
+            {"type": "object", "if": {"required": ["a"]}, "then": {"required": ["c"]}},
+            {"type": "object", "required": ["a"]},
+        ]
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare constrained oneOf conditional [ORB-26158]")
+        self.repo.git("tag", "-f", "v0.35.0")
+        tools[0]["inputSchema"]["oneOf"][0]["if"]["required"] = ["a", "b"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Narrow constrained selector [ORB-26159]")
+        report = self.report()
+        self.assertEqual(report["bump"], "minor")
+        self.assertIn("conditional `if` edited inside oneOf alternative",
+                      "\n".join(sig["detail"] for sig in report["signals"]))
+
     def test_oneof_branch_relaxations_decide_minor_but_root_relaxations_stay_patch(self):
         tools = self.repo.mcp()
         tools[0]["inputSchema"] = {
