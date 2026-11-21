@@ -599,6 +599,7 @@ class Harness:
         self.cli_args = shlex.split(args.cli) if args.cli else None
         self.http_path = args.http
         self.qualifying_task_counts = dict(args.qualifying_task_count or [])
+        self.reset_info = None
 
     def prepare(self, created: common.CreatedDirs) -> None:
         provenance = json.loads((self.builds / "provenance.json").read_text())
@@ -631,10 +632,27 @@ class Harness:
             }
 
     def restore(self, label: str) -> dict:
-        return fixture.restore_root(self.snapshot, self.work / f"root-{label}", self.manifest)
+        if self.args.keep:
+            return fixture.restore_root(self.snapshot, self.work / f"root-{label}", self.manifest)
+        root = self.work / "root"
+        template = self.work / "pristine"
+        if self.reset_info is None:
+            self.reset_info = fixture.restore_root(self.snapshot, root, self.manifest)
+            shutil.copytree(root, template, symlinks=True)
+        else:
+            # Checksums detect equal-size, equal-mtime changes made by an arm.
+            # Deletion also removes SQLite WALs and other newly created files.
+            try:
+                subprocess.run(["rsync", "-a", "--checksum", "--delete", "--",
+                                str(template) + "/", str(root) + "/"], check=True)
+            except (OSError, subprocess.CalledProcessError) as error:
+                raise common.PerfRefusal(f"fixture reset failed: {error}") from error
+        return self.reset_info
 
     def drop(self, info: dict) -> None:
-        if not self.args.keep:
+        # A successful observation reuses the root; an interrupted one cleans it
+        # after its child has been reaped. --keep retains each labelled root.
+        if not self.args.keep and sys.exc_info()[0] is not None:
             fixture.clean_root(Path(info["root"]))
 
     def limits(self) -> dict:

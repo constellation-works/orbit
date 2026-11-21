@@ -83,6 +83,24 @@ defence for runs outside the drain (an operator's measurement, an explicit `orbi
 A run that cannot take the lane within `--lane-wait` seconds (default 900, or
 `ORBIT_PERF_LANE_WAIT_SECONDS`) exits 2 with `perf lane busy: <holder>`.
 
+### Fixture IO and drain admission
+
+A paired run verifies the complete snapshot and performs one full restore and path
+rewrite, then keeps a pristine copy of that restored root. Before every parity
+observation and sampling round it synchronously resets a fixed root with `rsync -a
+--checksum --delete`; rsync is required on the host. Checksumming reads both copies,
+while only changed files are copied and newly created files are deleted. Setup and
+checksum scans can still cause substantial disk IO for a live-sized fixture, and
+other host activity also contributes to pressure. For example, a 33 GiB snapshot with
+550,927 files on dk-server-2 took about 76 minutes for a 3 × 10 CLI run in November
+2026; its one-minute IO-full readings peaked at 27.25%, with four consecutive readings
+at or above 20%. These host-dependent figures are not a guarantee. No reset overlaps
+sampling. With
+`--keep`, separate full restores are retained for diagnosis and cost more IO.
+The drain pauses admission when host IO-full pressure reaches 20% and resumes below
+10%; this run does not exempt its IO or change those thresholds. Monitor
+`/proc/pressure/io` and schedule or investigate runs that sustain pressure.
+
 ### Disk gate and cleanup
 
 Before creating a snapshot, restore root, builds dir or results dir, each script reads
