@@ -358,17 +358,28 @@ class BuildPairWorktreeTest(unittest.TestCase):
         self.assertEqual(_fingerprint(self.repo), before)
 
     def test_builds_destination_disk_gate_refuses_before_create(self) -> None:
+        # build-pair.sh resolves --base and --candidate in the checkout that holds
+        # the script. Run a copy inside this fixture and pass its own commit SHAs,
+        # so the refusal does not depend on the enclosing checkout's history: a
+        # one-commit checkout cannot resolve HEAD~1, and a full one resolves the
+        # wrong revisions.
+        script = self.repo / "scripts" / "perf" / "build-pair.sh"
+        script.parent.mkdir(parents=True)
+        shutil.copy2(BUILD_PAIR, script)
         (self.repo / "tracked.txt").write_text("v2\n")
         _git(self.repo, "add", "--", "tracked.txt")
         _git(self.repo, "commit", "-m", "second")
+        base = _git(self.repo, "rev-parse", "HEAD~1").stdout.strip()
+        candidate = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        self.assertNotEqual(base, candidate)
         env = self.env()
         env["ORBIT_PERF_SIMULATE_DISK_PCENT"] = "80"
         result = subprocess.run(
-            [str(BUILD_PAIR),
-             "--base", "HEAD~1",
-             "--candidate", "HEAD",
+            [str(script),
+             "--base", base,
+             "--candidate", candidate,
              "--out", str(self.out)],
-            cwd=REPO,
+            cwd=self.repo,
             env=env,
             capture_output=True,
             text=True,
