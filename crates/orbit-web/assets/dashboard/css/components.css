@@ -495,7 +495,7 @@ th,
   align-items: flex-end;
   gap: var(--space-2);
   margin: var(--space-2) -20px 0;
-  padding: 0 var(--space-12) var(--space-2);
+  padding: 0 var(--space-12) 1px;
   background: linear-gradient(var(--border), var(--border)) bottom / 100% 1px no-repeat;
   overflow-x: auto;
   scrollbar-width: none;
