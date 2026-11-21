@@ -52,6 +52,40 @@ sys.argv = [script] + sys.argv[2:]
 runpy.run_path(script, run_name="__main__")
 """
 
+# Seam for ORB-26496: simulates a broken stop_group that propagates
+# KeyboardInterrupt during the grace wait without killing the process group
+# and bypasses any second stop for that same interrupted process, while
+# paired.py still reports exit 130 and its normal cancellation stderr.
+BROKEN_STOP_PAIRED_BOOTSTRAP = PASSWD_HOME_PATCH + r"""
+import importlib.util, os, signal, sys, time
+script = sys.argv[1]
+spec = importlib.util.spec_from_file_location("paired_under_test", script)
+paired = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(paired)
+_interrupted = set()
+def _broken_stop_group(process, grace=paired.TERM_GRACE_SECONDS):
+    if process.pid in _interrupted:
+        return
+    try:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        deadline = time.monotonic() + grace
+        while paired.group_alive(process.pid) and time.monotonic() < deadline:
+            time.sleep(0.02)
+    except KeyboardInterrupt:
+        _interrupted.add(process.pid)
+        raise
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait(timeout=10)
+paired.stop_group = _broken_stop_group
+sys.exit(paired.main(sys.argv[2:]))
+"""
+
 # Seam for a regression that must exercise a live pidfd-backed wait. paired.py's
 # supervision loop can see an immediate-exit child as already exited and skip the
 # selector wait it is meant to cover (ORB-26488). This wraps the epoll selector's
@@ -97,8 +131,11 @@ runpy.run_path(script, run_name="__main__")
 # reused until waitpid reaps them; pidfds keep each signal bound to that child.
 # SIGUSR1 requests emergency cleanup, while the other signals are forwarded to
 # the harness so the cancellation assertions still exercise paired.py itself.
+# On normal harness exit, already-dead adopted descendants are reaped, while
+# any surviving live descendant is still killed and reaped so nothing leaks,
+# and the owner fails loudly instead of returning the harness status.
 CANCELLATION_OWNER = r"""
-import ctypes, os, signal, subprocess, sys, time
+import ctypes, os, select, signal, subprocess, sys, time
 if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
     raise OSError(ctypes.get_errno(), "PR_SET_CHILD_SUBREAPER")
 harness = None
@@ -122,22 +159,8 @@ while status is None and not abort:
 if status is None:
     harness.kill()
     status = harness.wait()
-# The harness is gone, so all surviving descendants eventually become our
-# direct children. Never reap a child before pinning and signalling it.
-deadline = time.monotonic() + 10
-while True:
-    children = open("/proc/self/task/%d/children" % os.getpid()).read().split()
-    if not children:
-        break
-    for child in children:
-        try:
-            fd = os.pidfd_open(int(child))
-            try:
-                signal.pidfd_send_signal(fd, signal.SIGKILL)
-            finally:
-                os.close(fd)
-        except ProcessLookupError:
-            pass
+
+def reap_zombies():
     while True:
         try:
             pid, _ = os.waitpid(-1, os.WNOHANG)
@@ -145,9 +168,48 @@ while True:
             break
         if pid == 0:
             break
+
+# The harness is gone, so all surviving descendants eventually become our
+# direct children. Reap already-dead descendants first; on normal exit give a
+# dying child a brief moment to become reapable before treating it as live.
+killed = []
+if not abort:
+    reap_zombies()
+    reap_deadline = time.monotonic() + 0.25
+    while (open("/proc/self/task/%d/children" % os.getpid()).read().split()
+           and time.monotonic() < reap_deadline):
+        time.sleep(0.01)
+        reap_zombies()
+
+deadline = time.monotonic() + 10
+while True:
+    if not abort:
+        reap_zombies()
+    children = open("/proc/self/task/%d/children" % os.getpid()).read().split()
+    if not children:
+        break
+    for child in children:
+        pid = int(child)
+        try:
+            fd = os.pidfd_open(pid)
+            try:
+                if not abort and select.select([fd], [], [], 0)[0]:
+                    continue
+                signal.pidfd_send_signal(fd, signal.SIGKILL)
+                if not abort:
+                    killed.append(pid)
+            finally:
+                os.close(fd)
+        except ProcessLookupError:
+            pass
+    reap_zombies()
     if time.monotonic() >= deadline:
         raise RuntimeError("fixture descendants did not exit within 10 seconds")
     time.sleep(0.01)
+if not abort and killed:
+    sys.stderr.write("cancellation owner killed surviving descendants: %s\n" % (killed,))
+    sys.stderr.flush()
+    sys.exit(1)
 sys.exit(status if status >= 0 else 128 - status)
 """
 
@@ -1005,6 +1067,7 @@ runpy.run_path(script, run_name="__main__")
         self.assertEqual(term_file.read_text(), str(signal.SIGTERM))
         harness.send_signal(signal.SIGINT)
         _stdout, stderr = harness.communicate(timeout=60)
+        self.assertNotIn("cancellation owner killed surviving descendants", stderr)
         self.assertEqual(harness.returncode, 128 + signal.SIGINT, stderr)
         self.assertIn("cancelled by SIGINT", stderr)
         self.assert_reaped([server_pid, descendant_pid])
@@ -1034,6 +1097,7 @@ runpy.run_path(script, run_name="__main__")
         self.assertEqual(term_file.read_text(), str(signal.SIGTERM))
         harness.send_signal(signal.SIGINT)
         _stdout, stderr = harness.communicate(timeout=60)
+        self.assertNotIn("cancellation owner killed surviving descendants", stderr)
         self.assertEqual(harness.returncode, 128 + signal.SIGINT, stderr)
         self.assertIn("cancelled by SIGINT", stderr)
         self.assert_reaped([leader_pid])
@@ -1085,6 +1149,85 @@ runpy.run_path(script, run_name="__main__")
                 finally:
                     self.assertTrue(case.doCleanups())
                 self.assertLess(time.monotonic() - started, 30)
+
+    def test_cancellation_cases_fail_when_harness_leaves_surviving_process(self) -> None:
+        for method, markers in (
+            ("test_interrupt_during_server_stop_kills_group_and_preserves_cancellation",
+             ("web-base.pid", "web-base.descendant.pid")),
+            ("test_interrupt_during_supervised_stop_kills_group_and_preserves_cancellation",
+             ("ignore-base.pid",)),
+        ):
+            with self.subTest(method=method):
+                case = type(self)(method)
+                case.setUp()
+                observed = []
+                owner = None
+                orig_paired_argv = case.paired_argv
+                orig_start = case.start_cancellation_harness
+                orig_communicate = subprocess.Popen.communicate
+
+                def broken_paired_argv(*args, **kwargs):
+                    kwargs["bootstrap"] = BROKEN_STOP_PAIRED_BOOTSTRAP
+                    return orig_paired_argv(*args, **kwargs)
+
+                def track_owner(*args, **kwargs):
+                    nonlocal owner
+                    owner = orig_start(*args, **kwargs)
+                    return owner
+
+                def record_observed_and_communicate(proc, *args, **kwargs):
+                    if proc is owner and not observed:
+                        for name in markers:
+                            observed.append(int((case.marks / name).read_text()))
+                    return orig_communicate(proc, *args, **kwargs)
+
+                case.paired_argv = broken_paired_argv
+                case.start_cancellation_harness = track_owner
+                try:
+                    with mock.patch.object(subprocess.Popen, "communicate",
+                                           record_observed_and_communicate):
+                        with self.assertRaises(AssertionError) as ctx:
+                            getattr(case, method)()
+                    self.assertIn("cancelled by SIGINT", str(ctx.exception))
+                    self.assertIn("cancellation owner killed surviving descendants",
+                                  str(ctx.exception))
+                    self.assertEqual(len(observed), len(markers))
+                    self.assert_reaped(observed)
+                    case.assert_lane_released()
+                finally:
+                    self.assertTrue(case.doCleanups())
+
+    def test_cancellation_owner_reaps_already_dead_descendant(self) -> None:
+        if not (sys.platform.startswith("linux") and hasattr(os, "pidfd_open")):
+            self.skipTest("requires Linux os.pidfd_open")
+        fake_harness = r"""
+import os, pathlib, signal, subprocess, sys, time
+child = subprocess.Popen([sys.executable, "-c", "pass"])
+stat = pathlib.Path(f"/proc/{child.pid}/stat")
+deadline = time.monotonic() + 10
+while time.monotonic() < deadline:
+    try:
+        state = stat.read_text().rsplit(")", 1)[1].split()[0]
+    except FileNotFoundError:
+        state = "Z"
+    if state in ("Z", "X"):
+        break
+    time.sleep(0.005)
+print(child.pid, flush=True)
+print("paired.py: cancelled by SIGINT; stopped every arm process", file=sys.stderr, flush=True)
+os._exit(128 + signal.SIGINT)
+"""
+        owner = subprocess.Popen(
+            [sys.executable, "-I", "-c", CANCELLATION_OWNER,
+             sys.executable, "-I", "-c", fake_harness],
+            cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        stdout, stderr = owner.communicate(timeout=30)
+        self.assertEqual(owner.returncode, 128 + signal.SIGINT, stderr)
+        self.assertIn("cancelled by SIGINT", stderr)
+        self.assertNotIn("cancellation owner killed surviving descendants", stderr)
+        dead_pid = int(stdout.strip())
+        self.assertTrue(process_gone(dead_pid), f"already-dead descendant {dead_pid} was not reaped")
 
     def test_sigterm_during_fixture_pid_staging_reaches_handler(self) -> None:
         # ORB-26485: a supervision deadline can expire while the ignore-term fixture
