@@ -23,8 +23,10 @@ const NAMED = {
 };
 
 // Other default-state views whose only nested-card hits, before the band
-// exemption, were the same full-bleed unframed shape.
-const SAME_SHAPE = ["jobs-live", "analytics-metrics", "settings"];
+// exemption, were the same full-bleed unframed shape. Settings is not listed:
+// ORB-24796 moved it from `.panel` to `.settings-page` with `.settings-section`
+// containers, which the rule does not measure, so the rule reports it skipped.
+const SAME_SHAPE = ["jobs-live", "analytics-metrics"];
 
 // The floated child keeps position: static but is out of normal flow, so it
 // must fail even though it is flush, zero-margin and filled (ORB-21076).
