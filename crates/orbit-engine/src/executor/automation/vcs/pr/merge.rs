@@ -269,6 +269,7 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
         "strategy": merge_strategy.as_str(),
         "reviewed_head_sha": reviewed_head_sha,
         "workspace_path": workspace_path,
+        (super::super::PR_MERGE_ATTRIBUTION_FIELD): super::super::pr_merge_attribution(input),
     });
     if let Value::Object(request) = &mut request {
         request.extend(squash_merge_fields(

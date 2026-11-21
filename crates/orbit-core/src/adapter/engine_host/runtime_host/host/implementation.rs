@@ -685,6 +685,10 @@ impl RuntimeHost for OrbitRuntime {
         operation: &str,
         input: Value,
     ) -> Result<Value, OrbitError> {
+        // [ORB-26389] Every merge the engine requests leaves an audit row.
+        if operation == orbit_engine::PRIVATE_VCS_PR_MERGE {
+            return crate::application::task::audited_private_vcs_merge(self, &input);
+        }
         orbit_engine::run_private_vcs_operation(operation, &input)
     }
 

@@ -55,9 +55,10 @@ pub(in crate::application) enum DeliveryCompletion {
     Authorized {
         /// That run.
         run_id: String,
-        /// The run held on `delivery_check_runs_absent`: the head had no
-        /// required check run to watch, so a merge needs a required check
-        /// that has since passed on it.
+        /// The run held. Its hold says the run could not establish the head's
+        /// check evidence, so a merge needs a required check that has since
+        /// passed on it: a forge read that reports no required check at all
+        /// is not that evidence [ORB-26389].
         needs_passed_check: bool,
     },
 }

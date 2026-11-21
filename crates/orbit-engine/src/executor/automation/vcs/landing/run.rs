@@ -45,7 +45,10 @@ pub(in crate::executor::automation) fn handoff_land<H: RuntimeHost + ?Sized>(
     let budget = LandingBudget::from_input(input)?;
     let mut passes = 1;
     loop {
-        let pass = LandingPass::new(host.handoff_landing_context(&handoff_id)?);
+        let pass = LandingPass::new(
+            host.handoff_landing_context(&handoff_id)?,
+            super::super::pr_merge_attribution(input),
+        );
         let error = match land(host, &pass, input, &budget) {
             Ok(landed) => return Ok(landed),
             Err(error) => error,
@@ -189,16 +192,19 @@ pub(super) struct LandingPass {
     pub(super) wrote: Cell<bool>,
     /// A merge intent stands unresolved.
     pub(super) intent_open: Cell<bool>,
+    /// The landing run and step its merge request names [ORB-26389].
+    pub(super) merge_attribution: Value,
 }
 
 impl LandingPass {
-    fn new(context: HandoffLandingContext) -> Self {
+    fn new(context: HandoffLandingContext, merge_attribution: Value) -> Self {
         let intent_open = context.unresolved_merge_intent.is_some();
         Self {
             context,
             settled: Cell::new(false),
             wrote: Cell::new(false),
             intent_open: Cell::new(intent_open),
+            merge_attribution,
         }
     }
 }
