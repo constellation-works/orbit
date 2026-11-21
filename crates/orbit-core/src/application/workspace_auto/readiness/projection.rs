@@ -166,6 +166,7 @@ pub(super) fn project_readiness_tasks(
                     | BacklogTaskExclusionReason::PrForgeRemoteMissing
                     | BacklogTaskExclusionReason::AwaitingFootprint
                     | BacklogTaskExclusionReason::AwaitingExclusiveSlot
+                    | BacklogTaskExclusionReason::PerfLaneBusy
                     | BacklogTaskExclusionReason::DeliveryJobUnavailable
                     // The one exclusion no later drain clears by itself, so
                     // readiness repeats the repair the drain recorded rather
@@ -413,7 +414,10 @@ pub(super) fn project_readiness_tasks(
                 if let Some(detail) = &deferred.detail {
                     object.insert("detail".to_string(), json!(detail));
                 }
-                if deferred.reason == DeferralReason::Conflict {
+                if matches!(
+                    deferred.reason,
+                    DeferralReason::Conflict | DeferralReason::PerfLaneBusy
+                ) {
                     let blocking_task_ids = deferred.blocking_task_ids();
                     let blocking_claims =
                         claim_holders.json_for(blocking_task_ids.iter().map(String::as_str));

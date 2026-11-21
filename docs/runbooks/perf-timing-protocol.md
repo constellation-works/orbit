@@ -65,6 +65,18 @@ its holder:
 {"entry": "paired.py", "host": "<host>", "pid": 58353, "run_id": "jrun-…", "started_at": "2026-11-21T09:54:42Z", "task_id": "ORB-…"}
 ```
 
+**Admission serialises perf tasks.** The drain treats the lane as an admission resource so
+a leaf never burns implementation time only to find the lane taken. A backlog task tagged
+`performance` or `perf-review` (the tags the `perf-review` auto-task files for a hard
+timing criterion) is not admitted while another task with either tag is `in-progress` or
+carried by a live leaf, nor beside one in the same admission wave. It waits as
+`perf_lane_busy`; `orbit run readiness` and the drain's pass name the lane and the task
+holding it (`blocking_task_ids`), and the task starts once that task leaves `in-progress`.
+Other work is unaffected. A perf task filed without either tag is not serialised, and
+a perf task that is only informational is serialised too, which costs a wait and nothing
+else. `--lane-wait` stays as the second defence for runs outside the drain (an operator's
+measurement, an explicit `orbit run ship`).
+
 A run that cannot take the lane within `--lane-wait` seconds (default 900, or
 `ORBIT_PERF_LANE_WAIT_SECONDS`) exits 2 with `perf lane busy: <holder>`.
 

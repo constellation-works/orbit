@@ -20,6 +20,7 @@ pub(super) fn footprint_exclusion(deferred: DeferredAdmission) -> BacklogTaskExc
         DeferralReason::Conflict => BacklogTaskExclusionReason::ContextLockConflict,
         DeferralReason::AwaitingFootprint => BacklogTaskExclusionReason::AwaitingFootprint,
         DeferralReason::AwaitingExclusiveSlot => BacklogTaskExclusionReason::AwaitingExclusiveSlot,
+        DeferralReason::PerfLaneBusy => BacklogTaskExclusionReason::PerfLaneBusy,
     };
     BacklogTaskExclusion {
         id: deferred.task_id,
