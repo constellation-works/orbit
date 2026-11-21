@@ -94,12 +94,18 @@ class Snapshotter:
 
     # Plain files ──────────────────────────────────────────────────────────
 
-    def copy_file(self, src: Path, dest_rel: Path) -> None:
+    def _admit_source_file(self, src: Path, dest_rel: Path) -> bool:
+        """Apply credential and non-regular exclusions before opening `src`."""
         if is_credential_like(dest_rel):
             self.excluded_credential_like += 1
-            return
+            return False
         if src.is_symlink() or not src.is_file():
             self.skipped_non_regular += 1
+            return False
+        return True
+
+    def copy_file(self, src: Path, dest_rel: Path) -> None:
+        if not self._admit_source_file(src, dest_rel):
             return
         dest = self.out / dest_rel
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -141,6 +147,8 @@ class Snapshotter:
 
     def backup_database(self, src: Path, dest_rel: Path) -> None:
         """Whole copy through SQLite's online backup API from a ro connection."""
+        if not self._admit_source_file(src, dest_rel):
+            return
         dest = self.out / dest_rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         source = open_source_read_only(src)

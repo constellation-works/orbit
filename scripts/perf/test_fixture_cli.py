@@ -541,6 +541,103 @@ class FixtureCliRestoreTests(unittest.TestCase):
         self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
         self.assertFalse(restore_into.exists())
 
+    def test_snapshot_excludes_credential_and_nonregular_workspace_databases(self):
+        source_home = self.base / "source"
+        source_repo = source_home / "ws" / "orbit"
+        paths = _build_disposable_source(source_home, source_repo)
+        orbit_dir = paths["orbit_dir"]
+
+        def create_sqlite_db(path: Path, table: str, key: str, value: str, *, wal: bool = False) -> None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(path)
+            try:
+                if wal:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute(f"CREATE TABLE {table} (k TEXT PRIMARY KEY, v TEXT)")
+                conn.execute(f"INSERT INTO {table} VALUES (?, ?)", (key, value))
+                conn.commit()
+            finally:
+                conn.close()
+
+        # Eligible workspace database in WAL mode.
+        create_sqlite_db(orbit_dir / "nested" / "cache.sqlite", "cache", "status", "ok", wal=True)
+
+        # Credential-directory and credential-named databases (valid SQLite and invalid bytes
+        # to verify exclusion happens before opening the source).
+        create_sqlite_db(orbit_dir / "secrets" / "vault.db", "vault", "k", "v")
+        create_sqlite_db(orbit_dir / "ssh" / "keys.db", "keys", "k", "v")
+        create_sqlite_db(orbit_dir / "auth_token.db", "tokens", "k", "v")
+        (orbit_dir / "plugin-secrets").mkdir(parents=True, exist_ok=True)
+        (orbit_dir / "plugin-secrets" / "corrupt.sqlite").write_bytes(b"not-a-sqlite-db")
+        (orbit_dir / "credentials.sqlite").write_bytes(b"not-a-sqlite-db")
+
+        # Non-regular database paths: symlink to an external DB, broken symlink, and FIFO.
+        outside_db = self.base / "outside.db"
+        create_sqlite_db(outside_db, "external", "k", "v")
+        (orbit_dir / "linked.db").symlink_to(outside_db)
+        (orbit_dir / "broken.sqlite").symlink_to(self.base / "missing.sqlite")
+        expected_nonregular = 2
+        if hasattr(os, "mkfifo"):
+            os.mkfifo(orbit_dir / "pipe.db")
+            expected_nonregular += 1
+
+        snapshot_dir = self.base / "snapshot"
+        env = _child_env(source_home)
+        snap_res = self.run_fixture(
+            env,
+            "snapshot",
+            "--workspace",
+            "ws_fixture",
+            "--global-root",
+            str(paths["global_root"]),
+            "--out",
+            str(snapshot_dir),
+        )
+        self.assertEqual(snap_res.returncode, 0, snap_res.stdout + snap_res.stderr)
+
+        manifest = json.loads((snapshot_dir / "snapshot-manifest.json").read_text())
+        self.assertEqual(manifest["excluded"]["credential_like_files"], 5)
+        self.assertEqual(manifest["excluded"]["non_regular_files"], expected_nonregular)
+
+        excluded_rels = [
+            "checkout/.orbit/secrets/vault.db",
+            "checkout/.orbit/ssh/keys.db",
+            "checkout/.orbit/auth_token.db",
+            "checkout/.orbit/plugin-secrets/corrupt.sqlite",
+            "checkout/.orbit/credentials.sqlite",
+            "checkout/.orbit/linked.db",
+            "checkout/.orbit/broken.sqlite",
+            "checkout/.orbit/pipe.db",
+        ]
+        manifest_file_paths = {entry["path"] for entry in manifest["files"]}
+        for rel in excluded_rels:
+            self.assertNotIn(rel, manifest["databases"])
+            self.assertNotIn(rel, manifest_file_paths)
+            self.assertFalse((snapshot_dir / rel).exists(), f"{rel} leaked into snapshot")
+
+        for eligible_rel in ("checkout/.orbit/workspace.db", "checkout/.orbit/nested/cache.sqlite"):
+            self.assertIn(eligible_rel, manifest["databases"])
+            self.assertEqual(manifest["databases"][eligible_rel]["method"], "online-backup-api")
+            self.assertFalse(manifest["databases"][eligible_rel]["filtered"])
+            self.assertIn(eligible_rel, manifest_file_paths)
+
+        restore_into = self.base / "restored"
+        restore_res = self.run_fixture(
+            env,
+            "restore",
+            "--snapshot",
+            str(snapshot_dir),
+            "--into",
+            str(restore_into),
+        )
+        self.assertEqual(restore_res.returncode, 0, restore_res.stdout + restore_res.stderr)
+        conn = sqlite3.connect(restore_into / "checkout" / ".orbit" / "nested" / "cache.sqlite")
+        try:
+            row = conn.execute("SELECT v FROM cache WHERE k = 'status'").fetchone()
+            self.assertEqual(row, ("ok",))
+        finally:
+            conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()
