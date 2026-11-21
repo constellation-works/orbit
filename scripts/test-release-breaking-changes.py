@@ -1683,6 +1683,59 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["signals"], [])
         self.assertEqual(report["bump"], "patch")
 
+    def test_wrapping_bare_anyof_into_allof_with_sibling_decides_minor(self):
+        # Wrapping a bare anyOf into allOf alongside a new independent sibling
+        # rejects values the original anyOf accepted (such as true/false).
+        first = {"anyOf": [{"type": "string"}, {"type": "boolean"}]}
+        second = {"anyOf": [{"type": "string"}, {"type": "integer"}]}
+        for order, members in (("wrapped first", [first, second]),
+                               ("sibling first", [second, first])):
+            with self.subTest(order=order):
+                tools = self.repo.mcp()
+                tools[0]["inputSchema"] = first
+                self.repo.write_mcp(tools)
+                self.repo.commit("feat: Prepare bare anyOf [ORB-95] (#1)")
+                self.repo.git("tag", "-f", "v0.35.0")
+
+                tools[0]["inputSchema"] = {"allOf": members}
+                self.repo.write_mcp(tools)
+                self.repo.commit("feat: Wrap anyOf into allOf with sibling [ORB-96] (#2)")
+                report = self.report()
+                self.assertEqual(self.signals(report), {
+                    ("ORB-96", "mcp-schema",
+                     "`orbit_task_show` `inputSchema` anyOf constraint added")})
+                self.assertEqual(report["bump"], "minor")
+
+        # Unwrapping back to the single bare anyOf relaxes the schema (patch),
+        # while unwrapping and dropping an alternative still decides minor.
+        self.repo.git("tag", "-f", "v0.35.0")
+        tools[0]["inputSchema"] = first
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Unwrap allOf back to bare anyOf [ORB-97] (#3)")
+        unwrapped = self.report()
+        self.assertEqual(unwrapped["signals"], [])
+        self.assertEqual(unwrapped["bump"], "patch")
+
+        tools = self._write_independent_anyof_pair([first, second])
+        tools[0]["inputSchema"] = {"anyOf": [{"type": "boolean"}]}
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Unwrap and narrow surviving anyOf [ORB-98] (#4)")
+        narrowed = self.report()
+        self.assertEqual(self.signals(narrowed), {
+            ("ORB-98", "mcp-schema",
+             "`orbit_task_show` `inputSchema{allOf0}{anyOf0}` anyOf alternative removed")})
+        self.assertEqual(narrowed["bump"], "minor")
+
+        # Replacing one allOf sibling with a new oneOf must not suppress both.
+        tools = self._write_independent_anyof_pair([first, second])
+        tools[0]["inputSchema"]["allOf"] = [first, {"oneOf": [{"type": "integer"}]}]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Replace second anyOf member with oneOf [ORB-99] (#5)")
+        replaced = self.report()
+        self.assertEqual(replaced["bump"], "minor")
+        self.assertEqual([(s["task"], s["signal"]) for s in replaced["signals"]][:1],
+                         [("ORB-99", "mcp-schema")])
+
     def test_removing_nested_input_mcp_applicator_is_additive(self):
         tools = self.repo.mcp()
         options = {
