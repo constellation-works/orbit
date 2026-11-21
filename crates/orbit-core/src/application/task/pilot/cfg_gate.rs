@@ -12,6 +12,7 @@ use std::path::Path;
 use orbit_engine::DispatchError;
 use orbit_types::task::HostOs;
 
+use super::gate_source::{self, GateSource};
 use super::source::SourceSnapshot;
 
 /// Whether evidence cites a cfg gate this check can admit.
@@ -37,29 +38,37 @@ pub(super) struct CfgGateCheck<'a> {
 /// Admit `check` or refuse it. [`CfgGateDecision::NotCited`] leaves the
 /// portable-criterion refusal to the caller, whose wording is already pinned.
 pub(super) fn admit_cfg_gate(check: &CfgGateCheck<'_>) -> Result<CfgGateDecision, DispatchError> {
+    let source_check = GateSource {
+        action: check.action,
+        task_id: check.task_id,
+        criterion_index: check.criterion_index,
+        workspace_root: check.workspace_root,
+        source: check.source,
+    };
     let attributes = cfg_attributes(check.evidence);
     if attributes.is_empty() {
         return Ok(CfgGateDecision::NotCited);
     }
     let Some(gated) = single_determining_os(&attributes) else {
-        return Err(refuse(
-            check,
+        return Err(gate_source::refuse(
+            &source_check,
             "evidence cites a cfg gate that does not determine one of linux, macos, or windows; \
              leave required_os empty",
         ));
     };
-    let Some((path, line_no)) = single_path_line(check.evidence) else {
-        return Err(refuse(
-            check,
+    let citations = gate_source::path_line_citations(check.evidence);
+    let [(path, line_no)] = citations.as_slice() else {
+        return Err(gate_source::refuse(
+            &source_check,
             "evidence must cite the cfg gate at one repository-relative path:line",
         ));
     };
-    let text = read_pinned_source(check, &path)?;
+    let text = gate_source::read_pinned_source(&source_check, path, "a cfg gate", "")?;
     let lines: Vec<&str> = text.lines().collect();
-    let source_line = lines.get(line_no - 1).copied().unwrap_or("");
+    let source_line = lines.get(*line_no - 1).copied().unwrap_or("");
     let Some(source_os) = exact_attribute_os(source_line) else {
-        return Err(refuse(
-            check,
+        return Err(gate_source::refuse(
+            &source_check,
             &format!(
                 "evidence cites #[cfg(target_os = \"{gated}\")] at {path}:{line_no}, but the \
                  pinned source does not have that gate there"
@@ -67,23 +76,23 @@ pub(super) fn admit_cfg_gate(check: &CfgGateCheck<'_>) -> Result<CfgGateDecision
         ));
     };
     if source_os != gated {
-        return Err(refuse(
-            check,
+        return Err(gate_source::refuse(
+            &source_check,
             &format!(
                 "evidence cites #[cfg(target_os = \"{gated}\")] at {path}:{line_no}, but the \
                  pinned source gate is target_os = \"{source_os}\""
             ),
         ));
     }
-    let Some(item) = item_after_gate(&lines, line_no - 1) else {
-        return Err(refuse(
-            check,
+    let Some(item) = item_after_gate(&lines, *line_no - 1) else {
+        return Err(gate_source::refuse(
+            &source_check,
             &format!("the cfg gate at {path}:{line_no} does not apply to a named item"),
         ));
     };
     if !names_token(check.criterion, &item) {
-        return Err(refuse(
-            check,
+        return Err(gate_source::refuse(
+            &source_check,
             &format!(
                 "does not name the item `{item}` gated at {path}:{line_no}; leave required_os \
                  empty"
@@ -91,8 +100,8 @@ pub(super) fn admit_cfg_gate(check: &CfgGateCheck<'_>) -> Result<CfgGateDecision
         ));
     }
     if check.os != gated {
-        return Err(refuse(
-            check,
+        return Err(gate_source::refuse(
+            &source_check,
             &format!(
                 "os is {os} but the cited gate is target_os = \"{gated}\"; leave required_os empty",
                 os = check.os
@@ -100,32 +109,6 @@ pub(super) fn admit_cfg_gate(check: &CfgGateCheck<'_>) -> Result<CfgGateDecision
         ));
     }
     Ok(CfgGateDecision::Admit)
-}
-
-fn refuse(check: &CfgGateCheck<'_>, detail: &str) -> DispatchError {
-    DispatchError::action_failed(
-        check.action,
-        format!(
-            "task {} required_os criterion {} {detail}",
-            check.task_id, check.criterion_index
-        ),
-    )
-}
-
-fn read_pinned_source(check: &CfgGateCheck<'_>, path: &str) -> Result<String, DispatchError> {
-    let Some(source) = check.source else {
-        return Err(refuse(
-            check,
-            "a cfg gate cannot be verified without a pinned source; leave required_os empty",
-        ));
-    };
-    match source.file_text(check.action, check.workspace_root, path)? {
-        Some(text) => Ok(text),
-        None => Err(refuse(
-            check,
-            &format!("pinned source has no file at {path}"),
-        )),
-    }
 }
 
 /// `Some(os)` when `#[cfg(...)]` is exactly `target_os = "<os>"`. `None` is a
@@ -228,85 +211,6 @@ fn exact_attribute_os(line: &str) -> Option<HostOs> {
     let line = line.trim();
     let (os, consumed) = parse_cfg_attribute(line)?;
     if consumed != line.len() { None } else { os }
-}
-
-fn single_path_line(evidence: &str) -> Option<(String, usize)> {
-    let bytes = evidence.as_bytes();
-    let mut found = None;
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b':' {
-            let mut cursor = index + 1;
-            if cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
-                let mut line = 0usize;
-                let mut overflow = false;
-                while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
-                    let digit = usize::from(bytes[cursor] - b'0');
-                    match line
-                        .checked_mul(10)
-                        .and_then(|value| value.checked_add(digit))
-                    {
-                        Some(value) => line = value,
-                        None => overflow = true,
-                    }
-                    cursor += 1;
-                }
-                if !overflow
-                    && line >= 1
-                    && let Some(path) = path_before(evidence, index)
-                {
-                    if found.is_some() {
-                        return None;
-                    }
-                    found = Some((path, line));
-                }
-                index = cursor;
-                continue;
-            }
-        }
-        index += 1;
-    }
-    found
-}
-
-fn path_before(evidence: &str, colon: usize) -> Option<String> {
-    let bytes = evidence.as_bytes();
-    let mut start = colon;
-    while start > 0 && is_path_byte(bytes[start - 1]) {
-        start -= 1;
-    }
-    let path = &evidence[start..colon];
-    if valid_source_path(path) {
-        Some(path.to_string())
-    } else {
-        None
-    }
-}
-
-fn is_path_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/')
-}
-
-fn valid_source_path(path: &str) -> bool {
-    if path.is_empty() || path.starts_with('/') || path.ends_with('/') || path.contains(':') {
-        return false;
-    }
-    let mut saw_letter = false;
-    for part in path.split('/') {
-        if part.is_empty() || part == "." || part == ".." {
-            return false;
-        }
-        if part.bytes().any(|byte| byte.is_ascii_alphabetic()) {
-            saw_letter = true;
-        }
-    }
-    let Some((stem, extension)) = path.rsplit_once('.') else {
-        return false;
-    };
-    !stem.is_empty()
-        && !extension.is_empty()
-        && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
-        && saw_letter
 }
 
 /// How many source lines after the attribute may hold doc comments and
