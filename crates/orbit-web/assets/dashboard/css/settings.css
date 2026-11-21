@@ -10,19 +10,19 @@
    controls answer to the pane's width, not the window's. */
 .tab-pane[data-tab="config"] { container-type: size; }
 .config-layout { grid-template-columns: minmax(0, 1fr); }
-.settings-page, .settings-body, .settings-stack { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.settings-page { font: 13px/1.45 var(--font-sans); }
+.settings-page, .settings-body, .settings-stack { display: flex; flex-direction: column; gap: var(--space-12); min-width: 0; }
+.settings-page { font: var(--text-md)/1.45 var(--font-sans); }
 
 /* ------------------------------------------------------------- the bar */
 .settings-bar {
-  display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 12px;
+  display: flex; align-items: center; gap: var(--space-10); min-width: 0; padding: var(--space-8) var(--space-12);
   background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-panel);
 }
 .settings-bar[hidden] { display: none; }
-.settings-bar-text { flex: 1 1 auto; min-width: 0; color: var(--fg-soft); font-size: 12.5px; overflow-wrap: anywhere; }
-.settings-bar-text .mono { color: var(--fg); font-size: 12px; }
-.settings-bar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; margin-left: auto; }
-.settings-bar-actions > .settings-btn { margin: 0 0 0 6px; }
+.settings-bar-text { flex: 1 1 auto; min-width: 0; color: var(--fg-soft); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.settings-bar-text .mono { color: var(--fg); font-size: var(--text-sm); }
+.settings-bar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: var(--space-2); margin-left: auto; }
+.settings-bar-actions > .settings-btn { margin: 0 0 0 var(--space-6); }
 
 /* Section jumps are navigation: one joined group. */
 .settings-jump {
@@ -30,8 +30,8 @@
   background: var(--bg-control); border: 1px solid var(--border-strong); border-radius: var(--radius);
 }
 .settings-jump-link {
-  height: 28px; padding: 0 11px; border: 0; border-left: 1px solid var(--border); background: none;
-  color: var(--fg-soft); font: 500 12.5px/1 var(--font-sans); white-space: nowrap; cursor: pointer;
+  height: 28px; padding: 0 var(--space-12); border: 0; border-left: 1px solid var(--border); background: none;
+  color: var(--fg-soft); font: 500 var(--text-sm)/1 var(--font-sans); white-space: nowrap; cursor: pointer;
 }
 .settings-jump-link:first-child { border-left: 0; }
 .settings-jump-link:hover { background: var(--bg-hover); color: var(--fg-strong); }
@@ -39,21 +39,21 @@
 
 /* The search or filter field: a sunk well with its icon. */
 .settings-search {
-  display: flex; flex: 1 1 160px; align-items: center; gap: 8px; min-width: 150px; height: 30px; padding: 0 10px;
+  display: flex; flex: 1 1 160px; align-items: center; gap: var(--space-8); min-width: 150px; height: 30px; padding: 0 var(--space-10);
   background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--radius); color: var(--fg-mute);
 }
 .settings-search > svg { flex: none; }
 .settings-search input {
   flex: 1 1 auto; min-width: 0; height: 100%; padding: 0; background: none; border: 0; outline: none;
-  color: var(--fg); font: 13px/1 var(--font-sans);
+  color: var(--fg); font: var(--text-md)/1 var(--font-sans);
 }
 .settings-search input::placeholder { color: var(--fg-mute); opacity: 1; }
 .settings-search:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* Expand all / Collapse all are actions, quieter than the navigation. */
 .settings-quiet {
-  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border: 0; border-radius: 7px;
-  background: none; color: var(--fg-dim); font: 12.5px/1 var(--font-sans); white-space: nowrap; cursor: pointer;
+  display: inline-flex; align-items: center; gap: var(--space-6); height: 28px; padding: 0 var(--space-8); border: 0; border-radius: var(--radius-sm);
+  background: none; color: var(--fg-dim); font: var(--text-sm)/1 var(--font-sans); white-space: nowrap; cursor: pointer;
 }
 .settings-quiet:hover { background: var(--bg-hover); color: var(--fg); }
 /* In a narrow pane the two actions keep their icon; the button's aria-label names it. */
@@ -61,16 +61,16 @@
 
 .settings-icon-btn {
   display: inline-flex; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0;
-  border: 1px solid var(--border-strong); border-radius: 7px; background: var(--bg-control); color: var(--fg-soft);
-  font: 12.5px/1 var(--font-sans); cursor: pointer;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg-control); color: var(--fg-soft);
+  font: var(--text-sm)/1 var(--font-sans); cursor: pointer;
 }
 .settings-icon-btn:hover { color: var(--fg-strong); border-color: var(--fg-disabled); }
-.settings-reload { margin-left: 6px; }
+.settings-reload { margin-left: var(--space-6); }
 
 /* The one button every Settings page uses: Edit, Save, Add, Show more. */
 .settings-btn {
-  height: 26px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: 7px;
-  background: var(--bg-control); color: var(--fg-soft); font: 500 12px/1 var(--font-sans); white-space: nowrap; cursor: pointer;
+  height: 26px; padding: 0 var(--space-12); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--bg-control); color: var(--fg-soft); font: 500 var(--text-sm)/1 var(--font-sans); white-space: nowrap; cursor: pointer;
 }
 .settings-btn:hover { color: var(--fg-strong); border-color: var(--fg-disabled); }
 .settings-btn.primary { color: var(--accent-hi); border-color: var(--accent-line); background: var(--accent-wash); }
@@ -78,116 +78,116 @@
 .settings-btn.danger { color: var(--danger-fg); border-color: var(--danger-line); background: var(--danger-wash); }
 .settings-btn[disabled] { opacity: 0.5; cursor: default; }
 .settings-input {
-  min-width: 160px; padding: 5px 8px; border: 1px solid var(--border-strong); border-radius: 7px;
-  background: var(--bg); color: var(--fg); font: 13px/1.4 var(--font-sans);
+  min-width: 160px; padding: var(--space-6) var(--space-8); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--bg); color: var(--fg); font: var(--text-md)/1.4 var(--font-sans);
 }
-.settings-input.mono { font-family: var(--font-mono); font-size: 12.5px; }
+.settings-input.mono { font-family: var(--font-mono); font-size: var(--text-sm); }
 
 /* ------------------------------------------------------- section panels */
 .settings-section { min-width: 0; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-panel); }
-.settings-section-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 11px 16px; }
+.settings-section-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-6) var(--space-10); padding: var(--space-12) var(--space-16); }
 .settings-section-head.open { border-bottom: 1px solid var(--hair); }
-.settings-section-title { margin: 0; color: var(--fg); font: 600 14px/1.45 var(--font-sans); }
-.settings-section-count { color: var(--fg-dim); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.settings-section-title { margin: 0; color: var(--fg); font: 600 var(--text-base)/1.45 var(--font-sans); }
+.settings-section-count { color: var(--fg-dim); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 .settings-section-state {
-  padding: 1px 8px; border: 1px solid var(--border-strong); border-radius: 999px; color: var(--fg-dim); font-size: 12px;
+  padding: var(--space-2) var(--space-8); border: 1px solid var(--border-strong); border-radius: var(--radius-pill); color: var(--fg-dim); font-size: var(--text-sm);
 }
 .settings-section-state.ok { color: var(--state-success); border-color: color-mix(in srgb, var(--state-success) 35%, transparent); }
 .settings-section-state.bad { color: var(--state-failed); border-color: color-mix(in srgb, var(--state-failed) 40%, transparent); }
 .settings-section-toggle {
   display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; margin-left: auto; padding: 0;
-  border: 0; border-radius: 7px; background: none; color: var(--fg-dim); cursor: pointer;
+  border: 0; border-radius: var(--radius-sm); background: none; color: var(--fg-dim); cursor: pointer;
 }
 .settings-section-toggle:hover { background: var(--bg-hover); color: var(--fg); }
 .settings-section-body[hidden] { display: none; }
 /* A table wider than its section (Crews, Hosts) scrolls inside the section, never the page. */
 .settings-section-body:has(> .host-list), .config-crews > .settings-section-body { overflow-x: auto; }
-.settings-empty { padding: 10px 16px; color: var(--fg-dim); font-size: 12.5px; }
+.settings-empty { padding: var(--space-10) var(--space-16); color: var(--fg-dim); font-size: var(--text-sm); }
 /* A line of text inside a section, and a callout between sections. */
-.settings-note { padding: 9px 16px; border-bottom: 1px solid var(--hair); color: var(--fg-dim); font-size: 12.5px; overflow-wrap: anywhere; }
+.settings-note { padding: var(--space-10) var(--space-16); border-bottom: 1px solid var(--hair); color: var(--fg-dim); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .settings-note.warn { color: var(--warn-fg); }
 .settings-note.bad { color: var(--state-failed); }
 .settings-callout {
-  margin: 0; padding: 8px 12px; border: 1px solid var(--border); border-left: 3px solid var(--accent-line);
-  border-radius: var(--radius-sm); background: var(--bg-elev); color: var(--fg-dim); font-size: 12.5px; overflow-wrap: anywhere;
+  margin: 0; padding: var(--space-8) var(--space-12); border: 1px solid var(--border); border-left: 3px solid var(--accent-line);
+  border-radius: var(--radius-sm); background: var(--bg-elev); color: var(--fg-dim); font-size: var(--text-sm); overflow-wrap: anywhere;
 }
 .settings-callout.warn { border-color: var(--warn-line); border-left-color: var(--status-open); background: var(--warn-wash); color: var(--warn-fg); }
-.settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 16px; }
+.settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); padding: var(--space-12) var(--space-16); }
 .settings-section-body + .settings-actions { border-top: 1px solid var(--hair); }
 
 /* ------------------------------------------------------------ the row */
 .settings-row {
-  display: grid; grid-template-columns: minmax(220px, 1fr) minmax(0, 1.25fr) 96px 92px; column-gap: 16px; row-gap: 6px;
-  align-items: start; padding: 10px 16px; border-top: 1px solid var(--hair);
+  display: grid; grid-template-columns: minmax(220px, 1fr) minmax(0, 1.25fr) 96px 92px; column-gap: var(--space-16); row-gap: var(--space-6);
+  align-items: start; padding: var(--space-10) var(--space-16); border-top: 1px solid var(--hair);
 }
 .settings-section-body > .settings-row:first-child { border-top: 0; }
 .settings-name, .settings-val { min-width: 0; }
 .settings-wide { grid-column: 2 / -1; }
-.settings-key { color: var(--fg); font: 13px/1.45 var(--font-mono); overflow-wrap: anywhere; }
+.settings-key { color: var(--fg); font: var(--text-md)/1.45 var(--font-mono); overflow-wrap: anywhere; }
 .settings-key-pre { color: var(--fg-mute); }
-.settings-label { color: var(--fg); font-size: 13px; font-weight: 500; }
-.settings-desc { margin-top: 2px; color: var(--fg-dim); font-size: 12.5px; }
-.settings-value { color: var(--fg-strong); font: 13px/1.45 var(--font-mono); overflow-wrap: anywhere; }
+.settings-label { color: var(--fg); font-size: var(--text-md); font-weight: 500; }
+.settings-desc { margin-top: var(--space-2); color: var(--fg-dim); font-size: var(--text-sm); }
+.settings-value { color: var(--fg-strong); font: var(--text-md)/1.45 var(--font-mono); overflow-wrap: anywhere; }
 .settings-value.none { color: var(--fg-mute); }
-.settings-meta { margin-top: 2px; color: var(--fg-mute); font-size: 12px; overflow-wrap: anywhere; }
-.settings-meta .mono { font-size: 11.5px; }
+.settings-meta { margin-top: var(--space-2); color: var(--fg-mute); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.settings-meta .mono { font-size: var(--text-sm); }
 .settings-row.dim .settings-key, .settings-row.dim .settings-value { color: var(--fg-dim); }
 .settings-row.overridden .settings-value, .settings-table-cell.overridden .settings-value { color: var(--fg-dim); text-decoration: line-through; }
 
-.settings-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.settings-tags { display: flex; flex-wrap: wrap; gap: var(--space-4); }
 .settings-tag {
-  padding: 1px 7px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg-sunk);
-  color: var(--fg-strong); font: 12px/1.5 var(--font-mono); overflow-wrap: anywhere;
+  padding: var(--space-2) var(--space-8); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-sunk);
+  color: var(--fg-strong); font: var(--text-sm)/1.5 var(--font-mono); overflow-wrap: anywhere;
 }
-.settings-tag-note { margin-left: 5px; color: var(--fg-mute); }
-.settings-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 14px; margin: 0; font: 12.5px/1.5 var(--font-mono); }
+.settings-tag-note { margin-left: var(--space-6); color: var(--fg-mute); }
+.settings-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-2) var(--space-14); margin: 0; font: var(--text-sm)/1.5 var(--font-mono); }
 .settings-kv dt { max-width: 22ch; color: var(--fg-dim); overflow-wrap: anywhere; }
 .settings-kv dd { margin: 0; color: var(--fg-strong); overflow-wrap: anywhere; }
 .settings-kv > [hidden] { display: none; }
 .settings-more {
   flex: 0 0 auto; padding: 0; border: 0; background: none; color: var(--accent);
-  font: 12px/1.45 var(--font-sans); white-space: nowrap; cursor: pointer;
+  font: var(--text-sm)/1.45 var(--font-sans); white-space: nowrap; cursor: pointer;
 }
 .settings-more:hover { color: var(--accent-hover); }
 .settings-more[hidden] { display: none; }
-.settings-kv + .settings-more { margin-top: 2px; }
+.settings-kv + .settings-more { margin-top: var(--space-2); }
 /* A long line clamped to one, with "Show full" beside it. */
-.settings-line { display: flex; align-items: baseline; gap: 10px; }
+.settings-line { display: flex; align-items: baseline; gap: var(--space-10); }
 .settings-clamp { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .settings-clamp.full { white-space: normal; overflow-wrap: anywhere; }
-.settings-dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--fg-mute); }
+.settings-dot { display: inline-block; width: 7px; height: 7px; margin-right: var(--space-6); border-radius: 50%; background: var(--fg-mute); }
 .settings-dot.on { background: var(--state-success); }
 
 /* Source is text; the dot marks a value set in a file or the environment. */
-.settings-src { display: flex; align-items: center; gap: 6px; min-height: 19px; color: var(--fg-dim); font-size: 12.5px; white-space: nowrap; }
+.settings-src { display: flex; align-items: center; gap: var(--space-6); min-height: 19px; color: var(--fg-dim); font-size: var(--text-sm); white-space: nowrap; }
 .settings-src.set { color: var(--fg); }
 .settings-src.set::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 .settings-act {
-  display: flex; justify-content: flex-end; align-items: center; gap: 5px; min-height: 19px;
-  color: var(--fg-mute); font-size: 12px; white-space: nowrap;
+  display: flex; justify-content: flex-end; align-items: center; gap: var(--space-6); min-height: 19px;
+  color: var(--fg-mute); font-size: var(--text-sm); white-space: nowrap;
 }
 /* The button is taller than the text line it sits on; the margin keeps the row's height. */
-.settings-act > .settings-btn { margin: -4px 0; }
-.settings-act > .info-hint.info-hint-pinned { margin: -15px; }
+.settings-act > .settings-btn { margin: calc(-1 * var(--space-4)) 0; }
+.settings-act > .info-hint.info-hint-pinned { margin: calc(-1 * var(--space-16)); }
 
 /* A table inside a section (the throttle marks) shares the value, source and
    edit styles; its column head is the dashboard's `.col-head`. */
 .settings-table-row {
-  display: grid; grid-template-columns: minmax(120px, 1fr) repeat(3, minmax(140px, 1fr)); column-gap: 16px;
-  align-items: center; padding: 9px 16px; border-top: 1px solid var(--hair);
+  display: grid; grid-template-columns: minmax(120px, 1fr) repeat(3, minmax(140px, 1fr)); column-gap: var(--space-16);
+  align-items: center; padding: var(--space-10) var(--space-16); border-top: 1px solid var(--hair);
 }
-.settings-table-cell { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
-.settings-table-note { color: var(--fg-mute); font-size: 12px; }
+.settings-table-cell { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-8); min-width: 0; }
+.settings-table-note { color: var(--fg-mute); font-size: var(--text-sm); }
 .settings-reading.elevated .settings-table-note { color: var(--status-open); }
 .settings-reading.critical .settings-table-note, .settings-reading.throttled .host-resource-held { color: var(--state-failed); }
-.settings-table-cell .settings-icon-btn { width: 24px; height: 24px; border-radius: 6px; }
+.settings-table-cell .settings-icon-btn { width: 24px; height: 24px; border-radius: var(--radius-sm); }
 
 .settings-raw {
-  margin: 0; width: 100%; padding: 10px; border: 1px solid var(--hair); border-radius: var(--radius-sm);
-  background: var(--bg-sunk); color: var(--fg-dim); font-size: 11.5px; line-height: 1.5;
+  margin: 0; width: 100%; padding: var(--space-10); border: 1px solid var(--hair); border-radius: var(--radius-sm);
+  background: var(--bg-sunk); color: var(--fg-dim); font-size: var(--text-sm); line-height: 1.5;
   white-space: pre-wrap; word-break: break-all; max-height: 400px; overflow: auto;
 }
-.settings-raw-label { flex-basis: 100%; color: var(--fg-mute); font-size: 12px; }
+.settings-raw-label { flex-basis: 100%; color: var(--fg-mute); font-size: var(--text-sm); }
 
 /* The Workflow bar stays reachable while its long page scrolls. Sections and
    their controls reserve the bar's height (published by settings-ui.js as
@@ -208,143 +208,143 @@
   .settings-jump-link { flex: 1 1 30%; height: 32px; margin-top: -1px; border-top: 1px solid var(--border); }
   .settings-search { flex: 1 1 140px; min-width: 0; height: 34px; }
   .settings-quiet, .settings-icon-btn { min-width: 32px; height: 32px; }
-  .settings-row { grid-template-columns: minmax(0, 1fr) auto; padding: 12px; }
+  .settings-row { grid-template-columns: minmax(0, 1fr) auto; padding: var(--space-12); }
   .settings-name { grid-column: 1; grid-row: 1; }
   .settings-act { grid-column: 2; grid-row: 1; }
   .settings-val { grid-column: 1 / -1; grid-row: 2; }
   .settings-src { grid-column: 1 / -1; grid-row: 3; }
   .settings-src:empty, .settings-act:empty { display: none; }
   .settings-btn { height: 32px; }
-  .settings-act > .settings-btn { margin: -6px 0; }
-  .settings-section-head, .settings-empty, .settings-note, .settings-actions { padding-left: 12px; padding-right: 12px; }
-  .settings-table-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); column-gap: 8px; padding: 9px 12px; }
+  .settings-act > .settings-btn { margin: calc(-1 * var(--space-6)) 0; }
+  .settings-section-head, .settings-empty, .settings-note, .settings-actions { padding-left: var(--space-12); padding-right: var(--space-12); }
+  .settings-table-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); column-gap: var(--space-8); padding: var(--space-10) var(--space-12); }
   .settings-table-cell .settings-icon-btn { width: 28px; min-width: 28px; height: 28px; }
 }
 
 /* ------------------------------------------- inline editors and the drawer */
-.config-warning { color: var(--status-open); font-size: 12px; }
-.config-note { color: var(--fg-dim); font-size: 12px; }
-.config-key { font-size: 12px; overflow-wrap: anywhere; }
-.config-value { color: var(--fg); font-size: 12px; overflow-wrap: anywhere; }
+.config-warning { color: var(--status-open); font-size: var(--text-sm); }
+.config-note { color: var(--fg-dim); font-size: var(--text-sm); }
+.config-key { font-size: var(--text-sm); overflow-wrap: anywhere; }
+.config-value { color: var(--fg); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .config-row { border-top: 1px solid var(--hair); }
 .config-row.editing { background: var(--bg-sunk); }
-.config-editor { display: flex; flex-direction: column; gap: 8px; padding: 10px 16px; }
-.config-editor-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
-.config-editor-foot { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
-.config-editor-actions { display: inline-flex; gap: 6px; }
-.config-toggle { display: inline-flex; gap: 8px; align-items: center; color: var(--fg-dim); font-size: 12px; }
-.config-chiplist { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.config-editor { display: flex; flex-direction: column; gap: var(--space-8); padding: var(--space-10) var(--space-16); }
+.config-editor-head { display: flex; gap: var(--space-10); align-items: baseline; flex-wrap: wrap; }
+.config-editor-foot { display: flex; gap: var(--space-10); align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.config-editor-actions { display: inline-flex; gap: var(--space-6); }
+.config-toggle { display: inline-flex; gap: var(--space-8); align-items: center; color: var(--fg-dim); font-size: var(--text-sm); }
+.config-chiplist { display: flex; flex-wrap: wrap; gap: var(--space-6); align-items: center; }
 .config-entry {
-  display: inline-flex; gap: 6px; align-items: center; padding: 2px 6px;
-  border: 1px solid var(--border); border-radius: 5px; color: var(--fg); font-size: 12px;
+  display: inline-flex; gap: var(--space-6); align-items: center; padding: var(--space-2) var(--space-6);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--fg); font-size: var(--text-sm);
 }
 .config-entry-remove { background: none; border: none; color: var(--fg-mute); cursor: pointer; padding: 0; }
 .config-entry-remove:hover { color: var(--state-failed); }
-.config-field { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.config-field-label { color: var(--fg-dim); font-size: 12px; min-width: 84px; }
-.config-row-error { color: var(--state-failed); font: 12px/1.5 var(--font-sans); padding: 0 16px 8px; overflow-wrap: anywhere; }
+.config-field { display: flex; gap: var(--space-10); align-items: center; flex-wrap: wrap; }
+.config-field-label { color: var(--fg-dim); font-size: var(--text-sm); min-width: 84px; }
+.config-row-error { color: var(--state-failed); font: var(--text-sm)/1.5 var(--font-sans); padding: 0 var(--space-16) var(--space-8); overflow-wrap: anywhere; }
 
 .drawer-detail { color: var(--fg-dim); }
-.drawer-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.drawer-actions { display: flex; gap: var(--space-8); flex-wrap: wrap; align-items: center; }
 .config-drawer {
   position: sticky; bottom: 0; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-panel);
-  padding: 16px; display: flex; flex-direction: column; gap: 8px; max-height: 70vh; overflow: auto;
+  padding: var(--space-16); display: flex; flex-direction: column; gap: var(--space-8); max-height: 70vh; overflow: auto;
 }
-.config-drawer > h3 { margin: 0; color: var(--fg); font: 600 14px/1.4 var(--font-sans); }
-.config-drawer > p { margin: 0; color: var(--fg-dim); font-size: 12px; }
+.config-drawer > h3 { margin: 0; color: var(--fg); font: 600 var(--text-base)/1.4 var(--font-sans); }
+.config-drawer > p { margin: 0; color: var(--fg-dim); font-size: var(--text-sm); }
 .config-drawer .settings-input { width: 100%; box-sizing: border-box; }
-.drawer-chain { font-size: 13px; color: var(--fg-mute); }
-.drawer-scope { display: block; font-size: 13px; }
-.drawer-cli { font-size: 12px; color: var(--fg-mute); word-break: break-all; }
+.drawer-chain { font-size: var(--text-md); color: var(--fg-mute); }
+.drawer-scope { display: block; font-size: var(--text-md); }
+.drawer-cli { font-size: var(--text-sm); color: var(--fg-mute); word-break: break-all; }
 
 /* ---------------------------------------------------------------- Crews */
 .config-crew-cells {
   display: grid;
   grid-template-columns: minmax(90px, 0.9fr) minmax(90px, 0.8fr) minmax(90px, 1fr) minmax(120px, 1fr) 70px minmax(100px, 0.9fr) 92px minmax(180px, 1.5fr) 60px;
-  gap: 10px; align-items: baseline; padding: 9px 16px;
+  gap: var(--space-10); align-items: baseline; padding: var(--space-10) var(--space-16);
 }
 .config-crew-head { align-items: center; border-bottom: 1px solid var(--hair); }
 .config-crew-head [role="columnheader"] { min-width: 0; }
 .config-crew-head [role="columnheader"]:last-child, .config-crew-cell:last-child { justify-self: end; }
 .config-crew-cell { min-width: 0; }
 .config-crew-cell > .config-value { overflow-wrap: anywhere; }
-.config-crew-cell > .settings-btn { margin: -4px 0; }
+.config-crew-cell > .settings-btn { margin: calc(-1 * var(--space-4)) 0; }
 .config-crew-label { display: none; }
 .config-crew-row:first-child { border-top: 0; }
-.config-crew-more { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 16px; border-top: 1px solid var(--hair); }
-.config-crew-status { color: var(--fg-mute); font-size: 12px; margin-right: auto; }
+.config-crew-more { display: flex; flex-wrap: wrap; gap: var(--space-8); align-items: center; padding: var(--space-10) var(--space-16); border-top: 1px solid var(--hair); }
+.config-crew-status { color: var(--fg-mute); font-size: var(--text-sm); margin-right: auto; }
 .config-crew-toggle { display: none; }
 .config-crew-row:focus { outline: none; }
 .config-crew-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 .config-crew-row.referenced { background: rgba(110, 159, 255, 0.06); }
 .config-crew-row.disabled .config-crew-cells { color: var(--fg-disabled); }
-.config-crew-identity { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.config-crew-description { color: var(--fg-mute); font-size: 12px; overflow-wrap: anywhere; }
+.config-crew-identity { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.config-crew-description { color: var(--fg-mute); font-size: var(--text-sm); overflow-wrap: anywhere; }
 /* A crew's `env` entries: variable names only, never values. */
-.config-crew-env { color: var(--fg-dim); font-size: 11.5px; overflow-wrap: anywhere; }
-.config-crew-usage { display: flex; flex-wrap: wrap; gap: 4px 8px; min-width: 0; }
-.config-crew-use { color: var(--fg-dim); font: 11.5px/1.45 var(--font-mono); overflow-wrap: anywhere; }
+.config-crew-env { color: var(--fg-dim); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.config-crew-usage { display: flex; flex-wrap: wrap; gap: var(--space-4) var(--space-8); min-width: 0; }
+.config-crew-use { color: var(--fg-dim); font: var(--text-sm)/1.45 var(--font-mono); overflow-wrap: anywhere; }
 .config-crew-row.disabled .config-crew-use { color: var(--fg-disabled); }
 .config-crew-disabled {
-  margin-left: 6px; padding: 0 5px; border: 1px solid var(--border); border-radius: 4px;
-  color: var(--fg-dim); font: 11px/1.5 var(--font-sans);
+  margin-left: var(--space-6); padding: 0 var(--space-6); border: 1px solid var(--border); border-radius: var(--radius-xs);
+  color: var(--fg-dim); font: var(--text-xs)/1.5 var(--font-sans);
 }
 /* [ORB-14698] A crew's tightest usage window: used percent, window, reset,
    and an amber "gated" badge while admission skips the crew. */
-.config-crew-limit { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.config-crew-limit-line { display: inline-flex; flex-wrap: wrap; gap: 4px 6px; align-items: baseline; }
-.config-crew-limit-window { color: var(--fg-dim); font-size: 11.5px; overflow-wrap: anywhere; }
-.config-crew-limit-reset { color: var(--fg-mute); font-size: 12px; }
+.config-crew-limit { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.config-crew-limit-line { display: inline-flex; flex-wrap: wrap; gap: var(--space-4) var(--space-6); align-items: baseline; }
+.config-crew-limit-window { color: var(--fg-dim); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.config-crew-limit-reset { color: var(--fg-mute); font-size: var(--text-sm); }
 .config-crew-gated {
-  padding: 0 5px; border: 1px solid var(--state-pending); border-radius: 4px;
-  color: var(--state-pending); font: 11px/1.5 var(--font-sans);
+  padding: 0 var(--space-6); border: 1px solid var(--state-pending); border-radius: var(--radius-xs);
+  color: var(--state-pending); font: var(--text-xs)/1.5 var(--font-sans);
 }
-.config-provider { display: inline-flex; gap: 6px; align-items: center; color: var(--fg); font-size: 12px; }
+.config-provider { display: inline-flex; gap: var(--space-6); align-items: center; color: var(--fg); font-size: var(--text-sm); }
 .config-provider-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 
 @media (max-width: 900px) {
-  .config-crew-cells { grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 10px 12px; }
+  .config-crew-cells { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); padding: var(--space-10) var(--space-12); }
   .config-crew-head { display: none; }
-  .config-crew-cell { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+  .config-crew-cell { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: var(--space-8); align-items: baseline; }
   .config-crew-cell:last-child { justify-self: stretch; }
   .config-crew-cell > .settings-btn { margin: 0; justify-self: start; }
-  .config-crew-label { display: block; color: var(--fg-dim); font-size: 12px; }
+  .config-crew-label { display: block; color: var(--fg-dim); font-size: var(--text-sm); }
   /* Bounded rows: identity, provider, model and the edit action stay; the
      rest opens from each row's Details control. */
   .config-crew-detail, .config-crew-blank { display: none; }
   .config-crew-row.expanded .config-crew-detail:not(.config-crew-blank) { display: grid; }
   .config-crew-toggle {
-    display: inline-block; margin: 0 12px 10px; padding: 0 10px; height: 32px;
-    background: none; border: 1px solid var(--border-strong); border-radius: 7px;
-    color: var(--fg-dim); font: 12px/1 var(--font-sans); cursor: pointer;
+    display: inline-block; margin: 0 var(--space-12) var(--space-10); padding: 0 var(--space-10); height: 32px;
+    background: none; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+    color: var(--fg-dim); font: var(--text-sm)/1 var(--font-sans); cursor: pointer;
   }
   .config-crew-toggle:hover { color: var(--accent); }
-  .config-crew-more { padding: 10px 12px; }
+  .config-crew-more { padding: var(--space-10) var(--space-12); }
 }
 
 /* ORB-14451: Settings › Hosts. One row per host — the serving host first —
    with its live identity, and the inline add, rename and remove editors.
    Reachability and skew carry text as well as colour. */
 .config-review-status {
-  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px;
-  padding: 8px 10px; border-left: 3px solid var(--border); background: var(--bg);
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-6) var(--space-10);
+  padding: var(--space-8) var(--space-10); border-left: 3px solid var(--border); background: var(--bg);
 }
 .config-review-status.alert {
   border: 1px solid var(--state-failed); border-left-width: 4px; border-radius: var(--radius-sm);
   background: rgba(255, 90, 90, 0.08); color: var(--fg);
 }
-.config-review-switch { font-size: 12.5px; font-weight: 600; }
+.config-review-switch { font-size: var(--text-sm); font-weight: 600; }
 .config-review-status.alert .config-review-switch { color: var(--state-failed); }
-.config-review-reason { color: var(--fg-dim); font-size: 12.5px; overflow-wrap: anywhere; }
-.config-review-remedy { color: var(--fg); font-size: 12.5px; }
+.config-review-reason { color: var(--fg-dim); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.config-review-remedy { color: var(--fg); font-size: var(--text-sm); }
 .host-notice:empty { display: none; }
-.host-notice { color: var(--state-success); font: 12.5px/1.5 var(--font-sans); overflow-wrap: anywhere; }
+.host-notice { color: var(--state-success); font: var(--text-sm)/1.5 var(--font-sans); overflow-wrap: anywhere; }
 .host-add .host-editor, .host-row .host-editor {
   border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elev);
 }
-.host-row .host-editor { margin: 0 16px 10px; background: var(--bg-sunk); }
-.host-fields { display: flex; flex-wrap: wrap; gap: 10px; }
-.host-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 220px; }
+.host-row .host-editor { margin: 0 var(--space-16) var(--space-10); background: var(--bg-sunk); }
+.host-fields { display: flex; flex-wrap: wrap; gap: var(--space-10); }
+.host-field { display: flex; flex-direction: column; gap: var(--space-4); flex: 1 1 220px; }
 .host-editor .config-row-error { padding: 0; }
 /* One grid owns the columns. A per-row grid whose last track is `auto` sizes
    that track to its own actions cell, so a row with Rename/Remove resolves
@@ -352,55 +352,55 @@
 .host-list {
   display: grid;
   grid-template-columns: minmax(180px, 2fr) minmax(100px, 0.9fr) minmax(64px, 0.7fr) minmax(80px, 0.7fr) minmax(70px, 0.8fr) minmax(120px, 1.3fr) minmax(150px, 1.6fr) auto;
-  column-gap: 12px;
+  column-gap: var(--space-12);
 }
 .host-row, .host-grid {
   display: grid; grid-template-columns: subgrid; grid-column: 1 / -1;
 }
-.host-grid { align-items: start; padding: 9px 16px; }
+.host-grid { align-items: start; padding: var(--space-10) var(--space-16); }
 .host-row > .host-error, .host-row > .host-editor { grid-column: 1 / -1; }
 .host-head { border-bottom: 1px solid var(--hair); }
 .host-row + .host-row { border-top: 1px solid var(--hair); }
-.host-identity, .host-workspaces { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.host-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-weight: 600; }
-.host-local { color: var(--fg-mute); font-size: 12px; font-weight: 400; }
-.host-facts { color: var(--fg-dim); font-size: 11.5px; overflow-wrap: anywhere; }
-.host-workspace { color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
-.host-version, .host-protocol { font-size: 12px; overflow-wrap: anywhere; }
-.host-health { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; }
-.host-health-readings { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
+.host-identity, .host-workspaces { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.host-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-6); font-weight: 600; }
+.host-local { color: var(--fg-mute); font-size: var(--text-sm); font-weight: 400; }
+.host-facts { color: var(--fg-dim); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.host-workspace { color: var(--fg-dim); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.host-version, .host-protocol { font-size: var(--text-sm); overflow-wrap: anywhere; }
+.host-health { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-4); min-width: 0; }
+.host-health-readings { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); min-width: 0; }
 .host-health .host-resource {
-  height: 22px; padding: 0 6px; gap: 4px; font-size: 11px; border-radius: 4px;
+  height: 22px; padding: 0 var(--space-6); gap: var(--space-4); font-size: var(--text-xs); border-radius: var(--radius-xs);
 }
 .host-health .host-resource[data-resource="cpu"],
 .host-health .host-resource[data-resource="memory"],
 .host-health .host-resource[data-resource="disk"] { min-width: 0; }
 .host-health-error, .host-health-pending, .host-drain {
-  font: 12px/1.4 var(--font-sans); color: var(--fg-dim); overflow-wrap: anywhere;
+  font: var(--text-sm)/1.4 var(--font-sans); color: var(--fg-dim); overflow-wrap: anywhere;
 }
 .host-drain.active { color: var(--state-pending); }
 .host-drain.throttled { color: var(--state-failed); }
-.host-reach, .host-skew { font: 12px/1.5 var(--font-sans); }
+.host-reach, .host-skew { font: var(--text-sm)/1.5 var(--font-sans); }
 .host-reach.ok { color: var(--state-success); }
 .host-reach.down, .host-reach.warn, .host-skew.warn { color: var(--state-failed); }
 .host-reach.unknown { color: var(--fg-mute); }
-.host-actions { display: inline-flex; gap: 6px; justify-content: flex-end; }
-.host-actions > .settings-btn { margin: -3px 0; }
+.host-actions { display: inline-flex; gap: var(--space-6); justify-content: flex-end; }
+.host-actions > .settings-btn { margin: calc(-1 * var(--space-4)) 0; }
 .host-error {
-  margin: 0 16px 8px; padding: 6px 8px; border-left: 3px solid var(--state-failed);
-  color: var(--fg-dim); font: 12px/1.5 var(--font-sans); overflow-wrap: anywhere;
+  margin: 0 var(--space-16) var(--space-8); padding: var(--space-6) var(--space-8); border-left: 3px solid var(--state-failed);
+  color: var(--fg-dim); font: var(--text-sm)/1.5 var(--font-sans); overflow-wrap: anywhere;
 }
-.host-dependents { margin: 0; padding-left: 18px; color: var(--fg); font-size: 12px; }
-.host-cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.host-dependents { margin: 0; padding-left: var(--space-20); color: var(--fg); font-size: var(--text-sm); }
+.host-cell { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
 .host-label { display: none; }
 @media (max-width: 900px) {
   .host-head { display: none; }
   .host-list, .host-row { display: block; }
-  .host-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 12px; padding: 10px 12px; }
+  .host-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-6) var(--space-12); padding: var(--space-10) var(--space-12); }
   .host-identity, .host-actions, .host-health { grid-column: 1 / -1; }
   .host-grid > .host-cell:nth-child(1), .host-grid > .host-cell:nth-child(7) { grid-column: 1 / -1; }
   .host-actions { justify-content: flex-start; }
   .host-actions > .settings-btn { margin: 0; }
-  .host-label { display: block; color: var(--fg-dim); font-size: 12px; }
-  .host-row .host-editor, .host-error { margin-left: 12px; margin-right: 12px; }
+  .host-label { display: block; color: var(--fg-dim); font-size: var(--text-sm); }
+  .host-row .host-editor, .host-error { margin-left: var(--space-12); margin-right: var(--space-12); }
 }
