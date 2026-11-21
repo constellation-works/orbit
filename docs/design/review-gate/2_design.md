@@ -508,7 +508,14 @@ naming the step's typed reason (`review_gate_blocked`,
 `review_timeout_incomplete`, `push_lease_lost`, ...) and decision
 `landing_review_failure`. `review_repair_after_merge` is the exception to
 staying in `review`: the pull request is already merged, and the task is
-blocked with the recipe that lands the preserved repair. No outcome closes the PR. One exception to "no
+blocked with the recipe that lands the preserved repair. No outcome closes the PR.
+A PR that merged outside Orbit while its review ran [ORB-26599] is the other
+exception: settlement reads the forge, and the settle comment names the merge
+commit, says the verdict no longer gates anything, and names any unpushed
+reviewer commit by sha and review worktree. The refusal omits the
+pending-decision text, so the run is not held for a decision; the failure
+handoff pushes no reviewer commit and its comment says the PR already merged,
+and external-merge settlement then moves the task to `done`. One exception to "no
 push": a reviewer commit that settled `incomplete` is not left in the run's
 host-local worktree. Settlement has already committed the reviewer's repair, so
 the failure handoff pushes it onto the published head under the same lease as

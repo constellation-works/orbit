@@ -4,8 +4,8 @@ use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::workflow::handoff::{HandoffArtifactRef, HandoffReviewEvidence};
 use orbit_types::workflow::{
     REVIEW_GATE_ARTIFACT, REVIEW_LANDING_DECISION_PENDING, REVIEW_MANIFEST_ARTIFACT,
-    REVIEW_REPORT_ARTIFACT, ReviewCertificate, ReviewGateAdmitted, ReviewGateHistoryEvent,
-    ReviewGateHistoryNote, ReviewManifest, ReviewTiming,
+    REVIEW_PR_MERGED_OUTSIDE_ORBIT, REVIEW_REPORT_ARTIFACT, ReviewCertificate, ReviewGateAdmitted,
+    ReviewGateHistoryEvent, ReviewGateHistoryNote, ReviewManifest, ReviewTiming,
 };
 use serde_json::{Value, json};
 
@@ -34,11 +34,29 @@ pub(super) fn not_required(reason: Option<String>) -> Value {
 }
 
 /// What a settled-without-approval review leaves the candidate waiting for.
-pub(super) fn candidate_standing(admitted: &ReviewGateAdmitted) -> &'static str {
-    if admitted.timing == ReviewTiming::BeforeLanding {
-        REVIEW_LANDING_DECISION_PENDING
-    } else {
-        "the candidate stays unpublished until a recorded decision resumes delivery"
+/// A before-landing PR that already merged outside Orbit [ORB-26599] waits
+/// for no decision, so its refusal omits the pending-decision marker that
+/// would hold the run for one.
+pub(super) fn candidate_standing(
+    runtime: &OrbitRuntime,
+    context: &GateContext,
+    admitted: &ReviewGateAdmitted,
+) -> String {
+    if admitted.timing != ReviewTiming::BeforeLanding {
+        return "the candidate stays unpublished until a recorded decision resumes delivery"
+            .to_string();
+    }
+    let merged = context
+        .tasks
+        .first()
+        .and_then(|task| super::external_merge::merged_outside_orbit(runtime, context, task));
+    match merged {
+        Some(merge) => format!(
+            "{REVIEW_PR_MERGED_OUTSIDE_ORBIT} as {}, so the verdict gates nothing and no \
+             decision is pending; any reviewer commit stays only in the worktree {}",
+            merge.merge_commit, merge.worktree
+        ),
+        None => REVIEW_LANDING_DECISION_PENDING.to_string(),
     }
 }
 

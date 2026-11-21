@@ -3,7 +3,9 @@ use std::path::Path;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskComment, TaskStatus};
-use orbit_types::workflow::{FailureHandoffDecision, ReviewGateAdmissionOutput};
+use orbit_types::workflow::{
+    FailureHandoffDecision, REVIEW_PR_MERGED_OUTSIDE_ORBIT, ReviewGateAdmissionOutput,
+};
 use serde_json::{Value, json};
 
 use crate::context::{ReviewReleaseRequest, RuntimeHost, TaskAutomationUpdate};
@@ -85,7 +87,10 @@ pub(super) fn push_incomplete_landing_reviewer_commit<H: RuntimeHost + ?Sized>(
     failed_step_id: &str,
     error_message: &str,
 ) -> Option<Value> {
-    if failed_step_id != LANDING_SETTLE_STEP || !error_message.contains(INCOMPLETE_VERDICT_REFUSAL)
+    // A merged PR's branch is gone: nothing can take the reviewer's commit.
+    if failed_step_id != LANDING_SETTLE_STEP
+        || !error_message.contains(INCOMPLETE_VERDICT_REFUSAL)
+        || error_message.contains(REVIEW_PR_MERGED_OUTSIDE_ORBIT)
     {
         return None;
     }
@@ -150,7 +155,20 @@ pub(super) fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
     let landing_review = LANDING_REVIEW_STEPS
         .contains(&failed_step_id)
         .then(|| typed_reason(error_code, error_message));
+    let merged_outside_orbit =
+        landing_review.is_some() && error_message.contains(REVIEW_PR_MERGED_OUTSIDE_ORBIT);
     let note = match &landing_review {
+        // [ORB-26599] The PR merged while the review ran: the verdict gates
+        // nothing, and the settlement comment names the merge and any
+        // unpushed reviewer commit.
+        Some(reason) if merged_outside_orbit => format!(
+            "Before-landing review ended on PR #{pr_number} (`{reason}`) after the PR had \
+             already merged outside Orbit; its verdict gates nothing and no decision is \
+             pending. Nothing was merged by the review, and no reviewer commit was pushed. \
+             The task settles from the merge.\n\n- Run: `{run_id}`\n- Failed step: \
+             `{failed_step_id}`\n- Error code: `{error_code}`\n\nFailure:\n```text\n\
+             {error_message}\n```",
+        ),
         Some(reason) => format!(
             "Before-landing review did not approve PR #{pr_number} (`{reason}`); the PR stays \
              open and unmerged and the task stays '{}'. Nothing was merged. {} An operator \
