@@ -605,12 +605,18 @@ class FixtureCliRestoreTests(unittest.TestCase):
         self.assertIn(str(restored_repo), (restored_orbit / "config.yaml").read_text())
 
     def test_snapshot_refuses_source_without_workspace_identity(self):
-        # Both checkouts keep their ordinary files but name no workspace identity:
-        # one has no config.yaml, the other a blank `workspace_id:` line whose
-        # value would otherwise be read from the next key.
+        # Each checkout keeps its ordinary files but names no workspace identity:
+        # no config.yaml; a blank `workspace_id:` line whose value would otherwise
+        # be read from the next key; or a value YAML reads as empty, null or a
+        # comment (empty quoted strings, null, ~, a comment with no value).
         cases = {
             "no-config": None,
             "blank-workspace-id": "workspace_id:\nrepo_root: {repo}\n",
+            "empty-double-quoted": 'workspace_id: ""\nrepo_root: {repo}\n',
+            "empty-single-quoted": "workspace_id: ''\nrepo_root: {repo}\n",
+            "null": "workspace_id: null\nrepo_root: {repo}\n",
+            "tilde": "workspace_id: ~\nrepo_root: {repo}\n",
+            "comment-only": "workspace_id: # identity not yet written\nrepo_root: {repo}\n",
         }
         for label, config_text in cases.items():
             with self.subTest(source=label):
@@ -636,6 +642,41 @@ class FixtureCliRestoreTests(unittest.TestCase):
                 )
                 self.assertEqual(snap_res.returncode, 2, snap_res.stdout + snap_res.stderr)
                 self.assertFalse(snapshot_dir.exists())
+
+    def test_snapshot_records_unquoted_workspace_identity(self):
+        # A quoted scalar names the same identity as its bare form, so the snapshot
+        # records ws_fixture rather than the quote characters around it.
+        cases = {
+            "double-quoted": '"ws_fixture"',
+            "single-quoted": "'ws_fixture'",
+        }
+        for label, quoted in cases.items():
+            with self.subTest(source=label):
+                source_home = self.base / label / "source"
+                source_repo = source_home / "ws" / "orbit"
+                paths = _build_disposable_source(source_home, source_repo)
+                config_path = paths["orbit_dir"] / "config.yaml"
+                config_path.write_text(
+                    config_path.read_text(encoding="utf-8").replace(
+                        "workspace_id: ws_fixture", f"workspace_id: {quoted}", 1
+                    ),
+                    encoding="utf-8",
+                )
+
+                snapshot_dir = self.base / label / "snapshot"
+                snap_res = self.run_fixture(
+                    _child_env(source_home),
+                    "snapshot",
+                    "--workspace",
+                    "ws_fixture",
+                    "--global-root",
+                    str(paths["global_root"]),
+                    "--out",
+                    str(snapshot_dir),
+                )
+                self.assertEqual(snap_res.returncode, 0, snap_res.stdout + snap_res.stderr)
+                manifest = json.loads((snapshot_dir / "snapshot-manifest.json").read_text())
+                self.assertEqual(manifest["source"]["storage_id"], "ws_fixture")
 
     def test_restore_refuses_snapshot_recording_no_workspace_identity(self):
         source_home = self.base / "source"

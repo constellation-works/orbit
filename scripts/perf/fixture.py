@@ -350,14 +350,29 @@ class Snapshotter:
 # ── workspace resolution ─────────────────────────────────────────────────────
 
 
+_YAML_NULL_SCALARS = frozenset({"", "~", "null", "Null", "NULL"})
+_QUOTED_SCALAR = re.compile(r"""(?:"([^"]*)"|'([^']*)')(?:[ \t]+#.*)?$""")
+
+
 def read_storage_id(orbit_dir: Path) -> str:
     try:
         text = (orbit_dir / "config.yaml").read_text()
     except OSError:
         return ""
     # Same-line value only: `\s` would let a blank `workspace_id:` line capture the next key.
-    match = re.search(r"^workspace_id:[ \t]*(\S+)", text, re.MULTILINE)
-    return match.group(1) if match else ""
+    match = re.search(r"^workspace_id:[ \t]*(.*)$", text, re.MULTILINE)
+    if not match:
+        return ""
+    value = match.group(1).rstrip()
+    if value[:1] in ("'", '"'):
+        # A quoted scalar names its content; anything else after it is not a usable identity.
+        quoted = _QUOTED_SCALAR.match(value)
+        if not quoted:
+            return ""
+        return quoted.group(1) if quoted.group(1) is not None else quoted.group(2)
+    # A plain scalar ends at a `#` that starts the value or follows whitespace (a YAML comment).
+    value = re.sub(r"(^|[ \t]+)#.*$", "", value)
+    return "" if value in _YAML_NULL_SCALARS else value
 
 
 def resolve_workspace(global_root: Path, selector: str) -> dict:
