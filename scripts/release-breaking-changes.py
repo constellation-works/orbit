@@ -322,6 +322,93 @@ def schema_without_top_required(schema):
     return stripped
 
 
+# Weakening `required` inside these keywords can reject an instance the
+# stronger schema accepted: a `oneOf` branch can pick up a second match, a
+# weaker schema under `not` rejects more, and a weaker `if` moves instances
+# onto the other branch.
+_NONMONOTONIC_REQUIRED_KEYWORDS = frozenset({"oneOf", "not", "if"})
+
+
+def _string_list_set(value):
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return set(value)
+    return None
+
+
+def nested_required_subset_only(target, source, under_nonmonotonic=False):
+    """Whether `target` adds no constraint beyond a nested `required` subset.
+
+    Equal schemas match. So does a schema whose `required` names are a subset
+    of `source`'s at the same object, with every other keyword unchanged.
+    That weakening cannot reject an instance `source` accepts under
+    `properties`, `items`, `allOf` or `anyOf`. A difference inside `oneOf`,
+    `not` or `if` is not treated as redundant.
+    """
+    if _json_value_key(target) == _json_value_key(source):
+        return True
+    if isinstance(target, list) and isinstance(source, list):
+        if len(target) != len(source):
+            return False
+        return all(nested_required_subset_only(left, right, under_nonmonotonic)
+                   for left, right in zip(target, source))
+    if not isinstance(target, dict) or not isinstance(source, dict):
+        return False
+    target_required = _string_list_set(target.get("required", []))
+    source_required = _string_list_set(source.get("required", []))
+    if target_required is None or source_required is None:
+        return False
+    if under_nonmonotonic:
+        if target_required != source_required:
+            return False
+    elif not target_required <= source_required:
+        return False
+    target_keys = set(target) - {"required"}
+    source_keys = set(source) - {"required"}
+    if target_keys != source_keys:
+        return False
+    for key in target_keys:
+        if not nested_required_subset_only(
+                target[key], source[key],
+                under_nonmonotonic or key in _NONMONOTONIC_REQUIRED_KEYWORDS):
+            return False
+    return True
+
+
+def drop_guaranteed_nested_required(schema, guaranteed):
+    """Drop nested `required` names `guaranteed(prop_path)` already imposes.
+
+    `guaranteed` receives a tuple of property names from this schema down to
+    the nested object. Top-level `required` stays for the caller. Schemas
+    under `oneOf`, `not` or `if` stay intact: removing a name there can hide
+    a constraint the enclosing requirement does not cover.
+    """
+    def walk(node, prop_path):
+        if not isinstance(node, dict):
+            return node
+        result = {}
+        for key, value in node.items():
+            if key == "required" and prop_path and isinstance(value, list):
+                covered = guaranteed(prop_path)
+                kept = [name for name in value if name not in covered]
+                if kept:
+                    result[key] = kept
+                continue
+            if key == "properties" and isinstance(value, dict):
+                result[key] = {
+                    name: walk(child, prop_path + (name,)) if isinstance(child, dict) else child
+                    for name, child in value.items()
+                }
+                continue
+            if key in ("allOf", "anyOf") and isinstance(value, list):
+                result[key] = [walk(child, prop_path) if isinstance(child, dict) else child
+                               for child in value]
+                continue
+            result[key] = value
+        return result
+
+    return walk(schema, ())
+
+
 def schema_required_names(schema):
     """Collect required property names anywhere in an alternative branch."""
     if isinstance(schema, list):
@@ -829,14 +916,24 @@ def detect_mcp_changes(git, parent, commit, changed):
                 return True
         return False
 
-    def constrains_beyond_required(schema, already_required):
+    def constrains_beyond_required(schema, already_required, nested_guaranteed=None):
+        """Whether `schema` rejects an instance the enclosing schema accepted.
+
+        `already_required` is the top-level names already demanded. When
+        `nested_guaranteed` is set, it maps a property-name tuple to names
+        the enclosing schema already requires on that nested object; a
+        nested `required` entry those names cover is not a new demand.
+        """
         if schema is False:
             return True
         if not isinstance(schema, dict):
             return False
         if effective_top_required(schema) - already_required:
             return True
-        return constrains_instances(schema_without_top_required(schema))
+        stripped = schema_without_top_required(schema)
+        if nested_guaranteed is not None:
+            stripped = drop_guaranteed_nested_required(stripped, nested_guaranteed)
+        return constrains_instances(stripped)
 
     def expand_type_names(type_json):
         names = json.loads(type_json)
@@ -1230,6 +1327,8 @@ def detect_mcp_changes(git, parent, commit, changed):
             when the destination demands more than the source did: a
             required name neither the source nor the enclosing schema
             required, or non-required constraints the source did not carry.
+            A nested `required` set that is a subset of the source arm's set
+            at the same position is not a new demand.
             """
             old_if = old_cond.get("if")
             new_if = new_cond.get("if")
@@ -1277,7 +1376,7 @@ def detect_mcp_changes(git, parent, commit, changed):
                 target_rest = schema_without_top_required(target)
                 source_rest = schema_without_top_required(source)
                 stricter = (constrains_instances(target_rest)
-                            and _json_value_key(target_rest) != _json_value_key(source_rest))
+                            and not nested_required_subset_only(target_rest, source_rest))
                 if extra or stricter or target is False:
                     demands.append((target_key, extra))
             return demands
@@ -1313,6 +1412,10 @@ def detect_mcp_changes(git, parent, commit, changed):
 
             enclosing = before_required.get(loc, set()) | unconditionally_required_in_conditionals(loc)
 
+            def nested_required_on_enclosing(prop_path, at=loc):
+                path = at + "".join(f".{part}" for part in prop_path)
+                return before_required.get(path, set())
+
             for old_raw, old_cond, new_raw, new_cond in paired:
                 if _json_value_key(old_cond["if"]) != _json_value_key(new_cond["if"]):
                     for target_key, extra in conditional_edit_demands(old_raw, old_cond, new_cond):
@@ -1327,10 +1430,12 @@ def detect_mcp_changes(git, parent, commit, changed):
                 new_if = new_cond["if"]
                 if "then" not in old_cond and "then" in new_cond and new_if is not False:
                     already = enclosing | (selector_required(new_if) or set())
-                    if constrains_beyond_required(new_cond["then"], already):
+                    if constrains_beyond_required(
+                            new_cond["then"], already, nested_required_on_enclosing):
                         report(f"`{name}` `{old_raw}` conditional `then` branch added")
                 if "else" not in old_cond and "else" in new_cond and not is_always_true(new_if):
-                    if constrains_beyond_required(new_cond["else"], enclosing):
+                    if constrains_beyond_required(
+                            new_cond["else"], enclosing, nested_required_on_enclosing):
                         report(f"`{name}` `{old_raw}` conditional `else` branch added")
                 if inside_oneof(loc) and loc in after_locs:
                     old_if = old_cond["if"]
@@ -1351,10 +1456,12 @@ def detect_mcp_changes(git, parent, commit, changed):
                     then_adds = (
                         "then" in new_cond and new_if is not False
                         and constrains_beyond_required(
-                            new_cond["then"], enclosing | (selector_required(new_if) or set())))
+                            new_cond["then"], enclosing | (selector_required(new_if) or set()),
+                            nested_required_on_enclosing))
                     else_adds = (
                         "else" in new_cond and not is_always_true(new_if)
-                        and constrains_beyond_required(new_cond["else"], enclosing))
+                        and constrains_beyond_required(
+                            new_cond["else"], enclosing, nested_required_on_enclosing))
                     if then_adds or else_adds:
                         report(f"`{name}` `{loc}` conditional constraint added")
 
