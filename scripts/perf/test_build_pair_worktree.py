@@ -22,6 +22,29 @@ REPO = Path(__file__).resolve().parents[2]
 BUILD_PAIR = REPO / "scripts" / "perf" / "build-pair.sh"
 SCRATCH = REPO / ".orbit" / "tmp"
 
+# Test double for `cat`, placed first on PATH while build-pair.sh runs. Only a
+# read of the retired sidecar is intercepted, right after the script selects it
+# and before the real read: SHIM_MODE=expire lets Git prune aged sidecars (the
+# retired one goes, the referenced one stays), and SHIM_MODE=deny fails the read
+# the way an unreadable file does.
+_CAT_SHIM = """#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in
+    */sharedindex.*)
+      if [ "${arg##*/}" = "$SHIM_RETIRED" ]; then
+        if [ "$SHIM_MODE" = expire ]; then
+          "$REAL_GIT" -C "$SHIM_REPO" -c splitIndex.sharedIndexExpire=now update-index --split-index || exit 99
+        elif [ "$SHIM_MODE" = deny ]; then
+          echo "cat: $arg: Permission denied" >&2
+          exit 1
+        fi
+      fi
+      ;;
+  esac
+done
+exec "$REAL_CAT" "$@"
+"""
+
 
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
@@ -305,6 +328,77 @@ class BuildPairWorktreeTest(unittest.TestCase):
 
         leaked = _git(self.repo, "cat-file", "-t", candidate["commit"], check=False)
         self.assertNotEqual(leaked.returncode, 0, leaked.stderr)
+
+    def _split_with_retired_sidecar(self) -> Path:
+        """Make two split-index generations and return the retired sidecar.
+
+        The first generation's sidecar stays on disk after the second one
+        becomes the referenced sidecar. Both are pinned to an old mtime, so a
+        Git read or expiry is visible.
+        """
+        (self.repo / "tracked.ign").write_text("staged\n")
+        _git(self.repo, "add", "-f", "--", "tracked.ign")
+        _git(self.repo, "update-index", "--split-index")
+        retired = next((self.repo / ".git").glob("sharedindex.*"))
+        (self.repo / "tracked.txt").write_text("v2\n")
+        _git(self.repo, "add", "--", "tracked.txt")
+        _git(self.repo, "update-index", "--split-index")
+        pinned_ns = 1500000000000000000
+        for shared in (self.repo / ".git").glob("sharedindex.*"):
+            os.utime(shared, ns=(pinned_ns, pinned_ns))
+        return retired
+
+    def _run_pair_with_cat_shim(self, mode: str, retired: Path) -> subprocess.CompletedProcess[str]:
+        shim_dir = self.root / "shim-bin"
+        shim_dir.mkdir()
+        shim = shim_dir / "cat"
+        shim.write_text(_CAT_SHIM)
+        shim.chmod(0o755)
+        env = self.env()
+        env["PATH"] = f"{shim_dir}{os.pathsep}{env['PATH']}"
+        env["SHIM_MODE"] = mode
+        env["SHIM_REPO"] = str(self.repo)
+        env["SHIM_RETIRED"] = retired.name
+        env["REAL_GIT"] = shutil.which("git") or "git"
+        env["REAL_CAT"] = shutil.which("cat") or "cat"
+        return subprocess.run(
+            [str(BUILD_PAIR),
+             "--base", "HEAD",
+             "--candidate-worktree", str(self.repo),
+             "--out", str(self.out),
+             "--keep"],
+            cwd=REPO,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+
+    def test_retired_sidecar_expired_during_seeding_still_exports(self) -> None:
+        # Git itself removes the aged retired sidecar after the script has
+        # selected it and before the script reads it. The dirty file is untracked
+        # on purpose: an explicit split-index write re-bases the index when a
+        # tracked file is dirty, and that prunes the referenced sidecar too.
+        retired = self._split_with_retired_sidecar()
+        (self.repo / "new.txt").write_text("new\n")
+        result = self._run_pair_with_cat_shim("expire", retired)
+        self.assertFalse(retired.exists(), "Git should have expired the retired sidecar")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        exported = self.out / ".work" / "src-candidate"
+        self.assertEqual((exported / "new.txt").read_text(), "new\n")
+        self.assertEqual((exported / "tracked.txt").read_text(), "v2\n")
+
+    def test_unreadable_retired_sidecar_does_not_block_export(self) -> None:
+        retired = self._split_with_retired_sidecar()
+        (self.repo / "tracked.txt").write_text("v3\n")
+        before_meta = _git_index_metadata(self.repo)
+        result = self._run_pair_with_cat_shim("deny", retired)
+        self.assertTrue(retired.exists())
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(_git_index_metadata(self.repo), before_meta)
+        exported = self.out / ".work" / "src-candidate"
+        self.assertEqual((exported / "tracked.txt").read_text(), "v3\n")
 
     def test_snapshot_filesystem_threshold_refuses_before_object_writes(self) -> None:
         # A git ahead of PATH records every invocation and delegates. The
