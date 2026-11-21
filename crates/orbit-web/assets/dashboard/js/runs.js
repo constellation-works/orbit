@@ -1169,8 +1169,8 @@ function runDurationCell(run) {
 }
 
 // Keep workspace scope in the URL, including when an aggregate row opens a task.
-export function runTaskLinks(run) {
-  const tasks = Array.isArray(run.tasks) ? run.tasks : (run.task_ids || []).map(id => ({ id }));
+export function runTaskLinks(run, { omit = "" } = {}) {
+  const tasks = (Array.isArray(run.tasks) ? run.tasks : (run.task_ids || []).map(id => ({ id }))).filter((task) => task.id !== omit);
   const cell = el("span", { class: "run-tasks" });
   if (tasks.length === 0) cell.textContent = "—";
   for (const task of tasks) {
@@ -1260,6 +1260,7 @@ function runFailureHash(run) {
 // run sorts. Only the loaded page is grouped: a triplet split across Load more
 // pages folds once its other runs arrive.
 function groupRunsForDisplay(sorted) {
+  if (runFilter === "running") return groupInFlightRunsByTask(sorted);
   const entries = [];
   const groups = new Map();
   // Form repeats in time order before applying the operator's sort. A
@@ -1307,6 +1308,43 @@ function groupRunsForDisplay(sorted) {
   return entries
     .flatMap((entry) => (entry.runs && !entry.repeatedFailure ? splitAttempts(entry) : [entry]))
     .map((entry) => (entry.runs && entry.runs.length === 1 ? { run: entry.runs[0] } : entry));
+}
+
+// The Running filter groups every in-flight run under each task it names, so
+// a task's pipeline and custom jobs sit together and a run shared by several
+// tasks appears under each. A task with a single run, and a run with no task,
+// stay plain rows; a run is listed flat once, and never beside a group that
+// already holds it.
+function groupInFlightRunsByTask(sorted) {
+  const entries = [];
+  const groups = new Map();
+  for (const run of sorted) {
+    const taskIds = runTaskIds(run);
+    if (!taskIds.length) {
+      entries.push({ run });
+      continue;
+    }
+    for (const taskId of taskIds) {
+      const key = `running:${run.workspace_id || getWorkspace() || ""}:${taskId}`;
+      let group = groups.get(key);
+      if (!group) {
+        group = { key, taskId, inFlight: true, runs: [] };
+        groups.set(key, group);
+        entries.push(group);
+      }
+      group.runs.push(run);
+    }
+  }
+  const grouped = new Set();
+  for (const group of groups.values()) if (group.runs.length > 1) group.runs.forEach((run) => grouped.add(run));
+  const flat = new Set();
+  return entries.filter((entry) => {
+    if (!entry.inFlight || entry.runs.length > 1) return true;
+    const [run] = entry.runs;
+    if (grouped.has(run) || flat.has(run)) return false;
+    flat.add(run);
+    return true;
+  }).map((entry) => (entry.inFlight && entry.runs.length === 1 ? { run: entry.runs[0] } : entry));
 }
 
 // The listed run that dispatched this one, or "" when none of `byId` did.
@@ -1373,6 +1411,14 @@ function rootCauseFailedAtCell(cause) {
   return cell;
 }
 
+// The one task an in-flight group stands for, shaped as a run for runTaskLinks.
+function groupTaskRun(group) {
+  const first = group.runs[0];
+  const ref = group.runs.flatMap((run) => (Array.isArray(run.tasks) ? run.tasks : []))
+    .find((task) => task && task.id === group.taskId && task.title) || { id: group.taskId };
+  return { tasks: [ref], workspace_id: first.workspace_id };
+}
+
 function runGroupRow(group, attributed, listed) {
   const { runs, key } = group;
   const expanded = expandedRunGroups.has(key);
@@ -1386,12 +1432,14 @@ function runGroupRow(group, attributed, listed) {
   const jobNames = runs.map((run) => run.job_id).join(", ");
   const toggle = el("button", {
     class: "id run-group-toggle",
-    text: group.repeatedFailure ? `${expanded ? "▾" : "▸"} ${first.job_id}` : `${expanded ? "▾" : "▸"} ${runs.length} pipeline runs`,
+    text: group.repeatedFailure ? `${expanded ? "▾" : "▸"} ${first.job_id}` : `${expanded ? "▾" : "▸"} ${runs.length} ${group.inFlight ? "runs" : "pipeline runs"}`,
     "aria-description": group.repeatedFailure ? `${expanded ? "Hide" : "Show"} the ${runs.length} individual failed runs of ${first.job_id}` : `${expanded ? "Hide" : "Show"} ${jobNames}`,
   });
   const failure = group.repeatedFailure ? { run: first } : groupFailure(group, failed, listed);
   let failedAt = el("span", { class: "run-failed-at" });
-  if (runFilter === "running") failedAt = runCrewCell(runs, { withJob: true });
+  // An expanded group's child rows name their own crews; the header names them
+  // only while collapsed, so the crew shows once.
+  if (runFilter === "running") failedAt = expanded ? el("span", { class: "run-failed-at run-crew" }) : runCrewCell(runs, { withJob: true });
   else if (failure && failure.run) failedAt = runFailedAtCell(failure.run, { withJob: !group.repeatedFailure });
   else if (failure) failedAt = rootCauseFailedAtCell(failure.cause);
   if (group.repeatedFailure) {
@@ -1407,14 +1455,14 @@ function runGroupRow(group, attributed, listed) {
   const failureHash = failure ? (failure.run ? `${runIdentity(failure.run)}:${runFailureHash(failure.run)}` : JSON.stringify(failure.cause)) : "";
   const row = el("div", {
     class: `runs-row runs-group${attributed ? " workspace-attributed" : ""}`,
-    title: group.repeatedFailure ? `${runs.length} identical failures of ${first.job_id}` : `${runs.length} pipeline runs for this task: ${jobNames}`,
+    title: group.repeatedFailure ? `${runs.length} identical failures of ${first.job_id}` : `${runs.length} ${group.inFlight ? "runs" : "pipeline runs"} for this task: ${jobNames}`,
   }, [
     el("span", { class: "state" }, [stateCell(runGroupState(runs))]),
     attributed ? el("span", { class: "run-workspace", text: first.workspace_name || first.workspace_id, title: first.workspace_id }) : null,
     group.repeatedFailure ? el("span", { class: "run-repeat-job" }, [toggle,
       el("span", { class: "run-group-count", text: `${runs.length} identical failures` }),
     ]) : toggle,
-    group.repeatedFailure ? el("span", { class: "run-tasks", text: "—" }) : runTaskLinks(first),
+    group.repeatedFailure ? el("span", { class: "run-tasks", text: "—" }) : runTaskLinks(group.inFlight ? groupTaskRun(group) : first),
     failedAt,
     el("span", { class: "run-id-cell" }, [el("span", { class: "run-group-count", text: group.repeatedFailure ? "—" : `${runs.length} runs` })]),
     el("span", { class: "when", text: formatAge(ts), title: ts ? formatDateTime(ts) : "" }),
@@ -1424,7 +1472,7 @@ function runGroupRow(group, attributed, listed) {
     el("span", { class: "run-actions" }),
   ]);
   row.dataset.key = `group-${key}`;
-  row.dataset.hash = `group-${key}-${expanded}-${ts}-${denials}-${toolFails}-${JSON.stringify(first.tasks)}-${runs.map((run) => `${runIdentity(run)}:${run.state}:${runFailureHash(run)}`).join("|")}-${failureHash}-${runFilter === "running" ? runs.map((run) => run.resolved_crew || "").join("|") : ""}`;
+  row.dataset.hash = `group-${key}-${expanded}-${ts}-${denials}-${toolFails}-${JSON.stringify(group.inFlight ? groupTaskRun(group).tasks : first.tasks)}-${runs.map((run) => `${runIdentity(run)}:${run.state}:${runFailureHash(run)}`).join("|")}-${failureHash}-${runFilter === "running" ? runs.map((run) => run.resolved_crew || "").join("|") : ""}`;
   row.style.cursor = "pointer";
   makeRowDisclosure(row, toggle, {
     expanded,
@@ -1437,10 +1485,21 @@ function runGroupRow(group, attributed, listed) {
   return row;
 }
 
+// A child of an in-flight task group leaves out that group's task and keeps
+// links to the run's other tasks, so a shared run still names every task.
+function runRowTaskCell(r, { child, sharedTaskInHeader, groupTaskId }) {
+  if (child && groupTaskId) {
+    return runTaskIds(r).some((id) => id !== groupTaskId)
+      ? runTaskLinks(r, { omit: groupTaskId })
+      : el("span", { class: "run-tasks", "aria-hidden": "true" });
+  }
+  return child && sharedTaskInHeader ? el("span", { class: "run-tasks", "aria-hidden": "true" }) : runTaskLinks(r);
+}
+
 // A task group's header carries the one task all its children share, so those
 // children leave the Task cell empty. A repeated-failure header spans tasks, so
 // its children keep their own links.
-function runRow(r, attributed, body, { child = false, sharedTaskInHeader = false } = {}) {
+function runRow(r, attributed, body, { child = false, sharedTaskInHeader = false, groupTaskId = "", groupKey = "" } = {}) {
   const ts = r.finished_at || r.started_at || r.scheduled_at || r.created_at;
   const friction = runFriction(r);
   const { durationMs, isLive } = runDurationInfo(r);
@@ -1475,7 +1534,7 @@ function runRow(r, attributed, body, { child = false, sharedTaskInHeader = false
     el("span", { class: "state" }, [stateCell(r.state)]),
     attributed ? el("span", { class: "run-workspace", text: r.workspace_name || r.workspace_id, title: r.workspace_id }) : null,
     openButton,
-    child && sharedTaskInHeader ? el("span", { class: "run-tasks", "aria-hidden": "true" }) : runTaskLinks(r),
+    runRowTaskCell(r, { child, sharedTaskInHeader, groupTaskId }),
     runFilter === "running" ? runCrewCell([r]) : runFailedAtCell(r),
     runIdCell,
     el("span", { class: "when", text: formatAge(ts), title: ts ? formatDateTime(ts) : "" }),
@@ -1488,10 +1547,11 @@ function runRow(r, attributed, body, { child = false, sharedTaskInHeader = false
     ]),
   ];
   const row = el("div", { class: `runs-row${attributed ? " workspace-attributed" : ""}${child ? " runs-group-child" : ""}`, title: `${r.run_id} (click to inspect)` }, rowCells);
-  row.dataset.key = `run-${runIdentity(r)}`;
+  // A run shared by several tasks is listed under each, so its key names the group.
+  row.dataset.key = `run-${runIdentity(r)}${groupKey ? `@${groupKey}` : ""}`;
   row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${resumeRequestsInFlight.has(runIdentity(r)) ? "resuming" : ""}-${friction.denials}-${friction.toolFails}-${durationMs}-${formattedDuration}-${isLive ? "live" : ""}-${friction.longRun}-${child ? "child" : ""}-${runFailureHash(r)}-${runFilter === "running" ? r.resolved_crew || "" : ""}`;
   row.style.cursor = "pointer";
-  row.dataset.hash += `-${JSON.stringify(r.tasks)}-${JSON.stringify(r.task_ids)}-${child && sharedTaskInHeader ? "header-task" : ""}`;
+  row.dataset.hash += `-${JSON.stringify(r.tasks)}-${JSON.stringify(r.task_ids)}-${child && sharedTaskInHeader ? "header-task" : ""}-${groupTaskId}`;
   // A run row opens the run detail view rather than disclosing inline, so its
   // button has no expansion state.
   makeRowDisclosure(row, openButton, { onToggle: (event) => {
@@ -1574,7 +1634,12 @@ export function renderRuns(runs) {
     }
     frag.appendChild(runGroupRow(entry, attributed, top));
     if (expandedRunGroups.has(entry.key)) {
-      for (const r of entry.runs) frag.appendChild(runRow(r, attributed, body, { child: true, sharedTaskInHeader: !entry.repeatedFailure }));
+      for (const r of entry.runs) frag.appendChild(runRow(r, attributed, body, {
+        child: true,
+        sharedTaskInHeader: !entry.repeatedFailure && !entry.inFlight,
+        groupTaskId: entry.inFlight ? entry.taskId : "",
+        groupKey: entry.inFlight ? entry.key : "",
+      }));
     }
   }
   syncNodes(body, Array.from(frag.children));
