@@ -6,8 +6,8 @@
    while a role panel is rendered, so a role without one leaves no empty track
    and no gap for it. */
 .agents-role-count {
-  margin-left: 6px;
-  font-size: 12px;
+  margin-left: var(--space-6);
+  font-size: var(--text-sm);
   font-weight: 400;
   font-variant-numeric: tabular-nums;
   color: var(--fg-mute);
@@ -19,7 +19,7 @@
 /* `.panel > .body` (components.css) zeroes the horizontal inset unless this
    rule matches its specificity; the grid stays at class specificity so the
    narrow-width template overrides below still win. */
-.panel > .body.agents-body { padding: 14px 16px 18px; }
+.panel > .body.agents-body { padding: var(--space-14) var(--space-16) var(--space-16); }
 .agents-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
@@ -29,7 +29,7 @@
     "strip detail"
     ". detail";
   grid-template-rows: auto auto auto 1fr;
-  gap: 16px;
+  gap: var(--space-16);
   align-items: start;
 }
 .agents-body > .panel-placeholder { grid-column: 1 / -1; }
@@ -44,8 +44,8 @@
 .agents-role-panel { grid-area: panel; }
 /* Interactive work spans the body under everything else. */
 .agents-execution { grid-column: 1 / -1; min-width: 0; }
-.agents-execution h3 { margin: 0 0 8px; font-size: 13px; }
-.agents-execution-none { margin: 0 0 8px; color: var(--fg-dim); font-size: 12px; line-height: 1.5; max-width: 820px; }
+.agents-execution h3 { margin: 0 0 var(--space-8); font-size: var(--text-md); }
+.agents-execution-none { margin: 0 0 var(--space-8); color: var(--fg-dim); font-size: var(--text-sm); line-height: 1.5; max-width: 820px; }
 /* The panel row exists only with a panel, or its empty track keeps a gap. */
 .agents-body:has(> .agents-role-panel) {
   grid-template-areas:
@@ -77,9 +77,9 @@
   grid-template-rows: auto auto auto auto auto auto 1fr;
 }
 .agents-body:has(> .agents-banner) > .agents-banner { grid-area: banner; }
-.agents-body h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--fg); }
-.agents-muted { margin: 4px 0 0; color: var(--fg-mute); font-size: 12px; line-height: 1.45; }
-.agents-error { margin: 4px 0 0; color: var(--status-blocked); font-size: 12px; }
+.agents-body h3 { margin: 0; font-size: var(--text-md); font-weight: 600; color: var(--fg); }
+.agents-muted { margin: var(--space-4) 0 0; color: var(--fg-mute); font-size: var(--text-sm); line-height: 1.45; }
+.agents-error { margin: var(--space-4) 0 0; color: var(--status-blocked); font-size: var(--text-sm); }
 /* The scan behind the ranking, in the header beside its window. A stale scan is
    also named in its text, so the warning colour is never the only signal. */
 .agents-scan { color: var(--fg-mute); }
@@ -91,34 +91,34 @@
 .agents-owner-reviewers { --owner: var(--status-review); }
 .agents-owner-pilots { --owner: var(--status-done); }
 .agents-owner-not_scored { --owner: var(--fg-disabled); }
-.agents-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: var(--owner, var(--fg-mute)); flex: 0 0 auto; }
+.agents-swatch { display: inline-block; width: 10px; height: 10px; border-radius: var(--radius-2xs); background: var(--owner, var(--fg-mute)); flex: 0 0 auto; }
 
-.agents-strip-head { flex-wrap: wrap; gap: 4px 12px; }
+.agents-strip-head { flex-wrap: wrap; gap: var(--space-4) var(--space-12); }
 .agents-strip-head h3 { margin-right: auto; }
-.agents-strip-total { color: var(--fg-mute); font-family: var(--font-mono); font-size: 11.5px; }
-.agents-strip-bar { display: flex; height: 12px; margin-top: 4px; border-radius: 2px; overflow: hidden; background: var(--hair); }
+.agents-strip-total { color: var(--fg-mute); font-family: var(--font-mono); font-size: var(--text-sm); }
+.agents-strip-bar { display: flex; height: 12px; margin-top: var(--space-4); border-radius: var(--radius-2xs); overflow: hidden; background: var(--hair); }
 .agents-strip-seg { display: block; height: 100%; background: var(--owner); opacity: 0.45; }
 .agents-strip-seg + .agents-strip-seg { border-left: 1px solid var(--bg-elev); }
 .agents-strip-seg.is-current { opacity: 1; }
-.agents-strip-none { margin: 8px 0 0; color: var(--fg-mute); font-size: 12px; }
-.agents-strip-legend { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0 4px; }
+.agents-strip-none { margin: var(--space-8) 0 0; color: var(--fg-mute); font-size: var(--text-sm); }
+.agents-strip-legend { list-style: none; margin: var(--space-8) 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0 var(--space-4); }
 .agents-strip-entry {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   min-height: 44px;
-  padding: 0 8px;
-  border-radius: 3px;
+  padding: 0 var(--space-8);
+  border-radius: var(--radius-xs);
   color: var(--fg-dim);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   text-decoration: none;
 }
 a.agents-strip-entry:hover { color: var(--fg); background: var(--bg-hover); }
 a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .agents-strip-legend li.is-current .agents-strip-entry { color: var(--fg); font-weight: 600; background: var(--bg-selected); }
-.agents-strip-count { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-mute); }
-.agents-state { border: 1px dashed var(--border); border-radius: 3px; padding: 18px 16px; }
-.agents-state p { margin: 6px 0 0; color: var(--fg-dim); font-size: 13px; line-height: 1.5; max-width: 720px; }
+.agents-strip-count { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--fg-mute); }
+.agents-state { border: 1px dashed var(--border); border-radius: var(--radius-xs); padding: var(--space-16) var(--space-16); }
+.agents-state p { margin: var(--space-6) 0 0; color: var(--fg-dim); font-size: var(--text-md); line-height: 1.5; max-width: 720px; }
 
 /* Columns past the score scroll sideways; the edge fades show which side has
    more. The local fades cover the scroll shadows once that edge is reached. */
@@ -132,7 +132,7 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
   position: relative;
   overflow-x: auto;
   border: 1px solid var(--border);
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
   background:
     linear-gradient(to right, var(--bg) 30%, transparent) left center / 28px 100% no-repeat local,
     linear-gradient(to left, var(--bg) 30%, transparent) right center / 28px 100% no-repeat local,
@@ -140,15 +140,15 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
     radial-gradient(farthest-side at 100% 50%, rgba(255, 255, 255, 0.18), transparent) right center / 12px 100% no-repeat scroll,
     var(--bg);
 }
-.agents-ranking-note { margin: 0 0 8px; color: var(--fg-dim); font-size: 12.5px; line-height: 1.4; }
+.agents-ranking-note { margin: 0 0 var(--space-8); color: var(--fg-dim); font-size: var(--text-sm); line-height: 1.4; }
 .agents-table-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.agents-table { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
+.agents-table { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; font-size: var(--text-sm); }
 .agents-table th,
-.agents-table td { padding: 6px 8px; border-bottom: 1px solid var(--hair); text-align: left; vertical-align: middle; white-space: nowrap; }
+.agents-table td { padding: var(--space-6) var(--space-8); border-bottom: 1px solid var(--hair); text-align: left; vertical-align: middle; white-space: nowrap; }
 .agents-table thead th {
   background: transparent;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-xs);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--fg-dim);
@@ -169,7 +169,7 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
   justify-content: center;
   min-height: 44px;
   width: 100%;
-  padding: 4px 10px;
+  padding: var(--space-4) var(--space-10);
   border: 0;
   background: none;
   color: var(--fg);
@@ -178,13 +178,13 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
   cursor: pointer;
 }
 .agents-row-select:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.agents-crew { font-size: 13px; font-weight: 500; }
-.agents-model { color: var(--fg-mute); font-family: var(--font-mono); font-size: 11px; }
+.agents-crew { font-size: var(--text-md); font-weight: 500; }
+.agents-model { color: var(--fg-mute); font-family: var(--font-mono); font-size: var(--text-xs); }
 .agents-support > span { display: block; }
 .agents-below {
-  margin-top: 2px;
+  margin-top: var(--space-2);
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: var(--text-xs);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--fg-mute);
@@ -195,33 +195,33 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-row-below .agents-bar-fill { opacity: 0.4; }
 .agents-score-col { min-width: 8rem; }
 .agents-score-col > .agents-bar { width: 88px; vertical-align: middle; }
-.agents-score-value { display: inline-block; min-width: 3.25rem; margin-left: 8px; text-align: right; font-variant-numeric: tabular-nums; color: var(--fg); font-weight: 600; }
-.agents-score-interval { display: block; white-space: nowrap; margin-top: 2px; text-align: right; font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-mute); font-variant-numeric: tabular-nums; }
-.agents-score-note { display: block; white-space: normal; margin-top: 2px; text-align: right; font-family: var(--font-mono); font-size: 10.5px; color: var(--warn-fg); }
+.agents-score-value { display: inline-block; min-width: 3.25rem; margin-left: var(--space-8); text-align: right; font-variant-numeric: tabular-nums; color: var(--fg); font-weight: 600; }
+.agents-score-interval { display: block; white-space: nowrap; margin-top: var(--space-2); text-align: right; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-mute); font-variant-numeric: tabular-nums; }
+.agents-score-note { display: block; white-space: normal; margin-top: var(--space-2); text-align: right; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--warn-fg); }
 
-.agents-bar { position: relative; display: inline-block; height: 8px; border-radius: 2px; background: var(--hair); }
-.agents-bar-fill { position: absolute; top: 0; bottom: 0; border-radius: 2px; background: var(--accent); }
+.agents-bar { position: relative; display: inline-block; height: 8px; border-radius: var(--radius-2xs); background: var(--hair); }
+.agents-bar-fill { position: absolute; top: 0; bottom: 0; border-radius: var(--radius-2xs); background: var(--accent); }
 .agents-bar-fill.negative { background: var(--status-blocked); }
 .agents-bar-zero { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--fg-mute); }
 
-.agents-detail { border: 1px solid var(--border); border-radius: 3px; background: var(--bg-elev); padding: 12px 14px; min-width: 0; }
-.agents-detail h4 { margin: 14px 0 6px; font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-dim); font-weight: 500; }
-.agents-detail-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
-.agents-detail-rank { font-family: var(--font-mono); color: var(--fg-mute); font-size: 12px; }
-.agents-detail-head h3 { font-size: 15px; overflow-wrap: anywhere; }
-.agents-detail-score { display: flex; align-items: baseline; gap: 6px; margin-top: 8px; }
-.agents-detail-score strong { font-size: 28px; font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
-.agents-detail-score span { color: var(--fg-mute); font-size: 12px; }
-.agents-detail-raw { margin: 2px 0 0; color: var(--fg-dim); font-size: 12px; }
-.agents-detail-note { margin: 4px 0 0; color: var(--warn-fg); font-size: 12px; line-height: 1.45; }
+.agents-detail { border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--bg-elev); padding: var(--space-12) var(--space-14); min-width: 0; }
+.agents-detail h4 { margin: var(--space-14) 0 var(--space-6); font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-dim); font-weight: 500; }
+.agents-detail-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-4) var(--space-8); }
+.agents-detail-rank { font-family: var(--font-mono); color: var(--fg-mute); font-size: var(--text-sm); }
+.agents-detail-head h3 { font-size: var(--text-lg); overflow-wrap: anywhere; }
+.agents-detail-score { display: flex; align-items: baseline; gap: var(--space-6); margin-top: var(--space-8); }
+.agents-detail-score strong { font-size: var(--text-4xl); font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
+.agents-detail-score span { color: var(--fg-mute); font-size: var(--text-sm); }
+.agents-detail-raw { margin: var(--space-2) 0 0; color: var(--fg-dim); font-size: var(--text-sm); }
+.agents-detail-note { margin: var(--space-4) 0 0; color: var(--warn-fg); font-size: var(--text-sm); line-height: 1.45; }
 /* Numbered axes keep full term labels readable even in the 280px column.
    Dashed spokes and explicit labels distinguish context from scored terms. */
-.agents-radar { position: relative; margin-top: 14px; border-top: 1px solid var(--hair); }
-.agents-radar svg { display: block; width: 100%; max-width: 360px; margin: 4px auto 0; overflow: visible; }
+.agents-radar { position: relative; margin-top: var(--space-14); border-top: 1px solid var(--hair); }
+.agents-radar svg { display: block; width: 100%; max-width: 360px; margin: var(--space-4) auto 0; overflow: visible; }
 .agents-radar-grid { fill: none; stroke: var(--border); stroke-width: 1; }
 .agents-radar-spoke { stroke: var(--border); stroke-width: 1; }
 .agents-radar .is-unscored { stroke-dasharray: 3 3; color: var(--fg-mute); font-style: italic; }
-.agents-radar-label { fill: var(--fg-dim); font-size: 12px; font-family: var(--font-mono); }
+.agents-radar-label { fill: var(--fg-dim); font-size: var(--text-sm); font-family: var(--font-mono); }
 .agents-radar-own { fill: var(--accent); fill-opacity: 0.2; stroke: var(--accent); stroke-width: 2; }
 .agents-radar-fleet { fill: var(--status-review); fill-opacity: 0.1; stroke: var(--status-review); stroke-width: 2; stroke-dasharray: 5 3; }
 .agents-radar-hit { fill: transparent; }
@@ -232,74 +232,74 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-radar-vertex:focus .agents-radar-hit,
 .agents-radar-vertex:hover .agents-radar-hit { stroke: var(--fg); stroke-width: 1.5; }
 .agents-radar.is-muted svg { opacity: 0.45; }
-.agents-radar-note { color: var(--warn-fg); font-size: 12px; }
-.agents-radar-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 2px 0 8px; font-size: 11px; color: var(--fg-dim); }
-.agents-radar-legend span::before { content: ""; display: inline-block; width: 16px; margin-right: 5px; vertical-align: middle; }
+.agents-radar-note { color: var(--warn-fg); font-size: var(--text-sm); }
+.agents-radar-legend { display: flex; flex-wrap: wrap; gap: var(--space-8) var(--space-16); margin: var(--space-2) 0 var(--space-8); font-size: var(--text-xs); color: var(--fg-dim); }
+.agents-radar-legend span::before { content: ""; display: inline-block; width: 16px; margin-right: var(--space-6); vertical-align: middle; }
 .agents-radar-own-key::before { border-top: 2px solid var(--accent); }
 .agents-radar-fleet-key::before { border-top: 2px dashed var(--status-review); }
-.agents-radar-axes { margin: 0; padding-left: 22px; display: grid; gap: 4px; font-size: 11px; line-height: 1.4; color: var(--fg-dim); }
-.agents-radar-tooltip { min-height: 5em; margin: 8px 0 0; padding: 8px; border: 1px solid var(--hair); color: var(--fg-dim); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.agents-radar-axes { margin: 0; padding-left: var(--space-20); display: grid; gap: var(--space-4); font-size: var(--text-xs); line-height: 1.4; color: var(--fg-dim); }
+.agents-radar-tooltip { min-height: 5em; margin: var(--space-8) 0 0; padding: var(--space-8); border: 1px solid var(--hair); color: var(--fg-dim); font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere; }
 
-.agents-breakdown { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.agents-breakdown li { display: grid; grid-template-columns: minmax(0, 1fr) auto 72px 3.5rem; align-items: center; gap: 8px; font-size: 12px; }
-.agents-term-context { display: block; color: var(--fg-dim); font-size: 0.75rem; font-weight: normal; }
+.agents-breakdown { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-6); }
+.agents-breakdown li { display: grid; grid-template-columns: minmax(0, 1fr) auto 72px 3.5rem; align-items: center; gap: var(--space-8); font-size: var(--text-sm); }
+.agents-term-context { display: block; color: var(--fg-dim); font-size: var(--text-xs); font-weight: normal; }
 .agents-term-provisional { color: var(--fg-mute); font-style: italic; }
 .agents-term-label { color: var(--fg); overflow-wrap: anywhere; }
-.agents-term-weight { color: var(--fg-mute); font-family: var(--font-mono); font-size: 11px; }
+.agents-term-weight { color: var(--fg-mute); font-family: var(--font-mono); font-size: var(--text-xs); }
 .agents-bar-centered { width: 100%; }
 .agents-term-value { text-align: right; font-variant-numeric: tabular-nums; color: var(--fg); }
-.agents-stats { margin: 0; display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 4px 12px; font-size: 12px; }
+.agents-stats { margin: 0; display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: var(--space-4) var(--space-12); font-size: var(--text-sm); }
 .agents-stats dt { min-width: 0; color: var(--fg-dim); overflow-wrap: anywhere; }
 .agents-stats dd { min-width: 0; margin: 0; text-align: right; color: var(--fg); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 
 /* A collapsed section under the ranking; its summary keeps a 44px target. */
-.agents-disclosure { border: 1px solid var(--border); border-radius: 3px; background: var(--bg-elev); padding: 0 12px; min-width: 0; }
+.agents-disclosure { border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--bg-elev); padding: 0 var(--space-12); min-width: 0; }
 .agents-disclosure > summary {
   display: flex;
   align-items: center;
   min-height: 44px;
   cursor: pointer;
   color: var(--fg);
-  font-size: 13px;
+  font-size: var(--text-md);
   font-weight: 600;
 }
-.agents-disclosure > summary::before { content: "▸"; margin-right: 6px; color: var(--fg-mute); font-weight: 400; }
+.agents-disclosure > summary::before { content: "▸"; margin-right: var(--space-6); color: var(--fg-mute); font-weight: 400; }
 .agents-disclosure[open] > summary::before { content: "▾"; }
 .agents-disclosure > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.agents-disclosure[open] { padding-bottom: 12px; }
-.agents-how p { margin: 8px 0 0; color: var(--fg-dim); font-size: 12px; line-height: 1.5; max-width: 820px; }
+.agents-disclosure[open] { padding-bottom: var(--space-12); }
+.agents-how p { margin: var(--space-8) 0 0; color: var(--fg-dim); font-size: var(--text-sm); line-height: 1.5; max-width: 820px; }
 .agents-formula { font-family: var(--font-mono); color: var(--fg) !important; }
-.agents-how-terms { margin: 0; display: grid; gap: 2px; font-size: 12px; line-height: 1.45; }
-.agents-how-terms dt { display: flex; gap: 8px; margin-top: 6px; color: var(--fg); font-weight: 500; }
+.agents-how-terms { margin: 0; display: grid; gap: var(--space-2); font-size: var(--text-sm); line-height: 1.45; }
+.agents-how-terms dt { display: flex; gap: var(--space-8); margin-top: var(--space-6); color: var(--fg); font-weight: 500; }
 .agents-how-terms dd { margin: 0; color: var(--fg-mute); }
 .agents-weight { font-family: var(--font-mono); color: var(--accent); }
 .agents-weight.negative { color: var(--status-blocked); }
 
-.agents-role-panel { border: 1px solid var(--border); border-radius: 3px; background: var(--bg-elev); padding: 10px 12px; min-width: 0; }
+.agents-role-panel { border: 1px solid var(--border); border-radius: var(--radius-xs); background: var(--bg-elev); padding: var(--space-10) var(--space-12); min-width: 0; }
 .agents-role-panel-head { display: flex; align-items: center; }
 .agents-cause-rework_spec { background: var(--status-proposed); }
 .agents-cause-rework_crew { background: var(--status-in-progress); }
 .agents-cause-rework_infrastructure { background: var(--fg-disabled); }
 .agents-cause-rework_no_cause { background: var(--hair); border: 1px solid var(--fg-disabled); box-sizing: border-box; }
-.agents-cause-legend { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--fg-dim); }
-.agents-cause-legend li { display: inline-flex; align-items: center; gap: 6px; }
-.agents-cause-rows { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
-.agents-cause-row { display: grid; grid-template-columns: minmax(6rem, 10rem) minmax(0, 1fr) 6.5rem; align-items: center; gap: 10px; font-size: 12.5px; }
+.agents-cause-legend { list-style: none; margin: var(--space-8) 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-4) var(--space-16); font-size: var(--text-sm); color: var(--fg-dim); }
+.agents-cause-legend li { display: inline-flex; align-items: center; gap: var(--space-6); }
+.agents-cause-rows { list-style: none; margin: var(--space-8) 0 0; padding: 0; display: grid; gap: var(--space-6); }
+.agents-cause-row { display: grid; grid-template-columns: minmax(6rem, 10rem) minmax(0, 1fr) 6.5rem; align-items: center; gap: var(--space-10); font-size: var(--text-sm); }
 .agents-cause-name { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agents-cause-bar { display: flex; height: 10px; border-radius: 2px; overflow: hidden; background: var(--hair); }
+.agents-cause-bar { display: flex; height: 10px; border-radius: var(--radius-2xs); overflow: hidden; background: var(--hair); }
 .agents-cause-seg { display: block; height: 100%; }
-.agents-banner { border: 1px solid var(--warn-line); border-radius: 3px; background: var(--warn-wash); padding: 4px 12px; }
-.agents-banner p { margin: 0; color: var(--warn-fg); font-size: 12.5px; line-height: 1.5; }
+.agents-banner { border: 1px solid var(--warn-line); border-radius: var(--radius-xs); background: var(--warn-wash); padding: var(--space-4) var(--space-12); }
+.agents-banner p { margin: 0; color: var(--warn-fg); font-size: var(--text-md); line-height: 1.5; }
 .agents-banner strong { font-weight: 600; }
-.agents-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.agents-tags { display: flex; flex-wrap: wrap; gap: var(--space-4); margin-top: var(--space-4); }
 .agents-tag {
-  padding: 0 5px;
+  padding: 0 var(--space-6);
   border: 1px solid var(--warn-line);
-  border-radius: 2px;
+  border-radius: var(--radius-2xs);
   background: var(--warn-wash);
   color: var(--warn-fg);
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: var(--text-xs);
   letter-spacing: 0.04em;
   line-height: 15px;
   text-transform: uppercase;
@@ -311,7 +311,7 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-outcome-outcome_false_alarm { background: var(--status-proposed); }
 .agents-outcome-outcome_missed { background: var(--status-blocked); }
 .agents-outcome-outcome_unresolved { background: var(--hair); border: 1px solid var(--fg-disabled); box-sizing: border-box; }
-.agents-cause-total { text-align: right; color: var(--fg-mute); font-family: var(--font-mono); font-size: 11.5px; }
+.agents-cause-total { text-align: right; color: var(--fg-mute); font-family: var(--font-mono); font-size: var(--text-sm); }
 
 /* The detail column stacks under the ranking below 1800px. The widest ranking
    (eleven columns) is about 1050px wide; beside the 360px detail column it fits
@@ -341,16 +341,16 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 }
 
 @media (max-width: 640px) {
-  .panel > .body.agents-body { padding: 10px; }
-  .agents-body { gap: 12px; }
+  .panel > .body.agents-body { padding: var(--space-10); }
+  .agents-body { gap: var(--space-12); }
   .agents-cause-row { grid-template-columns: minmax(0, 1fr) 5.5rem; }
   .agents-cause-row .agents-cause-bar { grid-column: 1 / -1; grid-row: 2; }
   /* Rank, crew and score fit the phone-width box together. */
-  .agents-table th, .agents-table td { padding-left: 6px; padding-right: 6px; }
-  .agents-row-select { padding: 4px 6px; }
+  .agents-table th, .agents-table td { padding-left: var(--space-6); padding-right: var(--space-6); }
+  .agents-row-select { padding: var(--space-4) var(--space-6); }
   .agents-score-col { min-width: 0; }
   .agents-score-col > .agents-bar { width: 40px; }
-  .agents-score-value { min-width: 0; margin-left: 6px; }
+  .agents-score-value { min-width: 0; margin-left: var(--space-6); }
   #agents-roles { overflow-x: auto; scrollbar-width: none; }
   /* Count and calendar windows together outgrow a phone: wrap them. Rank
      adds its own window, the settled/live board and the execution selector. */
@@ -362,28 +362,28 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 }
 
 /* Pilots: one assessed-by-observed tier matrix per row. */
-.agents-tier-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 12px; margin-top: 10px; }
-.agents-tier-card { border: 1px solid var(--hair); border-radius: 3px; padding: 8px 10px; min-width: 0; }
-.agents-tier-card h4 { display: flex; align-items: baseline; gap: 8px; margin: 0 0 8px; font-size: 13px; }
+.agents-tier-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: var(--space-12); margin-top: var(--space-10); }
+.agents-tier-card { border: 1px solid var(--hair); border-radius: var(--radius-xs); padding: var(--space-8) var(--space-10); min-width: 0; }
+.agents-tier-card h4 { display: flex; align-items: baseline; gap: var(--space-8); margin: 0 0 var(--space-8); font-size: var(--text-md); }
 .agents-tier-crew { color: var(--fg); overflow-wrap: anywhere; }
 .agents-tier-matrix th[scope="row"] { color: var(--fg-dim); font-weight: 500; }
 .agents-tier-cell.is-on { background: color-mix(in srgb, var(--status-done) 18%, transparent); color: var(--fg); font-weight: 600; }
 .agents-tier-cell.is-easy,
 .agents-tier-cell.is-hard { color: var(--fg-dim); }
 .agents-tier-cell.is-zero { color: var(--fg-mute); font-weight: 400; }
-.agents-tier-counts { display: grid; grid-template-columns: repeat(4, auto); gap: 2px 12px; margin: 8px 0 0; font-size: 12px; }
+.agents-tier-counts { display: grid; grid-template-columns: repeat(4, auto); gap: var(--space-2) var(--space-12); margin: var(--space-8) 0 0; font-size: var(--text-sm); }
 .agents-tier-counts dt { grid-row: 1; color: var(--fg-mute); }
 .agents-tier-counts dd { grid-row: 2; margin: 0; font-family: var(--font-mono); color: var(--fg); }
 .agents-tier-matrix { width: 100%; }
 .agents-tier-matrix thead th:first-child { white-space: normal; min-width: 5.5rem; }
 @media (max-width: 640px) {
   .agents-tier-matrix th,
-  .agents-tier-matrix td { padding: 6px; }
+  .agents-tier-matrix td { padding: var(--space-6); }
 }
 
 /* A role's own controls: `hidden` must beat the group's inline-flex. */
 #agents-controls [hidden] { display: none; }
-#agents-tier { height: 28px; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 3px; padding: 0 6px; font-size: 12px; }
+#agents-tier { height: 28px; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 0 var(--space-6); font-size: var(--text-sm); }
 #agents-tier-unavailable { margin: 0; }
 
 /* Rank is one column: its sections are not the scorecard's ranking/detail grid. */
@@ -400,9 +400,9 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
   min-width: 0;
 }
 .agents-provisional {
-  margin-left: 8px;
+  margin-left: var(--space-8);
   color: var(--warn-fg);
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -410,56 +410,56 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-rank-banner {
   margin: 0;
   color: var(--fg-dim);
-  font-size: 13px;
+  font-size: var(--text-md);
   line-height: 1.45;
   max-width: 70ch;
 }
 .agents-rank-banner-provisional { color: var(--warn-fg); font-weight: 600; }
 /* The noise-scale notice is a compact inline notice, not a full banner. */
 .agents-rank-banner-scales {
-  padding: 10px 14px;
+  padding: var(--space-10) var(--space-14);
   border: 1px solid var(--warn-line);
   border-radius: var(--radius-panel);
   background: var(--warn-wash);
   color: var(--warn-fg);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   max-width: none;
 }
 /* Rank summary strip: four stats divided by hairlines, wrapping on a phone. */
 .agents-rank-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-panel); overflow: hidden; }
-.agents-rank-stat { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 14px 16px; background: var(--bg-elev); }
-.agents-rank-stat-label { color: var(--fg-mute); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
-.agents-rank-stat-value { color: var(--fg); font-size: 22px; font-weight: 500; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.agents-rank-stat-rest { color: var(--fg-mute); font-size: 13px; font-weight: 400; }
+.agents-rank-stat { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; padding: var(--space-14) var(--space-16); background: var(--bg-elev); }
+.agents-rank-stat-label { color: var(--fg-mute); font-size: var(--text-xs); letter-spacing: 0.06em; text-transform: uppercase; }
+.agents-rank-stat-value { color: var(--fg); font-size: var(--text-2xl); font-weight: 500; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.agents-rank-stat-rest { color: var(--fg-mute); font-size: var(--text-md); font-weight: 400; }
 
 /* The refined rank table: one tbody per band, every whisker on one score
    axis. The table keeps its columns and scrolls in its own box on a narrow
    screen, so the page itself never scrolls sideways (STD-07 §R4). */
 .agents-rank-board { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--bg-elev); overflow: hidden; }
-.agents-rank-board > .agents-rank-note { padding: 14px 16px; margin: 0; }
+.agents-rank-board > .agents-rank-note { padding: var(--space-14) var(--space-16); margin: 0; }
 .agents-rank-ladder-wrap { border: 0; border-radius: 0; }
 .agents-rank-ladder { width: 100%; min-width: 1040px; }
-.agents-rank-ladder thead th { vertical-align: bottom; padding-top: 12px; }
-.agents-rank-ladder td { padding-top: 7px; padding-bottom: 7px; border-bottom: 1px solid var(--hair); }
+.agents-rank-ladder thead th { vertical-align: bottom; padding-top: var(--space-12); }
+.agents-rank-ladder td { padding-top: var(--space-8); padding-bottom: var(--space-8); border-bottom: 1px solid var(--hair); }
 .agents-rank-ladder .agents-num { min-width: 3.5rem; }
 .agents-rank-chev-col { width: 36px; text-align: center; }
 .agents-rank-interval-col { min-width: 220px; width: 34%; }
 .agents-rank-ladder thead .agents-rank-interval-col { white-space: normal; }
-.agents-rank-axis-head { position: relative; height: 14px; margin-top: 6px; font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0; text-transform: none; color: var(--fg-mute); }
+.agents-rank-axis-head { position: relative; height: 14px; margin-top: var(--space-6); font-family: var(--font-mono); font-size: var(--text-2xs); letter-spacing: 0; text-transform: none; color: var(--fg-mute); }
 .agents-rank-axis-head span { position: absolute; transform: translateX(-50%); }
 .agents-rank-axis-head span.is-100 { color: var(--fg); font-weight: 600; }
 /* A band boundary is a stronger rule than the hairline between rows. */
 .agents-rank-band .agents-rank-row.is-band-start > td { border-top: 2px solid var(--border-strong, var(--border)); }
 .agents-rank-band:first-of-type .agents-rank-row.is-band-start > td { border-top: 0; }
-.agents-rank-label { font-family: var(--font-mono); font-size: 13px; font-weight: 500; color: var(--fg); }
-.agents-rank-score { color: var(--fg); font-size: 13px; font-weight: 600; }
-.agents-rank-model { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.agents-rank-label { font-family: var(--font-mono); font-size: var(--text-md); font-weight: 500; color: var(--fg); }
+.agents-rank-score { color: var(--fg); font-size: var(--text-md); font-weight: 600; }
+.agents-rank-model { display: flex; align-items: center; gap: var(--space-8); min-width: 0; }
 .agents-rank-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
 /* In the rank table the dot sits beside the model name's first line, not the middle of the two-line cell. */
 .agents-rank-model-cell .agents-rank-model { align-items: flex-start; }
-.agents-rank-model-cell .agents-rank-dot { margin-top: 5px; }
-.agents-rank-model-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.agents-rank-model-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; line-height: 18px; }
+.agents-rank-model-cell .agents-rank-dot { margin-top: var(--space-6); }
+.agents-rank-model-body { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.agents-rank-model-line { display: flex; align-items: center; gap: var(--space-6); flex-wrap: wrap; min-width: 0; line-height: 18px; }
 .agents-rank-toggle {
   display: inline-flex;
   align-items: center;
@@ -477,9 +477,9 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-rank-toggle:hover { background: var(--bg-hover); color: var(--fg); }
 .agents-rank-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .agents-rank-model-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.agents-rank-crew { color: var(--fg-mute); font-family: var(--font-mono); font-size: 11px; white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
-.agents-rank-single-tier { flex: none; color: var(--fg-mute); font-family: var(--font-mono); font-size: 11px; white-space: nowrap; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 1px 5px; }
-.agents-rank-chevron { color: var(--fg-mute); font-size: 10px; transition: transform 120ms ease; }
+.agents-rank-crew { color: var(--fg-mute); font-family: var(--font-mono); font-size: var(--text-xs); white-space: normal; overflow-wrap: anywhere; line-height: 1.35; }
+.agents-rank-single-tier { flex: none; color: var(--fg-mute); font-family: var(--font-mono); font-size: var(--text-xs); white-space: nowrap; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-2) var(--space-6); }
+.agents-rank-chevron { color: var(--fg-mute); font-size: var(--text-2xs); transition: transform 120ms ease; }
 .agents-rank-toggle[aria-expanded="true"] .agents-rank-chevron { transform: rotate(90deg); color: var(--fg); }
 .agents-rank-row { cursor: pointer; }
 .agents-rank-row:hover > td { background: var(--bg-hover); }
@@ -491,8 +491,8 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-rank-whisker { position: relative; height: 22px; --provider-line: color-mix(in srgb, var(--provider, var(--fg-mute)) 55%, transparent); }
 .agents-rank-grid { position: absolute; top: 2px; bottom: 2px; width: 1px; background: var(--hair); }
 .agents-rank-grid.is-100 { background: var(--border-strong, var(--border)); top: 0; bottom: 0; }
-.agents-rank-whisker-line { position: absolute; top: 7px; height: 7px; background: color-mix(in srgb, var(--provider, var(--fg-mute)) 20%, transparent); box-shadow: inset 0 0 0 1px var(--provider-line); border-radius: 4px; }
-.agents-rank-whisker-tick { position: absolute; top: 5px; width: 3px; height: 11px; margin-left: -1.5px; border-radius: 1px; background: var(--provider, var(--fg-mute)); }
+.agents-rank-whisker-line { position: absolute; top: 7px; height: 7px; background: color-mix(in srgb, var(--provider, var(--fg-mute)) 20%, transparent); box-shadow: inset 0 0 0 1px var(--provider-line); border-radius: var(--radius-xs); }
+.agents-rank-whisker-tick { position: absolute; top: 5px; width: 3px; height: 11px; margin-left: -1.5px; border-radius: var(--radius-2xs); background: var(--provider, var(--fg-mute)); }
 
 /* Contribution values in the breakdown: blue helps, amber hurts. */
 .agents-rank-contrib { color: var(--fg-mute); font-variant-numeric: tabular-nums; }
@@ -502,52 +502,52 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 /* Cost per task with its ratio to the fleet. Below 1× is the accent in a
    lighter tint; above 1× is warm and darker, so the two never rely on hue
    alone. */
-.agents-rank-cost { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 8px; font-variant-numeric: tabular-nums; }
-.agents-rank-per-task { color: var(--fg); font-size: 13px; }
-.agents-rank-ratio { font-size: 11.5px; min-width: 44px; text-align: right; }
+.agents-rank-cost { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: var(--space-8); font-variant-numeric: tabular-nums; }
+.agents-rank-per-task { color: var(--fg); font-size: var(--text-md); }
+.agents-rank-ratio { font-size: var(--text-sm); min-width: 44px; text-align: right; }
 .agents-rank-ratio.is-cheaper { color: var(--accent); font-weight: 500; }
 .agents-rank-ratio.is-dearer { color: var(--status-proposed); font-weight: 600; }
 .agents-rank-cost.is-unknown { color: var(--fg-mute); font-weight: 400; }
 
 /* Tier mix: the task count beside one small stacked bar, low to xhard
    getting lighter. */
-.agents-rank-mixcell { display: inline-flex; align-items: center; gap: 10px; min-width: 168px; }
-.agents-rank-units { font-variant-numeric: tabular-nums; font-size: 13px; min-width: 32px; text-align: right; }
-.agents-rank-mix { display: flex; flex: 1; height: 6px; overflow: hidden; border-radius: 3px; background: var(--bg-well); gap: 1px; }
+.agents-rank-mixcell { display: inline-flex; align-items: center; gap: var(--space-10); min-width: 168px; }
+.agents-rank-units { font-variant-numeric: tabular-nums; font-size: var(--text-md); min-width: 32px; text-align: right; }
+.agents-rank-mix { display: flex; flex: 1; height: 6px; overflow: hidden; border-radius: var(--radius-2xs); background: var(--bg-well); gap: 1px; }
 .agents-rank-landed { color: var(--fg-dim); }
 .agents-rank-mix-low { background: #3d4552; }
 .agents-rank-mix-medium { background: #6b7686; }
 .agents-rank-mix-hard { background: #b4bcc8; }
 .agents-rank-mix-xhard { background: var(--fg-strong); }
 .agents-rank-mix-unassessed { background: repeating-linear-gradient(135deg, var(--fg-disabled) 0 2px, transparent 2px 4px); }
-.agents-rank-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; padding: 10px 16px; border-top: 1px solid var(--border); color: var(--fg-mute); font-size: 11.5px; }
-.agents-rank-legend-tiers { display: inline-flex; align-items: center; gap: 12px; margin-left: auto; }
-.agents-rank-legend-item { display: inline-flex; align-items: center; gap: 6px; }
-.agents-rank-legend-swatch { width: 10px; height: 8px; border-radius: 2px; flex: none; }
+.agents-rank-legend { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8) var(--space-16); padding: var(--space-10) var(--space-16); border-top: 1px solid var(--border); color: var(--fg-mute); font-size: var(--text-sm); }
+.agents-rank-legend-tiers { display: inline-flex; align-items: center; gap: var(--space-12); margin-left: auto; }
+.agents-rank-legend-item { display: inline-flex; align-items: center; gap: var(--space-6); }
+.agents-rank-legend-swatch { width: 10px; height: 8px; border-radius: var(--radius-2xs); flex: none; }
 
 /* Rank disclosures keep their controls below the table and keyboard reachable. */
-.agents-rank-disclosure { min-height: 44px; padding: 0 12px; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; font: inherit; cursor: pointer; }
+.agents-rank-disclosure { min-height: 44px; padding: 0 var(--space-12); color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; cursor: pointer; }
 .agents-rank-disclosure:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.agents-rank-board > .agents-rank-disclosure { margin: 8px 16px; }
-.agents-rank-box { min-width: 0; padding: 16px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-panel); }
-.agents-rank-box-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; margin-bottom: 10px; }
+.agents-rank-board > .agents-rank-disclosure { margin: var(--space-8) var(--space-16); }
+.agents-rank-box { min-width: 0; padding: var(--space-16); background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-panel); }
+.agents-rank-box-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: var(--space-4) var(--space-12); margin-bottom: var(--space-10); }
 .agents-rank-box-head h3,
-.agents-rank-box-head h4 { margin: 0; font-size: 14px; font-weight: 600; }
-.agents-rank-box-count { color: var(--fg-mute); font-weight: 400; font-family: var(--font-mono); font-size: 12px; }
-.agents-rank-box-meta { color: var(--fg-mute); font-size: 12px; }
+.agents-rank-box-head h4 { margin: 0; font-size: var(--text-base); font-weight: 600; }
+.agents-rank-box-count { color: var(--fg-mute); font-weight: 400; font-family: var(--font-mono); font-size: var(--text-sm); }
+.agents-rank-box-meta { color: var(--fg-mute); font-size: var(--text-sm); }
 .agents-rank-pending-list { margin: 0; padding: 0; list-style: none; }
 /* Two lines at pair width: name, preview score and tasks on the first, the
    gate progress underneath, so no label or count is squeezed or truncated. */
-.agents-rank-pending-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 2px 12px; align-items: center; min-height: 38px; padding: 4px 0; font-variant-numeric: tabular-nums; color: var(--fg-dim); }
-.agents-rank-pending-gatecell { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; min-width: 0; }
-.agents-rank-progress { display: block; width: 96px; flex: none; height: 4px; overflow: hidden; border-radius: 2px; background: var(--bg-well); }
-.agents-rank-progress > span { display: block; height: 100%; border-radius: 2px; background: var(--fg-disabled); }
-.agents-rank-pending-gate { color: var(--fg-mute); font-size: 12px; }
+.agents-rank-pending-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: var(--space-2) var(--space-12); align-items: center; min-height: 38px; padding: var(--space-4) 0; font-variant-numeric: tabular-nums; color: var(--fg-dim); }
+.agents-rank-pending-gatecell { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--space-10); min-width: 0; }
+.agents-rank-progress { display: block; width: 96px; flex: none; height: 4px; overflow: hidden; border-radius: var(--radius-2xs); background: var(--bg-well); }
+.agents-rank-progress > span { display: block; height: 100%; border-radius: var(--radius-2xs); background: var(--fg-disabled); }
+.agents-rank-pending-gate { color: var(--fg-mute); font-size: var(--text-sm); }
 .agents-rank-pending-score { color: var(--fg-dim); }
-.agents-rank-reasons { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.agents-rank-reasons li { display: grid; grid-template-columns: minmax(110px, 140px) 1fr 40px; gap: 10px; align-items: center; font-size: 12px; font-variant-numeric: tabular-nums; }
-.agents-rank-reason-key { color: var(--fg-dim); font-family: var(--font-mono); font-size: 11px; overflow-wrap: anywhere; }
-.agents-rank-reason-bar { display: block; height: 6px; overflow: hidden; border-radius: 3px; background: var(--bg-well); }
+.agents-rank-reasons { display: flex; flex-direction: column; gap: var(--space-6); margin: 0; padding: 0; list-style: none; }
+.agents-rank-reasons li { display: grid; grid-template-columns: minmax(110px, 140px) 1fr 40px; gap: var(--space-10); align-items: center; font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.agents-rank-reason-key { color: var(--fg-dim); font-family: var(--font-mono); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.agents-rank-reason-bar { display: block; height: 6px; overflow: hidden; border-radius: var(--radius-2xs); background: var(--bg-well); }
 .agents-rank-reason-bar > span { display: block; height: 100%; background: #6b7686; }
 .agents-rank-reasons .agents-num { color: var(--fg-mute); text-align: right; }
 .agents-rank-pending-gate { min-width: 0; overflow-wrap: anywhere; }
@@ -558,7 +558,7 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
    which the two-line pending rows and the reason bars fit without sideways
    scroll (STD-07 §R4, §R23). Collapsed, Not ranked is only its toggle, so
    the pair goes single-column and Not scored takes the full width. */
-.agents-rank-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.agents-rank-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-16); align-items: start; }
 .agents-rank-pair:has(> .agents-rank-notranked > [hidden]) { grid-template-columns: minmax(0, 1fr); }
 .agents-rank-pair .agents-rank-reasons li { grid-template-columns: minmax(96px, 128px) minmax(0, 1fr) 40px; }
 @media (max-width: 900px) {
@@ -566,19 +566,19 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 }
 
 /* Score against cost: one chart with a tier switch, and its table beside it. */
-.agents-rank-frontier { display: flex; flex-direction: column; gap: 12px; }
-.agents-rank-frontier-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px 16px; }
-.agents-rank-frontier-title { display: flex; align-items: center; gap: 8px; }
-.agents-rank-frontier-title h3 { margin: 0; font-size: 15px; font-weight: 600; }
-.agents-rank-tiers { display: flex; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--font-mono); font-size: 12px; }
-.agents-rank-tier { min-height: 44px; padding: 0 18px; color: var(--fg-dim); background: transparent; border: 0; font: inherit; cursor: pointer; }
+.agents-rank-frontier { display: flex; flex-direction: column; gap: var(--space-12); }
+.agents-rank-frontier-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--space-10) var(--space-16); }
+.agents-rank-frontier-title { display: flex; align-items: center; gap: var(--space-8); }
+.agents-rank-frontier-title h3 { margin: 0; font-size: var(--text-lg); font-weight: 600; }
+.agents-rank-tiers { display: flex; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--font-mono); font-size: var(--text-sm); }
+.agents-rank-tier { min-height: 44px; padding: 0 var(--space-16); color: var(--fg-dim); background: transparent; border: 0; font: inherit; cursor: pointer; }
 .agents-rank-tier + .agents-rank-tier { border-left: 1px solid var(--border); }
 .agents-rank-tier.on { color: var(--fg); background: var(--bg-selected); font-weight: 500; }
 .agents-rank-tier:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .agents-rank-tier-count { color: var(--fg-mute); }
-.agents-rank-frontier-body { display: flex; flex-wrap: wrap; gap: 16px; align-items: stretch; }
+.agents-rank-frontier-body { display: flex; flex-wrap: wrap; gap: var(--space-16); align-items: stretch; }
 /* min-width 0: the plot is drawn at this box's width, so it must not hold the box open. */
-.agents-rank-chart { flex: 999 1 600px; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.agents-rank-chart { flex: 999 1 600px; min-width: 0; display: flex; flex-direction: column; gap: var(--space-8); }
 .agents-rank-chart .agents-rank-legend { padding: 0; }
 .agents-rank-plot-wrap { min-width: 0; overflow-x: auto; }
 .agents-rank-plot-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -586,16 +586,16 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-rank-plot { display: block; max-width: none; }
 .agents-rank-gridline { stroke: var(--hair); stroke-width: 1; }
 .agents-rank-axisline { stroke: var(--border); stroke-width: 1; }
-.agents-rank-tick { fill: var(--fg-mute); font-size: 11.5px; font-variant-numeric: tabular-nums; }
-.agents-rank-axis-title { fill: var(--fg-mute); font-size: 12px; }
-.agents-rank-corner { fill: var(--fg-mute); font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.04em; }
+.agents-rank-tick { fill: var(--fg-mute); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.agents-rank-axis-title { fill: var(--fg-mute); font-size: var(--text-sm); }
+.agents-rank-corner { fill: var(--fg-mute); font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: 0.04em; }
 .agents-rank-fleet { stroke: var(--fg-disabled); stroke-width: 1; stroke-dasharray: 5 4; }
 .agents-rank-front { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 5; }
 .agents-rank-mark { fill: var(--bg-elev); stroke: var(--fg-disabled); stroke-width: 2; }
 .agents-rank-point.is-frontier .agents-rank-mark { fill: var(--accent); stroke: var(--accent); }
 .agents-rank-point.is-underpriced .agents-rank-mark { stroke: var(--fg-mute); stroke-dasharray: 3 2; }
 .agents-rank-leader { stroke: var(--border-strong); stroke-width: 1; }
-.agents-rank-point-name { fill: var(--fg-dim); font-size: 12.5px; font-weight: 500; }
+.agents-rank-point-name { fill: var(--fg-dim); font-size: var(--text-sm); font-weight: 500; }
 .agents-rank-point.is-frontier .agents-rank-point-name { fill: var(--fg); }
 /* A point is hoverable and focusable as a whole: mark, leader and name. Its figures show in the tooltip. */
 .agents-rank-point { cursor: default; outline: none; }
@@ -605,13 +605,13 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-rank-point:focus-visible .agents-rank-point-name { fill: var(--fg); }
 .agents-rank-point:focus-visible .agents-rank-mark { stroke-width: 3; }
 .agents-rank-tip-box { fill: var(--bg-elev); stroke: var(--border-strong); stroke-width: 1; }
-.agents-rank-tip-text { fill: var(--fg); font-size: 12px; font-variant-numeric: tabular-nums; }
+.agents-rank-tip-text { fill: var(--fg); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 .agents-rank-tip-text.is-name { font-weight: 500; }
 .agents-rank-key { display: inline-block; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--fg-disabled); box-sizing: border-box; }
 .agents-rank-key.is-frontier { background: var(--accent); border-color: var(--accent); }
 .agents-rank-key.is-underpriced { border-style: dashed; border-color: var(--fg-mute); }
-.agents-rank-tier-table { flex: 1 1 380px; display: flex; flex-direction: column; gap: 10px; }
-.agents-rank-tier-table h4 { margin: 0; font-size: 14px; font-weight: 600; }
+.agents-rank-tier-table { flex: 1 1 380px; display: flex; flex-direction: column; gap: var(--space-10); }
+.agents-rank-tier-table h4 { margin: 0; font-size: var(--text-base); font-weight: 600; }
 .agents-rank-tier-table .agents-table-wrap { border: 0; background: transparent; }
 /* Fixed columns: the model name takes what is left and truncates. */
 .agents-rank-tier-table .agents-table { width: 100%; min-width: 0; table-layout: fixed; }
@@ -621,52 +621,52 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-rank-tier-table thead th.agents-num { min-width: 0; }
 .agents-rank-tier-table td:first-child { overflow: hidden; }
 /* The badge wraps under the name rather than squeezing it. */
-.agents-rank-tier-table .agents-rank-model { flex-wrap: wrap; row-gap: 2px; }
+.agents-rank-tier-table .agents-rank-model { flex-wrap: wrap; row-gap: var(--space-2); }
 .agents-rank-tier-table .agents-rank-model-name { max-width: calc(100% - 16px); }
 .agents-rank-tier-table tr.is-underpriced .agents-rank-model-name { color: var(--fg-dim); }
-.agents-rank-badge { flex: none; padding: 2px 6px; color: var(--accent-hi); background: var(--accent-wash); border-radius: 4px; font-family: var(--font-mono); font-size: 10px; }
-.agents-rank-skipped { padding-top: 10px; border-top: 1px solid var(--border); color: var(--fg-mute); font-size: 12px; }
-.agents-rank-skipped h5 { margin: 0 0 6px; color: var(--fg-dim); font-size: 12px; font-weight: 500; }
-.agents-rank-skipped ul { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.agents-rank-badge { flex: none; padding: var(--space-2) var(--space-6); color: var(--accent-hi); background: var(--accent-wash); border-radius: var(--radius-xs); font-family: var(--font-mono); font-size: var(--text-2xs); }
+.agents-rank-skipped { padding-top: var(--space-10); border-top: 1px solid var(--border); color: var(--fg-mute); font-size: var(--text-sm); }
+.agents-rank-skipped h5 { margin: 0 0 var(--space-6); color: var(--fg-dim); font-size: var(--text-sm); font-weight: 500; }
+.agents-rank-skipped ul { display: flex; flex-direction: column; gap: var(--space-4); margin: 0; padding: 0; list-style: none; }
 
 /* The breakdown: contributions, by-tier and delivery in three columns that
    stack on a narrow screen. No second border inside the detail row. */
-.agents-rank-breakdown { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 0.8fr); gap: 28px; padding: 6px 16px 22px 84px; }
-.agents-rank-breakdown-col { display: flex; flex-direction: column; gap: 8px; padding-top: 14px; min-width: 0; }
-.agents-rank-breakdown-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.agents-rank-breakdown-title { font-size: 12px; font-weight: 600; color: var(--fg); }
-.agents-rank-breakdown-sub { font-size: 11px; color: var(--fg-mute); font-family: var(--font-mono); }
-.agents-rank-contrib-row { display: grid; grid-template-columns: minmax(0, 1fr) 28px 140px 52px; align-items: center; gap: 10px; font-size: 12.5px; min-height: 22px; }
+.agents-rank-breakdown { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 0.8fr); gap: var(--space-32); padding: var(--space-6) var(--space-16) var(--space-24) 84px; }
+.agents-rank-breakdown-col { display: flex; flex-direction: column; gap: var(--space-8); padding-top: var(--space-14); min-width: 0; }
+.agents-rank-breakdown-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-8); }
+.agents-rank-breakdown-title { font-size: var(--text-sm); font-weight: 600; color: var(--fg); }
+.agents-rank-breakdown-sub { font-size: var(--text-xs); color: var(--fg-mute); font-family: var(--font-mono); }
+.agents-rank-contrib-row { display: grid; grid-template-columns: minmax(0, 1fr) 28px 140px 52px; align-items: center; gap: var(--space-10); font-size: var(--text-sm); min-height: 22px; }
 .agents-rank-contrib-label { color: var(--fg-dim); overflow-wrap: anywhere; }
 .agents-rank-contrib-label.is-unmeasured { color: var(--fg-mute); }
-.agents-rank-contrib-weight { font-family: var(--font-mono); font-size: 11px; color: var(--fg-mute); text-align: right; }
+.agents-rank-contrib-weight { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-mute); text-align: right; }
 .agents-rank-contrib-track { position: relative; height: 8px; display: block; }
 .agents-rank-contrib-zero { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--border); }
-.agents-rank-contrib-fill { position: absolute; top: 0; height: 8px; border-radius: 2px; }
+.agents-rank-contrib-fill { position: absolute; top: 0; height: 8px; border-radius: var(--radius-2xs); }
 .agents-rank-contrib-fill.is-up { background: var(--accent); }
 .agents-rank-contrib-fill.is-down { background: var(--status-proposed); }
-.agents-rank-contrib-value { text-align: right; font-family: var(--font-mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+.agents-rank-contrib-value { text-align: right; font-family: var(--font-mono); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 .agents-rank-contrib-value.is-up { color: var(--accent-hi, var(--accent)); }
 .agents-rank-contrib-value.is-down { color: var(--status-proposed); }
 .agents-rank-contrib-value.is-unmeasured { color: var(--fg-mute); font-family: var(--font-sans); }
-.agents-rank-tier-grid { display: grid; grid-template-columns: 1fr 52px 60px 64px; gap: 0 10px; align-items: center; font-size: 12.5px; font-variant-numeric: tabular-nums; min-height: 24px; border-top: 1px solid var(--hair); }
+.agents-rank-tier-grid { display: grid; grid-template-columns: 1fr 52px 60px 64px; gap: 0 var(--space-10); align-items: center; font-size: var(--text-sm); font-variant-numeric: tabular-nums; min-height: 24px; border-top: 1px solid var(--hair); }
 .agents-rank-tier-grid .agents-num { text-align: right; }
-.agents-rank-tier-head { border-top: 0; min-height: 0; font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-mute); padding-bottom: 4px; }
+.agents-rank-tier-head { border-top: 0; min-height: 0; font-size: var(--text-xs); letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-mute); padding-bottom: var(--space-4); }
 .agents-rank-tier-grid.is-thin { opacity: 0.45; }
-.agents-rank-tier-name { display: flex; align-items: center; gap: 8px; }
-.agents-rank-delivery { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--fg-dim); }
-.agents-rank-delivery-row { display: flex; justify-content: space-between; gap: 12px; }
+.agents-rank-tier-name { display: flex; align-items: center; gap: var(--space-8); }
+.agents-rank-delivery { display: flex; flex-direction: column; gap: var(--space-6); font-size: var(--text-sm); color: var(--fg-dim); }
+.agents-rank-delivery-row { display: flex; justify-content: space-between; gap: var(--space-12); }
 .agents-rank-delivery-value { font-family: var(--font-mono); color: var(--fg); text-align: right; overflow-wrap: anywhere; }
-.agents-rank-note { margin: 4px 0 0; color: var(--fg-dim); font-size: 12.5px; line-height: 1.45; max-width: 78ch; }
-.agents-rank-how-list { margin: 8px 0 0; padding-left: 18px; color: var(--fg-dim); font-size: 12.5px; line-height: 1.45; }
+.agents-rank-note { margin: var(--space-4) 0 0; color: var(--fg-dim); font-size: var(--text-sm); line-height: 1.45; max-width: 78ch; }
+.agents-rank-how-list { margin: var(--space-8) 0 0; padding-left: var(--space-20); color: var(--fg-dim); font-size: var(--text-sm); line-height: 1.45; }
 
 @media (max-width: 900px) {
-  .agents-rank-breakdown { grid-template-columns: minmax(0, 1fr); gap: 4px; padding-left: 16px; }
+  .agents-rank-breakdown { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); padding-left: var(--space-16); }
 }
 
 @media (max-width: 640px) {
   .agents-rank-tiers { width: 100%; }
-  .agents-rank-tier { flex: 1; padding: 0 8px; }
+  .agents-rank-tier { flex: 1; padding: 0 var(--space-8); }
   .agents-rank-tier-table .agents-table-wrap { overflow-x: auto; }
   .agents-rank-tier-table th:nth-child(2) { width: 48px; }
   .agents-rank-tier-table th:nth-child(3) { width: 56px; }
@@ -677,12 +677,12 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
    spans the detail column. The label is prose; the crew/effort counts are mono. */
 .agents-effort {
   flex: 1 0 100%;
-  margin: 2px 0 0;
+  margin: var(--space-2) 0 0;
   color: var(--fg-mute);
-  font: 12px/1.45 var(--font-sans);
+  font: var(--text-sm)/1.45 var(--font-sans);
   overflow-wrap: anywhere;
 }
-.agents-effort-values { font-family: var(--font-mono); font-size: 11px; }
+.agents-effort-values { font-family: var(--font-mono); font-size: var(--text-xs); }
 
 /* Implementers: regression rate by change size. Twenty categorical series
    colours, assigned by a series' place in the window's list so toggling one
@@ -707,20 +707,20 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-curve-s17 { color: #98df8a; }
 .agents-curve-s18 { color: #ff9896; }
 .agents-curve-s19 { color: #e5d8bd; }
-.agents-curves-control { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; }
-.agents-curves-control select { min-height: 44px; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font: inherit; }
-.agents-curves-cohort { margin-top: 8px; }
-.agents-curves-picker { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.agents-curves-control { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-10); margin-top: var(--space-10); }
+.agents-curves-control select { min-height: 44px; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-6) var(--space-12); font: inherit; }
+.agents-curves-cohort { margin-top: var(--space-8); }
+.agents-curves-picker { list-style: none; margin: var(--space-8) 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-6); }
 .agents-curves-pick {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-6);
   min-height: 44px;
-  padding: 0 10px;
+  padding: 0 var(--space-10);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   color: var(--fg);
   cursor: pointer;
 }
@@ -728,17 +728,17 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-curves-pick:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .agents-curves-pick.is-undrawn .agents-curves-crew { color: var(--fg-mute); }
 .agents-curves-pick input { margin: 0; accent-color: var(--accent); }
-.agents-curves-swatch { width: 12px; height: 3px; border-radius: 1px; background: currentColor; }
+.agents-curves-swatch { width: 12px; height: 3px; border-radius: var(--radius-2xs); background: currentColor; }
 .agents-curves-crew { font-family: var(--font-mono); overflow-wrap: anywhere; }
-.agents-curves-n { color: var(--fg-mute); font-family: var(--font-mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
-.agents-curves-picker-note { margin: 8px 0 0; color: var(--fg-mute); font-size: 11.5px; line-height: 1.4; }
-.agents-curves-chart { margin-top: 10px; min-width: 0; overflow-x: auto; }
+.agents-curves-n { color: var(--fg-mute); font-family: var(--font-mono); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.agents-curves-picker-note { margin: var(--space-8) 0 0; color: var(--fg-mute); font-size: var(--text-sm); line-height: 1.4; }
+.agents-curves-chart { margin-top: var(--space-10); min-width: 0; overflow-x: auto; }
 .agents-curves-chart:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* Drawn 1:1 in CSS px (width/height attributes), never scaled: chart text matches the panel text (STD-07 §R35). */
 .agents-curves-plot { display: block; max-width: none; }
 .agents-curves-grid { stroke: var(--hair); stroke-width: 1; }
-.agents-curves-tick { fill: var(--fg-mute); font-family: var(--font-mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
-.agents-curves-axis { fill: var(--fg-dim); font-size: 12px; }
+.agents-curves-tick { fill: var(--fg-mute); font-family: var(--font-mono); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.agents-curves-axis { fill: var(--fg-dim); font-size: var(--text-sm); }
 /* Bands only for the hovered/focused series, so many series stay legible. */
 /* Pointer-transparent: a hidden band must not catch the hover meant for a marker drawn beneath it. */
 .agents-curves-band { fill: currentColor; fill-opacity: 0; stroke: none; pointer-events: none; transition: fill-opacity 120ms ease; }
@@ -749,15 +749,15 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-curves-marker.is-sparse { fill: var(--bg-elev); stroke: currentColor; stroke-width: 2; }
 .agents-curves-marker:focus-visible { stroke: var(--fg); stroke-width: 2.5; }
 .agents-curves-tip-box { fill: var(--bg-elev); stroke: var(--border-strong); stroke-width: 1; }
-.agents-curves-tip-text { fill: var(--fg); font-size: 12px; font-variant-numeric: tabular-nums; }
-.agents-curves-empty { margin: 10px 0 0; color: var(--fg-dim); font-size: 12.5px; }
-.agents-curves-data { margin-top: 8px; font-size: 12.5px; }
-.agents-curves-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 3px; }
+.agents-curves-tip-text { fill: var(--fg); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
+.agents-curves-empty { margin: var(--space-10) 0 0; color: var(--fg-dim); font-size: var(--text-sm); }
+.agents-curves-data { margin-top: var(--space-8); font-size: var(--text-sm); }
+.agents-curves-table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-xs); }
 .agents-curves-table-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.agents-curves-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.agents-curves-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
 .agents-curves-table th,
-.agents-curves-table td { padding: 6px 8px; border-bottom: 1px solid var(--hair); text-align: left; white-space: nowrap; }
-.agents-curves-table thead th { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-dim); font-weight: 500; }
+.agents-curves-table td { padding: var(--space-6) var(--space-8); border-bottom: 1px solid var(--hair); text-align: left; white-space: nowrap; }
+.agents-curves-table thead th { font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-dim); font-weight: 500; }
 .agents-curves-table tbody th { color: var(--fg); font-family: var(--font-mono); font-weight: 400; }
 .agents-curves-table .agents-num { text-align: right; font-variant-numeric: tabular-nums; }
 .agents-curves-table .agents-row-below td { color: var(--fg-mute); }
