@@ -42,8 +42,8 @@ behind a proposed `CodeQL bundle <version> needed on <host>` prerequisite and
 an open drift friction record ([CONFIG.md](../CONFIG.md#security_alert_sweep--security-finding-severity)).
 Install that bundle on the host, then mark the prerequisite done.
 
-The default extractor toolchain is **Rust 1.97.0 plus rust-src**, confirmed for
-CodeQL **2.27.1**. This is separate from the repository's build toolchain. For
+The default extractor toolchain is **Rust 1.99.0 plus rust-src**, confirmed for
+CodeQL **2.27.5**. This is separate from the repository's build toolchain. For
 another bundle, inspect its extractor's requested version and pass
 `--toolchain <version>`; do not substitute the host's installed stable version.
 
@@ -310,7 +310,7 @@ when it returns `Result<PathBuf, E>` or `Result<Option<PathBuf>, E>`:
 - ["orbit_crate::module::validated_path", "ReturnValue", "path-injection", "manual"]
 ```
 
-On Linux with CodeQL 2.27.1 (rust-all 0.2.22), the real-CodeQL fixture below
+On Linux with CodeQL 2.27.1 (rust-all 0.2.22) and 2.27.5 (rust-all 0.2.26), the real-CodeQL fixture below
 reports `rust/path-injection` through
 `ReturnValue.Field[core::result::Result::Ok(0)]` and through its nested
 `.Field[core::option::Option::Some(0)]` form. The SARIF path traverses the
