@@ -1191,7 +1191,9 @@ function radarNode(row) {
     // numbered endpoint is another hover target for each of those vertices.
     const [lx, ly] = point(i, 1.16);
     vertex.append(svg("text", { x: lx, y: ly, "text-anchor": "middle", "dominant-baseline": "central", class: "agents-radar-label" }, String(i + 1)));
-    vertex.append(svg("title", {}, info));
+    // No SVG <title>: the vertex is a button, and a native tooltip is refused
+    // (STD-07 §R41). The accessible name is aria-label; the status line below
+    // the plot shows the same evidence on hover and focus.
     const disclose = () => { tooltip.textContent = info; };
     for (const event of ["mouseenter", "focus", "click"]) vertex.addEventListener(event, disclose);
     plot.append(vertex);

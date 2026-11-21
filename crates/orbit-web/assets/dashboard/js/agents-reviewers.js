@@ -3,8 +3,9 @@
 // row tag. The outcomes are the rows' shown-not-scored `outcome_*` stats; the
 // tag reads the `accepts_often` stat, the tier-compared accept rate
 // (`compared_accept_rate`) 10 or more points above the other reviewers on
-// tiers they also judged. The tooltip quotes that rate, not the all-reviews
-// `accept_rate`. Neither enters the score. `how` adds
+// tiers they also judged. The tag text quotes that rate and the other
+// reviewers' rate (`peer_accept_rate`), not the all-reviews `accept_rate`.
+// Neither enters the score. `how` adds
 // how a review job's filed findings are judged and what an unjudged row is
 // to "How the score works". Every node is built with `el()`.
 
@@ -85,14 +86,21 @@ function banner({ scorecard }) {
   ]);
 }
 
+function rateText(value) {
+  return typeof value === "number" && Number.isFinite(value) ? `${value}%` : "unreported";
+}
+
 function rowTags(row) {
   if (statValue(row, "accepts_often") !== true) return [];
   const rate = statValue(row, "compared_accept_rate");
   const peers = statValue(row, "peer_accept_rate");
+  // The tag sits inside the ranking row's select button. A title would be a
+  // native tooltip on that button (STD-07 §R41), and aria-label on a role-less
+  // span is not announced. The compared rate is visible text, so sighted
+  // readers and the button's accessible name both include it.
   const tag = el("span", {
     class: "badge", "data-tone": "warning",
-    text: "accepts often",
-    "aria-label": `Accepts ${rate}% of reviews on tiers other reviewers also judged; the other reviewers accept ${peers}% on the same tiers. Shown, not scored.`,
+    text: `accepts often · ${rateText(rate)} on shared tiers, peers ${rateText(peers)}`,
   });
   tag.dataset.tag = "accepts_often";
   return [tag];
