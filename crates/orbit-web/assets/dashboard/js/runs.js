@@ -1422,7 +1422,7 @@ function runRow(r, attributed, body, { child = false } = {}) {
     el("span", { class: "state" }, [stateCell(r.state)]),
     attributed ? el("span", { class: "run-workspace", text: r.workspace_name || r.workspace_id, title: r.workspace_id }) : null,
     openButton,
-    runTaskLinks(r),
+    child ? el("span", { class: "run-tasks", "aria-hidden": "true" }) : runTaskLinks(r),
     runFailedAtCell(r),
     runIdCell,
     el("span", { class: "when", text: formatAge(ts), title: ts ? formatDateTime(ts) : "" }),
