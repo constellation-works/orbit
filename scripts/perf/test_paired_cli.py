@@ -674,12 +674,32 @@ runpy.run_path(script, run_name="__main__")
         self.addCleanup(cleanup)
 
         pid_file = self.marks / "web-base.pid"
+
+        def pin_fixture_process(pid: int, marker: Path) -> int:
+            try:
+                pidfd = os.pidfd_open(pid)
+            except (AttributeError, OSError) as error:
+                self.fail(f"could not pin fixture process {pid}: {error}")
+            try:
+                cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+            except OSError as error:
+                os.close(pidfd)
+                self.fail(f"could not verify fixture process {pid}: {error}")
+            if str(marker).encode() not in cmdline:
+                os.close(pidfd)
+                self.fail(f"fixture process {pid} did not name {marker}")
+            # Keep the descriptor until the leaked-process cleanup has run. It
+            # continues to identify this process if it exits and its PID is reused.
+            self.addCleanup(os.close, pidfd)
+            return pidfd
+
         deadline = time.monotonic() + 60
         while not (pid_file.exists() and pid_file.read_text()):
             self.assertIsNone(harness.poll(), "harness exited before its server started")
             self.assertLess(time.monotonic(), deadline, "server never started")
             time.sleep(0.05)
         server_pid = int(pid_file.read_text())
+        server_pidfd = pin_fixture_process(server_pid, pid_file)
         descendant_file = self.marks / "web-base.descendant.pid"
         deadline = time.monotonic() + 10
         while not descendant_file.exists():
@@ -688,6 +708,7 @@ runpy.run_path(script, run_name="__main__")
             time.sleep(0.01)
         descendant_pid = int(descendant_file.read_text())
         descendant_ready = self.marks / "web-base.descendant.ready"
+        descendant_pidfd = pin_fixture_process(descendant_pid, descendant_ready)
         deadline = time.monotonic() + 10
         while not descendant_ready.exists():
             self.assertIsNone(harness.poll(), "server descendant exited before becoming ready")
@@ -695,14 +716,11 @@ runpy.run_path(script, run_name="__main__")
             time.sleep(0.01)
 
         def stop_leaked_server() -> None:
-            # Only this test's group: its leader cmdline names our pid file.
-            try:
-                cmdline = Path(f"/proc/{server_pid}/cmdline").read_bytes()
-            except FileNotFoundError:
-                cmdline = b""
-            if str(pid_file).encode() in cmdline or not process_gone(descendant_pid):
+            # Signal the pinned fixture processes individually. A numeric PID or
+            # process-group ID could be reused after the cmdline check above.
+            for pidfd in (server_pidfd, descendant_pidfd):
                 try:
-                    os.killpg(server_pid, signal.SIGKILL)
+                    signal.pidfd_send_signal(pidfd, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
         self.addCleanup(stop_leaked_server)
