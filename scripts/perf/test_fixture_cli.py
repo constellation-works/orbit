@@ -276,6 +276,49 @@ class FixtureCliRestoreTests(unittest.TestCase):
             timeout=60,
         )
 
+    def test_large_manifest_evidence_reconstructs_and_restore_checks_files(self):
+        source_home = self.base / "source"
+        paths = _build_disposable_source(source_home, self.base / "checkout")
+        task_files = paths["global_root"] / "tasks" / "workspaces" / "ws_fixture" / "ORB-1" / "artifacts"
+        for index in range(6000):
+            (task_files / f"realistic-task-artifact-name-{index:06d}.json").write_text("fixture")
+        env = _child_env(source_home)
+        snapshot = self.base / "snapshot"
+        result = self.run_fixture(env, "snapshot", "--workspace", "ws_fixture",
+                                  "--global-root", str(paths["global_root"]),
+                                  "--out", str(snapshot))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = snapshot / "snapshot-manifest.json"
+        self.assertGreater(manifest.stat().st_size, 1048576)
+
+        evidence = self.base / "evidence"
+        evidence.mkdir()
+        checksum = subprocess.run(["sha256sum", manifest.name], cwd=snapshot,
+                                  check=True, capture_output=True).stdout
+        (evidence / "snapshot-manifest.json.sha256").write_bytes(checksum)
+        subprocess.run(["split", "-b", "1048576", "-d", "-a", "6", str(manifest),
+                        str(evidence / "snapshot-manifest.json.part-")], check=True)
+        parts = sorted(evidence.glob("snapshot-manifest.json.part-*"))
+        self.assertGreater(len(parts), 1)
+        self.assertTrue(all(part.stat().st_size <= 1048576 for part in parts))
+        (evidence / manifest.name).write_bytes(b"".join(part.read_bytes() for part in parts))
+        self.assertEqual(subprocess.run(["sha256sum", "-c", "snapshot-manifest.json.sha256"],
+                                        cwd=evidence, capture_output=True).returncode, 0)
+        self.assertEqual((evidence / manifest.name).read_bytes(), manifest.read_bytes())
+        parts[-1].write_bytes(parts[-1].read_bytes()[:-1])
+        (evidence / manifest.name).write_bytes(b"".join(part.read_bytes() for part in parts))
+        self.assertNotEqual(subprocess.run(["sha256sum", "-c", "snapshot-manifest.json.sha256"],
+                                           cwd=evidence, capture_output=True).returncode, 0)
+        restored = self.base / "restored"
+        result = self.run_fixture(env, "restore", "--snapshot", str(snapshot), "--into", str(restored))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        copied = snapshot / "home" / ".orbit" / "tasks" / "workspaces" / "ws_fixture" / "ORB-1" / "artifacts" / "realistic-task-artifact-name-005999.json"
+        copied.write_text("changed")
+        result = self.run_fixture(env, "restore", "--snapshot", str(snapshot),
+                                  "--into", str(self.base / "tampered"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("sha256 mismatch", result.stderr)
+
     def test_restore_with_nested_managed_run_scratch_rewrites_paths_once(self):
         source_home = self.base / "source"
         # Nested under source_home (owner-host layout) and sibling layout where
