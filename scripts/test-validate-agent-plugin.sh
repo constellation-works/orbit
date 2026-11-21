@@ -385,6 +385,61 @@ home_env = dict(os.environ)
 home_env["HOME"] = embedded_home
 expect_failure(embedded, "user-specific absolute home path", "embedded home in launch arg", home_env)
 
+
+# Mirror entries are matched by their exact bytes (ORB-26165). A top-level entry
+# whose name differs from a canonical skill only by a trailing newline must fail
+# --check, and regeneration must remove exactly that child while keeping the
+# mirror root and every canonical skill. Each case runs a disposable copy of the
+# sync script and its inputs, so the script's repo root is the fixture itself.
+def sync_mirror_fixture(name: str) -> Path:
+    root = fixture_root / name
+    (root / "scripts").mkdir(parents=True)
+    shutil.copy2(repo_root / "scripts" / "sync-plugin-skills.sh", root / "scripts" / "sync-plugin-skills.sh")
+    shutil.copytree(
+        repo_root / "crates" / "orbit-core" / "assets" / "skills",
+        root / "crates" / "orbit-core" / "assets" / "skills",
+        symlinks=True,
+    )
+    shutil.copytree(repo_root / "plugin" / "skills", root / "plugin" / "skills", symlinks=True)
+    return root
+
+
+def run_sync(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(root / "scripts" / "sync-plugin-skills.sh"), *args],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+canonical_names = sorted(
+    entry.name
+    for entry in (repo_root / "crates" / "orbit-core" / "assets" / "skills").iterdir()
+    if entry.is_dir() and not entry.name.startswith("_")
+)
+for label, stray in (
+    ("newline-suffixed-canonical-name", canonical_names[0] + "\n"),
+    ("newline-only-name", "\n"),
+):
+    case = sync_mirror_fixture(f"sync-{label}")
+    mirror = case / "plugin" / "skills"
+    (mirror / stray).write_text("stray\n", encoding="utf-8")
+    check = run_sync(case, "--check")
+    if check.returncode == 0:
+        errors.append(f"{label}: --check accepted a noncanonical top-level entry")
+    elif "no matching canonical skill" not in check.stderr:
+        errors.append(f"{label}: --check failed without naming the noncanonical entry\n{check.stderr}")
+    regen = run_sync(case)
+    if regen.returncode != 0:
+        errors.append(f"{label}: regeneration exited {regen.returncode}\n{regen.stdout + regen.stderr}")
+        continue
+    remaining = sorted(os.listdir(mirror))
+    if remaining != canonical_names:
+        errors.append(f"{label}: regeneration left {remaining!r}, expected {canonical_names!r}")
+    if run_sync(case, "--check").returncode != 0:
+        errors.append(f"{label}: --check still fails after regeneration")
+
 if errors:
     print("test-validate-agent-plugin: failed", file=sys.stderr)
     for error in errors:
