@@ -442,17 +442,28 @@ def scrub_git_config(text: str, *, non_bare: bool = False) -> str:
             lines.append(line)
             continue
         if in_core:
-            key = stripped.split("=", 1)[0].strip().lower() if "=" in stripped else ""
+            if "=" in stripped:
+                key = stripped.split("=", 1)[0].strip().lower()
+            else:
+                key = stripped.split(None, 1)[0].lower() if stripped else ""
             if key == "worktree":
                 # Drop core.worktree so the restored `.git` never binds to a source path.
                 continue
             if non_bare and key == "bare":
-                line = re.sub(
-                    r"^(\s*bare\s*=\s*)(?:true|yes|on|1)\b",
-                    r"\1false",
-                    line,
-                    flags=re.IGNORECASE,
-                )
+                body = line.rstrip("\r\n")
+                ending = line[len(body):]
+                valueless = re.match(r"^(\s*bare)(\s*(?:[#;].*)?)$", body, flags=re.IGNORECASE)
+                if valueless:
+                    line = f"{valueless.group(1)} = false{valueless.group(2)}{ending}"
+                else:
+                    truthy = re.match(
+                        r"^(\s*bare\s*=\s*)(?:([\"'])(true|yes|on|1)\2|(true|yes|on|1))"
+                        r"(\s*(?:[#;].*)?)$",
+                        body,
+                        flags=re.IGNORECASE,
+                    )
+                    if truthy:
+                        line = f"{truthy.group(1)}false{truthy.group(5)}{ending}"
         lines.append(line)
     return "".join(lines)
 

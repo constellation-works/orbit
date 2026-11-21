@@ -1125,6 +1125,94 @@ class FixtureGitMetadataTests(unittest.TestCase):
             expected_ls_files=["bare-staged.txt", "primary-only.txt", "shared.txt"],
         )
 
+    def test_snapshot_and_restore_normalizes_noncanonical_linked_bare_config(self):
+        source_home = self.base / "source"
+        source_repo = source_home / "ws" / "orbit"
+        _build_disposable_source(source_home, source_repo)
+        self.init_primary_repo(source_repo)
+        env = _child_env(source_home)
+
+        for label, bare_setting in (("quoted", 'bare = "true"'), ("valueless", "bare")):
+            with self.subTest(setting=label):
+                bare_repo = self.base / f"{label}.git"
+                subprocess.run(
+                    ["git", "clone", "--bare", str(source_repo), str(bare_repo)],
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                    timeout=30,
+                )
+                config_path = bare_repo / "config"
+                config_lines = config_path.read_text(encoding="utf-8").splitlines(keepends=True)
+                bare_line = next(
+                    index for index, line in enumerate(config_lines)
+                    if line.strip().lower() == "bare = true"
+                )
+                original_line = config_lines[bare_line]
+                indent = original_line[:len(original_line) - len(original_line.lstrip())]
+                config_lines[bare_line] = f"{indent}{bare_setting}\n"
+                config_path.write_text("".join(config_lines), encoding="utf-8")
+
+                linked = self.base / f"{label}-worktree"
+                branch = f"{label}-task"
+                self.git(bare_repo, "worktree", "add", "-b", branch, str(linked), "agent-main")
+                self.assertEqual(
+                    self.git(linked, "rev-parse", "--is-inside-work-tree").stdout.strip(),
+                    "true",
+                )
+                self.assertEqual(
+                    self.git(linked, "rev-parse", "--is-bare-repository").stdout.strip(),
+                    "false",
+                )
+                (linked / "bare-staged.txt").write_text("staged in linked checkout\n", encoding="utf-8")
+                self.git(linked, "add", "bare-staged.txt")
+                expected_head = self.git(linked, "rev-parse", "HEAD").stdout.strip()
+
+                snapshot = self.base / f"{label}-snapshot"
+                snap_res = self.run_fixture(
+                    env,
+                    "snapshot",
+                    "--workspace",
+                    "ws_fixture",
+                    "--global-root",
+                    str(self.base / "source" / ".orbit"),
+                    "--git-metadata",
+                    str(linked),
+                    "--out",
+                    str(snapshot),
+                )
+                self.assertEqual(snap_res.returncode, 0, snap_res.stderr)
+
+                self.git(bare_repo, "worktree", "remove", "--force", str(linked))
+                bare_repo.rename(self.base / f"{label}-common-unavailable.git")
+                restored = self.base / f"{label}-restored"
+                restore_res = self.run_fixture(
+                    env, "restore", "--snapshot", str(snapshot), "--into", str(restored)
+                )
+                self.assertEqual(restore_res.returncode, 0, restore_res.stderr)
+                self.assert_standalone_restored_git(
+                    restored,
+                    expected_head_sha=expected_head,
+                    expected_branch=branch,
+                    expected_ls_files=["bare-staged.txt", "primary-only.txt", "shared.txt"],
+                )
+
+                restored_checkout = restored / "checkout"
+                self.assertEqual(
+                    self.git(restored_checkout, "rev-parse", "--is-inside-work-tree").stdout.strip(),
+                    "true",
+                )
+                self.assertEqual(
+                    self.git(restored_checkout, "rev-parse", "--is-bare-repository").stdout.strip(),
+                    "false",
+                )
+                self.assertEqual(
+                    self.git(restored_checkout, "diff", "--cached", "--name-only").stdout.splitlines(),
+                    ["bare-staged.txt"],
+                )
+                status = self.git(restored_checkout, "status", "--short", check=False)
+                self.assertEqual(status.returncode, 0, status.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
