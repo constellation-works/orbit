@@ -384,6 +384,13 @@ impl GithubQuotaStore {
             .join(format!(".{account}.clipped.{generation}.json"))
     }
 
+    fn is_claim_active_for_generation(&self, account: &str, generation: u64) -> bool {
+        match Self::load(&self.record_path(account)) {
+            Ok(record) => record.refresh_in_flight && record.refresh_generation == generation,
+            Err(_) => true,
+        }
+    }
+
     /// Persist a lock-free release marker for a clipped probe whose completion
     /// lock was contended at its deadline, so the next lock holder restores the
     /// prior claim without blocking this caller.
@@ -393,32 +400,31 @@ impl GithubQuotaStore {
         generation: u64,
         previous_claim: Option<u64>,
     ) -> io::Result<()> {
+        if !self.is_claim_active_for_generation(account, generation) {
+            return Ok(());
+        }
         let path = self.clipped_release_path(account, generation);
         let payload = serde_json::to_string(&ClippedClaimRelease {
             generation,
             previous_claim,
         })
         .map_err(io::Error::other)?;
-        orbit_common::fs::io::atomic_write_text_volatile(&path, &payload)
+        orbit_common::fs::io::atomic_write_text_volatile(&path, &payload)?;
+        // A newer claim that raced with the lock-free write may have moved the
+        // record past `generation` before the next update sees it; unlink now so
+        // markers more than one generation behind cannot linger.
+        if !self.is_claim_active_for_generation(account, generation) {
+            let _ = std::fs::remove_file(&path);
+        }
+        Ok(())
     }
 
-    /// Reconcile a staged clipped-claim release for the active generation under
-    /// the exclusive lock, returning its marker path to unlink after the updated
-    /// record is committed.
-    ///
-    /// Reads the active generation's marker directly by name so reconciliation
-    /// stays O(1) independent of unrelated directory entries and succeeds when
-    /// the quota directory denies listing.
-    fn reconcile_clipped_releases(
+    fn read_clipped_release(
         &self,
-        account: &str,
-        record: &mut QuotaRecord,
-    ) -> Option<PathBuf> {
-        if !record.refresh_in_flight {
-            return None;
-        }
-        let path = self.clipped_release_path(account, record.refresh_generation);
-        let text = match std::fs::read_to_string(&path) {
+        path: &Path,
+        expected_generation: u64,
+    ) -> Option<ClippedClaimRelease> {
+        let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
             Err(error) => {
@@ -437,16 +443,41 @@ impl GithubQuotaStore {
                 return None;
             }
         };
-        if release.generation != record.refresh_generation {
+        if release.generation != expected_generation {
             tracing::warn!(target: "orbit_tools::github_quota",
                 marker_generation = release.generation,
-                active_generation = record.refresh_generation,
+                active_generation = expected_generation,
                 path = %path.display(),
                 "staged clipped quota release marker ownership is ambiguous; preserving it");
             return None;
         }
-        release_clipped_claim(record, release.previous_claim);
-        Some(path)
+        Some(release)
+    }
+
+    /// Reconcile a staged clipped-claim release for the active generation under
+    /// the exclusive lock, returning marker paths (including any superseded
+    /// previous generation) to unlink after the updated record is committed.
+    ///
+    /// Accesses known generation paths directly by name so reconciliation stays
+    /// O(1) independent of unrelated directory entries and succeeds when the
+    /// quota directory denies listing.
+    fn reconcile_clipped_releases(&self, account: &str, record: &mut QuotaRecord) -> Vec<PathBuf> {
+        let mut markers = Vec::new();
+        if record.refresh_generation > 1 {
+            markers.push(self.clipped_release_path(account, record.refresh_generation - 1));
+        }
+        if record.refresh_generation == 0 {
+            return markers;
+        }
+        let path = self.clipped_release_path(account, record.refresh_generation);
+        let Some(release) = self.read_clipped_release(&path, record.refresh_generation) else {
+            return markers;
+        };
+        if record.refresh_in_flight {
+            release_clipped_claim(record, release.previous_claim);
+        }
+        markers.push(path);
+        markers
     }
 
     /// Read `path`, distinguishing a missing record (`NotFound`, initialized as
@@ -483,11 +514,18 @@ impl GithubQuotaStore {
             self.lock_options(),
             || {
                 let mut record = Self::load(&path)?;
-                let reconciled = self.reconcile_clipped_releases(account, &mut record);
+                let previous_generation = record.refresh_generation;
+                let mut markers = self.reconcile_clipped_releases(account, &mut record);
                 let output = change(&mut record);
+                if record.refresh_generation != previous_generation && previous_generation > 0 {
+                    let superseded = self.clipped_release_path(account, previous_generation);
+                    if !markers.contains(&superseded) {
+                        markers.push(superseded);
+                    }
+                }
                 let text = serde_json::to_string(&record).map_err(io::Error::other)?;
                 orbit_common::fs::io::atomic_write_text_volatile(&path, &text)?;
-                if let Some(marker) = reconciled {
+                for marker in markers {
                     let _ = std::fs::remove_file(marker);
                 }
                 Ok(output)
