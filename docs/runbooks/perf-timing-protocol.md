@@ -125,7 +125,9 @@ repository root of the checkout that holds these scripts.
    names this workspace or is NULL, and tables without either column are kept whole.
    ORB-25652's first fixture left out retained runs and routines, so its probes read 1–33 ms
    against 300+ ms deployed; check `state_distributions` in the manifest before you rely on
-   a snapshot.
+   a snapshot. For a linked reftable checkout, the snapshot retains the shared ref
+   stack and reconstructs the selected HEAD and per-worktree refs in the standalone
+   copy; selected per-worktree reflog history is not retained.
 
 2. Build the pair (two cold release builds; about 15 minutes each on the owner host).
    During `implement_bundle`, build the uncommitted candidate from the checkout:
