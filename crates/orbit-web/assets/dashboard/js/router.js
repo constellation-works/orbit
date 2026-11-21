@@ -745,6 +745,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     if (segments[1] === RETIRED_JOBS_LIVE) {
       selectRunningRunFilter();
       segments[1] = "history";
+      legacyRoute = true;
     }
     const sub = JOBS_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getJobsSubtab();
     adoptHashedWindow();
@@ -1029,7 +1030,7 @@ function initTabsImpl(ctx) {
     tab.addEventListener("click", (event) => {
       if (tab.dataset.tab === "jobs" && event.target?.closest?.("#rail-count-jobs")) {
         selectRunningRunFilter();
-        setActiveTabImpl(ctx, "jobs/history", { refresh: false });
+        setActiveTabImpl(ctx, "jobs/history");
         return;
       }
       // The failing-jobs pill opens the catalogue, where the badge names the job.
