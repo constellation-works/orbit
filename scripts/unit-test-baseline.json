@@ -233,6 +233,7 @@
         "application/automation/tests/source.rs::canonical_signature_deadline_propagates",
         "application/automation/tests/source.rs::held_fetch_lock_consumes_only_the_remaining_source_deadline",
         "application/automation/tests/source.rs::held_graphql_quota_defers_a_provider_read_without_running_gh",
+        "application/automation/tests/source.rs::held_quota_refusal_meeting_a_spent_command_budget_defers_as_source_budget_uncounted",
         "application/automation/tests/source.rs::missing_git_executable_defers_ancestor_check_instead_of_reporting_divergence",
         "application/automation/tests/source.rs::recorded_associations_survive_observation_and_missing_identities_back_off",
         "application/automation/tests/source.rs::replay_moves_a_retained_exclusion_onto_its_canonical_commit",

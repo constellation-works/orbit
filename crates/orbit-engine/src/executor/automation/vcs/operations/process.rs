@@ -251,8 +251,18 @@ pub(in crate::executor::automation::vcs) fn run_vcs_process_within(
         &request,
     );
     let admit_elapsed_ms = u64::try_from(admit_started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    let remaining_ms = remaining_after_admission(admit_elapsed_ms)?;
-    admission?;
+    // A refusal the guard counted is returned as decided, so the outcome
+    // matches the host record. An admission that ended on the spent budget was
+    // not counted: it is the caller's expiry, whatever whole milliseconds the
+    // caller's own clock measured.
+    let remaining_ms = match admission {
+        Ok(()) => remaining_after_admission(admit_elapsed_ms)?,
+        Err(timed_out @ OrbitError::ProcessTimeout { .. }) => {
+            remaining_after_admission(admit_elapsed_ms.max(timeout_ms))?;
+            return Err(timed_out);
+        }
+        Err(refusal) => return Err(refusal),
+    };
     request.timeout_ms = Some(remaining_ms);
     let result = run_process(&request, &NoSandbox)?;
     orbit_tools::github_quota::observe_gh_result_by_deadline(&request, &result, deadline);

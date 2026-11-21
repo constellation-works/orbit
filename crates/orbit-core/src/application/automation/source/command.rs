@@ -3,6 +3,7 @@
 use super::super::source_cache::SourceCache;
 use chrono::{DateTime, Utc};
 use orbit_automation::{AutomationError, DeferredReason};
+use orbit_common::OrbitError;
 use orbit_common::process::supervisor::{
     Outcome, Periodic, ProcessStopCause, Stdin, Stream, SupervisedChild, Supervision, Termination,
 };
@@ -188,17 +189,35 @@ impl<'a> Source<'a> {
             let command_elapsed = super::budget_now()
                 .saturating_duration_since(command_started)
                 .max(wall_elapsed);
+            // A refusal the guard counted is delivered as decided, whatever
+            // the clocks read now; a refusal that met a spent budget came back
+            // uncounted as the typed timeout, so the deferral is that budget's.
+            let timed_out = match admitted {
+                Ok(()) => false,
+                Err(OrbitError::ProcessTimeout { .. }) => true,
+                Err(error) => {
+                    return Err(AutomationError::Deferred(
+                        DeferredReason::EvidenceUnavailable(format!(
+                            "{}: {error}",
+                            command_line(program, args)
+                        )),
+                    ));
+                }
+            };
             if self.elapsed() >= SOURCE_DEADLINE
                 || (!frozen_clock && wall_elapsed >= remaining_source_before)
             {
                 return Err(AutomationError::Deferred(DeferredReason::SourceDeadline));
             }
-            admitted.map_err(|error| {
-                AutomationError::Deferred(DeferredReason::EvidenceUnavailable(format!(
-                    "{}: {error}",
-                    command_line(program, args)
-                )))
-            })?;
+            if timed_out {
+                return Err(AutomationError::Deferred(
+                    if !frozen_clock && remaining_source_before <= budget {
+                        DeferredReason::SourceDeadline
+                    } else {
+                        DeferredReason::SourceBudget
+                    },
+                ));
+            }
             let remaining_command_budget = budget.saturating_sub(command_elapsed);
             if !frozen_clock && remaining_command_budget.is_zero() {
                 return Err(AutomationError::Deferred(DeferredReason::SourceBudget));

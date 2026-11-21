@@ -900,6 +900,103 @@ fn infrastructure_deadline_refusal_keeps_type_and_unreadable_forge_holds() {
     }
 }
 
+/// ORB-26140: a quota refusal that meets the spent completion budget is the
+/// typed `CompletionBudgetExpired` and is not counted in the host record, so
+/// the outcome agrees with the record.
+#[test]
+fn quota_refusal_meeting_a_spent_budget_expires_the_read_uncounted() {
+    use orbit_tools::github_quota::{self, GithubQuotaPolicy, GithubQuotaStore};
+
+    isolated(
+        "infrastructure::bounds::quota_refusal_meeting_a_spent_budget_expires_the_read_uncounted",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let fx = fixture_with_workflow(row);
+                let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                action(
+                    &host,
+                    "pr_open",
+                    &fx.open_input(&fx.candidate, &fx.base_sha),
+                )
+                .unwrap();
+                setup(&fx, "positive");
+                let reset = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+                    + 1800;
+                fs::write(
+                    fx.forge.join("infra-rate-limit"),
+                    json!({"resources":{
+                        "core":{"limit":5000,"remaining":0,"reset":reset},
+                        "graphql":{"limit":5000,"remaining":4000,"reset":reset}
+                    }})
+                    .to_string(),
+                )
+                .unwrap();
+                let records = tempfile::TempDir::new().unwrap();
+                let store = GithubQuotaStore::new(records.path().to_path_buf());
+                let policy = GithubQuotaPolicy::default();
+                let mut input = fx.complete_ungated_input();
+                input["auto_fix"] = json!(true);
+                input["completion"] = json!("review");
+                input["max_wait_seconds"] = json!(60);
+                // The deadline crosses right after the exhausted core quota's
+                // refusal is decided. Armed last: the skewed clock stays on
+                // this thread afterwards.
+                github_quota::advance_deadline_clock_after_next_refusal_decision(
+                    std::time::Duration::from_secs(120),
+                );
+                let result = orbit_engine::test_support::with_prerequisite_clock(
+                    || 1_000,
+                    |_, _| {},
+                    || {
+                        github_quota::with_scoped_guard(store.clone(), policy, || {
+                            orbit_engine::test_support::with_vcs_retry_wait(
+                                |_| {},
+                                || action(&host, "pr_complete", &input),
+                            )
+                        })
+                    },
+                );
+                let error = result.expect_err("a refusal met by a spent budget expires");
+                assert!(
+                    matches!(
+                        &error,
+                        orbit_common::OrbitError::DeliveryRefused {
+                            refusal:
+                                orbit_types::workflow::DeliveryRefusal::CompletionBudgetExpired,
+                            ..
+                        }
+                    ),
+                    "expected CompletionBudgetExpired, got {error:?}"
+                );
+                let account = fs::read_dir(records.path())
+                    .unwrap()
+                    .filter_map(|entry| {
+                        let path = entry.ok()?.path();
+                        (path.extension()? == "json")
+                            .then(|| path.file_stem()?.to_str().map(str::to_owned))?
+                    })
+                    .next()
+                    .expect("the admission wrote a quota record");
+                let refused = store
+                    .status(&policy, &account, reset - 1800)
+                    .resources
+                    .into_iter()
+                    .find(|resource| resource.resource == github_quota::RESOURCE_CORE)
+                    .expect("core status")
+                    .refused;
+                assert_eq!(
+                    (refused.delivery, refused.background),
+                    (0, 0),
+                    "a refusal delivered as an expiry must not be counted"
+                );
+            });
+        },
+    );
+}
+
 /// ORB-25934: a slow `api rate_limit` quota probe is bounded by the caller's
 /// remaining deadline instead of 15 s, prevents spawning the original request
 /// once the budget expires, and preserves `CompletionBudgetExpired` on both

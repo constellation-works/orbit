@@ -1202,6 +1202,83 @@ fn held_graphql_quota_defers_a_provider_read_without_running_gh() {
     assert_eq!(graphql.refused.background, 1);
 }
 
+/// ORB-26140: a hold that meets a spent command budget is the timeout
+/// deferral and leaves the refusal count unchanged; with budget left the same
+/// hold defers as a counted refusal.
+#[test]
+fn held_quota_refusal_meeting_a_spent_command_budget_defers_as_source_budget_uncounted() {
+    use orbit_tools::github_quota::{self, GithubQuotaPolicy, GithubQuotaStore, RateLimitAnswer};
+
+    let policy = GithubQuotaPolicy::default();
+    let account = github_quota::inherited_account_key();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_secs();
+    let held_store = || {
+        let records = tempfile::tempdir().expect("tempdir");
+        let store = GithubQuotaStore::new(records.path().to_path_buf());
+        store.refresh_if_due(&policy, &account, now, &|| {
+            RateLimitAnswer::Unknown("fixture".into())
+        });
+        store.record_throttle(
+            &policy,
+            &account,
+            github_quota::RESOURCE_GRAPHQL,
+            &orbit_common::ProviderReadThrottle {
+                reset_epoch_seconds: Some(now + 600),
+                principal: Some("user ID 42".into()),
+                ..Default::default()
+            },
+            now,
+        );
+        (records, store)
+    };
+    let refused = |store: &GithubQuotaStore| {
+        store
+            .status(&policy, &account, now)
+            .resources
+            .into_iter()
+            .find(|resource| resource.resource == github_quota::RESOURCE_GRAPHQL)
+            .expect("graphql status")
+            .refused
+            .background
+    };
+    let root = tempfile::tempdir().expect("tempdir");
+
+    let (_within_records, within) = held_store();
+    let error = github_quota::with_scoped_guard(within.clone(), policy, || {
+        Source::new(root.path()).ci_cover_pull_request("#1")
+    })
+    .expect_err("a held provider read defers");
+    assert!(
+        matches!(
+            &error,
+            AutomationError::Deferred(DeferredReason::EvidenceUnavailable(_))
+        ),
+        "{error:?}"
+    );
+    assert_eq!(refused(&within), 1);
+
+    // Armed last: the skewed clock stays on this thread afterwards.
+    let (_spent_records, spent) = held_store();
+    github_quota::advance_deadline_clock_after_next_refusal_decision(
+        std::time::Duration::from_secs(120),
+    );
+    let error = github_quota::with_scoped_guard(spent.clone(), policy, || {
+        Source::new(root.path()).ci_cover_pull_request("#1")
+    })
+    .expect_err("a refusal met by a spent budget defers");
+    assert!(
+        matches!(
+            &error,
+            AutomationError::Deferred(DeferredReason::SourceBudget)
+        ),
+        "{error:?}"
+    );
+    assert_eq!(refused(&spent), 0);
+}
+
 /// ORB-25934: a slow `api rate_limit` quota probe is bounded by the source's
 /// remaining budget and prevents spawning the original provider command when
 /// `SOURCE_DEADLINE` expires during admission.
