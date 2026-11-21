@@ -2865,7 +2865,7 @@
       },
       {
         "name": "view",
-        "description": "Bounded metadata view. The only accepted value is `bounded`.",
+        "description": "Bounded metadata view; requires `workspace`. The only accepted value is `bounded`.",
         "param_type": "string",
         "required": false
       },
@@ -3174,7 +3174,7 @@
       },
       {
         "name": "view",
-        "description": "Bounded metadata view. The only accepted value is `bounded`.",
+        "description": "Bounded metadata view; requires `workspace`. The only accepted value is `bounded`.",
         "param_type": "string",
         "required": false
       },

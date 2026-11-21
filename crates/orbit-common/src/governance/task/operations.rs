@@ -207,7 +207,7 @@ pub const TASK_HOST_HELP: &str = "Host that `--workspace` names (`orbit host lis
 const BOUNDED_VIEW_PARAM: ParamSpec = mcp_only(
     "view",
     ParamType::String,
-    "Bounded metadata view. The only accepted value is `bounded`.",
+    "Bounded metadata view; requires `workspace`. The only accepted value is `bounded`.",
 );
 
 const LIST: TaskOperation = TaskOperation {

@@ -62,6 +62,50 @@ fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinati
     let list = client.call_tool_ok("orbit_task_list", json!({"workspace":selector,"view":"bounded","search":"Desktop","status":"proposed","limit":1}));
     assert_eq!(list["total"], 1);
     assert_eq!(list["items"][0]["id"], id);
+
+    let default_list = stdout_json(&workspace.tool_ok("orbit.task.list", json!({})));
+    assert!(
+        default_list["tasks"]
+            .as_array()
+            .is_some_and(|tasks| tasks.iter().any(|task| task["id"] == id)),
+        "the default task listing must not require workspace: {default_list}"
+    );
+    let cli_refusal = workspace.run(&[
+        "tool",
+        "run",
+        "orbit.task.list",
+        "--input",
+        r#"{"view":"bounded"}"#,
+        "--format",
+        "json",
+    ]);
+    assert_eq!(
+        cli_refusal.status.code(),
+        Some(1),
+        "a bounded task list without workspace must fail: {}",
+        stderr(&cli_refusal)
+    );
+    assert!(cli_refusal.stdout.is_empty(), "{cli_refusal:?}");
+    let cli_refusal: Value = serde_json::from_slice(&cli_refusal.stderr)
+        .expect("CLI tool refusal is one JSON error object");
+    assert_eq!(cli_refusal["code"], "invalid_input", "{cli_refusal}");
+    let cli_refusal_message = cli_refusal["error"]
+        .as_str()
+        .expect("CLI tool refusal has a message");
+    for part in [
+        "`workspace`",
+        "registered workspace name",
+        "logical workspace ID",
+        "`ws_*`",
+        "absolute local checkout path",
+        "omit `view`",
+        "default task listing",
+    ] {
+        assert!(
+            cli_refusal_message.contains(part),
+            "missing {part:?}: {cli_refusal}"
+        );
+    }
     for (tool, input) in [
         ("orbit_task_list", json!({"view":"bounded"})),
         ("orbit_task_show", json!({"id":id,"snapshot":true})),
