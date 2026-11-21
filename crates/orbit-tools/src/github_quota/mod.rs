@@ -40,6 +40,8 @@ pub use fixture::FixtureGh;
 #[cfg(any(test, feature = "test-support"))]
 pub use guard::with_scoped_guard;
 pub use guard::{configure_host_policy, enable_host_guard, host_quota_status};
+#[cfg(any(test, feature = "test-support"))]
+pub use request::with_probe_timeout_when;
 pub use store::{
     CallCounts, DEFAULT_AGENT_RESERVE_PERCENT, DEFAULT_BACKGROUND_RESERVE_PERCENT,
     DEFAULT_REFRESH_INTERVAL, GithubCaller, GithubQuotaPolicy, GithubQuotaStatus, GithubQuotaStore,

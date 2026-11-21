@@ -53,6 +53,22 @@ pub(super) mod refusal_clock {
     pub(super) fn now() -> Instant {
         Instant::now() + OFFSET.get()
     }
+
+    /// Advance this thread's clock to at least `deadline`, never back.
+    pub(super) fn reach(deadline: Instant) {
+        let behind = deadline.saturating_duration_since(Instant::now());
+        if behind > OFFSET.get() {
+            OFFSET.set(behind);
+        }
+    }
+}
+
+/// Advance this thread's admission deadline clock to `deadline`, where a
+/// probe the deadline cut short leaves it in production. Test fixtures only:
+/// the probe-timeout seam in `request.rs` calls it when it ends a probe early.
+#[cfg(any(test, feature = "test-support"))]
+pub(in crate::github_quota) fn reach_deadline(deadline: Instant) {
+    refusal_clock::reach(deadline);
 }
 
 /// Make this thread's next refusal evaluation advance the admission deadline
