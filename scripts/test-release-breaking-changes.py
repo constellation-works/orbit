@@ -739,6 +739,35 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["signals"], [])
         self.assertEqual(report["bump"], "patch")
 
+    def _write_nested_payload_conditional(self, then_payload, else_payload):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["allOf"] = [{
+            "if": {"required": ["a"]},
+            "then": {"properties": {"payload": then_payload}},
+            "else": {"properties": {"payload": else_payload}},
+        }]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add nested payload conditional [ORB-53] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+        tools[0]["inputSchema"]["allOf"][0]["if"]["required"].append("c")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Narrow nested payload selector [ORB-54] (#2)")
+        return self.report()
+
+    def test_conditional_if_edit_into_nested_required_else_decides_minor(self):
+        # `{a, payload: {}}` was valid; with `c` also selecting `then` it falls
+        # into `else` and its payload now lacks `b`.
+        report = self._write_nested_payload_conditional({}, {"required": ["b"]})
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual([(s["task"], s["signal"]) for s in report["signals"]],
+                         [("ORB-54", "mcp-schema")])
+
+    def test_conditional_if_edit_between_equal_nested_requirements_stays_patch(self):
+        report = self._write_nested_payload_conditional(
+            {"required": ["b"]}, {"required": ["b"]})
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+
     def test_adding_conditional_contract_decides_minor(self):
         self._write_guarded_request_schema()
         report = self.report("--range", "v0.35.0~1..v0.35.0")
