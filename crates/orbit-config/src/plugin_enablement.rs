@@ -19,9 +19,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
+use crate::config_document;
 use crate::config_toml::read_config_toml;
 
 /// The reserved workspace table that holds per-plugin toggles.
@@ -66,30 +66,29 @@ pub(crate) fn plugin_enablement_from_document(
     else {
         return Ok(BTreeMap::new());
     };
-    let display = || redact_home_dir(&path.display().to_string());
     let Some(table) = value.as_table() else {
-        return Err(OrbitError::InvalidInput(format!(
-            "invalid runtime config '{}': '{PLUGIN_ENABLEMENT_TABLE}' must be a table of \
-             `<plugin> = true|false`",
-            display()
-        )));
+        return Err(config_document::invalid_runtime_config(
+            path,
+            format!("'{PLUGIN_ENABLEMENT_TABLE}' must be a table of `<plugin> = true|false`"),
+        ));
     };
     let mut toggles = BTreeMap::new();
     for (namespace, value) in table {
         if !orbit_types::plugin::is_valid_namespace(namespace) {
-            return Err(OrbitError::InvalidInput(format!(
-                "invalid runtime config '{}': '{PLUGIN_ENABLEMENT_TABLE}.{namespace}' is not a \
-                 plugin namespace: use lowercase letters, digits, '_' or '-', starting with a \
-                 letter",
-                display()
-            )));
+            return Err(config_document::invalid_runtime_config(
+                path,
+                format!(
+                    "'{PLUGIN_ENABLEMENT_TABLE}.{namespace}' is not a \
+                     plugin namespace: use lowercase letters, digits, '_' or '-', starting with a \
+                     letter"
+                ),
+            ));
         }
         let Some(enabled) = value.as_bool() else {
-            return Err(OrbitError::InvalidInput(format!(
-                "invalid runtime config '{}': '{PLUGIN_ENABLEMENT_TABLE}.{namespace}' must be \
-                 true or false",
-                display()
-            )));
+            return Err(config_document::invalid_runtime_config(
+                path,
+                format!("'{PLUGIN_ENABLEMENT_TABLE}.{namespace}' must be true or false"),
+            ));
         };
         toggles.insert(namespace.clone(), enabled);
     }
@@ -120,7 +119,7 @@ pub fn global_plugin_enablement_fix(path: &Path) -> String {
         "Remove [{PLUGIN_ENABLEMENT_TABLE}] from '{}'. Host enablement is \
          `orbit plugin enable|disable <plugin>`; a per-workspace toggle is \
          `orbit plugin enable|disable <plugin> --scope workspace`",
-        redact_home_dir(&path.display().to_string())
+        config_document::redacted_display(path)
     )
 }
 
@@ -173,7 +172,7 @@ pub(crate) fn reject_global_plugin_enablement(
     }
     Err(OrbitError::host_configuration(
         host_label_from_document(document),
-        redact_home_dir(&path.display().to_string()),
+        config_document::redacted_display(path),
         format!(
             "[{PLUGIN_ENABLEMENT_TABLE}] is a workspace setting. {}",
             global_plugin_enablement_fix(path)

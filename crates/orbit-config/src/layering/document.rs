@@ -3,7 +3,6 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::security::redaction::redact_home_dir;
 
 use crate::config_io::read_config_file;
 
@@ -21,12 +20,8 @@ pub(super) fn read_config_document(path: &Path) -> Result<Option<ConfigDocument>
 /// loader translates each document once it knows its layer
 /// ([`crate::aliases::translate_deprecated_keys`]).
 pub(super) fn parse_config_document(path: &Path, raw: &str) -> Result<ConfigDocument, OrbitError> {
-    let value = toml::from_str(raw).map_err(|err| {
-        OrbitError::InvalidInput(format!(
-            "invalid runtime config '{}': {err}",
-            redact_home_dir(&path.display().to_string())
-        ))
-    })?;
+    let value = toml::from_str(raw)
+        .map_err(|err| crate::config_document::invalid_runtime_config(path, err))?;
     if let Some(patterns) = crate::config_document::read_typed_config_value::<Vec<String>>(
         &value,
         "worktree.reclaim",
