@@ -310,7 +310,7 @@ when it returns `Result<PathBuf, E>` or `Result<Option<PathBuf>, E>`:
 - ["orbit_crate::module::validated_path", "ReturnValue", "path-injection", "manual"]
 ```
 
-On Linux with CodeQL 2.27.1 (rust-all 0.2.22), the real-CodeQL fixture below
+On Linux with CodeQL 2.27.1 (rust-all 0.2.22) and 2.27.5 (rust-all 0.2.26), the real-CodeQL fixture below
 reports `rust/path-injection` through
 `ReturnValue.Field[core::result::Result::Ok(0)]` and through its nested
 `.Field[core::option::Option::Some(0)]` form. The SARIF path traverses the
