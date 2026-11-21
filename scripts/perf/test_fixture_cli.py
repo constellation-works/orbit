@@ -639,5 +639,284 @@ class FixtureCliRestoreTests(unittest.TestCase):
             conn.close()
 
 
+class FixtureGitMetadataTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(
+            prefix="fixture-git-", dir=_scratch_parent()
+        )
+        self.addCleanup(self.temporary.cleanup)
+        self.base = Path(self.temporary.name)
+
+    def run_fixture(self, env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-I", str(FIXTURE_PY), *args],
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
+
+    def git(self, cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-C", str(cwd), *args],
+            text=True,
+            capture_output=True,
+            check=check,
+            timeout=30,
+        )
+
+    def init_primary_repo(self, repo: Path) -> tuple[str, str]:
+        self.git(repo.parent, "init", "-b", "agent-main", str(repo))
+        self.git(repo, "config", "user.email", "fixture@example.invalid")
+        self.git(repo, "config", "user.name", "Fixture Test")
+        (repo / "shared.txt").write_text("base\n", encoding="utf-8")
+        self.git(repo, "add", "shared.txt")
+        self.git(repo, "commit", "-m", "base commit")
+        base_sha = self.git(repo, "rev-parse", "HEAD").stdout.strip()
+
+        # Advance primary checkout with a second commit and primary-only staged
+        # file + per-worktree ref so divergence from linked checkouts is clear.
+        (repo / "primary-only.txt").write_text("primary\n", encoding="utf-8")
+        self.git(repo, "add", "primary-only.txt")
+        self.git(repo, "commit", "-m", "primary commit")
+        primary_sha = self.git(repo, "rev-parse", "HEAD").stdout.strip()
+
+        (repo / "primary-staged.txt").write_text("primary staged\n", encoding="utf-8")
+        self.git(repo, "add", "primary-staged.txt")
+        self.git(repo, "update-ref", "refs/worktree/primary-marker", primary_sha)
+        return base_sha, primary_sha
+
+    def assert_standalone_restored_git(
+        self,
+        restored_into: Path,
+        expected_head_sha: str | None,
+        expected_branch: str | None,
+        expected_ls_files: list[str],
+    ) -> None:
+        restored_checkout = restored_into / "checkout"
+        restored_git = restored_checkout / ".git"
+        self.assertTrue(restored_git.is_dir())
+        self.assertFalse(restored_git.is_symlink())
+        for forbidden in ("commondir", "gitdir", "locked", "worktrees"):
+            self.assertFalse((restored_git / forbidden).exists(), f"unexpected {forbidden} in {restored_git}")
+        self.assertFalse((restored_git / "refs" / "worktree" / "primary-marker").exists())
+
+        env = _child_env(restored_into / "home")
+        env["GIT_CEILING_DIRECTORIES"] = str(restored_into)
+
+        def run_restored_git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                ["git", "-C", str(restored_checkout), *args],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=check,
+                timeout=30,
+            )
+
+        self.assertEqual(
+            run_restored_git("rev-parse", "--path-format=absolute", "--git-dir").stdout.strip(),
+            str(restored_git.resolve()),
+        )
+        self.assertEqual(
+            run_restored_git("rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip(),
+            str(restored_git.resolve()),
+        )
+        sym = run_restored_git("symbolic-ref", "HEAD", check=False)
+        if expected_branch is not None:
+            self.assertEqual(sym.returncode, 0, sym.stderr)
+            self.assertEqual(sym.stdout.strip(), f"refs/heads/{expected_branch}")
+        else:
+            self.assertNotEqual(sym.returncode, 0)
+
+        if expected_head_sha is not None:
+            self.assertEqual(run_restored_git("rev-parse", "HEAD").stdout.strip(), expected_head_sha)
+        self.assertEqual(run_restored_git("ls-files").stdout.splitlines(), expected_ls_files)
+        worktrees = [
+            line for line in run_restored_git("worktree", "list", "--porcelain").stdout.splitlines()
+            if line.startswith("worktree ")
+        ]
+        self.assertEqual(worktrees, [f"worktree {restored_checkout.resolve()}"])
+
+    def test_snapshot_and_restore_preserve_linked_checkout_branch_and_index(self):
+        source_home = self.base / "source"
+        source_repo = source_home / "ws" / "orbit"
+        paths = _build_disposable_source(source_home, source_repo)
+        base_sha, primary_sha = self.init_primary_repo(source_repo)
+
+        linked_checkout = paths["orbit_dir"] / "state" / "worktrees" / "run-branch"
+        self.git(source_repo, "worktree", "add", "-b", "task-branch", str(linked_checkout), base_sha)
+        self.git(linked_checkout, "config", "user.email", "fixture@example.invalid")
+        self.git(linked_checkout, "config", "user.name", "Fixture Test")
+        (linked_checkout / "task-file.txt").write_text("task\n", encoding="utf-8")
+        self.git(linked_checkout, "add", "task-file.txt")
+        self.git(linked_checkout, "commit", "-m", "task commit")
+        task_sha = self.git(linked_checkout, "rev-parse", "HEAD").stdout.strip()
+        self.assertNotEqual(task_sha, primary_sha)
+
+        (linked_checkout / "task-staged.txt").write_text("staged in task\n", encoding="utf-8")
+        self.git(linked_checkout, "add", "task-staged.txt")
+
+        snapshot_dir = self.base / "snapshot"
+        env = _child_env(source_home)
+        snap_res = self.run_fixture(
+            env,
+            "snapshot",
+            "--workspace",
+            "ws_fixture",
+            "--global-root",
+            str(paths["global_root"]),
+            "--git-metadata",
+            str(linked_checkout),
+            "--out",
+            str(snapshot_dir),
+        )
+        self.assertEqual(snap_res.returncode, 0, snap_res.stderr)
+
+        manifest = json.loads((snapshot_dir / "snapshot-manifest.json").read_text())
+        self.assertEqual(manifest["git_metadata"]["checkout"], str(linked_checkout.resolve()))
+        self.assertEqual(
+            manifest["git_metadata"]["common_dir"],
+            str((source_repo / ".git").resolve()),
+        )
+        self.assertNotEqual(
+            manifest["git_metadata"]["git_dir"],
+            manifest["git_metadata"]["common_dir"],
+        )
+
+        # Remove the source linked worktree after snapshotting so any hidden
+        # source binding fails immediately on restore.
+        self.git(source_repo, "worktree", "remove", "--force", str(linked_checkout))
+
+        restore_into = self.base / "restored"
+        res = self.run_fixture(env, "restore", "--snapshot", str(snapshot_dir), "--into", str(restore_into))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assert_standalone_restored_git(
+            restore_into,
+            expected_head_sha=task_sha,
+            expected_branch="task-branch",
+            expected_ls_files=["shared.txt", "task-file.txt", "task-staged.txt"],
+        )
+
+    def test_snapshot_and_restore_preserve_linked_checkout_detached_commit_and_index(self):
+        source_home = self.base / "source"
+        source_repo = source_home / "ws" / "orbit"
+        paths = _build_disposable_source(source_home, source_repo)
+        base_sha, _primary_sha = self.init_primary_repo(source_repo)
+
+        linked_checkout = self.base / "detached-wt"
+        self.git(source_repo, "worktree", "add", "--detach", str(linked_checkout), base_sha)
+        (linked_checkout / "detached-staged.txt").write_text("detached\n", encoding="utf-8")
+        self.git(linked_checkout, "add", "detached-staged.txt")
+
+        snapshot_dir = self.base / "snapshot"
+        env = _child_env(source_home)
+        snap_res = self.run_fixture(
+            env,
+            "snapshot",
+            "--workspace",
+            "ws_fixture",
+            "--global-root",
+            str(paths["global_root"]),
+            "--git-metadata",
+            str(linked_checkout),
+            "--out",
+            str(snapshot_dir),
+        )
+        self.assertEqual(snap_res.returncode, 0, snap_res.stderr)
+
+        self.git(source_repo, "worktree", "remove", "--force", str(linked_checkout))
+
+        restore_into = self.base / "restored"
+        res = self.run_fixture(env, "restore", "--snapshot", str(snapshot_dir), "--into", str(restore_into))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assert_standalone_restored_git(
+            restore_into,
+            expected_head_sha=base_sha,
+            expected_branch=None,
+            expected_ls_files=["detached-staged.txt", "shared.txt"],
+        )
+
+    def test_snapshot_and_restore_linked_orphan_and_bare_common_repo(self):
+        # 1. Orphan linked worktree has no index file yet; primary's index must not leak.
+        source_home = self.base / "orphan-source"
+        source_repo = source_home / "ws" / "orbit"
+        paths = _build_disposable_source(source_home, source_repo)
+        self.init_primary_repo(source_repo)
+
+        orphan_checkout = self.base / "orphan-wt"
+        self.git(source_repo, "worktree", "add", "--orphan", "-b", "orphan-task", str(orphan_checkout))
+
+        orphan_snapshot = self.base / "orphan-snapshot"
+        env = _child_env(source_home)
+        snap_res = self.run_fixture(
+            env,
+            "snapshot",
+            "--workspace",
+            "ws_fixture",
+            "--global-root",
+            str(paths["global_root"]),
+            "--git-metadata",
+            str(orphan_checkout),
+            "--out",
+            str(orphan_snapshot),
+        )
+        self.assertEqual(snap_res.returncode, 0, snap_res.stderr)
+
+        orphan_restored = self.base / "orphan-restored"
+        res = self.run_fixture(env, "restore", "--snapshot", str(orphan_snapshot), "--into", str(orphan_restored))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assert_standalone_restored_git(
+            orphan_restored,
+            expected_head_sha=None,
+            expected_branch="orphan-task",
+            expected_ls_files=[],
+        )
+
+        # 2. Bare common repo + linked worktree with remote credentials and core.worktree.
+        bare_repo = self.base / "bare.git"
+        subprocess.run(
+            ["git", "clone", "--bare", str(source_repo), str(bare_repo)],
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=30,
+        )
+        self.git(bare_repo, "remote", "set-url", "origin", "https://user:secret@example.invalid/org/repo.git")
+        bare_wt = self.base / "bare-wt"
+        self.git(bare_repo, "worktree", "add", "-b", "bare-task", str(bare_wt), "agent-main")
+        (bare_wt / "bare-staged.txt").write_text("bare staged\n", encoding="utf-8")
+        self.git(bare_wt, "add", "bare-staged.txt")
+        self.git(bare_repo, "config", "core.worktree", str(bare_wt))
+
+        bare_snapshot = self.base / "bare-snapshot"
+        snap_res = self.run_fixture(
+            env,
+            "snapshot",
+            "--workspace",
+            "ws_fixture",
+            "--global-root",
+            str(paths["global_root"]),
+            "--git-metadata",
+            str(bare_wt),
+            "--out",
+            str(bare_snapshot),
+        )
+        self.assertEqual(snap_res.returncode, 0, snap_res.stderr)
+
+        bare_restored = self.base / "bare-restored"
+        res = self.run_fixture(env, "restore", "--snapshot", str(bare_snapshot), "--into", str(bare_restored))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        restored_cfg = (bare_restored / "checkout" / ".git" / "config").read_text()
+        self.assertNotIn("user:secret@", restored_cfg)
+        self.assertNotIn("worktree =", restored_cfg)
+        self.assert_standalone_restored_git(
+            bare_restored,
+            expected_head_sha=self.git(bare_wt, "rev-parse", "HEAD").stdout.strip(),
+            expected_branch="bare-task",
+            expected_ls_files=["bare-staged.txt", "primary-only.txt", "shared.txt"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
