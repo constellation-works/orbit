@@ -328,8 +328,11 @@ contracts_higher="${app_modules}|routines|auto_tasks"
 # With `$4` set to `named-path`, match the `|`-separated path prefixes `$3`
 # anywhere in code, including grouped trees, while preserving comments and
 # literals as non-dependencies. A single name matches that identifier alone.
-# A leading `super::` chain is resolved from the file's module path under
-# `src/`, so `super::…::adapter` inside `application` matches `crate::adapter`.
+# A leading `super::` chain is resolved from the lexical module under `src/`:
+# the file's path plus each enclosing inline `mod`. Two `super` segments
+# inside `mod nested` in `application/probe.rs` land on `application`, so
+# they do not match `crate::adapter`. The same chain at file depth, or one
+# more `super` inside that module, does.
 # With `$5` set to `include-tests`, also scan sibling test modules.
 super_chains_into() {
   python3 - "$1" "$2" "$3" "${4:-}" "${5:-}" <<'PY'
@@ -420,6 +423,57 @@ def crate_module_parts(file_path):
     return None
 
 
+def inline_module_suffixes(tokens):
+    """Extra module names at each token from inline `mod name { … }` items.
+
+    A `mod` counts only at the enclosing module's brace depth, so function,
+    impl and use-tree braces do not add a segment. `mod name;` adds none.
+    This tokenizer spells a raw identifier as `r`, `#`, then the name.
+    """
+    ident = re.compile(r"[A-Za-z_][A-Za-z0-9_]*$")
+
+    def opened_module(mod_index):
+        cursor = mod_index + 1
+        limit = len(tokens)
+        if cursor >= limit or not ident.fullmatch(tokens[cursor][0]):
+            return None
+        mod_name = tokens[cursor][0]
+        cursor += 1
+        if (mod_name == "r" and cursor + 1 < limit and tokens[cursor][0] == "#"
+                and ident.fullmatch(tokens[cursor + 1][0])):
+            mod_name = tokens[cursor + 1][0]
+            cursor += 2
+        if cursor < limit and tokens[cursor][0] == "{":
+            return mod_name, cursor
+        return None
+
+    suffixes = []
+    extras = []
+    open_depths = []
+    opens = {}
+    depth = 0
+    for index, (name, _) in enumerate(tokens):
+        suffixes.append(tuple(extras))
+        body = open_depths[-1] if open_depths else 0
+        if (name == "mod" and depth == body
+                and (index == 0 or tokens[index - 1][0] != "::")):
+            opened = opened_module(index)
+            if opened is not None:
+                opens[opened[1]] = opened[0]
+        if name == "{":
+            depth += 1
+            if index in opens:
+                extras.append(opens[index])
+                open_depths.append(depth)
+        elif name == "}":
+            if open_depths and open_depths[-1] == depth:
+                open_depths.pop()
+                extras.pop()
+            if depth:
+                depth -= 1
+    return suffixes
+
+
 def resolve_super_chain(segments, module_parts):
     """Rewrite a leading `super::` chain as a `crate::` path, or None."""
     if module_parts is None or not segments or segments[0] != "super":
@@ -478,13 +532,15 @@ for path in paths:
             expanded.extend((head, *prefix[1:]) for head in heads - {prefix[0]})
         prefixes = [*prefixes, *expanded]
         module_parts = crate_module_parts(path)
+        suffixes = inline_module_suffixes(tokens)
 
-        def matches(segments):
+        def matches(segments, at):
             def hit(candidate):
                 return any(candidate[:len(prefix)] == prefix for prefix in prefixes)
             if hit(segments):
                 return True
-            absolute = resolve_super_chain(segments, module_parts)
+            here = None if module_parts is None else [*module_parts, *suffixes[at]]
+            absolute = resolve_super_chain(segments, here)
             return absolute is not None and hit(absolute)
 
         for index, (name, start) in enumerate(tokens):
@@ -496,7 +552,7 @@ for path in paths:
             if not starts_prefix and not starts_super:
                 continue
             named_paths, _ = use_tree(tokens, index)
-            if any(matches(segments) for segments in named_paths):
+            if any(matches(segments, index) for segments in named_paths):
                 number = source.count("\n", 0, start) + 1
                 print(f"{path}:{number}:{source.splitlines()[number - 1]}")
                 failed = True

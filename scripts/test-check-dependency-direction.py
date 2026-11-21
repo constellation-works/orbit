@@ -1509,6 +1509,24 @@ class RelativeImportTests(unittest.TestCase):
             ("driver/file/probe.rs", "use super::super::super::contracts::Probe;\n"),
         ], rejected=False, base=store)
 
+    def test_inline_module_super_resolves_at_its_lexical_depth(self):
+        # [ORB-26522] `mod nested` in a file directly under application adds
+        # one module. Two `super` segments there name application::adapter,
+        # which the public guard allows, in the module body and in a function
+        # nested there. Three `super` segments name crate::adapter in both
+        # of those places and stay rejected. A function body on its own adds
+        # no module; that row lives with the file-depth cases above.
+        self.check_rows([
+            ("probe.rs", "mod nested {\n    use super::super::adapter::Probe;\n}\n"),
+            ("body.rs", "mod nested {\n    fn probe() {\n"
+             "        super::super::adapter::Probe;\n    }\n}\n"),
+        ], rejected=False)
+        self.check_rows([
+            ("escape.rs", "mod nested {\n    use super::super::super::adapter::Probe;\n}\n"),
+            ("escape_body.rs", "mod nested {\n    fn probe() {\n"
+             "        super::super::super::adapter::Probe;\n    }\n}\n"),
+        ], rejected=True)
+
     def test_tools_builtin_grouped_imports_rejected_in_either_spelling(self):
         # [ORB-26107] `r#builtin` names the same module as `builtin`. The
         # tokenizer once split the raw identifier into `r` and `#`, so a grouped
