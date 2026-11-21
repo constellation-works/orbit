@@ -92,12 +92,13 @@ orbit task list
 orbit doctor
 ```
 
-`orbit init` and `orbit workspace init` do not create the task and workspace
-databases; the first command that opens them does, and `orbit task list` is
-the simplest. `orbit doctor` only observes, so on a machine where those
-databases do not exist yet it reports a single `runtime` error row that names
-this step instead of the full report. Run `orbit task list` once, then
-`orbit doctor`.
+`orbit init` creates the machine database and `orbit workspace init` the task
+index, but neither creates the workspace's search index; the first command
+that opens the workspace does, and `orbit task list` is the simplest.
+`orbit doctor` only observes, so until then it reports a `search-index`
+warning. If a database is missing altogether, it reports a single `runtime`
+error row that names this step instead of the full report. Run
+`orbit task list` once, then `orbit doctor`.
 
 ### Initialize the machine
 
@@ -127,6 +128,7 @@ your OS user name; pass `--human-name <name>` to choose another.
 | `--mcp` | Connects your agent clients with **operator** authority, so they can ship tasks and run governed operations. For an agent-only connection, see [Connect your agent](/how-to/mcp-integration/). |
 | `--base-branch <branch>` | Sets the branch pull requests target. The default is the branch checked out when you run the command, or `main`. |
 | `--ship-mode local` | Merges in place instead of opening pull requests. |
+| `--install-browser-kit` | Installs the [headless browser kit](#prepare-a-browser-kit-for-ui-tasks) without asking when the repository has a web UI (a `package.json` or HTML file). Without it, the command asks at a terminal and otherwise only says how. |
 | `--preset <file>` | Applies a [workspace preset](/reference/config/#workspace-presets) that a distribution supplies. |
 
 ### Prepare the sandbox
