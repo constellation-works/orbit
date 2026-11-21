@@ -18,6 +18,34 @@ use crate::contracts::ProviderLimitStoreBackend;
 
 use super::codec::stamp;
 
+/// Literal statements for one reading's table; placeholder numbering matches
+/// the bound parameters in `record_provider_usage_reading`.
+struct ReadingSql {
+    select: &'static str,
+    delete: &'static str,
+    newer_exists: &'static str,
+}
+
+const NAMED_CREW_READING_SQL: ReadingSql = ReadingSql {
+    select: "SELECT model_scope, window_label FROM provider_account_limit_observations \
+             WHERE provider = ?1 AND source = ?2 AND observed_at < ?4 AND account = ?3",
+    delete: "DELETE FROM provider_account_limit_observations \
+             WHERE provider = ?1 AND model_scope = ?2 AND window_label = ?3 \
+             AND source = ?4 AND observed_at < ?5 AND account = ?6",
+    newer_exists: "SELECT EXISTS (SELECT 1 FROM provider_account_limit_observations \
+             WHERE provider = ?1 AND source = ?2 AND observed_at > ?4 AND account = ?3)",
+};
+
+const DEFAULT_LOGIN_READING_SQL: ReadingSql = ReadingSql {
+    select: "SELECT model_scope, window_label FROM provider_limit_observations \
+             WHERE provider = ?1 AND source = ?2 AND observed_at < ?4",
+    delete: "DELETE FROM provider_limit_observations \
+             WHERE provider = ?1 AND model_scope = ?2 AND window_label = ?3 \
+             AND source = ?4 AND observed_at < ?5",
+    newer_exists: "SELECT EXISTS (SELECT 1 FROM provider_limit_observations \
+             WHERE provider = ?1 AND source = ?2 AND observed_at > ?4)",
+};
+
 impl ProviderLimitStoreBackend for Store {
     fn record_provider_limit(
         &self,
@@ -38,29 +66,14 @@ impl ProviderLimitStoreBackend for Store {
         let account = account_of(first);
         // Retire only what an older reading wrote: a newer reading that
         // landed first (a concurrent drain) is the authority, not this one.
-        let (table, account_filter) = if account.is_some() {
-            ("provider_account_limit_observations", " AND account = ?3")
+        // The statements are literals; the account is a crew name that only
+        // ever travels as a bound parameter.
+        let sql = if account.is_some() {
+            &NAMED_CREW_READING_SQL
         } else {
-            ("provider_limit_observations", "")
+            &DEFAULT_LOGIN_READING_SQL
         };
-        let select = format!(
-            "SELECT model_scope, window_label FROM {table} \
-             WHERE provider = ?1 AND source = ?2 AND observed_at < ?4{account_filter}"
-        );
-        let delete = format!(
-            "DELETE FROM {table} \
-             WHERE provider = ?1 AND model_scope = ?2 AND window_label = ?3 \
-             AND source = ?4 AND observed_at < ?5{}",
-            if account.is_some() {
-                " AND account = ?6"
-            } else {
-                ""
-            }
-        );
-        let newer_exists = format!(
-            "SELECT EXISTS (SELECT 1 FROM {table} \
-             WHERE provider = ?1 AND source = ?2 AND observed_at > ?4{account_filter})"
-        );
+        let (select, delete, newer_exists) = (sql.select, sql.delete, sql.newer_exists);
         let event = ProviderLimitSource::Event.as_str();
         let cutoff = stamp(first.observed_at);
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
@@ -73,7 +86,7 @@ impl ProviderLimitStoreBackend for Store {
             // layout dropped.
             let superseded: bool = conn
                 .query_row(
-                    &newer_exists,
+                    newer_exists,
                     rusqlite::params![first.provider, event, account_text, cutoff],
                     |row| row.get(0),
                 )
@@ -84,7 +97,7 @@ impl ProviderLimitStoreBackend for Store {
             for observation in observations {
                 upsert_observation(conn, observation)?;
             }
-            let mut statement = conn.prepare(&select).map_err(sqlite_store_error)?;
+            let mut statement = conn.prepare(select).map_err(sqlite_store_error)?;
             // `?3` is unused without an account; the placeholder keeps the
             // numbered parameters contiguous.
             let params: [&dyn rusqlite::ToSql; 4] =
@@ -110,7 +123,7 @@ impl ProviderLimitStoreBackend for Store {
                 if account.is_some() {
                     bound.push(&account_text);
                 }
-                conn.execute(&delete, bound.as_slice())
+                conn.execute(delete, bound.as_slice())
                     .map_err(sqlite_store_error)?;
             }
             Ok(())
