@@ -167,7 +167,8 @@ def bounded_schema_pairs():
             yield {"allOf": [{outer: [left, right]}]}, {"allOf": [{}]}
 
     # Independent same-keyword applicators in one allOf: adding, deleting or
-    # narrowing one conjunct while a sibling of the same keyword survives.
+    # narrowing one conjunct while a sibling of the same keyword survives, and
+    # wrapping/unwrapping a bare applicator into allOf alongside a sibling.
     conjuncts = [{"anyOf": [{"type": "string"}, {"type": "boolean"}]},
                  {"anyOf": [{"type": "string"}, {"type": "integer"}]},
                  {"oneOf": [{"type": "string"}, {"type": "boolean"}]},
@@ -176,10 +177,16 @@ def bounded_schema_pairs():
         yield {"allOf": [left, right]}, {"allOf": [left]}
         yield {"allOf": [left]}, {"allOf": [left, right]}
         yield {"allOf": [left, right]}, {"allOf": [right, left]}
+        yield left, {"allOf": [left, right]}
+        yield left, {"allOf": [right, left]}
+        yield {"allOf": [left, right]}, left
         for keyword in ("anyOf", "oneOf"):
             if keyword in right:
                 yield ({"allOf": [left, right]},
                        {"allOf": [left, {keyword: right[keyword][:1]}]})
+            if keyword in left:
+                yield left, {"allOf": [{keyword: left[keyword][:1]}, right]}
+                yield {"allOf": [left, right]}, {keyword: left[keyword][:1]}
 
     # if / then / else conditionals: selector edits, branch edits, adding/removing
     # if/then/else, moving required names between root and then/else, and
