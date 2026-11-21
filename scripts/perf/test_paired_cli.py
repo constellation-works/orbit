@@ -69,7 +69,7 @@ case "$mode" in
     exit 0
     ;;
   ignore-term)
-    exec {python} -c 'import os, pathlib, signal, sys, time; marker=pathlib.Path(sys.argv[1]); marker.write_text(str(os.getpid())); signal.signal(signal.SIGTERM, lambda signum, frame: marker.with_suffix(".term").write_text(str(signum))); time.sleep(600)' "$marks/ignore-$role.pid"
+    exec {python} -I {ignore_term_driver} "$marks/ignore-$role.pid"
     ;;
   graceful-descendant)
     exec {python} -I {graceful_driver} "$marks/graceful-$role"
@@ -104,6 +104,31 @@ case "$mode" in
     exit 3
     ;;
 esac
+"""
+
+
+# Signal and PID markers that a cancellation test reads while the writer may
+# still be running. The writer creates a temp sibling, pauses before flushing
+# (the 200 ms gap keeps that window open on every run), and renames the value
+# into place. A reader that sees the marker's name therefore sees the whole
+# value; creating the marker first would publish an empty file (ORB-26449).
+MARKER_PUBLISH = """
+import os, pathlib, time
+def publish_marker(path, text):
+    path = pathlib.Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as handle:
+        time.sleep(0.2)
+        handle.write(text)
+    os.replace(tmp, path)
+"""
+
+IGNORE_TERM_DRIVER = MARKER_PUBLISH + r"""
+import os, pathlib, signal, sys, time
+pid_file = pathlib.Path(sys.argv[1])
+publish_marker(pid_file, str(os.getpid()))
+signal.signal(signal.SIGTERM, lambda signum, frame: publish_marker(pid_file.with_suffix(".term"), str(signum)))
+time.sleep(600)
 """
 
 
@@ -153,7 +178,7 @@ os._exit(0)
 
 # Stands in for `orbit web serve`: announces its address, answers `/`, and
 # stalls on `/slow` so the harness can be cancelled while it is serving.
-WEB_SERVER = """
+WEB_SERVER = MARKER_PUBLISH + """
 import http.server, os, signal, subprocess, sys, time
 from pathlib import Path
 pid_file = Path(sys.argv[1])
@@ -161,7 +186,7 @@ marks = pid_file.parent
 role = pid_file.stem.removeprefix("web-")
 if (marks / "ignore-web-term").exists():
     def record_term(signum, _frame):
-        (marks / f"web-{role}.term").write_text(str(signum))
+        publish_marker(marks / f"web-{role}.term", str(signum))
     signal.signal(signal.SIGTERM, record_term)
     child = subprocess.Popen([
         sys.executable, "-c",
@@ -170,7 +195,7 @@ if (marks / "ignore-web-term").exists():
         "pathlib.Path(sys.argv[1]).write_text('ready'); time.sleep(600)",
         str(marks / f"web-{role}.descendant.ready"),
     ])
-    (marks / f"web-{role}.descendant.pid").write_text(str(child.pid))
+    publish_marker(marks / f"web-{role}.descendant.pid", str(child.pid))
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/slow":
@@ -207,8 +232,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
-with open(pid_file, "w") as handle:
-    handle.write(str(os.getpid()))
+publish_marker(pid_file, str(os.getpid()))
 with open(marks / "web-all.pids", "a") as handle:
     handle.write(f"{os.getpid()}\\n")
 print(f"http://127.0.0.1:{server.server_address[1]}", flush=True)
@@ -275,6 +299,8 @@ def write_builds(builds: Path, marks: Path) -> dict[str, Path]:
     web_server.write_text(WEB_SERVER)
     graceful_driver = builds.parent / "graceful_driver.py"
     graceful_driver.write_text(GRACEFUL_DRIVER)
+    ignore_term_driver = builds.parent / "ignore_term_driver.py"
+    ignore_term_driver.write_text(IGNORE_TERM_DRIVER)
     binaries = {}
     revisions = {}
     for role, commit in (("base", "a"), ("candidate", "c")):
@@ -287,6 +313,7 @@ def write_builds(builds: Path, marks: Path) -> dict[str, Path]:
             python=shlex.quote(sys.executable),
             web_server=shlex.quote(str(web_server)),
             graceful_driver=shlex.quote(str(graceful_driver)),
+            ignore_term_driver=shlex.quote(str(ignore_term_driver)),
         ))
         path.chmod(0o755)
         binaries[role] = path
