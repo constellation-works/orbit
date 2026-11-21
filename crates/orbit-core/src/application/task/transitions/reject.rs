@@ -1,6 +1,18 @@
 use super::*;
 use orbit_types::task::TaskHistoryEntry;
 
+/// The inputs `reject_task_recording` writes: the operator's note and optional
+/// comment, the acting identity, whether a `blocked` task may be rejected, and
+/// the answered triage history appended in the same store update.
+struct RejectionRecord {
+    note: String,
+    comment: Option<String>,
+    agent: Option<String>,
+    model: Option<String>,
+    allow_blocked: bool,
+    append_history: Vec<TaskHistoryEntry>,
+}
+
 impl OrbitRuntime {
     pub fn reject_task(
         &self,
@@ -30,8 +42,17 @@ impl OrbitRuntime {
         comment: Option<String>,
         answered: Vec<TaskHistoryEntry>,
     ) -> Result<DeferredApprovalEffects, OrbitError> {
-        let (task, previous_status, reason) =
-            self.reject_task_recording(id, note, comment, None, None, true, answered)?;
+        let (task, previous_status, reason) = self.reject_task_recording(
+            id,
+            RejectionRecord {
+                note,
+                comment,
+                agent: None,
+                model: None,
+                allow_blocked: true,
+                append_history: answered,
+            },
+        )?;
         Ok(DeferredApprovalEffects::after_rejection(
             previous_status,
             task,
@@ -59,27 +80,38 @@ impl OrbitRuntime {
         model: Option<String>,
         allow_blocked: bool,
     ) -> Result<Task, OrbitError> {
-        let (result, previous_status, reason) =
-            self.reject_task_recording(id, note, comment, agent, model, allow_blocked, Vec::new())?;
+        let (result, previous_status, reason) = self.reject_task_recording(
+            id,
+            RejectionRecord {
+                note,
+                comment,
+                agent,
+                model,
+                allow_blocked,
+                append_history: Vec::new(),
+            },
+        )?;
         self.close_task_prs_after_transition(previous_status, &result, Some(&reason));
 
         Ok(result)
     }
 
-    /// Write the rejection with `append_history` in the same store update and
-    /// return the rejected task, the status it left and the redacted reason.
-    /// Pull-request closure is the caller's.
-    #[allow(clippy::too_many_arguments)]
+    /// Write the rejection with `record.append_history` in the same store
+    /// update and return the rejected task, the status it left and the
+    /// redacted reason. Pull-request closure is the caller's.
     fn reject_task_recording(
         &self,
         id: &str,
-        note: String,
-        comment: Option<String>,
-        agent: Option<String>,
-        model: Option<String>,
-        allow_blocked: bool,
-        append_history: Vec<TaskHistoryEntry>,
+        record: RejectionRecord,
     ) -> Result<(Task, TaskStatus, String), OrbitError> {
+        let RejectionRecord {
+            note,
+            comment,
+            agent,
+            model,
+            allow_blocked,
+            append_history,
+        } = record;
         self.ensure_coordination_task_write_permitted()?;
         let (canonical_agent, canonical_model) =
             self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
