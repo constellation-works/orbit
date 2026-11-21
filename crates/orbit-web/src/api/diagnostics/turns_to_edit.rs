@@ -513,7 +513,7 @@ fn turns_to_edit_trend(
             json!({
                 "provider": provider, "n": n, "mean_turns": mean_turns,
                 "median_turns": median_turns, "measured_rate": cell.coverage_json()["measured_rate"],
-                "thin": n > 0 && n < MIN_TASKS,
+                "thin": n < MIN_TASKS,
             })
         }).collect::<Vec<_>>(),
         "available_providers": providers
