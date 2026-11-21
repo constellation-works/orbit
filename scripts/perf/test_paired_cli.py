@@ -22,6 +22,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
 PAIRED = REPO / "scripts" / "perf" / "paired.py"
@@ -221,6 +222,8 @@ class PairedCliTestCase(unittest.TestCase):
         self.marks.mkdir()
         self.binaries = write_builds(self.builds, self.marks)
         self.lane_lock = root / "lane.lock"
+        self.home = root / "home"
+        self.home.mkdir()
 
     def paired_argv(self, out: Path, surface: tuple[str, ...], *extra: str) -> list[str]:
         return [sys.executable, "-I", str(PAIRED),
@@ -232,8 +235,14 @@ class PairedCliTestCase(unittest.TestCase):
                 *surface, *extra]
 
     def paired_env(self) -> dict[str, str]:
-        # A private lock: this regression must not take the host perf lane.
-        env = os.environ.copy()
+        # No inherited Orbit or Git authority reaches the child (STD-03 §R20): it
+        # gets its own HOME and Orbit root, and a private lane lock so this
+        # regression never takes the host perf lane. The child's protected-root
+        # guard runs unchanged.
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith(("ORBIT_", "GIT_"))}
+        env["HOME"] = str(self.home)
+        env["ORBIT_ROOT"] = str(self.home / ".orbit")
         env["ORBIT_PERF_LANE_LOCK"] = str(self.lane_lock)
         return env
 
@@ -402,6 +411,14 @@ class PairedCliParityTest(PairedCliTestCase):
         summary = json.loads((out / "paired-summary.json").read_text())
         self.assertEqual(summary["verdict"], "pass")
         self.assertIn('"verdict": "pass"', result.stdout)
+
+    def test_inherited_orbit_root_does_not_refuse_isolated_parity(self) -> None:
+        # An ORBIT_ROOT exported by the invoking shell that encloses this run's
+        # scratch must not make the harness refuse its own disposable restore.
+        with mock.patch.dict(os.environ, {"ORBIT_ROOT": str(SCRATCH)}):
+            result, out = self.run_paired("--parity", "probe-same")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIs(json.loads((out / "parity.json").read_text())["match"], True)
 
 
 class PairedCliSupervisionTest(PairedCliTestCase):
