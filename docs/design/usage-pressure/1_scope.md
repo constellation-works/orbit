@@ -9,8 +9,8 @@ doc_role: scope
 type: design
 summary: "Scope: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not"
 tags: [usage-pressure, crews, crew-pools, provider-limits, admission]
-last_updated: 2026-10-30
-last_validated: 2026-11-06
+last_updated: 2026-11-20
+last_validated: 2026-11-20
 ---
 
 # Scope: usage-pressure crew selection
@@ -258,5 +258,7 @@ as neutral 1.0 — so an older or `static` follower orders exactly as before.
 - [ORB-17773] — applies follower pressure to pull-drain draws and offers
 - [ORB-17774] — records Grok usage windows
 - [ORB-17775] — records Antigravity usage windows
+- [ORB-22808] — removes the `usage_pressure_cap` and `usage_pressure_strength` keys and fixes both at 8 and 1.
+- [ORB-22844] — removes the finding-verification routine whose pool partitions the shared draw seam had served.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
