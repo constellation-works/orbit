@@ -760,6 +760,37 @@ with open(os.environ["STUB_ADMISSION_RELEASE"]) as pipe:
                         stop_group(process, anchor)
                 self.assert_isolated()
 
+    def test_group_teardown_signals_only_while_the_anchor_holds_the_group(self):
+        # A completed run reaps its leader before teardown; a failed run tears
+        # down while the leader is unreaped. Both signal the group while the
+        # anchor still holds it, then reap both, and a repeat teardown after
+        # the anchor is reaped never signals the released group ID.
+        for leader_reaped in (True, False):
+            with self.subTest(leader_reaped=leader_reaped):
+                leader = subprocess.Popen(BLOCKED_ON_STDIN, stdin=subprocess.PIPE,
+                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, process_group=0)
+                anchor = spawn_group_anchor(leader)
+                self.addCleanup(stop_group, leader, anchor)
+                if leader_reaped:
+                    # communicate closes stdin, so the leader exits and is reaped.
+                    leader.communicate(timeout=180)
+                    self.assertEqual(leader.returncode, 0)
+                signals = []
+                real_killpg = os.killpg
+
+                def recording_killpg(pgid, sig):
+                    signals.append((pgid, sig, leader.returncode, anchor.returncode))
+                    real_killpg(pgid, sig)
+
+                with mock.patch("os.killpg", recording_killpg):
+                    stop_group(leader, anchor)
+                self.assertEqual(signals, [(leader.pid, signal.SIGKILL, 0 if leader_reaped else None, None)])
+                self.assertEqual(leader.returncode, 0 if leader_reaped else -signal.SIGKILL)
+                self.assertEqual(anchor.returncode, -signal.SIGKILL)
+                with mock.patch("os.killpg") as repeat_killpg:
+                    stop_group(leader, anchor)
+                repeat_killpg.assert_not_called()
+
     def test_environment_count_overrides_persistent_count_and_keeps_existing_locks(self):
         slot_dir = self.cache / "slots"
         slot_dir.mkdir(parents=True)
