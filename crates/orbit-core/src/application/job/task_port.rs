@@ -8,7 +8,7 @@ use orbit_types::task::{
     CrewSource, DecisionRequest, ExecutorOsLimit, Task, TaskComplexity, TaskHistoryEntry,
 };
 use orbit_types::workflow::{
-    self, CrewPurpose, DeliveryRefusal, HostValidationGates, JobRun, JobRunTrigger, PipelineState,
+    self, CrewPurpose, HostValidationGates, JobRun, JobRunTrigger, PipelineState,
     RunDeliveryObservation, ShipMode, SourceRepairBinding,
 };
 use serde_json::{Value, json};
@@ -50,7 +50,13 @@ impl TaskJobPort for OrbitRuntime {
                     .get_job_run(&run.run_id)?
                     .as_ref()
                     .and_then(super::pr_repair::held_refusal);
-                needs_passed_check = refusal == Some(DeliveryRefusal::CheckRunsAbsent);
+                // [ORB-26389] A held run never merges on the hold's own
+                // missing evidence: a later read must show a required check
+                // passed on the head, not merely none failed or pending. A
+                // head whose required checks have not started (or a repository
+                // whose read reports none required) reads as no blocker at
+                // all, which merged a held pull request before its CI ran.
+                needs_passed_check = true;
                 refusal.is_some_and(super::pr_repair::handed_back_hold)
             }
             _ => false,

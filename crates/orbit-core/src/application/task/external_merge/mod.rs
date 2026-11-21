@@ -78,6 +78,7 @@ mod candidate;
 mod entry;
 mod handoff;
 mod land;
+mod merge_audit;
 mod model;
 mod persistence;
 mod refusal;
@@ -88,6 +89,9 @@ pub use auto_land::{
     AutoLanding, FOLLOW_UP_OWNER_OPERATOR, LANDING_FOLLOW_UP_EVENT, LandingFollowUp,
 };
 use candidate::{RevokedHandoff, names_delivery};
+pub(crate) use merge_audit::{
+    PullRequestMergeAttribution, audited_forge_merge, audited_private_vcs_merge,
+};
 pub use model::ExternalMergeSettlement;
 pub use model::ExternalMergeSettlementProfile;
 use model::SETTLEABLE_STATUSES;

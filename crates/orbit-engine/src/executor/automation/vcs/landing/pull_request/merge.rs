@@ -297,6 +297,7 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
             "reviewed_head_sha": head,
             "report_base_modified": true,
             "workspace_path": self.workspace_path,
+            (super::super::super::PR_MERGE_ATTRIBUTION_FIELD): context.merge_attribution,
         });
         // An unreadable task still lands: the squash takes its subject from
         // the candidate's own commits, which were composed from the task.

@@ -39,6 +39,9 @@ const MERGEABILITY_WAIT_TEST_ENV: &str = "ORBIT_TEST_MERGEABILITY_WAIT";
 
 use super::candidate::Candidate;
 
+/// The audit step a merge requested through `orbit.workflow.land` names.
+const LAND_TOOL_MERGE_STEP: &str = "workflow.land";
+
 /// The stable code a refused landing's error starts with.
 pub const TASK_LANDING_REFUSED: &str = "task_landing_refused";
 
@@ -218,7 +221,18 @@ impl OrbitRuntime {
             }
         };
         let merge_commit = self
-            .merge_delivery_pull_request(id, number, None, &expected_base, false)?
+            .merge_delivery_pull_request(
+                id,
+                number,
+                None,
+                &expected_base,
+                false,
+                &super::PullRequestMergeAttribution {
+                    run_id: None,
+                    step: LAND_TOOL_MERGE_STEP,
+                    task_id: Some(id),
+                },
+            )?
             .into_merge_commit(id, number)?;
         // The work has landed, so a settlement that fails now is not a failed
         // landing: the owner's settlement pass reads the same merge.
@@ -365,6 +379,7 @@ impl OrbitRuntime {
         expected_head: Option<&str>,
         expected_base: &str,
         require_passed_check: bool,
+        attribution: &super::PullRequestMergeAttribution<'_>,
     ) -> Result<DeliveryMergeOutcome, OrbitError> {
         let repo_root = self.context.paths().repo_root.clone();
         let forge = self.task_pr_forge();
@@ -403,7 +418,15 @@ impl OrbitRuntime {
             &blockers.head_sha,
             number,
         );
-        match forge.merge_pull_request(&repo_root, number, &blockers.head_sha, &message)? {
+        match super::audited_forge_merge(
+            self,
+            forge,
+            &repo_root,
+            number,
+            &blockers.head_sha,
+            &message,
+            attribution,
+        )? {
             PullRequestMergeOutcome::Merged { merge_commit } => {
                 Ok(DeliveryMergeOutcome::Merged { merge_commit })
             }

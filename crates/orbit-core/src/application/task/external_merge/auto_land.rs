@@ -16,8 +16,11 @@
 //! - no `completion.hold` rule holds it, and the pre-landing review covers the
 //!   pull request's head;
 //! - its one open delivery pull request (several record
-//!   `ambiguous_delivery_pull_requests` and merge nothing) is mergeable with every required
-//!   check passed, and, when a stopped native run published it, still is the
+//!   `ambiguous_delivery_pull_requests` and merge nothing) is mergeable with
+//!   every required check passed (after a held run, at least one required
+//!   check must have passed on the head: a read that reports none is not
+//!   evidence, so a held run never merges before its checks ran
+//!   [ORB-26389]), and, when a stopped native run published it, still is the
 //!   revision that run published: settlement rejects any other, so a moved
 //!   branch records `publication_identity_changed` and merges nothing.
 //!
@@ -30,6 +33,9 @@
 //! checked again when a later tick reaches the workspace.
 //! Successive ticks can skip the same workspace, so there is no elapsed-time
 //! upper bound for a skipped workspace.
+//!
+//! Each merge writes `pr_merge` audit rows naming the delivery run it acts on
+//! and the `owner_sweep.auto_land` step (see `merge_audit`).
 //!
 //! A task that cannot be merged does not sit silently: the pass appends one
 //! [`LANDING_FOLLOW_UP_EVENT`] entry naming a typed `code`, the `owner` of the
@@ -62,6 +68,10 @@ pub const LANDING_FOLLOW_UP_EVENT: &str = "landing_follow_up";
 
 /// Who records the follow-up and settles the merge in task history.
 const AUTO_LAND_ACTOR: &str = "owner-landing";
+
+/// The audit step an owner sweep's automatic landing names. Its row's run is
+/// the completion-authorised delivery run the merge acts on.
+const AUTO_LAND_MERGE_STEP: &str = "owner_sweep.auto_land";
 
 /// Follow-up code for a task with several open delivery pull requests.
 const AMBIGUOUS_DELIVERY_CODE: &str = "ambiguous_delivery_pull_requests";
@@ -275,9 +285,9 @@ impl OrbitRuntime {
         if !blockers.pending_required_checks.is_empty() {
             return Ok(None);
         }
-        // A run held because the head reported no required check run has no
-        // check evidence until one passes; a forge read with none is not
-        // permission to merge. The next pass reads again.
+        // A held run has no check evidence until a required check passes on
+        // the head; a forge read with none is not permission to merge
+        // [ORB-26389]. The next pass reads again.
         if needs_passed_check && blockers.passed_required_checks.is_empty() {
             return Ok(None);
         }
@@ -331,6 +341,11 @@ impl OrbitRuntime {
             Some(&head),
             &expected_base,
             needs_passed_check,
+            &super::PullRequestMergeAttribution {
+                run_id: Some(&run_id),
+                step: AUTO_LAND_MERGE_STEP,
+                task_id: Some(&id),
+            },
         )? {
             DeliveryMergeOutcome::Merged { merge_commit } => {
                 // The work has landed; a settlement that fails here is read
