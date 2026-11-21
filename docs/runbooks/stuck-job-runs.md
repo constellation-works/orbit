@@ -1865,8 +1865,8 @@ The evidence determines which recovery path to take:
 An operator attempting to recover a held or blocked delivery may meet two common refusals:
 
 - **A held run without a review-decision hold refuses source-repair requeue:**
-  A `held` run is eligible to preserve its published candidate only when it has finished, its
-  worker is gone, and its recorded steps identify the before-landing review-decision hold. In
+  Green requeue of a `held` run requires a finished run, a stopped worker, and recorded steps
+  that identify the before-landing review-decision hold. In
   that case, `orbit task requeue <task-id>` authenticates the candidate and resumes its pull
   request when it remains open at the authenticated published head — the recorded head, or a
   head advanced by recorded auto-fix (`pr_auto_fix_pushed`) or an attested reviewer commit
@@ -1881,14 +1881,36 @@ An operator attempting to recover a held or blocked delivery may meet two common
   (or `orbit task update <task-id> --status backlog --discard-candidate`).
 - **A task in `review` cannot be requeued:**
   `orbit task requeue` accepts only tasks currently in `blocked` status (`only a blocked task can be requeued; <task-id> is review`).
-  If the held delivery left the task in `review`, requeue is refused.
-  **Workaround:** Move the task directly to `backlog` with `--discard-candidate`:
+  To continue editing a held run's published candidate, use
+  [explicit source repair](#repair-a-held-runs-published-candidate).
+  To retire the candidate and implement afresh, move the task to `backlog` with
+  `--discard-candidate`.
   ```bash
   orbit task update <task-id> --status backlog --discard-candidate
   ```
   This discards the preserved candidate, closes any unmerged Orbit pull request, and returns
   the task to `backlog` for fresh execution. If no live run watches the pull request, see
   also [A conflicting or red pull request no run is watching](#a-conflicting-or-red-pull-request-no-run-is-watching).
+
+## Repair a held run's published candidate
+
+When a task PR pipeline ends `held` after publication, for example
+at `complete_pr` because required-check evidence was unavailable, use
+explicit source repair if the candidate needs changes. On the owning host,
+use `orbit run` action `resume` with `source_repair.action: inspect` and the
+held publishing run's ID. Then submit the exact returned binding with
+`source_repair.action: submit`, a fresh `request_key` and a concrete
+`diagnosis`. The task can be in `review` or `blocked` and needs an execution
+plan.
+
+The recorded worker must have conclusively stopped, and the run must still
+be the task's latest owner-local single-task execution. Orbit requires
+successful host publication checkpoints and verifies the existing open,
+unmerged PR against the published branch head. A missing publication
+checkpoint, a discarded candidate or an unexplained head change refuses
+repair. The new attempt adopts the PR branch and reapplies the authenticated
+candidate to the current base for fresh implementation, validation and
+configured review. It uses the PR's shared repair budget and stops for review.
 
 ## A delivery leaf that died after opening its pull request
 
