@@ -1437,7 +1437,7 @@
     ]
   },
   "scoped_step_by_workflow_name_in_a_raw_job_log_returns_an_unsupported_mapping_error": {
-    "error": "invalid input: log step selection unsupported: \"Download nextest archive\" in run 34060485218 job 101560010340: raw job logs name steps only by their `Run <command>` display group, not by workflow step name, so this step's identity and runtime boundaries cannot be reliably established in the raw log; job log fallback read 1 of 1 candidate job(s): job 101560010340 (`test`): raw log step mapping unsupported for the requested step; no log bytes returned",
+    "error": "invalid input: log step selection unsupported: \"Download nextest archive\" in run 34060485218 job 101560010340: raw job logs name steps only by their `Run <command>` display group, not by workflow step name, so this step's identity and runtime boundaries cannot be reliably established in the raw log; omit `step` and read by `job` with `scope` or a byte/line window; job log fallback read 1 of 1 candidate job(s): job 101560010340 (`test`): raw log step mapping unsupported for the requested step; no log bytes returned",
     "calls": [
       "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340",
       "run view 34060485218 --job 101560010340 --log-failed",
