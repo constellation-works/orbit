@@ -847,6 +847,18 @@ fi
         self.assertFalse((self.marks / "web-all.pids").exists(),
                          "no arm server may start for an empty parity command")
 
+    def test_malformed_parity_quoting_is_a_flag_usage_error_in_http_mode(self) -> None:
+        # ORB-26439: a --parity value shlex cannot split is a usage error (STD-01 R20,
+        # R21), not an unhandled ValueError traceback. Refused before any output or arm.
+        result, out = self.run_paired("--parity", "'", surface=("--http", "/ok"))
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("error: argument --parity:", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertNotIn('"verdict": "pass"', result.stdout)
+        self.assertFalse(out.exists(), "a refused usage error creates no output")
+        self.assertFalse((self.marks / "web-all.pids").exists(),
+                         "no arm server may start for a malformed parity command")
+
 
 class PairedCliSupervisionTest(PairedCliTestCase):
     def assert_stall_refused(self, mode: str, *extra: str, surface=("--cli", "timed")) -> None:
