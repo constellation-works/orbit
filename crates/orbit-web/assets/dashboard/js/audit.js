@@ -513,7 +513,7 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
 
   // Same card chrome and title row as the per-tool panel beside it, so the
   // side-by-side pair's headers share a top edge and height (§R2).
-  const panel = el("div", { class: "audit-summary-card" });
+  const panel = el("div", { class: "card card-flush audit-summary-card" });
   panel.appendChild(el("h3", {
     class: "card-title section-title",
     text: `Unexpected failures by callable tool (${window})${capped ? " · capped counts" : ""}`,
@@ -531,7 +531,7 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
     if (!isNamedTool(row.tool)) continue;
     const rate = row.rate || 0;
     const severity = rate >= 0.14 ? "critical" : rate >= 0.05 ? "warning" : "normal";
-    const card = el("div", { class: `health-card ${severity}` });
+    const card = el("div", { class: `card card-dense health-card ${severity}` });
 
     const header = el("div", { class: "card-header" });
     header.appendChild(el("span", { class: "tool-name", text: row.tool, title: row.tool }));
@@ -551,7 +551,6 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
     card.appendChild(body);
 
     if (onCardClick) {
-      card.classList.add("clickable");
       card.setAttribute("aria-label", `Filter unexpected failures by ${row.tool}`);
       makeToggleRow(card, { onToggle: () => onCardClick(row) });
     }
@@ -668,7 +667,7 @@ function renderAuditSummary(data, ctx) {
   };
 
   const createCard = (title, renderBody, scrollableBody = false) => {
-    const card = el("div", { class: "audit-summary-card" });
+    const card = el("div", { class: "card card-flush audit-summary-card" });
     card.appendChild(el("div", { class: "card-title section-title", text: title }));
     const body = el("div", { class: "card-body" });
     if (scrollableBody) {
@@ -800,7 +799,7 @@ function renderAuditSummary(data, ctx) {
     const label = data.lifecycle_diagnostic_label || "lifecycle diagnostics";
     const window = data.window || "24h";
     const lifecycleTitle = `${label}${incidentScanCapped ? " · capped counts" : ""}`;
-    const lifecycleCard = el("div", { class: "audit-summary-card lifecycle-failure-card" });
+    const lifecycleCard = el("div", { class: "card card-flush audit-summary-card lifecycle-failure-card" });
     lifecycleCard.appendChild(el("div", { class: "card-title section-title", text: lifecycleTitle }));
     const body = el("div", { class: "card-body" });
     body.appendChild(el("div", {

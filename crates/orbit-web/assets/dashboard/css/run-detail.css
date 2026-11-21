@@ -319,16 +319,7 @@ a.failure-id-link:focus-visible {
 /* The owner actions are one card, apart from the claim's facts and from the
    task's own actions under the tabs: approval, then recovery with a single
    reason field and its actions grouped by what they act on. */
-.claim-actions {
-  position: relative;
-  display: grid;
-  gap: var(--space-14);
-  margin-top: var(--space-16);
-  padding: var(--space-16);
-  background: var(--bg-well);
-  border: 1px solid var(--hair);
-  border-radius: var(--radius);
-}
+.claim-actions { position: relative; display: grid; gap: var(--space-14); margin-top: var(--space-16); }
 .claim-actions-head {
   display: flex;
   align-items: center;

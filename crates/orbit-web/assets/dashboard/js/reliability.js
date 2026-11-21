@@ -391,7 +391,7 @@ function renderBreakdown(payload) {
 }
 
 function card(title, body, key) {
-  const node = el("div", { class: "audit-summary-card rel-card" }, [
+  const node = el("div", { class: "card card-flush audit-summary-card rel-card" }, [
     el("div", { class: "card-title section-title", text: title }),
     el("div", { class: "card-body" }, [body]),
   ]);

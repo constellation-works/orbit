@@ -1,5 +1,5 @@
 /* Analytics › Experiments: the list and one experiment's readout, built on
-   the Metrics card, series-card, chart and table classes in health.css. Arms
+   shared cards and stat tiles with the chart and table layouts in health.css. Arms
    take the shared categorical palette (`.mx-s-c1`…) through `--mx-c`. */
 .panel > .body.experiments-body {
   display: flex; flex-direction: column; gap: var(--space-16);
@@ -14,7 +14,6 @@
 .ex-view.data-changed, .ex-view.data-new { animation: none; }
 .ex-tab-panel[hidden] { display: none; }
 .ex-tab-panel .ex-empty { min-height: 72px; padding: var(--space-16); }
-.ex-tab-panel > .mx-row > .mx-card { min-width: 0; }
 
 /* Badges: status, mode and verdict carry a text label, never color alone. */
 .ex-badges { display: inline-flex; flex-wrap: wrap; gap: var(--space-6); }
@@ -307,10 +306,7 @@ textarea.exf-control { resize: vertical; min-height: 56px; }
 .exf-roles { display: flex; flex-wrap: wrap; gap: var(--space-6) var(--space-14); }
 .exf-check { display: inline-flex; align-items: center; gap: var(--space-6); color: var(--fg); font: var(--text-md) var(--font-sans); }
 .exf-control-pick { align-self: end; min-height: 34px; }
-.exf-arm {
-  display: flex; flex-direction: column; gap: var(--space-10); min-width: 0; padding: var(--space-12);
-  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-sunk);
-}
+.exf-arm { display: flex; flex-direction: column; gap: var(--space-10); }
 .exf-arm-head { display: flex; justify-content: space-between; align-items: center; gap: var(--space-8); }
 .exf-surface { border-top: 1px solid var(--hair); padding-top: var(--space-8); }
 .exf-surface > summary { cursor: pointer; color: var(--fg-dim); font: 600 var(--text-sm) var(--font-sans); }

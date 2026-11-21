@@ -145,7 +145,7 @@ function jobCatalog(routinesPayload, runs, workspaceName, catalogJobs) {
 
 function jobRunningCard(run, workspaceId) {
   const startedAt = run.started_at || run.scheduled_at || run.created_at;
-  return el("div", { class: "operation-running-card" }, [
+  return el("div", { class: "card card-dense operation-running-card" }, [
     el("div", { class: "operation-running-head" }, [
       outcomeDot(run.state),
       el("strong", { class: "mono", text: run.job_id }),
@@ -189,7 +189,7 @@ function runningTaskCard(group, workspaceId) {
   const { task, runs } = group;
   const startedAt = (run) => run.started_at || run.scheduled_at || run.created_at;
   const oldest = runs.reduce((earliest, run) => (new Date(startedAt(run) || 0) < new Date(startedAt(earliest) || 0) ? run : earliest));
-  const card = el("div", { class: "operation-running-card operation-running-task" }, [
+  const card = el("div", { class: "card card-dense operation-running-card operation-running-task" }, [
     el("div", { class: "operation-running-head" }, [
       outcomeDot(oldest.state),
       taskLink(task.id, workspaceId),
@@ -275,7 +275,7 @@ function jobRow(job, workspace, streak) {
     setTimeout(() => { copy.textContent = "Copy command"; }, 1500);
   });
   const recent = job.runs.slice(0, 5);
-  const card = el("article", { class: `operation-card operation-row job-card ${jobFamily(job.id)}` });
+  const card = el("article", { class: `operation-row job-card ${jobFamily(job.id)}` });
   card.dataset.job = job.id;
   card.append(...[
     el("div", { class: "operation-row-head" }, [

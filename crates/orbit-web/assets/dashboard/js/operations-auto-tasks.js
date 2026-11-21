@@ -483,7 +483,7 @@ function autoTaskRow(payload, definition, workspaceId) {
   const nextCell = next?.state === "scheduled" && next.at
     ? whenCell("Next mint", next.at)
     : operationCell("Next mint", [el("span", { class: `operation-cell-main${on ? "" : " muted"}`, text: nextEvaluationText(next, null, definition.schedule) })]);
-  const card = el("article", { class: `operation-card operation-row auto-task-card ${state}` });
+  const card = el("article", { class: `operation-row auto-task-card ${state}` });
   card.append(
     el("div", { class: "operation-row-head" }, [
       operationCell("", [autoTaskToggleButton(payload, definition)], "operation-cell-control"),

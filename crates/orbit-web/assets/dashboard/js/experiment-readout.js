@@ -84,7 +84,7 @@ export function experimentBadge(text, className) {
 }
 
 export function experimentCard(title, children, { meta = null, className = "", hint = null } = {}) {
-  return el("section", { class: `mx-card ex-card ${className}`.trim(), "aria-label": title }, [
+  return el("section", { class: `card mx-card ex-card ${className}`.trim(), "aria-label": title }, [
     el("div", { class: "mx-card-head" }, [
       el("h2", { class: "mx-card-title" }, [title, hint ? pinnedInfoHint(hint) : null]),
       meta ? el("span", { class: "mx-card-meta", text: meta }) : null,

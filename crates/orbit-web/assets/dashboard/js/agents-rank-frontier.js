@@ -117,7 +117,7 @@ function chartCard(chart, minCoverage) {
     ? plotWrap(chart, label)
     : el("p", { class: "agents-rank-note", text: `No ranked model on ${label} has both a tier score and a recorded cost to plot.` });
   if (chart.plot.length) body.tabIndex = 0;
-  return el("div", { class: "agents-rank-box agents-rank-chart" }, [
+  return el("div", { class: "card agents-rank-box agents-rank-chart" }, [
     el("div", { class: "agents-rank-box-head" }, [
       el("h4", { text: `${label} tier · ${rankFormat.plural(chart.plot.length, "model")} plotted` }),
       el("span", { class: "agents-rank-box-meta", text: "Cost axis is logarithmic · $ per task at list price" }),
@@ -412,7 +412,7 @@ function tierTable(chart) {
     return tr;
   });
   const skipped = groupSkipped(chart.skipped);
-  return el("aside", { class: "agents-rank-box agents-rank-tier-table", "aria-label": `${label} tier table` }, [
+  return el("aside", { class: "card agents-rank-box agents-rank-tier-table", "aria-label": `${label} tier table` }, [
     el("h4", { text: `${label} tier, by tier score` }),
     el("div", { class: "agents-table-wrap" }, [
       el("table", { class: "agents-table" }, [

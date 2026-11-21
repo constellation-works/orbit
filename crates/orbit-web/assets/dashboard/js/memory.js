@@ -341,7 +341,7 @@ function revisionCard(space) {
   ];
   if (space.reason) rows.push(fact("Reason", collapsedText(space.reason)));
   rows.push(fact("Evidence", taskLinks(space.evidence)));
-  return el("div", { class: "task-delivery-card knowledge-meta-card" }, rows);
+  return el("div", { class: "card card-flush card-raised task-delivery-card knowledge-meta-card" }, rows);
 }
 
 function fact(label, value) {

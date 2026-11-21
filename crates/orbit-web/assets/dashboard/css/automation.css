@@ -42,11 +42,6 @@ body.operations-active .rail {
 .operation-feedback.success { color: var(--state-success); }
 .operation-feedback.error { color: var(--state-failed); }
 #routines-body, #clock-body, #auto-tasks-body, #scripts-body { padding: var(--space-12); background: var(--bg); }
-.operation-card {
-  padding: var(--space-10) var(--space-12); margin-bottom: var(--space-6); border: 1px solid var(--border);
-  border-radius: var(--radius-xs); background: var(--bg-elev);
-}
-.operation-card:last-child { margin-bottom: 0; }
 .operation-clock-summary, .operation-clock-actions {
   display: flex; align-items: center; justify-content: space-between; gap: var(--space-10);
 }
@@ -169,10 +164,7 @@ body.operations-active .rail {
 /* A plugin-off definition is two cells: what it is, and why it never fires. */
 #routines-body .operation-group.inactive-plugin-group,
 #auto-tasks-body .operation-group.inactive-plugin-group { --ops-columns: minmax(0, 1fr) minmax(0, 2fr); }
-.operation-group {
-  min-width: 0; margin-bottom: var(--space-12); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  background: var(--bg-elev); overflow: hidden;
-}
+.operation-group { margin-bottom: var(--space-12); overflow: hidden; }
 .operation-group:last-child { margin-bottom: 0; }
 /* The Active and Paused groups sit inside #routine-list-groups, so the rule above zeroes
    the last one's bottom margin. A plugin-off or owner-only group after the catalogue
@@ -194,10 +186,8 @@ body.operations-active .rail {
   display: grid; grid-template-columns: var(--ops-columns); gap: var(--space-8) var(--space-12);
   padding: var(--space-6) var(--space-12); border-bottom: 1px solid var(--hair);
 }
-.operation-card.operation-row {
-  margin: 0; padding: var(--space-10) var(--space-12); border: 0; border-bottom: 1px solid var(--hair); border-radius: 0; background: transparent;
-}
-.operation-card.operation-row:last-child { border-bottom: 0; }
+.operation-row { padding: var(--space-10) var(--space-12); border-bottom: 1px solid var(--hair); }
+.operation-row:last-child { border-bottom: 0; }
 .operation-row .operation-row-head { grid-template-columns: var(--ops-columns); align-items: center; }
 .operation-row .operation-details { margin-top: var(--space-6); }
 .operation-cell { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
@@ -340,10 +330,7 @@ a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
 .operation-running-title { display: flex; align-items: center; gap: var(--space-8); margin-bottom: var(--space-8); color: var(--fg-dim); font: var(--text-xs) var(--font-sans); }
 .operation-running-title strong { color: var(--fg); font-size: var(--text-sm); font-weight: 600; }
 .operation-running-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--space-8); }
-.operation-running-card {
-  display: flex; flex-direction: column; gap: var(--space-6); min-width: 0; overflow-wrap: anywhere; padding: var(--space-10) var(--space-12);
-  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-elev);
-}
+.operation-running-card { display: flex; flex-direction: column; gap: var(--space-6); overflow-wrap: anywhere; }
 .operation-running-head { display: flex; align-items: center; gap: var(--space-8); min-width: 0; font-size: var(--text-sm); }
 .operation-running-head .operation-task-link { flex-shrink: 0; white-space: nowrap; }
 .operation-running-head strong { overflow-wrap: anywhere; }
@@ -456,10 +443,7 @@ a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
 .automation-diagnostic p, .automation-diagnostic .operation-field-value { overflow-wrap: anywhere; }
 
 /* Automation › Scripts: grant state, diff since the grant, open request. */
-.script-card {
-  padding: var(--space-10) var(--space-12); margin-bottom: var(--space-8); border: 1px solid var(--border);
-  border-radius: var(--radius-xs); background: var(--bg-elev); min-width: 0;
-}
+.script-card { margin-bottom: var(--space-8); }
 .script-card:last-child { margin-bottom: 0; }
 .script-card-head { display: flex; align-items: center; gap: var(--space-10); flex-wrap: wrap; }
 .script-card-head .operation-button, .script-card-head .operation-action-unavailable { margin-left: auto; }

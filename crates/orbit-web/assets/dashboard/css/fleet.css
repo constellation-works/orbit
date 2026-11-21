@@ -10,8 +10,7 @@
 .fleet-host-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-14); }
 .fleet-host-grid[data-columns="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .fleet-host-grid[data-columns="1"] { grid-template-columns: minmax(0, 1fr); }
-.fleet-host-card.settings-btn { height: auto; display: grid; align-content: start; gap: var(--space-16); min-width: 0; width: 100%; padding: var(--space-16); white-space: normal; text-align: left; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-panel); color: var(--fg); cursor: pointer; }
-.fleet-host-card:hover { border-color: var(--accent); }
+.fleet-host-card { display: grid; align-content: start; gap: var(--space-16); width: 100%; text-align: left; color: var(--fg); font: inherit; }
 .fleet-card-head { display: grid; gap: var(--space-6); }
 .fleet-card-head h3 { font: 500 var(--text-base) var(--font-sans); margin: 0; overflow-wrap: anywhere; }
 .fleet-state { font: 400 var(--text-sm) var(--font-sans); white-space: nowrap; }
@@ -31,7 +30,7 @@
 .fleet-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .fleet-card-health { color: var(--fg-mute); font: 400 var(--text-sm)/1.5 var(--font-sans); overflow-wrap: anywhere; }
 .fleet-card-health.warn { color: var(--warn-fg); }
-.fleet-work-list, .fleet-account-list { border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--bg-elev); overflow: clip; }
+.fleet-work-list, .fleet-account-list { overflow: clip; }
 .fleet-work-row.settings-btn, .fleet-work-row { height: auto; display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) auto; align-items: center; gap: var(--space-8) var(--space-16); width: 100%; min-width: 0; padding: var(--space-14); border: 0; border-radius: 0; white-space: normal; text-align: left; font: 400 var(--text-sm)/1.5 var(--font-sans); background: transparent; color: var(--fg); box-sizing: border-box; }
 .fleet-work-row + .fleet-work-row, .fleet-account + .fleet-account { border-top: 1px solid var(--hair); }
 .fleet-work-row.settings-btn:hover { background: var(--bg-control); }
@@ -64,7 +63,7 @@
 .fleet-dialog input { max-width: 100%; box-sizing: border-box; }
 @media (max-width: 1000px) {
   .fleet-host-grid, .fleet-host-grid[data-columns="2"] { grid-template-columns: minmax(0, 1fr); }
-  .fleet-host-card.settings-btn { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .fleet-host-card { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .fleet-host-card .fleet-facts, .fleet-card-health { grid-column: 1 / -1; }
 }
 @media (max-width: 600px) {

@@ -636,7 +636,7 @@ function hotspotSections(model) {
 
 function hotspotTable(model) {
   const { data, signals, index } = model;
-  const box = el("section", { class: "codebase-hot", "aria-label": "Hotspots" });
+  const box = el("section", { class: "card card-flush codebase-hot", "aria-label": "Hotspots" });
   if (!signals.length) {
     box.appendChild(el("div", { class: "codebase-empty-state" }, [
       el("p", { class: "codebase-empty-title", text: `No path reaches minimum support ${count(data.min_support)} under any signal in this window.` }),
@@ -866,7 +866,7 @@ function fileTasks(model, path) {
     toggle.setAttribute("aria-expanded", String(view.allTasks));
     head.appendChild(toggle);
   }
-  const box = el("section", { class: "codebase-box codebase-file-tasks", "aria-label": "Regressed tasks" }, [head]);
+  const box = el("section", { class: "card card-flush codebase-box codebase-file-tasks", "aria-label": "Regressed tasks" }, [head]);
   const filters = activeFilters(model.data.regression_filter || {});
   if (filters.length) {
     box.appendChild(note(`Filtered to ${filters.map(({ label, key }) => `${label.toLowerCase()} ${valueLabel(model.data.regression_filter[key])}`).join(", ")}: only matching regressions are counted and listed.`, "codebase-filter-note"));
@@ -960,7 +960,7 @@ function symbolRow(site, tasksById, underDir) {
 /// one row per symbol, most regressed tasks first. A path with none says so,
 /// with how many regressed tasks that declared it record no site.
 function fileSymbols(model, path) {
-  const box = el("section", { class: "codebase-box codebase-file-symbols", "aria-label": "Symbols" }, [
+  const box = el("section", { class: "card card-flush codebase-box codebase-file-symbols", "aria-label": "Symbols" }, [
     el("div", { class: "codebase-box-head stacked" }, [el("h4", { text: "Symbols" }), el("span", { class: "codebase-extra", text: "regression sites recorded under this path" })]),
   ]);
   const body = el("div", { class: "codebase-box-body" });
@@ -1068,7 +1068,7 @@ function relatedRow(row) {
 }
 
 function fileRelated(path) {
-  const box = el("section", { class: "codebase-box codebase-file-related", "aria-label": "Changes with" }, [
+  const box = el("section", { class: "card card-flush codebase-box codebase-file-related", "aria-label": "Changes with" }, [
     el("div", { class: "codebase-box-head stacked" }, [el("h4", { text: "Changes with" }), el("span", { class: "codebase-extra", text: "files landed in the same tasks" })]),
   ]);
   const body = el("div", { class: "codebase-box-body" });
@@ -1257,7 +1257,7 @@ function pairsNode(model) {
   const head = el("div", { class: "codebase-box-head" }, [
     el("div", {}, [el("h4", { text: "Reserved together" }), el("span", { class: "codebase-extra", text: "tasks holding both ÷ tasks holding either" })]),
   ]);
-  const box = el("section", { class: "codebase-box codebase-pairs", "aria-label": "Reserved together" }, [head]);
+  const box = el("section", { class: "card card-flush codebase-box codebase-pairs", "aria-label": "Reserved together" }, [head]);
   const release = pairs.filter((pair) => releasePair(pair.paths));
   if (release.length) {
     const toggle = el("input", { type: "checkbox", class: "codebase-check" });
@@ -1342,7 +1342,7 @@ function locksNode(model) {
     }
     head.appendChild(sorts);
   }
-  const box = el("section", { class: "codebase-box codebase-locks", "aria-label": "Lock waits" }, [head]);
+  const box = el("section", { class: "card card-flush codebase-box codebase-locks", "aria-label": "Lock waits" }, [head]);
   const footer = couplingListFooter(rows.length, "allLocks", "codebase-lock-list");
   if (lockIsQuiet(data)) {
     box.appendChild(el("div", { class: "codebase-empty-state good" }, [

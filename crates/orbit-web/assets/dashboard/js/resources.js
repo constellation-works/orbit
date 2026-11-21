@@ -239,7 +239,7 @@ function units() {
 
 function emptySection() {
   const p = lastPayload;
-  return el("section", { class: "mx-card rp-card", "aria-label": "Resource profiles" }, [
+  return el("section", { class: "card mx-card rp-card", "aria-label": "Resource profiles" }, [
     el("div", { class: "mx-empty" }, [
       el("div", { class: "mx-empty-title", text: "No resource profiles on this host for this workspace yet" }),
       el("div", { class: "mx-empty-detail", text: `A profile is learned from the CPU and memory each delivery's workers recorded on this host. It appears once a delivery the drain admitted here finishes; each covers the last ${p.profile_window} completed deliveries of its kind, whatever their age.` }),
@@ -264,7 +264,7 @@ function profileSection() {
   const shown = all.filter((series) => !hidden.has(series.key));
   const visible = shown.length ? shown : all;
   const u = units();
-  return el("section", { class: "mx-card rp-card", "aria-label": "Resource profiles" }, [
+  return el("section", { class: "card mx-card rp-card", "aria-label": "Resource profiles" }, [
     el("div", { class: "rp-head" }, [
       classPicker(classes, workClass),
       historyPicker(),
