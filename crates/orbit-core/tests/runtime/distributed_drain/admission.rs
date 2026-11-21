@@ -2704,6 +2704,138 @@ fn cross_workspace_dependency_resolves_through_claim_lookup() {
     );
 }
 
+/// A holder, a second perf task and a plain task, on disjoint files, ranked
+/// so a pull examines the waiting perf task before the plain one.
+fn perf_and_plain(pair: &Pair) -> (String, String, String) {
+    let owner = &pair.wire.owner;
+    let holder = backlog_task_with_input(
+        owner,
+        &pair.owner_repo,
+        "src/holder.rs",
+        None,
+        json!({"tags": ["performance"], "priority": "high"}),
+    );
+    let waiting = backlog_task_with_input(
+        owner,
+        &pair.owner_repo,
+        "src/waiting.rs",
+        None,
+        json!({"tags": ["perf-review"], "priority": "medium"}),
+    );
+    let plain = backlog_task_with_input(
+        owner,
+        &pair.owner_repo,
+        "src/plain.rs",
+        None,
+        json!({"priority": "low"}),
+    );
+    (holder, waiting, plain)
+}
+
+/// The deferred-conflict entry a pull receipt recorded for `task_id`.
+fn pull_deferred(pair: &Pair, task_id: &str) -> Value {
+    let requests = pair.wire.calls("orbit.task.pull");
+    for request in requests {
+        let receipt = owner_call(pair, "orbit.task.pull", request).expect("replay pull");
+        if let Some(entry) = receipt["receipt"]["deferred_conflicts"]
+            .as_array()
+            .and_then(|entries| entries.iter().find(|entry| entry["task_id"] == task_id))
+        {
+            return entry.clone();
+        }
+    }
+    panic!("no pull receipt deferred {task_id}")
+}
+
+/// A pull on a host that already holds a perf claim admits other work and
+/// leaves the next perf task in the backlog.
+fn a_pull_drain_admits_one_perf_task_per_host_and_still_admits_other_work() {
+    let pair = Pair::new(0);
+    let (holder, waiting, plain) = perf_and_plain(&pair);
+    let drain = pair.start_drain();
+    // A launched leaf keeps the claim. A pass that only drops the bind reply
+    // reconciles that leaf as a failed run and blocks the holder.
+    let holder_leaf = pair.running_leaf(&drain, 1);
+    assert_eq!(pair.claimed_task(&holder_leaf), holder);
+    assert_eq!(pair.owner_status(&holder), "in-progress");
+    assert!(pair.owner_has_claim_for_task(&holder));
+    assert_eq!(pair.owner_status(&waiting), "backlog");
+    assert_eq!(pair.owner_status(&plain), "backlog");
+
+    // The live leaf fills one slot. The free slot must take the plain task,
+    // not the second perf task.
+    let plain_leaf = pair.running_leaf(&drain, 2);
+    assert_eq!(pair.claimed_task(&plain_leaf), plain);
+    assert_eq!(pair.owner_status(&holder), "in-progress");
+    assert_eq!(pair.owner_status(&waiting), "backlog");
+    assert_eq!(pair.owner_status(&plain), "in-progress");
+    assert!(pair.owner_has_claim_for_task(&plain));
+    assert!(!pair.owner_has_claim_for_task(&waiting));
+    let deferred = pull_deferred(&pair, &waiting);
+    let reason = deferred["reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.starts_with("perf_lane_busy"),
+        "the pull names the lane: {deferred}"
+    );
+    assert!(
+        reason.contains(&holder),
+        "the lane names its holder: {deferred}"
+    );
+    assert!(
+        deferred["blocked_by"]
+            .as_array()
+            .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(holder.as_str()))),
+        "{deferred}"
+    );
+}
+
+/// An owner-wave perf task that is still backlog holds the lane for a pull
+/// on that host. Other work on a disjoint file is still admitted.
+fn an_owner_wave_perf_task_holds_the_lane_for_a_pull_on_that_host() {
+    let pair = Pair::new(0);
+    let owner = &pair.wire.owner;
+    let (holder, waiting, plain) = perf_and_plain(&pair);
+    let wave = action(
+        owner,
+        "classify_workspace_auto_tasks",
+        &json!({"max_active_leaf_runs": 1}),
+    )
+    .expect("classify");
+    assert_eq!(wave["loose_task_ids"], json!([holder]), "{wave}");
+    assert_eq!(pair.owner_status(&holder), "backlog");
+
+    // A pull whose execution machine is the owner host. Flipping only the
+    // transport on a follower drain stamps the receipt with the owner machine
+    // and the drain refuses it.
+    let local = Pair::follower_of(
+        pair._root.clone(),
+        pair.wire.owner.clone(),
+        pair.owner_repo.clone(),
+        pair.tasks.clone(),
+        OWNER,
+    );
+    *local.wire.local.lock().unwrap() = true;
+    let drain = local.start_drain();
+    let leaf = local.running_leaf(&drain, 1);
+    assert_eq!(local.claimed_task(&leaf), plain);
+    assert_eq!(pair.owner_status(&holder), "backlog");
+    assert_eq!(pair.owner_status(&waiting), "backlog");
+    assert_eq!(pair.owner_status(&plain), "in-progress");
+    assert!(pair.owner_has_claim_for_task(&plain));
+    assert!(!pair.owner_has_claim_for_task(&waiting));
+    assert!(!pair.owner_has_claim_for_task(&holder));
+    let deferred = pull_deferred(&local, &waiting);
+    let reason = deferred["reason"].as_str().unwrap_or_default();
+    assert!(reason.starts_with("perf_lane_busy"), "{deferred}");
+    assert!(reason.contains(&holder), "{deferred}");
+    assert!(
+        deferred["blocked_by"]
+            .as_array()
+            .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(holder.as_str()))),
+        "{deferred}"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     pull_admission_preserves_execution_machine_name_scenarios,
@@ -2759,4 +2891,10 @@ crate::scenario_table!(
     review_settings_never_refuse_a_pull_and_the_owner_captures_before_pr_scenarios,
     review_settings_never_refuse_a_pull_and_the_owner_captures_before_pr,
     a_shutdown_inside_the_hold_horizon_refuses_pull_claims_and_one_beyond_it_requests_one
+);
+
+crate::scenario_table!(
+    pull_perf_lane_scenarios,
+    a_pull_drain_admits_one_perf_task_per_host_and_still_admits_other_work,
+    an_owner_wave_perf_task_holds_the_lane_for_a_pull_on_that_host
 );

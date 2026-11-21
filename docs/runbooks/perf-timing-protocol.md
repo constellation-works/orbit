@@ -69,13 +69,16 @@ its holder:
 a leaf never burns implementation time only to find the lane taken. A backlog task tagged
 `performance` or `perf-review` (the tags the `perf-review` auto-task files for a hard
 timing criterion) is not admitted while another task with either tag is `in-progress` or
-carried by a live leaf, nor beside one in the same admission wave. It waits as
+carried by a live leaf, nor beside one in the same admission wave. A pull onto the same
+host waits the same way: a live claim on that machine, and — when the pull is on the
+owner host — an owner-wave perf task still in `backlog` or a live local delivery carrying
+one. A perf task on another machine does not hold this host's lane. It waits as
 `perf_lane_busy`; `orbit run readiness` and the drain's pass name the lane and the task
-holding it (`blocking_task_ids`), and the task starts once that task leaves `in-progress`.
-Other work is unaffected. A perf task filed without either tag is not serialised, and
-a perf task that is only informational is serialised too, which costs a wait and nothing
-else. `--lane-wait` stays as the second defence for runs outside the drain (an operator's
-measurement, an explicit `orbit run ship`).
+holding it (`blocking_task_ids`), and the task starts once that task leaves `in-progress`
+and no owner-local wave still holds the lane. Other work is unaffected. A perf task filed
+without either tag is not serialised, and a perf task that is only informational is
+serialised too, which costs a wait and nothing else. `--lane-wait` stays as the second
+defence for runs outside the drain (an operator's measurement, an explicit `orbit run ship`).
 
 A run that cannot take the lane within `--lane-wait` seconds (default 900, or
 `ORBIT_PERF_LANE_WAIT_SECONDS`) exits 2 with `perf lane busy: <holder>`.

@@ -9,7 +9,8 @@
 //! footprint overlaps an ordinary claim, is refused. Known no-diff claims
 //! fence only their own task. Every admitted footprint is
 //! published as a coordination row the pull's screen honours until its gate
-//! has had time to reserve it.
+//! has had time to reserve it. A second perf task on the owner's machine is
+//! withheld instead of published, so the lane stays one task wide.
 
 use std::collections::BTreeSet;
 
@@ -43,9 +44,17 @@ impl TaskCommitBoundary {
     /// no-diff exemption, comes back with that claim; every other candidate's
     /// footprint is visible to each pull grant that enters the section after
     /// this one.
+    ///
+    /// `owner_machine_id` is the owner's machine. A perf candidate is withheld
+    /// when another perf task already holds that machine's lane: a protecting
+    /// claim there, an in-flight perf task with no claim, an owner-wave perf
+    /// task still in `backlog`, or an earlier perf candidate in this wave.
+    /// `None` skips those holds; two perf candidates in one call still
+    /// serialise. A withheld candidate is not published.
     pub fn admit_owner_wave(
         &self,
         candidates: &[OwnerWaveCandidate],
+        owner_machine_id: Option<&str>,
     ) -> Result<Vec<OwnerWaveAdmission>, OrbitError> {
         if candidates.is_empty() {
             return Ok(Vec::new());
@@ -74,6 +83,17 @@ impl TaskCommitBoundary {
             }
             let lock_modes = self.store.footprint_lock_modes();
             let expires_at = Utc::now() + Duration::seconds(OWNER_WAVE_VISIBILITY_SECONDS);
+            let mut lane_holders = match owner_machine_id {
+                Some(machine) => self.perf_lane_holders_locked(
+                    machine,
+                    true,
+                    &claims,
+                    &[],
+                    &self.owner_wave_footprints_locked()?,
+                    &BTreeSet::new(),
+                )?,
+                None => BTreeSet::new(),
+            };
             let mut admissions = Vec::with_capacity(candidates.len());
             let mut rows = Vec::with_capacity(candidates.len());
             for candidate in candidates {
@@ -87,8 +107,32 @@ impl TaskCommitBoundary {
                     admissions.push(OwnerWaveAdmission {
                         task_id: candidate.task_id.clone(),
                         blocked_by: Some(Box::new(claim.clone())),
+                        perf_lane_held_by: None,
                     });
                     continue;
+                }
+                let needs_lane = self.task_needs_perf_lane(&candidate.task_id)?;
+                if needs_lane
+                    && let Some(holder) = lane_holders
+                        .iter()
+                        .find(|holder| holder.as_str() != candidate.task_id)
+                        .cloned()
+                {
+                    let claim = claims.iter().find(|claim| {
+                        claim.phase.protects_footprint()
+                            && claim.task_id == holder
+                            && owner_machine_id
+                                .is_some_and(|machine| claim.executed_on.machine_id == machine)
+                    });
+                    admissions.push(OwnerWaveAdmission {
+                        task_id: candidate.task_id.clone(),
+                        blocked_by: claim.cloned().map(Box::new),
+                        perf_lane_held_by: Some(holder),
+                    });
+                    continue;
+                }
+                if needs_lane {
+                    lane_holders.insert(candidate.task_id.clone());
                 }
                 let wave = OwnerWaveRow {
                     task_id: candidate.task_id.clone(),

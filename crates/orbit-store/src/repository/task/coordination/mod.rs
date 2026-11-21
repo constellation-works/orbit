@@ -157,6 +157,7 @@ mod landing;
 mod lease_notices;
 mod lifecycle;
 mod owner_wave;
+mod perf_lane;
 mod repair;
 mod selection;
 

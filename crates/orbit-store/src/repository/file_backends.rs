@@ -238,9 +238,10 @@ impl TaskStoreBackend for TaskV2Store {
     fn admit_owner_wave(
         &self,
         candidates: &[crate::contracts::OwnerWaveCandidate],
+        owner_machine_id: Option<&str>,
     ) -> Result<Vec<crate::contracts::OwnerWaveAdmission>, OrbitError> {
         match self.coordination_boundary() {
-            Some(boundary) => boundary.admit_owner_wave(candidates),
+            Some(boundary) => boundary.admit_owner_wave(candidates, owner_machine_id),
             None => Ok(candidates
                 .iter()
                 .map(|candidate| crate::contracts::OwnerWaveAdmission::admitted(&candidate.task_id))

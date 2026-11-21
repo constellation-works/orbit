@@ -7,22 +7,17 @@
 //! treats the lane as a resource: while one perf task runs, no second one is
 //! admitted, and it waits as `perf_lane_busy` naming the task that holds it.
 //!
-//! A task needs the lane when it carries [`PERF_LANE_TAGS`]: the tags the
-//! `perf-review` auto-task files for a hard timing criterion. The admission
-//! snapshot carries no task descriptions, so tags are the only signal.
+//! A task needs the lane when it carries `performance` or `perf-review`: the
+//! tags the `perf-review` auto-task files for a hard timing criterion. The
+//! admission snapshot carries no task descriptions, so tags are the only signal.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_types::task::{Task, TaskStatus};
 
-/// Tags that mark a task whose acceptance runs the paired timing protocol.
-pub(crate) const PERF_LANE_TAGS: [&str; 2] = ["performance", "perf-review"];
-
 /// Whether `task` is a perf task that needs the host-wide perf lane.
 pub(crate) fn needs_perf_lane(task: &Task) -> bool {
-    task.tags
-        .iter()
-        .any(|tag| PERF_LANE_TAGS.contains(&tag.as_str()))
+    orbit_types::task::needs_perf_lane(&task.tags)
 }
 
 /// The first perf task, in ID order, already running: `in-progress`, or still
@@ -40,9 +35,5 @@ pub(crate) fn perf_lane_holder(
 
 /// What an operator reads for a task waiting on the lane.
 pub(crate) fn perf_lane_detail(holder: &str) -> String {
-    format!(
-        "Waits for the host-wide perf lane, held by {holder}. Tasks that run the paired timing \
-         protocol (tagged `performance` or `perf-review`) are admitted one at a time, so this \
-         one starts when {holder} leaves `in-progress`."
-    )
+    orbit_types::task::perf_lane_detail(holder)
 }
