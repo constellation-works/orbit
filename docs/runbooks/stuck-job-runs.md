@@ -2180,10 +2180,10 @@ as its own live claim or no merge into its target branch.
 
 A delivery run started with `--complete` (`completion: done`) can end with its
 pull request open and the task in `review`: it held after a checks retrigger or
-a rerun hold, or ended before the checks went green. Each owner clock tick
-(`orbit clock tick` / `orbit sweep`) merges and settles such a task itself,
-exactly as `orbit.workflow.land` does, so a green pull request waits at most one
-tick interval. It needs all of these:
+a rerun hold, or ended before the checks went green. An owner sweep tick
+(`orbit clock tick` / `orbit sweep`) attempts the same merge and settlement as
+`orbit.workflow.land` for owner workspaces it reaches before the per-tick
+deadline. It needs all of these:
 
 - the task is in `review`, no run or claim of its own is live, and no decision
   request is open;
@@ -2195,10 +2195,16 @@ tick interval. It needs all of these:
   request's head;
 - its one open delivery pull request (several open ones record `ambiguous_delivery_pull_requests` and merge nothing) is mergeable with every required check passed.
 
-Checks still running, or mergeability GitHub has not computed, wait for the next
-tick. When Orbit does not merge, the task says why: a `landing_follow_up` history
-entry with a typed `code` and the `owner` of the next step, written once per code
-and pull request head:
+Checks still running, or mergeability GitHub has not computed, are checked again
+on a later tick that reaches the workspace before its deadline. An invocation
+that finds the host sweep lock busy exits without running sweep phases. A
+workspace reached after the per-tick deadline is skipped for that tick. A later
+tick retries a skipped workspace only if it acquires the host sweep lock and
+reaches that workspace before its deadline. It can be skipped again on
+successive ticks, so there is no elapsed-time upper bound for work in a skipped
+workspace. When Orbit does not merge, the task says why: a
+`landing_follow_up` history entry with a typed `code` and the `owner` of the next
+step, written once per code and pull request head:
 
 | `code` | Meaning | Next step (`owner: operator`) |
 |---|---|---|
