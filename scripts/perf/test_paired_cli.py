@@ -29,6 +29,28 @@ REPO = Path(__file__).resolve().parents[2]
 PAIRED = REPO / "scripts" / "perf" / "paired.py"
 SCRATCH = REPO / ".orbit" / "tmp"
 
+# The child's protected-root guard reads the registry under the passwd home
+# (`pwd.getpwuid`), which an overridden HOME does not move. Every child therefore
+# starts with this patch, which points the passwd home at the fixture home named by
+# PAIRED_TEST_PASSWD_HOME; the guard itself runs unchanged against fixture-owned
+# registry data and never reads the invoking account's registry (STD-03 §R20).
+PASSWD_HOME_PATCH = """
+import os, pwd
+_getpwuid = pwd.getpwuid
+def _fixture_getpwuid(uid):
+    entry = _getpwuid(uid)
+    return pwd.struct_passwd((entry.pw_name, entry.pw_passwd, entry.pw_uid,
+                              entry.pw_gid, entry.pw_gecos,
+                              os.environ["PAIRED_TEST_PASSWD_HOME"], entry.pw_shell))
+pwd.getpwuid = _fixture_getpwuid
+"""
+PAIRED_BOOTSTRAP = PASSWD_HOME_PATCH + """
+import runpy, sys
+script = sys.argv[1]
+sys.argv = [script] + sys.argv[2:]
+runpy.run_path(script, run_name="__main__")
+"""
+
 # Role is baked in so the control copy of the base binary agrees with base,
 # while the candidate binary can fail or differ on its own.
 ARM_SCRIPT = """#!/bin/sh
@@ -300,9 +322,17 @@ class PairedCliTestCase(unittest.TestCase):
         self.lane_lock = root / "lane.lock"
         self.home = root / "home"
         self.home.mkdir()
+        self.register_checkouts()
+
+    def register_checkouts(self, *orbit_dirs: Path) -> None:
+        """Write the fixture-owned registry the child's protected-root guard reads."""
+        registry = self.home / ".orbit" / "workspaces.json"
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text(json.dumps(
+            {"checkouts": [{"orbit_dir": str(path)} for path in orbit_dirs]}))
 
     def paired_argv(self, out: Path, surface: tuple[str, ...], *extra: str) -> list[str]:
-        return [sys.executable, "-I", str(PAIRED),
+        return [sys.executable, "-I", "-c", PAIRED_BOOTSTRAP, str(PAIRED),
                 "--builds", str(self.builds),
                 "--snapshot", str(self.snapshot),
                 "--out", str(out),
@@ -312,12 +342,13 @@ class PairedCliTestCase(unittest.TestCase):
 
     def paired_env(self) -> dict[str, str]:
         # No inherited Orbit or Git authority reaches the child (STD-03 §R20): it
-        # gets its own HOME and Orbit root, and a private lane lock so this
-        # regression never takes the host perf lane. The child's protected-root
-        # guard runs unchanged.
+        # gets its own HOME, passwd home (PASSWD_HOME_PATCH), Orbit root and
+        # registry, and a private lane lock so this regression never takes the
+        # host perf lane. The child's protected-root guard runs unchanged.
         env = {key: value for key, value in os.environ.items()
                if not key.startswith(("ORBIT_", "GIT_"))}
         env["HOME"] = str(self.home)
+        env["PAIRED_TEST_PASSWD_HOME"] = str(self.home)
         env["ORBIT_ROOT"] = str(self.home / ".orbit")
         env["ORBIT_PERF_LANE_LOCK"] = str(self.lane_lock)
         return env
@@ -509,6 +540,26 @@ class PairedCliParityTest(PairedCliTestCase):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertIs(json.loads((out / "parity.json").read_text())["match"], True)
 
+    def test_registered_checkout_on_host_does_not_refuse_isolated_parity(self) -> None:
+        # The guard reads the fixture-owned registry only: the invoking account's
+        # registry, even one naming this checkout, cannot refuse the run. The
+        # fixture registry here names an unrelated directory.
+        self.register_checkouts(self.home / "unrelated" / ".orbit")
+        result, out = self.run_paired("--parity", "probe-same")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIs(json.loads((out / "parity.json").read_text())["match"], True)
+
+    def test_fixture_registered_protected_destination_is_still_refused(self) -> None:
+        # The real guard stays effective: a checkout the fixture registry names
+        # protects the scratch root enclosed in it.
+        self.register_checkouts(REPO / ".orbit")
+        result, out = self.run_paired("--parity", "probe-same")
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("refusing to restore into", result.stderr)
+        self.assertIn(str(REPO / ".orbit"), result.stderr)
+        self.assertNotIn('"verdict": "pass"', result.stdout)
+        self.assertFalse((out / "paired-summary.json").exists())
+
     def test_explicit_empty_parity_command_is_refused_in_http_mode(self) -> None:
         # ORB-26398: an explicit empty `--parity` names no command, so it must not
         # stand in for an omitted one and let HTTP-only observations match.
@@ -606,7 +657,7 @@ class PairedCliSupervisionTest(PairedCliTestCase):
 
     def test_cancellation_during_process_acquisition(self) -> None:
         # Trace Popen's return, before its caller can install a cleanup guard.
-        driver = """
+        driver = PASSWD_HOME_PATCH + """
 import os, runpy, signal, subprocess, sys
 script, kind, pidfile, signum = sys.argv[1:5]
 sys.argv = [script] + sys.argv[5:]
@@ -643,7 +694,7 @@ runpy.run_path(script, run_name="__main__")
                                         "probe-same" if kind == "server" else "probe-stall")
                 result = subprocess.run(
                     [sys.executable, "-I", "-c", driver, str(PAIRED), kind,
-                     str(pidfile), str(signum), *args[3:]],
+                     str(pidfile), str(signum), *args[5:]],
                     cwd=REPO, env=self.paired_env(), capture_output=True, text=True, timeout=60,
                 )
                 self.assertTrue(pidfile.exists(), result.stderr)
