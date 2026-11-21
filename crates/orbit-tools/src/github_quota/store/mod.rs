@@ -8,8 +8,13 @@
 //! lands through a staging file and an atomic rename, so concurrent writers in
 //! any number of processes never leave a torn record.
 //!
-//! The store never turns its own failure into a refusal: an unreadable or
-//! unwritable record admits the read.
+//! The store's own failures never refuse a read on their own. When a record's
+//! update fails on a lock or write error but the record still reads cleanly,
+//! the decision uses a read-only copy: an active hold or the reserve refuses
+//! the read as it otherwise would, uncounted. An admitted read is not counted
+//! or debited, and the record file is not written. A record that cannot be
+//! read (an I/O error or malformed JSON) is preserved untouched and admits the
+//! read, uncounted.
 
 mod clock;
 mod quota_store;
