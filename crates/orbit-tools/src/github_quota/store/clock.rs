@@ -66,6 +66,19 @@ pub(super) mod refusal_clock {
         body()
     }
 
+    /// Run `body`, then put this thread's offset back to its value on entry,
+    /// including when `body` unwinds.
+    pub(super) fn with_restored_offset<T>(body: impl FnOnce() -> T) -> T {
+        struct Restore(Duration);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                OFFSET.set(self.0);
+            }
+        }
+        let _restore = Restore(OFFSET.get());
+        body()
+    }
+
     /// Advance this thread's clock to at least `deadline`, never back.
     pub(super) fn reach(deadline: Instant) {
         if FIXED.get().is_some() {
@@ -108,4 +121,11 @@ pub fn advance_deadline_clock_after_next_refusal_decision(by: Duration) {
 #[cfg(any(test, feature = "test-support"))]
 pub(in crate::github_quota) fn with_fixed_clock<T>(body: impl FnOnce() -> T) -> T {
     refusal_clock::with_fixed(body)
+}
+
+/// Run `body` so that the clock offset a probe moves on this thread is restored
+/// to its value on entry when `body` returns or unwinds. Test fixtures only.
+#[cfg(any(test, feature = "test-support"))]
+pub(in crate::github_quota) fn with_restored_clock_offset<T>(body: impl FnOnce() -> T) -> T {
+    refusal_clock::with_restored_offset(body)
 }

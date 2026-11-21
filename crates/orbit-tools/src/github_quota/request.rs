@@ -243,16 +243,18 @@ fn run_rate_limit_probe(
 /// started, or has logged its call (ORB-26200). Pass a `fired` that turns true
 /// once the fake has logged the call: the probe is then stopped, reported as
 /// timed out, and this thread's admission deadline clock is moved to the
-/// request's deadline, which is where the real timeout leaves both. The probe
-/// keeps its production arguments, environment and supervision, and the
-/// endpoint's 15 s read limit still bounds a `fired` that never turns true.
+/// request's deadline, which is where the real timeout leaves both. That move
+/// lasts only for `f`: the clock is restored to its value on entry when `f`
+/// returns or unwinds, so a later request on the thread sees its own budget.
+/// The probe keeps its production arguments, environment and supervision, and
+/// the endpoint's 15 s read limit still bounds a `fired` that never turns true.
 #[cfg(any(test, feature = "test-support"))]
 pub fn with_probe_timeout_when<T>(
     fired: impl Fn() -> bool + Send + Sync + 'static,
     f: impl FnOnce() -> T,
 ) -> T {
     let _armed = probe_timeout::arm(std::sync::Arc::new(fired));
-    f()
+    super::store::with_restored_clock_offset(f)
 }
 
 #[cfg(any(test, feature = "test-support"))]
