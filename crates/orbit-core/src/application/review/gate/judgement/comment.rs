@@ -301,9 +301,10 @@ fn merged_consequence(
             "{pull_request} already merged outside Orbit as `{}` before this review settled, so \
              the {} verdict no longer gates the merge. The reviewer's commit {commits} is not \
              part of the merge. The push step that follows decides what happens to it: when the \
-             PR merged at the reviewed head the commit is preserved on a durable ref and the task \
-             is blocked with the steps that land it as a follow-up; otherwise it stays only in \
-             the review worktree `{}`. The next comment on the task records which.",
+             merge at the reviewed head is confirmed, it tries to preserve the commit on a durable \
+             ref and blocks the task with follow-up steps, whether the head branch survives or \
+             not. If preservation fails, or the lease is lost without a confirmed merge, the \
+             commit stays in the review worktree `{}`. The next comment records the outcome.",
             merge.merge_commit,
             certificate.verdict.as_str(),
             merge.worktree,

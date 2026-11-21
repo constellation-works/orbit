@@ -942,13 +942,20 @@ fn assert_lease_lost(fx: &Fixture, host: &DeliveryHost, pipeline: &str, started:
 }
 fn a_merged_lease_preserves_the_review_repair_and_any_other_move_loses_the_lease(sandbox: &Path) {
     for pipeline in ["task_pr_pipeline.yaml", "task_claimed_pr_pipeline.yaml"] {
-        for method in ["squash", "merge"] {
+        for (method, delete_branch) in [
+            ("squash", true),
+            ("merge", true),
+            ("squash", false),
+            ("merge", false),
+        ] {
             let fx = Fixture::new(sandbox);
             let lease = fx.candidate.clone();
             let first = commit_local(&fx, "src/repair-a.txt", "repair a\n");
             let second = commit_local(&fx, "src/repair-b.txt", "repair b\n");
             merge_remote_head(&fx, &lease, method);
-            delete_remote_branch(&fx, BRANCH);
+            if delete_branch {
+                delete_remote_branch(&fx, BRANCH);
+            }
             let host = landing_host(&fx, pipeline);
             let error = run_shipped_landing_push(&fx, &host, pipeline).unwrap_err();
             assert!(error.contains("review_repair_after_merge:"));
@@ -959,7 +966,10 @@ fn a_merged_lease_preserves_the_review_repair_and_any_other_move_loses_the_lease
             let evidence = format!("refs/heads/orbit-evidence/{BRANCH}");
             assert!(error.contains(&evidence), "{pipeline} {method}: {error}");
             assert_eq!(remote_ref(&fx, &evidence).as_deref(), Some(second.as_str()));
-            assert!(remote_ref(&fx, &format!("refs/heads/{BRANCH}")).is_none());
+            assert_eq!(
+                remote_ref(&fx, &format!("refs/heads/{BRANCH}")).as_deref(),
+                (!delete_branch).then_some(lease.as_str())
+            );
             assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
             let recipes: Vec<_> = host
                 .comments(TASK_ID)
