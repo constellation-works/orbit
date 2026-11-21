@@ -1646,6 +1646,144 @@ class RelativeImportTests(unittest.TestCase):
              "}\n"),
         ], rejected=False)
 
+    def test_item_preserving_macro_preserves_inline_module_super_depth(self):
+        # [ORB-26589] A macro that emits an `$item:item` or token tree intact
+        # keeps the inline module in the expanded AST, so `super::super` inside
+        # `application/probe.rs`'s `mod inner` resolves to `application::adapter`
+        # (allowed) while three `super` segments reach `crate::adapter` (rejected),
+        # regardless of whether the macro uses `{}`, `()`, or `[]`. Non-item
+        # macros (like `stringify!` or a discarding macro) and multi-arm or
+        # rewrapping rules follow what their transcriber emits.
+        self.check_rows([
+            ("keep_braces_ok.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! keep { ($item:item) => { $item }; }\n"
+             "    keep! { mod inner {\n"
+             "        pub fn check() { let _ = super::super::adapter::Probe; }\n"
+             "    } }\n"
+             "    inner::check();\n"
+             "}\n"),
+            ("keep_parens_ok.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! keep { ($item:item) => { $item }; }\n"
+             "    keep!(mod inner {\n"
+             "        pub fn check() { let _ = super::super::adapter::Probe; }\n"
+             "    });\n"
+             "    inner::check();\n"
+             "}\n"),
+            ("keep_brackets_ok.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! keep { ($item:item) => { $item }; }\n"
+             "    keep![mod inner {\n"
+             "        pub fn check() { let _ = super::super::adapter::Probe; }\n"
+             "    }];\n"
+             "    inner::check();\n"
+             "}\n"),
+            ("keep_tt_ok.rs",
+             "macro_rules! keep_tt { ($($t:tt)*) => { $($t)* }; }\n"
+             "keep_tt! {\n"
+             "    mod inner {\n"
+             "        pub fn check() { let _ = super::super::adapter::Probe; }\n"
+             "    }\n"
+             "}\n"),
+            ("keep_many_ok.rs",
+             "macro_rules! keep_many { ($($item:item)*) => { $($item)* }; }\n"
+             "keep_many! {\n"
+             "    const N: usize = { 1 };\n"
+             "    mod inner {\n"
+             "        pub fn check() { let _ = super::super::adapter::Probe; }\n"
+             "    }\n"
+             "}\n"),
+            ("keep_gated_ok.rs",
+             "macro_rules! gate { ($meta:meta, $item:item) => { #[cfg($meta)] $item }; }\n"
+             "gate!(all(), mod inner {\n"
+             "    pub fn check() { let _ = super::super::adapter::Probe; }\n"
+             "});\n"),
+            ("rewrap_ok.rs",
+             "macro_rules! rewrap { (mod $name:ident { $item:item }) => { pub mod $name { $item } }; }\n"
+             "rewrap!(mod inner {\n"
+             "    pub fn check() { let _ = super::super::adapter::Probe; }\n"
+             "});\n"),
+            ("wrap_outer_ok.rs",
+             "macro_rules! wrap_outer { ($item:item) => { mod outer { $item } }; }\n"
+             "wrap_outer!(mod inner {\n"
+             "    pub fn check() { let _ = super::super::super::adapter::Probe; }\n"
+             "});\n"),
+            ("either_item_arm_ok.rs",
+             "macro_rules! either {\n"
+             "    (mod $name:ident { $item:item }) => { $item };\n"
+             "    ($item:item) => { $item };\n"
+             "}\n"
+             "either!(pub fn check() {\n"
+             "    mod inner { pub fn inner_check() { let _ = super::super::adapter::Probe; } }\n"
+             "});\n"),
+            ("external_cfg_if_ok.rs",
+             "external_macros::cfg_if! {\n"
+             "    if #[cfg(all())] {\n"
+             "        mod inner {\n"
+             "            pub fn check() { let _ = super::super::adapter::Probe; }\n"
+             "        }\n"
+             "    }\n"
+             "}\n"),
+        ], rejected=False)
+        self.check_rows([
+            ("keep_braces_escape.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! keep { ($item:item) => { $item }; }\n"
+             "    keep! { mod inner {\n"
+             "        pub fn check() { let _ = super::super::super::adapter::Probe; }\n"
+             "    } }\n"
+             "    inner::check();\n"
+             "}\n"),
+            ("keep_parens_escape.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! keep { ($item:item) => { $item }; }\n"
+             "    keep!(mod inner {\n"
+             "        pub fn check() { let _ = super::super::super::adapter::Probe; }\n"
+             "    });\n"
+             "    inner::check();\n"
+             "}\n"),
+            ("keep_brackets_escape.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! keep { ($item:item) => { $item }; }\n"
+             "    keep![mod inner {\n"
+             "        pub fn check() { let _ = super::super::super::adapter::Probe; }\n"
+             "    }];\n"
+             "    inner::check();\n"
+             "}\n"),
+            ("discard_mod_escape.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! discard { ($($t:tt)*) => {}; }\n"
+             "    discard!(mod fake { use super::super::adapter::Probe; });\n"
+             "}\n"),
+            ("stringify_wrapper_escape.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! to_str { ($item:item) => { const S: &str = stringify!($item); }; }\n"
+             "    to_str!(mod fake { use super::super::adapter::Probe; });\n"
+             "}\n"),
+            ("stringify_builtin_escape.rs",
+             "pub fn probe() {\n"
+             "    let _ = stringify!(mod fake { use super::super::adapter::Probe; });\n"
+             "}\n"),
+            ("either_strip_arm_escape.rs",
+             "macro_rules! either {\n"
+             "    (mod $name:ident { $item:item }) => { $item };\n"
+             "    ($item:item) => { $item };\n"
+             "}\n"
+             "either!(mod envelope { use super::super::adapter::Probe; });\n"),
+            ("rewrap_escape.rs",
+             "macro_rules! rewrap { (mod $name:ident { $item:item }) => { pub mod $name { $item } }; }\n"
+             "rewrap!(mod inner {\n"
+             "    pub fn check() { let _ = super::super::super::adapter::Probe; }\n"
+             "});\n"),
+            ("forwarded_strip_escape.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! forward { (mod $name:ident { $item:item }) => { $item }; }\n"
+             "    macro_rules! outer { ($($t:tt)*) => { forward!($($t)*); }; }\n"
+             "    outer!(mod envelope { use super::super::adapter::Probe; });\n"
+             "}\n"),
+        ], rejected=True)
+
     def test_tools_builtin_grouped_imports_rejected_in_either_spelling(self):
         # [ORB-26107] `r#builtin` names the same module as `builtin`. The
         # tokenizer once split the raw identifier into `r` and `#`, so a grouped
