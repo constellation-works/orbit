@@ -58,8 +58,19 @@ orbit experiment start model-memory
 ```
 
 Start in `shadow`. The mode is frozen once the experiment starts, so to go
-`live`, clone the experiment and set `--mode live` on the new draft (see
-[Run an experiment](/how-to/experiments/)).
+`live`, clone the experiment, switch the new draft to `live` (`clone` takes no
+`--mode`), retire the shadow experiment and start the clone (see
+[Run an experiment](/how-to/experiments/)):
+
+```bash
+orbit experiment clone model-memory --name model-memory-live
+orbit experiment update model-memory-live --mode live
+orbit experiment abandon model-memory --reason "moving to live"
+orbit experiment start model-memory-live
+```
+
+Retiring the shadow experiment first keeps the two from competing for the
+`memory` surface.
 
 | Mode | What happens |
 |---|---|

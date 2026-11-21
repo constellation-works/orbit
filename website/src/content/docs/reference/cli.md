@@ -121,7 +121,7 @@ an exact time.
 | `orbit run auto --approve-proposed` | Also [approve `proposed` tasks](/how-to/continuous-delivery/#2-authorize-the-backlog) that pass task-pilot verification. |
 | `orbit run auto --auto-fix` | Also [repair failing checks and conflicts](/how-to/continuous-delivery/#repair-blocked-pull-requests) on the pull requests the drain opens. |
 | `orbit run auto --pull <selector>` | On a replica, [claim work from the owner's backlog](/how-to/distributed-drain/) and hand results back as pull requests. |
-| `orbit run auto --stop` | Stop admitting new work. Running tasks continue. |
+| `orbit run auto --stop` | Stop admitting new work. Running tasks continue. A hand stop also pauses the opt-in [standing-drain keeper](/reference/config/#settable-keys) (`workflow.standing_drain`); only a hand start sets it back on. |
 | `orbit run ship\|auto --complete` | Also [finish delivery](/getting-started/workflows/#completing-work-with---complete) and move shipped tasks to `done` instead of `review`. |
 | `orbit run ship\|auto --review <layer>` | [Add `before-landing` review](/concepts/tasks/#adding-review-to-one-run) to this run when workspace policy applies none. |
 | `orbit run ship\|auto --allow-crew <crew>` | Restrict the run to tasks on these crews. |
@@ -169,7 +169,7 @@ Each `orbit gc` command reports what it would remove; `--confirm` removes it.
 
 | Command | Purpose |
 |---|---|
-| `orbit notice post --kind <incident\|maintenance\|info> --title <title>` | Post a [fleet notice](/how-to/fleet-notices/), or update the open one with the same key. |
+| `orbit notice post --kind <warn\|incident\|maintenance\|info> --title <title>` | Post a [fleet notice](/how-to/fleet-notices/), or update the open one with the same key. |
 | `orbit notice close [id] --reason <text>` | Close a notice by ID or `--dedupe-key`. |
 | `orbit notice list` \| `show <id>` | List open notices, or show one. |
 
@@ -178,6 +178,7 @@ Each `orbit gc` command reports what it would remove; `--confirm` removes it.
 | Command | Purpose |
 |---|---|
 | `orbit attention` | [List what waits on an operator](/how-to/attention/): pilot holds, blocked tasks, failed runs, open decisions, review waits, red CI and more. `--all` reads every workspace and registered host. |
+| `orbit attention wait --since <cursor>` | Block until the attention list changes, with no model turn. It needs a wait grant: call `orbit.attention` with `wait_grant` over MCP and export the token as `ORBIT_ATTENTION_WAIT_TOKEN`. `--timeout` defaults to 30m. Exit codes: 0 changed, 3 timeout, 4 degraded set changed, 5 every read failed. |
 | `orbit audit list\|stats` \| `show <id>` \| `export --output <file>` \| `prune --older-than <duration>` | Query, export and prune the audit event log. |
 | `orbit log tail` | Print recent lines of the unified Orbit log feed. `-f` follows it. |
 | `orbit doctor` | Check workspace health: config, database, disk, indexes, locks and runs. `--problems` prints only failures and warnings; the `--fix-*` flags run opt-in repairs. |
@@ -261,7 +262,7 @@ With `decision_channel.enabled` on, work held on a human decision raises a
 | Command | Purpose |
 |---|---|
 | `orbit experiment create <name>` \| `update <id>` \| `clone <id> --name <name>` | Define, edit or copy a draft [experiment](/how-to/experiments/): `--arms <json>`, `--hypothesis`, `--primary-metric`, `--mode shadow\|live` and more. |
-| `orbit experiment start\|pause\|resume\|reweight\|conclude\|abandon <id>` | Move an experiment through its lifecycle. Operator only. `start` needs `experiments.enabled`; `conclude --arm <arm>` records the chosen arm. |
+| `orbit experiment start\|pause\|resume\|reweight\|conclude\|abandon <id>` | Move an experiment through its lifecycle. Operator only. `start` needs `experiments.enabled`; `pause`, `reweight`, `conclude` and `abandon` need `--reason <text>`; `conclude --arm <arm>` records the chosen arm. |
 | `orbit experiment assign <id> --task <task> --arm <arm>` | Force a task into an active arm of a running experiment. |
 | `orbit experiment readout <id>` | Show per-arm outcomes, intervals and the [verdict](/how-to/experiments/#read-the-readout). |
 | `orbit experiment show <id>` \| `list` | Show one experiment with its arms and event log, or list the workspace's experiments. |
