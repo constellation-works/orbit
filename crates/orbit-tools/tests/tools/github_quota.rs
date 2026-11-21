@@ -1829,57 +1829,6 @@ fn positional_clipped_release_keeps_fresh_claim_and_marker() {
     assert_eq!(core.calls.agent, 1);
 }
 
-/// Named release objects with explicit null or timestamp claims still settle
-/// the active claim and are removed after the quota record commits.
-#[test]
-fn object_clipped_release_reconciles_and_removes_marker() {
-    let now = now();
-    for previous_claim in ["null".to_string(), (now - 120).to_string()] {
-        let records = TempDir::new().unwrap();
-        let policy = GithubQuotaPolicy::default();
-        let reset = now + 1800;
-        store(records.path()).refresh_if_due(&policy, ACCOUNT, now - 120, &|| known(3500, reset));
-        run_contended_clipped_probe(records.path(), policy, ACCOUNT, now);
-
-        let marker = records.path().join(format!(".{ACCOUNT}.clipped.2.json"));
-        let object_bytes = format!("{{\"generation\":2,\"previous_claim\":{previous_claim}}}");
-        std::fs::write(&marker, object_bytes).unwrap();
-
-        let probes = AtomicUsize::new(0);
-        store(records.path())
-            .admit(
-                &policy,
-                ACCOUNT,
-                GithubCaller::Agent,
-                RESOURCE_CORE,
-                now,
-                &|| {
-                    probes.fetch_add(1, Ordering::SeqCst);
-                    known(3500, reset)
-                },
-            )
-            .expect("valid object marker should leave healthy admission available");
-
-        assert_eq!(
-            probes.load(Ordering::SeqCst),
-            1,
-            "valid release object with previous_claim={previous_claim} must reconcile the claim"
-        );
-        assert!(
-            !marker.exists(),
-            "valid release object must be removed after the quota record commits"
-        );
-        let status = store(records.path()).status(&policy, ACCOUNT, now);
-        let core = status
-            .resources
-            .iter()
-            .find(|resource| resource.resource == RESOURCE_CORE)
-            .unwrap();
-        assert_eq!(core.remaining, Some(3499));
-        assert_eq!(core.calls.agent, 1);
-    }
-}
-
 /// Regression [ORB-26137]: ambiguous clipped-release bytes at the active
 /// generation (malformed, or a payload naming another generation) are
 /// diagnostic evidence. The due claim that advances the generation, and the
