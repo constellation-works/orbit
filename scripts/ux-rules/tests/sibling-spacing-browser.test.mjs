@@ -213,7 +213,7 @@ describe("ui.sibling-spacing", { concurrency: false }, () => {
     }
   });
 
-  test("experiment detail badges share a style at 1440 and 375", {
+  test("experiment detail status pill and mode badge pass sibling spacing at 1440 and 375", {
     timeout: 300000,
     skip: !ENABLED,
   }, async () => {
@@ -240,6 +240,7 @@ describe("ui.sibling-spacing", { concurrency: false }, () => {
               const style = getComputedStyle(el);
               return {
                 className: el.className,
+                dataState: el.dataset.state ?? null,
                 text: el.textContent.trim(),
                 fontWeight: style.fontWeight,
                 fontSize: style.fontSize,
@@ -250,11 +251,13 @@ describe("ui.sibling-spacing", { concurrency: false }, () => {
         });
         const result = await check(ctx);
         assert.equal(rendered.missing, false, JSON.stringify(rendered));
-        const badges = rendered.badges.filter((badge) => badge.className.split(/\s+/).includes("badge"));
-        assert.equal(badges.length, 2, JSON.stringify(rendered));
-        for (const property of ["fontWeight", "fontSize", "padding"]) {
-          assert.equal(badges[0][property], badges[1][property], JSON.stringify(rendered));
-        }
+        // Status renders as the shared .pill and mode as the shared .badge. They
+        // are different kinds, so the sibling rule compares neither against the
+        // other. The visual fixture is a running experiment with no verdict badge.
+        assert.deepEqual(rendered.badges.map((badge) => badge.className), ["pill", "badge"], JSON.stringify(rendered));
+        assert.deepEqual(rendered.badges.map((badge) => badge.text), ["running", "shadow"], JSON.stringify(rendered));
+        assert.equal(rendered.badges[0].dataState, "running", JSON.stringify(rendered));
+        assert.equal(result.status, "pass", JSON.stringify(result.measurements.failures));
         evidence.views.push({
           width: target.width,
           status: result.status,
