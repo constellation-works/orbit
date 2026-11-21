@@ -429,10 +429,16 @@ class HttpRequestError(Exception):
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Keep the timed route's response instead of requesting its destination."""
+    """Keep a redirect response without parsing or requesting its Location."""
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    def _keep_response(self, req, fp, code, msg, headers):
         return None
+
+    http_error_301 = _keep_response
+    http_error_302 = _keep_response
+    http_error_303 = _keep_response
+    http_error_307 = _keep_response
+    http_error_308 = _keep_response
 
 
 class Server:
