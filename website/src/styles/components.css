@@ -293,9 +293,10 @@
   color: var(--sl-color-black);
   font-family: var(--sl-font);
   font-size: var(--orbit-text-xs);
-  font-weight: 600;
+  font-weight: 500;
+  line-height: 1;
   margin-inline-start: var(--orbit-space-3);
-  padding: 0.15rem 0.55rem;
+  padding: var(--orbit-space-1) var(--orbit-space-2);
   vertical-align: middle;
 }
 
