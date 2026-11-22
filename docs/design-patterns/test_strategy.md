@@ -1472,6 +1472,141 @@ last-awaited jobs (now including `Test partition 13`), the `rebuilt=` lines
 of `Test build`, and the selection and cache strata, with every gap kept as
 uncertainty, never zero.
 
+### Large-buffer transfer streaming and direct pack I/O (2026-11-22)
+
+ORB-26805 follows the ORB-26803 watch (latest 20 completed PR `ci.yml` runs,
+`45008653304` back to `45001989804`): 16 executed Checks (12 success, four
+failure), four skipped (docs-only), none cancelled or missing; nearest-rank p90
+**521 s** (rank 15/16, run `45006477880`, success), median **395 s**, min 276 s,
+max **736 s**, seven of 16 over 400 s (`408, 411, 413, 415, 498, 521, 736 s`).
+Pre-Check delay proxy (`run.created_at` → `Check.started_at`) was 17–26 s
+(median 20 s; exact job `created_at` unavailable); awaited test jobs started
+1–3 s after `Test build` completed. All 16 `Test build` runs restored both the
+Rust dependency cache (`cache_hit=true`) and `workspace-test-cache` (no
+cold-cache stratum). A test job ended last in 15 of 16 executed runs (all seven
+over 400 s): four warm `orbit-core` rebuilds (`rebuilt=20..22`, list-build
+155–210 s, `Test build` 253–289 s) plus 115–149 s test jobs (408–415 s), and
+three all-package rebuilds (`45006477880` 521 s, `45007770272` 498 s,
+`45008022369` 736 s; `rebuilt=45..75`, list-build 257–317 s, `Test build`
+366–411 s) plus 146–314 s test jobs. On `45008022369`, `Test partition 13`
+(314 s) spent **132.152 s** in `scripts/ci-repack-nextest.py extract` on 615 MiB
+/ 346 members under runner I/O contention (`31.2%` iowait) before a 143.6 s
+nextest run; across sampled test jobs, 20–32 s setup, 2–22 s download and
+3.3–132.2 s extract preceded 10–159 s of nextest execution.
+
+**Local fixture and diagnosis (candidate evidence; not hosted compliance).**
+Built serially at pinned base `39c2ae8cbdf5ca4af783e7fe901591950ef44770` on
+`dk-server-2` (Linux x86_64, `taskset -c 0-3`, Rust 1.98.1, nextest 0.9.136,
+Python 3.14.4, zstd 1.5.7, `scripts/build-budget.py` admission with `0.0 s`
+admission delay, scratch `CARGO_HOME`, `ORBIT_COMPILER_CACHE=0`,
+`ORBIT_CARGO_JOBS=4`, `CARGO_INCREMENTAL=0`, debug off, symbol stripping, warm
+OS page cache without eviction): `ci-guardrails.sh --test-archive` rebuilt 76
+workspace units (`workflow-test-list-build` 251 s, `workspace-test-archive`
+3 s, total 254.2 s) into an `871,785,408`-byte source archive (`53` binaries,
+`362` files, **`3,380,071,198` uncompressed bytes = 3.15 GiB**; `60` files ≥ 1
+MiB hold `3,215.1 MiB`, including GNU sparse binaries), and base `pack --parts
+4` produced a `647,211,379`-byte four-part transfer (`161,802,845 × 3 +
+161,802,844` bytes). Profiling baseline `extract` on those immutable transfer
+parts showed Python's `tarfile.open(..., mode="r|")` reading through a 10 KiB
+`_Stream` and 16 KiB `tarfile.copyfileobj` loop: **2,776,135** Python function
+calls, **205,361** `_Stream.read`/`bytes.join`/slice iterations copying the
+3.22 GiB payload in userspace, **80,148** main-thread I/O syscalls (`25,781`
+disk `write()` calls on Python 3.14; ~206,000 on Python 3.12's 8 KiB
+`BufferedWriter`, plus `52,445` pipe `read()` calls), **156,659** whole-process
+traced syscalls, and **647,211,379** bytes copied through userspace by the part
+feeder. Baseline `pack` also piped its single `871,785,408`-byte input through
+Python userspace to `zstd -dc` and copied `485,408,534` bytes through userspace
+in `split_transfer_in_place` (**157,772** traced `read`/`write` syscalls).
+
+**The change (`scripts/ci-repack-nextest.py`).**
+
+- `extract` keeps stdlib `tarfile.TarFile` header/sparse parsing, the `target/`
+  regular-file/directory check and `tarfile.data_filter` (path containment,
+  set-id/group-other-write stripping, executable-bit rules, link/special-file
+  refusal, plus `O_NOFOLLOW`), but replaces `tarfile._Stream`'s 10 KiB / 16 KiB
+  copy loop with `TarPipeStream`: one reusable 1 MiB `bytearray` filled via
+  `readinto` and written straight to file descriptors (preserving GNU sparse
+  holes via `lseek`/`ftruncate` and applying `fchmod`/`utime`). On Linux it
+  enlarges pipe buffers to 1 MiB (`F_SETPIPE_SZ`, best-effort) and feeds parts
+  with `os.sendfile` (falling back to `os.read`/`os.write`). Output now reports
+  `write_ops=N`.
+- `pack` passes its single source file directly as `stdin` to `zstd -dc`
+  (removing the Python input pipe), enlarges the decoder→encoder pipe on Linux,
+  and copies parts 2–4 via `os.copy_file_range` with `os.read`/`os.write`
+  fallback. Compression options, balanced part boundaries, no-replace links,
+  rollback and fail-closed decoder checks are unchanged.
+
+**Deterministic operation and byte reductions (same 362-file, 3,380,071,198-byte
+archive; `strace` runs separate from timed blocks):**
+
+| Operation / metric | Base | Candidate | Reduction |
+|---|---:|---:|---:|
+| `extract`: main-thread disk `write()` syscalls | 25,781 | **3,554** (`3,553` payload `write_ops`) | **−86.2%** (7.3× fewer) |
+| `extract`: main-thread pipe `read()` syscalls | 52,445 | **21,426** | **−59.1%** |
+| `extract`: main-thread traced I/O syscalls | 80,148 | **26,630** | **−66.8%** (−53,518) |
+| `extract`: whole-process (`strace -f`) traced syscalls | 156,659 | **110,962** | **−29.2%** (−45,697) |
+| `extract`: `tarfile._Stream` 10/16 KiB `bytes.join` loops | 205,361 | **0** | **−100%** |
+| `extract`: feeder userspace copy bytes (Linux `sendfile`) | 647,211,379 | **0** | **−100%** |
+| `pack`: whole-process (`strace -f`) `read`/`write`/`copy_file_range` syscalls | 157,772 | **120,202** | **−23.8%** (−37,570) |
+| `pack`: Python userspace input-feed bytes to `zstd -dc` | 871,785,408 | **0** | **−100%** |
+| `pack`: Python userspace `split_transfer_in_place` copy bytes (`copy_file_range`) | 485,408,534 | **0** (`61` kernel calls) | **−100%** |
+
+**Paired local timings (`scripts/build-budget.py -- taskset -c 0-3 /usr/bin/time -f '%e %U %S %M'`; one untimed warmup per arm, then Block 1 `base, candidate, unchanged_base` and Block 2 `unchanged_base, candidate, base`; all admission delays `0.0 s`; full records in task artifacts `ci-path/measurements.json`, `ci-path/commands.sh`, `ci-path/archive-build.log`):**
+
+| Operation / arm | Wall s: median (min–max) | User CPU s: median (min–max) | Sys CPU s: median (min–max) |
+|---|---:|---:|---:|
+| `extract` / `base` (2 samples) | 2.75 (2.43–3.07) | 2.525 (2.41–2.64) | 1.12 (1.03–1.21) |
+| `extract` / `unchanged_base` (2 samples) | 2.28 (2.25–2.31) | 2.45 (2.43–2.47) | 1.025 (1.02–1.03) |
+| `extract` / all 4 base controls | 2.37 (2.25–3.07; range 0.82) | 2.45 (2.41–2.64; range 0.23) | 1.03 (1.02–1.21; range 0.19) |
+| `extract` / `candidate` (2 samples) | 2.37 (2.32–2.42) | **2.21 (2.19–2.23)** | 0.985 (0.97–1.00) |
+| `pack` / `base` (2 samples) | 6.44 (6.28–6.60) | 13.23 (12.90–13.56) | 1.725 (1.70–1.75) |
+| `pack` / `unchanged_base` (2 samples) | 6.035 (5.94–6.13) | 13.12 (13.01–13.23) | 1.665 (1.66–1.67) |
+| `pack` / all 4 base controls | 6.205 (5.94–6.60; range 0.66) | 13.12 (12.90–13.56; range 0.66) | 1.685 (1.66–1.75; range 0.09) |
+| `pack` / `candidate` (2 samples) | 6.195 (5.96–6.43) | 13.275 (13.06–13.49) | 1.77 (1.73–1.81) |
+
+Warmups (excluded from medians, retained in `ci-path/measurements.json`):
+`extract` base 2.81 s / candidate 2.85 s; `pack` base 7.34 s / candidate 7.96 s.
+On warm local NVMe, pure `zstd -dc > /dev/null` takes 2.09 s wall (2.01 s user),
+and the unchanged-base wall spread (`0.82 s` extract, `0.66 s` pack) masks wall
+deltas (`wall_claim_gate.exceeds_control_range = false` for both operations).
+**No local wall-time reduction or hosted p90 reduction is claimed from these
+timings**; `extract` user CPU dropped below all four controls in both blocks
+(`2.45 → 2.21 s`, −0.24 s against a 0.23 s control spread), and the deterministic
+reduction is the syscall and userspace-copy cut above.
+
+**Contract verification.** All four candidate-packed parts match the base parts
+bit-for-bit (`7963bf81…`, `b91178fa…`, `9ad46e2a…`, `6eceb6fb…`). Across all
+four producer/consumer combinations (`{base,candidate}` parts × `{base,candidate}`
+extract), every extracted tree matches on all 362 relative paths, 3,380,071,198
+bytes, 54 executable files, and tree SHA-256 `d458d2949cce7708…`. The
+candidate extraction passes `scripts/check-nextest-partitions.py --shards 13`
+(4,303 tests covered exactly once) and selects shard-1's Linux sandbox/policy
+portable filterset (303 tests), ignored `linux_sandbox::` filterset (2 tests),
+and `linux_landlock::tests::ruleset::` filterset (3 tests). `scripts/test-ci-repack-nextest.py`,
+`scripts/test-pr-state-workflows.py`, `scripts/test-check-nextest-partitions.py`,
+`ALWAYS_RUN` selection, and path/link/set-id/truncation safety checks all pass.
+No test, assertion, workflow job, required check name, runner class or cache
+policy changed.
+
+**Hosted compliance remains open; the 400 s budget is not restored by this
+pass.** The binding cost in the ORB-26803 cohort remains the 253–411 s `Test
+build` on `orbit-core`/`orbit-types` rebuilds; any runner-class/SKU change or
+setup-overlap trade-off belongs to an operator decision outside this leaf. After
+publication, once the latest 20 completed PR `ci.yml` runs carry this revision,
+the operator runs:
+
+```bash
+python3 scripts/ci-p90.py --limit 20 --budget-seconds 400
+```
+
+under the [hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff),
+reporting executed, failed, skipped, cancelled and missing Check counts,
+nearest-rank p90, median and maximum, pre-Check and awaited-job queue wait
+separately from elapsed time, cache (`hit`/`miss`), scope (`full`/`affected`),
+and runner CPU strata, plus `nextest-repack: mode=extract` `write_ops=` and
+extraction wall times from the shard logs. Hosted compliance is **not run, owed
+after publication**.
+
 ## Why
 
 On 2026-10-03, unit tests under `crates/*/src/**` were about 295k lines and 7,675 test functions, more lines than the production code they covered. Crate-root integration tests were 37k lines. Most unit tests pinned internals, so a refactor that kept behaviour unchanged still broke dozens of them, and each break cost an agent tokens to repair a test rather than find a bug. A review of all of them kept 180 (2.3%).
