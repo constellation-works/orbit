@@ -404,7 +404,6 @@ td.codebase-empty { padding: var(--space-16) var(--space-14); }
   border-bottom: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.02);
 }
-#tools-meta { display: none; }
 /* The tool-call failures card's header holds two rows: the title, then the
    By tool | By model tab strip. Each row stays on one line at every width
    (STD-07 §R39), so the strip never wraps under the title on a phone. */
