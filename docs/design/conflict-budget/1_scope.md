@@ -1,7 +1,7 @@
 ---
 title: "Scope: conflict budget for footprint admission"
 owner: claude
-last_updated: 2026-11-21
+last_updated: 2026-11-22
 last_validated: 2026-11-21
 status: Draft
 stage: parked
@@ -21,8 +21,10 @@ candidate on any overlap with a held claim, reservation or wave member
 via the `overlaps` closure in `selection.rs`, and by `owner_wave.rs` and the runtime lock index;
 a footprint-less editing task was treated as a whole-tree lock in multi-slot drains by [ORB-15191]). Three settings already
 relax that per path: [`workflow.unlocked_context_paths`](../../CONFIG.md#unlocked-context-paths)
-takes no lock for matching entries (built-in default `["**/*.md"]`; init template value
-`["**/*.json", "**/*.txt", "**/*.md", "**/mod.rs", "**/*.toml"]`);
+takes no lock for a matching entry of a task that also declares a non-matching one, so admission
+never blocks it on that path; a task whose every entry matches keeps them all locked, because two
+rewrites of one document are where a merge produces contradictory text (built-in default
+`["**/*.md"]`; init template value `["**/*.json", "**/*.txt", "**/*.md", "**/mod.rs", "**/*.toml"]`);
 [`workflow.generated_paths`](../../CONFIG.md#generated-paths-are-regenerated-not-merged)
 ([ORB-16784]) regenerates a conflicting generated file at landing instead of merging it; and
 [`workflow.lock_modes`](../../CONFIG.md#footprint-lock-modes) ([ORB-18157], done) waives an
@@ -71,7 +73,8 @@ The operator sets how much expected conflict-repair work Orbit may take on to ru
 tasks together, and can set it higher during working hours than overnight. Admission admits an
 overlapping candidate when the expected repair cost of its overlaps, estimated per path from
 recorded history, fits that budget. With the budget at its default of zero, admission is exactly
-today's: every locked path is exclusive and `unlocked_context_paths` still takes no lock. Landing,
+today's: every locked path is exclusive and `unlocked_context_paths` still takes no lock for a
+matching entry beside a non-matching one. Landing,
 conflict recovery and review are unchanged; the budget changes only which work runs at the same
 time.
 
@@ -128,10 +131,12 @@ admit when overlap_risk(candidate) ≤ budget(now)
 ```
 
 `holders(path)` counts the tasks already holding it, because the k-th task to land on a busy
-path rebases against k−1 changes. Paths matching `unlocked_context_paths` keep taking no lock
-(`risk = 0`); paths matching `workflow.exclusive_context_paths` are never shared at any budget.
+path rebases against k−1 changes. A matching path keeps taking no lock (`risk = 0`) when its task
+also declares a non-matching selector; a task whose every selector matches keeps those paths
+locked, so they are priced like any other locked path. Paths matching
+`workflow.exclusive_context_paths` are never shared at any budget.
 Owner pull admission applies the same rule, which also closes today's gap where it checks a
-claim's full footprint, unlocked paths included, against in-flight work.
+candidate's full declared context, unlocked paths included, against in-flight claims.
 
 Worked example, ws_orbit's eleven catalog tasks at a daytime budget of 15 and the default cap of
 4 holders, if neither shared file were unlocked:
