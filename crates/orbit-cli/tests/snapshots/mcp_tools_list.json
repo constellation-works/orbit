@@ -10,7 +10,7 @@
           "items": {
             "type": "string"
           },
-          "description": "orbit_workspace_list ID; resolved globally by default."
+          "description": "From orbit_workspace_list."
         },
         "all": {
           "type": "boolean",
@@ -212,7 +212,7 @@
         },
         "workspace": {
           "type": "string",
-          "description": "orbit_workspace_list ID; resolved globally by default."
+          "description": "From orbit_workspace_list."
         }
       },
       "required": [
@@ -278,7 +278,7 @@
         },
         "workspace": {
           "type": "string",
-          "description": "orbit_workspace_list ID; resolved globally by default."
+          "description": "From orbit_workspace_list."
         }
       },
       "additionalProperties": true,
@@ -330,7 +330,7 @@
         },
         "workspace": {
           "type": "string",
-          "description": "orbit_workspace_list ID; resolved globally by default."
+          "description": "From orbit_workspace_list."
         },
         "acceptance_criteria": {
           "type": "array",
@@ -529,7 +529,7 @@
         },
         "workspace": {
           "type": "string",
-          "description": "orbit_workspace_list ID; resolved globally by default."
+          "description": "From orbit_workspace_list."
         },
         "source_path": {
           "type": "string",
@@ -580,7 +580,7 @@
         },
         "workspace": {
           "type": "string",
-          "description": "orbit_workspace_list ID; resolved globally by default."
+          "description": "From orbit_workspace_list."
         }
       },
       "additionalProperties": false
@@ -691,7 +691,7 @@
         },
         "workspace": {
           "type": "string",
-          "description": "orbit_workspace_list ID; resolved globally by default."
+          "description": "From orbit_workspace_list."
         }
       },
       "additionalProperties": false
@@ -732,7 +732,7 @@
         },
         "workspace": {
           "type": "string",
-          "description": "orbit_workspace_list ID; resolved globally by default."
+          "description": "From orbit_workspace_list."
         },
         "view": {
           "type": "string",
@@ -958,7 +958,7 @@
         },
         "workspace": {
           "type": "string",
-          "description": "orbit_workspace_list ID; resolved globally by default."
+          "description": "From orbit_workspace_list."
         }
       },
       "required": [

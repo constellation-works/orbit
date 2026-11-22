@@ -38,10 +38,11 @@ fn tool_annotations(annotations: McpToolAnnotations) -> ToolAnnotations {
 /// Canonical name of the authoritative server's workspace selector.
 pub(crate) const WORKSPACE_SELECTOR_PARAM: &str = "workspace";
 
-/// One description for every advertised `workspace` selector.
+/// One description for every workspace selector normalized by the MCP adapter.
 ///
-/// Defined once in `orbit_common::governance::tool_schema`.
-pub(crate) use orbit_common::governance::tool_schema::WORKSPACE_SELECTOR_DESCRIPTION;
+/// The CLI tool schema keeps the extra global-default guidance on its declared
+/// argument. MCP transport selectors instead point callers to workspace discovery.
+pub(crate) const WORKSPACE_SELECTOR_DESCRIPTION: &str = "From orbit_workspace_list.";
 
 /// Property descriptions on these tools are hand-written one-sentence contract.
 const HAND_AUTHORED_PROPERTY_TOOLS: &[&str] =
