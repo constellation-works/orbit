@@ -2187,7 +2187,13 @@ A task settles only when all of these hold:
   accepted handoff's branch, or the original admission receipt's branch for a
   released or failed claim. A missing or expired admission receipt cannot prove
   that branch. Other delivery pull requests must merge into the base branch of
-  the task's delivery run, else the workspace base branch;
+  the task's delivery run, else the workspace base branch. A local delivery held
+  after it published its pull request is pinned to that publication's number,
+  branch and head. The pull request may also have merged after it was brought up to
+  its base (such as with `gh pr update-branch`), when every commit added after the
+  published head is a clean merge of commits already on the target branch before
+  this merge. The landing note then names the published head and the merged head.
+  A merged head carrying any other commit does not settle the task;
 - it owes no post-deploy acceptance criterion still awaiting an operator's met
   record. Merging the pull request does not discharge that measurement.
 

@@ -605,6 +605,117 @@ fn the_owner_sweep_merges_a_stopped_publication_only_while_the_pull_request_is_u
     );
 }
 
+/// The stopped publication of `f`, merged at `head` as a squash commit on
+/// `origin/main`, with the forge reporting it merged at that head.
+fn squash_merged_at(f: &mut Fixture, checkout: &Path, head: &str) -> (Forge, String) {
+    git(
+        checkout,
+        &["push", "-q", "origin", &format!("HEAD:{}", f.branch)],
+    );
+    git(&f.repo, &["fetch", "-q", "origin"]);
+    git(&f.repo, &["checkout", "-q", "main"]);
+    git(&f.repo, &["reset", "-q", "--hard", "origin/main"]);
+    git(&f.repo, &["merge", "-q", "--squash", head]);
+    git(&f.repo, &["commit", "-qm", "Squash-merge the delivery"]);
+    git(&f.repo, &["push", "-q", "origin", "HEAD:main"]);
+    let merge = git(&f.repo, &["rev-parse", "HEAD"]);
+    let forge = Forge::for_fixture(f);
+    forge.merge();
+    {
+        let mut state = forge.0.lock().unwrap();
+        let merged = state.merged.as_mut().unwrap();
+        merged.head_sha = head.to_string();
+        merged.merge_commit = merge.clone();
+    }
+    f.runtime = f
+        .runtime
+        .clone()
+        .with_task_pr_forge(Arc::new(forge.clone()));
+    (forge, merge)
+}
+
+/// Bring the published branch in `checkout` up to a newly advanced
+/// `origin/main` with a merge commit, as the forge's branch update does.
+fn refresh_from_advanced_base(f: &Fixture, checkout: &Path) -> String {
+    git(&f.repo, &["checkout", "-q", "main"]);
+    git(&f.repo, &["reset", "-q", "--hard", "origin/main"]);
+    std::fs::write(f.repo.join("advanced-base.txt"), "advanced base\n").unwrap();
+    git(&f.repo, &["add", "advanced-base.txt"]);
+    git(&f.repo, &["commit", "-qm", "Advance the base"]);
+    git(&f.repo, &["push", "-q", "origin", "HEAD:main"]);
+    git(checkout, &["fetch", "-q", "origin", "main"]);
+    git(
+        checkout,
+        &["merge", "-q", "--no-ff", "--no-edit", "origin/main"],
+    );
+    git(checkout, &["rev-parse", "HEAD"])
+}
+
+fn a_stopped_publication_merged_after_a_base_refresh_settles_at_the_merged_head() {
+    // ORB-26871: a held delivery's PR was brought up to its base (branch
+    // update) and squash-merged; settle-merged refused it as unmerged.
+    let (mut f, checkout, _) = escalated_completion_fixture();
+    let refreshed = refresh_from_advanced_base(&f, &checkout);
+    assert_ne!(refreshed, f.head);
+    let (_, merge) = squash_merged_at(&mut f, &checkout, &refreshed);
+
+    let settled = f
+        .runtime
+        .settle_externally_merged_task(&f.task)
+        .expect("a base-refreshed merge settles");
+    assert_eq!(settled.pr_number, 17);
+    assert_eq!(settled.merge_commit, merge);
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Done
+    );
+    let history = f.runtime.get_task_history(&f.task).unwrap();
+    let note = history
+        .iter()
+        .find(|entry| entry.event == "external_merge_settled")
+        .and_then(|entry| entry.note.clone())
+        .expect("settlement in task history");
+    assert!(
+        note.contains(&f.head) && note.contains(&refreshed) && note.contains(&merge),
+        "the note names the published head and the delivered merged head: {note}"
+    );
+}
+
+fn a_stopped_publication_merged_with_a_commit_beyond_its_base_does_not_settle() {
+    // ORB-26871: only target-branch commits may separate the merged head
+    // from the published one; a hand-pushed change on the branch inherits
+    // none of the stopped run's evidence.
+    let (mut f, checkout, _) = escalated_completion_fixture();
+    refresh_from_advanced_base(&f, &checkout);
+    std::fs::write(checkout.join("hand-fix.txt"), "unreviewed change\n").unwrap();
+    git(&checkout, &["add", "hand-fix.txt"]);
+    git(&checkout, &["commit", "-qm", "Hand-pushed fix"]);
+    let foreign = git(&checkout, &["rev-parse", "HEAD"]);
+    squash_merged_at(&mut f, &checkout, &foreign);
+
+    let error = f
+        .runtime
+        .settle_externally_merged_task(&f.task)
+        .expect_err("a merged head with a foreign commit is refused");
+    assert!(
+        error
+            .to_string()
+            .contains("none of its delivery pull requests is merged"),
+        "{error}"
+    );
+    assert!(
+        f.runtime
+            .settle_externally_merged_tasks()
+            .unwrap()
+            .is_empty(),
+        "the owner pass refuses it too"
+    );
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Blocked
+    );
+}
+
 crate::scenario_table!(
     handoff_landing_regressions,
     owner_lands_green_handoff_and_refusals_change_nothing,
@@ -613,4 +724,6 @@ crate::scenario_table!(
     handoff_landing_reads_draft_and_checks_from_the_real_forge_adapter,
     periodic_settlement_recovers_a_stopped_completion_during_rest_rate_limiting,
     the_owner_sweep_merges_a_stopped_publication_only_while_the_pull_request_is_unchanged,
+    a_stopped_publication_merged_after_a_base_refresh_settles_at_the_merged_head,
+    a_stopped_publication_merged_with_a_commit_beyond_its_base_does_not_settle,
 );

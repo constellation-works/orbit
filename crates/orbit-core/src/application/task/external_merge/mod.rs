@@ -29,7 +29,13 @@
 //!
 //! A stopped native completion run's authenticated publication pins the PR
 //! number and URL, head branch and commit, and target branch. It can settle
-//! without a separate forge login lookup. Otherwise a recorded delivery PR
+//! without a separate forge login lookup. The PR may also have merged at a
+//! base refresh of the published head (such as the forge's branch update):
+//! a first-parent chain of clean two-parent merges whose other sides were
+//! already on the target branch before this merge, with the merge commit's
+//! tree exactly that head merged onto the target. The merged head is then the
+//! delivered candidate, and the landing note names both heads. A merged head
+//! carrying any other commit does not settle the task. Otherwise a recorded delivery PR
 //! is matched as the closure matches it: its head branch is
 //! `orbit/<TASK-ID>-…`, its body names the task, and it was authored by a
 //! delivery identity (`pr.delivery_authors`, else the login this machine's

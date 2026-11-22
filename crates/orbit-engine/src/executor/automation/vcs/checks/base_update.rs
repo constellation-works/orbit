@@ -105,31 +105,8 @@ pub(in crate::executor::automation::vcs) fn verify_published_base_update(
     if !contains(workspace, &candidate.base.commit, &landing_ref) {
         return Err(refuse("landing base rewound or unrelated".into()));
     }
-    if remote && !contains(workspace, head, head) {
-        let _ = git_command_success(
-            workspace,
-            &[
-                "fetch",
-                "--no-tags",
-                "--quiet",
-                "origin",
-                &candidate.source_branch,
-            ],
-        );
-        if !contains(workspace, head, head) {
-            // GitHub retains this ref after deleting a merged source branch,
-            // including when the landing branch received a squash commit.
-            let _ = git_command_success(
-                workspace,
-                &[
-                    "fetch",
-                    "--no-tags",
-                    "--quiet",
-                    "origin",
-                    &format!("refs/pull/{number}/head"),
-                ],
-            );
-        }
+    if remote {
+        fetch_provider_head(workspace, head, &candidate.source_branch, number);
     }
     verified_base_update(workspace, &candidate.candidate.commit, head, &landing_ref)
         .map_err(refuse)?;
@@ -160,23 +137,7 @@ pub(in crate::executor::automation::vcs) fn verify_published_base_update(
                 "provider merge is not an exact commit identity".into(),
             ));
         }
-        if !contains(workspace, merge, &landing_ref) {
-            return Err(refuse(
-                "reported merge is absent from the fetched landing base".into(),
-            ));
-        }
-        let parents = git_output(workspace, &["rev-list", "--parents", "-n", "1", merge])?;
-        let parent = parents
-            .split_whitespace()
-            .nth(1)
-            .ok_or_else(|| refuse("merge parent unavailable".into()))?;
-        let clean = git_output(workspace, &["merge-tree", "--write-tree", head, parent])?;
-        let tree = git_output(workspace, &["rev-parse", &format!("{merge}^{{tree}}")])?;
-        if clean.lines().next().map(str::trim) != Some(tree.trim()) {
-            return Err(refuse(
-                "reported merge tree does not deliver this provider head".into(),
-            ));
-        }
+        merge_delivers_head(workspace, merge, head, &landing_ref).map_err(refuse)?;
     } else if remote {
         let actual = git_output(
             workspace,
@@ -192,4 +153,137 @@ pub(in crate::executor::automation::vcs) fn verify_published_base_update(
         }
     }
     Ok(())
+}
+
+/// Fetch a provider head the checkout cannot read yet: first its source
+/// branch, then the pull request's retained ref. Fetch failures are not
+/// answers; the caller's later reads refuse an object still missing.
+fn fetch_provider_head(workspace: &Path, head: &str, source_branch: &str, number: u64) {
+    if contains(workspace, head, head) {
+        return;
+    }
+    let _ = git_command_success(
+        workspace,
+        &["fetch", "--no-tags", "--quiet", "origin", source_branch],
+    );
+    if !contains(workspace, head, head) {
+        // GitHub retains this ref after deleting a merged source branch,
+        // including when the landing branch received a squash commit.
+        let _ = git_command_success(
+            workspace,
+            &[
+                "fetch",
+                "--no-tags",
+                "--quiet",
+                "origin",
+                &format!("refs/pull/{number}/head"),
+            ],
+        );
+    }
+}
+
+/// Whether the reported `merge` is on `landing_ref` and its tree is exactly
+/// the clean merge of `head` into the merge's first parent, the landing
+/// branch tip it merged onto. Returns that first parent.
+fn merge_delivers_head(
+    workspace: &Path,
+    merge: &str,
+    head: &str,
+    landing_ref: &str,
+) -> Result<String, String> {
+    if !contains(workspace, merge, landing_ref) {
+        return Err("reported merge is absent from the fetched landing base".into());
+    }
+    let parents = git_output(workspace, &["rev-list", "--parents", "-n", "1", merge])
+        .map_err(|error| format!("merge {merge} cannot be read: {error}"))?;
+    let parent = parents
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| "merge parent unavailable".to_string())?
+        .to_string();
+    let clean = git_output(workspace, &["merge-tree", "--write-tree", head, &parent])
+        .map_err(|error| format!("head {head} does not merge cleanly onto {parent}: {error}"))?;
+    let tree = git_output(workspace, &["rev-parse", &format!("{merge}^{{tree}}")])
+        .map_err(|error| format!("merge {merge} has no readable tree: {error}"))?;
+    if clean.lines().next().map(str::trim) != Some(tree.trim()) {
+        return Err("reported merge tree does not deliver this provider head".into());
+    }
+    Ok(parent)
+}
+
+/// A pull request the forge reports merged, and the head its stopped
+/// delivery published.
+#[derive(Debug, Clone, Copy)]
+pub struct MergedBaseRefresh<'a> {
+    /// The exact head the delivery published and validated.
+    pub published_head: &'a str,
+    /// The head the pull request merged at.
+    pub merged_head: &'a str,
+    /// The pull request's source branch.
+    pub source_branch: &'a str,
+    /// The branch it merged into.
+    pub landing_branch: &'a str,
+    /// The pull request's number.
+    pub pull_request: u64,
+    /// The commit it merged as.
+    pub merge_commit: &'a str,
+}
+
+/// Verify that a pull request merged at a head other than its published one
+/// delivered only the published candidate plus target-branch commits: the
+/// merged head reaches the published head through clean two-parent base
+/// merges (the provider branch-update rule), each base side already on the landing
+/// branch before this merge, and the merge commit's tree is exactly that
+/// head merged onto the landing tip. Base sides are checked against the
+/// merge's first parent, not the landing branch after it, so a commit that
+/// reached the landing branch only through this merge never counts as base.
+/// Any commit outside the candidate plus base, an unreadable object or an
+/// unclean merge refuses.
+pub fn verify_merged_base_refresh(
+    workspace: &Path,
+    refresh: &MergedBaseRefresh<'_>,
+) -> Result<(), OrbitError> {
+    let refuse = |reason: String| {
+        OrbitError::Execution(format!(
+            "merged head {} is not the published head {} plus base merges: {reason}",
+            refresh.merged_head, refresh.published_head
+        ))
+    };
+    for commit in [
+        refresh.published_head,
+        refresh.merged_head,
+        refresh.merge_commit,
+    ] {
+        if !matches!(commit.len(), 40 | 64) || !commit.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(refuse(format!("{commit} is not an exact commit identity")));
+        }
+    }
+    let remote = git_command_success(workspace, &["remote", "get-url", "origin"])?;
+    let landing_ref = if remote {
+        super::super::git::fetch_remote_base(workspace, refresh.landing_branch)?;
+        fetch_provider_head(
+            workspace,
+            refresh.merged_head,
+            refresh.source_branch,
+            refresh.pull_request,
+        );
+        format!("origin/{}", refresh.landing_branch)
+    } else {
+        refresh.landing_branch.to_string()
+    };
+    let onto = merge_delivers_head(
+        workspace,
+        refresh.merge_commit,
+        refresh.merged_head,
+        &landing_ref,
+    )
+    .map_err(refuse)?;
+    verified_base_update(
+        workspace,
+        refresh.published_head,
+        refresh.merged_head,
+        &onto,
+    )
+    .map_err(refuse)
 }
