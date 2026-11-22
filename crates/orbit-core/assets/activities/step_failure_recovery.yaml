@@ -444,6 +444,7 @@ spec:
     - orbit.run:list
     - orbit.run:resume
     - orbit.workflow:land
+    - orbit.workflow:refresh
     - orbit.workflow:ship
   proc_disallowed_programs:
     - sudo

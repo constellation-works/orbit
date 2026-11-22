@@ -87,7 +87,7 @@ fn task_update_class(input: &Value) -> ResidentCallClass {
 /// What a resident cycle's grant must hold for this call.
 pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) -> ResidentCallClass {
     use ResidentCallClass::{Gated, Open, Read, Refused};
-    use ResidentRight::{Dispatch, Merge, Promote};
+    use ResidentRight::{Dispatch, Merge, Promote, Refresh};
     match action {
         OrbitBuiltinAction::PipelineInvoke => Gated(Dispatch),
         OrbitBuiltinAction::PipelineWait
@@ -140,6 +140,7 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
             }
             WorkflowVerb::Auto | WorkflowVerb::Ship | WorkflowVerb::RunResume => Gated(Dispatch),
             WorkflowVerb::Land => Gated(Merge),
+            WorkflowVerb::Refresh => Gated(Refresh),
             WorkflowVerb::RunList | WorkflowVerb::RunObserve | WorkflowVerb::RunShow => Read,
         },
         OrbitBuiltinAction::Drain(verb) => match verb {

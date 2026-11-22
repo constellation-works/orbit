@@ -90,6 +90,7 @@ pub const TOOL_FAMILIES: &[ToolFamily] = &[
             action_with_mode("auto", "orbit.workflow.auto"),
             action("ship", "orbit.workflow.ship"),
             action("land", "orbit.workflow.land"),
+            action("refresh", "orbit.workflow.refresh"),
         ],
     },
     ToolFamily {

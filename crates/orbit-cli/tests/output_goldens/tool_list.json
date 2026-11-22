@@ -1961,7 +1961,7 @@
   },
   {
     "name": "orbit.resident.grant",
-    "description": "Widen or narrow a resident mandate's authority: its rights (dispatch, promote, merge, plugin_upgrade) and covered workspaces. Narrowing applies at once; widening is the human's. Rules and output: the orbit skill's tool-surface.md reference, section `Resident tools`.",
+    "description": "Widen or narrow a resident mandate's authority: its rights (dispatch, promote, merge, plugin_upgrade, refresh) and covered workspaces. Narrowing applies at once; widening is the human's. Rules and output: the orbit skill's tool-surface.md reference, section `Resident tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1975,7 +1975,7 @@
       },
       {
         "name": "add",
-        "description": "Rights to add: dispatch, promote, merge or plugin_upgrade. Widening.",
+        "description": "Rights to add: dispatch, promote, merge, plugin_upgrade or refresh. Widening.",
         "param_type": "string_list",
         "required": false
       },
@@ -3344,7 +3344,7 @@
     "parameters": [
       {
         "name": "action",
-        "description": "Operation to run, with its required fields: auto (mode); ship (task_ids); land (task_id).",
+        "description": "Operation to run, with its required fields: auto (mode); ship (task_ids); land (task_id); refresh (task_id).",
         "param_type": "string",
         "required": true
       },
@@ -3464,7 +3464,7 @@
       },
       {
         "name": "task_id",
-        "description": "For land: The task in review whose delivery pull request lands.",
+        "description": "For land: The task in review whose delivery pull request lands; For refresh: The held (blocked) or review task whose open Orbit delivery pull request refreshes.",
         "param_type": "string",
         "required": false
       }

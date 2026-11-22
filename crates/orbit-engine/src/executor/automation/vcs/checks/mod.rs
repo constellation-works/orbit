@@ -137,6 +137,7 @@ mod suspect;
 
 pub(in crate::executor::automation::vcs) use base_tip::base_tip_check_evidence;
 pub(in crate::executor::automation::vcs) use base_update::verify_published_base_update;
+pub use base_update::verify_refreshed_head_from_base;
 pub use base_update::{MergedBaseRefresh, verify_merged_base_refresh};
 pub(in crate::executor::automation::vcs) use head::{
     CheckReadGap, DeferredLogRead, HeadCheckEvidence, head_check_evidence, unmoved_red_base,

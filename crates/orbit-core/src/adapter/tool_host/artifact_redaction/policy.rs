@@ -297,6 +297,7 @@ pub(super) fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto
             | WorkflowVerb::Land
+            | WorkflowVerb::Refresh
             | WorkflowVerb::RunList
             | WorkflowVerb::RunResume
             | WorkflowVerb::RunObserve
@@ -366,6 +367,7 @@ pub(super) fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto
             | WorkflowVerb::Land
+            | WorkflowVerb::Refresh
             | WorkflowVerb::RunList
             | WorkflowVerb::RunResume
             | WorkflowVerb::RunObserve

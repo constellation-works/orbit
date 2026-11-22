@@ -399,6 +399,18 @@ impl OrbitRuntime {
                 self.record_follow_up(&task, &history, follow_up("merge_refused", reason))?;
                 Ok(None)
             }
+            DeliveryMergeOutcome::ReviewNotSettled => {
+                self.record_follow_up(
+                    &task,
+                    &history,
+                    follow_up(
+                        "review_not_settled",
+                        "the required pre-landing review does not cover the pull request head"
+                            .to_string(),
+                    ),
+                )?;
+                Ok(None)
+            }
             DeliveryMergeOutcome::ForgeRefused { reason } => {
                 self.record_follow_up(
                     &task,

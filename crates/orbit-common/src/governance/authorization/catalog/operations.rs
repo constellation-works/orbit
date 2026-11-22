@@ -218,6 +218,12 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "landing merges a delivery pull request and completes its task",
     },
     GovernedOperation {
+        id: "orbit.workflow.refresh",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "refreshing merges the base branch into a delivery pull request head and starts its required checks",
+    },
+    GovernedOperation {
         id: "orbit.workflow.ship",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],

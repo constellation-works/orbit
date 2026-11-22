@@ -22,6 +22,8 @@ operation_registry! {
         Auto => AUTO,
         /// `orbit.workflow.land`.
         Land => LAND,
+        /// `orbit.workflow.refresh`.
+        Refresh => REFRESH,
         /// `orbit.workflow.run.list`.
         RunList => RUN_LIST,
         /// `orbit.workflow.run.observe`.
@@ -200,6 +202,26 @@ const LAND: OperationSpec<WorkflowVerb> = OperationSpec {
         "task_id",
         ParamType::String,
         "The task in review whose delivery pull request lands.",
+    ))]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Unspecified,
+};
+
+const REFRESH: OperationSpec<WorkflowVerb> = OperationSpec {
+    verb: WorkflowVerb::Refresh,
+    cli_path: &[],
+    tool_name: "orbit.workflow.refresh",
+    tool_description: "Bring a held or review task's one open Orbit delivery pull request up to the tip of its base branch with one conflict-free merge commit and start its required checks. Never rebases, rewrites or force-pushes, makes no code edits, and lands nothing. Any refusal answers `task_refresh_refused` (naming conflicting paths on conflict) and leaves the head unchanged. A head that already includes the base tip is a no-op. Requires operator capability or a resident cycle holding the `refresh` right.",
+    cli_about: "",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[required(mcp_only(
+        "task_id",
+        ParamType::String,
+        "The held (blocked) or review task whose open Orbit delivery pull request refreshes.",
     ))]],
     at_least_one_of: &[],
     retired_fields: &[],

@@ -109,6 +109,7 @@ pub use executor::automation::vcs::{
     judge_light_delivery_with_key, recorded_baseline_hold_status, review_skip_decision,
     run_deferral_probe, run_review_skip_guard, run_worktree_has_reclaim_output, run_worktree_paths,
     validate_claim_new_paths, verify_claimed_known_red, verify_claimed_known_red_base,
+    verify_refreshed_head_from_base,
 };
 pub use executor::automation::vcs::{MergedBaseRefresh, verify_merged_base_refresh};
 pub use executor::automation::vcs::{PR_MERGE_ATTRIBUTION_FIELD, PRIVATE_VCS_PR_MERGE};

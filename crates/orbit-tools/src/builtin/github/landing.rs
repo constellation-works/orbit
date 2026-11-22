@@ -54,6 +54,25 @@ pub fn merge_pull_request_at_head(
     super::gh_exec_request(args, None, TIMEOUT_SLOW_MS)
 }
 
+/// Merge the base branch's tip into pull request `number`'s head branch at
+/// exactly `expected_head_sha` as one merge commit, without rebasing or
+/// force-pushing. GitHub refuses a moved head or conflict and triggers
+/// required checks on the new merge commit when accepted.
+pub fn update_pull_request_branch(number: u64, expected_head_sha: &str) -> ExecRequest {
+    super::gh_exec_request(
+        vec![
+            "api".into(),
+            format!("repos/{{owner}}/{{repo}}/pulls/{number}/update-branch"),
+            "--method".into(),
+            "PUT".into(),
+            "-f".into(),
+            format!("expected_head_sha={expected_head_sha}"),
+        ],
+        None,
+        TIMEOUT_SLOW_MS,
+    )
+}
+
 /// Resolve PR identities associated by GitHub with an exact landed commit.
 pub fn commit_pull_requests(repository: &str, commit: &str) -> Result<ExecRequest, OrbitError> {
     if !super::is_repository_path(repository)

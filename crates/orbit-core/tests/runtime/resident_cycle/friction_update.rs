@@ -330,7 +330,7 @@ fn friction_update_for_uncovered_workspace_is_refused_as_resident_scope_refused(
     let mandate = fx.mandate(&watched);
     fx.grant(
         &mandate,
-        &["dispatch", "promote", "merge", "plugin_upgrade"],
+        &["dispatch", "promote", "merge", "plugin_upgrade", "refresh"],
     );
     let run = fx.cycle_run(&mandate, "resident-friction-scope-refused");
     let brief = fx.begin_cycle(&run, Utc::now());
@@ -411,7 +411,7 @@ fn friction_update_carrying_rehome_to_is_refused_as_resident_tool_refused() {
         &fx,
         &watched,
         &[&home_id, &other_id],
-        &["dispatch", "promote", "merge", "plugin_upgrade"],
+        &["dispatch", "promote", "merge", "plugin_upgrade", "refresh"],
     );
     let run = fx.cycle_run(&mandate, "resident-friction-rehome-refused");
     let brief = fx.begin_cycle(&run, Utc::now());

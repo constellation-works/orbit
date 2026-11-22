@@ -92,6 +92,7 @@ fn worker_route(action: OrbitBuiltinAction) -> Option<WorkerRoute> {
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto
             | WorkflowVerb::Land
+            | WorkflowVerb::Refresh
             | WorkflowVerb::RunList
             | WorkflowVerb::RunResume
             | WorkflowVerb::RunObserve

@@ -17,6 +17,7 @@ mod landing;
 #[cfg(unix)]
 mod launch;
 mod recover;
+mod refresh;
 mod wake_scope;
 
 use std::path::PathBuf;
@@ -176,6 +177,7 @@ impl Fixture {
             allowed_tools: [
                 "orbit.workflow:ship",
                 "orbit.workflow:land",
+                "orbit.workflow:refresh",
                 "orbit.task.recover:repilot",
                 "orbit.task.recover:requeue",
             ]
@@ -1400,7 +1402,7 @@ fn restoring_lint_refuses_resident_cycles_without_partial_context_writes() {
     let mandate = fx.mandate(&named);
     fx.grant(
         &mandate,
-        &["dispatch", "promote", "merge", "plugin_upgrade"],
+        &["dispatch", "promote", "merge", "plugin_upgrade", "refresh"],
     );
     let run = fx.cycle_run(&mandate, "resident-restoring-lint");
     let brief = fx.begin_cycle(&run, Utc::now());

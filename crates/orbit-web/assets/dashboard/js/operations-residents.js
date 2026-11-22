@@ -13,7 +13,7 @@ import { recordRoutedHref } from './router.js';
 
 const FEEDBACK = "resident-operation-feedback";
 const DETAIL_FEEDBACK = "resident-detail-feedback";
-const RIGHTS = ["dispatch", "promote", "merge", "plugin_upgrade"];
+const RIGHTS = ["dispatch", "promote", "merge", "plugin_upgrade", "refresh"];
 const STATE_STATUS = { active: "done", paused: "todo", taken_over: "in_progress", ended: "archived" };
 const STATE_ORDER = { active: 0, taken_over: 1, paused: 2 };
 
