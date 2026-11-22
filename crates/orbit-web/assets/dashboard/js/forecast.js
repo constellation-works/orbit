@@ -32,7 +32,7 @@ import {
   COMPLEXITY_LABELS, scheduleShowsReview,
 } from './forecast-shared.js';
 import {
-  UNREPORTED_FORECAST_REASON, forecastBoundedGap, forecastUnavailableInfo, forecastBaselineFigures, formatForecastHours,
+  UNREPORTED_FORECAST_REASON, SUBSET_REASON, forecastMetricReason, forecastBoundedGap, forecastUnavailableInfo, forecastBaselineFigures, formatForecastHours,
   formatForecastQuantileRange, formatForecastTokens, formatForecastUsd, fmtParallelism, fmtRank, fmtRate,
   fmtShare, forecastCount, hasHorizonCensoringEvidence, num, quantilePair, recordedPoolsContainGaps,
   regressionGapBecause, regressionHistoryIsAbsent, forecastDrainScope,
@@ -591,17 +591,8 @@ function arrivalsText() {
 
 // ---- totals ---------------------------------------------------------------
 
-// Unforecastable dependencies withhold every full total, whatever the history.
-const SUBSET_REASON = "Not every task can be scheduled.";
-
 function metricReason(scenario, quantiles, metric) {
-  if (quantiles?.p90 != null) return metric === "tokens" ? "Normalized tokens." : null;
-  if (scenario.source?.schedulable_subset) return SUBSET_REASON;
-  const coverage = scenario.coverage;
-  if (metric === "tokens" && num(coverage.uncovered_model)) return "Some tasks have no priced history.";
-  if (metric === "usd" && num(coverage.uncosted)) return "Some tasks have no costed history.";
-  if (view.payload.arrivals?.coverage?.[`missing_${metric}`]) return metric === "tokens" ? "Some history is missing token telemetry." : "Some history is missing cost telemetry.";
-  return metric === "tokens" ? "Not enough priced history." : "Not enough costed history.";
+  return forecastMetricReason(scenario, quantiles, metric, view.payload.arrivals);
 }
 
 function drainReason(scenario, quantiles) {
