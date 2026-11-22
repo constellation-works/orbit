@@ -107,6 +107,7 @@ pub(in crate::api) async fn ship_workflow_action(
             // The dashboard's Ship is an operator's explicit ship: it
             // overrides the drain's readiness gates for the named tasks.
             operator_override: true,
+            ignore_dependency_delivery: false,
         })?;
         Ok(runtime
             .ship_submission_receipt(

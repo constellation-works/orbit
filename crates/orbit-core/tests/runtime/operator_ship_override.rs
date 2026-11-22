@@ -95,6 +95,7 @@ fn ship(runtime: &OrbitRuntime, task: &str, operator_override: bool) -> Result<(
         strict_containment: false,
         review: None,
         operator_override,
+        ignore_dependency_delivery: false,
     }) {
         Ok(_) | Err(OrbitError::Execution(_)) => Ok(()),
         Err(other) => Err(other),
