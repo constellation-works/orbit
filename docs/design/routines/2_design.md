@@ -605,19 +605,28 @@ integration head: freshness is scoped to workflow and ref for both landing branc
 pilot proves the repair already landed on integration, admission leaves the deduped task in
 proposed quarantine and reports `release_promotion_or_hotfix_needed` with the red release
 SHA/run and the pilot's covering repair evidence. The sweep performs neither release
-promotion nor hotfix dispatch. A `verified_no_diff` assessment is never promoted: admission
-reports it as `pilot_verified_no_diff` with the pilot's evidence and the commits it cites.
-After the pilot write the task is archived, with a system comment naming the covering
-commits and the assessment, only when every cited commit exists and at least one is an
-ancestor of the base branch that relates to the finding. The commits the finding itself
-names (any commit in its description, and the landed commit of a `regression_from` target)
-never count, since they are on the base branch by construction. A target with no recorded
-delivery names no commit. A pinned delivery definition that cannot be read or parsed is not
-that case: the proof is refused and the finding stays proposed, so a citation of the culprit
-itself cannot close it. When one is known, a covering commit must descend from all of
-them, and when the task declared path selectors it must touch one of those paths. An `--approve-proposed` drain applies the same rule.
-Without that proof (no commit cited, an unknown SHA, none on the base branch, or only
-commits unrelated to the finding) the task stays proposed with that reason. The routine is a scheduling surface only: an
+promotion nor hotfix dispatch. An untagged `verified_no_diff` finding stays held as
+`pilot_verified_no_diff` with the pilot's evidence and cited commits. After the pilot write,
+Orbit automation may archive that finding with a system comment naming the covering commits
+and assessment only when every cited commit exists and at least one is an ancestor of the base
+branch that relates to the finding. The commits the finding itself names (any commit in its
+description, and the landed commit of a `regression_from` target) never count, since they are on
+the base branch by construction. A target with no recorded delivery names no commit. A pinned
+delivery definition that cannot be read or parsed is not that case: the proof is refused and the
+finding stays proposed, so a citation of the culprit itself cannot close it. When one is known,
+a covering commit must descend from all of them, and when the task declared path selectors it
+must touch one of those paths. Human- and orchestrator-filed findings are never archived this
+way. An `--approve-proposed` drain applies the same finding proof and hold.
+
+An eligible no-diff deliverable follows a separate path: apply adds `no-diff-expected` atomically
+with its `verified_no_diff` assessment, and the drain judges the task with that tag, so the same
+pass, including an `--approve-proposed` drain, may approve it when no other hold applies. The tag
+is reserved for assessments with no cited commit or disqualifying finding, and is not added to
+review, QA, CI-sweep or host-computed comment-hygiene tasks, or a task already carrying the tag.
+Empty selectors do not make a `selectors` disposition valid: ordinary apply refuses it before
+writing, while the host-computed held comment-hygiene path separately requires empty selectors
+with the `selectors` disposition and remains held. Adding `no-auto-approve` stops automatic
+approval while leaving the tag in place. The routine is a scheduling surface only: an
 operator-triggered run of the job behaves identically to a scheduled fire.
 
 An operator-authorized creation grant is retained even when the requested work has
