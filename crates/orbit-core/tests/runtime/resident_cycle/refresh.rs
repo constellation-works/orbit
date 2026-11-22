@@ -451,7 +451,7 @@ fn record_passing_review_certificate(
     );
     let cert = ReviewCertificate {
         schema_version: REVIEW_CONTRACT_VERSION,
-        attempt_id: format!("rev-attempt-{task_id}"),
+        attempt_id: format!("rev-attempt-{task_id}-{reviewed_head}"),
         lineage_key: format!("lineage-{task_id}"),
         task_ids: vec![task_id.to_string()],
         task_meaning_digest: digest,
@@ -1094,6 +1094,29 @@ fn landing_accepts_conflict_free_refreshed_head_with_passing_checks_and_refuses_
     assert_eq!(
         fx.runtime.get_task(&task_bad).unwrap().status,
         TaskStatus::Review
+    );
+
+    forge.set_head(pr_bad, &extra_commit);
+    // A fresh review of the changed head does not waive its required checks.
+    record_passing_review_certificate(&fx, &task_bad, &base0, &extra_commit);
+    forge.set_checks(pr_bad, &[], &[], &["Check / Clippy / Test"]);
+    let err = fx
+        .runtime
+        .land_task_pull_request(&task_bad, Some("operator"))
+        .expect_err("the reviewed changed head still has a failed required check")
+        .to_string();
+    assert!(
+        err.contains("task_landing_refused") && err.contains("Check / Clippy / Test"),
+        "{err}"
+    );
+    assert!(
+        !forge
+            .0
+            .lock()
+            .unwrap()
+            .merge_requests
+            .iter()
+            .any(|(pr, _)| *pr == pr_bad)
     );
 }
 

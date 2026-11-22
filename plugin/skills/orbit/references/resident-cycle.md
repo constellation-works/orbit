@@ -27,7 +27,7 @@ brief wins.
 Your grant is frozen for the cycle. A maintenance notice open in a covered
 workspace, or a passed deadline, empties the rights for that cycle: you may
 still read, comment, escalate and checkpoint, but dispatch, promote, merge,
-refresh and plugin upgrade are refused. Notices narrow; they never widen.
+refresh, delivery recovery and plugin upgrade are refused. Notices narrow; they never widen.
 
 ## The cycle, in order
 
@@ -83,6 +83,7 @@ friction between workspaces stays with the operator and the curation pass.
 | `promote` | Move a `proposed` task to `backlog`; file tasks directly in `backlog` |
 | `merge` | Land a reviewed delivery with `orbit.workflow` action `land`; move a task with no open pull request to `done` |
 | `refresh` | Bring a held or review delivery pull request head up to its base branch with `orbit.workflow` action `refresh` and re-run required checks (conflict-free merge commit only; lands nothing) |
+| `recover` | Start a review-only recovery leaf with `orbit.task.recover` action `resume_delivery` in any covered workspace on this host |
 | (none yet) | `plugin_upgrade` maps to no tool yet; never improvise an install |
 
 `orbit.attention` reads the runtime kinds (`run_failed`, `run_stuck`, `claim_stale`) and `host_unhealthy` for the covered workspaces while the cycle's grant is live; any other workspace still reports them as `capability` degraded. `orbit.workflow` action `auto` with `mode: "status"` reads drain readiness for the covered workspaces while the cycle is live, with or without any granted right, and refuses any other workspace as `resident_scope_refused`. Both are reads only: they grant no write, and drain controls (`start`, `stop`, `resize`) stay operator-only.
@@ -104,10 +105,8 @@ Use the normal pipeline for leaf work. To dispatch, call `orbit.workflow` action
 with the mandate's own workspace and the `backlog` task ids; it returns the run
 id and stops the delivery at `review`, so landing it still takes `merge`. A
 covered workspace other than the mandate's own is refused as `resident_scope_refused`
-for every write except `orbit.friction` action `update`: a cycle writes through its
-own workspace only, whereas `orbit.friction` action `update` (without `rehome_to` or
-`move`) may target any covered workspace on the host and records its action ledger
-row on the mandate. The same `dispatch` right re-pilots and requeues:
+for writes other than `orbit.friction` action `update` and `orbit.task.recover`
+action `resume_delivery`. Both record their action key on the home mandate. The same `dispatch` right re-pilots and requeues:
 call `orbit.task.recover` action `repilot` with the `id` of a `proposed` or
 `backlog` task to repeat its pilot assessment, and action `requeue` with
 the `id` of a `blocked` task and a `reason`, both with the mandate's own
@@ -119,8 +118,7 @@ held candidate. An operator can decide to discard it. A fresh
 successful action returns its `resident_action_key`. If a recovery call matches
 an action the dead cycle already completed, it returns
 `resident_action: "already_done"` with the original key in `key`, plus `ref`
-and `subject`, and does not return `resident_action_key`. Every other
-`orbit.task.recover` action, `orbit.workflow` action `auto` drain controls (`start`, `stop`, `resize`), `orbit.run` action
+and `subject`, and does not return `resident_action_key`. Recovery actions outside the specified rights, `orbit.workflow` action `auto` drain controls (`start`, `stop`, `resize`), `orbit.run` action
 `resume` and `orbit.pipeline.invoke` stay operator-only and answer
 `capability_denied` even with the right: record that as a cost and leave them
 to the operator or the scheduler.
@@ -134,6 +132,18 @@ conflicting paths and leave the head unchanged; a head already at the base tip
 returns `already_up_to_date` as a no-op. A refreshed head needs no new review
 when only conflict-free base refresh merges follow the reviewed head, while
 `land` still requires the required checks to pass on the new head.
+To continue a blocked delivery with source changes, call `orbit.task.recover`
+action `resume_delivery` with `id`, `run_id`, `workspace` and `diagnosis`.
+Use the stopped failed or held run that preserved the published candidate.
+Give the observed failure and remaining work. A leaf adopts that candidate on
+the current base and runs fresh validation and review. The ledger keys one
+attempt per cycle, and the task admits one resident reservation per rolling
+24 hours with a shared 120-minute agent deadline. An open final-recovery
+request permits the attempt only while every option is explicitly routine or
+reversible and it needs no separate human action. If it refuses, record the
+decision reference for the operator. Never answer a decision or take an
+irreversible option. Landing still needs `merge`.
+
 To land, call `orbit.workflow` action `land` with the mandate's own workspace and the
 `task_id` of a task in `review`. It
 merges the task's delivery pull request under the forge's branch protection and

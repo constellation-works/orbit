@@ -96,6 +96,9 @@ pub(super) fn continue_source<H: RuntimeHost + ?Sized>(
         Adoption::Refused(reason) => return Err(refused(&reason)),
     }
     let mut repair = json!({"trigger":"continuation","failed_step_id":"operator_source_repair","output":admission.diagnosis});
+    if admission.resident_repair_deadline().is_some() {
+        repair["failed_step_id"] = json!("resident_source_repair");
+    }
     match apply(&candidate, &candidate.head_sha, workspace, base)? {
         Applied::Refused(reason) => return Err(refused(&reason)),
         Applied::Conflict { paths, output } => {

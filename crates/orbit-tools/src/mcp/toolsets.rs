@@ -28,6 +28,7 @@ pub(crate) fn builtin_mcp_toolset(name: &str) -> Option<McpToolset> {
         | "orbit.task.recover_claim"
         | "orbit.task.repilot"
         | "orbit.task.requeue"
+        | "orbit.task.resume_delivery"
         | "orbit.task.retry_handoff"
         | "orbit.task.review_reset"
         | "orbit.task.revoke_handoff" => T::TaskRepair,

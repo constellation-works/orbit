@@ -55,7 +55,7 @@ impl WorkspaceCatalog for HostWorkspaces {
 }
 
 /// Attach a second registered workspace sharing the host's `global` store.
-fn add_host_workspace(fx: &mut Fixture) -> (String, OrbitRuntime, TempDir) {
+pub(super) fn add_host_workspace(fx: &mut Fixture) -> (String, OrbitRuntime, TempDir) {
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let other_repo = root.path().join("other");
     std::fs::create_dir_all(other_repo.join(".orbit")).unwrap();
@@ -135,7 +135,7 @@ fn cycle_action_rows(fx: &Fixture, mandate: &str, cycle: &str) -> Vec<ResidentAc
     rows
 }
 
-fn multi_workspace_mandate(
+pub(super) fn multi_workspace_mandate(
     fx: &Fixture,
     watched: &str,
     workspaces: &[&str],

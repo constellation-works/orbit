@@ -134,7 +134,7 @@ fn session(capability: McpCapability) -> ToolSessionContext {
     }
 }
 
-fn call(
+pub(super) fn call(
     runtime: &OrbitRuntime,
     tool: &str,
     input: Value,
@@ -155,6 +155,48 @@ fn call(
         .map_err(|error| error.to_string())
 }
 
+#[cfg(unix)]
+pub(super) fn resident_test_broker(
+    runtime: &OrbitRuntime,
+    mandate: &str,
+    run_id: &str,
+) -> orbit_core::runtime::plugin::broker::PluginBroker {
+    use orbit_engine::PluginBrokerRun;
+    use orbit_tools::plugin::BrokeredCaller;
+    use orbit_types::policy::ResolvedFsProfile;
+    let run = PluginBrokerRun {
+        run_id: run_id.into(),
+        job_run_id: Some(run_id.into()),
+        task_id: Some(mandate.into()),
+        activity_name: "resident_cycle".into(),
+        agent_name: Some("codex".into()),
+        model_name: None,
+        workspace: Some(runtime.workspace_id().unwrap()),
+        allowed_tools: [
+            "orbit.workflow:ship",
+            "orbit.workflow:land",
+            "orbit.workflow:refresh",
+            "orbit.task.recover:repilot",
+            "orbit.task.recover:requeue",
+            "orbit.task.recover:resume_delivery",
+        ]
+        .map(String::from)
+        .into(),
+        tool_deny_policy: None,
+        caller: BrokeredCaller {
+            worktree: std::env::current_dir().unwrap(),
+            fs_profile: ResolvedFsProfile {
+                name: "test".into(),
+                read: vec![],
+                modify: vec![],
+            },
+            proc_allowed_programs: vec![],
+            proc_disallowed_programs: None,
+        },
+    };
+    orbit_core::test_support::start_test_run_broker(runtime, run).unwrap()
+}
+
 impl Fixture {
     /// Declare the client's run for routing, without an authenticated broker.
     fn as_cycle_agent<T>(&self, run_id: &str, body: impl FnOnce() -> T) -> T {
@@ -163,39 +205,8 @@ impl Fixture {
 
     #[cfg(unix)]
     fn as_brokered_cycle<T>(&self, mandate: &str, run_id: &str, body: impl FnOnce() -> T) -> T {
-        use orbit_engine::{PluginBrokerHandle, PluginBrokerRun};
-        use orbit_tools::plugin::BrokeredCaller;
-        use orbit_types::policy::ResolvedFsProfile;
-        let run = PluginBrokerRun {
-            run_id: run_id.into(),
-            job_run_id: Some(run_id.into()),
-            task_id: Some(mandate.into()),
-            activity_name: "resident_cycle".into(),
-            agent_name: Some("codex".into()),
-            model_name: None,
-            workspace: Some(self.runtime.workspace_id().unwrap()),
-            allowed_tools: [
-                "orbit.workflow:ship",
-                "orbit.workflow:land",
-                "orbit.workflow:refresh",
-                "orbit.task.recover:repilot",
-                "orbit.task.recover:requeue",
-            ]
-            .map(String::from)
-            .into(),
-            tool_deny_policy: None,
-            caller: BrokeredCaller {
-                worktree: std::env::current_dir().unwrap(),
-                fs_profile: ResolvedFsProfile {
-                    name: "test".into(),
-                    read: vec![],
-                    modify: vec![],
-                },
-                proc_allowed_programs: vec![],
-                proc_disallowed_programs: None,
-            },
-        };
-        let broker = orbit_core::test_support::start_test_run_broker(&self.runtime, run).unwrap();
+        use orbit_engine::PluginBrokerHandle;
+        let broker = resident_test_broker(&self.runtime, mandate, run_id);
         self.with_cycle_environment(run_id, Some(broker.socket_path().to_str().unwrap()), body)
     }
 

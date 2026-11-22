@@ -130,6 +130,7 @@ fn worker_route(action: OrbitBuiltinAction) -> Option<WorkerRoute> {
             | TaskVerb::ReviewReset
             | TaskVerb::Repilot
             | TaskVerb::Requeue
+            | TaskVerb::ResumeDelivery
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff

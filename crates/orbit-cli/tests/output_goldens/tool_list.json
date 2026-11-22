@@ -1961,7 +1961,7 @@
   },
   {
     "name": "orbit.resident.grant",
-    "description": "Widen or narrow a resident mandate's authority: its rights (dispatch, promote, merge, plugin_upgrade, refresh) and covered workspaces. Narrowing applies at once; widening is the human's. Rules and output: the orbit skill's tool-surface.md reference, section `Resident tools`.",
+    "description": "Widen or narrow a resident mandate's authority: its rights (dispatch, promote, merge, plugin_upgrade, refresh, recover) and covered workspaces. Narrowing applies at once; widening is the human's. Rules and output: the orbit skill's tool-surface.md reference, section `Resident tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1975,7 +1975,7 @@
       },
       {
         "name": "add",
-        "description": "Rights to add: dispatch, promote, merge, plugin_upgrade or refresh. Widening.",
+        "description": "Rights to add: dispatch, promote, merge, plugin_upgrade, refresh or recover. Widening.",
         "param_type": "string_list",
         "required": false
       },
@@ -2895,7 +2895,7 @@
   },
   {
     "name": "orbit.task.recover",
-    "description": "Operator recovery for stuck claims, blocked tasks, handoffs and reviews.",
+    "description": "Recovery for stuck claims, blocked deliveries, handoffs and reviews.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2903,7 +2903,7 @@
     "parameters": [
       {
         "name": "action",
-        "description": "Operation to run, with its required fields: recover_claim (claim_id, expected_phase, status, reason, request_key); requeue (id, reason); repilot (id); retry_handoff (handoff_id, expected_candidate_commit, expected_base_commit, expected_latest_attempt, expected_latest_state, reason, request_key); revoke_handoff (handoff_id, expected_candidate_commit, expected_base_commit, reason, request_key); review_reset (id, lineage_key, reason); reconcile_review (mode, id).",
+        "description": "Operation to run, with its required fields: recover_claim (claim_id, expected_phase, status, reason, request_key); requeue (id, reason); resume_delivery (id, run_id, diagnosis); repilot (id); retry_handoff (handoff_id, expected_candidate_commit, expected_base_commit, expected_latest_attempt, expected_latest_state, reason, request_key); revoke_handoff (handoff_id, expected_candidate_commit, expected_base_commit, reason, request_key); review_reset (id, lineage_key, reason); reconcile_review (mode, id).",
         "param_type": "string",
         "required": true
       },
@@ -2951,7 +2951,7 @@
       },
       {
         "name": "id",
-        "description": "For requeue: Blocked task to requeue; For repilot: Task to assess again; For review_reset: Task in the selected lineage; For reconcile_review: Task in review whose foreign delivery merged.",
+        "description": "For requeue: Blocked task to requeue; For resume_delivery: Blocked task to recover; For repilot: Task to assess again; For review_reset: Task in the selected lineage; For reconcile_review: Task in review whose foreign delivery merged.",
         "param_type": "string",
         "required": false
       },
@@ -2959,6 +2959,18 @@
         "name": "discard_candidate",
         "description": "For requeue: Discard the published or kept candidate, close the task's undelivered Orbit pull requests and let the next run implement fresh.",
         "param_type": "boolean",
+        "required": false
+      },
+      {
+        "name": "run_id",
+        "description": "For resume_delivery: Stopped failed or held delivery run.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "diagnosis",
+        "description": "For resume_delivery: Observed failure and remaining source work.",
+        "param_type": "string",
         "required": false
       },
       {

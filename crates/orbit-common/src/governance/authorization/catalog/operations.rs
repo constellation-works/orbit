@@ -178,6 +178,12 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator],
         rationale: "requeuing a blocked task overrides a recorded escalation and preserves its published candidate",
     },
+    GovernedOperation {
+        id: "orbit.task.resume_delivery",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "starting a source-repair leaf requires the authenticated resident broker and its recover grant",
+    },
     // Field-level, not a tool: `orbit.task.add`, `orbit.task.update`,
     // `orbit.auto_task.add` and `orbit.auto_task.update` additionally require
     // it when their input carries `granted_tools`.

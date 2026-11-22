@@ -9,6 +9,7 @@ use orbit_common::protocol::tool_input::optional_csv_or_string_list_alias;
 use orbit_core::application::task::{
     TaskListResultPolicy, TaskListResultProfile, artifact_put_result,
 };
+use orbit_core::runtime::authorization::route_resident_delivery_recovery_to_broker;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::task::is_task_show_projection_field;
 use orbit_types::tool::{McpTransport, ToolSessionContext, tool_family, tool_operation_name};
@@ -131,6 +132,9 @@ impl ToolRunArgs {
     /// with the bootstrap error before `execute` can report the input error.
     pub(crate) fn bootstrap_route(&self) -> Result<ToolRunBootstrap, OrbitError> {
         let value = self.parsed_input()?;
+        if route_resident_delivery_recovery_to_broker(tool_operation_name(&self.name, &value)) {
+            return Ok(ToolRunBootstrap::CwdWorkspace);
+        }
         if let Some(selector) = trimmed_string_field(&value, "workspace") {
             return Ok(ToolRunBootstrap::SelectedWorkspace(selector));
         }
@@ -231,7 +235,12 @@ impl Execute for ToolRunArgs {
                 && runtime.worker_invocation().is_some_and(|binding| {
                     binding.execution.machine_id != binding.owner_machine_id
                 });
-        let bound = if claimed_owner_call || self.name == "orbit.attention" {
+        // The resident broker must verify coverage before the caller opens
+        // another workspace. Keep the named selector in the call's input.
+        let bound = if claimed_owner_call
+            || self.name == "orbit.attention"
+            || route_resident_delivery_recovery_to_broker(tool_operation_name(&self.name, &input))
+        {
             None
         } else {
             RegisteredRuntimeFactory::bind_cli_tool_workspace(runtime, &mut input, &self.name)?

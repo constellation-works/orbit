@@ -7,7 +7,7 @@ status: Draft
 feature: resident-orchestrator
 doc_role: decisions
 type: design
-summary: "Why the rewrite owns coordination only, rides the clock, keeps loops out of chats and consoles, gates widening on the human, trusts only Orbit state, keeps evolution apart from friction, lets `dispatch` re-pilot and requeue, lets live cycles read drain status, lets cycles update friction without a right or re-homing, and lets `refresh` merge base into a delivery PR without re-review"
+summary: "Why the rewrite owns coordination only, rides the clock, keeps loops out of chats and consoles, gates widening on the human, trusts only Orbit state, keeps evolution apart from friction, lets `dispatch` re-pilot and requeue, lets live cycles read drain status, lets cycles update friction without a right or re-homing, lets `refresh` merge base into a delivery PR without re-review, and bounds review-only recovery under `recover`"
 tags: [resident-orchestrator]
 paths: ["crates/orbit-core/src/application/resident/**", "crates/orbit-core/assets/jobs/**"]
 related_features: [distributed-drain, routines, activity-job, human-decision-channel, fleet-notices]
@@ -489,3 +489,37 @@ the run's broker with the host's credentials like `land`:
 - [ORB-10776] — moved the earlier design's fire clock outside Orbit and added its session log
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
+
+## Residents may start review-only delivery recovery under recover
+
+### Context
+
+A failed delivery can need source edits and fresh operator-host validation after the
+base advances. Refresh brings in the base and starts checks. Requeue leaves admission
+to a later dispatch.
+
+### Decision
+
+Add `recover` for `orbit.task.recover` action `resume_delivery`. The authenticated
+cycle broker records the action and starts the source-repair pipeline for a blocked
+task's stopped failed or held publication in a covered local workspace. The leaf
+continues the authenticated candidate on the current base, validates it, and sends it
+through fresh review. Landing still requires `merge` and the current head's evidence
+and required checks.
+
+The operator retains decision answers, live-claim recovery, review resets, handoff
+revocation, and general source-repair submission and reconciliation. The resident
+can proceed with an open final-recovery decision only when every option explicitly
+carries routine or reversible risk and the request has no separate human action.
+Other open requests, unknown risk, and irreversible options hold recovery. The leaf
+admission records no decision answer.
+
+A cycle gets one attempt. The task gets one resident reservation per rolling 24
+hours across all mandates, charging failed starts after reservation as well. Each
+reservation gets a shared 120-minute agent deadline from admission. The ordinary
+source-repair and review budgets also apply.
+
+- Cost: stopped owner-local published candidates only. Cases requiring more time or
+  authority remain visible to the operator with the preserved candidate intact.
+
+**Provenance:** ORB-26835.

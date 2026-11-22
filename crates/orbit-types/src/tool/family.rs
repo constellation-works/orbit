@@ -68,6 +68,7 @@ pub const TOOL_FAMILIES: &[ToolFamily] = &[
         actions: &[
             action("recover_claim", "orbit.task.recover_claim"),
             action("requeue", "orbit.task.requeue"),
+            action("resume_delivery", "orbit.task.resume_delivery"),
             action("repilot", "orbit.task.repilot"),
             action("retry_handoff", "orbit.task.retry_handoff"),
             action("revoke_handoff", "orbit.task.revoke_handoff"),

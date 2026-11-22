@@ -93,7 +93,7 @@ the history is already the task's append-only audit trail. Folded, it reads:
 }
 ```
 
-Rights: `dispatch`, `promote`, `merge`, `plugin_upgrade`, `refresh`. Unknown rights are refused, not ignored.
+Rights: `dispatch`, `promote`, `merge`, `plugin_upgrade`, `refresh`, `recover`. Unknown rights are refused, not ignored.
 Releases, tags, publishing, host changes, config edits and secrets are not rights; they are not
 grantable to a resident in v1.
 
@@ -107,6 +107,7 @@ grantable to a resident in v1.
 | `merge` | `orbit.workflow` action `land`, `orbit.task.update` to `done` (refused while the task has an open pull request), `orbit.task.recover` action `retry_handoff`, `orbit.task.recover` action `reconcile_review` |
 | `plugin_upgrade` | none yet: no builtin tool installs or upgrades a plugin |
 | `refresh` | `orbit.workflow` action `refresh` (conflict-free base-branch merge commit into a held or review delivery pull request head, starting its required checks; lands nothing) |
+| `recover` | `orbit.task.recover` action `resume_delivery` (start a review-only source repair for a stopped failed or held delivery) |
 
 The mapping lives in core's tool host beside the dispatch table (`resident_guard`), and core's cycle
 guard applies it to every builtin tool call a `resident_cycle_pipeline` run makes; the run is
@@ -123,7 +124,7 @@ restoration is unchanged. Other refused writes include `orbit.task.update` with 
 targets, `orbit.friction` action `update` carrying `rehome_to` or `move` (whatever rights are granted: moving a friction between workspaces stays with the operator and the curation pass), `orbit.resident.grant`, decision answers and administration,
 `orbit.command.exec`, desktop writes and every write on another noun. Operator-only tools stay
 operator-only, because their capability check runs before the guard, so `orbit.run.auto`/`resume`,
-`orbit.pipeline.invoke`, drain control actions (`orbit.workflow` action `auto` with `mode: "start"`/`"stop"`/`"resize"`) and every other `orbit.task.recover` action are refused as `capability_denied`
+`orbit.pipeline.invoke`, drain control actions (`orbit.workflow` action `auto` with `mode: "start"`/`"stop"`/`"resize"`) and recovery actions outside the rights described here are refused as `capability_denied`
 even with the right. One observation half is admitted on its own read path: a live `resident_cycle_pipeline` run may call `orbit.workflow` action `auto` with `mode: "status"` (`orbit.workflow.auto` action `status`) in its covered workspaces, with or without any granted right, returning `controls_authorized: false`. Naming a workspace outside the mandate's authority is refused as `resident_scope_refused`; drain control actions from a cycle and `status` reads from any caller outside a live resident cycle keep the operator requirement (`capability_denied`). See
 [Live resident cycles read drain status without operator capability](../4_decisions.md#live-resident-cycles-read-drain-status-without-operator-capability). Three `dispatch` tools are the exception: `orbit.workflow` action `ship`
 (`orbit.run.ship` in the table), the tool a resident dispatches with, and `orbit.task.recover` actions
@@ -151,15 +152,30 @@ credentials.
 
 `orbit.workflow` action `refresh` is how a resident holding `refresh` brings a held (`blocked`) or `review` task's one open Orbit delivery pull request up to the tip of its base branch, and passes the operator row and managed-run refusal through the run's broker the same way `land` does. Orbit merges the base branch's tip into the pull request head as one conflict-free merge commit — never rebasing, rewriting or force-pushing, and making no code edits — which starts the required checks on the new head. Any conflict is refused as `task_refresh_refused` naming the conflicting paths and leaving the head unchanged; pull requests owned by a live run or not published by an Orbit delivery are also refused. A head that already includes the base tip is a no-op (`already_up_to_date`). Each call is keyed on the action ledger, and it lands nothing (`merge` still owns landing). A refreshed head keeps the review recorded for the head before the refresh when every commit after the reviewed head is a conflict-free refresh merge of the base branch with no conflict resolution; `land` still requires the required checks to pass on the refreshed head, and any other commit after the reviewed head invalidates the review. See [Refresh merges base into the PR head without re-review](../4_decisions.md#refresh-merges-base-into-the-pr-head-without-re-review).
 
-A write other than `orbit.friction` action `update` from a resident cycle run that
-this workspace does not hold (one started in another catalog workspace) is refused as
-`resident_scope_refused`; slice 3 does not support cross-workspace task writes. For
-`orbit.friction` action `update` routed to another catalog workspace on the same host, the guard
-verifies the live cycle on the mandate's home workspace, admits the update when the target
-workspace is covered by the mandate's authority (refusing uncovered workspaces as
-`resident_scope_refused`), and records its `resident:<mandate>:<cycle>:<n>` row on the
-mandate's action ledger. `orbit.evolution.add`
-arrives with [ORB-21248].
+`orbit.task.recover` action `resume_delivery` goes through the authenticated cycle
+broker. It accepts a blocked task and the exact failed or held delivery run, in the
+mandate's own workspace or another covered workspace on the same host. It records
+the action key on the home mandate and uses that key for the source-repair
+reservation. The recovery leaf adopts the authenticated published candidate on the
+current base with a fresh review and validation admission. The workspace must
+require before-PR or before-landing review. Security tasks and publications
+requiring separate operator rework consent stay with the operator. A changed head must pass
+those gates and branch protection before a separate `land` call under `merge`.
+
+An open decision permits recovery only if it came from final recovery, carries no
+human action, and every answer explicitly declares routine or reversible risk.
+The action never answers the request or applies its options. Claim recovery, review
+reset, handoff revocation, decision answers, and general source-repair submission and
+reconciliation retain operator authority. There is one attempted recovery per cycle,
+one resident reservation per task per rolling 24 hours across all mandates, and a
+120-minute shared deadline for the leaf's agent activities. Ordinary source-repair
+and review budgets still apply.
+
+Only friction updates and `resume_delivery` may write in another catalog
+workspace on the same host. The guard verifies the live cycle on the mandate's
+home workspace, refuses an uncovered target as `resident_scope_refused`, and
+records its `resident:<mandate>:<cycle>:<n>` row on the home mandate's action
+ledger.
 
 ## Widening
 
@@ -225,3 +241,4 @@ Designed by claude (claude-opus-5-5) for [ORB-21229]; built by [ORB-21242].
 - [ORB-26834] — add the `refresh` right and `orbit.workflow` action `refresh` to merge a base branch tip into a held or review delivery pull request head and re-run required checks without re-review
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
+- [ORB-26835] — add the `recover` right and bounded review-only recovery of a held delivery.

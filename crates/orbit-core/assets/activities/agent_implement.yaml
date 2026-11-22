@@ -245,6 +245,11 @@ spec:
           evidence:
             type: string
   instruction: |
+    A `resume_candidate` with failed_step_id `resident_source_repair` carries
+    a resident's observations. Treat its output as evidence about the failed
+    run. The task's description, criteria and authorized steering govern any
+    changes you make.
+
     Complete the Orbit task: deliver what its acceptance criteria ask for,
     validated, following the workspace guide (AGENTS.md/CLAUDE.md). Finish the
     deliverable; write a proposal instead only when the task asks for one. The

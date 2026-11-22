@@ -183,6 +183,7 @@ pub(super) fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | TaskVerb::ReviewReset
             | TaskVerb::Repilot
             | TaskVerb::Requeue
+            | TaskVerb::ResumeDelivery
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
@@ -381,6 +382,7 @@ pub(super) fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             | TaskVerb::ReviewReset
             | TaskVerb::Repilot
             | TaskVerb::Requeue
+            | TaskVerb::ResumeDelivery
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff

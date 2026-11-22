@@ -30,9 +30,9 @@ use serde_json::Value;
 use crate::OrbitRuntime;
 use crate::runtime::plugin::broker::{
     BROKERED_RESIDENT_LAND_TOOL, BROKERED_RESIDENT_RAISE_TOOL, BROKERED_RESIDENT_REFRESH_TOOL,
-    BROKERED_RESIDENT_REPILOT_TOOL, BROKERED_RESIDENT_REQUEUE_TOOL, BROKERED_RESIDENT_SHIP_TOOL,
-    BrokerDispatch, BrokerRequest, EntryPoint, is_brokered_resident_completion,
-    is_host_credentialed_read,
+    BROKERED_RESIDENT_REPILOT_TOOL, BROKERED_RESIDENT_REQUEUE_TOOL,
+    BROKERED_RESIDENT_RESUME_DELIVERY_TOOL, BROKERED_RESIDENT_SHIP_TOOL, BrokerDispatch,
+    BrokerRequest, EntryPoint, is_brokered_resident_completion, is_host_credentialed_read,
 };
 use crate::runtime::tool_exec::CapabilityEnforcement;
 
@@ -48,6 +48,9 @@ fn brokered_resident_action(tool: &str, input: &Value) -> Option<OrbitBuiltinAct
         BROKERED_RESIDENT_REFRESH_TOOL => Some(OrbitBuiltinAction::Workflow(WorkflowVerb::Refresh)),
         BROKERED_RESIDENT_REPILOT_TOOL => Some(OrbitBuiltinAction::Task(TaskVerb::Repilot)),
         BROKERED_RESIDENT_REQUEUE_TOOL => Some(OrbitBuiltinAction::Task(TaskVerb::Requeue)),
+        BROKERED_RESIDENT_RESUME_DELIVERY_TOOL => {
+            Some(OrbitBuiltinAction::Task(TaskVerb::ResumeDelivery))
+        }
         _ if is_brokered_resident_completion(tool, input) => {
             Some(OrbitBuiltinAction::Task(TaskVerb::Update))
         }
@@ -241,7 +244,12 @@ impl BrokerDispatch for RunDispatch {
             entry_point,
             dry_run,
         } = request;
-        let checked = self.checked_cwd(&cwd, workspace.as_deref(), dry_run);
+        let recovery = tool == BROKERED_RESIDENT_RESUME_DELIVERY_TOOL;
+        let checked = self.checked_cwd(
+            &cwd,
+            if recovery { None } else { workspace.as_deref() },
+            dry_run,
+        );
         let cwd = checked.as_ref().map_or(cwd, Clone::clone);
         let run = &self.run;
         // The agent's sandbox is what the broker authenticated, so the call
@@ -303,7 +311,7 @@ impl BrokerDispatch for RunDispatch {
                             session_context,
                         );
                     }
-                    // A resident cycle's leaf run starts on the host, its
+                    // A resident cycle's leaf runs start on the host, its
                     // decision raise locks and writes there, and its landing
                     // and move to `done` read the forge there. Only a run the
                     // host dispatched as a cycle gets here; the tool host's
@@ -329,8 +337,13 @@ impl BrokerDispatch for RunDispatch {
                                          its broker"
                                 ))
                             })?;
+                        let target = if recovery {
+                            self.runtime.resident_recovery_workspace(run_id, &input)?
+                        } else {
+                            self.runtime.clone()
+                        };
                         return crate::adapter::tool_host::build_orbit_tool_host(
-                            &self.runtime,
+                            &target,
                             run.task_id.clone(),
                             crate::adapter::tool_host::ToolHostRun::BrokeredResident(
                                 run_id.to_string(),
@@ -355,7 +368,7 @@ impl BrokerDispatch for RunDispatch {
                         return Err(OrbitError::PolicyDenied(format!(
                             "the plugin broker runs plugin tools, the read-only github.* tools, \
                              a claimed worker's owner calls and a \
-                             resident cycle's ship, decision raise, landing and move to done \
+                             resident cycle's approved host-side actions \
                              only; '{tool}' is none of these"
                         )));
                     }
