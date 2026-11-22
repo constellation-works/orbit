@@ -117,19 +117,19 @@ impl OrbitRuntime {
             PullRequestSource::Native(pull_request) => Ok(Some(pull_request)),
             PullRequestSource::Reference { selector, url } => {
                 let status = self.read_pull_request_status(&selector)?;
-                let head = status.head_sha.ok_or_else(|| {
+                let head = status.head_sha.clone().ok_or_else(|| {
                     invalid(&format!("the provider reported no head for {selector}"))
                 })?;
-                let reported_url = status.url;
-                if url.is_some() && reported_url != url {
+                if url.is_some() && status.url != url {
                     return Err(invalid(
                         "the provider answered for a different pull request than the task links",
                     ));
                 }
+                let completion_refusal = self.moved_publication_refusal(task, &head, &status);
                 Ok(Some(DesktopPullRequest {
                     head,
-                    url: reported_url,
-                    completion_refusal: None,
+                    url: status.url,
+                    completion_refusal,
                 }))
             }
             PullRequestSource::Handoff { number, accepted } => {
@@ -235,6 +235,64 @@ impl OrbitRuntime {
                 .unwrap_or_else(|| reference.id.clone()),
             url: reference.url.clone(),
         }))
+    }
+
+    /// Why a task whose stopped native run published a different head than
+    /// the pull request's current `head` cannot complete, or `None`. Such a
+    /// head completes only once it merged as a verified base refresh of the
+    /// published head, the check settlement applies; any other commit on it
+    /// inherits none of the run's evidence. A task with no authenticated
+    /// stopped publication keeps the plain reference rule.
+    fn moved_publication_refusal(
+        &self,
+        task: &Task,
+        head: &str,
+        status: &orbit_engine::PullRequestStatus,
+    ) -> Option<String> {
+        let proof = self.stopped_publication_identity(task).ok().flatten()?;
+        if proof.head == head {
+            return None;
+        }
+        let moved = format!(
+            "pull request head {head} is not the head {} the delivery published",
+            proof.head
+        );
+        let merge_commit = status.merge_commit.as_deref().filter(|_| {
+            status
+                .state
+                .as_deref()
+                .is_some_and(|state| state.eq_ignore_ascii_case("merged"))
+        });
+        let (Some(merge_commit), Some(source_branch), Some(landing_branch), Ok(number)) = (
+            merge_commit,
+            status.head_branch.as_deref(),
+            status.base_branch.as_deref(),
+            proof.number.parse::<u64>(),
+        ) else {
+            return Some(format!(
+                "{moved}; it completes once it merges as the published head plus base merges"
+            ));
+        };
+        if source_branch != proof.branch || landing_branch != proof.base_branch {
+            return Some(format!(
+                "{moved}, and its branches differ from the publication's"
+            ));
+        }
+        orbit_engine::verify_merged_base_refresh(
+            &self.paths().repo_root,
+            &orbit_engine::MergedBaseRefresh {
+                published_head: &proof.head,
+                merged_head: head,
+                source_branch,
+                landing_branch,
+                pull_request: number,
+                merge_commit,
+            },
+        )
+        .err()
+        .map(|error| {
+            format!("{error}; a merged head with other changes needs a review reconciliation")
+        })
     }
 
     /// A handed-off delivery completes only once its own pull request merged

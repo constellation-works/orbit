@@ -48,6 +48,7 @@ pub use base::claim::{
 pub use baseline::{BaselineHoldStatus, baseline_hold_status, recorded_baseline_hold_status};
 pub(super) use candidate_resume::candidate_resume;
 pub(super) use candidate_validate::candidate_validate;
+pub use checks::{MergedBaseRefresh, verify_merged_base_refresh};
 pub(super) use claim::{claim_candidate_carry, claim_handoff, claim_validate};
 pub(super) use commit::git_commit;
 pub(crate) use commit::{

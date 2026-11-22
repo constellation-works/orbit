@@ -207,8 +207,11 @@ branch, when no run or claim of its own is live. To settle one task now, run
 each PR Orbit recorded for the task, including a held or kept PR from a released
 or failed claim even without an accepted handoff. That PR must name the task and
 be merged into the landing branch its claim's admission receipt recorded; a
-missing or expired receipt cannot prove it. An owed post-deploy measurement still
-requires the operator's met record.
+missing or expired receipt cannot prove it. A held local delivery's PR that was
+brought up to its base before merging (such as with `gh pr update-branch`) settles
+too, when the commits added after the published head are only clean merges of
+target-branch commits; a merged head with any other commit does not. An owed
+post-deploy measurement still requires the operator's met record.
 
 A claimed handoff whose completion authority an operator revoked keeps its
 claim `handed_off` and its task in `review`; Approve is refused and the

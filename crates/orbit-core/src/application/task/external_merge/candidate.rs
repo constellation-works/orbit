@@ -88,6 +88,23 @@ impl Candidate {
     }
 }
 
+/// The merged pull request that delivered a candidate.
+pub(super) struct DeliveryLanding {
+    pub(super) merged: MergedPullRequest,
+    /// The stopped publication's head, when the pull request merged at a
+    /// verified base refresh of it rather than at that head.
+    pub(super) refreshed_from: Option<String>,
+}
+
+impl DeliveryLanding {
+    fn exact(merged: MergedPullRequest) -> Self {
+        Self {
+            merged,
+            refreshed_from: None,
+        }
+    }
+}
+
 /// Why a stopped or revoked handoff's task did not settle: its candidate PR, as the
 /// forge returned it (`None` when it is not merged), is not merged, names
 /// another task, or merged into another branch.
@@ -474,14 +491,15 @@ impl OrbitRuntime {
         }
     }
 
-    /// A stopped native run's exact publication, or the newest recorded
+    /// A stopped native run's publication, merged at its published head or
+    /// at that head plus clean target-branch merges, or the newest recorded
     /// delivery that proves itself through the existing claim/author checks.
     pub(super) fn delivery_merge(
         &self,
         candidate: &Candidate,
         merged: &[MergedPullRequest],
         authors: &OnceCell<Vec<String>>,
-    ) -> Result<Option<MergedPullRequest>, OrbitError> {
+    ) -> Result<Option<DeliveryLanding>, OrbitError> {
         let task = &candidate.task;
         let recorded = candidate.pr_numbers();
         let mut matching = merged
@@ -498,15 +516,47 @@ impl OrbitRuntime {
             let number = proof.number.parse::<u64>().map_err(|_| {
                 super::refusal::refused(&task.id, "publication PR number is invalid")
             })?;
-            return Ok(matching
-                .find(|merged| {
-                    merged.pull.number == number
-                        && Some(merged.url.as_str()) == proof.url.as_deref()
-                        && merged.pull.head_branch == proof.branch
-                        && merged.head_sha == proof.head
-                        && merged.base_branch == proof.base_branch
-                })
-                .cloned());
+            let Some(merged) = matching.find(|merged| {
+                merged.pull.number == number
+                    && Some(merged.url.as_str()) == proof.url.as_deref()
+                    && merged.pull.head_branch == proof.branch
+                    && merged.base_branch == proof.base_branch
+            }) else {
+                return Ok(None);
+            };
+            if merged.head_sha == proof.head {
+                return Ok(Some(DeliveryLanding::exact(merged.clone())));
+            }
+            // A base refresh (such as the forge's branch update) moves the
+            // head off the published one. It settles only when every commit
+            // it adds is a clean merge of target-branch commits.
+            return match orbit_engine::verify_merged_base_refresh(
+                &self.paths().repo_root,
+                &orbit_engine::MergedBaseRefresh {
+                    published_head: &proof.head,
+                    merged_head: &merged.head_sha,
+                    source_branch: &merged.pull.head_branch,
+                    landing_branch: &merged.base_branch,
+                    pull_request: number,
+                    merge_commit: &merged.merge_commit,
+                },
+            ) {
+                Ok(()) => Ok(Some(DeliveryLanding {
+                    merged: merged.clone(),
+                    refreshed_from: Some(proof.head),
+                })),
+                Err(error) => {
+                    tracing::info!(
+                        target: "orbit.core.external_merge",
+                        task_id = %task.id,
+                        pr = number,
+                        error = %error,
+                        "a stopped publication's pull request merged at a head that is not \
+                         its published candidate plus base"
+                    );
+                    Ok(None)
+                }
+            };
         }
         Ok(matching
             .filter(|merged| {
@@ -537,14 +587,16 @@ impl OrbitRuntime {
                 )
             })
             .max_by_key(|merged| merged.pull.number)
-            .cloned())
+            .cloned()
+            .map(DeliveryLanding::exact))
     }
 
     /// What differs between a stopped native run's authenticated publication
     /// and the open pull request the owner is about to merge, or `None` when
     /// they are the same revision or the task has no such publication. The
-    /// checks are the ones [`Self::delivery_merge`] applies after the merge,
-    /// so a pull request this refuses is one settlement would reject.
+    /// owner merges only the exact published head; settlement after a merge
+    /// done elsewhere ([`Self::delivery_merge`]) also accepts a verified base
+    /// refresh of it.
     pub(super) fn stopped_publication_mismatch(
         &self,
         candidate: &Candidate,

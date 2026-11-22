@@ -84,7 +84,12 @@ impl OrbitRuntime {
                 "the merged pull request was not authored by a delivery identity",
             ));
         }
-        self.write_external_merge_settlement_as(&task, &landing, None, Some(&rescue))
+        self.write_external_merge_settlement_as(
+            &task,
+            &landing,
+            None,
+            super::persistence::SettlementNote::Rescued(&rescue),
+        )
     }
 
     /// Rechecked under the task lock immediately before writing `done`.
