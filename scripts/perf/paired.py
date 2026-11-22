@@ -4,6 +4,7 @@
     paired.py --builds <builds-dir> --snapshot <snapshot-dir> --out <results-dir>
               (--cli '<orbit args>' | --http '<GET path>')
               [--parity '<orbit args>' --parity-mask <field>...]
+              [--parity-mask-row KEY=VALUE:FIELD...]
               [--rounds 3] [--samples 10] [--warmup 1] [--gap-ms 250] [--bound-ms <n>]
               [--command-timeout 300] [--output-limit-bytes 16777216]
 
@@ -538,25 +539,83 @@ class Server:
 # ── parity ───────────────────────────────────────────────────────────────────
 
 
-def mask_value(value, masks: list[str], path: str = ""):
+class RowMask:
+    """One `--parity-mask-row` selector.
+
+    `text` is the flag value as given (`check=disk-space:message`). `fields`
+    are removed only from JSON array elements whose `key` equals `value`.
+    `value` is compared as a JSON string, so a numeric JSON value does not
+    match. A check name may itself contain colons (`provider-limits:muse`);
+    the field list is the text after the last colon.
+    """
+
+    __slots__ = ("key", "value", "fields", "text")
+
+    def __init__(self, key: str, value: str, fields: tuple[str, ...], text: str) -> None:
+        self.key = key
+        self.value = value
+        self.fields = fields
+        self.text = text
+
+    @classmethod
+    def parse(cls, text: str) -> RowMask:
+        key, _separator, rest = text.partition("=")
+        field_at = rest.rfind(":")
+        fields = tuple(rest[field_at + 1:].split(","))
+        return cls(key, rest[:field_at], fields, text)
+
+
+def _drop_masked_fields(row: dict, row_masks: list[RowMask], hits: set[int]) -> dict:
+    drop: set[str] = set()
+    for index, spec in enumerate(row_masks):
+        if row.get(spec.key) == spec.value:
+            hits.add(index)
+            drop.update(spec.fields)
+    if not drop:
+        return row
+    return {key: item for key, item in row.items() if key not in drop}
+
+
+def mask_value(value, masks: list[str], row_masks: list[RowMask],
+               hits: set[int], path: str = ""):
     if isinstance(value, dict):
         return {
-            key: mask_value(item, masks, f"{path}.{key}" if path else key)
+            key: mask_value(item, masks, row_masks, hits, f"{path}.{key}" if path else key)
             for key, item in sorted(value.items())
             if key not in masks and (f"{path}.{key}" if path else key) not in masks
         }
     if isinstance(value, list):
-        return [mask_value(item, masks, path) for item in value]
+        masked = []
+        for item in value:
+            if isinstance(item, dict):
+                item = _drop_masked_fields(item, row_masks, hits)
+            masked.append(mask_value(item, masks, row_masks, hits, path))
+        return masked
     return value
 
 
-def normalize_output(raw: bytes, masks: list[str], root: str) -> dict:
+def normalize_output(raw: bytes, masks: list[str], row_masks: list[RowMask],
+                     root: str) -> tuple[dict, set[int]]:
     text = raw.decode("utf-8", "replace").replace(root, "<root>")
     try:
         parsed = json.loads(text)
     except ValueError:
-        return {"format": "text", "value": text}
-    return {"format": "json", "value": mask_value(parsed, masks)}
+        return {"format": "text", "value": text}, set()
+    hits: set[int] = set()
+    return {"format": "json", "value": mask_value(parsed, masks, row_masks, hits)}, hits
+
+
+def row_mask_miss_reason(hits: set[int], row_masks: list[RowMask]) -> str | None:
+    """Why a successful observation failed its row selectors, or None.
+
+    A selector that matches no array row would otherwise compare the output
+    with that field still present and could pass when the arms happen to
+    agree. That is a refusal, not a silent pass.
+    """
+    missing = [spec.text for index, spec in enumerate(row_masks) if index not in hits]
+    if not missing:
+        return None
+    return "row mask matched no row: " + ", ".join(missing)
 
 
 def arm_observation_failure(record: dict) -> str | None:
@@ -608,6 +667,8 @@ class Harness:
         self.snapshot = Path(args.snapshot).absolute()
         self.out = Path(args.out).absolute()
         self.masks = list(args.parity_mask or [])
+        self.row_masks = [RowMask.parse(text) for text in (args.parity_mask_row or [])]
+        self.row_mask_hits: dict[str, set[int]] = {}
         self.cli_args = shlex.split(args.cli) if args.cli else None
         self.http_path = args.http
         self.qualifying_task_counts = dict(args.qualifying_task_count or [])
@@ -736,10 +797,13 @@ class Harness:
             else:
                 bound = {"name": "output_limit_bytes", "value": self.args.output_limit_bytes}
             return {"exit": None, "stopped": self.bound_reason(result), "bound": bound}
-        return {"exit": result.returncode,
-                "output": normalize_output(result.stdout, self.masks, info["root"])}
+        output, hits = normalize_output(
+            result.stdout, self.masks, self.row_masks, info["root"])
+        self.row_mask_hits[arm] = hits
+        return {"exit": result.returncode, "output": output}
 
     def parity(self) -> dict:
+        self.row_mask_hits = {}
         arms = {}
         for arm in ARMS:
             info = self.restore(f"parity-{arm}")
@@ -758,8 +822,15 @@ class Harness:
                         except HttpRequestError as error:
                             record["http"] = {"error": str(error)}
                         else:
-                            record["http"] = {"status": status,
-                                              "body": normalize_output(body, self.masks, info["root"])}
+                            normalized, hits = normalize_output(
+                                body, self.masks, self.row_masks, info["root"])
+                            # The parity command's output is the observation a row
+                            # selector must hit. The HTTP body is masked where a
+                            # row matches, and is the required observation only
+                            # when no parity command ran.
+                            if self.args.parity is None:
+                                self.row_mask_hits[arm] = hits
+                            record["http"] = {"status": status, "body": normalized}
                     finally:
                         server.stop()
             finally:
@@ -768,6 +839,9 @@ class Harness:
         failures = {}
         for arm in ARMS:
             reason = arm_observation_failure(arms[arm])
+            if reason is None and self.row_masks:
+                reason = row_mask_miss_reason(
+                    self.row_mask_hits.get(arm, set()), self.row_masks)
             if reason:
                 failures[arm] = reason
         reference = json.dumps(arms["base"], sort_keys=True)
@@ -779,6 +853,7 @@ class Harness:
             "command": self.args.parity,
             "http_path": self.http_path,
             "masks": self.masks,
+            "row_masks": [spec.text for spec in self.row_masks],
             "limits": self.limits(),
             "prepare": {"commands": [" ".join(argv) for argv in fixture.PREPARE_COMMANDS],
                         "runs": list(self.prepared)},
@@ -957,6 +1032,38 @@ def named_count(value: str) -> tuple[str, int]:
     return name, count
 
 
+def row_mask_value(value: str) -> str:
+    """`--parity-mask-row` is KEY=VALUE:FIELD, with extra fields comma-separated.
+
+    VALUE may contain colons. FIELD is the text after the last colon. A
+    selector that matches no row is refused later, once each arm's output
+    has been read; this check only rejects a value that is not a selector.
+    """
+    key, separator, rest = value.partition("=")
+    field_at = rest.rfind(":")
+    fields = rest[field_at + 1:].split(",") if field_at >= 0 else []
+    value_text = rest[:field_at] if field_at >= 0 else ""
+
+    def spaced(text: str) -> bool:
+        return any(char.isspace() for char in text)
+
+    if (
+        not separator
+        or field_at <= 0
+        or not key
+        or spaced(key)
+        or not value_text
+        or spaced(value_text)
+        or not fields
+        or any(not field or spaced(field) for field in fields)
+    ):
+        raise argparse.ArgumentTypeError(
+            "expected KEY=VALUE:FIELD, for example check=disk-space:message "
+            "(a colon inside VALUE is kept; FIELD is the text after the last colon)"
+        )
+    return value
+
+
 def parity_command_value(value: str) -> str:
     """A --parity value must be one shell-quoted orbit command (ORB-26398, ORB-26439).
 
@@ -990,6 +1097,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--parity-mask", action="extend", nargs="+", default=[],
                         help="JSON field names (or dotted paths) removed before comparing; "
                              "repeat the option or list several names")
+    parser.add_argument(
+        "--parity-mask-row", action="append", type=row_mask_value, default=[],
+        metavar="KEY=VALUE:FIELD",
+        help="drop FIELD only on JSON array rows whose KEY equals VALUE "
+             "(VALUE may contain colons; FIELD is the text after the last colon; "
+             "comma-separate fields to drop more than one). Repeat for each row. "
+             "A selector that matches no row in an arm's parity output refuses the run",
+    )
     parser.add_argument("--rounds", type=positive, default=3)
     parser.add_argument("--samples", type=positive, default=10)
     parser.add_argument("--warmup", type=int, default=1)
