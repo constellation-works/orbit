@@ -98,7 +98,7 @@
 .fc-wait-value { margin: 0; color: var(--fg); font: var(--text-sm) var(--font-mono); white-space: nowrap; }
 
 /* Data gaps: one sentence, then the non-zero counts in two groups. */
-.fc-gaps-sentence { margin: 0; color: var(--fg); font: var(--text-lg)/1.5 var(--font-sans); }
+.fc-gaps-sentence { margin: 0; color: var(--fg-soft); font: var(--text-lg)/1.5 var(--font-sans); }
 .fc-gap-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: var(--space-12); align-items: start; }
 .fc-gaps { display: flex; flex-direction: column; margin: 0; }
 .fc-gap {

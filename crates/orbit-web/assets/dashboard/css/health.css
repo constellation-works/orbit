@@ -331,11 +331,11 @@ td .rel-rate { font-size: var(--text-sm); }
 .diagnostics-errors-main .error-message-preview {
   flex: 1 1 auto; min-width: 0;
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
-  overflow: hidden; white-space: normal; overflow-wrap: anywhere;
+  overflow: hidden; white-space: normal; overflow-wrap: anywhere; color: var(--fg-soft);
 }
 .diagnostics-errors-main .error-message[open] .error-message-preview { display: none; }
 .diagnostics-errors-main .error-message-full {
-  margin-top: var(--space-4); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg);
+  margin-top: var(--space-4); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg-soft);
 }
 .diagnostics-errors-main .error-message-note { margin: var(--space-4) 0 0; color: var(--fg-mute); font: var(--text-sm)/1.5 var(--font-sans); }
 .diagnostics-load-more { color: var(--accent-hover); white-space: nowrap; }
@@ -487,7 +487,7 @@ td .rel-rate { font-size: var(--text-sm); }
 .doctor-remediation {
   display: flex; gap: var(--space-10); align-items: baseline;
   padding: var(--space-8) var(--space-10); border-radius: var(--radius-xs); background: var(--bg-sunk);
-  color: var(--fg); font: var(--text-sm)/1.6 var(--font-sans);
+  color: var(--fg-soft); font: var(--text-sm)/1.6 var(--font-sans);
 }
 .doctor-remediation-label {
   flex: 0 0 auto; font: 600 var(--text-xs) var(--font-mono);

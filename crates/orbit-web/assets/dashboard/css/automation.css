@@ -223,7 +223,7 @@ a.routine-fire:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .job-failure-title { font-weight: 600; }
 .job-failure-kind { color: var(--fg-dim); }
 .job-failure-error {
-  flex: 1 1 18ch; min-width: 0; color: var(--fg); font-size: var(--text-sm);
+  flex: 1 1 18ch; min-width: 0; color: var(--fg-soft); font-size: var(--text-sm);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .job-failure-notice .operation-run-link { color: var(--danger-fg); text-decoration: underline; }
@@ -361,7 +361,7 @@ a.routine-fire:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .schedule-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .schedule-input:disabled { opacity: .5; cursor: not-allowed; }
 .schedule-note, .schedule-preview { margin: 0; color: var(--fg-dim); font: var(--text-sm)/1.4 var(--font-sans); }
-.schedule-preview { color: var(--fg); }
+.schedule-preview { color: var(--fg-soft); }
 .schedule-error {
   color: var(--state-failed); font: var(--text-sm)/1.4 var(--font-sans); overflow-wrap: anywhere;
   border-left: 2px solid var(--state-failed); padding-left: var(--space-8);
@@ -421,6 +421,7 @@ a.routine-fire:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .automation-diagnostic summary { cursor: pointer; font-weight: 600; }
 .automation-diagnostic pre { max-height: 18rem; overflow: auto; padding: var(--space-12); }
 .automation-diagnostic p, .automation-diagnostic .operation-field-value { overflow-wrap: anywhere; }
+.automation-diagnostic p { color: var(--fg-soft); }
 
 /* Automation › Scripts: grant state, diff since the grant, open request. */
 .script-card { margin-bottom: var(--space-8); }

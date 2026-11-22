@@ -54,8 +54,8 @@
 .fleet-dialog-body summary { cursor: pointer; color: var(--accent); }
 .fleet-dialog-section { display: grid; gap: var(--space-12); padding: var(--space-14); background: var(--bg-control); border: 1px solid var(--border-strong); border-radius: var(--radius); min-width: 0; }
 .fleet-dialog-section h3 { font: 500 var(--text-base) var(--font-sans); color: var(--fg); margin: 0; }
-.fleet-dialog-section p { margin: 0; font: 400 var(--text-sm)/1.5 var(--font-sans); white-space: pre-wrap; overflow-wrap: anywhere; }
-.fleet-dialog-error { color: var(--fg); }
+.fleet-dialog-section p { margin: 0; color: var(--fg-soft); font: 400 var(--text-sm)/1.5 var(--font-sans); white-space: pre-wrap; overflow-wrap: anywhere; }
+.fleet-dialog-error { color: var(--fg-soft); }
 .fleet-dialog-cause { color: var(--fg-mute); }
 .fleet-dialog .host-actions { justify-content: flex-start; }
 .fleet-dialog .host-add .host-editor, .fleet-dialog .host-editor { margin: 0; padding: 0; border: 0; background: transparent; }

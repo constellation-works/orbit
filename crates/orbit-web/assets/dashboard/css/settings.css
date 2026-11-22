@@ -326,12 +326,12 @@
 }
 .config-review-status.alert {
   border: 1px solid var(--state-failed); border-left-width: 4px; border-radius: var(--radius-sm);
-  background: rgba(255, 90, 90, 0.08); color: var(--fg);
+  background: rgba(255, 90, 90, 0.08); color: var(--fg-soft);
 }
 .config-review-switch { font-size: var(--text-sm); font-weight: 600; }
 .config-review-status.alert .config-review-switch { color: var(--state-failed); }
 .config-review-reason { color: var(--fg-dim); font-size: var(--text-sm); overflow-wrap: anywhere; }
-.config-review-remedy { color: var(--fg); font-size: var(--text-sm); }
+.config-review-remedy { color: var(--fg-soft); font-size: var(--text-sm); }
 .host-notice:empty { display: none; }
 .host-notice { color: var(--state-success); font: var(--text-sm)/1.5 var(--font-sans); overflow-wrap: anywhere; }
 .host-add .host-editor, .host-row .host-editor {
