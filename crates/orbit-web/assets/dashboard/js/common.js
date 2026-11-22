@@ -173,6 +173,31 @@ export function findRegisteredHost(selector) {
   return registeredHosts.find((row) => row.machine_id === wanted || row.name.toLowerCase() === wanted.toLowerCase()) || null;
 }
 
+/// Stable host token for the currently selected host, used when binding
+/// host-local identifiers (such as SQLite audit row IDs) into URLs and caches.
+export function currentHostToken() {
+  return currentHost || (servingHost ? servingHost.name : "local");
+}
+
+function normalizedHostScope(selector) {
+  if (!selector) return null;
+  const raw = String(selector).trim();
+  if (!raw || raw.toLowerCase() === "local") return null;
+  const named = findRegisteredHost(raw);
+  if (named) return named.local ? null : named.name.toLowerCase();
+  if (servingHost && (raw === servingHost.machine_id || raw.toLowerCase() === servingHost.name.toLowerCase())) {
+    return null;
+  }
+  return raw.toLowerCase();
+}
+
+/// True when `selector` names the currently selected host (including serving
+/// host name, `machine_id` or fallback `"local"` token).
+export function isCurrentHostToken(selector) {
+  if (selector == null || String(selector).trim() === "") return false;
+  return normalizedHostScope(selector) === normalizedHostScope(currentHost);
+}
+
 /// The name the dashboard shows for the selected host.
 export function hostLabel() {
   if (currentHost) return currentHost;
@@ -920,6 +945,20 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
   window.addEventListener("popstate", restoreScopeFromUrl);
 }
 
+/// Navigate to `hash` under another host or workspace while keeping the source
+/// history entry's own scope (including an aggregate workspace subset) intact.
+/// Back and Forward restore each entry's scope via `restoreScopeFromUrl`.
+export function pushScopedHash(hash, { host = selectedRunHost(), workspace = currentWorkspace, remember = false } = {}) {
+  persistScopeToUrl();
+  if (host !== selectedRunHost()) requestHostSwitch(host, { fromHistory: true });
+  if (workspace) setWorkspace(workspace);
+  if (remember) rememberWorkspace();
+  syncWorkspaceSelector();
+  history.pushState(null, "", scopedHref(hash, { host, workspace }));
+  addressScope = addressScopeKey();
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+}
+
 /// Bind a run address while keeping ordinary navigation in this dashboard.
 export function bindRunLink(link, runId, { host = selectedRunHost(), workspace = currentWorkspace } = {}) {
   link.href = runHref(runId, { host, workspace });
@@ -928,13 +967,7 @@ export function bindRunLink(link, runId, { host = selectedRunHost(), workspace =
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     if (host !== selectedRunHost() || (workspace && workspace !== currentWorkspace)) {
-      persistScopeToUrl();
-      if (host !== selectedRunHost()) requestHostSwitch(host, { fromHistory: true });
-      if (workspace) setWorkspace(workspace);
-      syncWorkspaceSelector();
-      history.pushState(null, "", runHref(runId, { host, workspace }));
-      addressScope = addressScopeKey();
-      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      pushScopedHash(`#runs/${encodeURIComponent(runId)}`, { host, workspace });
       return;
     }
     window.location.hash = `#runs/${encodeURIComponent(runId)}`;
@@ -960,12 +993,7 @@ export function bindTaskLink(link, taskId, { workspace = currentWorkspace } = {}
       // Back and Forward re-read the scope from each entry
       // (`restoreScopeFromUrl`). No hashchange follows a pushState, so the
       // router is told by hand.
-      persistScopeToUrl();
-      setWorkspace(workspace);
-      syncWorkspaceSelector();
-      history.pushState(null, "", taskHref(taskId, { workspace }));
-      addressScope = addressScopeKey();
-      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      pushScopedHash(`#tasks?open=${encodeURIComponent(taskId)}`, { workspace });
       return;
     }
     window.location.hash = `#tasks?open=${encodeURIComponent(taskId)}`;
@@ -1387,17 +1415,25 @@ export function makeCopyButton(value, { class: className = "", text = value, des
   return button;
 }
 
-export async function fetchJson(path) {
-  return (await fetchJsonPage(path)).body;
+export async function fetchJson(path, opts) {
+  return (await fetchJsonPage(path, opts)).body;
 }
 
 // Like fetchJson, for an endpoint that also answers in response headers (a
 // paging cursor). `header(name)` reads one; most callers never need it.
-export async function fetchJsonPage(path) {
+// An optional `{ visit }` pins the host and workspace to that captured visit
+// and refuses to start a request once the visit is no longer current.
+export async function fetchJsonPage(path, { visit } = {}) {
+  if (visit && !visit.isCurrent()) {
+    const error = new Error("The host or workspace changed before the request began");
+    error.code = "stale_workspace_visit";
+    throw error;
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
-    const res = await fetch(withWorkspace(path), { headers: { accept: "application/json" }, signal: controller.signal });
+    const target = visit ? visit.path(path) : withWorkspace(path);
+    const res = await fetch(target, { headers: { accept: "application/json" }, signal: controller.signal });
     return await dashboardJsonResponse(res, path);
   } catch (error) {
     if (controller.signal.aborted) throw new Error("Request timed out after 30 seconds");

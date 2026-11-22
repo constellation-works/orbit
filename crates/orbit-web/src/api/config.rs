@@ -13,13 +13,14 @@ use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use axum::extract::{Path as UrlPath, Query, State};
-use axum::http::header;
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::DASHBOARD_CONFIG_SET;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::config::{
-    ConfigScope, ConfigWriteInit, ConfigWriteOutcome, delete_crew, effective_view, file_view,
-    key_catalog, parse_config_scope, set_crew, set_key, unset_key,
+    ConfigScope, ConfigWriteInit, ConfigWriteOutcome, GuardedConfigUnset, delete_crew,
+    effective_view, file_view, key_catalog, parse_config_scope, set_crew, set_key, unset_key,
+    unset_key_preserving_effective,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -63,6 +64,16 @@ pub(super) struct ConfigCrewWrite {
 pub(super) struct ConfigScopeQuery {
     #[serde(default)]
     scope: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub(super) struct ConfigKeyDeleteQuery {
+    #[serde(default)]
+    scope: Option<String>,
+    /// When true, remove only if the admitted current value still equals its
+    /// admitted current removal fallback (used by Settings bulk cleanup).
+    #[serde(default)]
+    preserve_effective: bool,
 }
 
 /// `GET /api/config/effective` — the layered view for the selected workspace.
@@ -154,26 +165,47 @@ pub(super) async fn put_config_key(
 }
 
 /// `DELETE /api/config/keys/:key` — clear one key from the selected file.
+///
+/// Unconditional by default for explicit single-key removal. When
+/// `preserve_effective=true` is set, the write boundary re-resolves the key
+/// under the file's write lock and refuses with `409 Conflict` if the current
+/// effective value no longer matches an admitted removal fallback.
 pub(super) async fn delete_config_key(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
     UrlPath(key): UrlPath<String>,
-    Query(query): Query<ConfigScopeQuery>,
+    Query(query): Query<ConfigKeyDeleteQuery>,
 ) -> Response {
     let (scope, _) = match write_target(query.scope.as_deref(), None) {
         Ok(target) => target,
         Err(message) => return bad_request(message),
     };
-    let arguments = json!({
-        "key": key,
-        "value": Value::Null,
-        "scope": scope.label(),
-    });
+    let arguments = if query.preserve_effective {
+        json!({
+            "key": key,
+            "value": Value::Null,
+            "scope": scope.label(),
+            "preserve_effective": true,
+        })
+    } else {
+        json!({
+            "key": key,
+            "value": Value::Null,
+            "scope": scope.label(),
+        })
+    };
     let write_key = key.clone();
-    perform_write(state, runtime, key, arguments, move |runtime| {
-        unset_key(runtime, &write_key, scope)
-    })
-    .await
+    if query.preserve_effective {
+        perform_guarded_unset(state, runtime, key, arguments, move |runtime| {
+            unset_key_preserving_effective(runtime, &write_key, scope)
+        })
+        .await
+    } else {
+        perform_write(state, runtime, key, arguments, move |runtime| {
+            unset_key(runtime, &write_key, scope)
+        })
+        .await
+    }
 }
 
 /// `PUT /api/config/crews/:name` — create or edit one crew table.
@@ -270,6 +302,78 @@ where
     };
     let outcome = match applied {
         Ok(Ok(outcome)) => outcome,
+        Ok(Err(error)) => {
+            let failure = error.to_string();
+            audit.failed(&caller, &failure, started).await;
+            return map_runtime_error(error);
+        }
+        Err(response) => return *response,
+    };
+    let mut applied = arguments.clone();
+    if let Some(object) = applied.as_object_mut() {
+        object.insert("old_value".to_string(), outcome.old_value.clone());
+        object.insert("new_value".to_string(), outcome.new_value.clone());
+    }
+    audit
+        .with_arguments(applied)
+        .succeeded(&caller, started)
+        .await;
+    Json(json!({
+        "key": target,
+        "scope": outcome.scope,
+        "path": outcome.path.display().to_string(),
+        "old_value": outcome.old_value,
+        "new_value": outcome.new_value,
+        "rows": outcome.rows,
+    }))
+    .into_response()
+}
+
+/// Authorize, apply, and audit a guarded config unset that refuses with 409
+/// when the current effective value no longer matches its removal fallback.
+async fn perform_guarded_unset<F>(
+    state: DashboardState,
+    runtime: Arc<OrbitRuntime>,
+    target: String,
+    arguments: Value,
+    write: F,
+) -> Response
+where
+    F: FnOnce(&OrbitRuntime) -> Result<GuardedConfigUnset, orbit_core::OrbitError> + Send + 'static,
+{
+    let workspace = workspace_label(&runtime).await;
+    let audit = OperationAudit::new(
+        &runtime,
+        &workspace,
+        CONFIG_AUDIT_OPERATION,
+        target.as_str(),
+        arguments.clone(),
+    );
+    let caller = match authorized_caller(&DASHBOARD_CONFIG_SET, state.operator_session()) {
+        Ok(caller) => caller,
+        Err(denial) => {
+            audit.denied(&denial, Instant::now()).await;
+            return authorization_denied(denial);
+        }
+    };
+    let started = Instant::now();
+    let applied = {
+        let runtime = runtime.clone();
+        helpers::blocking_join("config guarded unset", move || write(&runtime)).await
+    };
+    let outcome = match applied {
+        Ok(Ok(GuardedConfigUnset::Unset(outcome))) => outcome,
+        Ok(Ok(GuardedConfigUnset::Refused(refusal))) => {
+            audit.failed(&caller, &refusal.message, started).await;
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": refusal.message,
+                    "code": refusal.code,
+                })),
+            )
+                .into_response();
+        }
         Ok(Err(error)) => {
             let failure = error.to_string();
             audit.failed(&caller, &failure, started).await;

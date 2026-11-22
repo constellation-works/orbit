@@ -953,7 +953,9 @@ security defaults.
 first. To tidy the whole workspace file, open **Other**: **Keys that only
 repeat the global or built-in value** lists the workspace values you can
 remove without changing anything, and **Remove all N workspace values**
-removes them.
+removes them only while each key's current value still matches its admitted
+removal fallback (if a value or fallback changed after load, that key is
+preserved and the refusal is reported).
 
 ### Crews
 

@@ -1305,9 +1305,13 @@ function lockRow(row, byWait, maxTotal, recorded) {
   const wait = row.wait && typeof row.wait === "object" ? row.wait : null;
   const total = wait ? waitDuration(wait.total_ms) : "—";
   const denied = `${count(row.numerator)} of ${count(row.denominator)} requesters denied`;
-  const line = recorded && wait ? `median wait ${waitDuration(wait.median_ms)} · ${denied}` : denied;
+  const line = recorded && wait
+    ? byWait
+      ? `median wait ${waitDuration(wait.median_ms)} · ${denied}`
+      : `${denied} · total wait ${total} · median ${waitDuration(wait.median_ms)}`
+    : denied;
   const item = el("li", { class: "codebase-lock-row" }, [
-    el("div", { class: "codebase-lock-top" }, [fileLink(row.path), el("span", { class: "codebase-lock-total", text: recorded ? total : pct(row.rate) })]),
+    el("div", { class: "codebase-lock-top" }, [fileLink(row.path), el("span", { class: "codebase-lock-total", text: byWait ? total : pct(row.rate) })]),
     rateBar(byWait ? (Number(wait?.total_ms) || 0) / (maxTotal || 1) : row.rate),
     el("div", { class: "codebase-lock-line" }, [
       el("span", { class: "codebase-extra", text: line }),
@@ -1325,7 +1329,7 @@ function locksNode(model) {
   const byWait = lockByWait(data);
   const rows = byWait ? rowsByWait(data) : rowsOf(data, "lock_contention");
   const head = el("div", { class: "codebase-box-head" }, [
-    el("div", {}, [el("h4", { text: "Lock waits" }), el("span", { class: "codebase-extra", text: recorded ? "time tasks spent denied a lock on the file" : "requesters denied a lock on the file" })]),
+    el("div", {}, [el("h4", { text: "Lock waits" }), el("span", { class: "codebase-extra", text: byWait ? "time tasks spent denied a lock on the file" : "requesters denied a lock on the file" })]),
   ]);
   if (rowsByWait(data).length) {
     const sorts = el("div", { class: "mx-seg mx-seg-wrap", role: "group", "aria-label": "Sort locks" });

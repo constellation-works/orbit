@@ -1,5 +1,5 @@
 // Shared top-bar search. Its requests, selection and feedback never touch the board.
-import { captureWorkspaceVisit, el, getSelectedWorkspaces, getWorkspace, isAggregateView, onWorkspaceChange, persistScopeToUrl, rememberWorkspace, setWorkspace, withHost } from './common.js';
+import { captureWorkspaceVisit, el, getSelectedWorkspaces, getWorkspace, isAggregateView, onWorkspaceChange, pushScopedHash, withHost } from './common.js';
 import { navigateToRun } from './router.js';
 import { STATUS_LABELS } from './task-shared.js';
 
@@ -99,20 +99,19 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
     showSearchMessage(reason, 'error');
   }
 
-  function adoptSearchWorkspace(workspace) {
-    if (!workspace || workspace === getWorkspace()) return;
-    setWorkspace(workspace);
-    rememberWorkspace();
-    persistScopeToUrl();
-    workspaceChanged();
-  }
-
   function openSearchTask(task) {
     clearGlobalSearch();
-    adoptSearchWorkspace(task.workspace_id);
-    // Assign the destination once. Routing it programmatically first would
-    // replace the origin entry when normalizing a task-page deep link.
-    window.location.hash = `#tasks/${encodeURIComponent(task.id)}`;
+    const hash = `#tasks/${encodeURIComponent(task.id)}`;
+    // Keep the origin history entry on its own workspace/aggregate scope when
+    // jumping across workspaces; push the destination scope as a new entry.
+    if (task.workspace_id && task.workspace_id !== getWorkspace()) {
+      pushScopedHash(hash, { workspace: task.workspace_id, remember: true });
+      workspaceChanged();
+    } else {
+      // Assign the destination once. Routing it programmatically first would
+      // replace the origin entry when normalizing a task-page deep link.
+      window.location.hash = hash;
+    }
     input.blur();
   }
 
@@ -203,8 +202,12 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
       if (kind === 'task') openSearchTask({ ...hit.body, workspace_id: hit.workspace });
       else {
         clearGlobalSearch();
-        adoptSearchWorkspace(hit.workspace);
-        navigateToRun(id);
+        if (hit.workspace && hit.workspace !== getWorkspace()) {
+          pushScopedHash(`#runs/${encodeURIComponent(id)}`, { workspace: hit.workspace, remember: true });
+          workspaceChanged();
+        } else {
+          navigateToRun(id);
+        }
         input.blur();
       }
     } catch (error) {

@@ -379,18 +379,11 @@ function ownsDrawerMutation(session) {
   return drawer === session && session.visit.isCurrent();
 }
 
-async function submitDrawerMutation(session, context, request) {
+async function submitDrawerMutation(session, context, request, savedSummary = 'Changes saved') {
   if (!ownsDrawerMutation(session) || session.pending) return;
   session.pending = true; session.error = null; context.rerender?.();
   try {
     await request(session.visit);
-    if (!ownsDrawerMutation(session)) return;
-    drawer = null;
-    await context.reload();
-    // The reload can outlive its visit: a switch to another workspace while it
-    // is in flight superseded it, and that visit's editor must keep focus. Only
-    // an uninterrupted save returns focus to its Edit control.
-    if (session.visit.isCurrent() && !drawer) focusRowEdit(session.row.key, session.sectionTitle);
   } catch (error) {
     if (!ownsDrawerMutation(session)) return;
     session.pending = false; session.error = error.message || String(error);
@@ -398,7 +391,25 @@ async function submitDrawerMutation(session, context, request) {
     // The rerender rebuilt the pressed Save or Remove control. Keep focus in the
     // drawer, on the field the error is about, so Escape still reaches it.
     document.querySelector('.config-drawer .settings-input')?.focus();
+    return;
   }
+  if (!ownsDrawerMutation(session)) return;
+  drawer = null;
+  let readbackError = null;
+  try {
+    await context.reload();
+  } catch (error) {
+    readbackError = error;
+  }
+  // The reload can outlive its visit: a switch to another workspace while it
+  // is in flight superseded it, and that visit's editor must keep focus. Only
+  // an uninterrupted save closes the drawer and returns focus to its Edit control.
+  if (!session.visit.isCurrent()) return;
+  if (readbackError) {
+    context.reportReadbackFailure?.(savedSummary, readbackError);
+    if (!drawer) context.rerender?.();
+  }
+  if (!drawer) focusRowEdit(session.row.key, session.sectionTitle);
 }
 
 // Whether this workspace has no config policy file yet: none at all, or one
@@ -469,8 +480,12 @@ function drawerNode(payload, context) {
   body.appendChild(el('div', { class: 'drawer-cli mono', text: cliCmd(row, session.scope, session.text) }));
   if (session.error) body.appendChild(el('div', { class: 'config-warning', text: session.error }));
   const actions = el('div', { class: 'dialog-actions' });
-  const saveWith = (init) => () => submitDrawerMutation(session, context, (visit) =>
-    requestJson(`/api/config/keys/${encodeURIComponent(row.key)}`, 'PUT', { value: parseDraft(row, session.text), scope: session.scope, ...(init ? { init } : {}) }, visit));
+  const saveWith = (init) => () => submitDrawerMutation(
+    session,
+    context,
+    (visit) => requestJson(`/api/config/keys/${encodeURIComponent(row.key)}`, 'PUT', { value: parseDraft(row, session.text), scope: session.scope, ...(init ? { init } : {}) }, visit),
+    `Saved ${row.key}`,
+  );
   // A first workspace write offers only the explicit choices, so no click
   // creates the policy file implicitly; closing the drawer leaves it uncreated.
   const choosesInit = session.scope === 'workspace' && workspacePolicyMissing(payload);
@@ -488,8 +503,12 @@ function drawerNode(payload, context) {
   // Remove clears the global value; the label names the scope it removes.
   const removeScope = session.lockGlobal ? 'global' : 'workspace';
   const remove = el('button', { class: 'settings-btn ghost', text: `Remove ${removeScope} value` }); remove.type = 'button'; remove.disabled = session.pending;
-  remove.addEventListener('click', () => submitDrawerMutation(session, context, (visit) =>
-    requestJson(`/api/config/keys/${encodeURIComponent(row.key)}?scope=${removeScope}`, 'DELETE', undefined, visit)));
+  remove.addEventListener('click', () => submitDrawerMutation(
+    session,
+    context,
+    (visit) => requestJson(`/api/config/keys/${encodeURIComponent(row.key)}?scope=${removeScope}`, 'DELETE', undefined, visit),
+    `Removed ${removeScope} value for ${row.key}`,
+  ));
   // The header's esc control is the drawer's one dismiss control [STD-07 §R44].
   actions.append(remove); panel.appendChild(actions);
   return panel;
@@ -777,7 +796,9 @@ export function renderOther(body, payload, context) {
         for (const r of restates) {
           if (!ownsRemoval()) return;
           try {
-            await requestJson(`/api/config/keys/${encodeURIComponent(r.key)}?scope=workspace`, 'DELETE', undefined, operation.visit);
+            // Guarded removal: the server re-checks under the config write lock
+            // that the current effective value still matches its removal fallback.
+            await requestJson(`/api/config/keys/${encodeURIComponent(r.key)}?scope=workspace&preserve_effective=true`, 'DELETE', undefined, operation.visit);
             if (!ownsRemoval()) return;
             ok++;
           } catch (error) {
@@ -785,8 +806,14 @@ export function renderOther(body, payload, context) {
             failures.push(`${r.key}: ${error.message}`);
           }
         }
-        showNotice({ text: `Removed ${ok} workspace value(s).${failures.length ? ' Failed: ' + failures.join('; ') : ''}`, failed: failures.length > 0 }, context);
-        await context.reload();
+        const summary = `Removed ${ok} workspace value(s).${failures.length ? ' Failed: ' + failures.join('; ') : ''}`;
+        showNotice({ text: summary, failed: failures.length > 0 }, context);
+        try {
+          await context.reload();
+        } catch (error) {
+          if (!ownsRemoval()) return;
+          context.reportReadbackFailure?.(summary, error);
+        }
       } finally {
         if (ownsRemoval()) { bulkRemoval = null; context.rerender?.(); }
       }

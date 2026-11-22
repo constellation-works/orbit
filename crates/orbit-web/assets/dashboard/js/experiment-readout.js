@@ -413,8 +413,12 @@ export function cumulativeCard(readout, primary, color) {
   }
   let lo = Math.min(...values);
   let hi = Math.max(...values);
-  if (unit === "rate") { lo = 0; hi = Math.max(hi, 1e-9) > 0.5 ? 1 : Math.min(1, hi * 1.2); }
-  else {
+  if (unit === "rate") {
+    lo = 0;
+    // A settled all-zero rate keeps zero at the baseline under a readable
+    // nondegenerate percent span (0%, 5%, 10%) rather than collapsing ticks.
+    hi = hi <= 0 ? 0.1 : hi > 0.5 ? 1 : Math.min(1, Math.max(hi * 1.2, 0.01));
+  } else {
     const pad = (hi - lo) * 0.1 || Math.abs(hi) * 0.1 || 1;
     lo = Math.max(0, lo - pad);
     hi += pad;
@@ -449,41 +453,105 @@ export function cumulativeCard(readout, primary, color) {
   tip.hidden = true;
   const cursor = el("div", { class: "mx-cursor" });
   cursor.hidden = true;
-  const hover = el("div", { class: "ex-cum-hover" });
+  const hover = el("div", { class: "ex-cum-hover", role: "group", "aria-label": "Cumulative buckets: use left and right arrow keys to inspect each bucket" });
+  const columns = [];
+  let hoveredIndex = null;
+  let focusedIndex = null;
+  let visibleIndex = null;
+  const hideBucket = () => {
+    visibleIndex = null;
+    tip.hidden = true;
+    cursor.hidden = true;
+  };
+  const showBucket = (index) => {
+    visibleIndex = index;
+    tip.replaceChildren(
+      el("div", { class: "mx-tip-title", text: cumulativeHover(firstPoints[index]?.start, bucketSeconds, bucketUntil, index === buckets - 1) }),
+      ...arms.map((arm) => {
+        const point = arm.points?.[index] || {};
+        return el("div", { class: "mx-tip-row" }, [
+          el("span", { class: "mx-tip-name" }, [armSwatch(armColor(color(arm.arm))), el("span", { text: arm.arm })]),
+          el("span", { class: "mx-tip-n", text: `n ${point.n ?? 0}` }),
+          el("span", { class: "mx-tip-value", text: fmtValue(point.value, unit) }),
+        ]);
+      }),
+    );
+    const left = xOf(index);
+    cursor.style.left = `${left}%`;
+    tip.hidden = false;
+    // This narrow card can sit against the pane's clipped right edge even
+    // at its middle bucket. Measure the shown tip, then keep it inside both
+    // the plot and the viewport, including when its CSS width changes.
+    const bounds = hover.getBoundingClientRect();
+    const minLeft = Math.max(bounds.left, 0);
+    const maxRight = Math.min(bounds.right, document.documentElement.clientWidth);
+    tip.style.maxWidth = `${Math.max(0, maxRight - minLeft)}px`;
+    const tipWidth = tip.getBoundingClientRect().width;
+    const anchor = bounds.left + bounds.width * left / 100;
+    const preferred = anchor + 14 + tipWidth <= maxRight ? anchor + 14 : anchor - 14 - tipWidth;
+    tip.style.left = `${Math.max(minLeft, Math.min(preferred, maxRight - tipWidth)) - bounds.left}px`;
+    cursor.hidden = false;
+  };
+  const setRovingBucket = (activeIndex) => {
+    columns.forEach((col, i) => { col.tabIndex = i === activeIndex ? 0 : -1; });
+  };
   for (let index = 0; index < buckets; index += 1) {
-    const column = el("span", { class: "ex-cum-col" });
-    const show = () => {
-      tip.replaceChildren(
-        el("div", { class: "mx-tip-title", text: cumulativeHover(firstPoints[index]?.start, bucketSeconds, bucketUntil, index === buckets - 1) }),
-        ...arms.map((arm) => {
-          const point = arm.points?.[index] || {};
-          return el("div", { class: "mx-tip-row" }, [
-            el("span", { class: "mx-tip-name" }, [armSwatch(armColor(color(arm.arm))), el("span", { text: arm.arm })]),
-            el("span", { class: "mx-tip-n", text: `n ${point.n ?? 0}` }),
-            el("span", { class: "mx-tip-value", text: fmtValue(point.value, unit) }),
-          ]);
-        }),
-      );
-      const left = xOf(index);
-      cursor.style.left = `${left}%`;
-      tip.hidden = false;
-      // This narrow card can sit against the pane's clipped right edge even
-      // at its middle bucket. Measure the shown tip, then keep it inside both
-      // the plot and the viewport, including when its CSS width changes.
-      const bounds = hover.getBoundingClientRect();
-      const minLeft = Math.max(bounds.left, 0);
-      const maxRight = Math.min(bounds.right, document.documentElement.clientWidth);
-      tip.style.maxWidth = `${Math.max(0, maxRight - minLeft)}px`;
-      const tipWidth = tip.getBoundingClientRect().width;
-      const anchor = bounds.left + bounds.width * left / 100;
-      const preferred = anchor + 14 + tipWidth <= maxRight ? anchor + 14 : anchor - 14 - tipWidth;
-      tip.style.left = `${Math.max(minLeft, Math.min(preferred, maxRight - tipWidth)) - bounds.left}px`;
-      cursor.hidden = false;
-    };
-    column.addEventListener("mouseenter", show);
+    const windowText = cumulativeHover(firstPoints[index]?.start, bucketSeconds, bucketUntil, index === buckets - 1);
+    const bucketSummary = `${windowText}: ${arms.map((arm) => {
+      const point = arm.points?.[index] || {};
+      return `${arm.arm} n=${point.n ?? 0} ${fmtValue(point.value, unit)}`;
+    }).join(", ")}`;
+    const column = el("span", {
+      class: "ex-cum-col",
+      role: "img",
+      "aria-label": bucketSummary,
+    });
+    column.tabIndex = index === 0 ? 0 : -1;
+    column.addEventListener("mouseenter", () => {
+      hoveredIndex = index;
+      showBucket(index);
+    });
+    column.addEventListener("focus", () => {
+      focusedIndex = index;
+      setRovingBucket(index);
+      showBucket(index);
+    });
+    column.addEventListener("blur", () => {
+      if (focusedIndex === index) focusedIndex = null;
+      if (visibleIndex === index) {
+        if (hoveredIndex != null) showBucket(hoveredIndex);
+        else hideBucket();
+      }
+    });
+    columns.push(column);
     hover.appendChild(column);
   }
-  hover.addEventListener("mouseleave", () => { tip.hidden = true; cursor.hidden = true; });
+  hover.addEventListener("mouseleave", () => {
+    hoveredIndex = null;
+    if (focusedIndex != null) showBucket(focusedIndex);
+    else hideBucket();
+  });
+  hover.addEventListener("keydown", (event) => {
+    const current = focusedIndex ?? visibleIndex ?? 0;
+    if (event.key === "Escape") {
+      if (visibleIndex != null) {
+        event.preventDefault();
+        event.stopPropagation();
+        hideBucket();
+      }
+      return;
+    }
+    let next = null;
+    if (event.key === "ArrowRight") next = Math.min(buckets - 1, current + 1);
+    else if (event.key === "ArrowLeft") next = Math.max(0, current - 1);
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = buckets - 1;
+    if (next == null) return;
+    event.preventDefault();
+    setRovingBucket(next);
+    columns[next]?.focus();
+    showBucket(next);
+  });
   const legend = el("div", { class: "ex-legend" }, arms.map((arm) =>
     el("span", { class: "ex-legend-item" }, [armSwatch(armColor(color(arm.arm))), arm.arm])));
   const width = series.window?.bucket_seconds;
@@ -494,7 +562,7 @@ export function cumulativeCard(readout, primary, color) {
   }).join(", ")}`;
   return experimentCard(title, [
     legend,
-    el("div", { class: "ex-cum", role: "img", "aria-label": label }, [
+    el("div", { class: "ex-cum", role: "region", "aria-label": label }, [
       el("div", { class: "ex-cum-y" }, ticks),
       el("div", { class: "ex-cum-frame" }, [plot, ...ends, cursor, hover, tip]),
     ]),

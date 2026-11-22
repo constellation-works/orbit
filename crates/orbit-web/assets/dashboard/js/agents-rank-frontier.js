@@ -273,6 +273,25 @@ function scatterPlot(chart, width, host) {
   });
   const labels = placeLabels(items, { left: left + 4, right: width - 4, top: top + 8, bottom: height - bottom - 8, fixed });
   const tip = tooltipNode(width, height, family);
+  // Hover and keyboard focus own the shared tooltip independently (STD-07 §R34):
+  // ending pointer hover restores any still-focused point, blur retains any
+  // hovered point, and Escape hides the tooltip.
+  let hovered = null;
+  let focused = null;
+  let visible = null;
+  const showEntry = (entry) => {
+    visible = entry;
+    tip.show(entry.lines, entry.x, entry.y);
+  };
+  const hideTip = () => {
+    visible = null;
+    tip.hide();
+  };
+  const endSource = (ended, remaining) => {
+    if (visible !== ended) return;
+    if (remaining) showEntry(remaining);
+    else hideTip();
+  };
   for (const { point, name, x, y, ly, flip } of labels) {
     const group = svgEl("g", {
       class: `agents-rank-point${point.frontier ? " is-frontier" : ""}${point.underpriced ? " is-underpriced" : ""}`,
@@ -294,14 +313,39 @@ function scatterPlot(chart, width, host) {
       { text: rankFormat.plural(point.tasks || 0, "task") },
       ...(partialCoverage(point) ? [{ text: `${rankFormat.num(point.cost_coverage * 100, 0)}% of tasks priced` }] : []),
     ];
-    const open = () => tip.show(lines, x, y);
-    group.addEventListener("mouseenter", open);
-    group.addEventListener("mouseleave", tip.hide);
-    group.addEventListener("focus", open);
-    group.addEventListener("blur", tip.hide);
-    group.addEventListener("keydown", (event) => { if (event.key === "Escape") tip.hide(); });
+    const entry = { lines, x, y };
+    group.addEventListener("mouseenter", () => {
+      hovered = entry;
+      showEntry(entry);
+    });
+    group.addEventListener("mouseleave", () => {
+      if (hovered === entry) hovered = null;
+      endSource(entry, focused);
+    });
+    group.addEventListener("focus", () => {
+      focused = entry;
+      showEntry(entry);
+    });
+    group.addEventListener("blur", () => {
+      if (focused === entry) focused = null;
+      endSource(entry, hovered);
+    });
+    group.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && visible) {
+        event.preventDefault();
+        event.stopPropagation();
+        hideTip();
+      }
+    });
     svg.append(group);
   }
+  svg.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && visible) {
+      event.preventDefault();
+      event.stopPropagation();
+      hideTip();
+    }
+  });
   svg.append(tip.node);
   return svg;
 }
