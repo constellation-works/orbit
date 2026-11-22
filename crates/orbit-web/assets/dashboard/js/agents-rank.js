@@ -181,6 +181,34 @@ function ladderModel(payload, rows) {
   return { ranked, pending, bands, axis: scoreAxis(ranked) };
 }
 
+// The whisker axis follows the main distribution, not the raw extremes. Values
+// outside the Tukey fences (never closer than AXIS_MIN_MARGIN points to the
+// quartiles) are drawn off scale: clipped at the axis edge with a marker, while
+// the exact numbers stay in the score column, the tooltip and the aria-label.
+const AXIS_MIN_MARGIN = 20;
+const AXIS_MIN_VALUES_TO_CLIP = 6;
+// At most this many step-sized gaps span the axis, so the header carries at
+// most AXIS_MAX_GAPS + 1 ticks whatever the span.
+const AXIS_MAX_GAPS = 6;
+const AXIS_STEPS = [5, 10, 20, 25, 50, 100, 200, 250, 500, 1000];
+
+function quantile(sorted, q) {
+  const at = (sorted.length - 1) * q;
+  const below = Math.floor(at);
+  const above = Math.ceil(at);
+  return sorted[below] + (sorted[above] - sorted[below]) * (at - below);
+}
+
+function axisCoreRange(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  if (sorted.length < AXIS_MIN_VALUES_TO_CLIP) return [sorted[0], sorted[sorted.length - 1]];
+  const q1 = quantile(sorted, 0.25);
+  const q3 = quantile(sorted, 0.75);
+  const margin = Math.max(1.5 * (q3 - q1), AXIS_MIN_MARGIN);
+  const core = sorted.filter((v) => v >= q1 - margin && v <= q3 + margin);
+  return [core[0], core[core.length - 1]];
+}
+
 function scoreAxis(rows) {
   const values = [];
   for (const row of rows) {
@@ -190,14 +218,46 @@ function scoreAxis(rows) {
     if (typeof interval.p90 === "number") values.push(interval.p90);
   }
   if (!values.length) values.push(90, 110);
-  const span = Math.max(...values) - Math.min(...values);
-  const step = span > 100 ? 20 : span > 50 ? 10 : 5;
-  let lo = Math.floor(Math.min(...values) / step) * step;
-  let hi = Math.ceil(Math.max(...values) / step) * step;
+  const [min, max] = axisCoreRange(values);
+  let step = AXIS_STEPS[AXIS_STEPS.length - 1];
+  for (const candidate of AXIS_STEPS) {
+    if (Math.ceil(max / candidate) - Math.floor(min / candidate) <= AXIS_MAX_GAPS) { step = candidate; break; }
+  }
+  let lo = Math.floor(min / step) * step;
+  let hi = Math.ceil(max / step) * step;
   if (lo === hi) { lo -= step; hi += step; }
   const ticks = [];
   for (let v = lo; v <= hi + 1e-9; v += step) ticks.push(v);
-  return { lo, hi, ticks, pos: (v) => Math.max(0, Math.min(100, ((v - lo) / (hi - lo)) * 100)) };
+  return {
+    lo,
+    hi,
+    ticks,
+    pos: (v) => Math.max(0, Math.min(100, ((v - lo) / (hi - lo)) * 100)),
+    // -1 below the axis floor, 1 above its ceiling, 0 on the axis.
+    side: (v) => (v < lo - 1e-9 ? -1 : v > hi + 1e-9 ? 1 : 0),
+  };
+}
+
+// What a row plots beyond the axis, e.g. ["p10 below the axis"]; empty when it all fits.
+function offScaleParts(row, axis) {
+  const interval = row.interval || {};
+  const parts = [];
+  for (const [name, value] of [["score", row.score], ["p10", interval.p10], ["p90", interval.p90]]) {
+    if (typeof value !== "number") continue;
+    const side = axis.side(value);
+    if (side) parts.push(`${name} ${side < 0 ? "below" : "above"} the axis`);
+  }
+  return parts;
+}
+
+function whiskerLabel(row, axis) {
+  const interval = row.interval || {};
+  const hasInterval = typeof interval.p10 === "number" && typeof interval.p90 === "number";
+  const base = hasInterval
+    ? `${row.model} score ${rankFormat.num(row.score)}, interval ${rankFormat.num(interval.p10, 1)} to ${rankFormat.num(interval.p90, 1)}`
+    : `${row.model} score ${rankFormat.num(row.score)}, no interval`;
+  const off = offScaleParts(row, axis);
+  return off.length ? `${base}; off scale: ${off.join(", ")}` : base;
 }
 
 // --- summary strip ---
@@ -298,7 +358,7 @@ function ladderRow(payload, row, axis, isBandStart) {
     el("td", { class: "agents-rank-chev-col" }, [toggle.button]),
     el("td", { class: "agents-rank-label", text: isBandStart ? rankText(payload, row) : "" }),
     el("td", { class: "agents-rank-model-cell" }, [modelNode(row)]),
-    el("td", { class: "agents-num agents-rank-score", text: rankFormat.num(row.score) }),
+    scoreCell(row, axis),
     el("td", { class: "agents-rank-interval-col" }, [whiskerNode(row, axis)]),
     el("td", { class: "agents-num" }, [costNode(row)]),
     el("td", {}, [tierMixNode(row)]),
@@ -311,6 +371,15 @@ function ladderRow(payload, row, axis, isBandStart) {
   const detail = el("tr", { class: "agents-rank-detail" }, [detailCell]);
   toggle.bind(detail, main);
   return [main, detail];
+}
+
+function scoreCell(row, axis) {
+  const cell = el("td", { class: "agents-num agents-rank-score", text: rankFormat.num(row.score) });
+  if (offScaleParts(row, axis).length) {
+    cell.classList.add("is-offscale");
+    cell.title = whiskerLabel(row, axis);
+  }
+  return cell;
 }
 
 function modelNode(row) {
@@ -391,19 +460,35 @@ function rankText(payload, row) {
 function whiskerNode(row, axis) {
   const interval = row.interval || {};
   const hasInterval = typeof interval.p10 === "number" && typeof interval.p90 === "number";
-  const label = hasInterval
-    ? `${row.model} score ${rankFormat.num(row.score)}, interval ${rankFormat.num(interval.p10, 1)} to ${rankFormat.num(interval.p90, 1)}`
-    : `${row.model} score ${rankFormat.num(row.score)}, no interval`;
+  const label = whiskerLabel(row, axis);
   const node = el("div", { class: "agents-rank-whisker", role: "img", "aria-label": label, title: label });
   for (const tick of axis.ticks) {
     node.append(el("span", { class: tick === 100 ? "agents-rank-grid is-100" : "agents-rank-grid", style: { left: `${axis.pos(tick)}%` } }));
   }
+  // An end beyond the axis is never drawn at the edge as if it sat there: the
+  // edge carries an arrow instead, one per side.
+  const clippedSides = new Set();
   if (hasInterval) {
     const lo = axis.pos(interval.p10);
     const hi = axis.pos(interval.p90);
-    node.append(el("span", { class: "agents-rank-whisker-line", style: { left: `${lo}%`, width: `${Math.max(0, hi - lo)}%` } }));
+    const loSide = axis.side(interval.p10);
+    const hiSide = axis.side(interval.p90);
+    if (loSide) clippedSides.add(loSide);
+    if (hiSide) clippedSides.add(hiSide);
+    if (!(loSide && loSide === hiSide)) {
+      node.append(el("span", { class: "agents-rank-whisker-line", style: { left: `${lo}%`, width: `${Math.max(0, hi - lo)}%` } }));
+    }
   }
-  if (typeof row.score === "number") node.append(el("span", { class: "agents-rank-whisker-tick", style: { left: `${axis.pos(row.score)}%` } }));
+  if (typeof row.score === "number") {
+    const side = axis.side(row.score);
+    if (side) clippedSides.add(side);
+    else node.append(el("span", { class: "agents-rank-whisker-tick", style: { left: `${axis.pos(row.score)}%` } }));
+  }
+  for (const side of [-1, 1]) {
+    if (clippedSides.has(side)) {
+      node.append(el("span", { class: `agents-rank-whisker-clip ${side < 0 ? "is-low" : "is-high"}`, "aria-hidden": "true", text: side < 0 ? "◂" : "▸" }));
+    }
+  }
   return node;
 }
 
@@ -451,7 +536,7 @@ function legendNode(payload) {
   const rules = payload.rules || {};
   const confidence = typeof rules.band_probability === "number" ? `${rankFormat.num(rules.band_probability * 100, 0)}%` : "80%";
   return el("div", { class: "agents-rank-legend" }, [
-    el("span", { text: `Shared ranks (2=) are one band at ${confidence} confidence. Rows follow score order; exact ties use cost, then model name. Cost never changes a band's rank.` }),
+    el("span", { text: `Shared ranks (2=) are one band at ${confidence} confidence. Rows follow score order; exact ties use cost, then model name. Cost never changes a band's rank. An arrow (◂ ▸) at the edge of the interval column marks a score or interval end beyond the axis; the exact values stay in the Score column and the row's tooltip.` }),
     el("span", { class: "agents-rank-legend-tiers" }, ["low", "medium", "hard", "xhard", "unassessed"].map(swatch)),
   ]);
 }

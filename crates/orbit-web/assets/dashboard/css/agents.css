@@ -478,6 +478,10 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-rank-grid.is-100 { background: var(--border-strong, var(--border)); top: 0; bottom: 0; }
 .agents-rank-whisker-line { position: absolute; top: 7px; height: 7px; background: color-mix(in srgb, var(--provider, var(--fg-mute)) 20%, transparent); box-shadow: inset 0 0 0 1px var(--provider-line); border-radius: var(--radius-xs); }
 .agents-rank-whisker-tick { position: absolute; top: 5px; width: 3px; height: 11px; margin-left: -1.5px; border-radius: var(--radius-2xs); background: var(--provider, var(--fg-mute)); }
+.agents-rank-whisker-clip { position: absolute; top: 3px; font-size: var(--text-sm); line-height: 15px; color: var(--provider, var(--fg-mute)); }
+.agents-rank-whisker-clip.is-low { left: 0; }
+.agents-rank-whisker-clip.is-high { right: 0; }
+.agents-rank-score.is-offscale { text-decoration: underline dotted; text-underline-offset: 3px; }
 
 /* Contribution values in the breakdown: blue helps, amber hurts. */
 .agents-rank-contrib { color: var(--fg-mute); font-variant-numeric: tabular-nums; }
