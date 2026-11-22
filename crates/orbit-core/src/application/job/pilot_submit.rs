@@ -11,10 +11,14 @@
 use std::fmt;
 
 use orbit_common::{OrbitError, TaskPilotRefusalCode};
+use orbit_engine::activity_job::{ACTIVITY_REF_PREFIX, V2ActivityCatalog};
 use orbit_types::task::TaskStatus;
-use orbit_types::workflow::{JobRunState, JobRunTrigger, TASK_PILOT_PIPELINE_JOB};
+use orbit_types::workflow::{
+    ActivityV2Spec, CoreDeterministicAction, JobRunState, JobRunTrigger, JobV2, JobV2Step,
+    JobV2StepBody, TASK_PILOT_PIPELINE_JOB,
+};
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::automation_port::JobAutomationPort;
 use super::{JobRunListParams, PipelineInvokeResult};
@@ -333,4 +337,157 @@ impl OrbitRuntime {
         }
         self.pilot_holder_run(task_id)
     }
+
+    /// Reject caller-provided string `task_ids` (such as CLI `--input
+    /// task_ids=...`) when the admitted job definition routes `input.task_ids`
+    /// into a `prepare_task_pilot` step.
+    ///
+    /// Runs against the resolved `JobV2` definition (`Snapshot` for direct YAML
+    /// paths, `load_v2_job_asset_by_name` for catalog jobs) before admission
+    /// persists any run or reclaims worktrees.
+    pub(crate) fn validate_pilot_string_task_ids_input(
+        &self,
+        job_name: &str,
+        spec: &JobV2,
+        input: &Value,
+    ) -> Result<(), OrbitError> {
+        let Some(raw_task_ids) = input.get("task_ids").and_then(Value::as_str) else {
+            return Ok(());
+        };
+        let mut catalog = None;
+        let Some((step_id, target_label)) =
+            self.first_step_forwarding_task_ids_to_pilot(&spec.steps, &mut catalog)?
+        else {
+            return Ok(());
+        };
+        Err(OrbitError::InvalidInput(format!(
+            "invalid `--input task_ids={raw_task_ids}` for `{job_name}` (step `{step_id}`, \
+             {target_label}): `--input key=value` only passes string values, while `{}` \
+             requires `task_ids` to be an array. Use `orbit run task-pilot <TASK_ID>...` for \
+             explicit tasks, or omit `--input task_ids=...` (or run `orbit run task-pilot`) \
+             for automatic discovery; custom jobs can also supply an array `task_ids` in `default_input`",
+            CoreDeterministicAction::PrepareTaskPilot.name(),
+        )))
+    }
+
+    fn first_step_forwarding_task_ids_to_pilot(
+        &self,
+        steps: &[JobV2Step],
+        catalog: &mut Option<V2ActivityCatalog>,
+    ) -> Result<Option<(String, String)>, OrbitError> {
+        for step in steps {
+            match &step.body {
+                JobV2StepBody::Parallel { parallel } => {
+                    if let Some(hit) =
+                        self.first_step_forwarding_task_ids_to_pilot(&parallel.branches, catalog)?
+                    {
+                        return Ok(Some(hit));
+                    }
+                }
+                JobV2StepBody::FanOut { fan_out, .. } => {
+                    if let Some(hit) = self.first_step_forwarding_task_ids_to_pilot(
+                        std::slice::from_ref(fan_out.worker.as_ref()),
+                        catalog,
+                    )? {
+                        return Ok(Some(hit));
+                    }
+                }
+                JobV2StepBody::Loop { loop_ } => {
+                    if let Some(hit) =
+                        self.first_step_forwarding_task_ids_to_pilot(&loop_.steps, catalog)?
+                    {
+                        return Ok(Some(hit));
+                    }
+                }
+                JobV2StepBody::Target(target) => {
+                    if is_prepare_task_pilot_spec(&target.spec)
+                        && default_input_forwards_task_ids(target.default_input.as_ref())
+                    {
+                        return Ok(Some((
+                            step.id.clone(),
+                            format!(
+                                "action `{}`",
+                                CoreDeterministicAction::PrepareTaskPilot.name()
+                            ),
+                        )));
+                    }
+                }
+                JobV2StepBody::TargetRef(reference) => {
+                    if !default_input_forwards_task_ids(reference.default_input.as_ref()) {
+                        continue;
+                    }
+                    let Some(activity_name) = reference.target.strip_prefix(ACTIVITY_REF_PREFIX)
+                    else {
+                        continue;
+                    };
+                    let loaded = match catalog {
+                        Some(loaded) => loaded,
+                        None => {
+                            let built = self.v2_activity_catalog().map_err(|err| {
+                                OrbitError::InvalidInput(format!("build activity catalog: {err}"))
+                            })?;
+                            catalog.insert(built)
+                        }
+                    };
+                    let resolves_to_prepare = match loaded.get(activity_name) {
+                        Some(activity) => is_prepare_task_pilot_spec(&activity.spec),
+                        None => {
+                            loaded.unavailable_reason(activity_name).is_none()
+                                && activity_name == CoreDeterministicAction::PrepareTaskPilot.name()
+                        }
+                    };
+                    if resolves_to_prepare {
+                        return Ok(Some((
+                            step.id.clone(),
+                            format!(
+                                "target `{}` -> `{}`",
+                                reference.target,
+                                CoreDeterministicAction::PrepareTaskPilot.name()
+                            ),
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
+fn is_prepare_task_pilot_spec(spec: &ActivityV2Spec) -> bool {
+    matches!(
+        spec,
+        ActivityV2Spec::Deterministic(det)
+            if det.action == CoreDeterministicAction::PrepareTaskPilot.name()
+    )
+}
+
+fn default_input_forwards_task_ids(default_input: Option<&Value>) -> bool {
+    match default_input {
+        None => true,
+        Some(Value::String(template)) => template
+            .strip_prefix("{{")
+            .and_then(|token| token.strip_suffix("}}"))
+            .is_some_and(|token| token.trim() == "input"),
+        Some(Value::Object(map)) => match map.get("task_ids") {
+            Some(Value::String(template)) => template_references_input_field(template, "task_ids"),
+            _ => false,
+        },
+        Some(Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_)) => false,
+    }
+}
+
+fn template_references_input_field(template: &str, field: &str) -> bool {
+    let mut remaining = template;
+    while let Some(start) = remaining.find("{{") {
+        let after_start = &remaining[start + 2..];
+        let Some(end) = after_start.find("}}") else {
+            break;
+        };
+        let token = after_start[..end].trim();
+        if token.strip_prefix("input.").is_some_and(|key| key == field) {
+            return true;
+        }
+        remaining = &after_start[end + 2..];
+    }
+    false
 }
