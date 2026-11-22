@@ -141,7 +141,7 @@ summary { cursor: pointer; font-weight: 500; }
 .property-list dd.markdown > :last-child { margin-bottom: 0; }
 .markdown { color: var(--fg-soft); }
 .markdown p { margin: 0 0 10px; }
-.markdown h1, .markdown h2, .markdown h3, .markdown h4 { color: var(--fg); font-size: 14px; margin: 16px 0 8px; }
+.markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 { color: var(--fg); font-size: 14px; margin: 16px 0 8px; }
 .markdown h1:first-child, .markdown h2:first-child { margin-top: 0; }
 .markdown ul, .markdown ol { padding-left: 22px; }
 .markdown pre, .raw-data { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); padding: 12px; border-radius: 6px; font: 11px/1.6 ui-monospace, monospace; max-height: 320px; overflow: auto; }
