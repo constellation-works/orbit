@@ -46,7 +46,7 @@ const EXPLAIN_PARAMS: &[ParamSpec] = &[
     both(
         "subject",
         ParamType::String,
-        "The subject whose clause tree to show: a task ID for a task-scope condition, `workspace` for a workspace-scope one. Default: the first match, else the first closest miss, else the first subject evaluated.",
+        "Task ID (task-scope) or `workspace`.",
         CliArgKind::flag("subject"),
         "Subject whose clause tree to show (a task ID, or workspace)",
     ),
@@ -79,14 +79,14 @@ const CLEAR_STALL_PARAMS: &[ParamSpec] = &[
     required(both(
         "definition",
         ParamType::String,
-        "The stalled routine or auto-task: its name, or `routine:<name>` / `auto-task:<name>` when a routine and an auto-task share the name.",
+        "Stalled name (`routine:<name>` or `auto-task:<name>` if ambiguous).",
         CliArgKind::Positional,
         "Routine or auto-task name (routine:<name> or auto-task:<name> when both exist)",
     )),
     required(both(
         "reason",
         ParamType::String,
-        "Operator explanation, kept in the audit record. Required.",
+        "Audit reason.",
         CliArgKind::flag("reason"),
         "Why the stall is cleared; kept in the audit record",
     )),

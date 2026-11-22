@@ -559,7 +559,7 @@ fn plant_both_providers(workspace: &McpWorkspace, script: &str) {
 }
 
 /// The one `workspace` description every advertised selector uses.
-const SHARED_WORKSPACE_DESCRIPTION: &str = "Workspace selector from orbit_workspace_list.";
+const SHARED_WORKSPACE_DESCRIPTION: &str = "From orbit_workspace_list.";
 
 /// Assert a bound session advertises `tool`'s workspace selector as optional.
 fn assert_selector_optional<C>(client: &mut McpClient<C>, tool: &str) {

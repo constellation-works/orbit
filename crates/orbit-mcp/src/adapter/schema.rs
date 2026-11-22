@@ -40,10 +40,8 @@ pub(crate) const WORKSPACE_SELECTOR_PARAM: &str = "workspace";
 
 /// One description for every advertised `workspace` selector.
 ///
-/// Required versus optional stays in the schema `required` array. Routing
-/// rules live in the installed Orbit skill `references/task-fields.md`.
-pub(crate) const WORKSPACE_SELECTOR_DESCRIPTION: &str =
-    "Workspace selector from orbit_workspace_list.";
+/// Defined once in `orbit_common::governance::tool_schema`.
+pub(crate) use orbit_common::governance::tool_schema::WORKSPACE_SELECTOR_DESCRIPTION;
 
 /// Property descriptions on these tools are hand-written one-sentence contract.
 const HAND_AUTHORED_PROPERTY_TOOLS: &[&str] =

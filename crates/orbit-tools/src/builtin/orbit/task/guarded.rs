@@ -343,7 +343,7 @@ pub(super) fn extend_create_schema(value: &mut Value) {
 pub(super) fn extend_update_schema(value: &mut Value) {
     value["properties"]["verdict"] = json!({
         "type": "object",
-        "description": "Review verdict object."
+        "description": "Review verdict."
     });
     value["allOf"] = json!([{
         "if":{"anyOf":[{"required":["request_id"]},{"required":["expected_revision"]},{"required":["verdict"]},{"required":["complete"]}]},

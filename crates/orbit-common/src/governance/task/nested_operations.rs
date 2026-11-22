@@ -5,6 +5,7 @@ use crate::governance::operation::{
     CliArgKind, CliConstraint, CliHelp, Effect, ParamType, RETIRED_AGENT_FIELD, UnknownFields,
     aliased, both, cli_only, defaulted, mcp_only, required,
 };
+use crate::governance::tool_schema::WORKSPACE_SELECTOR_DESCRIPTION;
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 pub(super) const ARTIFACT_PUT: TaskOperation = TaskOperation {
@@ -24,7 +25,7 @@ pub(super) const ARTIFACT_PUT: TaskOperation = TaskOperation {
         required(both(
             "id",
             ParamType::String,
-            "task ID",
+            "Task ID.",
             CliArgKind::Positional,
             "Task ID",
         )),
@@ -32,12 +33,7 @@ pub(super) const ARTIFACT_PUT: TaskOperation = TaskOperation {
             both(
                 "source_path",
                 ParamType::String,
-                "Source file to store as a task artifact. Resolved against the \
-                    caller cwd, not the checkout root, so a file that exists only at the \
-                    checkout root is refused with the absolute path to pass. Then confined \
-                    to the workspace checkout after symlink resolution. Absolute paths and symlinks that escape the workspace are \
-                    rejected. Write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`); \
-                    sources under `/tmp` are outside the workspace and are refused.",
+                "Workspace file path (e.g. `.orbit/tmp/...`); escapes/`/tmp` rejected.",
                 CliArgKind::Positional,
                 "Source file to store as a task artifact, up to 1 MiB. Any content is accepted; the media type comes from the file name, and unknown extensions are stored as application/octet-stream. Resolved against the current directory, not the checkout root, so a file that exists only at the checkout root is refused with the absolute path to pass. Then confined to the workspace checkout after symlink resolution: sources that escape it, including under `/tmp`, are refused, so write evidence under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`)",
             ),
@@ -47,7 +43,7 @@ pub(super) const ARTIFACT_PUT: TaskOperation = TaskOperation {
             both(
                 "path",
                 ParamType::String,
-                "Artifact path relative to the task artifacts directory. Defaults to the source file name. Paths beginning with `review-` in any ASCII case are reserved for the review gate's system writer; the only agent-writable exception is the schema-checked `review-report.json`. Rename ordinary supporting evidence to a nonreserved name (for example `examination-checks.json`).",
+                "Target path (default filename); `review-*` reserved except `review-report.json`.",
                 CliArgKind::Flag {
                     long: "path",
                     delimiter: None,
@@ -101,7 +97,7 @@ pub(super) const ARTIFACT_GET: TaskOperation = TaskOperation {
             required(both(
                 "id",
                 ParamType::String,
-                "Globally unique task ID that owns the artifact.",
+                "Task ID.",
                 CliArgKind::Positional,
                 "Task ID that owns the artifact",
             )),
@@ -109,9 +105,7 @@ pub(super) const ARTIFACT_GET: TaskOperation = TaskOperation {
                 both(
                     "path",
                     ParamType::String,
-                    "Artifact path relative to the task artifacts directory, exactly as \
-                    it appears in `orbit.task.show` with `field: \"artifacts\"`. Absolute paths \
-                    and `..` are rejected.",
+                    "Path from `orbit.task.show` (`field: \"artifacts\"`).",
                     CliArgKind::Positional,
                     "Artifact path relative to the task artifacts directory, as listed by `orbit task show <ID> --fields artifacts`",
                 ),
@@ -127,7 +121,7 @@ pub(super) const ARTIFACT_GET: TaskOperation = TaskOperation {
         &[mcp_only(
             "workspace",
             ParamType::String,
-            "Optional workspace filter by registered name, ID or path; task `id` is resolved globally by default.",
+            WORKSPACE_SELECTOR_DESCRIPTION,
         )],
     ],
     at_least_one_of: &[],

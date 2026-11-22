@@ -354,85 +354,85 @@
       },
       {
         "name": "host",
-        "description": "Host name or machine id (repeatable).",
+        "description": "Host name/ID (repeatable).",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "kind",
-        "description": "Include kinds (repeatable).",
+        "description": "Include kinds.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "exclude_kind",
-        "description": "Exclude kinds (repeatable).",
+        "description": "Exclude kinds.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "severity",
-        "description": "Minimum severity: low, medium, high or critical.",
+        "description": "Min severity.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "status",
-        "description": "Task lifecycle states (repeatable).",
+        "description": "Statuses.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "tag",
-        "description": "Task tags (repeatable).",
+        "description": "Tags.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "task",
-        "description": "Task ids (repeatable).",
+        "description": "Task IDs.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "crew",
-        "description": "Assigned crews (repeatable).",
+        "description": "Crews.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "orchestrator",
-        "description": "Attributed orchestrators (repeatable).",
+        "description": "Orchestrators.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "older_than",
-        "description": "Minimum age, such as 90m, 36h or 3d.",
+        "description": "Min age (90m, 36h, 3d).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "since",
-        "description": "Opaque cursor from a prior response; unusable tokens restart the list.",
+        "description": "Pagination cursor.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "limit",
-        "description": "Public response limit, 1–500 (default 100).",
+        "description": "Max 1-500 (default 100).",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "wait_grant",
-        "description": "Also mint a shell token for `orbit attention wait`.",
+        "description": "Mint `orbit attention wait` token.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "candidate_read",
-        "description": "Reserved for Orbit's federated aggregator; never send it.",
+        "description": "Internal; omit.",
         "param_type": "boolean",
         "required": false
       }
@@ -449,103 +449,103 @@
     "parameters": [
       {
         "name": "action",
-        "description": "Operation to run, with its required fields: list; add (name, schedule, template); update (name); mint (name).",
+        "description": "Action (required): list; add (name, schedule, template); update (name); mint (name).",
         "param_type": "string",
         "required": true
       },
       {
         "name": "include_inactive_plugins",
-        "description": "For list: Also list definitions whose seeding plugin is off in this workspace or on the host, each marked plugin_inactive with its skipped_reason.",
+        "description": "list: Include inactive plugins.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "view",
-        "description": "For list: bounded: bounded metadata, explicit workspace, pagination and display truncation.",
+        "description": "list: `bounded` with explicit `workspace`.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "offset",
-        "description": "For list: Bounded list offset.",
+        "description": "list: Page offset.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "limit",
-        "description": "For list: Bounded page size.",
+        "description": "list: Page size.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "name",
-        "description": "For add: Unique definition name (lowercase alphanumeric, `-`/`_`, starts alphanumeric); For update, mint: Definition name.",
+        "description": "add, update, mint: Definition name (`[a-z0-9][a-z0-9_-]*`).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "description",
-        "description": "For add: Human description of the recurring chore; For update: New description.",
+        "description": "add, update: Chore description.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "schedule",
-        "description": "For add: Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (coverage: landed_code_review_v1; owner_machine defaults to this workspace's registered owner machine), or `{ condition: { ... } }` (fires once per subject edge on the workspace owner). `cron`, `every_minutes` and `deliveries_landed` take an optional `when` CEL guard over workspace state; `cron` and `every_minutes` also take `guard_miss` (`wait`, the default, or `skip`); For update: New schedule object: `{ cron: string }` `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (owner_machine defaults to this workspace's registered owner machine) (coverage: landed_code_review_v1), or `{ condition: { ... } }` (fires once per subject edge on the workspace owner). `cron`, `every_minutes` and `deliveries_landed` take an optional `when` CEL guard over workspace state; `cron` and `every_minutes` also take `guard_miss` (`wait`, the default, or `skip`).",
+        "description": "add, update: {cron}|{every_minutes}|{deliveries_landed:{branch,threshold,max_wait_minutes,coverage,owner_machine?,max_items?,retries?}}|{condition:{...}} + when?/guard_miss?.",
         "param_type": "object",
         "required": false
       },
       {
         "name": "template",
-        "description": "For add: Task template: `{ title, description?, acceptance_criteria?, task_type?, tags?, required_tools?, priority?, complexity?, crew?, status? }`. `complexity` is an assessed low/medium/hard/xhard value copied to every minted task; omission retains legacy unassessed minting. `required_tools` is an exact canonical-name list copied to every minted task; For update: Replacement task template object, including optional assessed `complexity` (low/medium/hard/xhard) and exact canonical `required_tools` copied to minted tasks.",
+        "description": "add, update: {title,description?,acceptance_criteria?,task_type?,tags?,required_tools?,priority?,complexity?,crew?,status?}.",
         "param_type": "object",
         "required": false
       },
       {
         "name": "dedupe",
-        "description": "For add: Dedupe policy: `skip_if_open` (default) or `always`; For update: New dedupe policy: `skip_if_open` or `always`.",
+        "description": "add, update: `skip_if_open` (default) or `always`.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "granted_tools",
-        "description": "For add: Operator only: tool names granted to every minted task; For update: Operator only: replacement granted tool names; an empty list clears them.",
+        "description": "add, update: Operator only; minted granted tools (empty clears on update, disallowed in `template`).",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "waive_batch",
-        "description": "For update: Explicit settled-batch waiver: { batch_id, reason }.",
+        "description": "update: `{batch_id,reason}` waiver; standalone.",
         "param_type": "object",
         "required": false
       },
       {
         "name": "enabled",
-        "description": "For update: Enable (`true`) or disable (`false`) the definition.",
+        "description": "update: Toggle active (not delete).",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "expected_enabled",
-        "description": "For update: Observed enabled state, checked atomically with the `enabled` change; the change is refused when the definition no longer matches.",
+        "description": "update: CAS on `enabled`; operator, `workspace`, standalone.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "workspace",
-        "description": "Explicit workspace, required with `expected_enabled`",
+        "description": "From orbit_workspace_list.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "adopt_bundled_contract",
-        "description": "For update: Append the bundled contract the effective body omits, keeping every other field.",
+        "description": "update: Append bundled contract; standalone.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "acknowledge_unconditional",
-        "description": "For mint: True acknowledges unconditional creation; requires operator authority.",
+        "description": "mint: Unconditional mint ack; operator only.",
         "param_type": "boolean",
         "required": false
       }
@@ -568,7 +568,7 @@
       },
       {
         "name": "subject",
-        "description": "The subject whose clause tree to show: a task ID for a task-scope condition, `workspace` for a workspace-scope one. Default: the first match, else the first closest miss, else the first subject evaluated.",
+        "description": "Task ID (task-scope) or `workspace`.",
         "param_type": "string",
         "required": false
       }
@@ -585,61 +585,61 @@
     "parameters": [
       {
         "name": "action",
-        "description": "Operation to run, with its required fields: show (path); related (path); analytics.",
+        "description": "Action (required): show (path); related (path); analytics.",
         "param_type": "string",
         "required": true
       },
       {
         "name": "path",
-        "description": "For show: A ranked key at the chosen rollup: a file path, a directory, or a crate such as crates/orbit-core/; For related: A repository-relative file path, including a deleted file with landed history.",
+        "description": "show: Rollup key (file/dir/crate); related: Repo-relative file.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "window",
-        "description": "For show, analytics: Counted period ending now: 7d, 30d, 90d or all; For related: Landed period ending now.",
+        "description": "show, analytics: 7d|30d|90d|all (default 90d); related: Period (default 30d).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "min_support",
-        "description": "For show, analytics: Smallest denominator a ranked row needs, at least 1; For related: Minimum shared landed tasks, at least 1.",
+        "description": ">=1 (default 15).",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "rollup",
-        "description": "For show, analytics: How paths are grouped: file, dir (parent directory) or crate.",
+        "description": "show, analytics: file (default), dir, or crate.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "nature",
-        "description": "For show, analytics: Count only regressions whose regression_from link records this nature; `absent` keeps links stored without a classification, distinct from `unclassified`.",
+        "description": "show, analytics: Nature (`absent` = unclassified).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "escape",
-        "description": "For show, analytics: Count only regressions whose regression_from link records this escape; `absent` keeps links stored without a classification, distinct from `unclassified`.",
+        "description": "show, analytics: Escape (`absent` = unclassified).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "layer",
-        "description": "For show, analytics: Count only regressions whose fix sits in this layer: a name from the workspace's `workflow.regression_layers`, `other` or `unknown`.",
+        "description": "show, analytics: Fix layer (`workflow.regression_layers`|other|unknown).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "detected_by",
-        "description": "For show, analytics: Count only regressions found this way, read from the regression task's tags, else its filer.",
+        "description": "show, analytics: Detector.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "top",
-        "description": "For related: Maximum partners, from 1 to 100.",
+        "description": "related: 1-100 (default 10).",
         "param_type": "integer",
         "required": false
       }
@@ -656,25 +656,25 @@
     "parameters": [
       {
         "name": "argv",
-        "description": "The command as a JSON array of argv strings, program first (e.g. [\"git\", \"status\"]). Never a shell string: no shell interprets this input, so quoting and operator-precedence bugs cannot occur.",
+        "description": "Argv JSON array (never a shell string).",
         "param_type": "string_list",
         "required": true
       },
       {
         "name": "working_directory",
-        "description": "The command's absolute working directory. Must exist and be inside this workspace's checkout or a linked worktree under `.orbit/state/worktrees/`; it is never inferred from the caller.",
+        "description": "Absolute path inside workspace/worktree.",
         "param_type": "string",
         "required": true
       },
       {
         "name": "timeout_ms",
-        "description": "Deadline in milliseconds (default 120000, at most 600000; larger values are clamped). When it passes, the command and its whole process group are killed and the result reports `timed_out: true`.",
+        "description": "Deadline ms (default 120000, max 600000).",
         "param_type": "u64",
         "required": false
       },
       {
         "name": "claim_token",
-        "description": "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
+        "description": "Exclusive workspace claim token.",
         "param_type": "string",
         "required": false
       }
@@ -691,49 +691,49 @@
     "parameters": [
       {
         "name": "action",
-        "description": "Operation to run, with its required fields: list; show (id); raise (task_id, question, options).",
+        "description": "Action (required): list; show (id); raise (task_id, question, options).",
         "param_type": "string",
         "required": true
       },
       {
         "name": "gate",
-        "description": "For list: Only requests waiting on this gate: agent_request, block_triage, model_answer_review, pilot_admission, proposed_approval, resident_authority, review_approval or script_grant.",
+        "description": "list: agent_request|block_triage|model_answer_review|pilot_admission|proposed_approval|resident_authority|review_approval|script_grant.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "task_id",
-        "description": "For list: Only requests on this task; For raise: The human-crew task this decision concerns.",
+        "description": "list: Task ID; raise: Open human-crew task ID.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "topic",
-        "description": "For list: Only requests carrying exactly this structured topic; For raise: Optional structured topic or corpus rule id (1-64 characters of letters, digits and . _ : / -), so a later reader matches the request by exact value.",
+        "description": "list: Exact topic; raise: Topic ID (1-64 `[A-Za-z0-9._:/-]`).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "include_closed",
-        "description": "For list: Include answered, superseded and expired requests beside the open ones.",
+        "description": "list: Include closed.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "id",
-        "description": "For show: The decision request id, as action `list` prints it.",
+        "description": "show: Request ID.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "question",
-        "description": "For raise: One or two plain-language sentences naming the decision needed, readable without opening the code.",
+        "description": "raise: Question (1-2 sentences).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "options",
-        "description": "For raise: Two to four options as an array of {label, consequence, recommended, risk_tier?} objects. risk_tier may be routine, reversible, irreversible, authority or spend; omitted means unknown. label and consequence are one line each; exactly one option has recommended: true, and it is listed first.",
+        "description": "raise: 2-4 `{label,consequence,recommended,risk_tier?}` (1 recommended; risk_tier: routine|reversible|irreversible|authority|spend).",
         "param_type": "object_array",
         "required": false
       }
@@ -767,7 +767,7 @@
     "parameters": [
       {
         "name": "id",
-        "description": "The decision request id, as action `list` prints it.",
+        "description": "Request ID.",
         "param_type": "string",
         "required": true
       },
@@ -1517,55 +1517,55 @@
     "parameters": [
       {
         "name": "action",
-        "description": "Operation to run, with its required fields: add (body); update (id).",
+        "description": "Action (required): add (body); update (id).",
         "param_type": "string",
         "required": true
       },
       {
         "name": "body",
-        "description": "For add: Markdown body describing what happened and why it caused friction; For update: Optional replacement markdown body.",
+        "description": "add: Markdown body; update: Replacement body.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "title",
-        "description": "For add: One-line handle identifying the problem, at most 120 characters; For update: Optional replacement one-line title, at most 120 characters; an empty string restores derivation from the body.",
+        "description": "add: Handle (<= 120 chars, default from body); update: Replacement (<= 120 chars, empty resets).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "tags",
-        "description": "For add: Friction taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; defaults to other; For update: Optional replacement taxonomy tags as a string or array; valid tags: automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling.",
+        "description": "add: Friction tags (string or array): automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling; defaults to other; update: Replacement tags (string or array): automation | build | docs | history-diverged | lifecycle | naming | other | policy | skill-guidance | tooling.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "during_task",
-        "description": "For add: Optional task ID being worked on when friction occurred; an ID that names no task is refused.",
+        "description": "add: Task ID (must exist).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "id",
-        "description": "For update: Friction record ID, e.g. FYYYY-MM-NNN.",
+        "description": "update: Friction ID (`FYYYY-MM-NNN`).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "status",
-        "description": "For update: Optional status: open, triaged, or resolved.",
+        "description": "update: open|triaged|resolved.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "rehome_to",
-        "description": "For update: Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless `move` is false.",
+        "description": "update: Target workspace unless `move: false`; empty clears.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "move",
-        "description": "For update: With `rehome_to`: false records the `rehome_required` disposition without moving, for a workspace that is not registered here; defaults to true.",
+        "description": "update: With `rehome_to`: false avoids moving (default true).",
         "param_type": "boolean",
         "required": false
       }
@@ -1582,19 +1582,19 @@
     "parameters": [
       {
         "name": "id",
-        "description": "The notice id, as orbit.notice.list prints it. Give id or dedupe_key, not both.",
+        "description": "Notice ID (mutually exclusive with `dedupe_key`).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "dedupe_key",
-        "description": "Close the open notice holding this key in the home workspace.",
+        "description": "Close open notice holding this key in home workspace.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "reason",
-        "description": "Why the notice no longer applies, 1-240 characters.",
+        "description": "Close reason (1-240 chars).",
         "param_type": "string",
         "required": true
       },
@@ -1617,55 +1617,55 @@
     "parameters": [
       {
         "name": "all",
-        "description": "List notices from every workspace homed on this owner, not only the selected one. Without a limit, every match is returned.",
+        "description": "List notices across all workspaces on this owner (default selected only).",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "status",
-        "description": "Effective state: open (the default), closed, expired or all. Closed and expired notices stay listable for the retention window.",
+        "description": "State: open (default), closed, expired, or all.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "include_global",
-        "description": "Also return global notices homed in other workspaces on this owner (default true).",
+        "description": "Include global notices from other workspaces (default true).",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "scope",
-        "description": "Only workspace or only global notices.",
+        "description": "Filter by scope (`workspace` or `global`).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "kind",
-        "description": "Only these kinds.",
+        "description": "Filter by notice kind.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "linked_task",
-        "description": "Only notices linked to this task.",
+        "description": "Filter by linked task ID.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "author_class",
-        "description": "Only notices posted by operator, orchestrator or agent.",
+        "description": "Filter by author class.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "host",
-        "description": "Only maintenance notices whose hosts include this machine id.",
+        "description": "Maintenance notices matching machine ID.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "limit",
-        "description": "At most this many notices, 1-200 (default 50).",
+        "description": "Max notices, 1-200 (default 50).",
         "param_type": "integer",
         "required": false
       },
@@ -1706,49 +1706,49 @@
       },
       {
         "name": "scope",
-        "description": "workspace (the home workspace only, the default) or global (every workspace whose readers reach this owner).",
+        "description": "`workspace` (default) or `global` (owner-wide).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "dedupe_key",
-        "description": "Subject key, 1-128 characters of a-z 0-9 . _ : / -. Defaults to task:<linked_task> or <kind>:<title slug>. Posting a key an open notice holds updates or corroborates that notice instead of opening a second one.",
+        "description": "Subject key (1-128 chars `[a-z0-9._:/-]`); repeats update open notice.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "linked_task",
-        "description": "Id of the task the notice is about, usually its fix. It must be a task this workspace's owner holds, in this or another of its workspaces. When that task is done the notice closes, unless close_on_linked_done is false.",
+        "description": "Linked task ID on this owner.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "close_on_linked_done",
-        "description": "Close the notice when its linked task is done. Defaults to true with linked_task.",
+        "description": "Close when `linked_task` reaches done (default true).",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "evidence",
-        "description": "Up to 8 references as {type, value} objects; type is task, run, friction, pull_request, decision, url or commit, and value is at most 256 characters. Stored and shown, never dereferenced.",
+        "description": "Up to 8 `{type, value}` refs (`task|run|friction|pull_request|decision|url|commit`).",
         "param_type": "object_array",
         "required": false
       },
       {
         "name": "hosts",
-        "description": "Up to 32 machine ids a maintenance notice concerns. Refused on other kinds.",
+        "description": "Up to 32 machine IDs (maintenance kind only).",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "expires_in_hours",
-        "description": "Hours until the notice expires. Defaults by kind (warn 72, incident 72, maintenance 12, info 168); capped by poster class, and a longer request is refused rather than clamped. Mutually exclusive with expires_at.",
+        "description": "Hours until expiry (mutually exclusive with `expires_at`).",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "expires_at",
-        "description": "RFC 3339 instant the notice expires, at least 5 minutes ahead. Mutually exclusive with expires_in_hours.",
+        "description": "RFC 3339 expiry >=5m ahead (mutually exclusive with `expires_in_hours`).",
         "param_type": "string",
         "required": false
       },
@@ -1771,7 +1771,7 @@
     "parameters": [
       {
         "name": "id",
-        "description": "The notice id, as orbit.notice.list prints it.",
+        "description": "Notice ID.",
         "param_type": "string",
         "required": true
       },
@@ -1794,31 +1794,31 @@
     "parameters": [
       {
         "name": "job_name",
-        "description": "Registered v2 job name to invoke.",
+        "description": "Registered v2 job name.",
         "param_type": "string",
         "required": true
       },
       {
         "name": "input",
-        "description": "Required unless default_input:true: JSON object forwarded as the run input payload.",
+        "description": "JSON payload (unless `default_input: true`).",
         "param_type": "object",
         "required": false
       },
       {
         "name": "priority",
-        "description": "Optional queue priority (`low`, `medium`, `high`, or `critical`).",
+        "description": "low|medium|high|critical.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "workspace",
-        "description": "Explicit workspace required for default-input catalog submission",
+        "description": "From orbit_workspace_list.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "default_input",
-        "description": "True submits an enabled, no-input catalog job with its defaults. Requires trusted operator authority and forbids managed-run invocation, input and priority. After a lost reply inspect runs; never automatically replay.",
+        "description": "Run no-input catalog job (operator only).",
         "param_type": "boolean",
         "required": false
       }
@@ -2156,61 +2156,61 @@
     "parameters": [
       {
         "name": "workspace",
-        "description": "Exact workspace selector from discovery",
+        "description": "From orbit_workspace_list.",
         "param_type": "string",
         "required": true
       },
       {
         "name": "action",
-        "description": "list, toggle or set_trigger",
+        "description": "list|toggle|set_trigger",
         "param_type": "string",
         "required": true
       },
       {
         "name": "name",
-        "description": "Required for toggle and set_trigger: exact routine name",
+        "description": "Routine (toggle/set_trigger).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "expected_enabled",
-        "description": "Required for toggle: observed enabled state",
+        "description": "CAS enabled (toggle).",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "enabled",
-        "description": "Required for toggle: desired enabled state",
+        "description": "Target state (toggle).",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "target",
-        "description": "Required for toggle and set_trigger: observed routine target",
+        "description": "Target (toggle/set_trigger).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "expected_trigger",
-        "description": "Required for set_trigger: observed trigger object, as listed",
+        "description": "CAS trigger (set_trigger).",
         "param_type": "object",
         "required": false
       },
       {
         "name": "trigger",
-        "description": "Required for set_trigger: replacement trigger, exactly one of `cron` (with optional `missed_run`), `state`, `deliveries_landed` or `condition` (checked and explained but never fired in this release; routine must stay disabled)",
+        "description": "cron|state|deliveries_landed",
         "param_type": "object",
         "required": false
       },
       {
         "name": "offset",
-        "description": "List offset; default 0",
+        "description": "Offset (default 0).",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "limit",
-        "description": "List size 1 through 50; default 25",
+        "description": "1-50 (default 25).",
         "param_type": "integer",
         "required": false
       }
@@ -2227,79 +2227,79 @@
     "parameters": [
       {
         "name": "action",
-        "description": "Operation to run, with its required fields: list; show (id); observe (id); resume (id).",
+        "description": "Action (required): list; show (id); observe (id); resume (id).",
         "param_type": "string",
         "required": true
       },
       {
         "name": "limit",
-        "description": "For list: Maximum runs to return (default 25; values above 200 are rejected); For show: Bounded detail page size.",
+        "description": "list: Max runs (<=200, default 25); show: Page size.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "job_id",
-        "description": "For list: Optional job ID filter.",
+        "description": "list: Job ID.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "state",
-        "description": "For list: Optional concrete run-state filter, or `terminal`.",
+        "description": "list: State or `terminal`.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "since",
-        "description": "For list: Optional RFC 3339 lower bound for run creation time.",
+        "description": "list: RFC 3339 min time.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "view",
-        "description": "For list, show: bounded: bounded metadata, explicit workspace, pagination and display truncation.",
+        "description": "list, show: `bounded` with explicit `workspace`.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "offset",
-        "description": "For list: Bounded list offset.",
+        "description": "list: Page offset.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "status",
-        "description": "For list: Bounded run state filter.",
+        "description": "list: Bounded state filter.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "include_catalog",
-        "description": "For list: Bounded view only: include a paginated no-input job catalog with last-run metadata alongside runs.",
+        "description": "list: Include catalog (`view: bounded`).",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "id",
-        "description": "For show, observe, resume: Job run ID.",
+        "description": "show, observe, resume: Job run ID.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "log_offset",
-        "description": "For show: Bounded log record offset.",
+        "description": "show: Log offset.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "claim_token",
-        "description": "For resume: Token for this workspace's exclusive claim, required when another operator holds one.",
+        "description": "resume: Claim token (`ORBIT_WORKSPACE_CLAIM_TOKEN` fallback).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "source_repair",
-        "description": "For resume: Explicit operator recovery of an eligible stopped owner-local publication.",
+        "description": "resume: {action:inspect|submit|reconcile,task_id,request_key?,binding?,diagnosis?,reservation_digest?,unmet_acceptance?,policy_digest?}; prior inspect + plan for submit/reconcile.",
         "param_type": "object",
         "required": false
       }
@@ -2316,49 +2316,49 @@
     "parameters": [
       {
         "name": "query",
-        "description": "Tasks match non-adjacent terms: full matches first, then partial matches by term count and BM25. Frictions match a case-insensitive substring. Optional with `kind: friction`, where omitting it lists frictions.",
+        "description": "Lexical query (optional if `kind: friction`).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "kind",
-        "description": "Corpus kind: task, friction, or all. Default: all.",
+        "description": "task|friction|all (default all).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "limit",
-        "description": "Maximum number of results, at most 1000. 0 or omitted uses the default: 10, or 1000 for a friction listing.",
+        "description": "Max <=1000 (default 10; 1000 friction list).",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "tag",
-        "description": "AND-filter by tag. Repeat or pass an array. Applies to task and friction.",
+        "description": "AND-filter tags.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "all",
-        "description": "Include every status for the queried kind. Task defaults to proposed/backlog/in-progress/review/blocked; all adds done/rejected/archived/someday. Friction query defaults to open; all adds triaged/resolved.",
+        "description": "Include closed statuses.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "status",
-        "description": "Explicit per-kind status override using kind:value tokens, such as task:open or friction:open. task:open covers proposed/backlog/in-progress/review/blocked. Overrides `all` for the named kind.",
+        "description": "Per-kind (`kind:value`, overrides `all`).",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "workspaces",
-        "description": "Federated scope: registered workspace names, `ws_*` IDs, or absolute checkout paths to search together. Hits carry workspace attribution. Omit to search only the bound workspace.",
+        "description": "Federate name/`ws_*`/path (default bound).",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "all_workspaces",
-        "description": "Search every active workspace registered on the answering machine. Overrides `workspaces`. Not available inside an Orbit-managed run.",
+        "description": "All active workspaces (not in managed runs).",
         "param_type": "boolean",
         "required": false
       }
@@ -2375,67 +2375,67 @@
     "parameters": [
       {
         "name": "title",
-        "description": "Task title.",
+        "description": "Title.",
         "param_type": "string",
         "required": true
       },
       {
         "name": "description",
-        "description": "Task description markdown.",
+        "description": "Markdown.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "workspace",
-        "description": "Workspace selector from orbit_workspace_list.",
+        "description": "From orbit_workspace_list.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "acceptance_criteria",
-        "description": "Acceptance criteria.",
+        "description": "Criteria.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "tags",
-        "description": "Task tags.",
+        "description": "Tags.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "required_tools",
-        "description": "Canonical tool names added to the activity baseline.",
+        "description": "Baseline activity tools.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "granted_tools",
-        "description": "Operator-granted tool names.",
+        "description": "Operator tools.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "requires_labels",
-        "description": "Host capability labels the task requires.",
+        "description": "Host capability labels.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "not_before",
-        "description": "Earliest dispatch time as an RFC 3339 instant.",
+        "description": "RFC 3339 earliest start.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "context_files",
-        "description": "Context selectors this task will change.",
+        "description": "Context selectors.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "allow_missing_context",
-        "description": "Accept selectors for created files.",
+        "description": "Allow missing context.",
         "param_type": "boolean",
         "required": false
       },
@@ -2453,61 +2453,61 @@
       },
       {
         "name": "type",
-        "description": "Task type.",
+        "description": "Kind.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "relations",
-        "description": "Typed task relations.",
+        "description": "Typed relations.",
         "param_type": "object_array",
         "required": false
       },
       {
         "name": "source_task_id",
-        "description": "Task whose change introduced this bug.",
+        "description": "Origin bug ID.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "crew",
-        "description": "Crew that runs this task.",
+        "description": "Crew.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "orchestrator",
-        "description": "Crew credited for orchestration.",
+        "description": "Orchestrator.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "orchestrator_model",
-        "description": "Orchestrator model when it differs from the crew.",
+        "description": "Orchestrator model.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "origin",
-        "description": "Category, not free text: operator_request, orchestrator_initiative, automation.",
+        "description": "operator_request|orchestrator_initiative|automation",
         "param_type": "string",
         "required": false
       },
       {
         "name": "fields",
-        "description": "Response fields, keyed (even one).",
+        "description": "Keyed fields.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "field",
-        "description": "One response field.",
+        "description": "Single field.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "request_id",
-        "description": "Retry-safe creation identity; selects guarded creation, which accepts only 'title', 'description', 'acceptance_criteria', 'priority', 'crew'.",
+        "description": "Selects guarded creation ('title', 'description', 'acceptance_criteria', 'priority', 'crew' only).",
         "param_type": "string",
         "required": false
       }
@@ -2524,31 +2524,31 @@
     "parameters": [
       {
         "name": "action",
-        "description": "Operation to run, with its required fields: get (id, path); put (id, source_path).",
+        "description": "Action (required): get (id, path); put (id, source_path).",
         "param_type": "string",
         "required": true
       },
       {
         "name": "id",
-        "description": "For get: Globally unique task ID that owns the artifact; For put: task ID.",
+        "description": "Task ID.",
         "param_type": "string",
         "required": true
       },
       {
         "name": "path",
-        "description": "For get: Artifact path relative to the task artifacts directory, exactly as it appears in `orbit.task.show` with `field: \"artifacts\"`; For put: Artifact path relative to the task artifacts directory.",
+        "description": "get: Path from `orbit.task.show` (`field: \"artifacts\"`); put: Target path (default filename); `review-*` reserved except `review-report.json`.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "workspace",
-        "description": "Optional workspace filter by registered name, ID or path; task `id` is resolved globally by default.",
+        "description": "From orbit_workspace_list.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "source_path",
-        "description": "For put: Source file to store as a task artifact.",
+        "description": "put: Workspace file path (e.g. `.orbit/tmp/...`); escapes/`/tmp` rejected.",
         "param_type": "string",
         "required": false
       }
@@ -2565,67 +2565,67 @@
     "parameters": [
       {
         "name": "workspace",
-        "description": "Optional workspace selector; defaults to the binding or task ID lookup if unbound.",
+        "description": "From orbit_workspace_list.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "action",
-        "description": "candidates, propose, or report",
+        "description": "candidates|propose|report",
         "param_type": "string",
         "required": true
       },
       {
         "name": "subject",
-        "description": "Triage subject, only pilot_warning (default); a proposed task's pilot warning hold",
+        "description": "pilot_warning",
         "param_type": "string",
         "required": false
       },
       {
         "name": "id",
-        "description": "Pilot-held task ID, for propose and report",
+        "description": "Task ID (propose/report).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "summary",
-        "description": "Decision needed in one or two plain sentences, for propose and report; readable without opening the code",
+        "description": "Question (1-2 sentences).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "reason",
-        "description": "Exact action only a human outside Orbit can take, for report",
+        "description": "Human action (report).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "options",
-        "description": "Two or three decision options for propose; each is a {summary, consequence, rewrite, action} object; rewrite is {description?, acceptance_criteria?} with the field's complete new value; action is {kind: requeue | re_pilot | change_crew (crew) | split (title, description, acceptance_criteria) | reject | archive}; every option needs a rewrite, an action or both",
+        "description": "2-3 {summary, consequence, rewrite?, action?}.",
         "param_type": "object_array",
         "required": false
       },
       {
         "name": "recommended",
-        "description": "1-based index of the recommended option, for propose",
+        "description": "1-based index (propose).",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "source_revision",
-        "description": "Pinned commit id inspected (null if non-Git); supply with observed_revision and observed_tree",
+        "description": "Commit ID (or null).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "observed_revision",
-        "description": "Value of `git rev-parse HEAD` in the inspection checkout; inspection proof",
+        "description": "`git rev-parse HEAD`.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "observed_tree",
-        "description": "Value of `git rev-parse 'HEAD^{tree}'` in the inspection checkout; inspection proof",
+        "description": "`git rev-parse 'HEAD^{tree}'`.",
         "param_type": "string",
         "required": false
       }
@@ -2642,25 +2642,25 @@
     "parameters": [
       {
         "name": "status",
-        "description": "Candidate statuses: `backlog`, `proposed`, or both (the default). Pass a comma-separated string or an array.",
+        "description": "Candidate statuses (`backlog`, `proposed`, or both).",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "path",
-        "description": "Keep only candidates whose `context_files` selectors apply to this path, matched as `orbit.task.list` matches `path`.",
+        "description": "Filter by `context_files` path.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "limit",
-        "description": "Maximum eligible tasks to return (default 50). Must be at least 1.",
+        "description": "Max results (default 50, >= 1).",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "explain",
-        "description": "When true, also return `conflicting`: every held-back candidate with the overlapping selector and the in-progress or review task holding it.",
+        "description": "Include `conflicting` held-back tasks.",
         "param_type": "boolean",
         "required": false
       }
@@ -2677,85 +2677,85 @@
     "parameters": [
       {
         "name": "status",
-        "description": "Filter by status name.",
+        "description": "Status filter.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "parent_id",
-        "description": "Parent task ID.",
+        "description": "Parent ID.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "type",
-        "description": "Filter by task type.",
+        "description": "Type filter.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "scheduled",
-        "description": "Keep only future schedules, soonest first.",
+        "description": "Future schedules, soonest first.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "not_before_from",
-        "description": "Inclusive lower schedule bound as RFC 3339.",
+        "description": "RFC 3339 lower bound.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "not_before_until",
-        "description": "Inclusive upper schedule bound as RFC 3339.",
+        "description": "RFC 3339 upper bound.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "origin",
-        "description": "Filter by task origin.",
+        "description": "Origin filter.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "job_run_id",
-        "description": "Filter by job run ID",
+        "description": "Job run ID.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "tag",
-        "description": "Filter by tag; an array matches every listed tag.",
+        "description": "Tag filter (array matches all).",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "runs_on",
-        "description": "Filter by effective host OS.",
+        "description": "Effective host OS.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "pilot_warnings",
-        "description": "Keep proposed tasks held by pilot warnings.",
+        "description": "Held by pilot warnings.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "ready",
-        "description": "Keep tasks whose dependencies are satisfied.",
+        "description": "Dependencies satisfied.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "path",
-        "description": "Filter by context selector path.",
+        "description": "Filter `context_files`.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "limit",
-        "description": "Maximum number of tasks to return.",
+        "description": "Max (default 50, >=1).",
         "param_type": "integer",
         "required": false
       },
@@ -2767,37 +2767,37 @@
       },
       {
         "name": "view",
-        "description": "Bounded metadata view; requires `workspace`. The only accepted value is `bounded`.",
+        "description": "View: only accepted value is `bounded`.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "offset",
-        "description": "Bounded view list offset.",
+        "description": "Bounded offset.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "search",
-        "description": "Bounded view key or title substring.",
+        "description": "Bounded key/title filter.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "priority",
-        "description": "Filter by priority.",
+        "description": "Priority filter.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "external_ref",
-        "description": "Exact external reference in system:id form.",
+        "description": "`system:id` ref.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "has_ref",
-        "description": "Keep tasks with a reference in this system.",
+        "description": "Ref system filter.",
         "param_type": "string",
         "required": false
       }
@@ -2903,127 +2903,127 @@
     "parameters": [
       {
         "name": "action",
-        "description": "Operation to run, with its required fields: recover_claim (claim_id, expected_phase, status, reason, request_key); requeue (id, reason); repilot (id); retry_handoff (handoff_id, expected_candidate_commit, expected_base_commit, expected_latest_attempt, expected_latest_state, reason, request_key); revoke_handoff (handoff_id, expected_candidate_commit, expected_base_commit, reason, request_key); review_reset (id, lineage_key, reason); reconcile_review (mode, id).",
+        "description": "Action (required): recover_claim (claim_id, expected_phase, status, reason, request_key); requeue (id, reason); repilot (id); retry_handoff (handoff_id, expected_candidate_commit, expected_base_commit, expected_latest_attempt, expected_latest_state, reason, request_key); revoke_handoff (handoff_id, expected_candidate_commit, expected_base_commit, reason, request_key); review_reset (id, lineage_key, reason); reconcile_review (mode, id).",
         "param_type": "string",
         "required": true
       },
       {
         "name": "mode",
-        "description": "For reconcile_review: inspect, submit, status, or accept_baseline.",
+        "description": "reconcile_review: inspect|submit|status|accept_baseline.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "workspace",
-        "description": "Optional workspace selector; defaults to the binding or task ID lookup if unbound.",
+        "description": "From orbit_workspace_list.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "claim_id",
-        "description": "For recover_claim: Live claim to recover.",
+        "description": "recover_claim: Live claim ID.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "expected_phase",
-        "description": "For recover_claim: Claim phase you observed; a claim that moved on is refused.",
+        "description": "recover_claim: Observed phase.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "status",
-        "description": "For recover_claim: Lifecycle-allowed target; done needs completion evidence.",
+        "description": "recover_claim: Target; done needs evidence.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "reason",
-        "description": "For recover_claim, retry_handoff, revoke_handoff: Required operator reason retained durably; For requeue: Required explanation retained in the task history; For review_reset: Required explanation retained in the decision history; For reconcile_review: accept_baseline: why the baseline failure is accepted.",
+        "description": "recover_claim, requeue, retry_handoff, revoke_handoff, review_reset, reconcile_review: Audit reason.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "request_key",
-        "description": "For recover_claim, retry_handoff, revoke_handoff: Durable request key; reuse exactly after a lost reply; For reconcile_review: submit: operator-chosen key; resubmitting it replays the same reconciliation.",
+        "description": "recover_claim, retry_handoff, revoke_handoff, reconcile_review: Idempotent replay key.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "id",
-        "description": "For requeue: Blocked task to requeue; For repilot: Task to assess again; For review_reset: Task in the selected lineage; For reconcile_review: Task in review whose foreign delivery merged.",
+        "description": "requeue, repilot, review_reset, reconcile_review: Task ID.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "discard_candidate",
-        "description": "For requeue: Discard the published or kept candidate, close the task's undelivered Orbit pull requests and let the next run implement fresh.",
+        "description": "requeue: Drop kept candidate/PRs.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "full",
-        "description": "For repilot: Run a full assessment instead of re-checking a held one.",
+        "description": "repilot: Full assessment.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "handoff_id",
-        "description": "For retry_handoff: Immutable accepted handoff identity; For revoke_handoff: Accepted handoff whose authority to revoke.",
+        "description": "retry_handoff, revoke_handoff: Handoff ID.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "expected_candidate_commit",
-        "description": "For retry_handoff, revoke_handoff: Accepted candidate commit the operator observed.",
+        "description": "retry_handoff, revoke_handoff: Observed candidate.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "expected_base_commit",
-        "description": "For retry_handoff, revoke_handoff: Accepted base commit the operator observed.",
+        "description": "retry_handoff, revoke_handoff: Observed base.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "expected_latest_attempt",
-        "description": "For retry_handoff: Latest landing attempt number the operator observed.",
+        "description": "retry_handoff: Observed attempt.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "expected_latest_state",
-        "description": "For retry_handoff: Latest state; dispatched is eligible only with unresolved intent and no live owner job.",
+        "description": "retry_handoff: stopped or dispatched (unresolved intent).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "lineage_key",
-        "description": "For review_reset: Exact lineage key from the admission refusal or review manifest.",
+        "description": "review_reset: Lineage key from refusal or review manifest.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "adopt_configured_budget",
-        "description": "For review_reset: Explicitly adopt current configured review limits; default retains the captured limits.",
+        "description": "review_reset: Adopt current limits (default keeps captured).",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "reconciliation_id",
-        "description": "For reconcile_review: status, accept_baseline: the target reconciliation.",
+        "description": "reconcile_review: ID (status/accept_baseline).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "command",
-        "description": "For reconcile_review: accept_baseline: the required command whose failure reproduced at the base.",
+        "description": "reconcile_review: Failed command (accept_baseline).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "remediation_commit",
-        "description": "For reconcile_review: accept_baseline: commit on the landing branch, landed on top of the delivery's merge or squash commit, that remediates that failure.",
+        "description": "reconcile_review: Fix commit (accept_baseline).",
         "param_type": "string",
         "required": false
       }
@@ -3040,67 +3040,67 @@
     "parameters": [
       {
         "name": "id",
-        "description": "Globally unique task ID. Resolved through the host task registry by default; a workspace argument is not required.",
+        "description": "Task ID.",
         "param_type": "string",
         "required": true
       },
       {
         "name": "snapshot",
-        "description": "True returns a bounded versioned snapshot with opaque revision and available actions. Requires explicit workspace; snapshot grants no authority and cannot combine with field projections.",
+        "description": "Versioned snapshot (needs `workspace`, no projections).",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "fields",
-        "description": "Fields to return, keyed (even one); `delivery` alone selects delivery evidence. Not with pagination on a claimed read. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop the projection to page the full task, or drop pagination for a projection.",
+        "description": "Fields (`delivery` = landing); not with claimed pagination.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "field",
-        "description": "Alias for `fields` taking one field, for example `field: \"artifacts\"`. Not with pagination on a claimed read. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop the projection to page the full task, or drop pagination for a projection.",
+        "description": "Alias for `fields`; not with claimed pagination.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "run_id",
-        "description": "Delivery run to report, with `field: \"delivery\"` only; not with pagination on a claimed read. Omitted, the newest task-delivery run submitted with this task is used. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop `run_id` (and any projection) to page the full task, or drop pagination for a projection.",
+        "description": "`field: \"delivery\"` run (default newest); not with claimed pagination.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "workspace",
-        "description": "Optional workspace filter by registered name, ID or path; task `id` is resolved globally by default.",
+        "description": "From orbit_workspace_list.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "view",
-        "description": "Bounded metadata view; requires `workspace`. The only accepted value is `bounded`.",
+        "description": "View: only accepted value is `bounded`.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "limit",
-        "description": "Detail page size for a paginated claimed read; not with a projection. That read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+        "description": "Claimed page size; not with projections.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "comments_offset",
-        "description": "Comment offset for a paginated claimed read; not with a projection. That read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+        "description": "Comment offset (claimed).",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "history_offset",
-        "description": "History offset for a paginated claimed read; not with a projection. That read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+        "description": "History offset (claimed).",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "artifacts_offset",
-        "description": "Artifact metadata offset for a paginated claimed read; not with a projection. That read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+        "description": "Artifact offset (claimed).",
         "param_type": "integer",
         "required": false
       }
@@ -3117,7 +3117,7 @@
     "parameters": [
       {
         "name": "repilot",
-        "description": "Request one new pilot.",
+        "description": "Request new pilot.",
         "param_type": "boolean",
         "required": false
       },
@@ -3129,79 +3129,79 @@
       },
       {
         "name": "title",
-        "description": "New task title.",
+        "description": "Title.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "description",
-        "description": "New description; empty clears it.",
+        "description": "Empty clears.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "acceptance_criteria",
-        "description": "Replacement criteria.",
+        "description": "Replaces list.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "dependencies",
-        "description": "Replacement dependency IDs.",
+        "description": "Replaces list.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "relations",
-        "description": "Replacement task relations.",
+        "description": "Replaces list.",
         "param_type": "object_array",
         "required": false
       },
       {
         "name": "tags",
-        "description": "Replacement task tags.",
+        "description": "Replaces list.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "granted_tools",
-        "description": "Replacement granted tool names.",
+        "description": "Operator; replaces list.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "requires_labels",
-        "description": "Replacement capability labels.",
+        "description": "Replaces list.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "not_before",
-        "description": "Earliest start, or empty to clear.",
+        "description": "RFC 3339 start; empty clears.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "allow_drop_system_tags",
-        "description": "Allow dropping a system tag.",
+        "description": "Drop system tags.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "plan",
-        "description": "Replacement plan text.",
+        "description": "Empty clears.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "status",
-        "description": "New task status.",
+        "description": "Target status.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "note",
-        "description": "Note on this status transition.",
+        "description": "Status change note.",
         "param_type": "string",
         "required": false
       },
@@ -3219,115 +3219,115 @@
       },
       {
         "name": "type",
-        "description": "New task type.",
+        "description": "Kind.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "source_task_id",
-        "description": "Source bug ID; empty clears it.",
+        "description": "Origin bug; empty clears.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "planned_by",
-        "description": "Planner; empty clears it.",
+        "description": "Empty clears.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "implemented_by",
-        "description": "Implementer; empty clears it.",
+        "description": "Empty clears.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "execution_summary",
-        "description": "New execution summary.",
+        "description": "Empty clears.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "comment",
-        "description": "Comment to append.",
+        "description": "Appends comment.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "pr_status",
-        "description": "PR status; empty clears it.",
+        "description": "approve|request-changes; empty clears.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "job_run_id",
-        "description": "Job run ID; empty clears it.",
+        "description": "Empty clears.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "crew",
-        "description": "Named crew; empty redraws.",
+        "description": "Empty redraws.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "orchestrator",
-        "description": "Orchestrator crew; empty clears it.",
+        "description": "Empty clears.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "origin",
-        "description": "Category, not free text: operator_request, orchestrator_initiative, automation.",
+        "description": "operator_request|orchestrator_initiative|automation",
         "param_type": "string",
         "required": false
       },
       {
         "name": "context_files",
-        "description": "New context selectors.",
+        "description": "Replaces list.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "allow_missing_context",
-        "description": "Accept selectors for created files.",
+        "description": "Allow missing context.",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "fields",
-        "description": "Response fields, keyed (even one).",
+        "description": "Keyed fields.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "field",
-        "description": "One response field.",
+        "description": "Single field.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "request_id",
-        "description": "Retry-safe; selects guarded update ('verdict', 'complete'; 'comment'; or 'status' edits). Omit for an ordinary update.",
+        "description": "Selects guarded update ('verdict', 'complete'; 'comment'; 'status'); omit for ordinary update.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "expected_revision",
-        "description": "Revision from task show.",
+        "description": "Snapshot rev.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "verdict",
-        "description": "Review verdict object.",
+        "description": "Review verdict.",
         "param_type": "object",
         "required": false
       },
       {
         "name": "complete",
-        "description": "Complete an accepted review.",
+        "description": "Complete review.",
         "param_type": "boolean",
         "required": false
       }
@@ -3344,127 +3344,127 @@
     "parameters": [
       {
         "name": "action",
-        "description": "Operation to run, with its required fields: auto (mode); ship (task_ids); land (task_id).",
+        "description": "Action (required): auto (mode); ship (task_ids); land (task_id).",
         "param_type": "string",
         "required": true
       },
       {
         "name": "mode",
-        "description": "For auto: status, start, stop or resize; For ship: Optional ship mode (`pr` or `local`); defaults to workspace configuration.",
+        "description": "auto: `status`, `start`, `stop`, or `resize`; ship: `pr` or `local` (default config).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "for_seconds",
-        "description": "For auto: Required for start: window length in seconds, 1 through 86400 (24 hours).",
+        "description": "auto: Start seconds (1-86400).",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "auto_concurrency",
-        "description": "For auto: Start only: off, shadow or enforce for this local drain.",
+        "description": "auto: Start local mode (off|shadow|enforce).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "concurrency",
-        "description": "For auto: Worker limit, positive u32.",
+        "description": "auto: Worker limit >=1 (required resize).",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "task",
-        "description": "For auto: Status only: one task ID or a list to explain instead of the bounded backlog.",
+        "description": "auto: Status task IDs.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "limit",
-        "description": "For auto: Status only: maximum tasks to explain, including an explicit selection (1-500; default 50).",
+        "description": "auto: Status max 1-500 (default 50).",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "allow_crew",
-        "description": "For auto: Status only: configured crews to evaluate; omitted uses the live drain's restriction, if any.",
+        "description": "auto: Status crews.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "id",
-        "description": "For auto: Resize only: auto- or pull-drain run ID.",
+        "description": "auto: Resize drain ID (omit if sole).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "if_revision",
-        "description": "For auto: Resize only: apply only if the run's worker limit is still at this revision, so a concurrent change is reported rather than overwritten.",
+        "description": "auto: Resize CAS rev.",
         "param_type": "integer",
         "required": false
       },
       {
         "name": "reason",
-        "description": "For auto: Resize only: note recorded with the change.",
+        "description": "auto: Resize note.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "complete",
-        "description": "For auto: Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review.",
+        "description": "auto: Start auto-complete (default false).",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "review",
-        "description": "For auto: Start only: add this review layer before landing (before-landing recommended; before-pr deprecated but honoured) to the window when workspace policy applies none; every task it admits inherits it; For ship: Optional review layer before landing (`before-landing` recommended; `before-pr` deprecated but honoured) this run adds when workspace policy applies none.",
+        "description": "auto, ship: Review layer (`before-landing` preferred; `before-pr` deprecated).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "approve_proposed",
-        "description": "For auto: Start only: each pass pilots qualifying proposed tasks (tagged no-diff-expected, or with context_files and an assessed complexity) and approves into backlog those with no duplicate, already-landed, conflict or warning finding, including tasks filed during the window.",
+        "description": "auto: Start pilot-approve proposed (default false).",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "force",
-        "description": "For auto: Stop only: also cancel each live drain and stop its in-flight work.",
+        "description": "auto: Stop cancel active work (default false).",
         "param_type": "boolean",
         "required": false
       },
       {
         "name": "claim_token",
-        "description": "For auto: Workspace claim token when held by another operator; For ship: Token for this workspace's exclusive claim, required when another operator holds one.",
+        "description": "auto, ship: Claim token (`ORBIT_WORKSPACE_CLAIM_TOKEN` fallback).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "workspace",
-        "description": "Exact selector returned by workspace discovery. No implicit destination.",
+        "description": "From orbit_workspace_list.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "task_ids",
-        "description": "For ship: Explicit task IDs to ship; at least one is required.",
+        "description": "ship: Task IDs (>=1).",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "base",
-        "description": "For ship: Optional base branch override.",
+        "description": "ship: Base branch.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "allowed_crews",
-        "description": "For ship: Optional configured crews this explicit shipment may dispatch; excluded crews are rejected before provider invocation.",
+        "description": "ship: Allowed crews.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "task_id",
-        "description": "For land: The task in review whose delivery pull request lands.",
+        "description": "land: Review task ID.",
         "param_type": "string",
         "required": false
       }

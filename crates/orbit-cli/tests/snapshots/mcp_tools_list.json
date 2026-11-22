@@ -10,7 +10,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Workspace selector from orbit_workspace_list."
+          "description": "From orbit_workspace_list."
         },
         "all": {
           "type": "boolean",
@@ -21,7 +21,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Host name or machine id (repeatable)."
+          "description": "Host name/ID (repeatable)."
         },
         "kind": {
           "type": "array",
@@ -46,7 +46,7 @@
               "drain_breaker_open"
             ]
           },
-          "description": "Include kinds (repeatable)."
+          "description": "Include kinds."
         },
         "exclude_kind": {
           "type": "array",
@@ -71,11 +71,11 @@
               "drain_breaker_open"
             ]
           },
-          "description": "Exclude kinds (repeatable)."
+          "description": "Exclude kinds."
         },
         "severity": {
           "type": "string",
-          "description": "Minimum severity: low, medium, high or critical.",
+          "description": "Min severity.",
           "enum": [
             "low",
             "medium",
@@ -88,57 +88,57 @@
           "items": {
             "type": "string"
           },
-          "description": "Task lifecycle states (repeatable)."
+          "description": "Statuses."
         },
         "tag": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Task tags (repeatable)."
+          "description": "Tags."
         },
         "task": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Task ids (repeatable)."
+          "description": "Task IDs."
         },
         "crew": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Assigned crews (repeatable)."
+          "description": "Crews."
         },
         "orchestrator": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Attributed orchestrators (repeatable)."
+          "description": "Orchestrators."
         },
         "older_than": {
           "type": "string",
-          "description": "Minimum age, such as 90m, 36h or 3d."
+          "description": "Min age (90m, 36h, 3d)."
         },
         "since": {
           "type": "string",
-          "description": "Opaque cursor from a prior response."
+          "description": "Pagination cursor."
         },
         "limit": {
           "type": "integer",
-          "description": "Public response limit, 1–500 (default 100).",
+          "description": "Max 1-500 (default 100).",
           "minimum": 1,
           "maximum": 500
         },
         "wait_grant": {
           "type": "boolean",
-          "description": "Also mint a shell token for `orbit attention wait`."
+          "description": "Mint `orbit attention wait` token."
         },
         "candidate_read": {
           "type": "boolean",
-          "description": "Reserved for Orbit's federated aggregator."
+          "description": "Internal; omit."
         }
       },
       "additionalProperties": true
@@ -156,7 +156,7 @@
       "properties": {
         "action": {
           "type": "string",
-          "description": "Operation to run, with its required fields: add (body); update (id).",
+          "description": "Action (required): add (body); update (id).",
           "enum": [
             "add",
             "update"
@@ -164,11 +164,11 @@
         },
         "body": {
           "type": "string",
-          "description": "For add: Markdown body describing what happened and why it caused friction; For update: Optional replacement markdown body."
+          "description": "add: Markdown body; update: Replacement body."
         },
         "title": {
           "type": "string",
-          "description": "For add: One-line handle identifying the problem, at most 120 characters; For update: Optional replacement one-line title, at most 120 characters; an empty string restores derivation from the body.",
+          "description": "add: Handle (<= 120 chars, default from body); update: Replacement (<= 120 chars, empty resets).",
           "maxLength": 120
         },
         "tags": {
@@ -192,27 +192,27 @@
         },
         "during_task": {
           "type": "string",
-          "description": "For add: Optional task ID being worked on when friction occurred; an ID that names no task is refused."
+          "description": "add: Task ID (must exist)."
         },
         "id": {
           "type": "string",
-          "description": "For update: Friction record ID, e.g. FYYYY-MM-NNN."
+          "description": "update: Friction ID (`FYYYY-MM-NNN`)."
         },
         "status": {
           "type": "string",
-          "description": "For update: Optional status: open, triaged, or resolved."
+          "description": "update: open|triaged|resolved."
         },
         "rehome_to": {
           "type": "string",
-          "description": "For update: Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless `move` is false."
+          "description": "update: Target workspace unless `move: false`; empty clears."
         },
         "move": {
           "type": "boolean",
-          "description": "For update: With `rehome_to`: false records the `rehome_required` disposition without moving, for a workspace that is not registered here; defaults to true."
+          "description": "update: With `rehome_to`: false avoids moving (default true)."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector from orbit_workspace_list."
+          "description": "From orbit_workspace_list."
         }
       },
       "required": [
@@ -235,50 +235,50 @@
       "properties": {
         "query": {
           "type": "string",
-          "description": "Tasks match non-adjacent terms.",
+          "description": "Lexical query (optional if `kind: friction`).",
           "minLength": 1
         },
         "kind": {
           "type": "string",
-          "description": "Corpus kind: task, friction, or all."
+          "description": "task|friction|all (default all)."
         },
         "limit": {
           "type": "integer",
-          "description": "Maximum number of results, at most 1000."
+          "description": "Max <=1000 (default 10; 1000 friction list)."
         },
         "tag": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "AND-filter by tag.",
+          "description": "AND-filter tags.",
           "minItems": 1
         },
         "all": {
           "type": "boolean",
-          "description": "Include every status for the queried kind."
+          "description": "Include closed statuses."
         },
         "status": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Explicit per-kind status override using kind."
+          "description": "Per-kind (`kind:value`, overrides `all`)."
         },
         "workspaces": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Federated scope."
+          "description": "Federate name/`ws_*`/path (default bound)."
         },
         "all_workspaces": {
           "type": "boolean",
-          "description": "Search every active workspace registered on the answering machine."
+          "description": "All active workspaces (not in managed runs)."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector from orbit_workspace_list."
+          "description": "From orbit_workspace_list."
         }
       },
       "additionalProperties": true,
@@ -322,65 +322,65 @@
       "properties": {
         "title": {
           "type": "string",
-          "description": "Task title."
+          "description": "Title."
         },
         "description": {
           "type": "string",
-          "description": "Task description markdown."
+          "description": "Markdown."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector from orbit_workspace_list."
+          "description": "From orbit_workspace_list."
         },
         "acceptance_criteria": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Acceptance criteria."
+          "description": "Criteria."
         },
         "tags": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Task tags."
+          "description": "Tags."
         },
         "required_tools": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Canonical tool names added to the activity baseline."
+          "description": "Baseline activity tools."
         },
         "granted_tools": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Operator-granted tool names."
+          "description": "Operator tools."
         },
         "requires_labels": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Host capability labels the task requires."
+          "description": "Host capability labels."
         },
         "not_before": {
           "type": "string",
-          "description": "Earliest dispatch time as an RFC 3339 instant."
+          "description": "RFC 3339 earliest start."
         },
         "context_files": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Context selectors this task will change."
+          "description": "Context selectors."
         },
         "allow_missing_context": {
           "type": "boolean",
-          "description": "Accept selectors for created files."
+          "description": "Allow missing context."
         },
         "priority": {
           "type": "string",
@@ -398,52 +398,52 @@
             "refactor",
             "chore"
           ],
-          "description": "Task type."
+          "description": "Kind."
         },
         "relations": {
           "type": "array",
           "items": {
             "type": "object"
           },
-          "description": "Typed task relations."
+          "description": "Typed relations."
         },
         "source_task_id": {
           "type": "string",
-          "description": "Task whose change introduced this bug."
+          "description": "Origin bug ID."
         },
         "crew": {
           "type": [
             "string",
             "null"
           ],
-          "description": "Crew that runs this task."
+          "description": "Crew."
         },
         "orchestrator": {
           "type": "string",
-          "description": "Crew credited for orchestration."
+          "description": "Orchestrator."
         },
         "orchestrator_model": {
           "type": "string",
-          "description": "Orchestrator model when it differs from the crew."
+          "description": "Orchestrator model."
         },
         "origin": {
           "type": "string",
-          "description": "Category, not free text: operator_request, orchestrator_initiative, automation."
+          "description": "operator_request|orchestrator_initiative|automation"
         },
         "fields": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Response fields, keyed (even one)."
+          "description": "Keyed fields."
         },
         "field": {
           "type": "string",
-          "description": "One response field."
+          "description": "Single field."
         },
         "request_id": {
           "type": "string",
-          "description": "Retry-safe creation identity; selects guarded creation, which accepts only 'title', 'description', 'acceptance_criteria', 'priority', 'crew'."
+          "description": "Selects guarded creation ('title', 'description', 'acceptance_criteria', 'priority', 'crew' only)."
         }
       },
       "required": [
@@ -513,7 +513,7 @@
       "properties": {
         "action": {
           "type": "string",
-          "description": "Operation to run, with its required fields: get (id, path); put (id, source_path).",
+          "description": "Action (required): get (id, path); put (id, source_path).",
           "enum": [
             "get",
             "put"
@@ -521,19 +521,19 @@
         },
         "id": {
           "type": "string",
-          "description": "For get: Globally unique task ID that owns the artifact; For put: task ID."
+          "description": "Task ID."
         },
         "path": {
           "type": "string",
-          "description": "For get: Artifact path relative to the task artifacts directory, exactly as it appears in `orbit_task_show` with `field: \"artifacts\"`; For put: Artifact path relative to the task artifacts directory."
+          "description": "get: Path from `orbit_task_show` (`field: \"artifacts\"`); put: Target path (default filename); `review-*` reserved except `review-report.json`."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector from orbit_workspace_list."
+          "description": "From orbit_workspace_list."
         },
         "source_path": {
           "type": "string",
-          "description": "For put: Source file to store as a task artifact."
+          "description": "put: Workspace file path (e.g. `.orbit/tmp/...`); escapes/`/tmp` rejected."
         }
       },
       "required": [
@@ -564,23 +564,23 @@
               "proposed"
             ]
           },
-          "description": "Candidate statuses."
+          "description": "Candidate statuses (`backlog`, `proposed`, or both)."
         },
         "path": {
           "type": "string",
-          "description": "Keep only candidates whose `context_files` selectors apply to this path."
+          "description": "Filter by `context_files` path."
         },
         "limit": {
           "type": "integer",
-          "description": "Maximum eligible tasks to return (default 50)."
+          "description": "Max results (default 50, >= 1)."
         },
         "explain": {
           "type": "boolean",
-          "description": "When true, also return `conflicting`."
+          "description": "Include `conflicting` held-back tasks."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector from orbit_workspace_list."
+          "description": "From orbit_workspace_list."
         }
       },
       "additionalProperties": false
@@ -601,62 +601,62 @@
           "items": {
             "type": "string"
           },
-          "description": "Filter by status name."
+          "description": "Status filter."
         },
         "parent_id": {
           "type": "string",
-          "description": "Parent task ID."
+          "description": "Parent ID."
         },
         "type": {
           "type": "string",
-          "description": "Filter by task type."
+          "description": "Type filter."
         },
         "scheduled": {
           "type": "boolean",
-          "description": "Keep only future schedules, soonest first."
+          "description": "Future schedules, soonest first."
         },
         "not_before_from": {
           "type": "string",
-          "description": "Inclusive lower schedule bound as RFC 3339."
+          "description": "RFC 3339 lower bound."
         },
         "not_before_until": {
           "type": "string",
-          "description": "Inclusive upper schedule bound as RFC 3339."
+          "description": "RFC 3339 upper bound."
         },
         "origin": {
           "type": "string",
-          "description": "Filter by task origin."
+          "description": "Origin filter."
         },
         "job_run_id": {
           "type": "string",
-          "description": "Filter by job run ID"
+          "description": "Job run ID."
         },
         "tag": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Filter by tag; an array matches every listed tag."
+          "description": "Tag filter (array matches all)."
         },
         "runs_on": {
           "type": "string",
-          "description": "Filter by effective host OS."
+          "description": "Effective host OS."
         },
         "pilot_warnings": {
           "type": "boolean",
-          "description": "Keep proposed tasks held by pilot warnings."
+          "description": "Held by pilot warnings."
         },
         "ready": {
           "type": "boolean",
-          "description": "Keep tasks whose dependencies are satisfied."
+          "description": "Dependencies satisfied."
         },
         "path": {
           "type": "string",
-          "description": "Filter by context selector path."
+          "description": "Filter `context_files`."
         },
         "limit": {
           "type": "integer",
-          "description": "Maximum number of tasks to return."
+          "description": "Max (default 50, >=1)."
         },
         "fields": {
           "type": "array",
@@ -667,31 +667,31 @@
         },
         "view": {
           "type": "string",
-          "description": "Bounded metadata view; requires `workspace`. The only accepted value is `bounded`."
+          "description": "View: only accepted value is `bounded`."
         },
         "offset": {
           "type": "integer",
-          "description": "Bounded view list offset."
+          "description": "Bounded offset."
         },
         "search": {
           "type": "string",
-          "description": "Bounded view key or title substring."
+          "description": "Bounded key/title filter."
         },
         "priority": {
           "type": "string",
-          "description": "Filter by priority."
+          "description": "Priority filter."
         },
         "external_ref": {
           "type": "string",
-          "description": "Exact external reference in system:id form."
+          "description": "`system:id` ref."
         },
         "has_ref": {
           "type": "string",
-          "description": "Keep tasks with a reference in this system."
+          "description": "Ref system filter."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector from orbit_workspace_list."
+          "description": "From orbit_workspace_list."
         }
       },
       "additionalProperties": false
@@ -709,50 +709,50 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "Globally unique task ID."
+          "description": "Task ID."
         },
         "snapshot": {
           "type": "boolean",
-          "description": "True returns a bounded versioned snapshot with opaque revision and available actions."
+          "description": "Versioned snapshot (needs `workspace`, no projections)."
         },
         "fields": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Fields to return, keyed (even one)."
+          "description": "Fields (`delivery` = landing)."
         },
         "field": {
           "type": "string",
-          "description": "Alias for `fields` taking one field."
+          "description": "Alias for `fields`; not with claimed pagination."
         },
         "run_id": {
           "type": "string",
-          "description": "Delivery run to report."
+          "description": "`field: \"delivery\"` run (default newest)."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector from orbit_workspace_list."
+          "description": "From orbit_workspace_list."
         },
         "view": {
           "type": "string",
-          "description": "Bounded metadata view; requires `workspace`."
+          "description": "View: only accepted value is `bounded`."
         },
         "limit": {
           "type": "integer",
-          "description": "Detail page size for a paginated claimed read."
+          "description": "Claimed page size; not with projections."
         },
         "comments_offset": {
           "type": "integer",
-          "description": "Comment offset for a paginated claimed read."
+          "description": "Comment offset (claimed)."
         },
         "history_offset": {
           "type": "integer",
-          "description": "History offset for a paginated claimed read."
+          "description": "History offset (claimed)."
         },
         "artifacts_offset": {
           "type": "integer",
-          "description": "Artifact metadata offset for a paginated claimed read."
+          "description": "Artifact offset (claimed)."
         }
       },
       "required": [
@@ -773,7 +773,7 @@
       "properties": {
         "repilot": {
           "type": "boolean",
-          "description": "Request one new pilot."
+          "description": "Request new pilot."
         },
         "id": {
           "type": "string",
@@ -781,65 +781,65 @@
         },
         "title": {
           "type": "string",
-          "description": "New task title."
+          "description": "Title."
         },
         "description": {
           "type": "string",
-          "description": "New description; empty clears it."
+          "description": "Empty clears."
         },
         "acceptance_criteria": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Replacement criteria."
+          "description": "Replaces list."
         },
         "dependencies": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Replacement dependency IDs."
+          "description": "Replaces list."
         },
         "relations": {
           "type": "array",
           "items": {
             "type": "object"
           },
-          "description": "Replacement task relations."
+          "description": "Replaces list."
         },
         "tags": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Replacement task tags."
+          "description": "Replaces list."
         },
         "granted_tools": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Replacement granted tool names."
+          "description": "Operator; replaces list."
         },
         "requires_labels": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Replacement capability labels."
+          "description": "Replaces list."
         },
         "not_before": {
           "type": "string",
-          "description": "Earliest start, or empty to clear."
+          "description": "RFC 3339 start; empty clears."
         },
         "allow_drop_system_tags": {
           "type": "boolean",
-          "description": "Allow dropping a system tag."
+          "description": "Drop system tags."
         },
         "plan": {
           "type": "string",
-          "description": "Replacement plan text."
+          "description": "Empty clears."
         },
         "status": {
           "type": "string",
@@ -854,11 +854,11 @@
             "archived",
             "rejected"
           ],
-          "description": "New task status."
+          "description": "Target status."
         },
         "note": {
           "type": "string",
-          "description": "Note on this status transition."
+          "description": "Status change note."
         },
         "priority": {
           "type": "string",
@@ -876,89 +876,89 @@
             "refactor",
             "chore"
           ],
-          "description": "New task type."
+          "description": "Kind."
         },
         "source_task_id": {
           "type": "string",
-          "description": "Source bug ID; empty clears it."
+          "description": "Origin bug; empty clears."
         },
         "planned_by": {
           "type": "string",
-          "description": "Planner; empty clears it."
+          "description": "Empty clears."
         },
         "implemented_by": {
           "type": "string",
-          "description": "Implementer; empty clears it."
+          "description": "Empty clears."
         },
         "execution_summary": {
           "type": "string",
-          "description": "New execution summary."
+          "description": "Empty clears."
         },
         "comment": {
           "type": "string",
-          "description": "Comment to append."
+          "description": "Appends comment."
         },
         "pr_status": {
           "type": "string",
-          "description": "PR status; empty clears it."
+          "description": "approve|request-changes; empty clears."
         },
         "job_run_id": {
           "type": "string",
-          "description": "Job run ID; empty clears it."
+          "description": "Empty clears."
         },
         "crew": {
           "type": "string",
-          "description": "Named crew; empty redraws."
+          "description": "Empty redraws."
         },
         "orchestrator": {
           "type": "string",
-          "description": "Orchestrator crew; empty clears it."
+          "description": "Empty clears."
         },
         "origin": {
           "type": "string",
-          "description": "Category, not free text: operator_request, orchestrator_initiative, automation."
+          "description": "operator_request|orchestrator_initiative|automation"
         },
         "context_files": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "New context selectors."
+          "description": "Replaces list."
         },
         "allow_missing_context": {
           "type": "boolean",
-          "description": "Accept selectors for created files."
+          "description": "Allow missing context."
         },
         "fields": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Response fields, keyed (even one)."
+          "description": "Keyed fields."
         },
         "field": {
           "type": "string",
-          "description": "One response field."
+          "description": "Single field."
         },
         "request_id": {
           "type": "string",
-          "description": "Retry-safe; selects guarded update ('verdict', 'complete'; 'comment'; or 'status' edits). Omit for an ordinary update."
+          "description": "Selects guarded update ('verdict', 'complete'; 'comment'; 'status'); omit for ordinary update."
         },
         "expected_revision": {
           "type": "string",
-          "description": "Revision from task show."
+          "description": "Snapshot rev."
         },
         "verdict": {
           "type": "object",
-          "description": "Review verdict object."
+          "description": "Review verdict."
         },
         "complete": {
           "type": "boolean",
-          "description": "Complete an accepted review."
+          "description": "Complete review."
         },
         "workspace": {
           "type": "string",
-          "description": "Workspace selector from orbit_workspace_list."
+          "description": "From orbit_workspace_list."
         }
       },
       "required": [
@@ -1074,7 +1074,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Optional extra detail per workspace row."
+          "description": "Pass `crews` to include crews."
         }
       },
       "additionalProperties": true

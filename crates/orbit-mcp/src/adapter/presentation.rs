@@ -60,11 +60,11 @@ pub(super) fn tools(_federated: bool) -> Vec<Tool> {
         "properties": {
             "action": {
                 "type": "string", "enum": actions,
-                "description": "open: the control center, or a task or run panel given workspace and id. inspect: a task or run panel (workspace, id required)."
+                "description": "open (control center or panel) or inspect (requires workspace, id)."
             },
             "workspace": { "type": "string", "minLength": 1, "description": WORKSPACE_SELECTOR_DESCRIPTION },
-            "id": { "type": "string", "minLength": 1, "description": "Public task key or run ID." },
-            "kind": {"type":"string", "enum":["task","run"], "default":"task", "description": "Whether `id` is a task or a run."}
+            "id": { "type": "string", "minLength": 1, "description": "Task key or run ID." },
+            "kind": {"type":"string", "enum":["task","run"], "default":"task", "description": "task|run (default task)."}
         },
         "required": ["action"],
         "dependentRequired": { "id": ["workspace"], "kind": ["workspace", "id"] }

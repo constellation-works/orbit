@@ -28,36 +28,25 @@ impl Tool for OrbitCommandExecTool {
         let parameters = vec![
             ToolParam {
                 name: "argv".to_string(),
-                description: "The command as a JSON array of argv strings, program first (e.g. \
-                     [\"git\", \"status\"]). Never a shell string: no shell interprets this \
-                     input, so quoting and operator-precedence bugs cannot occur."
-                    .to_string(),
+                description: "Argv JSON array (never a shell string).".to_string(),
                 param_type: "string_list".to_string(),
                 required: true,
             },
             ToolParam {
                 name: "working_directory".to_string(),
-                description: "The command's absolute working directory. Must exist and \
-                     be inside this workspace's checkout or a linked worktree under \
-                     `.orbit/state/worktrees/`; it is never inferred from the caller."
-                    .to_string(),
+                description: "Absolute path inside workspace/worktree.".to_string(),
                 param_type: "string".to_string(),
                 required: true,
             },
             ToolParam {
                 name: "timeout_ms".to_string(),
-                description: "Deadline in milliseconds (default 120000, at most 600000; larger \
-                     values are clamped). When it passes, the command and its whole process \
-                     group are killed and the result reports `timed_out: true`."
-                    .to_string(),
+                description: "Deadline ms (default 120000, max 600000).".to_string(),
                 param_type: "u64".to_string(),
                 required: false,
             },
             ToolParam {
                 name: "claim_token".to_string(),
-                description: "Token for this workspace's exclusive claim, required when \
-                     another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`."
-                    .to_string(),
+                description: "Exclusive workspace claim token.".to_string(),
                 param_type: "string".to_string(),
                 required: false,
             },

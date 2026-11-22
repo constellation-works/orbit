@@ -31,6 +31,7 @@ use crate::governance::operation::{
     ParamSpec, ParamType, RETIRED_AGENT_FIELD, ToolOnlyRegistration, UnknownFields, aliased, both,
     cli_only, defaulted, mcp_only, operation_registry, preserve_empty,
 };
+use crate::governance::tool_schema::WORKSPACE_SELECTOR_DESCRIPTION;
 
 operation_registry! {
     noun: TASK;
@@ -207,7 +208,7 @@ pub const TASK_HOST_HELP: &str = "Host that `--workspace` names (`orbit host lis
 const BOUNDED_VIEW_PARAM: ParamSpec = mcp_only(
     "view",
     ParamType::String,
-    "Bounded metadata view; requires `workspace`. The only accepted value is `bounded`.",
+    "View: only accepted value is `bounded`.",
 );
 
 const LIST: TaskOperation = TaskOperation {
@@ -249,7 +250,7 @@ const LIST: TaskOperation = TaskOperation {
         both(
             "status",
             ParamType::EnumList(TASK_STATUS_VALUES),
-            "Filter by status name.",
+            "Status filter.",
             CliArgKind::Flag {
                 long: "status",
                 delimiter: Some(','),
@@ -264,7 +265,7 @@ const LIST: TaskOperation = TaskOperation {
             both(
                 "parent_id",
                 ParamType::String,
-                "Parent task ID.",
+                "Parent ID.",
                 CliArgKind::flag("parent"),
                 "Filter to subtasks belonging to a parent task",
             ),
@@ -274,7 +275,7 @@ const LIST: TaskOperation = TaskOperation {
             both(
                 "type",
                 ParamType::Enum(TASK_TYPE_VALUES),
-                "Filter by task type.",
+                "Type filter.",
                 CliArgKind::Flag {
                     long: "type",
                     delimiter: None,
@@ -290,35 +291,35 @@ const LIST: TaskOperation = TaskOperation {
         both(
             "scheduled",
             ParamType::Switch,
-            "Keep only future schedules, soonest first.",
+            "Future schedules, soonest first.",
             CliArgKind::flag("scheduled"),
             "List future-scheduled tasks soonest first, including proposed tasks labelled by status",
         ),
         preserve_empty(both(
             "not_before_from",
             ParamType::String,
-            "Inclusive lower schedule bound as RFC 3339.",
+            "RFC 3339 lower bound.",
             CliArgKind::flag("not-before-from"),
             "Inclusive lower schedule bound (RFC 3339 with an offset)",
         )),
         preserve_empty(both(
             "not_before_until",
             ParamType::String,
-            "Inclusive upper schedule bound as RFC 3339.",
+            "RFC 3339 upper bound.",
             CliArgKind::flag("not-before-until"),
             "Inclusive upper schedule bound (RFC 3339 with an offset)",
         )),
         both(
             "origin",
             ParamType::Enum(TASK_ORIGIN_VALUES),
-            "Filter by task origin.",
+            "Origin filter.",
             CliArgKind::flag("origin"),
             "Filter by task origin (operator_request, orchestrator_initiative, automation); tasks without a recorded origin never match",
         ),
         both(
             "job_run_id",
             ParamType::String,
-            "Filter by job run ID",
+            "Job run ID.",
             CliArgKind::flag("job-run-id"),
             "Filter by job run ID",
         ),
@@ -326,7 +327,7 @@ const LIST: TaskOperation = TaskOperation {
             both(
                 "tag",
                 ParamType::StringList,
-                "Filter by tag; an array matches every listed tag.",
+                "Tag filter (array matches all).",
                 CliArgKind::Flag {
                     long: "tag",
                     delimiter: Some(','),
@@ -346,28 +347,28 @@ const LIST: TaskOperation = TaskOperation {
                 EnumValue::helped("macos", "macOS hosts"),
                 EnumValue::helped("windows", "Windows hosts"),
             ]),
-            "Filter by effective host OS.",
+            "Effective host OS.",
             CliArgKind::flag("runs-on"),
             "Filter by effective host OS: tags intersected with the stored crew executor; unrestricted tasks match, unresolved crews and conflicts do not",
         ),
         both(
             "pilot_warnings",
             ParamType::Switch,
-            "Keep proposed tasks held by pilot warnings.",
+            "Held by pilot warnings.",
             CliArgKind::flag("pilot-warnings"),
             "Keep proposed tasks held by pilot warning findings",
         ),
         both(
             "ready",
             ParamType::Switch,
-            "Keep tasks whose dependencies are satisfied.",
+            "Dependencies satisfied.",
             CliArgKind::flag("ready"),
             "Keep only tasks whose dependencies are already satisfied",
         ),
         both(
             "path",
             ParamType::String,
-            "Filter by context selector path.",
+            "Filter `context_files`.",
             CliArgKind::flag("path"),
             "Filter to tasks whose `context_files` selectors apply to this path",
         ),
@@ -375,7 +376,7 @@ const LIST: TaskOperation = TaskOperation {
             both(
                 "limit",
                 ParamType::Integer,
-                "Maximum number of tasks to return.",
+                "Max (default 50, >=1).",
                 CliArgKind::flag("limit"),
                 "Maximum number of tasks to return (default 50). Must be at least 1",
             ),
@@ -387,30 +388,26 @@ const LIST: TaskOperation = TaskOperation {
             "Name fields, or fetch one task with `orbit.task.show`; compact rows match `orbit tool run orbit.task.list`.",
         ),
         BOUNDED_VIEW_PARAM,
-        mcp_only("offset", ParamType::Integer, "Bounded view list offset."),
-        mcp_only(
-            "search",
-            ParamType::String,
-            "Bounded view key or title substring.",
-        ),
+        mcp_only("offset", ParamType::Integer, "Bounded offset."),
+        mcp_only("search", ParamType::String, "Bounded key/title filter."),
         both(
             "priority",
             ParamType::Enum(TASK_PRIORITY_VALUES),
-            "Filter by priority.",
+            "Priority filter.",
             CliArgKind::flag("priority"),
             "Filter by priority level",
         ),
         both(
             "external_ref",
             ParamType::String,
-            "Exact external reference in system:id form.",
+            "`system:id` ref.",
             CliArgKind::flag("ref"),
             "Filter by exact external reference in `system:id` form",
         ),
         both(
             "has_ref",
             ParamType::String,
-            "Keep tasks with a reference in this system.",
+            "Ref system filter.",
             CliArgKind::flag("has-ref"),
             "Filter by external reference system",
         ),
@@ -461,7 +458,7 @@ const ELIGIBLE: TaskOperation = TaskOperation {
         both(
             "status",
             ParamType::EnumList(ELIGIBLE_STATUS_VALUES),
-            "Candidate statuses: `backlog`, `proposed`, or both (the default). Pass a comma-separated string or an array.",
+            "Candidate statuses (`backlog`, `proposed`, or both).",
             CliArgKind::Flag {
                 long: "status",
                 delimiter: Some(','),
@@ -475,7 +472,7 @@ const ELIGIBLE: TaskOperation = TaskOperation {
         both(
             "path",
             ParamType::String,
-            "Keep only candidates whose `context_files` selectors apply to this path, matched as `orbit.task.list` matches `path`.",
+            "Filter by `context_files` path.",
             CliArgKind::flag("path"),
             "Keep only candidates whose `context_files` selectors apply to this path, matched as `orbit task list --path` matches",
         ),
@@ -483,7 +480,7 @@ const ELIGIBLE: TaskOperation = TaskOperation {
             both(
                 "limit",
                 ParamType::Integer,
-                "Maximum eligible tasks to return (default 50). Must be at least 1.",
+                "Max results (default 50, >= 1).",
                 CliArgKind::flag("limit"),
                 "Maximum eligible tasks to list (default 50). Must be at least 1",
             ),
@@ -492,7 +489,7 @@ const ELIGIBLE: TaskOperation = TaskOperation {
         both(
             "explain",
             ParamType::Switch,
-            "When true, also return `conflicting`: every held-back candidate with the overlapping selector and the in-progress or review task holding it.",
+            "Include `conflicting` held-back tasks.",
             CliArgKind::flag("explain"),
             "Also list the held-back candidates, each with the overlapping file and the in-progress or review task holding it",
         ),
@@ -536,7 +533,7 @@ const SHOW: TaskOperation = TaskOperation {
             mcp_only(
                 "snapshot",
                 ParamType::Boolean,
-                "True returns a bounded versioned snapshot with opaque revision and available actions. Requires explicit workspace; snapshot grants no authority and cannot combine with field projections.",
+                "Versioned snapshot (needs `workspace`, no projections).",
             ),
         ],
         &[
@@ -549,7 +546,7 @@ const SHOW: TaskOperation = TaskOperation {
                 default: None,
                 redact: crate::governance::operation::Redaction::None,
                 mcp_description: Some(Description::Static(
-                    "Fields to return, keyed (even one); `delivery` alone selects delivery evidence. Not with pagination on a claimed read. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop the projection to page the full task, or drop pagination for a projection.",
+                    "Fields (`delivery` = landing); not with claimed pagination.",
                 )),
                 cli: Some(crate::governance::operation::CliBinding {
                     required: false,
@@ -569,7 +566,7 @@ const SHOW: TaskOperation = TaskOperation {
             mcp_only(
                 "field",
                 ParamType::String,
-                "Alias for `fields` taking one field, for example `field: \"artifacts\"`. Not with pagination on a claimed read. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop the projection to page the full task, or drop pagination for a projection.",
+                "Alias for `fields`; not with claimed pagination.",
             ),
             ParamSpec {
                 mcp_description: Some(Description::Computed(show_run_id_description)),
@@ -578,28 +575,28 @@ const SHOW: TaskOperation = TaskOperation {
             mcp_only(
                 "workspace",
                 ParamType::String,
-                "Optional workspace filter by registered name, ID or path; task `id` is resolved globally by default.",
+                WORKSPACE_SELECTOR_DESCRIPTION,
             ),
             BOUNDED_VIEW_PARAM,
             mcp_only(
                 "limit",
                 ParamType::Integer,
-                "Detail page size for a paginated claimed read; not with a projection. That read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+                "Claimed page size; not with projections.",
             ),
             mcp_only(
                 "comments_offset",
                 ParamType::Integer,
-                "Comment offset for a paginated claimed read; not with a projection. That read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+                "Comment offset (claimed).",
             ),
             mcp_only(
                 "history_offset",
                 ParamType::Integer,
-                "History offset for a paginated claimed read; not with a projection. That read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+                "History offset (claimed).",
             ),
             mcp_only(
                 "artifacts_offset",
                 ParamType::Integer,
-                "Artifact metadata offset for a paginated claimed read; not with a projection. That read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+                "Artifact offset (claimed).",
             ),
         ],
     ],
@@ -670,7 +667,7 @@ const TASK_ID_PARAM: ParamSpec = ParamSpec {
     ..both(
         "id",
         ParamType::String,
-        "Globally unique task ID. Resolved through the host task registry by default; a workspace argument is not required.",
+        "Task ID.",
         CliArgKind::Positional,
         "Task ID",
     )
@@ -678,6 +675,6 @@ const TASK_ID_PARAM: ParamSpec = ParamSpec {
 
 fn show_run_id_description() -> String {
     format!(
-        "Delivery run to report, with `field: \"{TASK_SHOW_DELIVERY_FIELD}\"` only; not with pagination on a claimed read. Omitted, the newest task-delivery run submitted with this task is used. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop `run_id` (and any projection) to page the full task, or drop pagination for a projection."
+        "`field: \"{TASK_SHOW_DELIVERY_FIELD}\"` run (default newest); not with claimed pagination."
     )
 }

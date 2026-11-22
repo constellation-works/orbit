@@ -29,6 +29,7 @@ use crate::governance::operation::{
     RetiredField, UnknownFields, both, cli_only, cli_required, defaulted, free_text, mcp_only,
     preserve_empty, required,
 };
+use crate::governance::tool_schema::WORKSPACE_SELECTOR_DESCRIPTION;
 
 /// The hidden wire field that carries `orbit task add` and `orbit task update`
 /// options no tool field expresses. The task handlers honour it only for a
@@ -82,12 +83,8 @@ const ADD_MODEL_PARAM: ParamSpec = cli_only(
 
 /// The response projection a write takes.
 pub(super) const WRITE_PROJECTION_PARAMS: &[ParamSpec] = &[
-    mcp_only(
-        "fields",
-        ParamType::StringList,
-        "Response fields, keyed (even one).",
-    ),
-    mcp_only("field", ParamType::String, "One response field."),
+    mcp_only("fields", ParamType::StringList, "Keyed fields."),
+    mcp_only("field", ParamType::String, "Single field."),
 ];
 
 /// The CLI-only options, carried as one object.
@@ -136,7 +133,7 @@ const fn path(mut param: ParamSpec) -> ParamSpec {
 }
 
 /// `not_before` on `orbit.task.add`.
-const NOT_BEFORE_MCP_HELP: &str = "Earliest dispatch time as an RFC 3339 instant.";
+const NOT_BEFORE_MCP_HELP: &str = "RFC 3339 earliest start.";
 
 /// `--not-before` on `orbit task add|update`.
 const NOT_BEFORE_CLI_HELP: &str = "Earliest dispatch start: an RFC 3339 instant (`2026-11-06T09:00:00Z`) or local `YYYY-MM-DDTHH:MM`";
@@ -197,7 +194,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             free_text(required(both(
                 "title",
                 ParamType::String,
-                "Task title.",
+                "Title.",
                 CliArgKind::flag("title"),
                 "Task title",
             ))),
@@ -209,7 +206,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
                 both(
                     "description",
                     ParamType::String,
-                    "Task description markdown.",
+                    "Markdown.",
                     CliArgKind::flag("description"),
                     "Task description",
                 ),
@@ -220,40 +217,40 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             mcp_only(
                 "workspace",
                 ParamType::String,
-                "Workspace selector from orbit_workspace_list.",
+                WORKSPACE_SELECTOR_DESCRIPTION,
             ),
             free_text(both(
                 "acceptance_criteria",
                 ParamType::StringList,
-                "Acceptance criteria.",
+                "Criteria.",
                 CliArgKind::flag("acceptance-criteria"),
                 "Acceptance criteria. Repeat the flag for multiple criteria",
             )),
             both(
                 "tags",
                 ParamType::StringList,
-                "Task tags.",
+                "Tags.",
                 flag_with_delimiter("tag", &[], None),
                 "Task tags. Repeat or comma-separate for multiple tags. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task; any other `os:` value is rejected",
             ),
             both(
                 "required_tools",
                 ParamType::StringList,
-                "Canonical tool names added to the activity baseline.",
+                "Baseline activity tools.",
                 flag_with_delimiter("required-tools", &["required-tool"], None),
                 "Exact canonical tool names the task adds to its agent activity baseline",
             ),
             both(
                 "granted_tools",
                 ParamType::StringList,
-                "Operator-granted tool names.",
+                "Operator tools.",
                 flag_with_delimiter("granted-tools", &["granted-tool"], None),
                 "Exact canonical tool names an operator grants the implementing activity despite its deny list (operator only)",
             ),
             both(
                 "requires_labels",
                 ParamType::StringList,
-                "Host capability labels the task requires.",
+                "Host capability labels.",
                 flag_with_delimiter("requires-labels", &["requires-label"], Some("LABEL")),
                 "Capability labels a host must carry, all of them, to run the task (its `machine.labels` plus its OS). Repeat or comma-separate for multiple labels",
             ),
@@ -267,14 +264,14 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             path(both(
                 "context_files",
                 ParamType::StringList,
-                "Context selectors this task will change.",
+                "Context selectors.",
                 flag_with_delimiter("context", &[], Some("CONTEXT")),
                 "Task context selectors (`file:`, `dir:`, `symbol:path#name:kind`); repeat or comma-separate",
             )),
             both(
                 "allow_missing_context",
                 ParamType::Switch,
-                "Accept selectors for created files.",
+                "Allow missing context.",
                 CliArgKind::flag("allow-missing-context"),
                 "Accept context selectors for files this task will create",
             ),
@@ -298,41 +295,37 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             both(
                 "type",
                 ParamType::Enum(TASK_TYPE_VALUES),
-                "Task type.",
+                "Kind.",
                 flag_named("type", "TASK_TYPE"),
                 "Task type (defaults to chore)",
             ),
-            mcp_only("relations", ParamType::Array, "Typed task relations."),
-            mcp_only(
-                "source_task_id",
-                ParamType::String,
-                "Task whose change introduced this bug.",
-            ),
+            mcp_only("relations", ParamType::Array, "Typed relations."),
+            mcp_only("source_task_id", ParamType::String, "Origin bug ID."),
             both(
                 "crew",
                 ParamType::String,
-                "Crew that runs this task.",
+                "Crew.",
                 CliArgKind::flag("crew"),
                 "Named crew to use when running this task (default: drawn from the complexity pool, else the configured default crew)",
             ),
             both(
                 "orchestrator",
                 ParamType::String,
-                "Crew credited for orchestration.",
+                "Orchestrator.",
                 CliArgKind::flag("orchestrator"),
                 "Named crew responsible for orchestration attribution",
             ),
             both(
                 "orchestrator_model",
                 ParamType::String,
-                "Orchestrator model when it differs from the crew.",
+                "Orchestrator model.",
                 CliArgKind::flag("orchestrator-model"),
                 "Orchestrator's model when it differs from the orchestrator crew's configured model (default: that crew's model, recorded at creation)",
             ),
             both(
                 "origin",
                 ParamType::Enum(TASK_ORIGIN_VALUES),
-                "Category, not free text: operator_request, orchestrator_initiative, automation.",
+                "operator_request|orchestrator_initiative|automation",
                 CliArgKind::flag("origin"),
                 "Provenance category, not free text: operator_request (a human asked), orchestrator_initiative (the orchestrator decided) or automation. Omitted, it stays unset",
             ),
@@ -342,7 +335,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             mcp_only(
                 "request_id",
                 ParamType::String,
-                "Retry-safe creation identity; selects guarded creation, which accepts only 'title', 'description', 'acceptance_criteria', 'priority', 'crew'.",
+                "Selects guarded creation ('title', 'description', 'acceptance_criteria', 'priority', 'crew' only).",
             ),
             ADD_MODEL_PARAM,
             cli_only(
@@ -468,7 +461,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             both(
                 "repilot",
                 ParamType::Switch,
-                "Request one new pilot.",
+                "Request new pilot.",
                 CliArgKind::flag("repilot"),
                 "Request one new pilot after updating (operator only)",
             ),
@@ -482,64 +475,64 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             free_text(both(
                 "title",
                 ParamType::String,
-                "New task title.",
+                "Title.",
                 CliArgKind::flag("title"),
                 "New title",
             )),
             free_text(preserve_empty(both(
                 "description",
                 ParamType::String,
-                "New description; empty clears it.",
+                "Empty clears.",
                 CliArgKind::flag("description"),
                 "New description (empty string clears)",
             ))),
             free_text(both(
                 "acceptance_criteria",
                 ParamType::StringList,
-                "Replacement criteria.",
+                "Replaces list.",
                 CliArgKind::flag("acceptance-criteria"),
                 "Replacement acceptance criteria. Repeat the flag for multiple criteria",
             )),
             preserve_empty(both(
                 "dependencies",
                 ParamType::StringList,
-                "Replacement dependency IDs.",
+                "Replaces list.",
                 flag_with_delimiter("dependencies", &["dependency"], None),
                 "Replacement dependency task IDs; repeat or comma-separate (empty string clears)",
             )),
-            mcp_only("relations", ParamType::Array, "Replacement task relations."),
+            mcp_only("relations", ParamType::Array, "Replaces list."),
             both(
                 "tags",
                 ParamType::StringList,
-                "Replacement task tags.",
+                "Replaces list.",
                 flag_with_delimiter("tag", &[], None),
                 "Replacement task tags; repeat or comma-separate. `os:linux|macos|windows` limits the host OS",
             ),
             preserve_empty(both(
                 "granted_tools",
                 ParamType::StringList,
-                "Replacement granted tool names.",
+                "Operator; replaces list.",
                 flag_with_delimiter("granted-tools", &["granted-tool"], None),
                 "Replacement operator-granted tool names (operator only; empty string clears)",
             )),
             preserve_empty(both(
                 "requires_labels",
                 ParamType::StringList,
-                "Replacement capability labels.",
+                "Replaces list.",
                 flag_with_delimiter("requires-labels", &["requires-label"], Some("LABEL")),
                 "Replacement labels a host must all carry to run the task (empty string clears)",
             )),
             preserve_empty(both(
                 "not_before",
                 ParamType::String,
-                "Earliest start, or empty to clear.",
+                "RFC 3339 start; empty clears.",
                 flag_named("not-before", "TIME"),
                 NOT_BEFORE_CLI_HELP,
             )),
             both(
                 "allow_drop_system_tags",
                 ParamType::Switch,
-                "Allow dropping a system tag.",
+                "Drop system tags.",
                 CliArgKind::Flag {
                     long: "allow-drop-system-tags",
                     delimiter: None,
@@ -553,7 +546,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             free_text(preserve_empty(both(
                 "plan",
                 ParamType::String,
-                "Replacement plan text.",
+                "Empty clears.",
                 CliArgKind::Flag {
                     long: "plan",
                     delimiter: None,
@@ -567,14 +560,14 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             both(
                 "status",
                 ParamType::Enum(TASK_UPDATE_STATUS_VALUES),
-                "New task status.",
+                "Target status.",
                 CliArgKind::flag("status"),
                 "New status (human-crew tasks accept any status, recorded as a bypass)",
             ),
             free_text(both(
                 "note",
                 ParamType::String,
-                "Note on this status transition.",
+                "Status change note.",
                 CliArgKind::flag("note"),
                 "Note recorded on the approval's status history entry (with `--approve`)",
             )),
@@ -595,89 +588,89 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             both(
                 "type",
                 ParamType::Enum(TASK_TYPE_VALUES),
-                "New task type.",
+                "Kind.",
                 flag_named("type", "TASK_TYPE"),
                 "New task type",
             ),
             mcp_only(
                 "source_task_id",
                 ParamType::String,
-                "Source bug ID; empty clears it.",
+                "Origin bug; empty clears.",
             ),
             preserve_empty(both(
                 "planned_by",
                 ParamType::String,
-                "Planner; empty clears it.",
+                "Empty clears.",
                 CliArgKind::flag("planned-by"),
                 "Explicit planning attribution label (empty string clears)",
             )),
             preserve_empty(both(
                 "implemented_by",
                 ParamType::String,
-                "Implementer; empty clears it.",
+                "Empty clears.",
                 CliArgKind::flag("implemented-by"),
                 "Explicit implementation attribution label (empty string clears)",
             )),
             free_text(preserve_empty(both(
                 "execution_summary",
                 ParamType::String,
-                "New execution summary.",
+                "Empty clears.",
                 CliArgKind::flag("execution-summary"),
                 "New execution summary (empty string clears)",
             ))),
             free_text(both(
                 "comment",
                 ParamType::String,
-                "Comment to append.",
+                "Appends comment.",
                 CliArgKind::flag("comment"),
                 "Append a task comment",
             )),
             preserve_empty(both(
                 "pr_status",
                 ParamType::String,
-                "PR status; empty clears it.",
+                "approve|request-changes; empty clears.",
                 CliArgKind::flag("pr-status"),
                 "PR review status: `approve` or `request-changes` (empty string clears)",
             )),
             preserve_empty(both(
                 "job_run_id",
                 ParamType::String,
-                "Job run ID; empty clears it.",
+                "Empty clears.",
                 CliArgKind::flag("job-run-id"),
                 "Job run ID to associate with the task (empty string clears)",
             )),
             preserve_empty(both(
                 "crew",
                 ParamType::String,
-                "Named crew; empty redraws.",
+                "Empty redraws.",
                 CliArgKind::flag("crew"),
                 "Named crew to use when running this task (empty string draws a fresh one)",
             )),
             preserve_empty(both(
                 "orchestrator",
                 ParamType::String,
-                "Orchestrator crew; empty clears it.",
+                "Empty clears.",
                 CliArgKind::flag("orchestrator"),
                 "Named crew responsible for orchestration attribution (empty string clears)",
             )),
             both(
                 "origin",
                 ParamType::Enum(TASK_ORIGIN_VALUES),
-                "Category, not free text: operator_request, orchestrator_initiative, automation.",
+                "operator_request|orchestrator_initiative|automation",
                 CliArgKind::flag("origin"),
                 "Replacement provenance category, not free text: operator_request, orchestrator_initiative, automation",
             ),
             path(preserve_empty(both(
                 "context_files",
                 ParamType::StringList,
-                "New context selectors.",
+                "Replaces list.",
                 flag_with_delimiter("context", &["context-files"], None),
                 "Replace the whole context selector list; to extend, resend existing ones too (empty string clears)",
             ))),
             both(
                 "allow_missing_context",
                 ParamType::Switch,
-                "Accept selectors for created files.",
+                "Allow missing context.",
                 CliArgKind::flag("allow-missing-context"),
                 "Accept context selectors for files this task will create",
             ),
@@ -687,20 +680,12 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             mcp_only(
                 "request_id",
                 ParamType::String,
-                "Retry-safe; selects guarded update ('verdict', 'complete'; 'comment'; or 'status' edits). Omit for an ordinary update.",
+                "Selects guarded update ('verdict', 'complete'; 'comment'; 'status'); omit for ordinary update.",
             ),
-            mcp_only(
-                "expected_revision",
-                ParamType::String,
-                "Revision from task show.",
-            ),
+            mcp_only("expected_revision", ParamType::String, "Snapshot rev."),
             // The schema-extension table replaces the advertised shape.
-            mcp_only("verdict", ParamType::Object, "Review verdict object."),
-            mcp_only(
-                "complete",
-                ParamType::Boolean,
-                "Complete an accepted review.",
-            ),
+            mcp_only("verdict", ParamType::Object, "Review verdict."),
+            mcp_only("complete", ParamType::Boolean, "Complete review."),
             WRITE_MODEL_PARAM,
             cli_only(
                 "host",

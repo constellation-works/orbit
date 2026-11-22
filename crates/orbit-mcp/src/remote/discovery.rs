@@ -101,11 +101,7 @@ pub(super) fn discovery_tool_definitions() -> Result<Vec<McpToolDefinition>, Mcp
 pub fn workspace_list_include_param() -> ToolParam {
     ToolParam {
         name: "include".to_string(),
-        description: "Optional extra detail per workspace row. `crews` adds the workspace's \
-                      effective configured crews and default crew as `crews`, read on the \
-                      machine that holds the checkout, or `crews_error` when its \
-                      configuration cannot be read."
-            .to_string(),
+        description: "Pass `crews` to include crews.".to_string(),
         param_type: "string_list".to_string(),
         required: false,
     }
