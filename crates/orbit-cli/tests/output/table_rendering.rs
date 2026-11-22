@@ -27,6 +27,8 @@ use serde_json::Value;
 const BOX_GLYPHS: &[char] = &['─', '│', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '┼'];
 
 const LONG_TITLE: &str = "Terminal tables are borderless with a one-line row invariant, and this title is deliberately far longer than any terminal is wide so that it has to be truncated rather than wrapped";
+const SHORTENING_HINT: &str =
+    "Table details shortened. Use --format plain or --json for full output.";
 
 #[test]
 fn task_list_renders_one_line_per_task() {
@@ -38,6 +40,80 @@ fn task_list_renders_one_line_per_task() {
     );
 
     assert_both_forms(&workspace, &["task", "list"], 3, "orbit task list");
+}
+
+/// Terminal tables identify when their cells or columns are shortened, while
+/// pipe and machine-readable output keep their existing full-text forms.
+#[cfg(unix)]
+#[test]
+fn shortened_cli_tables_print_a_hint_only_in_terminal_table_mode() {
+    let workspace = workspace();
+    workspace.seed_tasks(&[workspace.task_seed(LONG_TITLE)]);
+
+    for (args, label) in [
+        (vec!["task", "list"], "task list"),
+        (vec!["tool", "list"], "tool list"),
+        (vec!["tool", "show", "github.run.logs"], "tool show"),
+    ] {
+        let output = run_cli_on_terminal_at_width(&workspace, &args, "80");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let output = format!("{stdout}{stderr}");
+        assert_eq!(
+            output.matches(SHORTENING_HINT).count(),
+            1,
+            "{label} reports one shortening hint at 80 columns: {output:?}"
+        );
+    }
+
+    let wide = run_cli_on_terminal_at_width(&workspace, &["task", "list"], "500");
+    let wide_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&wide.stdout),
+        String::from_utf8_lossy(&wide.stderr)
+    );
+    assert!(
+        !wide_output.contains(SHORTENING_HINT),
+        "a table that fits its terminal has no shortening hint: {wide_output:?}"
+    );
+
+    let empty =
+        run_cli_on_terminal_at_width(&workspace, &["task", "list", "--status", "done"], "80");
+    let empty_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&empty.stdout),
+        String::from_utf8_lossy(&empty.stderr)
+    );
+    assert!(
+        !empty_output.contains(SHORTENING_HINT),
+        "a table with no rows has no shortened content: {empty_output:?}"
+    );
+
+    for (args, label) in [
+        (vec!["task", "list"], "task list"),
+        (vec!["tool", "list"], "tool list"),
+        (vec!["tool", "show", "github.run.logs"], "tool show"),
+    ] {
+        let piped = workspace.run(&args, label);
+        let explicit_plain = workspace.run(
+            &[args.clone(), vec!["--format", "plain"]].concat(),
+            "explicit plain output",
+        );
+        assert_eq!(piped.stdout, explicit_plain.stdout, "{label} plain bytes");
+        assert!(
+            !String::from_utf8_lossy(&piped.stdout).contains(SHORTENING_HINT),
+            "{label} pipe output has no terminal hint"
+        );
+
+        let mut json_args = args.clone();
+        json_args.push("--json");
+        let json = workspace.run(&json_args, "JSON output");
+        assert!(
+            !String::from_utf8_lossy(&json.stdout).contains(SHORTENING_HINT),
+            "{label} JSON output has no terminal hint"
+        );
+        serde_json::from_slice::<Value>(&json.stdout).expect("valid JSON output");
+    }
 }
 
 /// Attention keeps its repair command beside the reason at narrow terminal
