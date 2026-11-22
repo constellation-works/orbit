@@ -82,6 +82,9 @@ pub(super) fn assess_with(
     let user_facing_ui =
         user_facing_ui(action, task_id, &assessment).map_err(refused(task_id, "invalid"))?;
     footprint::hold_unresolved_footprint(&mut assessment, recommended, complexity);
+    if let Some(batch) = snapshot.comment_hygiene_batch.as_ref() {
+        super::super::comment_hygiene::attach_comment_hygiene_hold(&mut assessment, batch);
+    }
     // The description-stated subset of an undecided consequential decision.
     // The activity prompt covers the same choice when only pinned source shows it.
     consequential::attach_undecided_consequential_decisions(&mut assessment, &current.description);

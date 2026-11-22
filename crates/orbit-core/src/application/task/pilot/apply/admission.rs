@@ -42,6 +42,9 @@ pub(in super::super) struct PreparedTaskSnapshot {
     pub(in super::super) context_creation_identity: Option<String>,
     /// The pilot mode preparation chose for the task.
     pub(in super::super) pilot_mode: PilotModeSnapshot,
+    /// Host-verified deterministic `comment-hygiene` batch preparation, when
+    /// this task is a selector-free `comment-hygiene` chore [ORB-26787].
+    pub(in super::super) comment_hygiene_batch: Option<Value>,
 }
 
 /// How preparation asked the pilot to assess a task. The default, also read

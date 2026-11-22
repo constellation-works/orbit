@@ -772,6 +772,7 @@ fn certified_snapshot(task: &Task) -> PreparedTaskSnapshot {
         validation_tool_warnings: Vec::new(),
         context_creation_identity: None,
         pilot_mode: Default::default(),
+        comment_hygiene_batch: None,
     }
 }
 

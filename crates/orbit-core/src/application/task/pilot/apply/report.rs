@@ -10,7 +10,9 @@ use serde_json::{Value, json};
 use super::super::auto_effort::{AUTO_EFFORT_ESCALATION, PILOT_ROUND, REPAIR_ROUND};
 use super::super::recheck::{RECHECK, RECHECKS};
 use super::super::source::SourceSnapshot;
-use super::super::{OPERATOR_TOOL_CANDIDATES, member_ready};
+use super::super::{
+    COMMENT_HYGIENE_BATCH, COMMENT_HYGIENE_BATCHES, OPERATOR_TOOL_CANDIDATES, member_ready,
+};
 use super::input::{PreparedEcho, PreparedTask, Record};
 use super::{Applied, detail, settled};
 
@@ -219,6 +221,15 @@ impl Report<'_> {
                     .and_then(|task| task.raw.get(OPERATOR_TOOL_CANDIDATES))
                 {
                     partition[OPERATOR_TOOL_CANDIDATES] = json!({ task_id.as_str(): candidates });
+                }
+                // The repair pilot keeps the same deterministic comment-hygiene batch.
+                if let Some(batch) = self
+                    .tasks
+                    .iter()
+                    .find(|task| task.fields.task_id.get() == Some(task_id))
+                    .and_then(|task| task.raw.get(COMMENT_HYGIENE_BATCH))
+                {
+                    partition[COMMENT_HYGIENE_BATCHES] = json!({ task_id.as_str(): batch });
                 }
                 partition
             })

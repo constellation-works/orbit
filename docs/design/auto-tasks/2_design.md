@@ -428,10 +428,19 @@ not name a document the brief excludes), `comment-hygiene` declares no
 `context_files` and mints as `proposed`: a selector-free instance is not a
 backlog drain candidate, so it never becomes the unknown-footprint
 whole-tree holder that stalls unrelated editing work, with or without a
-pilot. Batch selection is pre-admission preparation — the task pilot (or
-an operator) follows the body's selection steps, persists exactly the
-selected `file:` selectors, and only then is the task approved to
-`backlog`. That write precedes any execution claim, so the route never
+pilot. Batch selection is pre-admission preparation — `prepare_task_pilot` computes
+the bounded deterministic batch against the pinned source revision, carried
+ledgers and open-task footprints (`comment_hygiene_batch` /
+`partition.comment_hygiene_batches`), the task pilot verifies repository-guide
+exclusions against that bounded candidate list without guessing or sampling
+(and an operator preparing by hand follows the same steps), `apply_task_pilot_results`
+enforces the ordering, cap and hold contract and persists exactly the selected
+`file:` selectors, and only then is the task approved to `backlog`. When
+required predecessor ledger or open-task footprint evidence is missing,
+unreadable or malformed, preparation returns `status: "hold"` with empty
+selectors and empty ranked candidates, and apply refuses provisional selectors
+and persists an honest `footprint_unresolved` hold. That write precedes any
+execution claim, so the route never
 depends on a scope update a protecting claim refuses or on
 `context_files_added` returned after editing; in claimed mode the
 selectors simply travel with the owner-prepared task. Without preparation
