@@ -187,6 +187,18 @@ printf '%-32s %s\n' "npm view $NPM_PKG" "${npm_registry_version:-<skipped>}"
 printf '%-32s %s\n' "gh release list -L 1" "${gh_tag_version:-<skipped>}"
 
 drift=0
+compare_local_version() {
+  local source="$1"
+  local version="$2"
+  if [[ -z "$version" || "$version" == "null" ]]; then
+    echo "DRIFT: $source has empty or missing version (expected $cargo_package_version)" >&2
+    drift=1
+  elif [[ "$cargo_package_version" != "$version" ]]; then
+    echo "DRIFT: $CARGO_TOML ($cargo_package_version) != $source ($version)" >&2
+    drift=1
+  fi
+}
+
 compare_version() {
   local source="$1"
   local version="$2"
@@ -199,12 +211,13 @@ compare_version() {
 if [[ -z "$desktop_package_version" ]]; then
   echo "DRIFT: $DESKTOP_CARGO_TOML has no [package] version" >&2
   drift=1
+else
+  compare_local_version "$DESKTOP_CARGO_TOML" "$desktop_package_version"
 fi
-compare_version "$DESKTOP_CARGO_TOML" "$desktop_package_version"
-compare_version "$NPM_PACKAGE_JSON" "$npm_package_version"
-compare_version "$CLAUDE_PLUGIN_MANIFEST" "$claude_plugin_version"
-compare_version "$CODEX_PLUGIN_MANIFEST" "$codex_plugin_version"
-compare_version "$AGENT_PLUGIN_MANIFEST" "$agent_plugin_version"
+compare_local_version "$NPM_PACKAGE_JSON" "$npm_package_version"
+compare_local_version "$CLAUDE_PLUGIN_MANIFEST" "$claude_plugin_version"
+compare_local_version "$CODEX_PLUGIN_MANIFEST" "$codex_plugin_version"
+compare_local_version "$AGENT_PLUGIN_MANIFEST" "$agent_plugin_version"
 compare_version "npm view $NPM_PKG" "$npm_registry_version"
 compare_version "latest gh release tag" "$gh_tag_version"
 

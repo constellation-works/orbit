@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import threading
@@ -140,26 +141,82 @@ def _sample_linux(root: int) -> list[int] | None:
     return found
 
 
+def _is_orbit_ps_entry(comm: str, args: str) -> bool:
+    """Return True when a ps entry identifies an ``orbit`` process.
+
+    ``comm`` preserves spaces in the executable path on macOS without arguments,
+    while ``args`` still catches processes launched with ``argv[0] == "orbit"``
+    under another interpreter (such as the smoke fixture).
+    """
+    if comm and _basename(comm.strip()) == "orbit":
+        return True
+    stripped = args.strip()
+    if not stripped:
+        return False
+    first = stripped.split(None, 1)[0]
+    if _basename(first) == "orbit":
+        return True
+    if stripped[0] in ("'", '"'):
+        try:
+            tokens = shlex.split(stripped)
+        except ValueError:
+            tokens = []
+        if tokens and _basename(tokens[0]) == "orbit":
+            return True
+    if stripped.startswith(("/", "./", "../")):
+        # Walk whitespace boundaries to match an unquoted executable path that
+        # contains spaces without mistaking a later argument for argv[0].
+        index = 0
+        length = len(stripped)
+        while index < length:
+            while index < length and not stripped[index].isspace():
+                index += 1
+            candidate = stripped[:index]
+            if os.path.isfile(candidate):
+                return _basename(candidate) == "orbit"
+            while index < length and stripped[index].isspace():
+                index += 1
+    return False
+
+
 def _sample_ps(root: int) -> list[int] | None:
     try:
-        result = subprocess.run(
+        comm_result = subprocess.run(
+            ["ps", "-ax", "-o", "pid=,ppid=,comm="],
+            capture_output=True, text=True, check=False,
+        )
+        args_result = subprocess.run(
             ["ps", "-ax", "-o", "pid=,ppid=,args="],
             capture_output=True, text=True, check=False,
         )
     except OSError:
         return None
-    if result.returncode != 0:
+    if comm_result.returncode != 0 or args_result.returncode != 0:
         return None
     children: dict[int, list[int]] = {}
+    comm_by_pid: dict[int, str] = {}
     args_by_pid: dict[int, str] = {}
-    for line in result.stdout.splitlines():
+    seen_edges: set[tuple[int, int]] = set()
+    for line in comm_result.stdout.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) < 2 or not parts[0].isdigit() or not parts[1].isdigit():
+            continue
+        pid = int(parts[0])
+        ppid = int(parts[1])
+        comm_by_pid[pid] = parts[2] if len(parts) == 3 else ""
+        if (ppid, pid) not in seen_edges:
+            seen_edges.add((ppid, pid))
+            children.setdefault(ppid, []).append(pid)
+    for line in args_result.stdout.splitlines():
         parts = line.strip().split(None, 2)
         if len(parts) < 2 or not parts[0].isdigit() or not parts[1].isdigit():
             continue
         pid = int(parts[0])
         ppid = int(parts[1])
         args_by_pid[pid] = parts[2] if len(parts) == 3 else ""
-        children.setdefault(ppid, []).append(pid)
+        if (ppid, pid) not in seen_edges:
+            seen_edges.add((ppid, pid))
+            children.setdefault(ppid, []).append(pid)
     found: list[int] = []
     stack = [root]
     seen: set[int] = set()
@@ -168,9 +225,7 @@ def _sample_ps(root: int) -> list[int] | None:
         if pid in seen:
             continue
         seen.add(pid)
-        args = args_by_pid.get(pid, "")
-        token = args.split(None, 1)[0] if args else ""
-        if token and _basename(token) == "orbit":
+        if _is_orbit_ps_entry(comm_by_pid.get(pid, ""), args_by_pid.get(pid, "")):
             found.append(pid)
         stack.extend(children.get(pid, []))
     return found

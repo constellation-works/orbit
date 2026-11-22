@@ -5,6 +5,7 @@ The provider follows the requested transport; nothing invokes an API or reads
 live Orbit state. A sandbox-exec shim exercises the companion's script contract,
 without claiming evidence about kernel confinement.
 """
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parent
 
@@ -317,6 +319,69 @@ runpy.run_path(sys.argv[0], run_name="__main__")
                     if exit_code != '0':
                         self.assertIn(f'exited {exit_code}', result.stdout + result.stderr)
                         self.assertNotEqual(result.returncode, 17)
+
+
+    def test_ps_sampling_matches_spaced_orbit_paths_without_matching_arguments(self):
+        spec = importlib.util.spec_from_file_location(
+            "smoke_claude_mcp_invoke", SCRIPTS / "smoke-claude-mcp-invoke.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        spaced_dir = self.root / "My Orbit Dir"
+        spaced_dir.mkdir()
+        spaced_orbit = spaced_dir / "orbit"
+        spaced_orbit.write_text("#!/bin/sh\n")
+        spaced_orbit.chmod(0o755)
+
+        comm_out = (
+            "100 1 /usr/bin/claude\n"
+            f"101 100 {spaced_orbit}\n"
+            "102 100 /usr/bin/python3\n"
+            "103 100 /bin/sh\n"
+            "104 100 /usr/bin/env\n"
+        )
+        args_out = (
+            "100 1 /usr/bin/claude -p prompt\n"
+            f"101 100 {spaced_orbit} mcp serve\n"
+            "102 100 orbit -c pass\n"
+            f"103 100 /bin/sh {spaced_orbit} mcp serve\n"
+            f"104 100 {spaced_orbit} mcp serve\n"
+        )
+
+        def fake_ps(cmd, *args, **kwargs):
+            if "comm=" in cmd[-1]:
+                return subprocess.CompletedProcess(cmd, 0, stdout=comm_out, stderr="")
+            if "args=" in cmd[-1]:
+                return subprocess.CompletedProcess(cmd, 0, stdout=args_out, stderr="")
+            raise AssertionError(f"unexpected ps command: {cmd}")
+
+        with mock.patch.object(module.subprocess, "run", side_effect=fake_ps):
+            found = module._sample_ps(100)
+        self.assertEqual(sorted(found), [101, 102, 104])
+
+    def test_sandbox_profile_escapes_backslashes_and_quotes(self):
+        special = self.root / 'dir\\with"chars'
+        home = special / 'home'
+        (home / '.orbit').mkdir(parents=True)
+        db = home / '.orbit/orbit.db'
+        with sqlite3.connect(db) as conn:
+            conn.execute('CREATE TABLE audit_events (id INTEGER PRIMARY KEY, timestamp TEXT, '
+                         'subcommand TEXT, tool_name TEXT, status TEXT, exit_code INTEGER, pid INTEGER)')
+        repo = special / 'repo'
+        repo.mkdir(parents=True)
+        subprocess.run(['git', 'init', '-q', str(repo)], env=self.env, check=True)
+        (repo / '.mcp.json').write_text('{}')
+        profile_copy = self.root / 'captured.sb'
+        self.executable('sandbox-exec', f'#!/bin/sh\ncp "$2" "{profile_copy}"\nshift 2\nexec "$@"\n')
+        env = dict(self.env, HOME=str(home), SMOKE_FIXTURE_MODE='requested', SMOKE_FIXTURE_EXIT='0')
+        result = subprocess.run(['bash', str(SCRIPTS / 'smoke-claude-mcp-sandbox.sh')], cwd=repo,
+                                env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        profile = profile_copy.read_text()
+        expected_home = str(home).replace('\\', '\\\\').replace('"', '\\"')
+        expected_repo = str(repo).replace('\\', '\\\\').replace('"', '\\"')
+        self.assertIn(f'(allow file-write* (subpath "{expected_home}/.orbit"))', profile)
+        self.assertIn(f'(allow file-write* (subpath "{expected_repo}"))', profile)
 
 
 if __name__ == '__main__':
