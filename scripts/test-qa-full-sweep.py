@@ -2325,9 +2325,12 @@ def install_last_progress(cache: Path, finished: float):
 def install_record(install: dict, cache: Path, duration_seconds: float, timeout_seconds: int):
     """Project one `npm ci` run into bounded, redacted report fields.
 
-    The raw output stays on the in-memory record for classification; the report
-    gets the attribution (duration, timeout, outcome), the capability notices read
-    from that output, and redacted tails of its stdout, stderr and debug log.
+    The caller has already redacted `install` in place (`redact_install_evidence`),
+    so its stdout and stderr hold only redacted lines and raw output is not kept on
+    the in-memory record. The report gets the attribution (duration, timeout,
+    outcome), the capability notices read from that redacted output (their
+    `SKIP:`, `DEFERRED:` and `skipping` prefixes survive redaction), and redacted
+    tails of its stdout, stderr and debug log.
     """
     def tail(text: str):
         return [redacted_install_line(line) for line in text.splitlines() if line.strip()][-_INSTALL_TAIL_LINES:]
