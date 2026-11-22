@@ -1517,7 +1517,7 @@ fn exhausted_review_preflight_stops_the_shipped_pipeline_before_implementation()
     };
     let (result, _) = run_job_resume(
         &job,
-        json!({"task_ids": ["fixture-task"], "base_branch": "main", "base_sync": "local"}),
+        json!({"task_ids": ["fixture-task"], "base_branch": "main", "base_sync": "local", "dependency_delivery": "enforce"}),
         "preflight-run",
         &host,
         None,
