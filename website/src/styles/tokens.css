@@ -73,6 +73,10 @@
   --orbit-text-muted: var(--sl-color-gray-3);
   --orbit-link: var(--sl-color-text-accent);
 
+  /* Behind the dashboard tour (DESIGN.md §3.1). The capture is dark, so its box
+     stays dark in either theme. */
+  --orbit-media-backdrop: #0a0a0a;
+
   /* Caution panels (changelog breaking changes). */
   --orbit-caution-bg: #1a140c;
   --orbit-caution-line: #5a4225;

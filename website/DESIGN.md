@@ -78,6 +78,7 @@ step of its own.
 | Text, secondary | `#C7C7CC` | `#30313A` | Prose. |
 | Text, muted | `#9B9BA3` | `#5F606B` | Metadata, captions, eyebrows. |
 | Accent | `#6E9FFF` | `#2F67D8` | Links, the active page, focus, the primary button. |
+| Media backdrop | `#0A0A0A` | `#0A0A0A` | Behind the dashboard tour, so the dark capture stays dark in either theme. |
 
 A colour means one thing: the accent marks what you can follow or what is current, and
 amber appears only on the changelog's breaking-changes panel.

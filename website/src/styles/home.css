@@ -70,7 +70,7 @@
 .orbit-hero-headline {
   color: var(--orbit-text);
   font-size: var(--orbit-text-display);
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: -0.02em;
   line-height: 1.08;
   text-wrap: balance;
@@ -226,7 +226,7 @@
 
 .orbit-demo-video {
   aspect-ratio: 6 / 5;
-  background: #0a0a0a;
+  background: var(--orbit-media-backdrop);
   border: 1px solid var(--orbit-line);
   border-radius: var(--orbit-radius);
   display: block;
@@ -262,7 +262,7 @@
 .orbit-section-heading {
   color: var(--orbit-text);
   font-size: var(--orbit-text-h2);
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: -0.01em;
   line-height: 1.25;
 }
@@ -359,9 +359,10 @@
   color: var(--orbit-text-muted);
   font-family: var(--sl-font-mono);
   font-size: var(--orbit-text-xs);
-  font-weight: 400;
+  font-weight: 500;
+  line-height: 1;
   margin-inline-start: var(--orbit-space-2);
-  padding: 0.1rem 0.5rem;
+  padding: var(--orbit-space-1) var(--orbit-space-2);
   white-space: nowrap;
 }
 
