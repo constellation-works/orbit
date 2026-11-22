@@ -312,8 +312,9 @@ repository root of the checkout that holds these scripts.
      omitted one. Identical non-zero exits are a failed probe,
      not a match, even when stdout is empty on every arm. JSON outputs are compared after
      the `--parity-mask` fields (key names at any depth, or dotted paths) are removed and
-     the root path is replaced by `<root>`. A missing observation, a failed probe, a
-     parity command that hit a bound, or a difference writes `parity.json` with `match` false and exits 2 without sampling, so no bounded timing
+     the root path is replaced by `<root>`. Repeat `--parity-mask` or list several names
+     after one occurrence; `parity.json` records every name in `masks`.
+     A missing observation, a failed probe, a parity command that hit a bound, or a difference writes `parity.json` with `match` false and exits 2 without sampling, so no bounded timing
      verdict is issued. Mask only timing fields; a mask that hides a behaviour change
      defeats the check.
    - **Host pressure.** `/proc/loadavg` and the number of Orbit-managed processes (those
