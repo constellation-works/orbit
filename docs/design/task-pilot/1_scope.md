@@ -70,7 +70,9 @@ when every one of these holds:
 - the disposition is `verified_no_diff` and apply keeps no selectors (an operator's creation grant
   turns the verdict into an `already_landed` hold with its selectors, so it never tags);
 - the assessment carries no `already_landed`, `duplicate_of`, `release_action_required` or
-  `finding_invalid` finding, and its `evidence` and rationale cite no commit;
+  `finding_invalid` finding, and its `evidence` and rationale cite no commit (known non-commit Git
+  objects such as blob or tree checksums do not block tagging; commits and unknown IDs still do,
+  and finding-proof closure keeps its fail-closed rules [ORB-26851]);
 - the task is not a review, QA or CI-sweep finding (`code-review`, `delivery-code-review`,
   `qa-full-sweep`, `qa-sweep`, `security-review` or `ci-failure-sweep`, also as `auto-task:<name>`),
   where `verified_no_diff` means the finding no longer holds;
@@ -105,6 +107,7 @@ the release, consumer and remaining-record retirement checks in
 
 - [ORB-23677] — move pilot assessments into task artifacts and retain compact receipts.
 - [ORB-26836] — a no-diff deliverable verdict tags the task `no-diff-expected`.
+- [ORB-26851] — known non-commit Git object IDs do not block `no-diff-expected` tagging.
 - [ORB-23707] — makes the dashboard pilot-warnings readout degrade per task when an artifact is missing.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

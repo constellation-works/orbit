@@ -142,9 +142,11 @@ impl VerifiedNoDiff {
     /// as opposed to a task whose work already landed, duplicates another
     /// task, awaits an operator release action or rests on an invalid finding.
     /// Only the first kind is a no-diff deliverable: its evidence cites no
-    /// commit and the assessment carries none of the typed findings that say
-    /// the work is already done or the task is not work, and `after` (the
-    /// selectors apply keeps) is empty.
+    /// commit (known non-commit Git objects such as blob or tree checksums do
+    /// not count as commit citations, whereas commits and unknown object IDs
+    /// still fail closed) and the assessment carries none of the typed findings
+    /// that say the work is already done or the task is not work, and `after`
+    /// (the selectors apply keeps) is empty.
     ///
     /// A finding task (a review, QA or CI-sweep finding, filed directly or by
     /// its auto-task) is never one: its `verified_no_diff` says the finding is
@@ -154,6 +156,7 @@ impl VerifiedNoDiff {
         assessment: &Value,
         after: &[String],
         tags: &[String],
+        source: Option<&dyn SourceGit>,
     ) -> bool {
         const NOT_A_DELIVERABLE: [&str; 4] = [
             "already_landed",
@@ -166,10 +169,26 @@ impl VerifiedNoDiff {
         };
         !finding_filed(tags)
             && after.is_empty()
-            && finding.cited_commits.is_empty()
+            && !finding.cites_commit(source)
             && NOT_A_DELIVERABLE
                 .iter()
                 .all(|field| assessment.get(field).is_none_or(Value::is_null))
+    }
+
+    /// Whether any parsed citation may name a commit: empty citations do not;
+    /// without a source reader, every citation fails closed; with one, known
+    /// non-commit objects (such as blobs or trees) are excluded while commits
+    /// and unknown object IDs still count.
+    fn cites_commit(&self, source: Option<&dyn SourceGit>) -> bool {
+        if self.cited_commits.is_empty() {
+            return false;
+        }
+        let Some(source) = source else {
+            return true;
+        };
+        self.cited_commits
+            .iter()
+            .any(|sha| !is_known_non_commit_object(source, sha))
     }
 
     /// One line for a hold's `detail`: the evidence, then what it cites.
@@ -533,6 +552,20 @@ fn resolve_commit(source: &dyn SourceGit, revision: &str) -> Option<String> {
         ])
         .ok()
         .filter(|sha| !sha.is_empty())
+}
+
+/// Whether `object` resolves in Git as an unambiguous non-commit object (such
+/// as a blob, tree, or tag that does not peel to a commit). Ambiguous
+/// prefixes, unknown SHAs, and Git errors return `false` so callers fail
+/// closed.
+fn is_known_non_commit_object(source: &dyn SourceGit, object: &str) -> bool {
+    if resolve_commit(source, object).is_some() {
+        return false;
+    }
+    source
+        .git(&["cat-file", "-t", object])
+        .ok()
+        .is_some_and(|kind| !kind.is_empty() && kind != "commit")
 }
 
 /// Whether `commit` changes a path any of the task's selectors cover. A merge
