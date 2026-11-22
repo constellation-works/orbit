@@ -450,6 +450,16 @@ fn contribution(input: &RowInput<'_>, per_100: &BTreeMap<&'static str, f64>, ter
     term.weight * (per_100[term.key] - expected * 100.0 / input.units_of(term.key).max(1) as f64)
 }
 
+/// Snaps a term's signed excess to a nine-decimal grid for the payload. The
+/// expected counts are summed in hash-iteration order, so two loads of the
+/// same facts can differ in the last bits. The grid gives those loads one
+/// value and maps an exact zero (or noise around it) to positive zero, which
+/// keeps the chart's zero test exact. The raw score keeps the full value.
+fn round_excess_nine_decimals(excess: f64) -> f64 {
+    let snapped = (excess * 1e9).round() / 1e9;
+    if snapped == 0.0 { 0.0 } else { snapped }
+}
+
 impl Scored<'_> {
     /// Whether `crew` contributed units to this row.
     pub(super) fn has_crew(&self, crew: &str) -> bool {
@@ -531,6 +541,21 @@ impl Scored<'_> {
                     .collect::<serde_json::Map<String, Value>>()
             );
             payload["score_base"] = json!(100);
+            // The rounded `expected` and `per_100` fields stay the display
+            // contract. The chart and score breakdown need the same signed
+            // excess the raw score sums, including a term whose displayed
+            // expected count rounds to zero.
+            payload["contributions"] = json!(
+                terms
+                    .iter()
+                    .map(|term| {
+                        (
+                            term.key.to_string(),
+                            json!(round_excess_nine_decimals(self.contribution(term))),
+                        )
+                    })
+                    .collect::<serde_json::Map<String, Value>>()
+            );
         }
         payload
     }
