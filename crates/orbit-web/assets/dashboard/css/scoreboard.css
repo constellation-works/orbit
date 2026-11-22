@@ -71,7 +71,12 @@
   color: var(--fg-dim);
 }
 
-/* Header band: title and window on one row, scope and range on the next. */
+/* Header band: title and window on one row, scope and range on the next. The
+   band's bottom hairline separates it from the body it heads. */
+#scoreboard-controls {
+  padding-bottom: var(--space-16);
+  border-bottom: 1px solid var(--hair);
+}
 .cost-band-head {
   display: flex;
   flex-wrap: wrap;
@@ -79,11 +84,24 @@
   justify-content: space-between;
   gap: var(--space-12);
 }
+/* The title, its cost hint and the bucket count: the view's one header line. */
+.cost-band-title-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-6) var(--space-12);
+  min-width: 0;
+}
 .cost-band-title {
   margin: 0;
   font-size: var(--text-lg);
   font-weight: 600;
   color: var(--fg-strong);
+}
+.cost-band-count {
+  color: var(--fg-dim);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
 }
 #scoreboard-window-selector {
   gap: var(--space-4);
@@ -143,22 +161,13 @@
   padding: 0;
 }
 
-/* Tab bodies: both sit on the content colour the active tab joins. */
-.cost-tab-body {
+.cost-body {
   display: flex;
   flex-direction: column;
   gap: var(--space-20);
   min-width: 0;
   padding: var(--space-20);
   font-size: var(--text-sm);
-}
-.cost-tabpanel[hidden] { display: none; }
-
-.scoreboard-orchestration-policy {
-  margin: 0;
-  max-width: 860px;
-  color: var(--fg-mute);
-  line-height: 1.5;
 }
 
 .scoreboard-token-usage {
@@ -262,13 +271,14 @@
   overflow-wrap: anywhere;
 }
 
+/* The comparison is part of its bucket: a hairline divides it from the figures
+   above, with no box of its own inside the bucket's border (STD-07 R31). */
 .scoreboard-orchestration-cost.comparable {
   grid-template-columns: minmax(0, 1fr);
   gap: var(--space-6);
-  margin: 0 var(--space-16);
-  padding: var(--space-10) var(--space-12);
-  border: 1px solid var(--hair);
-  border-radius: var(--radius);
+  margin: 0;
+  padding: var(--space-10) var(--space-16);
+  border-top: 1px solid var(--hair);
 }
 .scoreboard-orchestration-cost .cost-comparison {
   display: grid;
