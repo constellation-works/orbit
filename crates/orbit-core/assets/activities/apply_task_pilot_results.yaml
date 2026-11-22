@@ -27,8 +27,8 @@ spec:
     selectors and an assessed complexity, and is approved through the
     ordinary approve transition with a note naming the drain run
     (`drain_approval`). That approval decides under the task lock: a task
-    tagged `no-auto-approve`, or whose pilot-assessed material changed, after
-    the pilot write stays proposed with that classification
+    tagged `no-auto-approve` or `no-drain`, or whose pilot-assessed material
+    changed, after the pilot write stays proposed with that classification
     (`changed_since_pilot` for a material change). A task edited under that
     drain child's own assessment is piloted again on the next pass. A fresh
     explicit or routine assessment is approved without another pilot; a stale

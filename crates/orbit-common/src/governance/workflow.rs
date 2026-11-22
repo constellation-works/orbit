@@ -162,7 +162,7 @@ const AUTO: OperationSpec<WorkflowVerb> = OperationSpec {
         mcp_only(
             "approve_proposed",
             ParamType::Boolean,
-            "Start only: each pass pilots qualifying proposed tasks (tagged no-diff-expected, or with context_files and an assessed complexity) and approves into backlog those with no duplicate, already-landed, conflict or warning finding, including tasks filed during the window. Tasks tagged no-auto-approve are never approved. Others stay proposed; status reports approved and held counts. Default false",
+            "Start only: each pass pilots qualifying proposed tasks (tagged no-diff-expected, or with context_files and an assessed complexity) and approves into backlog those with no duplicate, already-landed, conflict or warning finding, including tasks filed during the window. Tasks tagged no-auto-approve or no-drain are never approved. Others stay proposed; status reports approved and held counts. Default false",
         ),
         mcp_only(
             "force",

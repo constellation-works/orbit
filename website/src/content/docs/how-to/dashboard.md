@@ -422,7 +422,7 @@ To start a window:
 | **Window length** | Whole hours from 1 to 24 (`--for`). The default is `1h`. |
 | **Parallel tasks** | How many tasks run at once. Blank uses the default of 5. |
 | **Mark shipped tasks done** | Off (default) leaves shipped tasks in `review`. On moves every task the window ships to `done` (`--complete`). |
-| **Approve qualifying proposals** | Off (default) leaves `proposed` tasks for you. On (`--approve-proposed`) lets each pass approve proposed tasks that have context files, an assessed complexity (or the `no-diff-expected` tag), and a clean task-pilot verification. Tasks tagged `no-auto-approve` are skipped. |
+| **Approve qualifying proposals** | Off (default) leaves `proposed` tasks for you. On (`--approve-proposed`) lets each pass approve proposed tasks that have context files, an assessed complexity (or the `no-diff-expected` tag), and a clean task-pilot verification. Tasks tagged `no-drain` or `no-auto-approve` are skipped. |
 | **Auto-fix PR blockers** | Off by default. On (`--auto-fix`) repairs failed required checks and merge conflicts on the window's own pull requests. It does not merge or approve anything. |
 | **Review before landing** | On adds before-landing review to this window only (`--review before-landing`). When workspace policy already sets `review.timing`, the switch is on and locked: a window can add review, never remove it. It is refused when no reviewer crew is configured and for local-only delivery. See [Review layers](/concepts/tasks/#adding-review-to-one-run). |
 | **Stop** | Stops new admissions (`orbit run auto --stop`). Admitted workers keep running; this is not cancellation. |

@@ -146,7 +146,7 @@ with `orbit.task.artifact` action `get` (`id` and `path`). Compare that assessme
 with the readiness hold; older receipts contain the assessment JSON inline. After re-pilot, confirm the new assessment no
 longer reports the unresolved condition and that readiness no longer holds the
 task for it. A standalone pilot does not promote a task. `no-auto-approve`
-continues to prevent automatic promotion, and neither changing a tag nor
+and `no-drain` continue to prevent automatic promotion, and neither changing a tag nor
 requesting a pilot supplies evidence that a condition is satisfied.
 
 ### Owner/operator-only acceptance evidence
@@ -307,8 +307,8 @@ creates `proposed` tasks. The CI job invokes `task_pilot_pipeline` for each new
 task and retries matching tasks that a prior pilot left proposed, carrying
 explicit promotion authority into its deterministic apply boundary. Invalid or
 empty selectors, pilot failure, duplicates, already-landed
-work, conflicts, holding warnings and a `no-auto-approve` tag leave that task
-proposed without blocking other pilot children. A `blocked_by` finding, or a
+work, conflicts, holding warnings and a `no-auto-approve` or `no-drain` tag
+leave that task proposed without blocking other pilot children. A `blocked_by` finding, or a
 holding utility or surface finding, holds unless it names prerequisites and every
 one is already done — in this workspace or in another registered workspace,
 resolved through its registered owner — or is enforced by a stored dependency edge.

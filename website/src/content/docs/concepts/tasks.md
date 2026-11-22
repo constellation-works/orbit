@@ -44,7 +44,8 @@ Each gate can also pass without you, but only when you opt in:
 
 `--approve-proposed` is off by default and refused with `--pull`: only the
 owner approves work. The `no-auto-approve` tag keeps a task proposed through
-such a drain. Completion never approves `proposed` work.
+such a drain, and so does `no-drain`, which implies it. Completion never
+approves `proposed` work.
 
 A task minted by an [auto-task](/concepts/scheduling/#auto-task) enters
 `proposed` by default.
