@@ -1064,9 +1064,11 @@ configuration.
   until it finishes; what it approves then waits in the backlog for the next
   drain.
 - A task tagged `no-auto-approve` is never approved by any automatic
-  promotion authority (this drain or the CI sweep). The drain does not pilot
-  it; it stays `proposed`, held with reason `no-auto-approve`, until a human
-  approves it. File a task with that tag when it needs a human decision.
+  promotion authority (this drain or the CI sweep). A proposed task tagged
+  `no-drain` also opts out of this drain's approval: it is not piloted and
+  stays `proposed`, held with reason `no-drain`. Use `no-auto-approve` when
+  every automatic approval authority must stop; use `no-drain` to keep work
+  out of drains.
 - A task whose current pilot assessment is `verified_no_diff`, and that is
   not tagged `no-diff-expected`, is held as `pilot_verified_no_diff` with the
   pilot's evidence and the commits it cites. When Orbit automation filed it

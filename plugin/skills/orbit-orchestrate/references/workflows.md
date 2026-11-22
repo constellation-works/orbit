@@ -146,8 +146,9 @@ with `orbit.task.artifact` action `get` (`id` and `path`). Compare that assessme
 with the readiness hold; older receipts contain the assessment JSON inline. After re-pilot, confirm the new assessment no
 longer reports the unresolved condition and that readiness no longer holds the
 task for it. A standalone pilot does not promote a task. `no-auto-approve`
-continues to prevent automatic promotion, and neither changing a tag nor
-requesting a pilot supplies evidence that a condition is satisfied.
+prevents automatic promotion, and `no-drain` also opts a task out of
+drain-window approval. Neither changing a tag nor requesting a pilot supplies
+evidence that a condition is satisfied.
 
 ### Owner/operator-only acceptance evidence
 
