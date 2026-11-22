@@ -512,14 +512,17 @@ fn refuse_stale_branch(
     if tip.trim() == base.trim() {
         return Ok(());
     }
-    Err(OrbitError::Execution(format!(
-        "worktree setup refusing stale branch '{branch}' at tip {tip}; requested base {base}. \
-         Left '{}' untouched. Setup does not reset or discard a retained candidate, and does not \
-         publish a new base_sha for unexplained history. Inspect the leftover, then move the \
-         branch aside or delete it only after confirming no retained work is needed; retrying \
-         setup without that recovery will refuse again.",
-        location.display()
-    )))
+    Err(OrbitError::DeliveryRefused {
+        refusal: DeliveryRefusal::StaleBranch,
+        message: format!(
+            "worktree setup refusing stale branch '{branch}' at tip {tip}; requested base {base}. \
+             Left '{}' untouched. Setup does not reset or discard a retained candidate, and does not \
+             publish a new base_sha for unexplained history. Inspect the leftover, then move the \
+             branch aside or delete it only after confirming no retained work is needed; retrying \
+             setup without that recovery will refuse again.",
+            location.display()
+        ),
+    })
 }
 
 fn remove_owned_incomplete_worktree(

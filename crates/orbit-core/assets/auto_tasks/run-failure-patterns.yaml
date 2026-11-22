@@ -88,9 +88,10 @@ template:
     `accounting.counts_as_failure` is true (`failure`, `baseline_red`, and the explicit
     `unrecorded` legacy outcome). `review_decision_hold` (a before-landing review refusal awaiting
     a recorded decision: its `kind` stays `fail`, `failure_class` stays `candidate`, its claim
-    still blocks the task and its pull request stays open), `evidence_hold`, `operator_cancel` and
+    still blocks the task and its pull request stays open), `evidence_hold`, `operator_cancel`,
     `upgrade_paused` (an Orbit upgrade paused the leaf; its `accounting.reason` is
-    `upgrade_quiesce`) are designed outcomes: count them per outcome in the job's `held_7d` counter, not as
+    `upgrade_quiesce`) and `delivery_hold` (a typed delivery hold such as
+    `delivery_stale_branch` kept a retained branch untouched for inspection) are designed outcomes: count them per outcome in the job's `held_7d` counter, not as
     failures. A `failure` whose `accounting.reason` is
     `review_decision_pending_without_candidate_failure` carries the flag on a settlement that
     cannot be that hold: keep it counted and name the reason. A record from a build without

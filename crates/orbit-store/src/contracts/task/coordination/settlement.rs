@@ -37,6 +37,11 @@ pub struct ClaimReleaseRecord {
     /// task's release budget.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub owner_busy: bool,
+    /// The release was a task-scoped delivery hold (such as a retained
+    /// stale-branch setup refusal), which holds only that task for operator
+    /// inspection and blames neither the drain's host nor its crew.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub delivery_hold: bool,
 }
 
 impl ClaimReleaseRecord {

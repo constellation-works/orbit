@@ -4714,8 +4714,14 @@ fn landing_input(field: &str, spelling: &str, run_id: &str) -> Value {
 fn assert_stale_refusal(error: &OrbitError, branch: &str, tip: &str, base: &str) {
     let message = error.to_string();
     assert!(
-        matches!(error, OrbitError::Execution(_)),
-        "expected an execution refusal, got {error:?}"
+        matches!(
+            error,
+            OrbitError::DeliveryRefused {
+                refusal: orbit_types::workflow::DeliveryRefusal::StaleBranch,
+                ..
+            }
+        ),
+        "expected a stale-branch delivery refusal, got {error:?}"
     );
     for fragment in ["refusing stale branch", &format!("'{branch}'"), tip, base] {
         assert!(

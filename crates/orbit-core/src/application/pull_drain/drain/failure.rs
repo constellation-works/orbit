@@ -11,8 +11,8 @@ use orbit_store::contracts::{
 };
 use orbit_types::workflow::{
     BASELINE_RED_MARKER, BaselineRedHold, CandidateCarry, CandidateCarryOutput, ClaimFailureClass,
-    FORGE_UNAVAILABLE_MARKER, FinalRecoveryDecision, ForgeUnavailableHold, JobRunState,
-    OWNER_BUSY_MARKER, OWNER_ROUTE_UNAVAILABLE_MARKER, PROVIDER_CAPACITY_MARKER,
+    DeliveryRefusal, FORGE_UNAVAILABLE_MARKER, FinalRecoveryDecision, ForgeUnavailableHold,
+    JobRunState, OWNER_BUSY_MARKER, OWNER_ROUTE_UNAVAILABLE_MARKER, PROVIDER_CAPACITY_MARKER,
     PROVIDER_LIMIT_MARKER, PROVIDER_UNAVAILABLE_MARKER, PipelineState,
     REVIEW_LANDING_DECISION_PENDING, ReviewEvidenceHold, TRANSIENT_FAILURE_MARKER,
     UPGRADE_PENDING_MARKER, VALIDATION_ENVIRONMENT_MARKER, is_baseline_red_failure,
@@ -240,7 +240,7 @@ pub(crate) fn leaf_failure_settlement(
             (None, Some(forge), None) => forge_hold_release(record, run, forge, &failure),
             (None, None, None) => release_evidence(
                 record,
-                &release_reason(run, &failure),
+                &release_reason(run, diagnostic, &failure),
                 failure.class.requires_operator_decision(),
             ),
         };
@@ -528,6 +528,7 @@ fn leaf_failure(
         provider_limit,
         provider_refusal,
         owner_busy,
+        delivery_hold: is_stale_branch_hold(run, diagnostic),
     }
 }
 
@@ -726,8 +727,32 @@ fn forge_hold_release(
     }
 }
 
+/// Whether `run` (or its terminalizing `diagnostic`) recorded a retained
+/// stale-branch setup refusal.
+fn is_stale_branch_hold(
+    run: &orbit_types::workflow::JobRun,
+    diagnostic: Option<(&str, &str)>,
+) -> bool {
+    let code = DeliveryRefusal::StaleBranch.error_code();
+    crate::application::job::run_error_step(run).and_then(|step| step.error_code.as_deref())
+        == Some(code)
+        || diagnostic.is_some_and(|(diag_code, _)| diag_code == code)
+}
+
 /// The release comment's reason for a typed failure.
-fn release_reason(run: &orbit_types::workflow::JobRun, failure: &ClaimFailure) -> String {
+fn release_reason(
+    run: &orbit_types::workflow::JobRun,
+    diagnostic: Option<(&str, &str)>,
+    failure: &ClaimFailure,
+) -> String {
+    if is_stale_branch_hold(run, diagnostic) {
+        return format!(
+            "leaf {} held on a retained stale branch for operator inspection ({}){}",
+            run.run_id,
+            failure.reason,
+            candidate_note(failure)
+        );
+    }
     let crew = failure.crew.as_deref().unwrap_or("its crew");
     let mut why = match failure.class {
         ClaimFailureClass::Provider if failure.provider_limit => format!(
@@ -812,6 +837,7 @@ pub(crate) fn operator_cancel_release(
         provider_limit: false,
         provider_refusal: false,
         owner_busy: false,
+        delivery_hold: false,
     };
     let mut evidence =
         release_evidence(record, &format!("{why}{}", candidate_note(&failure)), false);

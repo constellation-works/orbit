@@ -388,6 +388,7 @@ impl TaskCommitBoundary {
                         forge_unavailable: value.forge_hold.is_some(),
                         provider_limit: failure.provider_limit,
                         owner_busy: failure.owner_busy,
+                        delivery_hold: failure.delivery_hold,
                     });
                     let settlement = ClaimSettlementRecord::of(
                         ClaimSettlementKind::Release,

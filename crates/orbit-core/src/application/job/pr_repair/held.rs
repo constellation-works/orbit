@@ -68,7 +68,9 @@ pub(crate) fn handed_back_hold(refusal: DeliveryRefusal) -> bool {
         // The claim already ended. Resuming this hold would land a revoked handoff.
         | DeliveryRefusal::LandingRepairRequeue
         // The operator inspects explicit source repair or discards the candidate.
-        | DeliveryRefusal::SourceRepairDecision => false,
+        | DeliveryRefusal::SourceRepairDecision
+        // The operator inspects the retained branch or worktree before retrying setup.
+        | DeliveryRefusal::StaleBranch => false,
     }
 }
 
