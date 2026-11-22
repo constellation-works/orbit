@@ -101,7 +101,7 @@ grantable to a resident in v1.
 
 | Right | Tools the cycle may call (writes in the mandate's own workspace) |
 |---|---|
-| none | read tools, `orbit.workflow` action `auto` with `mode: "status"` (drain readiness read); `orbit.task.add` filed `proposed` (or with no status); `orbit.task.update` without a status (edits, comments); `orbit.task.artifact` action `put`; `orbit.friction` action `add` (own workspace only) and `update` (without `rehome_to` or `move`, in any covered workspace); `orbit.evolution.add`; `orbit.decision` action `raise`; `orbit.notice.post`; and `orbit.resident.checkpoint`, including the `handoff` outcome that has finalize move the assignment to `review` |
+| none | read tools, `orbit.workflow` action `auto` with `mode: "status"` (drain readiness read); `orbit.task.add` filed `proposed` (or with no status); `orbit.task.update` without a status (edits, comments); `orbit.task.artifact` action `put`; `orbit.friction` action `add` (own workspace only) and `update` (without `rehome_to` or `move`, in any covered workspace); `orbit.evolution.add`; `orbit.decision` action `raise`; `orbit.notice.post`; `orbit.notice.close` for notices posted by the mandate's own cycles in its own workspace; and `orbit.resident.checkpoint`, including the `handoff` outcome that has finalize move the assignment to `review` |
 | `dispatch` | `orbit.pipeline.invoke`, `orbit.run.auto`/`ship`/`resume`, `orbit.task.recover` action `requeue`/`repilot`, drain pull and claim bind/settle, `orbit.task.update` to `in-progress` |
 | `promote` | `orbit.task.update` to `backlog`, `orbit.task.add` filed `backlog` |
 | `merge` | `orbit.workflow` action `land`, `orbit.task.update` to `done` (refused while the task has an open pull request), `orbit.task.recover` action `retry_handoff`, `orbit.task.recover` action `reconcile_review` |
@@ -119,7 +119,7 @@ granted workspaces and the assignment's own as `resident_scope_refused`; and any
 right grants context maintenance. This applies to the native `orbit task lint --restore-pruned`
 route too; MCP and `orbit tool run` do not expose lint. Outside a resident cycle, operator
 restoration is unchanged. Other refused writes include `orbit.task.update` with `approve` or `force`, other status
-targets, `orbit.friction` action `update` carrying `rehome_to` or `move` (whatever rights are granted: moving a friction between workspaces stays with the operator and the curation pass), `orbit.notice.close`, `orbit.resident.grant`, decision answers and administration,
+targets, `orbit.friction` action `update` carrying `rehome_to` or `move` (whatever rights are granted: moving a friction between workspaces stays with the operator and the curation pass), `orbit.resident.grant`, decision answers and administration,
 `orbit.command.exec`, desktop writes and every write on another noun. Operator-only tools stay
 operator-only, because their capability check runs before the guard, so `orbit.run.auto`/`resume`,
 `orbit.pipeline.invoke`, drain control actions (`orbit.workflow` action `auto` with `mode: "start"`/`"stop"`/`"resize"`) and every other `orbit.task.recover` action are refused as `capability_denied`
