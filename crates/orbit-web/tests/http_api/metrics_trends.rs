@@ -972,6 +972,107 @@ fn delivery_friction_lists_done_crews_for_non_history_families() {
     );
 }
 
+/// One invocation linked to `task`, recorded now, with `cost` as its provider
+/// cost (`None` for an invocation that reported none).
+fn record_spend(fixture: &Fixture, run: &str, task: &str, cost: Option<f64>) {
+    fixture
+        .runtime
+        .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
+            job_run_id: run.into(),
+            account: None,
+            activity_id: "implement_one".into(),
+            agent: "codex".into(),
+            provider: None,
+            model: None,
+            task_ids: vec![task.to_string()],
+            trace: InvocationTrace {
+                provider_cost_usd: cost,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+}
+
+/// A cost or token total that leaves invocations out is a partial sum: its
+/// per-done-task rate is withheld with the coverage counts, never the partial
+/// spend divided by every done task [ORB-26731].
+#[test]
+fn delivery_friction_withholds_rates_over_partial_cost_and_token_coverage() {
+    isolated(
+        "metrics_trends::delivery_friction_withholds_rates_over_partial_cost_and_token_coverage",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let mut sol = Vec::new();
+            for hours in 1..=3 {
+                let task = add_crewed_task(&fixture, "sol");
+                close_at(
+                    &fixture,
+                    &task,
+                    TaskStatus::Done,
+                    now - Duration::hours(hours),
+                );
+                sol.push(task);
+            }
+            let priced = add_crewed_task(&fixture, "haiku");
+            close_at(
+                &fixture,
+                &priced,
+                TaskStatus::Done,
+                now - Duration::hours(4),
+            );
+            record_spend(&fixture, "sol-a", &sol[0], None);
+            record_spend(&fixture, "sol-b", &sol[1], None);
+            record_spend(&fixture, "claude-a", &priced, Some(2.0));
+
+            let server = fixture.server(false);
+            let read = |crew: &str| {
+                let response = json_ok(server.get(&format!(
+                    "/api/diagnostics/delivery_friction?since=24h&families=cost,tokens{crew}&{WS}"
+                )));
+                let family = |key: &str| {
+                    response["families"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|family| family["family"] == key)
+                        .unwrap_or_else(|| panic!("{key} in {response}"))["total"]
+                        .clone()
+                };
+                (family("cost"), family("tokens"))
+            };
+
+            // Only unpriced invocations: no spend was measured, so no rate.
+            let (cost, tokens) = read("&crew=sol");
+            assert_eq!(cost["denominator"], 3, "{cost}");
+            assert_eq!(cost["count"], 0.0, "{cost}");
+            assert_eq!(cost["covered_invocations"], 0, "{cost}");
+            assert_eq!(cost["excluded_invocations"], 2, "{cost}");
+            assert_eq!(cost["rate_withheld"], true, "{cost}");
+            assert!(cost["rate"].is_null(), "{cost}");
+            assert_eq!(tokens["excluded_invocations"], 2, "{tokens}");
+            assert_eq!(tokens["rate_withheld"], true, "{tokens}");
+            assert!(tokens["rate"].is_null(), "{tokens}");
+
+            // One priced invocation beside two unpriced ones is still partial.
+            let (cost, _) = read("");
+            assert_eq!(cost["denominator"], 4, "{cost}");
+            assert_eq!(cost["count"], 2.0, "{cost}");
+            assert_eq!(cost["covered_invocations"], 1, "{cost}");
+            assert_eq!(cost["excluded_invocations"], 2, "{cost}");
+            assert!(cost["rate"].is_null(), "{cost}");
+
+            // A fully priced cohort keeps its rate.
+            let (cost, _) = read("&crew=haiku");
+            assert_eq!(cost["denominator"], 1, "{cost}");
+            assert_eq!(cost["excluded_invocations"], 0, "{cost}");
+            assert_eq!(cost["rate_withheld"], false, "{cost}");
+            assert_f64(&cost["rate"], 2.0);
+        },
+    );
+}
+
 fn tool_call(seq: u32, name: &str, bytes: u64) -> ToolCallTrace {
     ToolCallTrace {
         seq,

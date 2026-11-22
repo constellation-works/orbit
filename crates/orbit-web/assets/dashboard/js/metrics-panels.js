@@ -5,7 +5,7 @@ import { COMPLEXITY_LABELS, delta, fmtMs, previousLabel, seriesLabel, tasks } fr
 import { fmtTokens } from './metrics-tokens.js';
 import { fmtTurns } from './metrics-turns.js';
 import { fmtLines } from './metrics-diff.js';
-import { fmtAmount } from './metrics-friction.js';
+import { coverageText, fmtAmount } from './metrics-friction.js';
 
 const LOW_ACTOR_SAMPLE = 5;
 const ACTORS_SHOWN = 7;
@@ -358,15 +358,21 @@ function deliveriesCountedCard(payload) {
 }
 
 function frictionFamilyCard(payload) {
-  const rows = (payload?.families || []).map(({ label, unit, total, previous }) => {
+  const families = payload?.families || [];
+  // Cost and tokens leave invocations out of their sums; say so beside the
+  // totals rather than only in a tooltip.
+  const hasCoverage = families.some(({ total }) => total.excluded_invocations != null);
+  const rows = families.map(({ label, unit, total, previous }) => {
     const format = (count) => `${fmtAmount(unit, count)}${unit === "tokens" ? " tokens" : ""}`;
-    return [label, format(total.count), ...(previous ? [format(previous.count)] : [])];
+    const coverage = total.excluded_invocations == null ? null : (coverageText(unit, total) || "complete");
+    return [label, format(total.count), ...(previous ? [format(previous.count)] : []), ...(hasCoverage ? [coverage] : [])];
   });
-  const hasFriction = payload?.families?.some(({ total, previous }) => total.count || previous?.count);
-  const hasPrevious = payload?.families?.some(({ previous }) => previous);
-  return summaryCard("Friction by family", "", payload, ["Family", hasPrevious ? "Current" : "Total", ...(hasPrevious ? ["Prior"] : [])],
+  const hasFriction = families.some(({ total, previous }) => total.count || previous?.count || total.excluded_invocations || previous?.excluded_invocations);
+  const hasPrevious = families.some(({ previous }) => previous);
+  return summaryCard("Friction by family", "", payload,
+    ["Family", hasPrevious ? "Current" : "Total", ...(hasPrevious ? ["Prior"] : []), ...(hasCoverage ? ["Coverage"] : [])],
     hasFriction ? rows : [], "No occurrences or recorded usage for the selected families.",
-    "These are window totals for the selected families. Recoveries and merge conflicts are workspace-wide when crew or complexity is selected.");
+    "These are window totals for the selected families. Recoveries and merge conflicts are workspace-wide when crew or complexity is selected. Coverage counts cost and token invocations left out of a total because they recorded no provider cost or no covered tokens; the per-task rate is withheld while any are left out.");
 }
 
 const durationPanelState = { allActors: false, complexity: null };
@@ -406,6 +412,6 @@ export function metricsPanelRows(trend, payload, rerender, { originLabels, linea
         [diff?.crews?.map(({ key, total }) => [key, total]), diff?.overall?.total.n, diff?.overall?.points.map(({ thin }) => thin), diff?.unavailable]]];
     case "friction":
       return [["metrics-friction", frictionFamilyCard(friction),
-        [friction?.families?.map(({ label, unit, total, previous }) => [label, unit, total.count, previous?.count]), friction?.unavailable]]];
+        [friction?.families?.map(({ label, unit, total, previous }) => [label, unit, total.count, previous?.count, total.excluded_invocations, total.covered_invocations]), friction?.unavailable]]];
   }
 }

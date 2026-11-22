@@ -15,6 +15,11 @@
 //! | `cost` | invocations' `provider_cost_usd` | USD summed per invocation, at its time; invocations without a valid provider cost are reported, not counted | invocation |
 //! | `tokens` | invocations' normalized token total, as `GET /api/cost` normalizes it | tokens summed per invocation, at its time; invocations of an uncovered model are reported, not counted | invocation |
 //!
+//! A `cost` or `tokens` cell that leaves any invocation out reports
+//! `rate: null` and `rate_withheld: true` beside `covered_invocations` and
+//! `excluded_invocations`: the partial sum is not divided by done tasks whose
+//! spend is missing [ORB-26731].
+//!
 //! Failed checks are recorded only where the `--auto-fix` watcher read the
 //! pull request, so `failed_ci` misses failures on runs without it.
 //!
@@ -299,6 +304,8 @@ struct Occurrence {
 struct Cell {
     count: f64,
     parts: BTreeMap<&'static str, f64>,
+    /// Invocations summed into `count` (cost and tokens only).
+    covered: u64,
     /// Invocations left out of `count`: no valid cost, or an uncovered model.
     excluded: u64,
 }
@@ -310,7 +317,11 @@ impl Cell {
     }
 
     fn to_json(&self, family: Family, denominator: u64) -> Value {
-        let rate = (denominator > 0).then(|| self.count / denominator as f64);
+        // A cost or token total that leaves invocations out is a partial sum:
+        // dividing it by every done task would read missing telemetry as zero
+        // spend, so no rate is reported until the cell is fully covered.
+        let withheld = family.reads_invocations() && self.excluded > 0;
+        let rate = (denominator > 0 && !withheld).then(|| self.count / denominator as f64);
         let parts: Map<String, Value> = self
             .parts
             .iter()
@@ -324,7 +335,9 @@ impl Cell {
             "breakdown": parts,
         });
         if family.reads_invocations() {
+            cell["covered_invocations"] = json!(self.covered);
             cell["excluded_invocations"] = json!(self.excluded);
+            cell["rate_withheld"] = json!(withheld);
         }
         cell
     }
@@ -509,8 +522,11 @@ fn delivery_friction_trend(
         if let Some(index) = window.bucket_of(occurrence.at) {
             entry.points[index].add(occurrence.value, occurrence.part);
             entry.total.add(occurrence.value, occurrence.part);
+            entry.points[index].covered += u64::from(occurrence.family.reads_invocations());
+            entry.total.covered += u64::from(occurrence.family.reads_invocations());
         } else if window.in_previous(occurrence.at) {
             entry.previous.add(occurrence.value, occurrence.part);
+            entry.previous.covered += u64::from(occurrence.family.reads_invocations());
         }
     }
     for (family, at, task_ids) in &excluded {
