@@ -3,19 +3,25 @@
 
     fixture.py snapshot --workspace <ws> --out <snapshot-dir> [--git-metadata <checkout>]
     fixture.py restore  --snapshot <snapshot-dir> --into <dir>
+    fixture.py prepare  --into <dir> --binary <orbit>
     fixture.py clean    --into <dir>
 
 `snapshot` reads the source only: every SQLite source is opened through a
 `mode=ro` URI connection (`open_source_read_only`), files are copied by
 reading them, and nothing writes to, reconciles or signals the live store or a
-service. `restore` verifies every digest in `snapshot-manifest.json` before it
-lays out a disposable `HOME` and workspace root. See
-docs/runbooks/perf-timing-protocol.md.
+service. It then checks that every copied task-index row agrees with its
+copied bundle, re-copying a drifted task's rows and bundle together and
+refusing when they still disagree. `restore` verifies every digest in
+`snapshot-manifest.json` before it lays out a disposable `HOME` and workspace
+root. `prepare` brings a restored root to the state a live host running
+`<orbit>` is in: it converges the managed defaults and re-records the task
+envelope proofs with that binary. See docs/runbooks/perf-timing-protocol.md.
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime
 import fnmatch
 import importlib
 import json
@@ -103,6 +109,25 @@ CREDENTIAL_PATTERNS = (
     "id_ed25519*", "id_ecdsa*",
 )
 CREDENTIAL_DIRS = ("plugin-secrets", "ssh", ".ssh", ".gnupg", "secrets")
+# The task index and the bundle tree are copied at different instants while
+# drains write, so a task written in between has an index row from one moment
+# and a bundle from another. One such row sends every task read of the
+# restored root to a full bundle scan (ORB-26617). The check compares each
+# row's `updated_at` with its copied `task.yaml`, then re-copies a drifted
+# task's rows and bundle together, up to this many rounds, before refusing.
+TASK_INDEX_DB = "tasks/index.sqlite"
+TASK_INDEX_TABLE = "task_bundle_index"
+TASK_BINDINGS_TABLE = "task_bundle_bindings"
+TASK_ROW_KEYS = ("task_id", "source_task_id")
+RECONCILE_ROUNDS = 5
+# Commands `prepare` runs with an arm's own binary on a restored root, in
+# order. `workspace sync` converges the managed defaults on that binary, as
+# `orbit update` does on a live host; doctor opens read-only and never
+# reconciles them. `task list` is a writable listing whose freshness scan
+# records envelope proofs (task_envelope_stamps) for the restored files,
+# which a restore gives new inodes and mtimes; read-only doctor never records
+# them, so without this every doctor listing re-parses every task.yaml.
+PREPARE_COMMANDS = (("workspace", "sync"), ("task", "list", "--json"))
 
 
 # ── read-only source access ──────────────────────────────────────────────────
@@ -347,6 +372,271 @@ class Snapshotter:
                     "sha256": common.sha256_file(path),
                 })
         self.files.sort(key=lambda entry: entry["path"])
+
+
+# ── task index consistency ───────────────────────────────────────────────────
+
+
+_RFC3339 = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})[Tt ](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?"
+    r"(Z|z|[+-]\d{2}:\d{2})$")
+_ENVELOPE_UPDATED_AT = re.compile(r"^updated_at:[ \t]*(.*?)[ \t]*$", re.MULTILINE)
+
+
+def rfc3339_instant(text: str) -> tuple[int, int] | None:
+    """(Unix seconds, nanoseconds) of an RFC 3339 timestamp, or None.
+
+    The index stores `+00:00` and the envelope `Z`, and either may carry 0–9
+    fraction digits, so instants are compared, not strings.
+    """
+    match = _RFC3339.match(text.strip().strip("'\""))
+    if not match:
+        return None
+    year, month, day, hour, minute, second = (int(g) for g in match.groups()[:6])
+    fraction, offset = match.group(7) or "", match.group(8)
+    try:
+        moment = datetime.datetime(year, month, day, hour, minute, second,
+                                   tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return None
+    seconds = int(moment.timestamp())
+    if offset not in ("Z", "z"):
+        sign = 1 if offset[0] == "+" else -1
+        seconds -= sign * (int(offset[1:3]) * 3600 + int(offset[4:6]) * 60)
+    return seconds, int(fraction.ljust(9, "0")) if fraction else 0
+
+
+def envelope_updated_at(task_yaml: Path) -> str | None:
+    """The top-level `updated_at` scalar of a copied `task.yaml`, or None."""
+    try:
+        text = task_yaml.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    match = _ENVELOPE_UPDATED_AT.search(text)
+    return match.group(1) if match else None
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> list[str]:
+    return [row[1] for row in conn.execute(f"PRAGMA table_info({quote_ident(table)})")]
+
+
+def _has_table(conn: sqlite3.Connection, table: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                        (table,)).fetchone() is not None
+
+
+def task_index_mismatches(index_db: Path, bundles_root: Path,
+                          keep: set[str]) -> dict[str, str] | None:
+    """Task id → why its copied index rows and copied bundle disagree.
+
+    Covers every task the copied index binds or indexes for the fixture
+    workspace and every copied bundle directory: a task must have a binding,
+    an index row and a bundle, and the row's `updated_at` must be the bundle
+    envelope's. None when the copied index has no task bundle index (an
+    older or synthetic store), which leaves nothing to compare.
+    """
+    conn = sqlite3.connect(index_db)
+    try:
+        if not _has_table(conn, TASK_INDEX_TABLE) or not _has_table(conn, TASK_BINDINGS_TABLE):
+            return None
+        placeholders = ",".join("?" for _ in keep)
+        params = tuple(sorted(keep))
+        indexed = {
+            task_id: (workspace_id, updated_at)
+            for task_id, workspace_id, updated_at in conn.execute(
+                f"SELECT task_id, workspace_id, updated_at FROM {TASK_INDEX_TABLE} "
+                f"WHERE workspace_id IN ({placeholders})", params)
+        }
+        bound = {
+            task_id: workspace_id
+            for task_id, workspace_id in conn.execute(
+                f"SELECT task_id, workspace_id FROM {TASK_BINDINGS_TABLE} "
+                f"WHERE workspace_id IN ({placeholders})", params)
+        }
+    finally:
+        conn.close()
+    bundles: dict[str, str] = {}
+    for ident in sorted(keep):
+        directory = bundles_root / ident
+        if directory.is_dir():
+            for entry in directory.iterdir():
+                # Dot entries are the store's own coordination state
+                # (`.task-commit-applying`), not task bundles.
+                if entry.is_dir() and not entry.is_symlink() and not entry.name.startswith("."):
+                    bundles.setdefault(entry.name, ident)
+    problems: dict[str, str] = {}
+    for task_id in sorted(set(indexed) | set(bound) | set(bundles)):
+        if task_id not in bound:
+            problems[task_id] = "no task_bundle_bindings row"
+            continue
+        if task_id not in indexed:
+            problems[task_id] = "no task_bundle_index row"
+            continue
+        workspace_id, row_updated_at = indexed[task_id]
+        task_yaml = bundles_root / workspace_id / task_id / "task.yaml"
+        if task_id not in bundles or not task_yaml.is_file():
+            problems[task_id] = f"index row has no copied bundle {workspace_id}/{task_id}/task.yaml"
+            continue
+        envelope_value = envelope_updated_at(task_yaml)
+        if envelope_value is None:
+            problems[task_id] = "copied task.yaml has no readable updated_at"
+            continue
+        row_instant = rfc3339_instant(row_updated_at or "")
+        envelope_instant = rfc3339_instant(envelope_value)
+        if row_instant is None or row_instant != envelope_instant:
+            problems[task_id] = (f"index updated_at {row_updated_at} != "
+                                 f"task.yaml updated_at {envelope_value}")
+    return problems
+
+
+def recopy_task_rows(source_db: Path, target_db: Path, task_ids: list[str],
+                     keep: set[str]) -> None:
+    """Replace the copied rows of `task_ids` in every task-keyed table.
+
+    Rows come from one read transaction of a `mode=ro` source connection, with
+    the same workspace filter the first copy applied; a task the source no
+    longer has loses its copied rows.
+    """
+    source = open_source_read_only(source_db)
+    target = sqlite3.connect(target_db)
+    try:
+        source.execute("BEGIN")
+        id_marks = ",".join("?" for _ in task_ids)
+        keep_marks = ",".join("?" for _ in keep)
+        tables = [r[0] for r in target.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' "
+            "AND sql NOT LIKE 'CREATE VIRTUAL%' ORDER BY name")]
+        for table in tables:
+            columns = _table_columns(target, table)
+            key = next((c for c in TASK_ROW_KEYS if c in columns), None)
+            if key is None or not _has_table(source, table):
+                continue
+            if _table_columns(source, table) != columns:
+                raise common.PerfRefusal(
+                    f"{source_db}: table {table} changed shape during the snapshot; take it again")
+            tbl, col = quote_ident(table), quote_ident(key)
+            select = f"SELECT * FROM {tbl} WHERE {col} IN ({id_marks})"
+            params: tuple = tuple(task_ids)
+            scope = next((c for c in WORKSPACE_COLUMNS if c in columns), None)
+            if scope:
+                select += (f" AND ({quote_ident(scope)} IN ({keep_marks})"
+                           f" OR {quote_ident(scope)} IS NULL)")
+                params += tuple(sorted(keep))
+            rows = source.execute(select, params).fetchall()
+            target.execute(f"DELETE FROM {tbl} WHERE {col} IN ({id_marks})", tuple(task_ids))
+            target.executemany(
+                f"INSERT INTO {tbl} VALUES ({','.join('?' for _ in columns)})", rows)
+        source.execute("COMMIT")
+        target.commit()
+    finally:
+        target.close()
+        source.close()
+
+
+def bind_foreign_relation_targets(source_db: Path, target_db: Path, keep: set[str]) -> int:
+    """Keep the source bindings of relation targets registered to other workspaces.
+
+    A relation target resolves when any workspace binds it. The filtered copy
+    keeps only the fixture workspace's bindings, so a relation into another
+    partition (ws_orbit relates to 791 tasks bound to another partition) read as
+    dangling: doctor reported it as blocking an index rebuild, which live
+    does not. Copies those `task_bundle_bindings` rows and their
+    `workspace_bindings` rows, and nothing else of the other workspace. Returns
+    how many bindings were added.
+    """
+    target = sqlite3.connect(target_db)
+    try:
+        if not all(_has_table(target, t) for t in
+                   (TASK_BINDINGS_TABLE, "task_bundle_relations", "workspace_bindings")):
+            return 0
+        wanted = sorted(
+            row[0] for row in target.execute(
+                "SELECT DISTINCT target_task_id FROM task_bundle_relations WHERE target_task_id "
+                f"NOT IN (SELECT task_id FROM {TASK_BINDINGS_TABLE})"))
+        if not wanted:
+            return 0
+        source = open_source_read_only(source_db)
+        try:
+            source.execute("BEGIN")
+            bindings: list = []
+            for start in range(0, len(wanted), 500):
+                chunk = wanted[start:start + 500]
+                bindings += source.execute(
+                    f"SELECT * FROM {TASK_BINDINGS_TABLE} WHERE task_id IN "
+                    f"({','.join('?' for _ in chunk)})", chunk).fetchall()
+            columns = _table_columns(target, TASK_BINDINGS_TABLE)
+            workspace_index = columns.index("workspace_id")
+            partitions = sorted({row[workspace_index] for row in bindings} - set(keep))
+            workspaces = source.execute(
+                f"SELECT * FROM workspace_bindings WHERE workspace_id IN "
+                f"({','.join('?' for _ in partitions)})", partitions).fetchall() if partitions else []
+            source.execute("COMMIT")
+        finally:
+            source.close()
+        ws_columns = _table_columns(target, "workspace_bindings")
+        target.executemany(
+            f"INSERT OR IGNORE INTO workspace_bindings VALUES ({','.join('?' for _ in ws_columns)})",
+            workspaces)
+        target.executemany(
+            f"INSERT OR IGNORE INTO {TASK_BINDINGS_TABLE} VALUES "
+            f"({','.join('?' for _ in columns)})", bindings)
+        target.commit()
+        return len(bindings)
+    finally:
+        target.close()
+
+
+def reconcile_task_index(snap: "Snapshotter", global_root: Path, home_rel: Path,
+                         keep: set[str]) -> dict:
+    """Make the copied task index and bundles agree, or refuse naming the drift.
+
+    Each round re-copies every drifted task's index rows, then its bundle, so
+    both come from one short window; a drain that rewrites the task again in
+    that window leaves it drifted for the next round.
+    """
+    index_db = snap.out / home_rel / TASK_INDEX_DB
+    bundles_root = snap.out / home_rel / "tasks" / "workspaces"
+    if not index_db.is_file():
+        return {"checked": False, "reason": f"no {TASK_INDEX_DB} in the source"}
+    problems = task_index_mismatches(index_db, bundles_root, keep)
+    if problems is None:
+        return {"checked": False,
+                "reason": f"{TASK_INDEX_DB} has no {TASK_INDEX_TABLE} table"}
+    first = dict(problems)
+    rounds = 0
+    while problems and rounds < RECONCILE_ROUNDS:
+        rounds += 1
+        ids = sorted(problems)
+        recopy_task_rows(global_root / TASK_INDEX_DB, index_db, ids, keep)
+        for task_id in ids:
+            for ident in sorted(keep):
+                copied = bundles_root / ident / task_id
+                if copied.exists():
+                    shutil.rmtree(copied)
+                snap.copy_tree(global_root / "tasks" / "workspaces" / ident / task_id,
+                               home_rel / "tasks" / "workspaces" / ident / task_id)
+        problems = task_index_mismatches(index_db, bundles_root, keep)
+    if problems:
+        shown = "; ".join(f"{task_id}: {why}" for task_id, why in list(problems.items())[:10])
+        more = f" (+{len(problems) - 10} more)" if len(problems) > 10 else ""
+        raise common.PerfRefusal(
+            f"task index and bundles still disagree after {rounds} re-copy rounds, "
+            f"refusing the snapshot: {shown}{more}")
+    conn = sqlite3.connect(index_db)
+    try:
+        checked = conn.execute(
+            f"SELECT COUNT(*) FROM {TASK_INDEX_TABLE} WHERE workspace_id IN "
+            f"({','.join('?' for _ in keep)})", tuple(sorted(keep))).fetchone()[0]
+    finally:
+        conn.close()
+    foreign = bind_foreign_relation_targets(global_root / TASK_INDEX_DB, index_db, keep)
+    return {
+        "checked": True,
+        "tasks": checked,
+        "foreign_relation_target_bindings": foreign,
+        "drifted": [{"task_id": task_id, "reason": why} for task_id, why in first.items()],
+        "reconcile_rounds": rounds,
+    }
 
 
 # ── workspace resolution ─────────────────────────────────────────────────────
@@ -599,6 +889,7 @@ def cmd_snapshot(args) -> int:
                            home_rel / "tasks" / "workspaces" / ident)
             snap.copy_tree(global_root / "frictions" / "workspaces" / ident,
                            home_rel / "frictions" / "workspaces" / ident)
+        consistency = reconcile_task_index(snap, global_root, home_rel, keep)
         excludes = WORKSPACE_EXCLUDES + tuple(args.exclude or ())
         snap.copy_tree(Path(ws["orbit_dir"]), Path("checkout/.orbit"),
                        excludes=excludes, databases=True)
@@ -632,6 +923,7 @@ def cmd_snapshot(args) -> int:
             "databases": snap.databases,
             "state_distributions": snap.distributions((home_rel / "orbit.db").as_posix()),
             "git_metadata": git_info,
+            "task_index_consistency": consistency,
             "excluded": {
                 "credential_like_files": snap.excluded_credential_like,
                 "non_regular_files": snap.skipped_non_regular,
@@ -914,6 +1206,47 @@ def cmd_restore(args) -> int:
     print(f"cd {json.dumps(info['cwd'])}")
     print(f"# workspace selector: --workspace {info['workspace']}  (registry id {info['registry_id']})")
     print("# unset every inherited ORBIT_* and GIT_* variable before running orbit here")
+    print("# before timing a binary here: fixture.py prepare --into <dir> --binary <that orbit>")
+    return 0
+
+
+def restored_info(into: Path) -> dict:
+    """The env record `restore` wrote into a restored root."""
+    marker = into.absolute() / RESTORE_MARKER
+    try:
+        return json.loads(marker.read_text())
+    except (OSError, ValueError) as error:
+        raise common.PerfRefusal(f"{into} is not a restored root: cannot read {marker}: {error}") from None
+
+
+def prepare_failure(binary: Path, argv: tuple[str, ...], how: str) -> common.PerfRefusal:
+    return common.PerfRefusal(
+        f"preparing the restored root with {binary} failed: `orbit {' '.join(argv)}` {how}")
+
+
+def cmd_prepare(args) -> int:
+    into = Path(args.into).absolute()
+    common.refuse_protected(into, "prepare")
+    info = restored_info(into)
+    binary = Path(args.binary).absolute()
+    env = isolated_env(info)
+    ran = []
+    for argv in PREPARE_COMMANDS:
+        started = time.perf_counter()
+        try:
+            result = subprocess.run([str(binary), *argv], cwd=info["cwd"], env=env,
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.PIPE, timeout=args.timeout)
+        except subprocess.TimeoutExpired:
+            raise prepare_failure(binary, argv, f"ran past {args.timeout:g} s") from None
+        except OSError as error:
+            raise prepare_failure(binary, argv, f"could not start: {error}") from None
+        if result.returncode != 0:
+            tail = result.stderr.decode("utf-8", "replace").strip().splitlines()[-5:]
+            raise prepare_failure(binary, argv, f"exited {result.returncode}: {' | '.join(tail)}")
+        ran.append({"command": " ".join(argv), "exit": 0,
+                    "ms": round((time.perf_counter() - started) * 1000, 1)})
+    print(json.dumps({"prepared": str(into), "binary": str(binary), "commands": ran}))
     return 0
 
 
@@ -949,12 +1282,18 @@ def main(argv: list[str] | None = None) -> int:
     restore = sub.add_parser("restore", help="make a disposable root from a snapshot")
     restore.add_argument("--snapshot", required=True)
     restore.add_argument("--into", required=True)
+    prepare = sub.add_parser(
+        "prepare", help="converge a restored root's defaults and envelope proofs with one binary")
+    prepare.add_argument("--into", required=True, help="a root `restore` made")
+    prepare.add_argument("--binary", required=True, help="the orbit binary that will run there")
+    prepare.add_argument("--timeout", type=float, default=300.0,
+                         help="seconds each prepare command may run")
     clean = sub.add_parser("clean", help="remove a restored root")
     clean.add_argument("--into", required=True)
     args = parser.parse_args(argv)
     os.umask(0o077)
     try:
-        return {"snapshot": cmd_snapshot, "restore": cmd_restore,
+        return {"snapshot": cmd_snapshot, "restore": cmd_restore, "prepare": cmd_prepare,
                 "clean": cmd_clean}[args.command](args)
     except common.PerfRefusal as refusal:
         print(f"fixture.py {args.command}: {refusal}", file=sys.stderr)

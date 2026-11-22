@@ -238,6 +238,10 @@ case "$mode" in
     ;;
 esac
 case "$mode" in
+  workspace|task)
+    # fixture.py PREPARE_COMMANDS, run untimed on every fresh root.
+    exit 0
+    ;;
   stall|probe-stall)
     # A descendant in the arm's group, then a leader that never finishes.
     sleep 600 &

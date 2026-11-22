@@ -644,6 +644,58 @@ class FixtureCliRestoreTests(unittest.TestCase):
                 self.assertEqual(snap_res.returncode, 2, snap_res.stdout + snap_res.stderr)
                 self.assertFalse(snapshot_dir.exists())
 
+    def test_snapshot_refuses_task_index_row_that_disagrees_with_its_bundle(self):
+        # ORB-26617: the index and the bundles were copied at different instants,
+        # so a copied row's updated_at (21:55:19) predated its copied task.yaml
+        # (21:55:56) and every task read of the restored root fell back to a full
+        # bundle scan. A row that still disagrees after re-copying must refuse.
+        source_home = self.base / "source"
+        paths = _build_disposable_source(source_home, self.base / "checkout")
+        bundles = paths["global_root"] / "tasks" / "workspaces" / "ws_fixture"
+        stamps = {
+            # task id: (index updated_at, task.yaml updated_at); equal instants
+            # in the index's `+00:00` and the envelope's `Z` spellings agree.
+            "ORB-1": ("2026-11-21T21:55:19.376518147+00:00", "2026-11-21T21:55:19.376518147Z"),
+            "ORB-2": ("2026-11-21T21:55:19.376518147+00:00", "2026-11-21T21:55:56.672174779Z"),
+        }
+        conn = sqlite3.connect(paths["global_root"] / "tasks" / "index.sqlite")
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE task_bundle_bindings (task_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL, canonical_path TEXT NOT NULL);
+                CREATE TABLE task_bundle_index (task_id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL, updated_at TEXT NOT NULL);
+                """
+            )
+            for task_id, (row_updated_at, envelope_updated_at) in stamps.items():
+                (bundles / task_id).mkdir(parents=True, exist_ok=True)
+                (bundles / task_id / "task.yaml").write_text(
+                    f"schema_version: 1\nid: {task_id}\nstatus: done\n"
+                    f"created_at: 2026-11-21T21:39:25Z\nupdated_at: {envelope_updated_at}\n",
+                    encoding="utf-8",
+                )
+                conn.execute("INSERT INTO task_bundle_bindings VALUES (?, ?, ?)",
+                             (task_id, "ws_fixture", str(bundles / task_id)))
+                conn.execute("INSERT INTO task_bundle_index VALUES (?, ?, ?)",
+                             (task_id, "ws_fixture", row_updated_at))
+            conn.commit()
+        finally:
+            conn.close()
+        snapshot_dir = self.base / "snapshot"
+        result = self.run_fixture(
+            _child_env(source_home), "snapshot", "--workspace", "ws_fixture",
+            "--global-root", str(paths["global_root"]), "--out", str(snapshot_dir),
+        )
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn(
+            "ORB-2: index updated_at 2026-11-21T21:55:19.376518147+00:00 != "
+            "task.yaml updated_at 2026-11-21T21:55:56.672174779Z",
+            result.stderr,
+        )
+        self.assertNotIn("ORB-1:", result.stderr)
+        self.assertFalse(snapshot_dir.exists())
+
     def test_snapshot_records_unquoted_workspace_identity(self):
         # A quoted scalar names the same identity as its bare form, so the snapshot
         # records ws_fixture rather than the quote characters around it.
