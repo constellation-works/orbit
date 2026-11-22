@@ -1,8 +1,8 @@
 ---
 title: "Scope: conflict budget for footprint admission"
 owner: claude
-last_updated: 2026-11-07
-last_validated: 2026-11-07
+last_updated: 2026-11-21
+last_validated: 2026-11-21
 status: Draft
 stage: parked
 next: "Parked for free time (Daniel, 2026-11-02); on pickup settle open questions, file phase 1"
@@ -21,14 +21,13 @@ candidate on any overlap with a held claim, reservation or wave member
 via the `overlaps` closure in `selection.rs`, and by `owner_wave.rs` and the runtime lock index;
 a footprint-less editing task was treated as a whole-tree lock in multi-slot drains by [ORB-15191]). Two settings already relax
 that per path: [`workflow.unlocked_context_paths`](../../CONFIG.md#unlocked-context-paths)
-(globs, default `["**/*.md"]`) takes no lock, and
+(globs, default `["**/*.json", "**/*.txt", "**/*.md", "**/mod.rs", "**/*.toml"]`) takes no lock, and
 [`workflow.generated_paths`](../../CONFIG.md#generated-paths-are-regenerated-not-merged)
 ([ORB-16784]) regenerates a conflicting generated file at landing instead of merging it, and
 [`workflow.lock_modes`](../../CONFIG.md#footprint-lock-modes) ([ORB-18157], done) waives an
 overlap at a path whose mode is `shared`. A
 conflict that reaches landing is repaired by `pr_conflict_recovery`, whose crew comes from
-`workflow.purpose_crews.failure_recovery` ([ORB-15663]); ws_orbit draws it from
-`gemini-flash, haiku, luna, muse-spark`. This scope makes the lock a priced decision instead of a
+`workflow.purpose_crews.failure_recovery` ([ORB-15663]). This scope makes the lock a priced decision instead of a
 static allow-list.
 
 ## Problem
@@ -264,7 +263,7 @@ parallelism that broke nothing.
 
 ## Phasing
 
-0. **Configuration only, today (ws_orbit).** Add `**/mod.rs` and
+0. **Configuration-only baseline (proposed for ws_orbit).** Add `**/mod.rs` and
    `crates/orbit-config/assets/default-config.toml` to `workflow.unlocked_context_paths`, and
    map `crates/orbit-core/assets/auto_tasks/body-history.json` to
    `python3 scripts/update-auto-task-body-history.py` in `workflow.generated_paths`. This unblocks
