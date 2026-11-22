@@ -678,10 +678,6 @@ td .rel-rate { font-size: var(--text-sm); }
 .mx-bar-col .mx-seg-fill { width: 68%; }
 .mx-seg-fill { width: 100%; background: var(--mx-c); }
 .mx-prev { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--fg-mute); z-index: 1; }
-.mx-prev-label {
-  position: absolute; right: 4px; transform: translateY(-120%); z-index: 1;
-  padding: 0 var(--space-4); background: var(--bg-elev); color: var(--fg-dim); font: var(--text-xs) var(--font-mono);
-}
 .mx-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; z-index: 1; }
 .mx-line { fill: none; stroke: var(--mx-c); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .mx-line.mx-s-all { stroke-width: 3; }
@@ -737,6 +733,8 @@ td .rel-rate { font-size: var(--text-sm); }
 .mx-notes { display: flex; flex-wrap: wrap; gap: var(--space-6) var(--space-16); padding-left: 54px; color: var(--fg-mute); font: var(--text-sm) var(--font-sans); }
 .mx-note-hollow { display: inline-flex; align-items: center; gap: var(--space-6); }
 .mx-pt-key { width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--fg-dim); box-sizing: border-box; }
+.mx-note-prev { display: inline-flex; align-items: center; gap: var(--space-6); color: var(--fg-dim); font-family: var(--font-mono); font-size: var(--text-xs); }
+.mx-prev-key { width: 14px; border-top: 1px dashed var(--fg-mute); }
 .mx-empty {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-8);
   min-height: 220px; padding: var(--space-24); text-align: center;
