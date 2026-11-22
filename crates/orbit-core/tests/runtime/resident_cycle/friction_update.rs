@@ -30,7 +30,9 @@ impl WorkspaceCatalog for HostWorkspaces {
                 .iter()
                 .filter(|target| {
                     selectors.iter().any(|selector| {
-                        selector == &target.workspace_id || selector == &target.name
+                        selector == &target.workspace_id
+                            || selector == &target.name
+                            || selector == target.repo_root.to_string_lossy().as_ref()
                     })
                 })
                 .cloned()
@@ -488,4 +490,414 @@ fn friction_update_carrying_rehome_to_is_refused_as_resident_tool_refused() {
         .expect_err("finished cycle cannot update friction");
         assert!(error.contains("resident_cycle_stale"), "{error}");
     });
+}
+
+struct RegisteredWorkspace {
+    id: String,
+    name: String,
+    repo_root: PathBuf,
+    runtime: OrbitRuntime,
+    _keep: TempDir,
+}
+
+fn add_colliding_basename_workspaces(
+    fx: &mut Fixture,
+) -> (
+    RegisteredWorkspace,
+    RegisteredWorkspace,
+    RegisteredWorkspace,
+    RegisteredWorkspace,
+    RegisteredWorkspace,
+) {
+    let label = fx.runtime.workspace_label();
+    let home_id = fx.runtime.workspace_id().unwrap();
+    let create = |basename: &str, registered_name: &str| {
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        let repo_root = root.path().join(basename);
+        std::fs::create_dir_all(repo_root.join(".orbit")).unwrap();
+        std::fs::write(repo_root.join(".orbit/config.toml"), CONFIG).unwrap();
+        let runtime = OrbitRuntime::from_roots(&fx.global, &repo_root.join(".orbit")).unwrap();
+        assert_eq!(runtime.workspace_label(), basename);
+        let id = runtime.workspace_id().unwrap();
+        (id, registered_name.to_string(), repo_root, runtime, root)
+    };
+
+    let (covered_id, covered_name, covered_root, covered_raw, covered_keep) =
+        create(&label, "covered-registered");
+    let (label_id, label_name, label_root, label_raw, label_keep) = create(&label, &label);
+    let (distinct_id, distinct_name, distinct_root, distinct_raw, distinct_keep) =
+        create(&label, "uncovered-registered");
+    let (cov_name_id, cov_name_name, cov_name_root, cov_name_raw, cov_name_keep) =
+        create(&covered_name, "uncovered-covered-name-basename");
+    let (id_base_id, id_base_name, id_base_root, id_base_raw, id_base_keep) =
+        create(&home_id, "uncovered-id-basename");
+
+    let unique_ids: std::collections::BTreeSet<_> = [
+        &home_id,
+        &covered_id,
+        &label_id,
+        &distinct_id,
+        &cov_name_id,
+        &id_base_id,
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(unique_ids.len(), 6, "all workspaces have distinct IDs");
+
+    let catalog = Arc::new(HostWorkspaces {
+        targets: vec![
+            FederatedWorkspaceTarget {
+                workspace_id: home_id,
+                name: "home-registered".into(),
+                repo_root: fx.repo.clone(),
+            },
+            FederatedWorkspaceTarget {
+                workspace_id: covered_id.clone(),
+                name: covered_name.clone(),
+                repo_root: covered_root.clone(),
+            },
+            FederatedWorkspaceTarget {
+                workspace_id: label_id.clone(),
+                name: label_name.clone(),
+                repo_root: label_root.clone(),
+            },
+            FederatedWorkspaceTarget {
+                workspace_id: distinct_id.clone(),
+                name: distinct_name.clone(),
+                repo_root: distinct_root.clone(),
+            },
+            FederatedWorkspaceTarget {
+                workspace_id: cov_name_id.clone(),
+                name: cov_name_name.clone(),
+                repo_root: cov_name_root.clone(),
+            },
+            FederatedWorkspaceTarget {
+                workspace_id: id_base_id.clone(),
+                name: id_base_name.clone(),
+                repo_root: id_base_root.clone(),
+            },
+        ],
+        runtimes: OnceLock::new(),
+    });
+    let home = fx.runtime.clone().with_workspace_catalog(catalog.clone());
+    let covered_runtime = covered_raw.with_workspace_catalog(catalog.clone());
+    let label_runtime = label_raw.with_workspace_catalog(catalog.clone());
+    let distinct_runtime = distinct_raw.with_workspace_catalog(catalog.clone());
+    let cov_name_runtime = cov_name_raw.with_workspace_catalog(catalog.clone());
+    let id_base_runtime = id_base_raw.with_workspace_catalog(catalog.clone());
+    let _ = catalog.runtimes.set(vec![
+        home.clone(),
+        covered_runtime.clone(),
+        label_runtime.clone(),
+        distinct_runtime.clone(),
+        cov_name_runtime.clone(),
+        id_base_runtime.clone(),
+    ]);
+    fx.runtime = home;
+    (
+        RegisteredWorkspace {
+            id: covered_id,
+            name: covered_name,
+            repo_root: covered_root,
+            runtime: covered_runtime,
+            _keep: covered_keep,
+        },
+        RegisteredWorkspace {
+            id: label_id,
+            name: label_name,
+            repo_root: label_root,
+            runtime: label_runtime,
+            _keep: label_keep,
+        },
+        RegisteredWorkspace {
+            id: distinct_id,
+            name: distinct_name,
+            repo_root: distinct_root,
+            runtime: distinct_runtime,
+            _keep: distinct_keep,
+        },
+        RegisteredWorkspace {
+            id: cov_name_id,
+            name: cov_name_name,
+            repo_root: cov_name_root,
+            runtime: cov_name_runtime,
+            _keep: cov_name_keep,
+        },
+        RegisteredWorkspace {
+            id: id_base_id,
+            name: id_base_name,
+            repo_root: id_base_root,
+            runtime: id_base_runtime,
+            _keep: id_base_keep,
+        },
+    )
+}
+
+#[test]
+fn colliding_checkout_basenames_and_labels_cannot_authorize_uncovered_friction_update() {
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::friction_update::colliding_checkout_basenames_and_labels_cannot_authorize_uncovered_friction_update",
+    ) {
+        return;
+    }
+    let mut fx = fixture();
+    let (
+        covered_other,
+        uncovered_label_collision,
+        uncovered_distinct_name,
+        uncovered_covered_name_basename,
+        uncovered_id_basename,
+    ) = add_colliding_basename_workspaces(&mut fx);
+    let home_id = fx.runtime.workspace_id().unwrap();
+    let watched = fx.task("Watched");
+
+    let home_fric = seed_friction(&fx.runtime, "Home friction", "Must update.");
+    let covered_fric = seed_friction(&covered_other.runtime, "Covered friction", "Must update.");
+    let label_collision_fric = seed_friction(
+        &uncovered_label_collision.runtime,
+        "Label collision uncovered friction",
+        "Must remain open.",
+    );
+    let distinct_uncovered_fric = seed_friction(
+        &uncovered_distinct_name.runtime,
+        "Distinct name uncovered friction",
+        "Must remain open.",
+    );
+    let covered_name_basename_fric = seed_friction(
+        &uncovered_covered_name_basename.runtime,
+        "Covered-name basename uncovered friction",
+        "Must remain open.",
+    );
+    let id_basename_fric = seed_friction(
+        &uncovered_id_basename.runtime,
+        "Canonical-ID basename uncovered friction",
+        "Must remain open.",
+    );
+
+    // Grant covers home and `covered_other` (granted by registered name to verify
+    // canonical catalog resolution) while leaving all colliding-basename siblings uncovered.
+    let mandate = multi_workspace_mandate(&fx, &watched, &[&home_id, &covered_other.name], &[]);
+    let run = fx.cycle_run(&mandate, "resident-friction-colliding-basenames");
+    let brief = fx.begin_cycle(&run, Utc::now());
+    let cycle = brief["cycle"].as_str().unwrap().to_string();
+
+    let covered_path = covered_other.repo_root.to_string_lossy().into_owned();
+    let label_collision_path = uncovered_label_collision
+        .repo_root
+        .to_string_lossy()
+        .into_owned();
+    let distinct_uncovered_path = uncovered_distinct_name
+        .repo_root
+        .to_string_lossy()
+        .into_owned();
+
+    fx.as_cycle_agent(&run, || {
+        // Covered cross-workspace update succeeds without a `workspace` field, as well
+        // as with canonical ID, registered name, and checkout-path `workspace`/`workspaces`.
+        let omitted_ok = update_friction(
+            &covered_other.runtime,
+            json!({
+                "action": "update",
+                "id": covered_fric,
+                "status": "triaged",
+                "body": "Triaged without workspace field."
+            }),
+        )
+        .expect("covered target runtime without workspace field should succeed");
+        assert_eq!(
+            omitted_ok["resident_action_key"],
+            format!("resident:{mandate}:{cycle}:1")
+        );
+
+        let named_ok = update_friction(
+            &covered_other.runtime,
+            json!({
+                "action": "update",
+                "id": covered_fric,
+                "status": "resolved",
+                "workspace": covered_other.name,
+                "body": "Resolved via registered name."
+            }),
+        )
+        .expect("covered target runtime with covered registered name should succeed");
+        assert_eq!(
+            named_ok["resident_action_key"],
+            format!("resident:{mandate}:{cycle}:2")
+        );
+
+        let path_ok = update_friction(
+            &covered_other.runtime,
+            json!({
+                "action": "update",
+                "id": covered_fric,
+                "workspace": covered_path,
+                "body": "Updated via checkout path."
+            }),
+        )
+        .expect("covered target runtime with covered checkout path should succeed");
+        assert_eq!(
+            path_ok["resident_action_key"],
+            format!("resident:{mandate}:{cycle}:3")
+        );
+
+        let home_list_ok = update_friction(
+            &fx.runtime,
+            json!({
+                "action": "update",
+                "id": home_fric,
+                "status": "resolved",
+                "workspaces": [home_id, covered_other.name],
+                "body": "Updated home with covered workspaces list."
+            }),
+        )
+        .expect("covered home runtime with covered workspaces array should succeed");
+        assert_eq!(
+            home_list_ok["resident_action_key"],
+            format!("resident:{mandate}:{cycle}:4")
+        );
+
+        // Uncovered target runtimes sharing basenames with home_label, covered registered name,
+        // or canonical home ID (`ws_*`) are refused even when `workspace` is omitted or
+        // spoofed to a covered workspace.
+        for (label, target_runtime, input) in [
+            (
+                "label-collision runtime without workspace",
+                &uncovered_label_collision.runtime,
+                json!({"action": "update", "id": label_collision_fric, "status": "resolved"}),
+            ),
+            (
+                "label-collision runtime with home_id",
+                &uncovered_label_collision.runtime,
+                json!({
+                    "action": "update",
+                    "id": label_collision_fric,
+                    "status": "resolved",
+                    "workspace": home_id
+                }),
+            ),
+            (
+                "label-collision runtime with own colliding name",
+                &uncovered_label_collision.runtime,
+                json!({
+                    "action": "update",
+                    "id": label_collision_fric,
+                    "status": "resolved",
+                    "workspace": uncovered_label_collision.name
+                }),
+            ),
+            (
+                "label-collision runtime with own checkout path",
+                &uncovered_label_collision.runtime,
+                json!({
+                    "action": "update",
+                    "id": label_collision_fric,
+                    "status": "resolved",
+                    "workspace": label_collision_path
+                }),
+            ),
+            (
+                "distinct-name colliding basename runtime without workspace",
+                &uncovered_distinct_name.runtime,
+                json!({"action": "update", "id": distinct_uncovered_fric, "status": "resolved"}),
+            ),
+            (
+                "distinct-name colliding basename runtime with covered_other id",
+                &uncovered_distinct_name.runtime,
+                json!({
+                    "action": "update",
+                    "id": distinct_uncovered_fric,
+                    "status": "resolved",
+                    "workspace": covered_other.id
+                }),
+            ),
+            (
+                "covered-name basename runtime without workspace",
+                &uncovered_covered_name_basename.runtime,
+                json!({"action": "update", "id": covered_name_basename_fric, "status": "resolved"}),
+            ),
+            (
+                "canonical-id basename runtime without workspace",
+                &uncovered_id_basename.runtime,
+                json!({"action": "update", "id": id_basename_fric, "status": "resolved"}),
+            ),
+            (
+                "home runtime naming label-collision registered name",
+                &fx.runtime,
+                json!({
+                    "action": "update",
+                    "id": home_fric,
+                    "status": "triaged",
+                    "workspace": uncovered_label_collision.name
+                }),
+            ),
+            (
+                "home runtime naming label-collision checkout path",
+                &fx.runtime,
+                json!({
+                    "action": "update",
+                    "id": home_fric,
+                    "status": "triaged",
+                    "workspace": label_collision_path
+                }),
+            ),
+            (
+                "home runtime naming uncovered id in workspace",
+                &fx.runtime,
+                json!({
+                    "action": "update",
+                    "id": home_fric,
+                    "status": "triaged",
+                    "workspace": uncovered_distinct_name.id
+                }),
+            ),
+            (
+                "home runtime naming uncovered checkout path in workspaces array",
+                &fx.runtime,
+                json!({
+                    "action": "update",
+                    "id": home_fric,
+                    "status": "triaged",
+                    "workspaces": [home_id, distinct_uncovered_path]
+                }),
+            ),
+            (
+                "home runtime naming colliding label in workspaces array",
+                &fx.runtime,
+                json!({
+                    "action": "update",
+                    "id": home_fric,
+                    "status": "triaged",
+                    "workspaces": [covered_other.name, uncovered_label_collision.name]
+                }),
+            ),
+        ] {
+            let error = update_friction(target_runtime, input)
+                .expect_err(&format!("{label} must be refused"));
+            assert!(error.contains("resident_scope_refused"), "{label}: {error}");
+        }
+    });
+
+    assert_eq!(show_friction(&fx.runtime, &home_fric)["status"], "resolved");
+    assert_eq!(
+        show_friction(&covered_other.runtime, &covered_fric)["status"],
+        "resolved"
+    );
+    assert_eq!(
+        show_friction(&covered_other.runtime, &covered_fric)["body"],
+        "Updated via checkout path."
+    );
+    for (runtime, id) in [
+        (&uncovered_label_collision.runtime, &label_collision_fric),
+        (&uncovered_distinct_name.runtime, &distinct_uncovered_fric),
+        (
+            &uncovered_covered_name_basename.runtime,
+            &covered_name_basename_fric,
+        ),
+        (&uncovered_id_basename.runtime, &id_basename_fric),
+    ] {
+        let stored = show_friction(runtime, id);
+        assert_eq!(stored["status"], "open");
+        assert_eq!(stored["body"], "Must remain open.");
+    }
+    assert_eq!(cycle_action_rows(&fx, &mandate, &cycle).len(), 4);
 }
