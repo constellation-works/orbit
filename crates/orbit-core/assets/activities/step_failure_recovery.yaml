@@ -396,13 +396,16 @@ spec:
 
     Admission reads only this file. Orbit reads it after this invocation
     completes and ignores your result, comments and summary. A `retry` bound to
-    this invocation admits the attempt. A `not_recovered` or `external_blocker`
-    file refuses it even if you changed the worktree. A missing file admits the
-    attempt only when Orbit observed a change since this recovery began to the
-    worktree (HEAD, index or content), the run's base-ref tip or the validation
-    environment, which your own edits can cause. An unreadable, invalid or
-    foreign file refuses it. So always write the file; do not leave the decision
-    to an observed change.
+    this invocation admits the attempt. An `external_blocker` file refuses it,
+    and a `not_recovered` file refuses it even if you changed the
+    worktree—except for an admitted auto-fix check repair with no edit and no
+    scope record (where recording the no-edit rerun still reruns the failed
+    checks once). A missing file admits the attempt only when Orbit observed a
+    change since this recovery began to the worktree (HEAD, index or content),
+    the run's base-ref tip or the validation environment (which your own edits
+    can cause), or for that same clean, no-scope-record admitted auto-fix check
+    repair. An unreadable, invalid or foreign file refuses it. So always write
+    the file; do not leave the decision to an observed change.
 
     Add no other fields. End the file at the closing brace, optionally with one
     real newline, never a literal backslash-n. Then parse it back (for example
