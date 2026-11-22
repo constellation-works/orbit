@@ -181,11 +181,14 @@ reports it as `mcp_toolset`.
 | `core` (always on) | `orbit.workspace.list` |
 | `tasks-read` | `orbit.task.show`, `orbit.task.list`, `orbit.task.eligible`, `orbit.task.artifact` action `get`, `orbit.attention` |
 | `tasks-write` | `orbit.task.add`, `orbit.task.update`, `orbit.task.artifact` action `put`, `orbit.friction` |
-| `task-repair` | `orbit.task.block_triage`, `orbit.task.recover` |
+| `task-repair` | `orbit.task.recover` |
+| `task-triage` | `orbit.task.block_triage` |
 | `decisions` | `orbit.decision` |
 | `runs` | `orbit.run` actions `list`, `show`, `observe` |
-| `dispatch` | `orbit.workflow`, `orbit.run` action `resume`, `orbit.pipeline.invoke` |
-| `automation` | `orbit.auto_task`, `orbit.routine.control`, `orbit.automation.explain` |
+| `dispatch` | `orbit.workflow`, `orbit.run` action `resume` |
+| `pipelines` | `orbit.pipeline.invoke` |
+| `routines` | `orbit.routine.control` |
+| `automation` | `orbit.auto_task`, `orbit.automation.explain` |
 | `codebase` | `orbit.codebase` |
 | `search` | `orbit.search` |
 | `exec` | `orbit.command.exec` |
@@ -219,6 +222,27 @@ orbit config set --global machine.mcp.toolsets '["experiments"]'
 `--mode remote` asks the destination for the same role and toolsets, and
 `--mode federated` applies them to every destination.
 
+The `operator` role leaves six tools out by default. Add the five toolsets below
+to enable all six:
+
+| Toolset | Tools |
+|---|---|
+| `automation` | `orbit.auto_task`, `orbit.automation.explain` |
+| `codebase` | `orbit.codebase` |
+| `pipelines` | `orbit.pipeline.invoke` |
+| `task-triage` | `orbit.task.block_triage` |
+| `ui` | `orbit.ui` (`orbit_ui`) |
+
+For one server, add them to the operator profile:
+
+```bash
+orbit mcp serve --operator \
+  --toolset automation,codebase,pipelines,task-triage,ui
+```
+
+For every server on the host, include them in
+`machine.mcp.toolsets`; that setting applies to all MCP servers on the host.
+
 ### If a call returns `toolset_not_enabled`
 
 The tool or action is outside the server's toolsets. The error names the
@@ -232,9 +256,9 @@ A role is a named set of toolsets for one kind of session:
 
 | Role | Toolsets (beside `core`) |
 |---|---|
-| `operator` | `tasks-read`, `tasks-write`, `task-repair`, `decisions`, `runs`, `dispatch`, `automation`, `codebase`, `search`, `ui`, `exec`, `plugins` |
+| `operator` | `tasks-read`, `tasks-write`, `task-repair`, `decisions`, `runs`, `dispatch`, `routines`, `search`, `exec`, `plugins` |
 | `manager` | `tasks-read`, `runs`, `decisions`, `notice`, `resident`, `search` |
-| `resident` | `tasks-read`, `tasks-write`, `runs`, `dispatch`, `decisions`, `notice`, `resident`, `search` |
+| `resident` | `tasks-read`, `tasks-write`, `runs`, `dispatch`, `pipelines`, `decisions`, `notice`, `resident`, `search` |
 | `agent` | `tasks-read`, `tasks-write`, `decisions`, `codebase`, `search`, `ui`, `leases`, `notice` |
 | `reader` | `tasks-read`, `runs`, `codebase`, `search` |
 
@@ -311,7 +335,16 @@ A completed tool call is not a successful command: read `success` and
 `orbit.pipeline.invoke` submits a registered job and returns at once with a
 durable `run_id`. The job has been accepted, not finished. Pass `input` as a
 JSON object that matches the job's input contract, even when it is `{}`. This
-example assumes a job named `example_check` that accepts `directory`:
+example assumes a job named `example_check` that accepts `directory`.
+`pipelines` is not in the operator profile by default, so enable it for this
+server with `--toolset pipelines` or include it in the host's
+`machine.mcp.toolsets` setting before using either job-submission example:
+
+```bash
+orbit mcp serve --operator --toolset pipelines
+```
+
+Then call the tool:
 
 ```json
 {
