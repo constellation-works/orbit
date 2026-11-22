@@ -949,13 +949,19 @@ in place of **Save**. Creating the file changes execution inheritance: **Seed
 from global** copies the global policy, and **Start empty** uses built-in
 security defaults.
 
-**Remove workspace value** deletes the workspace entry. Check **if removed**
-first. To tidy the whole workspace file, open **Other**: **Keys that only
-repeat the global or built-in value** lists the workspace values you can
-remove without changing anything, and **Remove all N workspace values**
-removes them only while each key's current value still matches its admitted
-removal fallback (if a value or fallback changed after load, that key is
-preserved and the refusal is reported).
+**Remove workspace value** deletes the workspace entry without the guarded
+check below, so check **if removed** first. To tidy the whole workspace file,
+open **Other**. **Keys that only repeat the global or built-in value** lists
+the workspace values that match their removal fallback. Treat each one as a
+candidate, not a promise. **Remove all N workspace values** sends a guarded
+removal for each candidate, and the server re-checks each key under the config
+write lock. It refuses a key, and keeps that key's entry, when the value or
+fallback changed after load. It also refuses when the removal would drop the
+workspace policy layer or change the effective value, even though the value
+matches its fallback. For example, a workspace file whose only other content
+is `[plugin_enablement]` no longer counts as a policy layer once its last
+dotted key is removed. The refusal is reported with the server's message, and
+the other keys are still removed.
 
 ### Crews
 
