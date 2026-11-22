@@ -493,6 +493,7 @@ function revealActiveRailSelection() {
   const rail = tab.closest(".rail");
   const foot = rail.querySelector(".rail-foot");
   rail.style.setProperty("--rail-foot-height", `${foot?.offsetHeight || 0}px`);
+  fitRailSubtabRegion();
   const subtab = document.querySelector(".rail-subtabs:not(.dimmed) .subtab.active");
   scrollElementIntoRailView(subtab);
   // On desktop the selected leaf takes precedence: revealing its parent can
@@ -502,6 +503,31 @@ function revealActiveRailSelection() {
   }
   for (const strip of document.querySelectorAll(".rail-subtabs:not(.dimmed)")) snapRailSubtabStrip(strip);
   syncRailScrollCues();
+}
+
+// Desktop: when the open destination's views do not all fit the room the
+// rail leaves them, size the list to a whole number of rows (never fewer
+// than two) and rest it on a row boundary that keeps the active view in
+// sight, so the list's edges never cut a label. A list that fits, and the
+// phone strips, are left alone.
+const RAIL_SUBTAB_MIN_ROWS = 2;
+function fitRailSubtabRegion() {
+  for (const strip of document.querySelectorAll(".rail-subtabs")) strip.style.maxHeight = "";
+  if (window.matchMedia("(max-width: 760px)").matches) return;
+  const strip = document.querySelector(".rail-subtabs:not(.dimmed)");
+  const views = strip ? [...strip.querySelectorAll(".subtab")] : [];
+  if (views.length <= RAIL_SUBTAB_MIN_ROWS || strip.scrollHeight <= strip.clientHeight + 1) return;
+  const rowHeight = views[0].offsetHeight;
+  const gap = parseFloat(getComputedStyle(strip).rowGap) || 0;
+  const step = rowHeight + gap;
+  if (!(step > 0)) return;
+  const rows = Math.max(RAIL_SUBTAB_MIN_ROWS, Math.floor((strip.clientHeight + gap) / step));
+  strip.style.maxHeight = `${rows * step - gap}px`;
+  const active = views.findIndex((view) => view.classList.contains("active"));
+  let first = Math.round(strip.scrollTop / step);
+  if (active >= 0 && active < first) first = active;
+  else if (active >= first + rows) first = active - rows + 1;
+  strip.scrollTop = first * step;
 }
 
 // ORB-20479: on phones the destination and its views share one scrolling row.
