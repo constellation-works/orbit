@@ -38,7 +38,7 @@ pub enum McpToolset {
     Decisions,
     /// Workflow run reads.
     Runs,
-    /// Workflow dispatch: ship, land, auto and run resume.
+    /// Workflow dispatch: ship, land, auto, refresh and run resume.
     Dispatch,
     /// Direct catalog pipeline invocation (`orbit.pipeline.invoke`).
     Pipelines,

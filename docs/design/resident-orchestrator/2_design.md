@@ -87,7 +87,9 @@ not the prompt.
 
 - **Rights.** `dispatch` (start or requeue leaf runs and drains), `promote` (move a `proposed` task
   to `backlog`, where the drain can admit it), `merge` (land a reviewed PR), `plugin_upgrade`
-  (install or upgrade a workspace plugin). Task-pilot assessment is a separate gate: it can assess
+  (install or upgrade a workspace plugin), `refresh` (merge the base tip into a held or review
+  delivery PR and start its required checks, when the merge is conflict-free). Task-pilot
+  assessment is a separate gate: it can assess
   eligible `proposed` or `backlog` tasks. Reading, commenting, filing `proposed` tasks, filing
   friction records in the mandate's own workspace, updating friction records in any covered
   workspace (without moving them via `rehome_to`), and checkpointing need no right. Anything not
