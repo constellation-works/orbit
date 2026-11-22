@@ -151,6 +151,9 @@ function buildPinnedTask(ptask, context) {
 
   const drain = taskDrainState(ptask, context);
   const detail = buildTaskDetail(ptask, context, drain);
+  // The action handlers find the live detail by this id to place a refresh or
+  // ship failure on it, as they do for a list task's detail.
+  detail.id = `detail-${ptask.id}`;
   const readiness = detail.querySelector(".readiness-list");
   if (readiness) readiness.dataset.drainSignature = taskDrainSignature(drain);
 
