@@ -987,8 +987,9 @@ def main(argv: list[str] | None = None) -> int:
         "--parity", type=parity_command_value,
         help="orbit arguments run once per arm before sampling; a CLI match needs "
              "this command to exit 0 on every arm")
-    parser.add_argument("--parity-mask", nargs="+", default=[],
-                        help="JSON field names (or dotted paths) removed before comparing")
+    parser.add_argument("--parity-mask", action="extend", nargs="+", default=[],
+                        help="JSON field names (or dotted paths) removed before comparing; "
+                             "repeat the option or list several names")
     parser.add_argument("--rounds", type=positive, default=3)
     parser.add_argument("--samples", type=positive, default=10)
     parser.add_argument("--warmup", type=int, default=1)

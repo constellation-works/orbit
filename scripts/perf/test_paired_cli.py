@@ -279,6 +279,14 @@ case "$mode" in
     printf '%s\\n' "$role"
     exit 0
     ;;
+  probe-json)
+    if [ "$role" = candidate ]; then
+      printf '{{"duration_ms": 2, "message": "candidate", "stable": 1}}\\n'
+    else
+      printf '{{"duration_ms": 1, "message": "base", "stable": 1}}\\n'
+    fi
+    exit 0
+    ;;
   timed)
     printf 'timed %s\\n' "$role"
     exit 0
@@ -787,6 +795,29 @@ class PairedCliParityTest(PairedCliTestCase):
         self.assertNotEqual(
             report["arms"]["base"]["command"]["output"],
             report["arms"]["candidate"]["command"]["output"])
+
+    def test_repeated_parity_mask_options_accumulate_into_the_record(self) -> None:
+        # Regression (F2026-11-399): argparse kept only the last `--parity-mask`, so
+        # `--parity-mask duration_ms --parity-mask message` masked `message` alone and
+        # refused on the unmasked `duration_ms` difference after the full restore cost.
+        # The repeated and multi-value forms must both mask every name, and a field
+        # left unmasked must still refuse.
+        for masks in (("--parity-mask", "duration_ms", "--parity-mask", "message"),
+                      ("--parity-mask", "duration_ms", "message")):
+            with self.subTest(masks=masks):
+                result, out = self.run_paired(
+                    "--parity", "probe-json", *masks,
+                    "--qualifying-task-count", "indexed_tasks=14819")
+                self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                report = json.loads((out / "parity.json").read_text())
+                self.assertIs(report["match"], True, report)
+                self.assertEqual(report["masks"], ["duration_ms", "message"])
+        result, out = self.run_paired(
+            "--parity", "probe-json", "--parity-mask", "duration_ms", "--parity-mask", "stable")
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(report["masks"], ["duration_ms", "stable"])
+        self.assertEqual(report["differing_arms"], ["candidate"])
+        self.assertEqual(report["observation_failures"], {})
 
     def test_identical_successful_observations_match_and_can_pass(self) -> None:
         result, out = self.run_paired("--parity", "probe-same",
