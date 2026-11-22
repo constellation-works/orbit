@@ -1073,21 +1073,32 @@ configuration.
   stays `proposed`, held with reason `no-drain`. Use `no-auto-approve` when
   every automatic approval authority must stop; use `no-drain` to keep work
   out of drains.
-- A task whose current pilot assessment is `verified_no_diff`, and that is
-  not tagged `no-diff-expected`, is held as `pilot_verified_no_diff` with the
-  pilot's evidence and the commits it cites. When Orbit automation filed it
-  (`ci-failure-sweep`, `delivery-code-review` or `auto-task:*`), the pass
-  archives it with a system comment once every cited commit exists and at
-  least one is on the base branch. Human- and orchestrator-filed tasks are
-  never closed this way; archive or re-scope them yourself.
-- A `verified_no_diff` verdict for a task that expects no repository diff
-  (a report, an audit that files tasks) is not held: the pilot adds the
-  `no-diff-expected` tag with its write, so the empty `context_files` stop
-  blocking it, and this pass approves it when nothing else holds. The tag is
-  added only when the assessment cites no commit, carries no `already_landed`,
-  `duplicate_of`, `release_action_required` or `finding_invalid` finding, and
-  the task is not a review, QA or CI-sweep finding. Remove the tag, or add
-  `no-auto-approve`, to override it.
+- An untagged task whose current pilot assessment is `verified_no_diff` is
+  held as `pilot_verified_no_diff` with the pilot's evidence and cited
+  commits. When Orbit automation filed it (`ci-failure-sweep`,
+  `delivery-code-review` or `auto-task:*`), the pass archives it with a system
+  comment only after every cited commit exists and at least one qualifying
+  covering commit is on the base branch. Human- and orchestrator-filed tasks
+  are never closed this way; archive or re-scope them yourself. A task already
+  tagged `no-diff-expected` does not regain this finding hold from a later
+  `verified_no_diff` assessment.
+- An eligible no-diff deliverable (such as a report or audit that files tasks)
+  is tagged `no-diff-expected` atomically with its `verified_no_diff`
+  assessment. The drain judges it with that tag, so this pass can approve it
+  when no other promotion hold applies. The tag is added only when the
+  assessment cites no commit, has none of the `already_landed`, `duplicate_of`,
+  `release_action_required` or `finding_invalid` findings, and the task is
+  untagged and is not a review, QA, CI-sweep or host-computed comment-hygiene
+  task. A comment-hygiene batch with no eligible candidates means no work, not
+  a no-diff deliverable. Adding
+  `no-auto-approve` stops automatic approval while keeping the
+  `no-diff-expected` tag; removing that tag opts out of the no-diff disposition.
+- Ordinary apply rejects a `selectors` assessment with empty
+  `context_files_after` before writing anything. A host-computed held
+  comment-hygiene batch is the separate exception: it requires empty selectors,
+  the `selectors` disposition, then the host attaches `evidence_gaps` and a
+  holding `utility_warnings` finding that keeps it held. It is not an eligible
+  no-diff report.
 - Everything else stays `proposed`. `orbit run show` and `orbit run readiness`
   report approved, closed and held counts with each hold reason, and
   `awaiting_reuse` lists fresh assessments a later pass approves. A task this

@@ -77,14 +77,23 @@ when every one of these holds:
 - the task has no host-computed `comment-hygiene` batch, where an empty batch means no work;
 - the task is not already tagged.
 
-Any other `verified_no_diff` verdict keeps the `pilot_verified_no_diff` hold, its commit proof and
-its archival rule unchanged. A `selectors` verdict that found no selectors is not a verdict that no
-diff is expected: it adds no tag and keeps its gap. A task that already holds context files keeps
-the `selectors` path and gets no tag.
+For an untagged task, any other `verified_no_diff` verdict leaves it untagged and keeps the
+`pilot_verified_no_diff` hold, its commit proof and its archival rule unchanged. A task already
+tagged `no-diff-expected` is different: a later `verified_no_diff` does not reinstate that finding
+hold, and the drain may approve it if every other promotion rule passes. The tag remains in place.
 
-A drain judges the task as the tagged task it becomes, so the pass that applies the verdict also
-approves it when no other hold applies. Tagging is never removed by a later pilot. A person who
-disagrees removes the tag, or tags the task `no-auto-approve`.
+A `selectors` verdict with no selectors is not a verdict that no diff is expected. Ordinary apply
+rejects empty `context_files_after` with the `selectors` disposition before writing anything; it
+does not add the tag, and the task keeps its readiness gap. The host-computed comment-hygiene hold
+is a separate case: apply accepts its empty selectors with the `selectors` disposition, then the
+host attaches `evidence_gaps` and a holding `utility_warnings` finding that keeps the task held.
+An empty comment-hygiene batch means there is no work, not a no-diff deliverable. A task that
+already holds context files keeps the ordinary `selectors` path and gets no tag.
+
+A drain judges the task as the tagged task it becomes, so the pass that applies an eligible
+deliverable verdict also approves it when no other hold applies. Tagging is never removed by a
+later pilot. Adding `no-auto-approve` stops automatic approval but leaves the `no-diff-expected`
+tag in place; a person can remove the tag to opt out of the no-diff disposition.
 
 ## Compatibility
 
