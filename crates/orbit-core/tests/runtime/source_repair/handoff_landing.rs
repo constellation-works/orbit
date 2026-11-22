@@ -681,6 +681,42 @@ fn a_stopped_publication_merged_after_a_base_refresh_settles_at_the_merged_head(
     );
 }
 
+fn a_merged_base_refresh_with_an_unavailable_origin_reports_verification_failure() {
+    let (mut f, checkout, _) = escalated_completion_fixture();
+    let refreshed = refresh_from_advanced_base(&f, &checkout);
+    squash_merged_at(&mut f, &checkout, &refreshed);
+    let missing_origin = f.repo.join("missing-origin");
+    git(
+        &f.repo,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            missing_origin.to_str().unwrap(),
+        ],
+    );
+    let before = serde_json::to_value(f.runtime.get_task(&f.task).unwrap()).unwrap();
+    let history_before = f.runtime.get_task_history(&f.task).unwrap().len();
+
+    let error = f
+        .runtime
+        .settle_externally_merged_task(&f.task)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("fetch") && error.contains("origin/main"),
+        "{error}"
+    );
+    assert_eq!(
+        serde_json::to_value(f.runtime.get_task(&f.task).unwrap()).unwrap(),
+        before
+    );
+    assert_eq!(
+        f.runtime.get_task_history(&f.task).unwrap().len(),
+        history_before
+    );
+}
+
 fn a_stopped_publication_merged_with_a_commit_beyond_its_base_does_not_settle() {
     // ORB-26871: only target-branch commits may separate the merged head
     // from the published one; a hand-pushed change on the branch inherits
@@ -700,7 +736,7 @@ fn a_stopped_publication_merged_with_a_commit_beyond_its_base_does_not_settle() 
     assert!(
         error
             .to_string()
-            .contains("none of its delivery pull requests is merged"),
+            .contains("refreshed head could not be verified"),
         "{error}"
     );
     assert!(
@@ -725,5 +761,6 @@ crate::scenario_table!(
     periodic_settlement_recovers_a_stopped_completion_during_rest_rate_limiting,
     the_owner_sweep_merges_a_stopped_publication_only_while_the_pull_request_is_unchanged,
     a_stopped_publication_merged_after_a_base_refresh_settles_at_the_merged_head,
+    a_merged_base_refresh_with_an_unavailable_origin_reports_verification_failure,
     a_stopped_publication_merged_with_a_commit_beyond_its_base_does_not_settle,
 );

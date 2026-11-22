@@ -672,17 +672,12 @@ impl OrbitRuntime {
                     merged: merged.clone(),
                     refreshed_from: Some(proof.head),
                 })),
-                Err(error) => {
-                    tracing::info!(
-                        target: "orbit.core.external_merge",
-                        task_id = %task.id,
-                        pr = number,
-                        error = %error,
-                        "a stopped publication's pull request merged at a head that is not \
-                         its published candidate plus base"
-                    );
-                    Ok(None)
-                }
+                Err(error) => Err(super::refusal::refused(
+                    &task.id,
+                    &format!(
+                        "pull request #{number} merged, but its refreshed head could not be verified: {error}"
+                    ),
+                )),
             };
         }
         Ok(matching
