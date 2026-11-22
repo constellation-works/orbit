@@ -144,6 +144,15 @@ The effective authority is what the resident can act on now: the granted
 rights, in the granted workspaces that the mandate also lists. It is empty for
 an `ended` or `invalid` mandate.
 
+Updating friction records (`orbit.friction` action `update`) in covered
+workspaces requires no granted right — observe-only cycles may record landing
+evidence on or close frictions too — and each write is keyed on the cycle's
+action ledger. Updates for workspaces outside the mandate's authority are
+refused as `resident_scope_refused`, and any update carrying `rehome_to` (or
+`move`) is refused as `resident_tool_refused` regardless of granted rights;
+moving friction records between workspaces stays with the operator and the
+curation pass.
+
 | Caller | Widen | Narrow |
 |---|---|---|
 | Operator at a terminal on this host | Applies at once | Applies at once |

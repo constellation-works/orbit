@@ -7,11 +7,11 @@ status: Draft
 feature: resident-orchestrator
 doc_role: decisions
 type: design
-summary: "Why the rewrite owns coordination only, rides the clock, keeps loops out of chats and consoles, gates widening on the human, trusts only Orbit state, keeps evolution apart from friction, lets `dispatch` re-pilot and requeue, and lets live cycles read drain status"
+summary: "Why the rewrite owns coordination only, rides the clock, keeps loops out of chats and consoles, gates widening on the human, trusts only Orbit state, keeps evolution apart from friction, lets `dispatch` re-pilot and requeue, lets live cycles read drain status, and lets cycles update friction without a right or re-homing"
 tags: [resident-orchestrator]
 paths: ["crates/orbit-core/src/application/resident/**", "crates/orbit-core/assets/jobs/**"]
 related_features: [distributed-drain, routines, activity-job, human-decision-channel, fleet-notices]
-related_artifacts: [ORB-21229, ORB-12488, ORB-10815, ORB-10776, ORB-26832]
+related_artifacts: [ORB-21229, ORB-12488, ORB-10815, ORB-10776, ORB-26832, ORB-26833]
 ---
 
 # Resident Orchestrator — Decisions
@@ -356,12 +356,66 @@ operator requirement (`capability_denied`).
   tool must follow the same explicit action-and-run-binding check rather than
   widening the catalog row, or split into a separate read operation.
 
+## Resident cycles update friction records without a right, without re-homing
+
+**Recorded:** 2026-11-22 · [ORB-26833] · Requested by Daniel in the chief's chat
+(2026-11-22, `ORB-26762` follow-up); re-homing refusal decided by the formation
+chief (2026-11-22)
+
+**Code anchors:** `crates/orbit-core/assets/activities/resident_cycle.yaml` `tool_disallow_list`;
+`crates/orbit-core/src/adapter/tool_host/resident_guard.rs` `resident_guard_class`;
+`crates/orbit-core/src/application/resident/guard.rs` `OrbitRuntime::check_resident_cycle_grant_for`
+
+### Context
+
+`resident_cycle.yaml` disallowed `orbit.friction:update`, and `resident_guard_class`
+refused `FrictionVerb::Update` as `Refused`. Overnight resident cycles such as
+[ORB-26762] could file new friction records (`orbit.friction` action `add`) with no
+granted right, but could not append landing evidence to or close an open friction
+whose fix they had seen land, leaving those updates on the assignment for the
+scheduled curation pass.
+
+The alternative for gating was placing `orbit.friction` action `update` under
+`promote`, alongside moving a `proposed` task to `backlog`. However, updating or
+closing a friction record changes no task lifecycle, dispatches no work, and merges
+no code; it is the same Orbit record-keeping class as `orbit.friction` action
+`add` and `orbit.task.update` comments, and every write is numbered and deduped
+on the mandate's action ledger. Moving a friction between workspaces (`rehome_to`)
+belongs to the operator and the scheduled curation pass and must never happen
+from a resident cycle regardless of its granted rights.
+
+### Decision
+
+Remove `orbit.friction:update` from `resident_cycle.yaml`'s `tool_disallow_list`
+and admit `orbit.friction` action `update` in `resident_guard_class` as `Open`
+(requiring no granted right, so observe-only cycles may call it too), except
+that any call carrying `rehome_to` (or `move`) is refused as
+`resident_tool_refused` whatever rights the cycle holds. The cycle's scope check
+enforces that the friction's workspace is covered by the mandate's authority
+(`resident_scope_refused` otherwise); when routed through another covered
+workspace's runtime on the same host, the guard verifies the live cycle on the
+mandate's home runtime and records the `resident:<mandate>:<cycle>:<n>` action
+ledger row there.
+
+### Consequences
+
+- A live resident cycle — including an observe-only cycle — records landing
+  evidence on and closes friction records in its covered workspaces under its
+  action ledger.
+- Cross-workspace friction moves (`rehome_to`) remain restricted to operators and
+  the curation pass (`resident_tool_refused`), and updates targeting uncovered
+  workspaces remain refused (`resident_scope_refused`).
+- Cost: an observe-only resident cycle can mutate or close friction records in
+  its covered workspaces without a right grant, relying on the action ledger for
+  auditability and recovery dedupe rather than a human right gate.
+
 ## Task References
 
 - [ORB-21229] — rewrote the resident-orchestrator design and recorded these decisions
 - [ORB-25959] — let resident cycles with `dispatch` re-pilot and requeue
 - [ORB-26184] — refuse resident cycles' candidate discards during requeue
 - [ORB-26832] — admit `orbit.workflow.auto` `status` reads for live resident cycles without operator capability
+- [ORB-26833] — let resident cycles update friction records in covered workspaces without a right and without re-homing
 - [ORB-25951] — on-call whose chief ruling delegated and conditioned that change
 - [ORB-12488] — removed the epic pipeline and the earlier resident-orchestrator folder
 - [ORB-10815] — revised the earlier design to v2: epic-owned worktree and windowed drain
