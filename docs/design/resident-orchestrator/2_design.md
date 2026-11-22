@@ -88,10 +88,12 @@ not the prompt.
 - **Rights.** `dispatch` (start or requeue leaf runs and drains), `promote` (move a `proposed` task
   to `backlog`, where the drain can admit it), `merge` (land a reviewed PR), `plugin_upgrade`
   (install or upgrade a workspace plugin). Task-pilot assessment is a separate gate: it can assess
-  eligible `proposed` or `backlog` tasks. Reading, commenting, filing `proposed` tasks, filing and updating friction records in covered workspaces (without moving them via `rehome_to`),
-  and checkpointing need no right. Anything not listed (releases, tags, publishing, host changes,
-  config edits, secrets) is not grantable to a resident in v1.
-- **Scope.** A list of covered workspaces. A tool call naming another workspace is refused.
+  eligible `proposed` or `backlog` tasks. Reading, commenting, filing `proposed` tasks, filing
+  friction records in the mandate's own workspace, updating friction records in any covered
+  workspace (without moving them via `rehome_to`), and checkpointing need no right. Anything not
+  listed (releases, tags, publishing, host changes, config edits, secrets) is not grantable to a
+  resident in v1.
+- **Scope.** A list of covered workspaces. A tool call naming a workspace outside the list is refused. Inside the list, only `orbit.friction` action `update` (without `rehome_to` or `move`) may name another covered workspace for a write; every other write stays in the mandate's own workspace.
 - **Enforcement.** The cycle's tool grant is computed from the authority at cycle start and frozen
   for the cycle, like a dispatched attempt's [granted tools](../granted-tools/1_scope.md). A right the
   mandate lacks is a tool the cycle cannot call; a workspace outside scope fails the call in core.

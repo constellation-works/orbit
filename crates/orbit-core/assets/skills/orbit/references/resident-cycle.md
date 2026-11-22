@@ -68,15 +68,16 @@ died without a checkpoint. Its actions are in the ledger under
 
 ### 3. Act within authority
 
-Rights gate writes; reads, comments, filing `proposed` tasks, filing or updating
-friction records in covered workspaces (`orbit.friction` action `add` and
-`update` without `rehome_to` or `move`), escalations, your notices and your
-checkpoint need no right, so observe-only cycles may still update frictions in
-covered workspaces. Any friction update carrying `rehome_to` (or `move`) is
+Rights gate writes; reads, comments, filing `proposed` tasks, filing friction
+records in the mandate's own workspace (`orbit.friction` action `add`), updating
+friction records in any covered workspace (`orbit.friction` action `update`
+without `rehome_to` or `move`), escalations, your notices and your checkpoint
+need no right, so observe-only cycles may still update frictions in covered
+workspaces. Any friction update carrying `rehome_to` (or `move`) is
 refused as `resident_tool_refused` regardless of granted rights: moving a
 friction between workspaces stays with the operator and the curation pass.
 
-| Right | What it permits in covered workspaces |
+| Right | What it permits in the mandate's own workspace |
 |---|---|
 | `dispatch` | Start a leaf run with `orbit.workflow` action `ship`; move work to `in-progress` |
 | `promote` | Move a `proposed` task to `backlog`; file tasks directly in `backlog` |
@@ -101,10 +102,11 @@ as an escalation, never as compliance.
 Use the normal pipeline for leaf work. To dispatch, call `orbit.workflow` action `ship`
 with the mandate's own workspace and the `backlog` task ids; it returns the run
 id and stops the delivery at `review`, so landing it still takes `merge`. A
-covered workspace other than the mandate's own is refused for task and workflow
-writes: a cycle writes those only through its own workspace (whereas `orbit.friction`
-action `update` may target any covered workspace on the host and records its
-action ledger row on the mandate). The same `dispatch` right re-pilots and requeues:
+covered workspace other than the mandate's own is refused as `resident_scope_refused`
+for every write except `orbit.friction` action `update`: a cycle writes through its
+own workspace only, whereas `orbit.friction` action `update` (without `rehome_to` or
+`move`) may target any covered workspace on the host and records its action ledger
+row on the mandate. The same `dispatch` right re-pilots and requeues:
 call `orbit.task.recover` action `repilot` with the `id` of a `proposed` or
 `backlog` task to repeat its pilot assessment, and action `requeue` with
 the `id` of a `blocked` task and a `reason`, both with the mandate's own
