@@ -61,8 +61,10 @@ definition would split that sign-off, so the owner adds one block to the native 
        Orbit wrote). The owner passes each listed artifact's trusted writer class to the
        adapter as `trusted.artifact_authority`; a certificate without one earns nothing,
        whatever its producer fields say. The adapter then uses the QA harness's native
-       certificate validator. Linux evidence
-       never stands in for it. Record what is missing rather than filling it in: a gap
+       certificate validator. A required Linux row ran on the adapter's own Linux host,
+       or was imported with an exact `evidence_sha256` the owner authenticated the same
+       way; the report's own `environment` never decides it. Linux evidence
+       never stands in for the macOS certificate. Record what is missing rather than filling it in: a gap
        leaves the step unavailable.
    ```
 

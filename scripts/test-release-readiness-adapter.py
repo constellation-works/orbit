@@ -216,6 +216,104 @@ class NativeReadinessRegression(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 
+    def judged(self, mutate):
+        """Judge the positive QA request after `mutate(request, report)` breaks it."""
+        request = copy.deepcopy(self.request)
+        digest = hashlib.sha256(json.dumps(self.native, sort_keys=True).encode()).hexdigest()
+        request["evidence"]["artifacts"][CERTIFICATE] = {"sha256": digest, "json": self.native}
+        request["trusted"]["artifact_authority"] = {CERTIFICATE: {"sha256": digest, "writer": "operator"}}
+        report = request["evidence"]["artifacts"]["qa-full-sweep-report.json"]["json"]
+        for row in report["results"]:
+            if row["scenario"] == self.native_scenario["id"]:
+                row["native_evidence"] = self.native
+                row["native_certificate_sha256"] = digest
+        mutate(request, report)
+        result = subprocess.run(
+            [sys.executable, "-B", str(ROOT / "scripts/release-readiness-adapter.py")],
+            input=json.dumps(request), text=True, capture_output=True, timeout=30,
+            cwd=self.inputs, env={**os.environ, "ORBIT_SCRIPT_IN": str(self.inputs)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        verdict = json.loads(result.stdout)
+        return verdict["status"], verdict["reasons"][0]["code"] if verdict["reasons"] else None
+
+    def test_required_linux_rows_need_trusted_host_or_authenticated_import(self):
+        self.assertEqual(self.judged(lambda request, report: None), ("passed", None))
+        linux = next(s["id"] for s in json.loads((self.inputs / "qa-full-sweep-inventory.json").read_text())
+                     ["scenarios"] if s.get("required") and s.get("capability") == "linux")
+        evidence = {"schema_version": 2, "results": []}
+        digest = hashlib.sha256(json.dumps(evidence, sort_keys=True).encode()).hexdigest()
+
+        def imported(os_name="Darwin", sha=digest, authority="operator", listed_sha=None):
+            def mutate(request, report):
+                report["environment"] = {"os": os_name}
+                for row in report["results"]:
+                    if row["scenario"] == linux:
+                        row.update(imported_from="imported-qa.json", evidence_sha256=sha)
+                request["evidence"]["artifacts"]["imported-qa.json"] = {
+                    "sha256": listed_sha or digest, "json": evidence}
+                if authority:
+                    request["trusted"]["artifact_authority"]["imported-qa.json"] = {
+                        "sha256": digest, "writer": authority}
+            return mutate
+
+        # A candidate-written non-Linux report with imported evidence passes only
+        # when the owner authenticated the imported artifact's exact digest.
+        self.assertEqual(self.judged(imported()), ("passed", None))
+        self.assertEqual(self.judged(imported("Linux")), ("passed", None))
+        # Truthy but unauthenticated strings (the ORB-20165 bypass) are refused.
+        cases = {
+            "truthy-strings": (lambda request, report: (
+                report.update(environment={"os": "Darwin"}),
+                [row.update(imported_from="x", evidence_sha256="y")
+                 for row in report["results"] if row["scenario"] == linux]),
+                "platform-evidence-missing"),
+            "bad-digest": (imported(sha="not-a-digest"), "platform-evidence-missing"),
+            "no-authority": (imported(authority=None), "platform-evidence-unauthenticated"),
+            "agent-writer": (imported(authority="agent"), "platform-evidence-unauthenticated"),
+            "digest-not-listed": (imported(listed_sha="0" * 64), "platform-evidence-unauthenticated"),
+            "no-authority-block": (lambda request, report: (
+                imported()(request, report), request["trusted"].pop("artifact_authority")),
+                "platform-evidence-unauthenticated"),
+            "non-linux-claim": (lambda request, report: report.update(environment={"os": "Darwin"}),
+                                "platform-evidence-missing"),
+            "no-environment": (lambda request, report: report.pop("environment"),
+                               "platform-evidence-missing"),
+        }
+        for name, (mutate, code) in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(self.judged(mutate), ("unavailable", code))
+
+    def test_incomplete_decision_needs_an_accounting_finding(self):
+        def drop_findings(request, report):
+            report["findings"] = []
+
+        def no_findings(request, report):
+            del report["findings"]
+        cases = {
+            "incomplete-empty-findings": (drop_findings, "report-incomplete"),
+            "incomplete-missing-findings": (no_findings, "report-incomplete"),
+            "dict-findings": (lambda request, report: report.update(findings={"a": 1}), "report-malformed"),
+            "string-findings": (lambda request, report: report.update(findings="oops"), "report-malformed"),
+            "unaccounted-finding": (lambda request, report: report["findings"].append("surprise"),
+                                    "report-incomplete"),
+        }
+        for name, (mutate, code) in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(self.judged(mutate), ("unavailable", code))
+
+    def test_source_state_status_must_be_the_exact_clean_value(self):
+        def state(value):
+            return lambda request, report: report["source_state"].__setitem__("status", value)
+
+        def missing(request, report):
+            report["source_state"] = {}
+        for name, mutate in {
+            "missing-status": missing, "null-status": state(None), "empty-string": state(""),
+            "dirty-status": state([" M scripts/file"]), "false-status": state(False),
+        }.items():
+            with self.subTest(name=name):
+                self.assertEqual(self.judged(mutate), ("unavailable", "candidate-dirty"))
+
     def test_fabricated_certificate_needs_owner_artifact_authority(self):
         # A well-formed certificate with invented producer fields, invented
         # PASS transcripts and copied source hashes proves only its content.
@@ -447,6 +545,37 @@ class PrepReadinessRegression(unittest.TestCase):
             with self.subTest(name=name):
                 verdict = self.verdict(request)
                 self.assertEqual(verdict["status"], "unavailable", verdict)
+
+    def test_breaking_classification_must_be_the_exact_boolean(self):
+        for name, value in (("missing", ...), ("null", None), ("zero", 0), ("string", "false")):
+            with self.subTest(name=name):
+                request = self.request()
+                survey = request["evidence"]["artifacts"]["release-prep-evidence.json"]["json"]["survey"]
+                if value is ...:
+                    del survey["breaking"]
+                else:
+                    survey["breaking"] = value
+                verdict = self.verdict(request)
+                self.assertEqual(verdict["status"], "unavailable", verdict)
+                self.assertEqual(verdict["reasons"][0]["code"], "survey-mismatch", verdict)
+        request = self.request(candidate={"breaking": True})
+        request["trusted"]["release_survey"]["breaking"] = True
+        request["evidence"]["artifacts"]["release-prep-evidence.json"]["json"]["survey"]["breaking"] = 1
+        self.assertEqual(self.verdict(request)["reasons"][0]["code"], "survey-mismatch")
+
+    def test_canonical_task_is_chosen_by_numeric_id(self):
+        # ORB-100000 sorts before ORB-99999 as a string, but is the later task.
+        def two_open(named):
+            request = self.request()
+            first = request["tasks"]["tagged"][0]
+            request["tasks"]["tagged"] = [{**first, "id": "ORB-100000"}, {**first, "id": "ORB-99999"}]
+            request["evidence"]["artifacts"]["release-prep-evidence.json"]["json"][
+                "canonical_task_id"] = named
+            return request
+        self.assertEqual(self.verdict(two_open("ORB-99999"))["status"], "passed")
+        verdict = self.verdict(two_open("ORB-100000"))
+        self.assertEqual(verdict["status"], "unavailable", verdict)
+        self.assertEqual(verdict["reasons"][0]["code"], "handoff-mismatch", verdict)
 
     def test_busy_board_and_empty_range_probes_stay_blocked(self):
         for scenario, code in (("blocked", "prep-board-busy"),
