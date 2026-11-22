@@ -568,6 +568,17 @@ function incidentScanPartialCoverageNote(scanLimit) {
   return `Partial coverage: counts include only ${scannedRows} in this window. Older failures and affected runs may be omitted.`;
 }
 
+function appendToolIdentifier(container, value) {
+  const segments = String(value ?? "").split(".");
+  segments.forEach((segment, index) => {
+    if (index > 0) {
+      container.appendChild(document.createTextNode("."));
+      container.appendChild(document.createElement("wbr"));
+    }
+    container.appendChild(document.createTextNode(segment));
+  });
+}
+
 // The headline failure rate is the first line of the per-tool failures panel it
 // summarises (STD-07 §R29). Its definition sits behind an info icon (§R13), so
 // it reads on hover, keyboard focus or tap rather than as a caption.
@@ -582,7 +593,7 @@ function toolCallFailureRateLine(stats) {
   ]);
 }
 
-function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = "24h", capped = false, scanLimit = 0) {
+function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, capped = false, scanLimit = 0) {
   const failByTool = new Map();
   for (const f of failuresRows) {
     if (isNamedTool(f.tool)) failByTool.set(f.tool, f);
@@ -593,7 +604,7 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
   const panel = el("div", { class: "card card-flush audit-summary-card" });
   panel.appendChild(el("h3", {
     class: "card-title section-title",
-    text: `Unexpected failures by callable tool (${window})${capped ? " · capped counts" : ""}`,
+    text: `Unexpected failures by callable tool${capped ? " · capped counts" : ""}`,
   }));
   const body = el("div", { class: "card-body tool-health-body" });
   if (capped) {
@@ -608,10 +619,12 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
     if (!isNamedTool(row.tool)) continue;
     const rate = row.rate || 0;
     const severity = rate >= 0.14 ? "critical" : rate >= 0.05 ? "warning" : "normal";
-    const card = el("div", { class: `card card-dense health-card ${severity}` });
+    const card = el("div", { class: `card health-card ${severity}` });
 
     const header = el("div", { class: "card-header" });
-    header.appendChild(el("span", { class: "tool-name", text: row.tool, title: row.tool }));
+    const toolName = el("span", { class: "tool-name" });
+    appendToolIdentifier(toolName, row.tool);
+    header.appendChild(toolName);
     header.appendChild(el("span", {
       class: "badge mono",
       "data-tone": severity === "critical" ? "danger" : severity === "warning" ? "warning" : null,
@@ -701,9 +714,11 @@ function buildAuditSummaryTable(items, cols, onRowClick) {
         const value = col.format ? col.format(item[col.key]) : item[col.key];
         return `${col.title || col.label}: ${value ?? "-"}`;
       }).join("; ");
-      const td = el("td", { class: `${c.num ? "num" : ""} ${c.secondary ? "summary-secondary" : ""}`, text: val });
+      const td = el("td", { class: `${c.num ? "num" : ""} ${c.secondary ? "summary-secondary" : ""}` });
       if (!onRowClick) td.title = title;
       if (c.render) td.textContent = c.render(item[c.key], item, td);
+      else if (c.key === "tool") appendToolIdentifier(td, val);
+      else td.textContent = val ?? "";
       td.dataset.column = c.key;
       row.appendChild(td);
     }
@@ -840,7 +855,7 @@ function renderAuditSummary(data, ctx) {
       tabGroup.appendChild(button);
     }
     addCard(AUDIT_TOOL_FAILURES_CARD_KEY, createCard(
-      `Tool call failures · window ${windowLabel}`,
+      "Tool call failures",
       (body) => {
         if (tab === "model") {
           renderModelRows(body);
@@ -871,10 +886,9 @@ function renderAuditSummary(data, ctx) {
       namedRates,
       namedFailures,
       filterByTool,
-      windowLabel,
       incidentScanCapped,
       incidentScanLimit,
-    ), [namedRates, namedFailures, windowLabel, incidentScanCapped, incidentScanLimit]);
+    ), [namedRates, namedFailures, incidentScanCapped, incidentScanLimit]);
   }
 
   const categoryOrder = ["unexpected", "expected", "denied", "diagnostic", "deferred"];
@@ -890,7 +904,7 @@ function renderAuditSummary(data, ctx) {
     const capped = incidentScanCapped;
     const scanLimit = incidentScanLimit;
     const card = createCard(
-      `Failure categories · window ${data.window || "24h"}${capped ? " · capped counts" : ""}`,
+      `Failure categories${capped ? " · capped counts" : ""}`,
       renderTable(categoryRows, [
         { key: "label", label: "class", title: "Failure classification", render: (value, row, td) => {
           // The full name is visible now, so a tooltip would only repeat it (STD-07 R32).
@@ -908,14 +922,13 @@ function renderAuditSummary(data, ctx) {
         text: incidentScanPartialCoverageNote(scanLimit),
       }));
     }
-    addCard("failure-categories", card, [categoryRows, data.window || "24h", capped, scanLimit]);
+    addCard("failure-categories", card, [categoryRows, capped, scanLimit]);
   }
 
   const lifecycleFailures = Number(data.lifecycle_diagnostic_events) || 0;
   const lifecycleIncidents = Number(data.lifecycle_diagnostic_incidents) || 0;
   if (lifecycleFailures > 0 || lifecycleIncidents > 0) {
     const label = data.lifecycle_diagnostic_label || "lifecycle diagnostics";
-    const window = data.window || "24h";
     const lifecycleTitle = `${label}${incidentScanCapped ? " · capped counts" : ""}`;
     const lifecycleCard = el("div", { class: "card card-flush audit-summary-card lifecycle-failure-card" });
     lifecycleCard.appendChild(el("div", { class: "card-title section-title", text: lifecycleTitle }));
@@ -926,7 +939,7 @@ function renderAuditSummary(data, ctx) {
     }));
     body.appendChild(el("div", {
       class: "metric-trend",
-      text: `Failure-only diagnostic surfaces; excluded from callable-tool denominators and rates · window ${window}`,
+      text: "Failure-only diagnostic surfaces; excluded from callable-tool denominators and rates",
     }));
     if (incidentScanCapped) {
       body.appendChild(el("div", {
@@ -937,7 +950,6 @@ function renderAuditSummary(data, ctx) {
     lifecycleCard.appendChild(body);
     addCard("lifecycle-diagnostics", lifecycleCard, [
       label,
-      window,
       lifecycleIncidents,
       lifecycleFailures,
       Number(data.lifecycle_diagnostic_affected_run_count) || 0,
