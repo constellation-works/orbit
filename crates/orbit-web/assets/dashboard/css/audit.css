@@ -440,7 +440,10 @@ td.codebase-empty { padding: var(--space-16) var(--space-14); }
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   overflow-wrap: anywhere;
 }
-.summary-table td[data-column="tool"] { overflow-wrap: normal; }
+/* A tool identifier wraps after its dots (`<wbr>`, see `appendToolIdentifier`). A valid
+   plugin verb may hold one segment wider than the card, so it still breaks inside that
+   segment rather than push the figures out of view; break opportunities win first. */
+.summary-table td[data-column="tool"] { overflow-wrap: anywhere; }
 .summary-table th:first-child, .summary-table td:first-child { padding-inline-start: var(--space-12); }
 .summary-table th:last-child, .summary-table td:last-child { padding-inline-end: var(--space-12); }
 .summary-table tr:last-child td { border-bottom: none; }
@@ -519,7 +522,7 @@ td.codebase-empty { padding: var(--space-16) var(--space-14); }
   font-weight: 600;
   font-size: var(--text-sm);
   color: var(--fg);
-  overflow-wrap: normal;
+  overflow-wrap: anywhere;
   white-space: normal;
 }
 .health-card .metric-trend {
