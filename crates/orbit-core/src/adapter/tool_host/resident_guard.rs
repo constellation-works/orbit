@@ -192,7 +192,16 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
                 Read
             }
             FrictionVerb::Add => Open,
-            FrictionVerb::Update | FrictionVerb::Resolve | FrictionVerb::Rehome => Refused,
+            FrictionVerb::Update => {
+                if input.get("rehome_to").is_some_and(|value| !value.is_null())
+                    || input.get("move").is_some_and(|value| !value.is_null())
+                {
+                    Refused
+                } else {
+                    Open
+                }
+            }
+            FrictionVerb::Resolve | FrictionVerb::Rehome => Refused,
         },
         OrbitBuiltinAction::Evolution(verb) => match verb {
             EvolutionVerb::List | EvolutionVerb::Show => Read,
