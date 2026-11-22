@@ -372,7 +372,7 @@ td .rel-rate { font-size: var(--text-sm); }
 /* Narrow viewports: the Audit tool-health cards keep their labels readable. */
 @media (max-width: 720px) {
   .health-card .card-header { flex-wrap: wrap; align-items: flex-start; }
-  .health-card .tool-name { white-space: normal; overflow-wrap: normal; }
+  .health-card .tool-name { white-space: normal; overflow-wrap: anywhere; }
 }
 
 /* Errors: one card per failed event on phones (see `.card-table`). */
