@@ -15,7 +15,7 @@
 - **One tool-failures card**: Audit › Tools shows tool-call failures in one card with By tool and By model tabs, and the MCP vs CLI split is gone. ([ORB-26507])
 - **Tab-specific Metrics panels**: Each Analytics › Metrics trend tab shows its own panels. Turns to first edit adds a turns-by-provider comparison, also returned as `provider_summary` in its API. ([ORB-26290])
 - **Faster resident list**: The Tasks dock's resident list now reads in under 500 ms on a live-sized store. ([ORB-26324])
-- **Reproducible perf timing**: `scripts/perf` checks in a paired timing protocol: a frozen store snapshot, a locked base and candidate build, and interleaved timed rounds. Paired runs share one perf lane per host and no longer throttle drain admissions. ([ORB-26322])
+- **Reproducible perf timing**: `scripts/perf` checks in a paired timing protocol: a frozen store snapshot, a locked base and candidate build, and interleaved timed rounds. Paired runs share one perf lane per host, and each fixture reset re-copies only the files that changed. ([ORB-26322])
 
 ## 0.52.0 — 2026-11-21
 
