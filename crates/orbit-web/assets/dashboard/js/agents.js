@@ -724,15 +724,18 @@ function contribution(term, row) {
 // One decimal hides a contribution the score still counts: one nit among
 // 600 peer tasks is about +0.02. Two decimals match the payload's display
 // rounding of rates; anything smaller keeps four decimals so the sign stays
-// visible. An exact zero stays 0, the middle ring.
+// visible. A nonzero value that rounds to 0.0000 reads as "+<0.0001" or
+// "−<0.0001", the form the cost labels use for sub-cent amounts, so it never
+// looks like zero. An exact zero of either sign stays 0, the middle ring.
 function contributionLabel(value) {
   if (typeof value !== "number" || !Number.isFinite(value)) return "—";
-  if (Object.is(value, 0)) return "0";
+  if (value === 0) return "0";
   const abs = Math.abs(value);
+  const sign = value < 0 ? "−" : "+";
+  if (abs.toFixed(4) === "0.0000") return `${sign}<0.0001`;
   let digits = 1;
   if (abs.toFixed(1) === "0.0") digits = abs.toFixed(2) === "0.00" ? 4 : 2;
-  const text = abs.toFixed(digits);
-  return value < 0 ? `−${text}` : `+${text}`;
+  return `${sign}${abs.toFixed(digits)}`;
 }
 
 function render() {
