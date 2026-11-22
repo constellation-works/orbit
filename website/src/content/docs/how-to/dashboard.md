@@ -492,9 +492,10 @@ first. Select a mandate to answer its requests and steer it:
 **Jobs › History** lists job runs for the selected workspace. It opens on
 **Running**, the runs pending or running now. Tasks with multiple in-flight runs are
 grouped; a shared run appears in every group for a task that has multiple runs, and
-appears once as a plain row when none of its tasks has a group. Each run shows its crew,
-and the panel shows a count of tasks and runs in flight. Switch to **All** or **Failed**,
-narrow the list with a task ID or job ID, and pick a time window (**Running**
+appears once as a plain row when none of its tasks has a group. Each run row shows its
+state, job, tasks, run ID, age, and duration. The panel header shows the tasks and runs in
+flight as `N tasks, M runs in flight` (`nothing in flight` when none is). Switch to **All**
+or **Failed**, narrow the list with a task ID or job ID, and pick a time window (**Running**
 ignores the window).
 
 Click a run for its steps, events, and child runs. A failed, timed-out, or
