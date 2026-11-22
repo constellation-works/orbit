@@ -32,7 +32,7 @@ impl ShipMode {
 #[command(
     about = "Ship backlog or explicitly selected tasks through the gated task pipeline",
     override_usage = "orbit run ship [<TASK_ID>...] [OPTIONS]",
-    after_help = "Examples:\n  orbit run ship\n  orbit run ship T123\n  orbit run ship T123 T456 --mode local\n  orbit run ship T123 --base main\n  orbit run ship T123 --allow-crew sol\n  orbit run ship T123 --complete\n  orbit run ship T123 --review before-landing\n\n\
+    after_help = "Examples:\n  orbit run ship\n  orbit run ship T123\n  orbit run ship T123 T456 --mode local\n  orbit run ship T123 --base main\n  orbit run ship T123 --allow-crew sol\n  orbit run ship T123 --complete\n  orbit run ship T123 --ignore-dependency-delivery\n  orbit run ship T123 --review before-landing\n\n\
                   Named tasks ship even when a drain would wait on them (a pending\n\
                   scheduled start, unassessed complexity, no context files, or\n\
                   context locks another in-flight task holds); task history\n\
@@ -66,6 +66,11 @@ pub struct ShipCommand {
     /// `before-pr` is deprecated but still holds PR creation for a reviewer.
     #[arg(long, value_enum, value_name = "LAYER")]
     pub review: Option<orbit_types::workflow::ReviewLayer>,
+    /// Skip the dependency-delivery check for the named tasks. Use it when a
+    /// done dependency's work reached the base under a commit message that
+    /// carries no `[ORB-…]` marker, so the setup refuses it as undelivered.
+    #[arg(long, requires = "task_ids")]
+    pub ignore_dependency_delivery: bool,
     /// Require a systemd user scope for this run and every worker it starts.
     /// Treats machine.worker_containment as strict for this invocation.
     #[arg(long)]
@@ -113,6 +118,7 @@ impl Execute for ShipCommand {
             // Naming tasks is the operator's override of the drain's
             // readiness gates; the run's task history records which.
             operator_override: true,
+            ignore_dependency_delivery: self.ignore_dependency_delivery,
         })?;
         let receipt = runtime.ship_submission_receipt(
             &invoke,

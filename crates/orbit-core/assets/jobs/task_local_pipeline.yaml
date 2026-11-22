@@ -70,6 +70,10 @@ spec:
     auto_push: false
     base_branch: main
     base_sync: remote
+    # Forwarded unchanged to each leaf's worktree setup. `ignore` skips the
+    # dependency-delivery check for work delivered under a different commit
+    # message (`orbit run ship --ignore-dependency-delivery`).
+    dependency_delivery: enforce
     landing_branch: ""
     landing_mode: local
     terminal_status: review
@@ -94,6 +98,7 @@ spec:
         task_ids: "{{ input.task_ids }}"
         base: "{{ input.base_branch }}"
         base_sync: "{{ input.base_sync }}"
+        dependency_delivery: "{{ input.dependency_delivery }}"
         landing_mode: "{{ input.landing_mode }}"
 
     # ORB-13985: a task whose last failed run preserved a candidate resumes

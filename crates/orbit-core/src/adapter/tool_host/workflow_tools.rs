@@ -111,6 +111,7 @@ fn ship(
         // Agents ship through this tool; only an operator's CLI or dashboard
         // ship overrides the drain's readiness gates.
         operator_override: false,
+        ignore_dependency_delivery: false,
     })?;
     Ok(runtime
         .ship_submission_receipt(&invoke, !task_ids.is_empty(), ShipSubmissionProfile::Tool)?

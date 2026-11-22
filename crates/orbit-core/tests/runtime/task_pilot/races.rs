@@ -402,6 +402,7 @@ fn local_auto_ship_and_readiness_wait_for_an_active_pilot_checkpoint() {
             strict_containment: false,
             review: None,
             operator_override: true,
+            ignore_dependency_delivery: false,
         })
         .expect_err("named ship must report the active pilot hold");
     assert!(held_ship.to_string().contains(&task.id), "{held_ship}");
