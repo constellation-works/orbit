@@ -639,6 +639,44 @@ fn workspace() -> TestWorkspace {
     TestWorkspace::new("table-rendering-test", template)
 }
 
+/// The shortening hint is advisory. A stderr pipe whose reader is gone must not
+/// turn a table that already reached stdout into a panic (exit 101), and the
+/// same invocation with a writable stderr still prints the hint exactly once.
+#[cfg(unix)]
+#[test]
+fn shortened_table_survives_a_closed_stderr_pipe() {
+    let workspace = workspace();
+    workspace.seed_tasks(&[workspace.task_seed(LONG_TITLE)]);
+
+    let (reader, writer) = std::io::pipe().expect("stderr pipe");
+    drop(reader);
+    let closed = run_cli_on_terminal_at_width_with_operator(
+        &workspace,
+        &["task", "list"],
+        "120",
+        false,
+        writer.into(),
+    );
+    let closed_stdout = String::from_utf8_lossy(&closed.stdout);
+    assert!(
+        closed_stdout.contains("Terminal tables"),
+        "task list writes its table to stdout when stderr is closed: {closed_stdout:?}"
+    );
+
+    let writable = run_cli_on_terminal_at_width(&workspace, &["task", "list"], "120");
+    let writable_stdout = String::from_utf8_lossy(&writable.stdout);
+    let writable_stderr = String::from_utf8_lossy(&writable.stderr);
+    assert_eq!(
+        writable_stderr.trim(),
+        SHORTENING_HINT,
+        "a writable stderr receives only the one shortening hint: {writable_stderr:?}"
+    );
+    assert!(
+        writable_stdout.contains("Terminal tables") && !writable_stdout.contains(SHORTENING_HINT),
+        "the hint stays off stdout, which carries the table payload: {writable_stdout:?}"
+    );
+}
+
 #[cfg(unix)]
 fn run_on_terminal(workspace: &TestWorkspace, args: &[&str]) -> Output {
     run_cli_on_terminal_at_width(workspace, args, "120")
@@ -650,7 +688,13 @@ pub(super) fn run_cli_on_terminal_at_width(
     args: &[&str],
     width: &str,
 ) -> Output {
-    run_cli_on_terminal_at_width_with_operator(workspace, args, width, false)
+    run_cli_on_terminal_at_width_with_operator(
+        workspace,
+        args,
+        width,
+        false,
+        std::process::Stdio::piped(),
+    )
 }
 
 #[cfg(unix)]
@@ -659,15 +703,24 @@ fn run_cli_on_terminal_at_width_as_operator(
     args: &[&str],
     width: &str,
 ) -> Output {
-    run_cli_on_terminal_at_width_with_operator(workspace, args, width, true)
+    run_cli_on_terminal_at_width_with_operator(
+        workspace,
+        args,
+        width,
+        true,
+        std::process::Stdio::piped(),
+    )
 }
 
+/// `child_stderr` is the child's fd 2. A pipe whose reader is already gone is
+/// the stream an early consumer leaves behind; the returned stderr is then empty.
 #[cfg(unix)]
 fn run_cli_on_terminal_at_width_with_operator(
     workspace: &TestWorkspace,
     args: &[&str],
     width: &str,
     operator: bool,
+    child_stderr: std::process::Stdio,
 ) -> Output {
     use std::io::Read;
     use std::os::fd::FromRawFd;
@@ -725,7 +778,7 @@ fn run_cli_on_terminal_at_width_with_operator(
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::from(slave))
-        .stderr(Stdio::piped())
+        .stderr(child_stderr)
         .spawn()
         .expect("run CLI on terminal");
     drop(command);
@@ -736,15 +789,12 @@ fn run_cli_on_terminal_at_width_with_operator(
     }
     let status = child.wait().expect("wait for CLI");
     let mut stderr = Vec::new();
-    child
-        .stderr
-        .take()
-        .expect("captured stderr")
-        .read_to_end(&mut stderr)
-        .expect("read CLI stderr");
+    if let Some(mut pipe) = child.stderr.take() {
+        pipe.read_to_end(&mut stderr).expect("read CLI stderr");
+    }
     assert!(
         status.success(),
-        "CLI command failed\nstdout:\n{}\nstderr:\n{}",
+        "CLI command failed with {status}\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&stdout),
         String::from_utf8_lossy(&stderr)
     );
