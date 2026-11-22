@@ -231,8 +231,8 @@ pub(in crate::executor::automation::vcs::pr) enum CiRerunRecovery {
     /// The retry budget is spent on stopped jobs or logged infrastructure
     /// failures. The reason names the hold. Do not admit a repair.
     Stopped(String),
-    /// The no-edit repair's rerun failed again (or the head's rerun budget is
-    /// spent); hold with the named typed delivery refusal instead of failing.
+    /// The no-edit repair's rerun failed again; hold with the named typed
+    /// delivery refusal instead of failing.
     Held {
         refusal: DeliveryRefusal,
         reason: String,
