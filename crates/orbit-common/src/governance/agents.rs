@@ -132,7 +132,7 @@ const SCORECARD: OperationSpec<AgentsVerb> = OperationSpec {
     verb: AgentsVerb::Scorecard,
     cli_path: &["scorecard"],
     tool_name: "orbit.agents.scorecard",
-    tool_description: "Rank one agent role's models by recorded reasoning effort over the window by weighted outcome rate per 100 units of work, to compare model-and-effort rows for that role; each row lists the crews that contributed its units, units with no recorded effort form a separate effort-unknown row, and a null effort is the provider default. `by_type` and `per_task` switch implementers' output to a per-type cell matrix or a per-task export; `orbit.agents.show` follows a row to its tasks. Rows below minimum support are listed last without a rank. The scoring rules, switch outputs and cost notes are in the orbit skill's references/tool-surface.md, section `Agent scorecards`.",
+    tool_description: "Rank one agent role's models by recorded reasoning effort over the window by weighted outcome rate per 100 units of work. `by_type` and `per_task` switch the output. Scoring rules, switches and cost: the orbit skill's references/tool-surface.md, section `Agent scorecards`.",
     cli_about: "Show one role's scorecard rows by model and recorded effort",
     cli_help: CliHelp {
         long_about: None,

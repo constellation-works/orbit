@@ -756,7 +756,8 @@ it returns a new linked run; preserve both IDs.
 ## Fleet notices
 
 A fleet notice is a short note every agent and operator in its scope should see
-until it stops being true: a `warn` (the operator is needed: it names the exact
+until it stops being true. It is not a lease notice: lease notices are events on
+one path lease. The kinds are a `warn` (the operator is needed: it names the exact
 ask), an `incident` (something is broken now), `maintenance` (planned work to
 hold off or plan around) or `info`. A notice never
 grants authority, and no delivery gate reads it. An open `maintenance` notice does
@@ -770,7 +771,9 @@ optionally `body`, `scope` (`workspace`, the default, or `global`),
 `dedupe_key`, `linked_task`, `close_on_linked_done` (default true with a link),
 `evidence` (up to 8 `{type, value}`, type `task`, `run`, `friction`,
 `pull_request`, `decision`, `url` or `commit`), `hosts` (maintenance only), and
-`expires_in_hours` or `expires_at`. It returns `{notice, outcome}`:
+`expires_in_hours` or `expires_at`. The notice closes when its linked task is
+done and is deduplicated by `dedupe_key`. It returns `{notice, outcome}`, and a
+lost reply is safe to retry:
 
 - **created** when no open notice of the workspace holds the dedupe key. An
   omitted key is `task:<linked task>`, else the kind and the slugged title.
@@ -831,6 +834,11 @@ federated session (or as `orbit notice list` outside any workspace on a host
 with registered hosts) it merges every reachable owner's notices, deduplicated
 by id and limited once after the merge, with each unreachable owner named in
 `degraded`; `all: true` is the per-owner hop that aggregation issues.
+Each listed notice carries its kind, scope, title, body, author class, linked
+task, status, expiry, report count and effective status; the output is
+`{notices, degraded}`, so a shorter list never silently hides an unreachable
+owner, and the tool is read-only. With a workspace, `orbit.notice.list` returns
+that workspace's notices plus global notices homed elsewhere on its owner.
 `orbit.notice.show` takes `id`, and
 for the operator includes the history. Status is computed when read: closed,
 then linked task done, then expired, else open.
@@ -839,6 +847,113 @@ The CLI mirrors the tools: `orbit notice post --kind <k> --title <t> [--body <te
 [--scope global] [--link <task>] [--keep-after-done] [--evidence type=value]
 [--host <machine>] [--expires-in <hours> | --expires-at <time>]`, `close <id>
 --reason <why>` (or `--dedupe-key`), `list` and `show <id>`, all with `--json`.
+
+## Registry tool details
+
+Detail for tools whose registry description (`orbit tool show <tool>`,
+`orbit tool list`) is kept to a sentence or two. The notice tools are under
+[Fleet notices](#fleet-notices), `orbit.task.block_triage` under
+[Pilot-warning triage](#pilot-warning-triage) and `orbit.agents.scorecard`
+under [Agent scorecards](#agent-scorecards).
+
+### GitHub run logs
+
+`github.run.logs` reads a bounded excerpt of one GitHub Actions run's logs:
+failed steps by default, or the full log, plus runner checkout evidence.
+
+- **Narrowing.** Scope the excerpt to a named step (`step`, usually with `job`),
+  a byte window (`byte_start`/`byte_end`, 0-based, end-exclusive) or a line
+  window (`line_start`/`line_end`, 1-based, end-exclusive). A window combined
+  with `step` applies within the step section. An absent step or window fails
+  without returning other log bytes. The response reports the selection and its
+  `selected_bytes`/`selected_lines`.
+- **Step mapping in a raw job log.** Steps are named only by their
+  `Run <command>` display group, which closes before the command runs, so a
+  step matched there includes its post-group runtime output until the next
+  `Run` step. A workflow `name:` that differs from its `Run <command>` cannot be
+  reliably mapped in a raw log and fails with an explicit unsupported-mapping
+  error instead of a not-found error. Omit `step` and read by `job` with `scope`
+  or a byte/line window to recover.
+- **Limits.** The source stream is read incrementally with an 8 MiB stdout limit
+  and a process timeout. A separate `diagnostic_unit` retains a unique complete
+  failing runner command up to 256 KiB; display truncation does not imply
+  missing command evidence. Source-limit exhaustion is retryable.
+- **Recovery.** When the run-scoped read succeeds with no output, or GitHub says
+  the parent run is still in progress, the excerpt can be recovered from the log
+  API of a verified completed job belonging to that run; `failed` scope is
+  restricted to unsuccessful jobs. `source` and `source_jobs` identify the
+  recovery. Other errors remain errors.
+
+### GitHub auth status
+
+`github.auth.status` preflights the GitHub CLI surface: whether a GitHub CLI is
+present on this execution lane (`available`) and whether it holds usable
+credentials there (`authenticated`). Neither absence nor a missing credential
+is an error; both are reported so a caller can record a capability-unavailable
+outcome instead of mistaking it for a clean result. `quota` is the host's GitHub
+API quota record for this account: per resource (`core`, `graphql`) the limit,
+remaining count and reset time (`state: unknown` when GitHub's rate-limit
+answer could not be read), whether agent, background or delivery reads are
+currently refused, and the calls each caller class made in the current window.
+
+### Resident tools
+
+`orbit.resident.grant` widens or narrows a resident mandate's authority: its
+rights (`dispatch`, `promote`, `merge`, `plugin_upgrade`) and covered workspaces.
+
+- **Widening** (`add`, `workspaces`) is the human's. From an operator it applies
+  at once. From any other caller it changes nothing and raises one
+  `resident_authority` decision request that quotes `quote` verbatim and names
+  your session; the authority changes only if a human answers `grant`. An open
+  request for the same addition is returned, not duplicated; any authority
+  change supersedes it.
+- **Narrowing** (`remove`, `drop_workspaces`, a shorter deadline) applies at once
+  for any caller that can write the assignment and is recorded with that caller.
+- A call may not widen and narrow at once. Output is
+  `{outcome, authority, request?}` with `outcome` `granted`, `requested` or
+  `narrowed`.
+
+`orbit.resident.metrics` reports the resident widening measures over a window,
+derived read-only from task history, decision requests, checkpoints and audit
+rows:
+
+- manual interventions (per mandate and per active mandate-day);
+- escalation load (per mandate-day and per human-day, median answer latency,
+  share answered with the recommended option, expired-unanswered);
+- reversal rate (resident decisions and actions a human undid within 7 days,
+  each counted once);
+- crashed-cycle recovery cost (cycles without a checkpoint, time to the next
+  good checkpoint, recovery slot minutes, repeated actions, human interventions
+  needed).
+
+With `baseline`, the same measures are reported for an interactive assignment
+task. A measure that cannot be derived reports `not_derivable`, never zero.
+
+### Distributed drain tools
+
+`orbit.drain.probe` is the read-only preflight for the distributed drain, served
+by the workspace owner. It reports the owner machine, binary version,
+distributed-drain protocol schema, the capabilities this session holds, the
+diagnostic caller machine, the owner-resolved ship configuration, and both
+review switches (`review.timing` and the after-landing auto-task). Declaring
+`caller_version`, `caller_schema` or `caller_before_pr` also reports the first
+refusal an admission would raise, in the order admission applies it. It creates
+no request receipt, reservation, claim or task transition, and it is never a
+health check for admission itself.
+
+`orbit.drain.claim.effort` reports, after the fact, the reasoning effort and
+implementing model a claimed leaf ran at when its settlement carried none, so
+the owner's agent scorecards stop counting the attempt as effort unknown or
+model unknown.
+
+- It is accepted only from the machine that ran the claim, for the leaf run
+  bound to it, once the claim is settled. A claim that settled before the owner
+  kept settlement records is accepted only when the task's history names it as
+  pulled.
+- It is attribution only: it changes no claim, task, run or settlement outcome.
+- A value the claim already holds is never overwritten: the same value replays,
+  and a different one is refused as `effort_conflict` or `model_conflict`,
+  recording neither.
 
 ## Missing operations
 

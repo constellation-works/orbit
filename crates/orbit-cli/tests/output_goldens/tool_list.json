@@ -1,7 +1,7 @@
 [
   {
     "name": "github.auth.status",
-    "description": "Preflight the GitHub CLI surface: whether a GitHub CLI is present on this execution lane (`available`) and whether it holds usable credentials there (`authenticated`). Neither absence nor a missing credential is an error — both are reported so a caller can record a capability-unavailable outcome instead of mistaking it for a clean result. `quota` is the host's GitHub API quota record for this account: per resource (`core`, `graphql`) the limit, remaining count and reset time (`state: unknown` when GitHub's rate-limit answer could not be read), whether agent, background or delivery reads are currently refused, and the calls each caller class made in the current window.",
+    "description": "Preflight the GitHub CLI surface: whether a GitHub CLI is present on this execution lane (`available`) and whether it holds usable credentials there (`authenticated`). Neither absence nor a missing credential is an error. Quota fields and detail: the orbit skill's tool-surface.md reference, section `GitHub auth status`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -93,7 +93,7 @@
   },
   {
     "name": "github.run.logs",
-    "description": "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. Optionally scope the excerpt to a named step (step, usually with job) or to a byte window (byte_start/byte_end, 0-based end-exclusive) or line window (line_start/line_end, 1-based end-exclusive); a window combined with step applies within the step section, an absent step or window fails without returning other log bytes, and the response reports the selection and its selected_bytes/selected_lines. In a raw job log, steps are named only by their `Run <command>` display group, which closes before the command runs, so a step matched there includes its post-group runtime output until the next `Run` step; a workflow `name:` that differs from its `Run <command>` cannot be reliably mapped in a raw log and fails with an explicit unsupported-mapping error instead of a not-found error. Omit `step` and read by `job` with `scope` or a byte/line window to recover. The source stream is read incrementally with an 8 MiB stdout limit and process timeout. A separate diagnostic_unit retains a unique complete failing runner command up to 256 KiB; display truncation does not imply missing command evidence. Source-limit exhaustion is retryable. When the run-scoped read succeeds with no output, or GitHub says the parent run is still in progress, the excerpt can be recovered from the log API of a verified completed job belonging to that run; failed scope is restricted to unsuccessful jobs. `source` and `source_jobs` identify the recovery. Other errors remain errors.",
+    "description": "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. Source limits, step mapping and job-log recovery: the orbit skill's tool-surface.md reference, section `GitHub run logs`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -222,7 +222,7 @@
   },
   {
     "name": "orbit.agents.scorecard",
-    "description": "Rank one agent role's models by recorded reasoning effort over the window by weighted outcome rate per 100 units of work, to compare model-and-effort rows for that role; each row lists the crews that contributed its units, units with no recorded effort form a separate effort-unknown row, and a null effort is the provider default. `by_type` and `per_task` switch implementers' output to a per-type cell matrix or a per-task export; `orbit.agents.show` follows a row to its tasks. Rows below minimum support are listed last without a rank. The scoring rules, switch outputs and cost notes are in the orbit skill's references/tool-surface.md, section `Agent scorecards`.",
+    "description": "Rank one agent role's models by recorded reasoning effort over the window by weighted outcome rate per 100 units of work. `by_type` and `per_task` switch the output. Scoring rules, switches and cost: the orbit skill's references/tool-surface.md, section `Agent scorecards`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -847,7 +847,7 @@
   },
   {
     "name": "orbit.drain.claim.effort",
-    "description": "Report, after the fact, the reasoning effort and implementing model a claimed leaf ran at when its settlement carried none, so the owner's agent scorecards stop counting the attempt as effort unknown or model unknown. Accepted only from the machine that ran the claim, for the leaf run bound to it, once the claim is settled; a claim that settled before the owner kept settlement records is accepted only when the task's history names it as pulled. Attribution only: it changes no claim, task, run or settlement outcome. A value the claim already holds is never overwritten: the same value replays, and a different one is refused as `effort_conflict` or `model_conflict`, recording neither.",
+    "description": "Report, after the fact, the reasoning effort and implementing model a claimed leaf ran at when its settlement carried none. Attribution only; it changes no claim, task or run outcome. Who may call and the conflict refusals: the orbit skill's tool-surface.md reference, section `Distributed drain tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -957,7 +957,7 @@
   },
   {
     "name": "orbit.drain.probe",
-    "description": "Read-only preflight for the distributed drain, served by the workspace owner. Reports the owner machine, binary version, distributed-drain protocol schema, the capabilities this session holds, the diagnostic caller machine, the owner-resolved ship configuration, and both review switches (`review.timing` and the after-landing auto-task). Declaring `caller_version`, `caller_schema`, or `caller_before_pr` also reports the first refusal an admission would raise, in the order admission applies it. It creates no request receipt, reservation, claim, or task transition, and it is never a health check for admission itself.",
+    "description": "Read-only preflight for the distributed drain, served by the workspace owner. Reports the owner, version, protocol schema, held capabilities and ship configuration; creates no receipt, claim or task transition. Fields and caller_* inputs: the orbit skill's tool-surface.md reference, section `Distributed drain tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1609,7 +1609,7 @@
   },
   {
     "name": "orbit.notice.list",
-    "description": "List fleet notices, open ones unless status says otherwise. With a workspace, that workspace's notices plus global notices homed elsewhere on its owner; with all: true, every workspace homed on this owner; without a workspace in a federated session, every reachable owner's notices merged, deduplicated by id and limited once after the merge. Each notice carries its kind, scope, title, body, author class, linked task and its status, expiry, report count and effective status (open, closed or expired, derived when read). Ordered warn, incident, maintenance, info, newest update first. Output {notices, degraded}; degraded names any owner or home that could not be read, so a shorter list never silently hides an unreachable owner. Read-only.",
+    "description": "List fleet notices, open ones unless status says otherwise. Output is {notices, degraded}; `degraded` names any owner that could not be read. Read-only. Scope and merge rules: the orbit skill's tool-surface.md reference, section `Fleet notices`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1680,7 +1680,7 @@
   },
   {
     "name": "orbit.notice.post",
-    "description": "Post a fleet notice: a short, scoped note every agent and operator in its scope should see until it stops being true (an ask of the operator, an incident, planned maintenance, or other information). Not a lease notice: lease notices are events on one path lease. The notice is held by this workspace's owner, expires (defaults by kind, capped by poster class), closes when its linked task is done, and is deduplicated by dedupe_key: posting a key an open notice already holds updates it when you may edit it, or corroborates it (bumps its report count) when you may not. The response is {notice, outcome} with outcome created, updated or corroborated; a lost reply is safe to retry. Who you post as (operator, orchestrator or agent) comes from your session, never from input; a managed agent may post only incident or info notices about its own workspace, for at most 24 hours, with a linked task or evidence. A resident cycle may also post warn notices and keeps one info status line under the key resident:<mandate>:status, whose expiry Orbit sets to twice the mandate's heartbeat. A notice informs; it grants nothing.",
+    "description": "Post a fleet notice: a short, scoped note every agent and operator in its scope should see until it stops being true. A repeated dedupe_key updates or corroborates the open one. Poster classes, expiry caps and refusals: the orbit skill's tool-surface.md reference, section `Fleet notices`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1961,7 +1961,7 @@
   },
   {
     "name": "orbit.resident.grant",
-    "description": "Widen or narrow a resident mandate's authority: its rights (dispatch, promote, merge, plugin_upgrade) and covered workspaces. Widening (add, workspaces) is the human's: from an operator it applies at once; from any other caller it changes nothing and raises one resident_authority decision request that quotes `quote` verbatim and names your session, and the authority changes only if a human answers grant. An open request for the same addition is returned, not duplicated; any authority change supersedes it. Narrowing (remove, drop_workspaces, a shorter deadline) applies at once for any caller that can write the assignment and is recorded with that caller. A call may not widen and narrow at once. Output {outcome, authority, request?} with outcome granted, requested or narrowed.",
+    "description": "Widen or narrow a resident mandate's authority: its rights (dispatch, promote, merge, plugin_upgrade) and covered workspaces. Narrowing applies at once; widening is the human's. Rules and output: the orbit skill's tool-surface.md reference, section `Resident tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2043,7 +2043,7 @@
   },
   {
     "name": "orbit.resident.metrics",
-    "description": "Report the resident widening measures over a window, derived read-only from task history, decision requests, checkpoints and audit rows: manual interventions (per mandate and per active mandate-day), escalation load (per mandate-day and per human-day, median answer latency, share answered with the recommended option, expired-unanswered), reversal rate (resident decisions and actions a human undid within 7 days, each counted once) and crashed-cycle recovery cost (cycles without a checkpoint, time to the next good checkpoint, recovery slot minutes, repeated actions, human interventions needed). With baseline, the same measures for an interactive assignment task; a measure that cannot be derived reports not_derivable, never zero. Read-only.",
+    "description": "Report the resident widening measures over a window, derived read-only from task history, decision requests, checkpoints and audit rows: interventions, escalation load, reversals and crash-recovery cost. Read-only. Measure definitions: the orbit skill's tool-surface.md reference, section `Resident tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2557,7 +2557,7 @@
   },
   {
     "name": "orbit.task.block_triage",
-    "description": "Triage proposed tasks a task-pilot warning holds. `candidates` lists those awaiting triage; `propose` opens a decision request with a summary, options and a recommendation, which the operator answers with one click; `report` records the exact human action when only something outside Orbit resolves the hold. Prefer `propose` whenever the operator resolves the hold by choosing. Never approves, rejects or archives a task itself. Blocked tasks are refused here: final recovery decides them. A decision on a task a live triage run holds needs that run's inspection proof. Policy detail, the pilot-warning marker and the proof recipe: the orbit skill's references/tool-surface.md, section `Pilot-warning triage`.",
+    "description": "Triage proposed tasks a task-pilot warning holds. `candidates` lists held tasks; `propose` opens an operator decision; `report` records a human action. Policy and the proof recipe: the orbit skill's references/tool-surface.md, section `Pilot-warning triage`.",
     "enabled": true,
     "active": true,
     "status": "active",

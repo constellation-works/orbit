@@ -176,7 +176,7 @@ const POST: OperationSpec<NoticeVerb> = OperationSpec {
     verb: NoticeVerb::Post,
     cli_path: &["post"],
     tool_name: "orbit.notice.post",
-    tool_description: "Post a fleet notice: a short, scoped note every agent and operator in its scope should see until it stops being true (an ask of the operator, an incident, planned maintenance, or other information). Not a lease notice: lease notices are events on one path lease. The notice is held by this workspace's owner, expires (defaults by kind, capped by poster class), closes when its linked task is done, and is deduplicated by dedupe_key: posting a key an open notice already holds updates it when you may edit it, or corroborates it (bumps its report count) when you may not. The response is {notice, outcome} with outcome created, updated or corroborated; a lost reply is safe to retry. Who you post as (operator, orchestrator or agent) comes from your session, never from input; a managed agent may post only incident or info notices about its own workspace, for at most 24 hours, with a linked task or evidence. A resident cycle may also post warn notices and keeps one info status line under the key resident:<mandate>:status, whose expiry Orbit sets to twice the mandate's heartbeat. A notice informs; it grants nothing.",
+    tool_description: "Post a fleet notice: a short, scoped note every agent and operator in its scope should see until it stops being true. A repeated dedupe_key updates or corroborates the open one. Poster classes, expiry caps and refusals: the orbit skill's tool-surface.md reference, section `Fleet notices`.",
     cli_about: "Post a fleet notice, or update or corroborate the open one with its key",
     cli_help: CliHelp {
         long_about: None,
@@ -341,7 +341,7 @@ const LIST: OperationSpec<NoticeVerb> = OperationSpec {
     verb: NoticeVerb::List,
     cli_path: &["list"],
     tool_name: "orbit.notice.list",
-    tool_description: "List fleet notices, open ones unless status says otherwise. With a workspace, that workspace's notices plus global notices homed elsewhere on its owner; with all: true, every workspace homed on this owner; without a workspace in a federated session, every reachable owner's notices merged, deduplicated by id and limited once after the merge. Each notice carries its kind, scope, title, body, author class, linked task and its status, expiry, report count and effective status (open, closed or expired, derived when read). Ordered warn, incident, maintenance, info, newest update first. Output {notices, degraded}; degraded names any owner or home that could not be read, so a shorter list never silently hides an unreachable owner. Read-only.",
+    tool_description: "List fleet notices, open ones unless status says otherwise. Output is {notices, degraded}; `degraded` names any owner that could not be read. Read-only. Scope and merge rules: the orbit skill's tool-surface.md reference, section `Fleet notices`.",
     cli_about: "List fleet notices",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
