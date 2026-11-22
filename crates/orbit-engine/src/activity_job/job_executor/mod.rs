@@ -83,7 +83,9 @@ pub use self::execute::{
     execute_job_with_resume, resolve_job_catalog_refs_for_execution,
     resolve_job_catalog_refs_with_scripts_for_execution,
 };
-pub use self::templating::render_job_step_input_at_admission;
+pub use self::templating::{
+    evaluate_job_step_when_at_admission, render_job_step_input_at_admission,
+};
 pub use self::validate::{validate_job, validate_job_deterministic_actions};
 
 #[derive(Debug, Clone)]

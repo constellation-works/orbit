@@ -23,9 +23,10 @@ pub use dispatcher::{
     dispatch_error_to_orbit, dispatch_v2_activity,
 };
 pub use job_executor::{
-    JobOutcome, execute_job_with_resume, render_job_step_input_at_admission,
-    resolve_job_catalog_refs_for_execution, resolve_job_catalog_refs_with_scripts_for_execution,
-    validate_job, validate_job_deterministic_actions,
+    JobOutcome, evaluate_job_step_when_at_admission, execute_job_with_resume,
+    render_job_step_input_at_admission, resolve_job_catalog_refs_for_execution,
+    resolve_job_catalog_refs_with_scripts_for_execution, validate_job,
+    validate_job_deterministic_actions,
 };
 pub use sqlite_sink::V2SqliteSink;
 
