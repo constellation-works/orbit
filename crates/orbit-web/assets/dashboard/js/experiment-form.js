@@ -129,6 +129,9 @@ function blankArm(name, control) {
     skills: { rows: [], roles: ["implement"] },
     config: { rows: [], roles: ["implement"] },
     open: {},
+    // A stored memory treatment has no control in this form. It rides along
+    // unchanged so editing any other surface never drops it.
+    memory: null,
   };
 }
 
@@ -158,6 +161,7 @@ function armFromView(arm) {
   const overlay = arm.overlay && typeof arm.overlay === "object" ? arm.overlay : {};
   const state = blankArm(text(arm.name), Boolean(arm.control));
   state.weight = text(arm.weight ?? 1);
+  if (overlay.memory != null) state.memory = JSON.parse(JSON.stringify(overlay.memory));
   state.crew = (overlay.crew?.pool || []).map((member) => ({ key: key(), crew: text(member.crew), weight: text(member.weight ?? 1) }));
   for (const role of ROLES) {
     const value = overlay.instructions?.[role];
@@ -279,6 +283,7 @@ function armBody(arm) {
       roles: [...arm.config.roles],
     };
   }
+  if (arm.memory != null) overlay.memory = arm.memory;
   return { name: arm.name.trim(), control: arm.control, weight: count(arm.weight), overlay };
 }
 
