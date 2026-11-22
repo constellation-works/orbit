@@ -21,9 +21,13 @@ JSON. See [When it does not render](#when-it-does-not-render).
 
 ## Prerequisites
 
-[Connect your agent](/how-to/mcp-integration/) first. `orbit_ui` then appears in
-`tools/list` with the actions `open` and `inspect`. A session that hides the
-read-only task read does not list it.
+[Connect your agent](/how-to/mcp-integration/) first. The `ui` toolset must be
+enabled for `orbit_ui` to appear in `tools/list` with the actions `open` and
+`inspect`, and the session must also include the read-only task read. The
+operator profile already includes task reads, but `ui` is opt-in. Add it to one
+server with `orbit mcp serve --operator --toolset ui`, or include `ui` in the
+host's `machine.mcp.toolsets` setting for registered MCP servers. Restart the
+MCP server or client session to load the updated tool list.
 
 A client that renders the panel reads the resource
 `ui://orbit/control-center/v1/index.html` (MIME type
