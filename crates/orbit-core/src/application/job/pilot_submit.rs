@@ -12,7 +12,8 @@ use std::fmt;
 
 use orbit_common::{OrbitError, TaskPilotRefusalCode};
 use orbit_engine::activity_job::{
-    ACTIVITY_REF_PREFIX, V2ActivityCatalog, render_job_step_input_at_admission,
+    ACTIVITY_REF_PREFIX, V2ActivityCatalog, evaluate_job_step_when_at_admission,
+    render_job_step_input_at_admission,
 };
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
@@ -380,6 +381,18 @@ impl OrbitRuntime {
         catalog: &mut Option<V2ActivityCatalog>,
     ) -> Result<Option<(String, String)>, OrbitError> {
         for step in steps {
+            if let Some(when_expr) = step.when.as_deref()
+                && matches!(
+                    evaluate_job_step_when_at_admission(
+                        spec.default_input.as_ref(),
+                        input,
+                        when_expr,
+                    ),
+                    Ok(false)
+                )
+            {
+                continue;
+            }
             match &step.body {
                 JobV2StepBody::Parallel { parallel } => {
                     if let Some(hit) = self.first_step_forwarding_task_ids_to_pilot(

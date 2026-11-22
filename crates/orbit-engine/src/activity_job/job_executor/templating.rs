@@ -22,6 +22,28 @@ pub fn render_job_step_input_at_admission(
     render_input(step_default_input, &base_input, &tctx, input_schema)
 }
 
+/// Evaluate a step's `when:` guard against the merged job input before
+/// execution starts, using the executor's own job-input merge and condition
+/// evaluator.
+///
+/// Prior step outputs, fan-out items, and loop iterations are absent at
+/// admission, so expressions that depend on those return `Err`.
+pub fn evaluate_job_step_when_at_admission(
+    job_default_input: Option<&Value>,
+    caller_input: &Value,
+    when_expr: &str,
+) -> Result<bool, DispatchError> {
+    let base_input = merge_job_input(job_default_input, caller_input);
+    let tctx = TemplateContext {
+        input: base_input,
+        item: None,
+        iteration: None,
+        steps: Arc::new(HashMap::new()),
+    };
+    evaluate_bool_expr(when_expr, &tctx)
+        .map_err(|err| DispatchError::JobExecution(format!("when expr: {err}")))
+}
+
 pub(super) fn render_input(
     default_input: Option<&Value>,
     base_input: &Value,

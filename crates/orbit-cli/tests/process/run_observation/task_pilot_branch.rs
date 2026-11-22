@@ -837,4 +837,143 @@ fn generic_job_run_validates_pilot_input_against_resolved_job_and_step() {
             );
         }
     }
+
+    // Guarded `activity:custom_prepare` steps (and guarded enclosing blocks)
+    // whose input-only `when` evaluates to false must skip without rejecting
+    // unrelated caller string `task_ids`, letting later steps consume it.
+    fixture.write_job(
+        "custom_pilot_guarded_prepare.yaml",
+        &json!({
+            "schemaVersion": 2,
+            "kind": "Job",
+            "metadata": {"name": "custom_pilot_guarded_prepare"},
+            "spec": {
+                "state": "enabled",
+                "kind": "workflow",
+                "steps": [
+                    {
+                        "id": "prepare",
+                        "when": "{{ input.mode }} == pilot",
+                        "target": "activity:custom_prepare",
+                        "default_input": "{{ input }}"
+                    },
+                    {
+                        "id": "probe",
+                        "default_input": {"seconds": 0, "note": "{{ input.task_ids }}"},
+                        "spec": {"type": "deterministic", "action": "sleep", "config": {}}
+                    }
+                ]
+            }
+        })
+        .to_string(),
+    );
+    fixture.write_job(
+        "custom_pilot_guarded_block.yaml",
+        &json!({
+            "schemaVersion": 2,
+            "kind": "Job",
+            "metadata": {"name": "custom_pilot_guarded_block"},
+            "spec": {
+                "state": "enabled",
+                "kind": "workflow",
+                "steps": [
+                    {
+                        "id": "guarded_prepare",
+                        "when": "{{ input.mode }} == pilot",
+                        "parallel": {
+                            "join": {"mode": "all"},
+                            "branches": [{
+                                "id": "prepare",
+                                "target": "activity:custom_prepare",
+                                "default_input": "{{ input }}"
+                            }]
+                        }
+                    },
+                    {
+                        "id": "probe",
+                        "default_input": {"seconds": 0, "note": "{{ input.task_ids }}"},
+                        "spec": {"type": "deterministic", "action": "sleep", "config": {}}
+                    }
+                ]
+            }
+        })
+        .to_string(),
+    );
+
+    for target in ["custom_pilot_guarded_prepare", "custom_pilot_guarded_block"] {
+        for subcommand in [["run", "job"], ["job", "run"]] {
+            let output = cli(&[
+                subcommand[0],
+                subcommand[1],
+                target,
+                "--input",
+                "mode=probe",
+                "--input",
+                "task_ids=plain-string-value",
+                "--wait",
+                "--timeout-seconds",
+                "60",
+                "--json",
+            ]);
+            assert!(
+                output.status.success(),
+                "{subcommand:?} {target} with false preparation guard must run probe: {output:?}"
+            );
+            let doc: Value = serde_json::from_slice(&output.stdout).unwrap();
+            let run_id = doc["run_id"].as_str().unwrap();
+            let run = runtime.show_job_run(run_id).unwrap();
+            assert_eq!(
+                run.input.as_ref().unwrap()["task_ids"],
+                json!("plain-string-value")
+            );
+            let state = runtime.read_run_state(run_id).unwrap().unwrap();
+            assert!(
+                state.pipeline.get("prepare").is_none(),
+                "{subcommand:?} {target} must record no preparation output: {state:?}"
+            );
+            assert!(
+                state.pipeline.get("guarded_prepare").is_none(),
+                "{subcommand:?} {target} must record no skipped block output: {state:?}"
+            );
+            assert!(
+                state.pipeline["probe"]["slept_seconds"].is_number(),
+                "{subcommand:?} {target} probe step must run: {state:?}"
+            );
+        }
+    }
+
+    let before_guarded_refusals = fixture.snapshot();
+    for target in ["custom_pilot_guarded_prepare", "custom_pilot_guarded_block"] {
+        for subcommand in [["run", "job"], ["job", "run"]] {
+            let output = cli(&[
+                subcommand[0],
+                subcommand[1],
+                target,
+                "--input",
+                "mode=pilot",
+                "--input",
+                "task_ids=plain-string-value",
+                "--json",
+            ]);
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{subcommand:?} {target} with true preparation guard must fail before submit: {output:?}"
+            );
+            assert!(output.stdout.is_empty(), "{output:?}");
+            let error: Value = serde_json::from_slice(&output.stderr)
+                .unwrap_or_else(|err| panic!("expected JSON error ({err}): {output:?}"));
+            assert_eq!(error["code"], "invalid_input", "{error}");
+            let message = error["error"].as_str().unwrap_or("");
+            assert!(
+                message.contains("orbit run task-pilot"),
+                "error must direct users to the dedicated command: {message}"
+            );
+            assert_eq!(
+                fixture.snapshot(),
+                before_guarded_refusals,
+                "{subcommand:?} {target} must not persist a durable run when guard is true"
+            );
+        }
+    }
 }
