@@ -238,26 +238,48 @@ class NativeReadinessRegression(unittest.TestCase):
 
     def test_required_linux_rows_need_trusted_host_or_authenticated_import(self):
         self.assertEqual(self.judged(lambda request, report: None), ("passed", None))
-        linux = next(s["id"] for s in json.loads((self.inputs / "qa-full-sweep-inventory.json").read_text())
-                     ["scenarios"] if s.get("required") and s.get("capability") == "linux")
-        evidence = {"schema_version": 2, "results": []}
-        digest = hashlib.sha256(json.dumps(evidence, sort_keys=True).encode()).hexdigest()
+        inventory = json.loads((self.inputs / "qa-full-sweep-inventory.json").read_text())
+        scenario = next(s for s in inventory["scenarios"] if s.get("required") and s.get("capability") == "linux")
+        linux = scenario["id"]
+        inventory_sha = hashlib.sha256((self.inputs / "qa-full-sweep-inventory.json").read_bytes()).hexdigest()
+        passing_row = {"scenario": linux, "candidate_id": CANDIDATE, "outcome": "PASS",
+                       "command": scenario["command"], "assertions": scenario["assertions"]}
 
-        def imported(os_name="Darwin", sha=digest, authority="operator", listed_sha=None):
+        def qa_report(**changes):
+            """A Linux QA report for this candidate whose row passes the Linux scenario."""
+            report = {"schema_version": 2, "candidate": {"id": CANDIDATE, "source_revision": REVISION},
+                      "source_state": {"status": []}, "environment": {"os": "Linux"},
+                      "inventory_sha256": inventory_sha, "results": [dict(passing_row)]}
+            report.update(changes)
+            return report
+
+        def imported(os_name="Darwin", evidence=None, sha=None, authority="operator", listed_sha=None):
+            body = qa_report() if evidence is None else evidence
+            digest = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+
             def mutate(request, report):
                 report["environment"] = {"os": os_name}
                 for row in report["results"]:
                     if row["scenario"] == linux:
-                        row.update(imported_from="imported-qa.json", evidence_sha256=sha)
+                        row.update(imported_from="imported-qa.json", evidence_sha256=sha or digest)
                 request["evidence"]["artifacts"]["imported-qa.json"] = {
-                    "sha256": listed_sha or digest, "json": evidence}
+                    "sha256": listed_sha or digest, "json": body}
                 if authority:
                     request["trusted"]["artifact_authority"]["imported-qa.json"] = {
                         "sha256": digest, "writer": authority}
             return mutate
 
+        def native_certificate_digest(request, report):
+            """The bypass: a Darwin report cites the owner's macOS certificate, which is
+            authenticated but is not Linux QA evidence."""
+            digest = hashlib.sha256(json.dumps(self.native, sort_keys=True).encode()).hexdigest()
+            report["environment"] = {"os": "Darwin"}
+            for row in report["results"]:
+                if row["scenario"] == linux:
+                    row.update(imported_from="macos-platform-evidence.json", evidence_sha256=digest)
+
         # A candidate-written non-Linux report with imported evidence passes only
-        # when the owner authenticated the imported artifact's exact digest.
+        # when the owner authenticated an exact-digest Linux QA report for this candidate.
         self.assertEqual(self.judged(imported()), ("passed", None))
         self.assertEqual(self.judged(imported("Linux")), ("passed", None))
         # Truthy but unauthenticated strings (the ORB-20165 bypass) are refused.
@@ -278,6 +300,16 @@ class NativeReadinessRegression(unittest.TestCase):
                                 "platform-evidence-missing"),
             "no-environment": (lambda request, report: report.pop("environment"),
                                "platform-evidence-missing"),
+            # An authenticated artifact that is not a passing Linux QA report for
+            # this candidate earns no Linux row, whatever digest cites it.
+            "native-certificate-digest": (native_certificate_digest, "platform-evidence-missing"),
+            "no-matching-row": (imported(evidence=qa_report(results=[])), "platform-evidence-missing"),
+            "imported-run-on-darwin": (imported(evidence=qa_report(environment={"os": "Darwin"})),
+                                       "platform-evidence-missing"),
+            "imported-row-failed": (imported(evidence=qa_report(results=[{**passing_row, "outcome": "FAIL"}])),
+                                    "platform-evidence-missing"),
+            "imported-other-inventory": (imported(evidence=qa_report(inventory_sha256="0" * 64)),
+                                         "platform-evidence-missing"),
         }
         for name, (mutate, code) in cases.items():
             with self.subTest(name=name):
