@@ -58,6 +58,7 @@ const REQUIRED: &[(&str, &str, &[&str])] = &[
     ("orbit.workflow", "auto", &["mode"]),
     ("orbit.workflow", "ship", &["task_ids"]),
     ("orbit.workflow", "land", &["task_id"]),
+    ("orbit.workflow", "refresh", &["task_id"]),
     ("orbit.auto_task", "add", &["name", "schedule", "template"]),
     ("orbit.auto_task", "update", &["name"]),
     ("orbit.auto_task", "mint", &["name"]),
