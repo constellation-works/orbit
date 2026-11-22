@@ -503,6 +503,32 @@ class VisualFixtureServerTest(unittest.TestCase):
                 finally:
                     self._stop(server)
 
+    def test_health_diagnostic_is_recorded_for_complete_and_truncated_responses(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        for mode in ("present", "health-truncated"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+                repo = self._mini_checkout(Path(tmp) / "repo")
+                wrapper, record = self._stale_backend(Path(tmp), mode, fixture_cli=True)
+                server, output, diagnostics = self._start(
+                    repo / "scripts/visual-fixture-server.sh", ["experiments:empty"], repo,
+                    self._fixture_env(tmp, wrapper, record, mode))
+                try:
+                    # A backend that closes the health body early must neither
+                    # hang startup nor lose the diagnostic.
+                    self.assertIn("ORBIT_VISUAL_URL=", output, diagnostics)
+                    protocol = self._protocol(output)
+                    health = json.loads(Path(protocol["ORBIT_VISUAL_PROVENANCE"]).read_text())["healthz"]
+                    self.assertEqual(health["status"], 200, health)
+                    self.assertLessEqual(len(health["body"]), 200, health)
+                    if mode == "present":
+                        self.assertTrue(health["body"].startswith("STALE-EMBEDDED-ASSET"), health)
+                        self.assertNotIn("incomplete", health)
+                    else:
+                        self.assertTrue(health["incomplete"], health)
+                        self.assertIn("health response ended before completion", health["body"])
+                finally:
+                    self._stop(server)
+
     def test_front_rejects_untrusted_authority_before_all_routes(self):
         SCRATCH.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
@@ -825,6 +851,11 @@ class VisualFixtureServerTest(unittest.TestCase):
             "    const status = mode === 'absent' || mode === 'absent:' + req.url ? 404 : 405;\n"
             "    res.writeHead(status, {'content-type': 'text/plain', 'allow': 'GET'});\n"
             "    res.end(status === 404 ? 'missing' : 'method');\n"
+            "    return;\n"
+            "  }\n"
+            "  if (mode === 'health-truncated' && req.url === '/healthz') {\n"
+            "    res.writeHead(200, {'content-type': 'text/plain', 'content-length': '64'});\n"
+            "    res.write('ok', () => res.socket.destroy());\n"
             "    return;\n"
             "  }\n"
             "  res.writeHead(200, {'content-type': 'text/css'});\n"

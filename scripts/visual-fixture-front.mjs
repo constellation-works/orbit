@@ -529,6 +529,18 @@ function fetchHealth(upstream) {
           body: Buffer.concat(chunks).toString('utf8').slice(0, 200),
         });
       });
+      // A response that starts and then ends early never emits `end`; settle
+      // with the status line already received and a bounded refusal note.
+      const incomplete = (reason) => resolve({
+        status: response.statusCode || 0,
+        body: `health response ended before completion: ${reason}`.slice(0, 200),
+        incomplete: true,
+      });
+      response.on('error', (error) => incomplete(String(error.message || error)));
+      response.on('aborted', () => incomplete('aborted'));
+      response.on('close', () => {
+        if (!response.complete) incomplete('closed');
+      });
     });
     request.setTimeout(2000, () => request.destroy(new Error('timeout')));
     request.on('error', (error) => resolve({ status: 0, body: String(error.message || error) }));
