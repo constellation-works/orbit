@@ -83,22 +83,57 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-12);
+  /* A grid item of the band: without this its minimum width is the nowrap title
+     group's full width, and the group could never shrink to the band. */
+  min-width: 0;
+  container: cost-band / inline-size;
 }
-/* The title, its cost hint and the bucket count: the view's one header line. */
+/* The title, its cost hint and the bucket count: the view's one header line
+   (STD-07 R39). It never wraps, so the line's height does not depend on the
+   count. The title is the one member that gives up width where the line does
+   not fit: it truncates (its full text is the heading's tooltip) while the hint
+   and count keep their size. The count's slot is reserved at its longest
+   value, so the line's width, and with it where the window controls sit, is the
+   same under the placeholder dash and the loaded count (R5). */
 .cost-band-title-group {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: var(--space-6) var(--space-12);
+  gap: var(--space-12);
   min-width: 0;
 }
 .cost-band-title {
   margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--text-lg);
   font-weight: 600;
   color: var(--fg-strong);
 }
+/* Where the full title, hint and count stop fitting the band (their full-size
+   row is about 430px wide), the title shortens before it truncates (R39). The
+   full text stays in the heading's accessible name and tooltip. */
+.cost-band-title-short { display: none; }
+@container cost-band (max-width: 429.98px) {
+  .cost-band-title-full {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .cost-band-title-short { display: inline; }
+}
+#scoreboard-cost-hint {
+  flex: 0 0 auto;
+}
 .cost-band-count {
+  flex: 0 0 auto;
+  min-width: 10ch;
+  white-space: nowrap;
   color: var(--fg-dim);
   font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
