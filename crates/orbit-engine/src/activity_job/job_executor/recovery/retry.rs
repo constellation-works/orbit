@@ -189,13 +189,10 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
                         emit_audit(pending_audit.take());
                         RetryPlan::NoCommit
                     }
-                    Ok(super::check_scope::CheckScopeBind::Bound) => {
-                        emit_audit(pending_audit.take());
-                        RetryPlan::Commit {
-                            recovery_model,
-                            bound,
-                        }
-                    }
+                    Ok(super::check_scope::CheckScopeBind::Bound) => RetryPlan::Commit {
+                        recovery_model,
+                        bound,
+                    },
                     Err(refusal) => {
                         if let Some(mut audit) = pending_audit.take() {
                             audit.refuse_retry();
@@ -206,11 +203,14 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
                 }
             }
             RecoveryAdmission::Retry(recovery_model) => {
-                emit_audit(pending_audit.take());
                 if recovery.name == STEP_FAILURE_RECOVERY_ACTIVITY {
                     let mut bound = Value::Object(serde_json::Map::new());
                     if let Err(error) = bind_recovery_context(step, ctx, &mut bound) {
                         let refusal = RecoveryCommitRefusal::Uncommittable(error.to_string());
+                        if let Some(mut audit) = pending_audit.take() {
+                            audit.refuse_retry();
+                            audit.emit(ctx);
+                        }
                         return failure.into_refused_repair(&refusal);
                     }
                     RetryPlan::Commit {
@@ -296,9 +296,14 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
                 review_follows,
                 recovery_model.as_deref(),
             ) {
+                if let Some(mut audit) = pending_audit.take() {
+                    audit.refuse_retry();
+                    audit.emit(ctx);
+                }
                 return failure.into_refused_repair(&refusal);
             }
         }
+        emit_audit(pending_audit.take());
         let rounds_left = round < MAX_CONFLICT_RECOVERY_ROUNDS;
         let recovered_conflict = (declared.name == PR_CONFLICT_RECOVERY_ACTIVITY && rounds_left)
             .then(|| failure.diagnostic());
