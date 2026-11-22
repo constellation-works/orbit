@@ -518,8 +518,16 @@ fn default_input_may_use_caller_task_ids(default_input: Option<&Value>) -> bool 
     match default_input {
         None => true,
         Some(Value::String(template)) => {
-            is_exact_whole_input_template(template)
-                || template_references_input_field(template, "task_ids")
+            if is_exact_whole_input_template(template) {
+                true
+            } else if let Some(projected_task_ids) =
+                project_json_object_template_field(template, "task_ids")
+            {
+                projected_task_ids
+                    .is_some_and(|raw| template_references_input_field(raw, "task_ids"))
+            } else {
+                template_references_input_field(template, "task_ids")
+            }
         }
         Some(Value::Object(map)) => map
             .get("task_ids")
@@ -579,7 +587,21 @@ fn rendered_step_has_invalid_pilot_task_ids(
             });
             Some(&scoped_object)
         }
-        Some(Value::String(_)) => step_default_input,
+        Some(Value::String(template)) => {
+            if let Some(projected_task_ids) =
+                project_json_object_template_field(template, "task_ids")
+            {
+                let Some(raw_task_ids) = projected_task_ids else {
+                    return false;
+                };
+                // Render only `task_ids` so unrelated sibling fields referencing
+                // prior step outputs do not block admission validation.
+                scoped_object = Value::String(format!("{{\"task_ids\":{raw_task_ids}}}"));
+                Some(&scoped_object)
+            } else {
+                step_default_input
+            }
+        }
         Some(Value::Object(map)) => {
             let Some(task_ids) = map.get("task_ids") else {
                 return false;
@@ -603,6 +625,240 @@ fn rendered_step_has_invalid_pilot_task_ids(
         return false;
     };
     !rendered_pilot_input_has_valid_task_ids(&rendered)
+}
+
+const MAX_JSON_TEMPLATE_DEPTH: usize = 64;
+
+/// Project the raw value slice of top-level `target_field` from a static-key
+/// JSON-object string template.
+///
+/// Returns `Some(Some(raw_value))` for the final `target_field` entry (matching
+/// `serde_json` last-key-wins semantics), `Some(None)` when the static-key JSON
+/// object has no `target_field` key, and `None` when the template is not a
+/// static-key JSON object (such as `{{ input }}` or dynamic top-level keys) so
+/// callers fall back to rendering the whole template.
+fn project_json_object_template_field<'a>(
+    template: &'a str,
+    target_field: &str,
+) -> Option<Option<&'a str>> {
+    let mut parser = JsonTemplateParser {
+        src: template,
+        pos: 0,
+    };
+    parser.skip_ws();
+    if !parser.eat_byte(b'{') {
+        return None;
+    }
+    parser.skip_ws();
+    let mut projected = None;
+    if !parser.eat_byte(b'}') {
+        loop {
+            parser.skip_ws();
+            let raw_key = parser.parse_template_string()?;
+            if raw_key.contains("{{") {
+                return None;
+            }
+            let key = serde_json::from_str::<String>(raw_key).ok()?;
+            parser.skip_ws();
+            if !parser.eat_byte(b':') {
+                return None;
+            }
+            let value = parser.parse_value(1)?;
+            if key == target_field {
+                projected = Some(value);
+            }
+            parser.skip_ws();
+            if parser.eat_byte(b',') {
+                continue;
+            }
+            if parser.eat_byte(b'}') {
+                break;
+            }
+            return None;
+        }
+    }
+    parser.skip_ws();
+    (parser.pos == template.len()).then_some(projected)
+}
+
+struct JsonTemplateParser<'a> {
+    src: &'a str,
+    pos: usize,
+}
+
+impl<'a> JsonTemplateParser<'a> {
+    fn remaining(&self) -> &'a str {
+        &self.src[self.pos..]
+    }
+
+    fn peek_byte(&self) -> Option<u8> {
+        self.src.as_bytes().get(self.pos).copied()
+    }
+
+    fn skip_ws(&mut self) {
+        while matches!(self.peek_byte(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
+            self.pos += 1;
+        }
+    }
+
+    fn eat_byte(&mut self, expected: u8) -> bool {
+        if self.peek_byte() == Some(expected) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn eat_template_token(&mut self) -> bool {
+        let Some(end) = self
+            .remaining()
+            .strip_prefix("{{")
+            .and_then(|after_open| after_open.find("}}"))
+        else {
+            return false;
+        };
+        self.pos += end + 4;
+        true
+    }
+
+    fn parse_template_string(&mut self) -> Option<&'a str> {
+        let start = self.pos;
+        if !self.eat_byte(b'"') {
+            return None;
+        }
+        while let Some(byte) = self.peek_byte() {
+            if self.remaining().starts_with("{{") {
+                if !self.eat_template_token() {
+                    return None;
+                }
+                continue;
+            }
+            match byte {
+                b'"' => {
+                    self.pos += 1;
+                    return Some(&self.src[start..self.pos]);
+                }
+                b'\\' => {
+                    self.pos += 1;
+                    self.pos += self.remaining().chars().next()?.len_utf8();
+                }
+                0x00..=0x1F => return None,
+                _ => self.pos += self.remaining().chars().next()?.len_utf8(),
+            }
+        }
+        None
+    }
+
+    fn parse_value(&mut self, depth: usize) -> Option<&'a str> {
+        if depth > MAX_JSON_TEMPLATE_DEPTH {
+            return None;
+        }
+        self.skip_ws();
+        let start = self.pos;
+        if self.remaining().starts_with("{{") {
+            while self.remaining().starts_with("{{") {
+                if !self.eat_template_token() {
+                    return None;
+                }
+            }
+            return Some(&self.src[start..self.pos]);
+        }
+        match self.peek_byte()? {
+            b'"' => {
+                self.parse_template_string()?;
+            }
+            b'{' => self.parse_nested_object(depth + 1)?,
+            b'[' => self.parse_array(depth + 1)?,
+            b't' if self.remaining().starts_with("true") => self.pos += 4,
+            b'f' if self.remaining().starts_with("false") => self.pos += 5,
+            b'n' if self.remaining().starts_with("null") => self.pos += 4,
+            b'-' | b'0'..=b'9' => self.parse_number()?,
+            _ => return None,
+        }
+        Some(&self.src[start..self.pos])
+    }
+
+    fn parse_nested_object(&mut self, depth: usize) -> Option<()> {
+        if depth > MAX_JSON_TEMPLATE_DEPTH || !self.eat_byte(b'{') {
+            return None;
+        }
+        self.skip_ws();
+        if self.eat_byte(b'}') {
+            return Some(());
+        }
+        loop {
+            self.skip_ws();
+            if self.remaining().starts_with("{{") {
+                if !self.eat_template_token() {
+                    return None;
+                }
+            } else {
+                self.parse_template_string()?;
+                self.skip_ws();
+                if !self.eat_byte(b':') {
+                    return None;
+                }
+                self.parse_value(depth)?;
+            }
+            self.skip_ws();
+            if self.eat_byte(b',') {
+                continue;
+            }
+            return self.eat_byte(b'}').then_some(());
+        }
+    }
+
+    fn parse_array(&mut self, depth: usize) -> Option<()> {
+        if depth > MAX_JSON_TEMPLATE_DEPTH || !self.eat_byte(b'[') {
+            return None;
+        }
+        self.skip_ws();
+        if self.eat_byte(b']') {
+            return Some(());
+        }
+        loop {
+            self.parse_value(depth)?;
+            self.skip_ws();
+            if self.eat_byte(b',') {
+                continue;
+            }
+            return self.eat_byte(b']').then_some(());
+        }
+    }
+
+    fn parse_number(&mut self) -> Option<()> {
+        self.eat_byte(b'-');
+        match self.peek_byte()? {
+            b'0' => self.pos += 1,
+            b'1'..=b'9' => {
+                self.pos += 1;
+                self.skip_digits();
+            }
+            _ => return None,
+        }
+        if self.eat_byte(b'.') && !self.skip_digits() {
+            return None;
+        }
+        if matches!(self.peek_byte(), Some(b'e' | b'E')) {
+            self.pos += 1;
+            if matches!(self.peek_byte(), Some(b'+' | b'-')) {
+                self.pos += 1;
+            }
+            if !self.skip_digits() {
+                return None;
+            }
+        }
+        Some(())
+    }
+
+    fn skip_digits(&mut self) -> bool {
+        let start = self.pos;
+        while matches!(self.peek_byte(), Some(b'0'..=b'9')) {
+            self.pos += 1;
+        }
+        self.pos > start
+    }
 }
 
 fn rendered_pilot_input_has_valid_task_ids(rendered: &Value) -> bool {

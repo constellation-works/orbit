@@ -1053,4 +1053,264 @@ fn generic_job_run_validates_pilot_input_against_resolved_job_and_step() {
             );
         }
     }
+
+    // A runtime-only sibling field in a whole JSON-object string template must
+    // not hide a known-invalid `task_ids` field, while templates whose `task_ids`
+    // field itself depends on a prior step must continue to defer to execution.
+    let locate_step = json!({
+        "id": "locate",
+        "target": "activity:custom_prepare",
+        "default_input": {
+            "task_ids": [],
+            "workspace_path": ".",
+            "base_branch": "main"
+        }
+    });
+    fixture.write_job(
+        "custom_pilot_json_object_runtime_sibling_string.yaml",
+        &json!({
+            "schemaVersion": 2,
+            "kind": "Job",
+            "metadata": {"name": "custom_pilot_json_object_runtime_sibling_string"},
+            "spec": {
+                "state": "enabled",
+                "kind": "workflow",
+                "steps": [
+                    locate_step,
+                    {
+                        "id": "prepare",
+                        "target": "activity:custom_prepare",
+                        "default_input": "{\"task_ids\":\"{{ input.task_ids }}\",\"workspace_path\":\"{{ steps.locate.output.workspace_path }}\",\"base_branch\":\"main\"}"
+                    }
+                ]
+            }
+        })
+        .to_string(),
+    );
+    fixture.write_job(
+        "custom_pilot_json_object_runtime_sibling_bare.yaml",
+        &json!({
+            "schemaVersion": 2,
+            "kind": "Job",
+            "metadata": {"name": "custom_pilot_json_object_runtime_sibling_bare"},
+            "spec": {
+                "state": "enabled",
+                "kind": "workflow",
+                "steps": [
+                    locate_step,
+                    {
+                        "id": "prepare",
+                        "target": "activity:custom_prepare",
+                        "default_input": "{\"task_ids\":{{ input.task_ids }},\"workspace_path\":\"{{ steps.locate.output.workspace_path }}\",\"base_branch\":\"main\"}"
+                    }
+                ]
+            }
+        })
+        .to_string(),
+    );
+    fixture.write_job(
+        "custom_pilot_json_object_runtime_sibling_array.yaml",
+        &json!({
+            "schemaVersion": 2,
+            "kind": "Job",
+            "metadata": {"name": "custom_pilot_json_object_runtime_sibling_array"},
+            "spec": {
+                "state": "enabled",
+                "kind": "workflow",
+                "steps": [
+                    locate_step,
+                    {
+                        "id": "prepare",
+                        "target": "activity:custom_prepare",
+                        "default_input": "{\"task_ids\":[\"{{ input.task_ids }}\"],\"workspace_path\":\"{{ steps.locate.output.workspace_path }}\",\"base_branch\":\"main\"}"
+                    }
+                ]
+            }
+        })
+        .to_string(),
+    );
+    fixture.write_job(
+        "custom_pilot_json_object_runtime_task_ids_override.yaml",
+        &json!({
+            "schemaVersion": 2,
+            "kind": "Job",
+            "metadata": {"name": "custom_pilot_json_object_runtime_task_ids_override"},
+            "spec": {
+                "state": "enabled",
+                "kind": "workflow",
+                "steps": [
+                    {
+                        "id": "locate",
+                        "target": "activity:custom_prepare",
+                        "default_input": {
+                            "task_ids": [task.id],
+                            "workspace_path": ".",
+                            "base_branch": "main"
+                        }
+                    },
+                    {
+                        "id": "prepare",
+                        "target": "activity:custom_prepare",
+                        "default_input": "{\"task_ids\":\"{{ input.task_ids }}\",\"task_ids\":{{ steps.locate.output.task_ids }},\"workspace_path\":\"{{ steps.locate.output.workspace_path }}\",\"base_branch\":\"main\"}"
+                    }
+                ]
+            }
+        })
+        .to_string(),
+    );
+    fixture.write_job(
+        "custom_pilot_json_object_runtime_task_ids_mixed.yaml",
+        &json!({
+            "schemaVersion": 2,
+            "kind": "Job",
+            "metadata": {"name": "custom_pilot_json_object_runtime_task_ids_mixed"},
+            "spec": {
+                "state": "enabled",
+                "kind": "workflow",
+                "steps": [
+                    locate_step,
+                    {
+                        "id": "prepare",
+                        "target": "activity:custom_prepare",
+                        "default_input": "{\"task_ids\":\"{{ steps.locate.output.mode }}-{{ input.task_ids }}\",\"workspace_path\":\"{{ steps.locate.output.workspace_path }}\",\"base_branch\":\"main\"}"
+                    }
+                ]
+            }
+        })
+        .to_string(),
+    );
+
+    let before_runtime_sibling_refusals = fixture.snapshot();
+    for (target, input_arg) in [
+        (
+            "custom_pilot_json_object_runtime_sibling_string",
+            "task_ids=plain-string",
+        ),
+        (
+            "custom_pilot_json_object_runtime_sibling_bare",
+            json_array_string.as_str(),
+        ),
+    ] {
+        for subcommand in [["run", "job"], ["job", "run"]] {
+            let output = cli(&[
+                subcommand[0],
+                subcommand[1],
+                target,
+                "--input",
+                input_arg,
+                "--json",
+            ]);
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{subcommand:?} {target} {input_arg} must fail before submit despite runtime-only sibling: {output:?}"
+            );
+            assert!(output.stdout.is_empty(), "{output:?}");
+            let error: Value = serde_json::from_slice(&output.stderr)
+                .unwrap_or_else(|err| panic!("expected JSON error ({err}): {output:?}"));
+            assert_eq!(error["code"], "invalid_input", "{error}");
+            let message = error["error"].as_str().unwrap_or("");
+            assert!(
+                message.contains("orbit run task-pilot"),
+                "error must direct users to the dedicated command: {message}"
+            );
+            assert_eq!(
+                fixture.snapshot(),
+                before_runtime_sibling_refusals,
+                "{subcommand:?} {target} {input_arg} must not persist a durable run"
+            );
+        }
+    }
+
+    for subcommand in [["run", "job"], ["job", "run"]] {
+        let output = cli(&[
+            subcommand[0],
+            subcommand[1],
+            "custom_pilot_json_object_runtime_sibling_array",
+            "--input",
+            &task_id_input,
+            "--wait",
+            "--timeout-seconds",
+            "60",
+            "--json",
+        ]);
+        assert!(
+            output.status.success(),
+            "{subcommand:?} custom_pilot_json_object_runtime_sibling_array must accept valid array template with runtime sibling: {output:?}"
+        );
+        let doc: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let run_id = doc["run_id"].as_str().unwrap();
+        let state = runtime.read_run_state(run_id).unwrap().unwrap();
+        assert_eq!(state.pipeline["prepare"]["mode"], json!("explicit"));
+        assert_eq!(state.pipeline["prepare"]["task_ids"], json!([task.id]));
+    }
+
+    for subcommand in [["run", "job"], ["job", "run"]] {
+        let output = cli(&[
+            subcommand[0],
+            subcommand[1],
+            "custom_pilot_json_object_runtime_task_ids_override",
+            "--input",
+            "task_ids=plain-string",
+            "--wait",
+            "--timeout-seconds",
+            "60",
+            "--json",
+        ]);
+        assert!(
+            output.status.success(),
+            "{subcommand:?} custom_pilot_json_object_runtime_task_ids_override must defer when final task_ids depends on prior step: {output:?}"
+        );
+        let doc: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let run_id = doc["run_id"].as_str().unwrap();
+        let state = runtime.read_run_state(run_id).unwrap().unwrap();
+        assert_eq!(state.pipeline["prepare"]["mode"], json!("explicit"));
+        assert_eq!(state.pipeline["prepare"]["task_ids"], json!([task.id]));
+    }
+
+    for subcommand in [["run", "job"], ["job", "run"]] {
+        let output = cli(&[
+            subcommand[0],
+            subcommand[1],
+            "custom_pilot_json_object_runtime_task_ids_mixed",
+            "--input",
+            "task_ids=plain-string",
+            "--json",
+        ]);
+        assert!(
+            output.status.success(),
+            "{subcommand:?} custom_pilot_json_object_runtime_task_ids_mixed must defer admission when task_ids itself depends on a prior step: {output:?}"
+        );
+        let doc: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let run_id = doc["run_id"].as_str().unwrap();
+        test_env::wait_until("deferred mixed run settles", || {
+            matches!(
+                runtime.show_job_run(run_id).unwrap().state,
+                orbit_types::workflow::JobRunState::Failed
+                    | orbit_types::workflow::JobRunState::Success
+                    | orbit_types::workflow::JobRunState::Cancelled
+            )
+        });
+        let run = runtime.show_job_run(run_id).unwrap();
+        test_env::wait_until("deferred mixed worker exit", || {
+            run.pid.is_none_or(|pid| {
+                probe_process_liveness(pid, run.pid_start_time.as_deref())
+                    == ProcessLiveness::Exited
+            })
+        });
+        assert_eq!(
+            run.state,
+            orbit_types::workflow::JobRunState::Failed,
+            "{subcommand:?} deferred mixed run must fail at runtime prepare: {run:?}"
+        );
+        assert_eq!(
+            run.input.as_ref().unwrap()["task_ids"],
+            json!("plain-string")
+        );
+        let state = runtime.read_run_state(run_id).unwrap().unwrap();
+        assert!(
+            state.pipeline.get("locate").is_some(),
+            "{subcommand:?} deferred run must reach runtime execution of locate step: {state:?}"
+        );
+    }
 }
