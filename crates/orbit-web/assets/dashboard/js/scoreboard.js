@@ -116,13 +116,13 @@ const usdFormatter = new Intl.NumberFormat("en-US", {
 });
 const wholeFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 
-// Cents with thousands separators; a non-zero amount that rounds to $0.00
-// reads "<$0.01" so it is not mistaken for no spend.
+// Cents with thousands separators; a non-zero amount under one cent reads
+// "<$0.01" so it is not mistaken for no spend.
 function formatUsd(value) {
   const amount = typeof value === "number" && Number.isFinite(value) ? value : 0;
   const sign = amount < 0 ? "-" : "";
   const magnitude = Math.abs(amount);
-  if (magnitude > 0 && usdFormatter.format(magnitude) === "0.00") return `${sign}<$0.01`;
+  if (magnitude > 0 && magnitude < 0.01) return `${sign}<$0.01`;
   return `${sign}$${usdFormatter.format(magnitude)}`;
 }
 

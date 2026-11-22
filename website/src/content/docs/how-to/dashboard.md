@@ -632,8 +632,8 @@ ownership. Interactive session overhead is excluded.
 
 **Provider-reported** dollars come first. **Derived estimate** is an estimate
 with its own coverage. Do not add the two: compare them under
-**Same-invocation comparison**. `<$0.01` is a non-zero amount that rounds to
-zero, and **unknown** means the figure was not reported.
+**Same-invocation comparison**. `<$0.01` is a non-zero amount under one cent,
+and **unknown** means the figure was not reported.
 
 ### Reliability
 
