@@ -8,12 +8,18 @@
 // local and redraws from the cached payload. The window comes from the
 // shared selector. Chart drawing and tooltips stay in metrics.js.
 
-import { el } from './common.js';
+import { el, onWorkspaceChange } from './common.js';
 import { OUTCOMES, TERMINAL_TIME_NOTE, axisScale, fmtCompactTotal, option, seriesKey, seriesLabel, tagPicker, tasks, trendSource, undatedNote } from './metrics-running.js';
 
 const MEASURES = [["turns", "Turns"], ["bytes", "Result bytes"]];
 
 const filters = { outcome: "done", provider: "", tags: [] };
+// The provider and tag options come from the workspace's own tasks: another
+// workspace may have neither, and a kept pick would filter its trend to empty.
+onWorkspaceChange(() => {
+  filters.provider = "";
+  filters.tags = [];
+});
 /// Local view state. metrics.js includes `measure` in the section hash so
 /// a toggle redraws; the endpoint is not read again.
 export const turnsView = { measure: "turns" };

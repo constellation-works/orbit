@@ -44,7 +44,7 @@ pub(super) fn read(
         "tasks" => tasks(runtime, &input, limit)?,
         "task" => task(runtime, session, &input, limit)?,
         "runs" => runs(runtime, &input, limit)?,
-        "drain" => super::drain::readiness(runtime, &input, limit)?,
+        "drain" => super::drain::readiness(runtime, session, &input, limit)?,
         "routines" | "auto_tasks" | "jobs" => {
             super::automation::read(runtime, &scope, number(&input, "offset", 0)?, limit)?
         }

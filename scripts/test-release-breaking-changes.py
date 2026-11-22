@@ -517,6 +517,49 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
              "field `renamed_example` added to deny_unknown_fields type `TaskEnvelopeV2`"),
         })
 
+    def test_deny_unknown_types_handles_comment_braces_block_comments_inline_attrs_and_raw_strings(self):
+        # Braces in comments/doc strings must not close the struct body early;
+        # fields sharing a line with an attribute must be kept (unless skipped);
+        # raw strings inside #[serde(...)] must not hide persisted fields; and
+        # block-commented #[serde(deny_unknown_fields)] must not classify a type.
+        additions = (
+            "    // } unmatched brace in line comment\n"
+            "    /* } unmatched brace in block comment */\n"
+            '    #[doc = "} brace in doc string"]\n'
+            "    pub after_comment_braces: Option<String>,\n"
+            "    #[serde(default)] pub inline_attr_field: Option<String>,\n"
+            "    #[serde(skip)] pub inline_skipped_field: Option<String>,\n"
+            '    #[serde(rename = r#"foo), skip"#)]\n'
+            "    pub raw_string_rename_field: Option<String>,\n"
+        )
+        block_commented = (
+            "\n/* #[serde(deny_unknown_fields)] */\n"
+            "pub struct CommentedDeny {\n"
+            "    pub first: String,\n"
+            "}\n"
+        )
+        self.repo.write(TYPES, self.repo.read(TYPES) + block_commented)
+        self.repo.commit("chore: Add block-commented struct baseline [ORB-4]")
+        self.repo.git("tag", "v0.35.1")
+
+        self.repo.replace(TYPES, "    pub tags: Vec<String>,\n",
+                          "    pub tags: Vec<String>,\n" + additions)
+        self.repo.replace(TYPES, "pub struct CommentedDeny {\n    pub first: String,\n",
+                          "pub struct CommentedDeny {\n    pub first: String,\n    pub second: String,\n")
+        self.repo.commit("feat: Exercise persisted-field scanner edge cases [ORB-5]")
+        self.repo.git("tag", "v0.35.2")
+
+        report = self.report("--range", "v0.35.1..v0.35.2")
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(self.signals(report), {
+            ("ORB-5", "persisted-field",
+             "field `after_comment_braces` added to deny_unknown_fields type `TaskEnvelopeV2`"),
+            ("ORB-5", "persisted-field",
+             "field `inline_attr_field` added to deny_unknown_fields type `TaskEnvelopeV2`"),
+            ("ORB-5", "persisted-field",
+             "field `raw_string_rename_field` added to deny_unknown_fields type `TaskEnvelopeV2`"),
+        })
+
     def test_rustfmt_normalized_quoted_serde_examples_decide_minor(self):
         additions = (
             '    #[doc = "Persisted field; unlike #[serde(skip)], it is on disk."]\n'

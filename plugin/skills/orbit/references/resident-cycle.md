@@ -68,8 +68,13 @@ died without a checkpoint. Its actions are in the ledger under
 
 ### 3. Act within authority
 
-Rights gate writes; reads, comments, filing `proposed` tasks, friction,
-escalations, your notices and your checkpoint need no right.
+Rights gate writes; reads, comments, filing `proposed` tasks, filing or updating
+friction records in covered workspaces (`orbit.friction` action `add` and
+`update` without `rehome_to` or `move`), escalations, your notices and your
+checkpoint need no right, so observe-only cycles may still update frictions in
+covered workspaces. Any friction update carrying `rehome_to` (or `move`) is
+refused as `resident_tool_refused` regardless of granted rights: moving a
+friction between workspaces stays with the operator and the curation pass.
 
 | Right | What it permits in covered workspaces |
 |---|---|
@@ -78,7 +83,7 @@ escalations, your notices and your checkpoint need no right.
 | `merge` | Land a reviewed delivery with `orbit.workflow` action `land`; move a task with no open pull request to `done` |
 | (none yet) | `plugin_upgrade` maps to no tool yet; never improvise an install |
 
-`orbit.attention` reads the runtime kinds (`run_failed`, `run_stuck`, `claim_stale`) and `host_unhealthy` for the covered workspaces while the cycle's grant is live; any other workspace still reports them as `capability` degraded. That is a read only: it grants no write.
+`orbit.attention` reads the runtime kinds (`run_failed`, `run_stuck`, `claim_stale`) and `host_unhealthy` for the covered workspaces while the cycle's grant is live; any other workspace still reports them as `capability` degraded. `orbit.workflow` action `auto` with `mode: "status"` reads drain readiness for the covered workspaces while the cycle is live, with or without any granted right, and refuses any other workspace as `resident_scope_refused`. Both are reads only: they grant no write, and drain controls (`start`, `stop`, `resize`) stay operator-only.
 
 Core enforces the grant on every call, not the prompt: a write without this
 cycle's live grant, outside the covered workspaces, or without its right is
@@ -96,8 +101,10 @@ as an escalation, never as compliance.
 Use the normal pipeline for leaf work. To dispatch, call `orbit.workflow` action `ship`
 with the mandate's own workspace and the `backlog` task ids; it returns the run
 id and stops the delivery at `review`, so landing it still takes `merge`. A
-covered workspace other than the mandate's own is refused: a cycle writes only
-through its own workspace. The same `dispatch` right re-pilots and requeues:
+covered workspace other than the mandate's own is refused for task and workflow
+writes: a cycle writes those only through its own workspace (whereas `orbit.friction`
+action `update` may target any covered workspace on the host and records its
+action ledger row on the mandate). The same `dispatch` right re-pilots and requeues:
 call `orbit.task.recover` action `repilot` with the `id` of a `proposed` or
 `backlog` task to repeat its pilot assessment, and action `requeue` with
 the `id` of a `blocked` task and a `reason`, both with the mandate's own
@@ -110,7 +117,7 @@ successful action returns its `resident_action_key`. If a recovery call matches
 an action the dead cycle already completed, it returns
 `resident_action: "already_done"` with the original key in `key`, plus `ref`
 and `subject`, and does not return `resident_action_key`. Every other
-`orbit.task.recover` action, `orbit.workflow` action `auto`, `orbit.run` action
+`orbit.task.recover` action, `orbit.workflow` action `auto` drain controls (`start`, `stop`, `resize`), `orbit.run` action
 `resume` and `orbit.pipeline.invoke` stay operator-only and answer
 `capability_denied` even with the right: record that as a cost and leave them
 to the operator or the scheduler.

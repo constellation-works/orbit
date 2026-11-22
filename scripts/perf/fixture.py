@@ -1072,7 +1072,49 @@ def rewrite_text_file(path: Path, pairs: list[tuple[str, str]]) -> None:
         path.write_text(rewritten, encoding="utf-8")
 
 
+def _rewrite_table_paths(conn: sqlite3.Connection, table: str, olds: list[str]) -> None:
+    """Rewrite every text value in `table` with one UPDATE.
+
+    One statement scans the table once. Each column is assigned from its
+    original value (SQLite evaluates every SET expression against the row as
+    it was), and only a text value that actually changes is rewritten. The
+    stored text matches one application of ``perf_rewrite_path``, the same
+    result as updating each column on its own.
+    """
+    tbl = quote_ident(table)
+    columns = [row[1] for row in conn.execute(f"PRAGMA table_info({tbl})")]
+    if not columns:
+        return
+    assignments: list[str] = []
+    predicates: list[str] = []
+    params: list[str] = []
+    for column in columns:
+        col = quote_ident(column)
+        instr = " OR ".join(f"instr({col}, ?) > 0" for _old in olds)
+        predicate = (
+            f"typeof({col}) = 'text' AND ({instr}) "
+            f"AND perf_rewrite_path({col}) != {col}"
+        )
+        assignments.append(
+            f"{col} = CASE WHEN {predicate} THEN perf_rewrite_path({col}) ELSE {col} END"
+        )
+        params.extend(olds)
+        predicates.append(f"({predicate})")
+        params.extend(olds)
+    conn.execute(
+        f"UPDATE {tbl} SET {', '.join(assignments)} WHERE {' OR '.join(predicates)}",
+        tuple(params),
+    )
+
+
 def rewrite_database(path: Path, pairs: list[tuple[str, str]]) -> None:
+    """Point stored absolute paths in `path` at the restored root.
+
+    Each ordinary table is one UPDATE (see ``_rewrite_table_paths``), so a
+    multi-gigabyte store is scanned once per table rather than once per text
+    column. Triggers are dropped for the write and recreated afterwards, so
+    they cannot observe the intermediate rows.
+    """
     compiled = _compile_path_rewriter(pairs)
     if compiled is None:
         return
@@ -1084,20 +1126,11 @@ def rewrite_database(path: Path, pairs: list[tuple[str, str]]) -> None:
             "SELECT name, sql FROM sqlite_master WHERE type='trigger'").fetchall()
         for name, _sql in triggers:
             conn.execute(f"DROP TRIGGER {quote_ident(name)}")
-        tables = [r[0] for r in conn.execute(
+        tables = [row[0] for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND sql NOT LIKE 'CREATE VIRTUAL%'"
             " AND name NOT LIKE 'sqlite_%'")]
         for table in tables:
-            tbl = quote_ident(table)
-            for column in [r[1] for r in conn.execute(f"PRAGMA table_info({tbl})")]:
-                col = quote_ident(column)
-                where_instr = " OR ".join(f"instr({col}, ?) > 0" for _ in olds)
-                conn.execute(
-                    f"UPDATE {tbl} SET {col} = perf_rewrite_path({col}) "
-                    f"WHERE typeof({col}) = 'text' AND ({where_instr}) "
-                    f"AND perf_rewrite_path({col}) != {col}",
-                    tuple(olds),
-                )
+            _rewrite_table_paths(conn, table, olds)
         for _name, sql in triggers:
             conn.execute(sql)
         conn.commit()

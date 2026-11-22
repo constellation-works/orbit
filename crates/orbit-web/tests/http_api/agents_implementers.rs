@@ -11,8 +11,8 @@ use orbit_types::task::{DefectSeverity, RegressionEscape, RegressionNature, Task
 use serde_json::{Value, json};
 
 use super::agents::{
-    Owned, WS, add, append, as_f64, comment, implementation_run, regression, retag,
-    sited_regression,
+    Owned, WS, add, append, as_f64, comment, implementation_run, rated_regression, regression,
+    retag, sited_regression,
 };
 use super::support::{Fixture, isolated, json_ok};
 
@@ -466,8 +466,14 @@ fn by_type_cells_classify_n_and_shrink_empty_cells_to_the_crew_mean() {
     );
 }
 
-/// One landed task for `crew` with `tags`, its attempt three hours ago.
-fn landed_with_tags(fixture: &Fixture, run: &str, crew: &str, tags: Vec<String>) -> String {
+/// One landed task for `crew` at `complexity`, its attempt three hours ago.
+fn landed_in_tier(
+    fixture: &Fixture,
+    run: &str,
+    crew: &str,
+    complexity: TaskComplexity,
+    tags: Vec<String>,
+) -> String {
     let now = Utc::now();
     let start = now - Duration::hours(3);
     let id = fixture
@@ -475,7 +481,7 @@ fn landed_with_tags(fixture: &Fixture, run: &str, crew: &str, tags: Vec<String>)
         .add_task(TaskAddParams {
             title: "no-diff exclusion fixture".into(),
             description: "no-diff exclusion fixture".into(),
-            complexity: TaskComplexity::Low,
+            complexity,
             status: Some(TaskStatus::Done),
             tags,
             ..Default::default()
@@ -509,6 +515,11 @@ fn landed_with_tags(fixture: &Fixture, run: &str, crew: &str, tags: Vec<String>)
         Some(TaskStatus::Done),
     );
     id
+}
+
+/// One landed task for `crew` with `tags`, its attempt three hours ago.
+fn landed_with_tags(fixture: &Fixture, run: &str, crew: &str, tags: Vec<String>) -> String {
+    landed_in_tier(fixture, run, crew, TaskComplexity::Low, tags)
 }
 
 #[test]
@@ -1181,6 +1192,290 @@ fn escape_expectation_uses_other_rows_when_a_bucket_has_no_peer() {
                 .find(|term| term["key"] == "escaped_regressions")
                 .unwrap();
             assert_eq!(term["contribution"], -50);
+        },
+    );
+}
+
+/// A nit among 600 peer tasks is smaller than the displayed expected count
+/// (two decimals) but the score still credits it. The ranking payload keeps
+/// that signed excess so a chart can plot the same side the score uses.
+#[test]
+fn escaped_regression_below_display_precision_keeps_its_score_sign() {
+    isolated(
+        "agents_implementers::escaped_regression_below_display_precision_keeps_its_score_sign",
+        || {
+            let fixture = Fixture::new();
+            for index in 0..10 {
+                landed_with_tags(
+                    &fixture,
+                    &format!("jrun-clean-{index}"),
+                    "clean",
+                    Vec::new(),
+                );
+            }
+            let mut peer_ids = Vec::new();
+            for index in 0..600 {
+                peer_ids.push(landed_with_tags(
+                    &fixture,
+                    &format!("jrun-peers-{index}"),
+                    "peers",
+                    Vec::new(),
+                ));
+            }
+            rated_regression(
+                &fixture,
+                &peer_ids[0],
+                RegressionNature::DefectInNew,
+                RegressionEscape::NoTest,
+                DefectSeverity::Nit,
+            );
+            let server = fixture.server(false);
+            let card = json_ok(server.get(&format!(
+                "/api/agents/implementers/scorecard?{WS}&window=30d&min_support=10"
+            )));
+            let clean = row(&card, "clean");
+            let peers = row(&card, "peers");
+            let nit = DefectSeverity::Nit.weight();
+            let clean_tasks = 10.0;
+            let peer_tasks = 600.0;
+            // Leave-one-row-out in one tier and size bucket: the clean row's
+            // expected count is its tasks times the peers' severity-weighted
+            // escapes per task.
+            let expected_count = clean_tasks * nit / peer_tasks;
+            let excess = -0.5 * (0.0 - expected_count * 100.0 / clean_tasks);
+            let peer_excess = -0.5 * (nit * 100.0 / peer_tasks);
+            assert_eq!(
+                (expected_count * 100.0).round() / 100.0,
+                0.0,
+                "this fixture's expected count rounds to a displayed zero"
+            );
+            assert!(
+                excess > 0.0 && (excess * 100.0).round() / 100.0 > 0.0,
+                "the score still credits a positive contribution ({excess})"
+            );
+            assert_eq!(clean["counts"]["escaped_regressions"], 0);
+            assert_eq!(clean["per_100"]["escaped_regressions"], 0);
+            assert_eq!(as_f64(&clean["expected"]["escaped_regressions"]), 0.0);
+            assert_eq!(clean["score_base"], 100);
+            assert_eq!(card["rows"][0]["crew"], "clean");
+            assert_eq!(clean["rank"], 1);
+            assert!(
+                (as_f64(&clean["contributions"]["escaped_regressions"]) - excess).abs() < 1e-9,
+                "clean excess {excess} payload {}",
+                clean["contributions"]["escaped_regressions"]
+            );
+            assert!(
+                (as_f64(&peers["contributions"]["escaped_regressions"]) - peer_excess).abs() < 1e-9,
+                "peer excess {peer_excess} payload {}",
+                peers["contributions"]["escaped_regressions"]
+            );
+            assert!(as_f64(&peers["contributions"]["escaped_regressions"]) < 0.0);
+            for key in ["weighted_landed", "crew_rework"] {
+                assert_eq!(
+                    as_f64(&clean["contributions"][key]),
+                    0.0,
+                    "{key} meets its expectation, so its contribution is zero"
+                );
+            }
+            assert!(clean["per_100"]["first_pass_accepts"].is_null());
+            assert_eq!(as_f64(&clean["contributions"]["first_pass_accepts"]), 0.0);
+            let sum: f64 = clean["contributions"]
+                .as_object()
+                .expect("contributions")
+                .values()
+                .map(as_f64)
+                .sum();
+            assert!(
+                (as_f64(&clean["raw"]) - (100.0 + sum)).abs() < 0.01,
+                "displayed raw {} is the rounded 100 plus {}",
+                clean["raw"],
+                sum
+            );
+            for field in ["counts", "per_100", "expected", "score", "score_base"] {
+                assert!(
+                    clean.get(field).is_some(),
+                    "existing display field {field} stays on the row"
+                );
+            }
+        },
+    );
+}
+
+/// Four tiers with ordinary integer counts can differ by less than 1e-9:
+/// 252/307 + 149/311 + 150/313 + 70/317 = 2 + 1/9473323417, giving a genuine
+/// +3.29873e-10 contribution that a nine-decimal grid snapped to 0.
+#[test]
+fn four_tier_sub_grid_excess_keeps_its_score_sign() {
+    isolated(
+        "agents_implementers::four_tier_sub_grid_excess_keeps_its_score_sign",
+        || {
+            let fixture = Fixture::new();
+            let tiers = [
+                ("low", TaskComplexity::Low, 307usize, 252usize),
+                ("medium", TaskComplexity::Medium, 311, 149),
+                ("hard", TaskComplexity::Hard, 313, 150),
+                ("xhard", TaskComplexity::XHard, 317, 70),
+            ];
+            let mut selected_ids = Vec::new();
+            for (tier_name, complexity, peer_tasks, peer_nits) in tiers {
+                for index in 0..3 {
+                    selected_ids.push(landed_in_tier(
+                        &fixture,
+                        &format!("jrun-selected-{tier_name}-{index}"),
+                        "selected",
+                        complexity,
+                        Vec::new(),
+                    ));
+                }
+                for index in 0..peer_tasks {
+                    let id = landed_in_tier(
+                        &fixture,
+                        &format!("jrun-peer-{tier_name}-{index}"),
+                        &format!("peer-{tier_name}"),
+                        complexity,
+                        Vec::new(),
+                    );
+                    if index < peer_nits {
+                        rated_regression(
+                            &fixture,
+                            &id,
+                            RegressionNature::DefectInNew,
+                            RegressionEscape::NoTest,
+                            DefectSeverity::Nit,
+                        );
+                    }
+                }
+            }
+            for id in selected_ids.iter().take(6) {
+                rated_regression(
+                    &fixture,
+                    id,
+                    RegressionNature::DefectInNew,
+                    RegressionEscape::NoTest,
+                    DefectSeverity::Nit,
+                );
+            }
+            let server = fixture.server(false);
+            let card = json_ok(server.get(&format!(
+                "/api/agents/implementers/scorecard?{WS}&window=30d&min_support=10"
+            )));
+            let selected = row(&card, "selected");
+            assert_eq!(selected["below_support"], false);
+            assert!(selected["rank"].is_number(), "{selected}");
+            let nit = DefectSeverity::Nit.weight();
+            let peer_sum = 252.0 / 307.0 + 149.0 / 311.0 + 150.0 / 313.0 + 70.0 / 317.0;
+            let expected_count = 3.0 * nit * peer_sum;
+            let excess = -0.5 * (6.0 * nit * 100.0 / 12.0 - expected_count * 100.0 / 12.0);
+            assert!(
+                excess > 0.0 && excess < 5e-10,
+                "the four-tier example produces a positive sub-1e-9 excess: {excess}"
+            );
+            let payload_excess = as_f64(&selected["contributions"]["escaped_regressions"]);
+            assert!(
+                payload_excess > 0.0,
+                "genuine sub-grid excess must stay positive for the radar: {selected}"
+            );
+            assert!(
+                (payload_excess - excess).abs() < 1e-13,
+                "expected full-precision excess {excess}, got {payload_excess}"
+            );
+            for key in ["weighted_landed", "crew_rework"] {
+                assert_eq!(
+                    as_f64(&selected["contributions"][key]).to_bits(),
+                    0.0_f64.to_bits(),
+                    "{key} meets its expectation with exact positive zero"
+                );
+            }
+        },
+    );
+}
+
+/// Non-power-of-two peer rates summed per task can drift by 1-2 ULPs from
+/// exact equality in `f64`; equal observed and expected rates still emit
+/// positive zero so the radar places them on the middle ring.
+#[test]
+fn mathematically_equal_rates_keep_positive_zero_contribution() {
+    isolated(
+        "agents_implementers::mathematically_equal_rates_keep_positive_zero_contribution",
+        || {
+            let fixture = Fixture::new();
+            for (crew, count, regressions) in [("equal-seven", 7, 3), ("peer-seven", 7, 3)] {
+                for index in 0..count {
+                    let id = landed_in_tier(
+                        &fixture,
+                        &format!("jrun-{crew}-{index}"),
+                        crew,
+                        TaskComplexity::Low,
+                        Vec::new(),
+                    );
+                    if index < regressions {
+                        rated_regression(
+                            &fixture,
+                            &id,
+                            RegressionNature::DefectInNew,
+                            RegressionEscape::NoTest,
+                            DefectSeverity::Low,
+                        );
+                    }
+                }
+            }
+            let mut multi_ids = Vec::new();
+            for (tier_name, complexity, peer_tasks, peer_regressions) in [
+                ("med", TaskComplexity::Medium, 3usize, 1usize),
+                ("hard", TaskComplexity::Hard, 7, 2),
+                ("xhard", TaskComplexity::XHard, 21, 8),
+            ] {
+                for index in 0..3 {
+                    multi_ids.push(landed_in_tier(
+                        &fixture,
+                        &format!("jrun-multi-{tier_name}-{index}"),
+                        "equal-multi",
+                        complexity,
+                        Vec::new(),
+                    ));
+                }
+                for index in 0..peer_tasks {
+                    let id = landed_in_tier(
+                        &fixture,
+                        &format!("jrun-peer-{tier_name}-{index}"),
+                        &format!("peer-{tier_name}"),
+                        complexity,
+                        Vec::new(),
+                    );
+                    if index < peer_regressions {
+                        rated_regression(
+                            &fixture,
+                            &id,
+                            RegressionNature::DefectInNew,
+                            RegressionEscape::NoTest,
+                            DefectSeverity::Low,
+                        );
+                    }
+                }
+            }
+            for id in multi_ids.iter().take(3) {
+                rated_regression(
+                    &fixture,
+                    id,
+                    RegressionNature::DefectInNew,
+                    RegressionEscape::NoTest,
+                    DefectSeverity::Low,
+                );
+            }
+            let server = fixture.server(false);
+            let card = json_ok(server.get(&format!(
+                "/api/agents/implementers/scorecard?{WS}&window=30d&min_support=7"
+            )));
+            for crew in ["equal-seven", "equal-multi"] {
+                let r = row(&card, crew);
+                assert!(r["rank"].is_number(), "{r}");
+                assert_eq!(
+                    as_f64(&r["contributions"]["escaped_regressions"]).to_bits(),
+                    0.0_f64.to_bits(),
+                    "{crew} has mathematically equal observed and expected rates: {r}"
+                );
+                assert_eq!(as_f64(&r["raw"]), 100.0, "{crew}: {r}");
+            }
         },
     );
 }

@@ -19,7 +19,7 @@
 //
 // Also exports parseHashRoute for symmetry (used only internally today).
 
-import { el, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, setWorkspace, parseDashboardWindow, persistScopeToUrl, syncWindowSelectors, notifyScopeChange } from './common.js';
+import { el, isAggregateView, renderPanelPlaceholder, getWindow, setWindow, getWorkspace, parseDashboardWindow, persistScopeToUrl, pushScopedHash, syncWindowSelectors, notifyScopeChange } from './common.js';
 import { renderIncidentWindowHeader } from './incidents.js';
 import { adoptRunFiltersFromAddress, renderRuns, selectRunningRunFilter } from './runs.js';
 import { AGENT_ROLES, adoptAgentsSpan, agentsSpan } from './agents.js';
@@ -124,10 +124,14 @@ function analyticsSubtabRoute(ctx, sub) {
 
 // Rewrites the hash in place for a view change that does not route (a Forecast
 // or experiment tab pick), so it never refetches.
+// The entry keeps its state (its route-entry key, which names the Back
+// target), and the rewritten address counts as routed: no hashchange fires.
 function rewriteAnalyticsHash(ctx) {
   const url = new URL(window.location.href);
   url.hash = analyticsHash(ctx, parseHashRoute(window.location.hash).query).replace(/^#/, "");
-  if (url.href !== window.location.href) window.history.replaceState(null, "", url);
+  if (url.href === window.location.href) return;
+  window.history.replaceState(window.history.state, "", url);
+  routedHref = window.location.href;
 }
 
 function windowQuery() {
@@ -876,7 +880,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   // normalizes it: the entry is rewritten in place, so Back never lands on a
   // spelling the router would push forward from again. Only a navigation the
   // operator made adds an entry.
-  const rewriteInPlace = hashChanged && (opts.fromAddress || legacyRoute || opts.repairRoute || taskLink || runLink) && typeof window.history?.replaceState === "function";
+  const rewriteInPlace = hashChanged && (opts.fromAddress || legacyRoute || opts.repairRoute || opts.replace || taskLink || runLink) && typeof window.history?.replaceState === "function";
   if (rewriteInPlace) {
     window.history.replaceState(window.history.state, "", hash);
     // The rewrite fires no event, so the address it wrote is routed already.
@@ -896,17 +900,18 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
 }
 
 function navigateToRunImpl(ctx, runId, workspaceId = null) {
-  if (workspaceId) {
-    setWorkspace(workspaceId);
-    persistScopeToUrl();
-    const selector = $("workspace-select");
-    if (selector) selector.value = workspaceId;
-  }
   ctx.setRunId(runId);
   ctx.setExpandedSteps(new Set());
   ctx.setRunDetail(null);
   ctx.setRunEvents([]);
-  setActiveTabImpl(ctx, `runs/${encodeURIComponent(runId)}`);
+  const path = `runs/${encodeURIComponent(runId)}`;
+  if (workspaceId && workspaceId !== getWorkspace()) {
+    // The origin entry keeps its own workspace: change scope in memory and
+    // push the run as the one new entry, which carries the new scope.
+    pushScopedHash(`#${path}`, { workspace: workspaceId });
+    return;
+  }
+  setActiveTabImpl(ctx, path);
 }
 
 // The address the router last routed, kept at module scope so recordRoutedHref
@@ -1065,7 +1070,9 @@ function initTabsImpl(ctx) {
       ctx.setRunSubtab(btn.dataset.subtab);
       const path = `runs/${encodeURIComponent(ctx.getRunId() || "")}` +
         (ctx.getRunSubtab() !== "steps" ? `/${ctx.getRunSubtab()}` : "");
-      setActiveTabImpl(ctx, path, { refresh: false });
+      // Steps and Events are one run's views: rewrite the run's entry in
+      // place so Back (and its label) still names the view that opened it.
+      setActiveTabImpl(ctx, path, { refresh: false, replace: true });
     });
   }
   for (const btn of document.querySelectorAll("#jobs-subtabs .subtab")) {

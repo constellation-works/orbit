@@ -3,6 +3,7 @@
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -23,6 +24,15 @@ class BodyHistoryTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(dir=scratch, prefix="body-history-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name) / "repo"
+        isolated_home = Path(self.temporary.name) / "home"
+        isolated_home.mkdir()
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        self.env.update(
+            HOME=str(isolated_home),
+            GIT_CONFIG_GLOBAL=os.devnull,
+            GIT_CONFIG_NOSYSTEM="1",
+            GIT_CEILING_DIRECTORIES=str(self.root.parent),
+        )
         (self.root / ASSETS).mkdir(parents=True)
         (self.root / SOURCES).parent.mkdir(parents=True)
         (self.root / "scripts").mkdir()
@@ -45,12 +55,13 @@ template:
         self.original = self.git("rev-parse", "HEAD").strip()
 
     def git(self, *args):
-        return subprocess.check_output(["git", *args], cwd=self.root, text=True)
+        return subprocess.check_output(["git", *args], cwd=self.root, env=self.env,
+                                       text=True, timeout=30)
 
     def run_generator(self, *args, root=None, code=0):
         result = subprocess.run(
             [sys.executable, "scripts/update-auto-task-body-history.py", *args],
-            cwd=root or self.root, text=True, capture_output=True, timeout=30,
+            cwd=root or self.root, env=self.env, text=True, capture_output=True, timeout=30,
         )
         self.assertEqual(result.returncode, code, result.stdout + result.stderr)
         return result

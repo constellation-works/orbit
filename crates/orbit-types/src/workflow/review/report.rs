@@ -64,9 +64,11 @@ pub struct ReviewReport {
 }
 
 impl ReviewReport {
-    /// Validate a live reviewer's attachment before storing it. Persisted
-    /// reports still use [`Self::parse`] so settlement can diagnose legacy
-    /// or incomplete evidence without discarding it.
+    /// Validate a live reviewer's attachment before storing it: the contract
+    /// version, the attempt id, and an `expected_failure` record that did not
+    /// fail, a contradiction settlement would decide from that record alone.
+    /// Persisted reports still use [`Self::parse`] so settlement can diagnose
+    /// legacy or incomplete evidence without discarding it.
     pub fn parse_attachment(content: &[u8]) -> Result<Self, ReviewReportError> {
         let report = Self::parse(content)?;
         if report.schema_version != REVIEW_CONTRACT_VERSION {
@@ -80,6 +82,19 @@ impl ReviewReport {
         if report.attempt_id.trim().is_empty() {
             return Err(ReviewReportError::Contract {
                 detail: "must name the admitted attempt_id".to_string(),
+            });
+        }
+        if let Some((index, record)) = report.validation.iter().enumerate().find(|(_, record)| {
+            record.role == ValidationRole::ExpectedFailure
+                && record.outcome != ValidationOutcome::Failed
+        }) {
+            return Err(ReviewReportError::Contract {
+                detail: format!(
+                    "validation[{index}]: `{}` is recorded as expected_failure but is {}; a \
+                     negative control must fail, so record it as failed or change its role",
+                    record.command,
+                    record.outcome.as_str()
+                ),
             });
         }
         Ok(report)

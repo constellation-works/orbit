@@ -90,8 +90,11 @@ Notices under a `resident:` key (such as status lines) and notices authored by
 the mandate's own assignment task are excluded from wake evaluation so a cycle's
 own reports do not trigger immediate re-wakes.
 
-A live cycle may read runtime attention for its own workspace and the
-workspaces its grant covers. That read does not widen what it can write.
+A live cycle may read runtime attention and drain status (`orbit.workflow`
+action `auto` with `mode: "status"`) for its own workspace and the workspaces
+its grant covers, with or without any granted right. Neither read widens what
+it can write, and drain controls (`start`, `stop`, `resize`) remain
+operator-only.
 
 Each cycle's checkpoint plans the next wake in `next_wake.not_before`. Without
 a change that wakes it sooner, the next cycle starts then, but never sooner
@@ -140,6 +143,15 @@ flag.
 The effective authority is what the resident can act on now: the granted
 rights, in the granted workspaces that the mandate also lists. It is empty for
 an `ended` or `invalid` mandate.
+
+Updating friction records (`orbit.friction` action `update`) in covered
+workspaces requires no granted right — observe-only cycles may record landing
+evidence on or close frictions too — and each write is keyed on the cycle's
+action ledger. Updates for workspaces outside the mandate's authority are
+refused as `resident_scope_refused`, and any update carrying `rehome_to` (or
+`move`) is refused as `resident_tool_refused` regardless of granted rights;
+moving friction records between workspaces stays with the operator and the
+curation pass.
 
 | Caller | Widen | Narrow |
 |---|---|---|

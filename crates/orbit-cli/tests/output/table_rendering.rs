@@ -767,6 +767,9 @@ fn run_cli_on_terminal_at_width_with_operator(
     if operator {
         command.env("ORBIT_OPERATOR", "1");
     }
+    if let Some(filter) = workspace.child_log_filter {
+        command.env("RUST_LOG", filter);
+    }
     let mut child = command
         .current_dir(&workspace.work)
         .env("HOME", &workspace.home)

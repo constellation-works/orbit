@@ -185,15 +185,25 @@ class LinuxGatedTestItemTests(unittest.TestCase):
 
     def test_inline_format_arguments_and_attribute_arguments_are_uses(self):
         live = '#[test]\nfn portable() { println!("{LIMIT}"); }\n'
-        self.check_tree({SUITE: "const LIMIT: u32 = 7;\n" + linux_test("") + live}, 0)
+        self.check_tree({SUITE: "const LIMIT: u32 = 7;\n" + linux_test("assert_eq!(LIMIT, 7);") + live}, 0)
         self.check_tree(
             {SUITE: "const LIMIT: u32 = 7;\n" + linux_test('println!("{LIMIT:?}");')},
             1,
             "crates/example/tests/suite.rs:1: test helper const `LIMIT` is not gated, "
             "but every use is compiled out on macOS",
         )
-        self.check_tree({SUITE: "use serde::Serialize;\n#[derive(Serialize)]\nstruct Row;\n"
-                         "use std::fs;\n" + linux_test("fs::read(\"x\");")}, 1, "import `fs`")
+        # Non-inert outer attributes count as live or Linux-gated use sites for
+        # lowercase/UPPER_SNAKE candidates depending on the item they decorate.
+        self.check_tree(
+            {SUITE: "fn fixture() {}\n" + linux_test("fixture();")
+             + "#[custom_attr(fixture)]\nstruct Row;\n"},
+            0,
+        )
+        self.check_tree(
+            {SUITE: "fn fixture() {}\n" + f"{LINUX}\n#[custom_attr(fixture)]\nstruct Row;\n"},
+            1,
+            "crates/example/tests/suite.rs:1:", "test helper fn `fixture`",
+        )
 
     def test_raw_string_format_captures_are_uses_and_linux_only_captures_are_reported(self):
         for literal in ('r#"{LIMIT}"#', 'r##"{LIMIT}"##'):
@@ -232,7 +242,7 @@ class LinuxGatedTestItemTests(unittest.TestCase):
             "fn fixture() {}\n" + linux_test("x.fixture(); other::fixture();"),
             "fn unused() {}\n",
             "use std::fs;\n",
-            "#[test]\nfn only_linux_runs_this_name() {}\n",
+            "#[test]\nfn only_linux_runs_this_name() {}\n" + linux_test("only_linux_runs_this_name();"),
         )
         for source in cases:
             with self.subTest(source=source):
@@ -302,9 +312,14 @@ class LinuxGatedTestItemTests(unittest.TestCase):
         self.check_tree(files, 0)
 
     def test_included_files_share_their_includers_scope(self):
-        files = {SUITE: 'use std::fs;\ninclude!("cases.rs");\n',
-                 "crates/example/tests/cases.rs": "#[test]\nfn reads() { fs::read(\"x\"); }\n"}
+        files = {SUITE: 'use std::fs;\ninclude!("cases.rs");\n' + linux_test('fs::read("x");'),
+                 "crates/example/tests/cases.rs": "#[test]\nfn reads() { fs::read(\"y\"); }\n"}
         self.check_tree(files, 0)
+        self.check_tree(
+            {SUITE: 'use std::fs;\ninclude!("cases.rs");\n',
+             "crates/example/tests/cases.rs": linux_test('fs::read("y");')},
+            1, "crates/example/tests/suite.rs:1:", "import `fs`",
+        )
 
 
 if __name__ == "__main__":

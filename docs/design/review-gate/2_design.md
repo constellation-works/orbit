@@ -347,7 +347,10 @@ Git writes, changes task lifecycle, approves, or merges.
 The instruction carries the report's exact JSON Schema, and
 `orbit.task.artifact` action `put` validates a `review-report.json` on attach,
 refusing a mismatch with the offending field named so the reviewer can fix it
-while it still runs [ORB-13890]. Both the validator and settlement read
+while it still runs [ORB-13890]. It also refuses an `expected_failure` record
+whose outcome is not `failed`, naming the record's index and command, since
+settlement would decide that same contradiction from the record alone
+[ORB-26788]. Both the validator and settlement read
 through `ReviewReport::parse`, which accepts benign shape drift that leaves
 the meaning unambiguous — a bare-string `disposition`, enum labels in another
 case or with `-`/space separators, `pass`/`fail`/`skipped` outcomes, a single

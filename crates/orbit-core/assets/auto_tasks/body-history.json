@@ -1701,6 +1701,36 @@
     },
     {
       "comments": [
+        "# No context_files and proposed on purpose: the batch is known only after",
+        "# backlog. The executing run never writes its own scope.",
+        "# operator) persists the selected file: selectors and it is approved to",
+        "# selection, so the instance waits in proposed — never a backlog",
+        "# whole-tree holder — until pre-admission preparation (task pilot or",
+        "## Attach the ledger",
+        "## Check and record",
+        "## Comment-only diffs",
+        "## Escalate repeat skips",
+        "## Select a batch (preparation, before admission)",
+        "## The standard",
+        "## Use the prepared footprint"
+      ],
+      "digest": "ca288c930ada0828c14d03275940b4772d39ade55b256cda6b0baa3310b06b73",
+      "revision": "e55e9dab234d1af7b30262b1fe40076c53ea02f1",
+      "settings": {
+        "complexity": "low",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "cron": "45 6 * * *"
+        },
+        "tags": [
+          "comment-hygiene"
+        ]
+      }
+    },
+    {
+      "comments": [
         "# No context_files on purpose: the batch is only known at run time, and a",
         "# context_files to the selected files before editing.",
         "# minted task without selectors holds no workspace lock. The body narrows",
@@ -4699,6 +4729,31 @@
       ],
       "digest": "f420fa0e70541495dcd8df60be920928119e111a7525f414178ffd790bb12ae2",
       "revision": "87d40f42e134213db9d0fe52c1cc0c58cf1d11b1",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 6 * * *"
+        },
+        "tags": [
+          "pilot-block-patterns"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Collect",
+        "## 3. Group by cause and route to the source",
+        "## 4. Dedupe and file",
+        "## 5. Check earlier fixes",
+        "## 6. Corpus proposal, report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "fff4a9401abe81824fc3ad0ce53248276e95790f8d03a5cdb508ef947b66431b",
+      "revision": "29b3a1d572eb2f860518da5ce0cd84134b2e36cc",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",

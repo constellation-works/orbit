@@ -54,6 +54,10 @@ function clearCostChrome() {
 // Aggregate view has no per-workspace cost. Placeholder the panel so a
 // previous workspace's dollars and tokens cannot stay on screen.
 export function placeholdScoreboardAggregate() {
+  // app.js calls this directly in aggregate view: the window selector still
+  // writes the shared window there.
+  wireScoreboardWindowSelector();
+  syncWindowSelectors();
   for (const id of COST_CHROME) renderPanelPlaceholder(id);
   for (const id of COST_COUNTS) {
     const node = $(id);
@@ -65,6 +69,10 @@ export function placeholdScoreboardAggregate() {
 let scoreboardRequestScope = null;
 
 export function fetchAndRenderScoreboard() {
+  // Wire before any early return: the selector must work in aggregate view
+  // and while /api/cost is loading or failing, not only after a success.
+  wireScoreboardWindowSelector();
+  syncWindowSelectors();
   if (isAggregateView()) {
     placeholdScoreboardAggregate();
     return Promise.resolve();
@@ -163,8 +171,10 @@ function renderNormalizedTokenUsage(tokens, previous) {
   const total = asScoreboardNumber(usage.normalized_token_total);
   const invocations = asScoreboardNumber(usage.invocation_count);
   const tasks = asScoreboardNumber(usage.linked_task_count);
-  const perInvocation = invocations === 0 ? "—" : fmtScoreboardCount(Math.round(total / invocations));
-  const perTask = tasks === 0 ? "—" : fmtScoreboardCount(Math.round(total / tasks));
+  const coveredInvocations = asScoreboardNumber(usage.covered_invocation_count);
+  const coveredTasks = asScoreboardNumber(usage.covered_linked_task_count);
+  const perInvocation = coveredInvocations === 0 ? "—" : fmtScoreboardCount(Math.round(total / coveredInvocations));
+  const perTask = coveredTasks === 0 || coveredInvocations !== invocations ? "—" : fmtScoreboardCount(Math.round(total / coveredTasks));
   const bucketText = [
     `uncached input ${fmtScoreboardCount(usage.uncached_input_tokens)}`,
     `cache read ${fmtScoreboardCount(usage.cache_read_tokens)}`,
@@ -181,11 +191,11 @@ function renderNormalizedTokenUsage(tokens, previous) {
     el("div", { class: "token-ratios" }, [
       tokenStat(fmtScoreboardCount(invocations), "invocations"),
       tokenStat(fmtScoreboardCount(tasks), "linked tasks"),
-      tokenStat(perInvocation, invocations === 0 ? "tokens / invocation (0 invocations)" : "tokens / invocation"),
-      tokenStat(perTask, tasks === 0 ? "tokens / linked task (0 linked tasks)" : "tokens / linked task"),
+      tokenStat(perInvocation, "tokens / covered invocation"),
+      tokenStat(perTask, "tokens / covered linked task"),
     ]),
     el("span", { class: "token-buckets", text: bucketText }),
-    el("span", { class: "token-coverage" }, [el("span", { text: `${fmtScoreboardCount(usage.covered_invocation_count)} of ${fmtScoreboardCount(invocations)} invocations normalized` }), infoHint(`${fmtScoreboardCount(usage.unknown_input_basis_or_model_count)} with unknown model or input basis are excluded, never guessed.`)]),
+    el("span", { class: "token-coverage" }, [el("span", { text: `${fmtScoreboardCount(usage.covered_invocation_count)} of ${fmtScoreboardCount(invocations)} invocations normalized` }), infoHint(`${fmtScoreboardCount(usage.unknown_input_basis_or_model_count)} with unknown model or input basis are excluded, never guessed. Tokens per linked task is withheld when any invocation is uncovered.`)]),
   ]);
 }
 

@@ -124,4 +124,32 @@ fn orchestrator_accounting_excludes_other_workspaces_and_keeps_local_missing_tas
             "foreign facts contribute no normalized token totals"
         );
     }
+    // One task has both covered and uncovered invocations; a second is
+    // fully covered, and a third has only an uncovered invocation.
+    a.insert_invocation_trace_record(&InvocationInsertParams {
+        agent_execution_id: None,
+        job_run_id: "fixture-run".to_string(),
+        account: None,
+        activity_id: "fixture".to_string(),
+        agent: "codex".to_string(),
+        provider: None,
+        model: Some("unrecognized-model".to_string()),
+        task_ids: vec![a_task, "uncovered-only".to_string()],
+        trace: InvocationTrace::default(),
+    })
+    .expect("record uncovered invocation");
+    let mixed = a
+        .orchestrator_invocation_metrics(None, None)
+        .unwrap()
+        .normalized_tokens;
+    let json = serde_json::to_value(&mixed).unwrap();
+    assert_eq!(mixed.invocation_count, 3);
+    assert_eq!(mixed.covered_invocation_count, 2);
+    assert_eq!(mixed.linked_task_count, 3);
+    assert_eq!(json["covered_linked_task_count"], 1);
+    assert_eq!(
+        mixed.normalized_token_total / mixed.covered_invocation_count,
+        210
+    );
+    assert_eq!(mixed.normalized_token_total / mixed.invocation_count, 140);
 }

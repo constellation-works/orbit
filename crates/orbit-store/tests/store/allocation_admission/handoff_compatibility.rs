@@ -369,6 +369,15 @@ fn already_open_inline_writers_are_refused_atomically_at_the_store_boundary() {
         .commit_boundary
         .resolve_execution_claims()
         .unwrap();
+    let stable_projection = |claims: Vec<ClaimInspection>| {
+        claims
+            .into_iter()
+            .map(|mut claim| {
+                claim.age_seconds = None;
+                claim
+            })
+            .collect::<Vec<_>>()
+    };
     for insert in [false, true] {
         let result = stale_writer.with_transaction(|transaction| {
         transaction.connection().execute("UPDATE task_coordination_rows SET payload_json='{}' WHERE kind='distributed-execution-claim-v1'", []).unwrap();
@@ -388,14 +397,24 @@ fn already_open_inline_writers_are_refused_atomically_at_the_store_boundary() {
             result.is_err(),
             "both legacy insertion and replacement must be refused"
         );
+        let mut after = delivery
+            .owner
+            .backends
+            .commit_boundary
+            .resolve_execution_claims()
+            .unwrap();
+        for (after_claim, before_claim) in after.iter_mut().zip(&before) {
+            after_claim.age_seconds = Some(
+                before_claim
+                    .age_seconds
+                    .unwrap_or_default()
+                    .saturating_add(1),
+            );
+        }
         assert_eq!(
-            delivery
-                .owner
-                .backends
-                .commit_boundary
-                .resolve_execution_claims()
-                .unwrap(),
-            before
+            stable_projection(after),
+            stable_projection(before.clone()),
+            "refused writes must preserve stable claim state"
         );
     }
     assert_eq!(migrated.schema_version().unwrap(), SUPPORTED_SCHEMA_VERSION);

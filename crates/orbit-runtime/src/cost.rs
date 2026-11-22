@@ -129,6 +129,9 @@ pub struct NormalizedTokenSummary {
     pub output_tokens: u64,
     pub normalized_token_total: u64,
     pub covered_invocation_count: u64,
+    /// Linked tasks with no uncovered invocation in this summary.
+    #[serde(default)]
+    pub covered_linked_task_count: u64,
     pub unknown_input_basis_or_model_count: u64,
 }
 

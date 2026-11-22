@@ -248,4 +248,17 @@ impl ApplicationPort for CoreApplicationPort {
             complexity,
         )
     }
+
+    fn resident_cycle_drain_status_allowed(
+        &self,
+        kernel: &RuntimeKernel,
+        run_id: &str,
+        input: &Value,
+    ) -> Result<bool, OrbitError> {
+        OrbitRuntime::resident_cycle_drain_status_allowed(
+            OrbitRuntime::from_kernel_ref(kernel),
+            run_id,
+            input,
+        )
+    }
 }

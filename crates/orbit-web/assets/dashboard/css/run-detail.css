@@ -642,6 +642,8 @@ a.back-action { display: inline-flex; align-items: center; box-sizing: border-bo
   transition: opacity 0.15s ease;
 }
 .gantt-svg .gantt-bar:hover { opacity: 0.85; }
+.gantt-svg .gantt-bar:focus { outline: none; }
+.gantt-svg .gantt-bar:focus-visible { stroke: var(--accent); stroke-width: 2px; opacity: 0.85; }
 .gantt-svg .gantt-retry-marker {
   fill: var(--state-failed);
   stroke: #000;

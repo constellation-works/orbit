@@ -7,6 +7,11 @@
 //! evidence and the commits it cites, not under whichever readiness gap its
 //! empty selectors happen to leave.
 //!
+//! A `verified_no_diff` task that is a no-diff deliverable rather than an
+//! already-fixed finding is not held: apply tags it `no-diff-expected` in the
+//! pilot write ([`VerifiedNoDiff::expects_no_repository_diff`]), so this
+//! module's hold never sees it again.
+//!
 //! A task Orbit automation filed (a CI-sweep or delivery-review finding, or
 //! any `auto-task:` task) is archived once the cited commits pass the proof
 //! in [`VerifiedNoDiff::covering_proof`]. Any other task waits for a person.
@@ -65,6 +70,20 @@ pub(crate) fn auto_minted(tags: &[String]) -> bool {
     })
 }
 
+/// Whether the task is a finding Orbit or a review filed, whose
+/// `verified_no_diff` means the finding is already fixed.
+fn finding_filed(tags: &[String]) -> bool {
+    let kinds = tags
+        .iter()
+        .map(|tag| {
+            tag.strip_prefix(AUTO_TASK_TAG_PREFIX)
+                .unwrap_or(tag)
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    super::review_filed(&kinds) || kinds.iter().any(|kind| kind == "ci-failure-sweep")
+}
+
 /// A `verified_no_diff` assessment, reduced to what a hold reports and what
 /// the proof checks.
 pub(crate) struct VerifiedNoDiff {
@@ -117,6 +136,40 @@ impl VerifiedNoDiff {
             cited_commits: commit_citations(texts),
             context_files_before: Vec::new(),
         }
+    }
+
+    /// Whether `assessment` verifies that the task expects no repository diff,
+    /// as opposed to a task whose work already landed, duplicates another
+    /// task, awaits an operator release action or rests on an invalid finding.
+    /// Only the first kind is a no-diff deliverable: its evidence cites no
+    /// commit and the assessment carries none of the typed findings that say
+    /// the work is already done or the task is not work, and `after` (the
+    /// selectors apply keeps) is empty.
+    ///
+    /// A finding task (a review, QA or CI-sweep finding, filed directly or by
+    /// its auto-task) is never one: its `verified_no_diff` says the finding is
+    /// already fixed or does not hold, so it keeps the
+    /// [`PILOT_VERIFIED_NO_DIFF`] hold and its commit proof.
+    pub(super) fn expects_no_repository_diff(
+        assessment: &Value,
+        after: &[String],
+        tags: &[String],
+    ) -> bool {
+        const NOT_A_DELIVERABLE: [&str; 4] = [
+            "already_landed",
+            "duplicate_of",
+            "release_action_required",
+            super::FINDING_INVALID,
+        ];
+        let Some(finding) = Self::from_assessment(assessment) else {
+            return false;
+        };
+        !finding_filed(tags)
+            && after.is_empty()
+            && finding.cited_commits.is_empty()
+            && NOT_A_DELIVERABLE
+                .iter()
+                .all(|field| assessment.get(field).is_none_or(Value::is_null))
     }
 
     /// One line for a hold's `detail`: the evidence, then what it cites.

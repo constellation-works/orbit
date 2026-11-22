@@ -5,6 +5,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
+# Isolate host HOME, TMPDIR, ORBIT_* and proxy settings from installer fixtures.
+mkdir -p "$TMP_ROOT/home" "$TMP_ROOT/tmp"
+export HOME="$TMP_ROOT/home"
+export TMPDIR="$TMP_ROOT/tmp"
+for var in $(compgen -v ORBIT_ 2>/dev/null || true); do
+  unset "$var"
+done
+unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy
+
 require_bin() {
   local bin="$1"
   if ! command -v "$bin" >/dev/null 2>&1; then
@@ -140,7 +149,11 @@ run_shell_install() {
   local release_dir="$1"
   local install_dir="$2"
   local marker="$3"
-  ORBIT_INSTALL_BASE_URL="file://$release_dir" \
+  env -u ORBIT_RELEASE_PUBLIC_KEY_FILE \
+    -u ORBIT_RELEASE_PUBLIC_KEY_FILE_ACKNOWLEDGE_TRUST_CHANGE \
+    -u ORBIT_VERSION \
+    -u ORBIT_INSTALL_REPO \
+    ORBIT_INSTALL_BASE_URL="file://$release_dir" \
     ORBIT_INSTALL_DIR="$install_dir" \
     ORBIT_RELEASE_TRUSTED_KEYS_FILE="$TRUSTED_KEYS_FILE" \
     ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE=1 \
@@ -152,11 +165,15 @@ run_shell_install() {
 expect_shell_failure() {
   local release_dir="$1"
   local label="$2"
-  local expected_error="${3:-}"
+  local expected_error="$3"
   local install_dir="$TMP_ROOT/install-$label"
   local marker="$TMP_ROOT/marker-$label"
   local log_file="$TMP_ROOT/$label.log"
 
+  if [ -z "$expected_error" ]; then
+    echo "FAIL: expect_shell_failure for $label must assert an expected error" >&2
+    exit 1
+  fi
   if run_shell_install "$release_dir" "$install_dir" "$marker" > "$log_file" 2>&1; then
     echo "FAIL: shell installer accepted $label" >&2
     cat "$log_file" >&2
@@ -170,7 +187,7 @@ expect_shell_failure() {
     echo "FAIL: shell installer installed binary for $label" >&2
     exit 1
   fi
-  if [ -n "$expected_error" ] && ! grep -q "$expected_error" "$log_file"; then
+  if ! grep -q "$expected_error" "$log_file"; then
     echo "FAIL: shell installer rejected $label for an unexpected reason" >&2
     cat "$log_file" >&2
     exit 1
@@ -251,6 +268,7 @@ const server = http.createServer((req, res) => {
 server.listen(0, '127.0.0.1', () => {
   const started = Date.now();
   const child = spawn('sh', [path.join(process.env.ROOT, 'install.sh')], {
+    detached: true,
     env: { ...process.env, ORBIT_INSTALL_BASE_URL: `http://127.0.0.1:${server.address().port}`,
       ORBIT_INSTALL_DIR: process.env.INSTALL_DIR,
       ORBIT_RELEASE_TRUSTED_KEYS_FILE: process.env.TRUSTED_KEYS_FILE,
@@ -260,10 +278,36 @@ server.listen(0, '127.0.0.1', () => {
   let output = '';
   child.stdout.on('data', chunk => { output += chunk; });
   child.stderr.on('data', chunk => { output += chunk; });
-  const deadline = setTimeout(() => child.kill(), 50000);
+  let killEscalation;
+  const signalGroup = (sig) => {
+    if (child.pid) {
+      try {
+        process.kill(-child.pid, sig);
+      } catch (err) {
+        if (err.code !== 'ESRCH') {
+          try { child.kill(sig); } catch {}
+        }
+      }
+    }
+  };
+  const deadline = setTimeout(() => {
+    signalGroup('SIGTERM');
+    killEscalation = setTimeout(() => signalGroup('SIGKILL'), 2000);
+  }, 50000);
+  child.on('error', err => {
+    clearTimeout(deadline);
+    clearTimeout(killEscalation);
+    clearInterval(timer);
+    signalGroup('SIGKILL');
+    server.close();
+    console.error(`FAIL: slow progressing archive spawn error: ${err}`);
+    process.exitCode = 1;
+  });
   child.on('close', code => {
     clearTimeout(deadline);
+    clearTimeout(killEscalation);
     clearInterval(timer);
+    signalGroup('SIGKILL');
     server.close();
     if (code !== 0 || archiveRequests !== 1 || Date.now() - started <= 30000 ||
         !fs.existsSync(path.join(process.env.INSTALL_DIR, 'orbit'))) {
@@ -280,11 +324,11 @@ untrusted_key_release="$(prepare_release_dir untrusted-key regular correct "$UNT
 symlink_release="$(prepare_release_dir symlink symlink correct "$CURRENT_PRIVATE_KEY")"
 traversal_release="$(prepare_release_dir traversal traversal correct "$CURRENT_PRIVATE_KEY")"
 
-expect_shell_failure "$bad_checksum_release" "checksum-mismatch"
-expect_shell_failure "$expired_key_release" "expired-key"
-expect_shell_failure "$revoked_key_release" "revoked-key"
-expect_shell_failure "$untrusted_key_release" "untrusted-key"
-expect_shell_failure "$symlink_release" "symlink-member"
+expect_shell_failure "$bad_checksum_release" "checksum-mismatch" 'checksum verification failed'
+expect_shell_failure "$expired_key_release" "expired-key" 'expired release signing key expired'
+expect_shell_failure "$revoked_key_release" "revoked-key" 'revoked release signing key revoked'
+expect_shell_failure "$untrusted_key_release" "untrusted-key" 'no trusted release signing key matched'
+expect_shell_failure "$symlink_release" "symlink-member" 'release archive member is a symlink'
 expect_shell_failure "$traversal_release" "traversal-member" 'unsafe release archive member'
 
 # Use the same malformed dates for both installers and both optional fields.
@@ -517,7 +561,10 @@ expectExtractFailure(
 );
 NODE
 
-if ORBIT_RELEASE_PUBLIC_KEY_FILE="$PUBLIC_KEY" \
+if env -u ORBIT_RELEASE_TRUSTED_KEYS_FILE \
+  -u ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE \
+  -u ORBIT_RELEASE_PUBLIC_KEY_FILE_ACKNOWLEDGE_TRUST_CHANGE \
+  ORBIT_RELEASE_PUBLIC_KEY_FILE="$PUBLIC_KEY" \
   ROOT="$ROOT" \
   node -e 'const path = require("node:path"); const installer = require(path.join(process.env.ROOT, "npm/scripts/install-binary.js")); installer.acknowledgeTrustedPublicKeyOverride();' \
   > "$TMP_ROOT/npm-key-override-missing-ack.log" 2>&1; then
@@ -525,14 +572,19 @@ if ORBIT_RELEASE_PUBLIC_KEY_FILE="$PUBLIC_KEY" \
   exit 1
 fi
 
-ORBIT_RELEASE_PUBLIC_KEY_FILE="$PUBLIC_KEY" \
+env -u ORBIT_RELEASE_TRUSTED_KEYS_FILE \
+  -u ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE \
+  ORBIT_RELEASE_PUBLIC_KEY_FILE="$PUBLIC_KEY" \
   ORBIT_RELEASE_PUBLIC_KEY_FILE_ACKNOWLEDGE_TRUST_CHANGE=1 \
   ROOT="$ROOT" \
   node -e 'const path = require("node:path"); const installer = require(path.join(process.env.ROOT, "npm/scripts/install-binary.js")); installer.acknowledgeTrustedPublicKeyOverride();' \
   > "$TMP_ROOT/npm-key-override-ack.log" 2>&1
 grep -q "trusting replacement release signing key" "$TMP_ROOT/npm-key-override-ack.log"
 
-if ORBIT_RELEASE_TRUSTED_KEYS_FILE="$TRUSTED_KEYS_FILE" \
+if env -u ORBIT_RELEASE_PUBLIC_KEY_FILE \
+  -u ORBIT_RELEASE_PUBLIC_KEY_FILE_ACKNOWLEDGE_TRUST_CHANGE \
+  -u ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE \
+  ORBIT_RELEASE_TRUSTED_KEYS_FILE="$TRUSTED_KEYS_FILE" \
   ROOT="$ROOT" \
   node -e 'const path = require("node:path"); const installer = require(path.join(process.env.ROOT, "npm/scripts/install-binary.js")); installer.acknowledgeTrustedKeysOverride();' \
   > "$TMP_ROOT/npm-keys-override-missing-ack.log" 2>&1; then
@@ -540,7 +592,9 @@ if ORBIT_RELEASE_TRUSTED_KEYS_FILE="$TRUSTED_KEYS_FILE" \
   exit 1
 fi
 
-ORBIT_RELEASE_TRUSTED_KEYS_FILE="$TRUSTED_KEYS_FILE" \
+env -u ORBIT_RELEASE_PUBLIC_KEY_FILE \
+  -u ORBIT_RELEASE_PUBLIC_KEY_FILE_ACKNOWLEDGE_TRUST_CHANGE \
+  ORBIT_RELEASE_TRUSTED_KEYS_FILE="$TRUSTED_KEYS_FILE" \
   ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE=1 \
   ROOT="$ROOT" \
   node -e 'const path = require("node:path"); const installer = require(path.join(process.env.ROOT, "npm/scripts/install-binary.js")); installer.acknowledgeTrustedKeysOverride();' \

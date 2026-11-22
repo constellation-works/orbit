@@ -139,20 +139,28 @@ function findTaskRow(taskId) {
       (!taskState.selectedTaskWorkspace || row.dataset.workspace === taskState.selectedTaskWorkspace)) || null;
 }
 
-export function openVisibleTask(taskId, context) {
+export function openVisibleTask(taskId, context, { workspace = shownTaskWorkspace() } = {}) {
   // A full page has no list beside it: the link opens that task's own page,
   // whatever the list's filter hides.
   if (taskState.taskPageId) {
     if (taskState.taskPageId !== taskId) openLinkedTaskPage(taskId, context);
     return;
   }
-  const visible = filterTasks(taskList(context), context).some((task) => task.id === taskId);
+  // A relation names a task in the shown task's own workspace: in the
+  // aggregate view another workspace can list the same id.
+  const visible = filterTasks(taskList(context), context)
+    .find((task) => task.id === taskId && (!workspace || !task.workspace_id || task.workspace_id === workspace));
   if (!visible) {
     copyTaskIdWithNotice(taskId, context);
     return;
   }
-  selectTask(taskId, context);
+  selectTask(taskId, context, { workspace: visible.workspace_id || workspace });
   revealTaskRow(taskId);
+}
+
+// The workspace of the task the pane shows, when one is known.
+function shownTaskWorkspace() {
+  return taskState.pinnedExternalTask?.task?.workspace_id || taskState.selectedTaskWorkspace || null;
 }
 
 // Bring a row into view without moving a list that already shows it: a
@@ -319,8 +327,10 @@ export function setOpenTask(taskId) {
 // Every path that closes a task detail goes through here so the URL stops
 // naming a task the page no longer shows. A full-page task stays: the page is
 // that task, and its actions repaint it in place.
-export function collapseTask(taskId) {
+export function collapseTask(taskId, workspace = null) {
   if (taskState.taskPageId === taskId) return;
+  // A same-id task selected in another workspace (aggregate view) stays open.
+  if (workspace && taskState.selectedTaskWorkspace && taskState.selectedTaskWorkspace !== workspace) return;
   if (taskState.selectedTaskId === taskId) taskState.selectedTaskId = null;
   if (taskState.openTaskId === taskId) setOpenTask(null);
 }

@@ -303,7 +303,7 @@ export async function applyTaskStatusChange(task, nextStatus, context) {
     const pinned = taskState.pinnedExternalTask && taskState.pinnedExternalTask.id === task.id;
     if (!pinned && taskState.taskPageId !== task.id && (isSelectedTask(task) || taskState.foldedStatusTasks.has(taskDispatchIdentity(task)))) {
       if (isSelectedTask(task)) taskState.rowFocusAfterRender = task.id;
-      collapseTask(task.id);
+      collapseTask(task.id, task.workspace_id);
       taskState.foldedStatusTasks.set(taskDispatchIdentity(task), merged);
     }
   };

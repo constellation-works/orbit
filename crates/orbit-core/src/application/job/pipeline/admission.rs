@@ -153,6 +153,7 @@ impl OrbitRuntime {
             if !spec.auto_task_steps().is_empty() {
                 check_auto_task_job(job_name, Path::new(job_name), spec, Utc::now())?;
             }
+            self.validate_pilot_string_task_ids_input(job_name, spec, &input)?;
             delivery::normalize_delivery_input(spec, &mut input)?;
         }
         let reuse_admission = resume.is_some() && !source_repair;

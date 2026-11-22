@@ -416,14 +416,16 @@ for temp_root in "$managed/.orbit/state" "$SRC/.orbit/tmp"; do
 done
 
 # A failed run with an auto-created workdir must retain its logs for diagnosis.
+auto_tmp="$TMP/auto-tmp"
+mkdir -p "$auto_tmp"
 out="$TMP/auto-workdir-failure.out"
 status=0
-PROBE_EXIT=9 "$HELPER" --repo "$SRC" --baseline "$BASELINE_SHA" --candidate "$CANDIDATE_SHA" \
+TMPDIR="$auto_tmp" PROBE_EXIT=9 "$HELPER" --repo "$SRC" --baseline "$BASELINE_SHA" --candidate "$CANDIDATE_SHA" \
   -- ./probe.sh >"$out" 2>&1 || status=$?
 assert_eq "$status" "1" "an unexpected producer failure should fail the helper"
 PRESERVED_WORK="$(sed -n 's/^cross-revision-check: logs preserved at //p' "$out")"
-[[ -n "$PRESERVED_WORK" && -d "$PRESERVED_WORK" ]] \
-  || fail "a failed auto-workdir run should preserve its scratch root"
+[[ -n "$PRESERVED_WORK" && -d "$PRESERVED_WORK" && "$PRESERVED_WORK" == "$auto_tmp/"* ]] \
+  || fail "a failed auto-workdir run should preserve its scratch root under TMPDIR"
 [[ -f "$PRESERVED_WORK/baseline.log" && -f "$PRESERVED_WORK/candidate.log" ]] \
   || fail "a failed auto-workdir run should preserve both arm logs"
 

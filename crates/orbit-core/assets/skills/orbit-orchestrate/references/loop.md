@@ -138,7 +138,7 @@ orbit run job task_pilot_pipeline
 Zero-input discovery finds proposed/backlog tasks with empty context in the
 selected workspace, excluding no-diff tasks and tasks already prepared by an
 active pilot. No task IDs are needed for normal preparation. Use explicit
-`--input 'task_ids=["<task-id>"]'` only for a deliberate targeted re-audit,
+`orbit run task-pilot <task-id>` only for a deliberate targeted re-audit,
 including a task that already has selectors. Do not clear valid context just
 to force automatic discovery.
 

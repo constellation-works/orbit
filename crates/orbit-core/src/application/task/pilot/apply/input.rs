@@ -203,6 +203,7 @@ pub(super) struct PreparedTask {
     pilot_mode_reason: Field<Option<String>>,
     prior_assessment_id: Field<Option<String>>,
     recheck: Field<Option<Value>>,
+    comment_hygiene_batch: Field<Option<Value>>,
 }
 
 /// Prepare's exclusions: echoed verbatim in the report, and read for the
@@ -483,6 +484,16 @@ impl PreparedTask {
                 )));
             }
         };
+        let comment_hygiene_batch = match &self.comment_hygiene_batch {
+            Field::Absent | Field::Present(None) => None,
+            Field::Present(Some(value)) if value.is_object() => Some(value.clone()),
+            _ => {
+                return Err(refuse(format!(
+                    "prepared task {} must be an object or null",
+                    super::super::COMMENT_HYGIENE_BATCH
+                )));
+            }
+        };
         let snapshot = PreparedTaskSnapshot {
             context_files,
             status,
@@ -501,6 +512,7 @@ impl PreparedTask {
             history_len,
             context_creation_identity,
             pilot_mode: self.pilot_mode(action)?,
+            comment_hygiene_batch,
         };
         Ok((task_id.to_string(), snapshot))
     }

@@ -3,7 +3,7 @@
 // action bound to the digest the operator reviewed here.
 
 import { captureWorkspaceVisit, el, fetchJson, requestJson, requestPanel } from './common.js';
-import { actionReason, explainUnavailable, feedback, setRailSubtabCount } from './operations-shared.js';
+import { actionReason, explainUnavailable, feedback, registerOperationsReset, setRailSubtabCount } from './operations-shared.js';
 
 const STATE_LABELS = {
   granted: "granted",
@@ -17,6 +17,12 @@ const STATE_LABELS = {
 const short = digest => (digest ? String(digest).slice(0, 12) : "-");
 const scriptDiffOpen = new Map();
 const scriptDiffScroll = new Map();
+// Disclosure state and the rail count belong to the workspace that was read.
+registerOperationsReset(() => {
+  scriptDiffOpen.clear();
+  scriptDiffScroll.clear();
+  setRailSubtabCount("rail-count-ops-scripts", "");
+});
 
 function capabilityText(caps) {
   if (!caps) return "none";

@@ -3,16 +3,19 @@
 # No full crate compile: the wrapper is a rustc argv passthrough.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 WRAPPER="$ROOT/scripts/rustc-compiler-cache.sh"
 if ! NS_REAL_CARGO="$(command -v cargo)"; then
   printf 'test-compiler-cache: FAIL: cargo is required for the offline lockfile fixture\n' >&2
   exit 1
 fi
-TMP="$(mktemp -d)"
+if ! NS_REAL_PYTHON="$(command -v python3)"; then
+  printf 'test-compiler-cache: FAIL: python3 is required\n' >&2
+  exit 1
+fi
+TMP="$(cd "$(mktemp -d)" && pwd -P)"
 NS_REAL_HOME="$HOME"
-NS_REAL_PYTHON="$(command -v python3)"
-export NS_REAL_CARGO NS_REAL_HOME
+export NS_REAL_CARGO NS_REAL_HOME NS_REAL_PYTHON
 trap 'rm -rf "$TMP"' EXIT
 
 fail() {
@@ -57,6 +60,7 @@ fi
   printf 'SCCACHE_SERVER_UDS=%s\n' "${SCCACHE_SERVER_UDS-}"
   printf 'SCCACHE_SERVER_PORT=%s\n' "${SCCACHE_SERVER_PORT-}"
   printf 'CARGO_TARGET_DIR=%s\n' "${CARGO_TARGET_DIR-}"
+  printf 'PWD=%s\n' "${PWD-}"
 } > "${FAKE_SCCACHE_ENV:-/dev/null}"
 pwd > "${FAKE_SCCACHE_CWD:-/dev/null}"
 printf '%s' "${CACHE_ENV_SPACES-}" > "${FAKE_SCCACHE_SPACES:-/dev/null}"
@@ -385,7 +389,24 @@ grep -Fq "src/lib.rs" "$FAKE_SCCACHE_LOG" || fail "nested-cwd relative src/lib.r
 grep -Fq "$ROOT/crates/orbit-types/src/lib.rs" "$FAKE_SCCACHE_LOG" && fail "nested-cwd relative input must not expand to the original worktree path"
 assert_eq "$(cat "$FAKE_SCCACHE_CWD")" "$stable_src/crates/orbit-types" "nested member rustc cwd"
 
-# cwd outside the checkout is left alone even when the stable source mount aliases.
+# Symlinked checkout cwd resolves physically and still normalizes onto STABLE_SRC,
+# without mutating PWD before chdir succeeds.
+repo_link="$TMP/repo-symlink"
+ln -s "$ROOT" "$repo_link"
+export FAKE_SCCACHE_LOG="$TMP/sccache-symlink-cwd.log"
+export FAKE_SCCACHE_CWD="$TMP/sccache-symlink-cwd.cwd"
+export FAKE_SCCACHE_ENV="$TMP/sccache-symlink-cwd.env"
+rm -f "$FAKE_SCCACHE_LOG" "$FAKE_SCCACHE_CWD" "$FAKE_SCCACHE_ENV"
+(
+  cd "$repo_link/crates/orbit-types"
+  "$WRAPPER" "$TMP/bin/rustc" --out-dir "$fake_tgt/debug" src/lib.rs
+)
+assert_eq "$(cat "$FAKE_SCCACHE_CWD")" "$stable_src/crates/orbit-types" "symlinked checkout rustc cwd"
+grep -Fxq "PWD=$stable_src/crates/orbit-types" "$FAKE_SCCACHE_ENV" \
+  || fail "symlinked checkout PWD did not match normalized dest_cwd"
+
+# cwd outside the checkout is left alone even when the stable source mount aliases,
+# and PWD is not mutated when chdir is skipped.
 external_cwd="$TMP/external-cwd"
 if [[ "$external_cwd" == "$ROOT" || "$external_cwd" == "$ROOT/"* ]]; then
   external_cwd="/"
@@ -394,12 +415,15 @@ else
 fi
 export FAKE_SCCACHE_LOG="$TMP/sccache-external-cwd.log"
 export FAKE_SCCACHE_CWD="$TMP/sccache-external-cwd.cwd"
-rm -f "$FAKE_SCCACHE_LOG" "$FAKE_SCCACHE_CWD"
+export FAKE_SCCACHE_ENV="$TMP/sccache-external-cwd.env"
+rm -f "$FAKE_SCCACHE_LOG" "$FAKE_SCCACHE_CWD" "$FAKE_SCCACHE_ENV"
 (
   cd "$external_cwd"
   "$WRAPPER" "$TMP/bin/rustc" --crate-name external src/lib.rs
 )
 assert_eq "$(cat "$FAKE_SCCACHE_CWD")" "$external_cwd" "external cwd must not move to the repo root"
+grep -Fxq "PWD=$external_cwd" "$FAKE_SCCACHE_ENV" \
+  || fail "external cwd PWD must not be mutated when chdir is skipped"
 
 # 7. Custom CARGO_TARGET_DIR that is not aliased to STABLE_TGT still rewrites
 # source paths and cwd. Silently skipping all rewriting was the measured miss.
@@ -645,6 +669,7 @@ rm -f "$NS_BWRAP_LOG"
 run_live_ns "$ns_home" "$ns_path" "$ns_out" "$ns_err" \
   ORBIT_COMPILER_CACHE_BIN="$ns_sccache" ORBIT_COMPILER_CACHE_REQUIRE_NS=0
 assert_ns_skip "outside an agent lane"
+[[ ! -e "$ns_home/.orbit" ]] || fail "namespace capability probe must not create HOME/.orbit/cache/compiler"
 
 rm -f "$NS_BWRAP_LOG"
 run_live_ns "$ns_home" "$ns_path" "$ns_out" "$ns_err" \
@@ -793,7 +818,7 @@ assert_ns_diagnostics() {
   local status=$?
   set -e
   assert_eq "$status" 1 "$stage must fail"
-  python3 - "$fixture" "$stage" "$c_status" "$d_status" "$e_status" <<'PYTEST'
+  "$NS_REAL_PYTHON" - "$fixture" "$stage" "$c_status" "$d_status" "$e_status" <<'PYTEST'
 import os
 from pathlib import Path
 import re
@@ -895,7 +920,7 @@ assert_ns_skip "namespaces refused with Python 3.10"
 # transport leader alone reserves its process group. The same entrypoint
 # runs the port allocator's release and EXIT cleanup against an exited PID
 # that has been reused: the model intercepts every signal.
-python3 - "$ROOT" "$ns_fixture_root" "$ns_home" "$ns_diagnostic_bin" "$ns_sccache" <<'PYIDENTITY'
+"$NS_REAL_PYTHON" - "$ROOT" "$ns_fixture_root" "$ns_home" "$ns_diagnostic_bin" "$ns_sccache" <<'PYIDENTITY'
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
@@ -938,7 +963,7 @@ grep -Fq 'test-compiler-cache-namespaces: ok' "$ns_bench/out" \
 # fixture is itself a subreaper so even a broken candidate is fully cleaned up
 # at the independent watchdog deadline; it never leaves a test process behind.
 if [[ "$(uname -s)" == Linux ]]; then
-  python3 - "$ROOT/scripts/test-compiler-cache-namespaces.sh" "$ns_fixture_root" \
+  "$NS_REAL_PYTHON" - "$ROOT/scripts/test-compiler-cache-namespaces.sh" "$ns_fixture_root" \
     "$ns_home" "$ns_diagnostic_bin" "$ns_sccache" <<'PYTIMEOUT'
 import ctypes
 import os
@@ -1044,6 +1069,6 @@ fi
 # Live mount-namespace compile lives in the sibling script and is invoked as
 # a separate CI process after this unit process exits.
 
-python3 "$ROOT/scripts/test-bench-compiler-cache.py"
+"$NS_REAL_PYTHON" "$ROOT/scripts/test-bench-compiler-cache.py"
 
 printf 'test-compiler-cache: ok\n'

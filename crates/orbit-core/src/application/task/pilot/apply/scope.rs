@@ -1,9 +1,13 @@
 //! Resolve an assessment's selectors against creation grants and review evidence.
+use super::super::comment_hygiene::{
+    comment_hygiene_batch_holds, validate_comment_hygiene_selectors,
+};
 use super::super::no_diff::VerifiedNoDiff;
 use super::super::persist::task_outcome;
 use super::super::{
-    SelectorCheck, required_string, required_string_array, retained_review_evidence, review_filed,
-    reviewed_evidence_drops, unauthorized_missing_targets, validate_after_selectors,
+    SelectorCheck, ValidatedSelectors, required_string, required_string_array,
+    retained_review_evidence, review_filed, reviewed_evidence_drops, unauthorized_missing_targets,
+    validate_after_selectors,
 };
 use super::ApplyContext;
 use super::admission::PreparedTaskSnapshot;
@@ -45,19 +49,41 @@ pub(super) fn scope_with(
         None => (None, ContextCreationState::Absent),
     };
     let authorized_creation = creation.selectors();
-    let mut selectors = validate_after_selectors(
-        SelectorCheck {
-            action,
-            task_id,
-            disposition: &disposition,
-            assessment,
-            workspace_root: context.workspace_root,
-            source: context.source,
-            authorized_creation,
-        },
-        &proposed_after,
-    )
-    .map_err(refused(task_id, "invalid"))?;
+    let mut selectors = if let Some(batch) = snapshot.comment_hygiene_batch.as_ref()
+        && comment_hygiene_batch_holds(batch)
+    {
+        validate_comment_hygiene_selectors(action, task_id, batch, &disposition, &proposed_after)
+            .map_err(refused(task_id, "invalid"))?;
+        ValidatedSelectors {
+            values: Vec::new(),
+            normalizations: Vec::new(),
+        }
+    } else {
+        let checked = validate_after_selectors(
+            SelectorCheck {
+                action,
+                task_id,
+                disposition: &disposition,
+                assessment,
+                workspace_root: context.workspace_root,
+                source: context.source,
+                authorized_creation,
+            },
+            &proposed_after,
+        )
+        .map_err(refused(task_id, "invalid"))?;
+        if let Some(batch) = snapshot.comment_hygiene_batch.as_ref() {
+            validate_comment_hygiene_selectors(
+                action,
+                task_id,
+                batch,
+                &disposition,
+                &checked.values,
+            )
+            .map_err(refused(task_id, "invalid"))?;
+        }
+        checked
+    };
     if !authorized_creation.is_empty()
         && (disposition == "verified_no_diff"
             || (disposition == "selectors"

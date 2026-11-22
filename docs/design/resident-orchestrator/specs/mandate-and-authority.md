@@ -8,8 +8,8 @@ status: Draft
 feature: resident-orchestrator
 tags: [resident-orchestrator, spec, security]
 related_features: [resident-orchestrator, human-decision-channel, granted-tools]
-related_artifacts: [ORB-21229, ORB-21242]
-last_updated: 2026-11-20
+related_artifacts: [ORB-21229, ORB-21242, ORB-26832, ORB-26833]
+last_updated: 2026-11-22
 ---
 
 # Spec: Mandate and authority
@@ -101,7 +101,7 @@ grantable to a resident in v1.
 
 | Right | Tools the cycle may call (in covered workspaces) |
 |---|---|
-| none | read tools; `orbit.task.add` filed `proposed` (or with no status); `orbit.task.update` without a status (edits, comments); `orbit.task.artifact` action `put`; `orbit.friction` action `add`; `orbit.evolution.add`; `orbit.decision` action `raise`; `orbit.notice.post`; and `orbit.resident.checkpoint`, including the `handoff` outcome that has finalize move the assignment to `review` |
+| none | read tools, `orbit.workflow` action `auto` with `mode: "status"` (drain readiness read); `orbit.task.add` filed `proposed` (or with no status); `orbit.task.update` without a status (edits, comments); `orbit.task.artifact` action `put`; `orbit.friction` action `add` and `update` (without `rehome_to` or `move`, in covered workspaces); `orbit.evolution.add`; `orbit.decision` action `raise`; `orbit.notice.post`; and `orbit.resident.checkpoint`, including the `handoff` outcome that has finalize move the assignment to `review` |
 | `dispatch` | `orbit.pipeline.invoke`, `orbit.run.auto`/`ship`/`resume`, `orbit.task.recover` action `requeue`/`repilot`, drain pull and claim bind/settle, `orbit.task.update` to `in-progress` |
 | `promote` | `orbit.task.update` to `backlog`, `orbit.task.add` filed `backlog` |
 | `merge` | `orbit.workflow` action `land`, `orbit.task.update` to `done` (refused while the task has an open pull request), `orbit.task.recover` action `retry_handoff`, `orbit.task.recover` action `reconcile_review` |
@@ -119,11 +119,12 @@ granted workspaces and the assignment's own as `resident_scope_refused`; and any
 right grants context maintenance. This applies to the native `orbit task lint --restore-pruned`
 route too; MCP and `orbit tool run` do not expose lint. Outside a resident cycle, operator
 restoration is unchanged. Other refused writes include `orbit.task.update` with `approve` or `force`, other status
-targets, `orbit.notice.close`, `orbit.resident.grant`, decision answers and administration,
+targets, `orbit.friction` action `update` carrying `rehome_to` or `move` (whatever rights are granted: moving a friction between workspaces stays with the operator and the curation pass), `orbit.notice.close`, `orbit.resident.grant`, decision answers and administration,
 `orbit.command.exec`, desktop writes and every write on another noun. Operator-only tools stay
 operator-only, because their capability check runs before the guard, so `orbit.run.auto`/`resume`,
-`orbit.pipeline.invoke` and every other `orbit.task.recover` action are refused as `capability_denied`
-even with the right. Three `dispatch` tools are the exception: `orbit.workflow` action `ship`
+`orbit.pipeline.invoke`, drain control actions (`orbit.workflow` action `auto` with `mode: "start"`/`"stop"`/`"resize"`) and every other `orbit.task.recover` action are refused as `capability_denied`
+even with the right. One observation half is admitted on its own read path: a live `resident_cycle_pipeline` run may call `orbit.workflow` action `auto` with `mode: "status"` (`orbit.workflow.auto` action `status`) in its covered workspaces, with or without any granted right, returning `controls_authorized: false`. Naming a workspace outside the mandate's authority is refused as `resident_scope_refused`; drain control actions from a cycle and `status` reads from any caller outside a live resident cycle keep the operator requirement (`capability_denied`). See
+[Live resident cycles read drain status without operator capability](../4_decisions.md#live-resident-cycles-read-drain-status-without-operator-capability). Three `dispatch` tools are the exception: `orbit.workflow` action `ship`
 (`orbit.run.ship` in the table), the tool a resident dispatches with, and `orbit.task.recover` actions
 `repilot` (a `proposed` or `backlog` task) and `requeue` (a held, `blocked` delivery). A cycle's run
 passes their operator row and managed-run refusal, and the guard decides the live cycle, the right and
@@ -147,9 +148,14 @@ reply was lost settles on a repeated call without merging again. `orbit.task.upd
 when the forge cannot say. Both go through the run's broker, because they read the forge with the host's
 credentials.
 
-A write from a resident cycle run that
+A write other than `orbit.friction` action `update` from a resident cycle run that
 this workspace does not hold (one started in another catalog workspace) is refused as
-`resident_scope_refused`; slice 3 does not support cross-workspace writes. `orbit.evolution.add`
+`resident_scope_refused`; slice 3 does not support cross-workspace task writes. For
+`orbit.friction` action `update` routed to another catalog workspace on the same host, the guard
+verifies the live cycle on the mandate's home workspace, admits the update when the target
+workspace is covered by the mandate's authority (refusing uncovered workspaces as
+`resident_scope_refused`), and records its `resident:<mandate>:<cycle>:<n>` row on the
+mandate's action ledger. `orbit.evolution.add`
 arrives with [ORB-21248].
 
 ## Widening
@@ -211,5 +217,7 @@ Designed by claude (claude-opus-5-5) for [ORB-21229]; built by [ORB-21242].
 - [ORB-21242] — implements the mandate record, grants, grant requests and narrowing
 - [ORB-21244] — the cycle that maps rights to tools
 - [ORB-21245] — `orbit.resident.control` and relay
+- [ORB-26832] — admit `orbit.workflow.auto` action `status` (drain readiness read) for live resident cycles in covered workspaces without operator capability
+- [ORB-26833] — admit `orbit.friction` action `update` (without `rehome_to` or `move`) in covered workspaces without a granted right
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

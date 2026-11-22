@@ -412,7 +412,7 @@ export function renderRunDetailMeta() {
 // Match the CLI's Requests held, Breaker and Settlement refused lines. The
 // pass refusal is already operator-facing text; render it and remedies as text.
 function buildRequestsHeld(detail) {
-  const pass = detail.run.drain_last_pass;
+  const pass = detail.run?.drain_last_pass;
   const refusal = pass?.admission_refusal;
   const breaker = detail.pull_breaker;
   const settlements = Array.isArray(detail.refused_settlements) ? detail.refused_settlements : [];
@@ -1156,7 +1156,7 @@ export function renderRunGantt() {
     label.setAttribute("class", "gantt-lane-label");
     label.setAttribute("x", String(8));
     label.setAttribute("y", String(y + ROW_H / 2 + 3));
-    const name = String(step.target_id || `#${Number(step.step_index) + 1}`);
+    const name = ganttStepName(step);
     label.textContent = name.length > 34 ? `${name.slice(0, 33)}…` : name;
     svg.appendChild(label);
   });
@@ -1202,6 +1202,21 @@ export function renderRunGantt() {
     bar.setAttribute("fill", "var(--dot)");
     bar.addEventListener("mousemove", (e) => showGanttTooltip(e, step));
     bar.addEventListener("mouseleave", hideGanttTooltip);
+    // A bar is a control: reachable by keyboard, named, and showing the same
+    // tooltip on focus as on hover (STD-07 §R34).
+    bar.setAttribute("tabindex", "0");
+    bar.setAttribute("role", "button");
+    bar.setAttribute("aria-label", `${ganttStepName(step)}: ${ganttTooltipLines(step).join(", ")}. Open in Steps`);
+    bar.addEventListener("focus", () => {
+      const rect = bar.getBoundingClientRect();
+      showGanttTooltip({ clientX: rect.left, clientY: rect.bottom }, step);
+    });
+    bar.addEventListener("blur", hideGanttTooltip);
+    bar.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      bar.dispatchEvent(new MouseEvent("click"));
+    });
     bar.addEventListener("click", () => {
       // Reuse the per-step expand/collapse panel from the Steps sub-tab.
       if (expandedStepIndices.has(step.step_index)) {
@@ -1220,20 +1235,30 @@ export function renderRunGantt() {
     svg.appendChild(bar);
   });
 
-  // Retry markers from StepRetry events.
-  const stepIdToIndex = new Map();
-  steps.forEach((s) => {
-    // step_id is the activity name (or step.id); the step file stores it as
-    // target_id. Map both forms to the lane index.
-    if (s.target_id != null) stepIdToIndex.set(String(s.target_id), s.step_index);
+  // Retry markers from StepRetry events. step_id is the activity name (or
+  // step.id); the step file stores it as target_id. A target can run in more
+  // than one lane, so a marker goes on the lane whose span holds its time,
+  // else that target's last lane. Lanes are positions in `steps`, not
+  // step indices.
+  const lanesByStepId = new Map();
+  steps.forEach((s, lane) => {
+    if (s.target_id == null) return;
+    const key = String(s.target_id);
+    if (!lanesByStepId.has(key)) lanesByStepId.set(key, []);
+    lanesByStepId.get(key).push(lane);
   });
   for (const ev of activeRunRetries) {
     if (ev.body_kind !== "step_retry") continue;
-    const stepId = ev.step_id;
-    const index = stepIdToIndex.get(stepId);
-    if (index == null) continue;
+    const lanes = lanesByStepId.get(ev.step_id);
+    if (!lanes) continue;
     const tsMs = ev.ts ? new Date(ev.ts).getTime() : null;
     if (!tsMs || isNaN(tsMs)) continue;
+    const index = lanes.find((lane) => {
+      const s = steps[lane];
+      const from = s.started_at ? new Date(s.started_at).getTime() : derivedStart;
+      const to = s.finished_at ? new Date(s.finished_at).getTime() : derivedEnd;
+      return tsMs >= from && tsMs <= to;
+    }) ?? lanes[lanes.length - 1];
     const cx = xOf(Math.max(derivedStart, Math.min(derivedEnd, tsMs)));
     const cy = PAD_TOP + index * ROW_H + ROW_H / 2;
     const marker = document.createElementNS(svgNS, "circle");
@@ -1267,16 +1292,23 @@ export function renderRunGantt() {
   }));
 }
 
-function showGanttTooltip(e, step) {
-  const tip = $("gantt-tooltip");
-  if (!tip) return;
-  const lines = [
+function ganttStepName(step) {
+  return String(step.target_id || `#${Number(step.step_index) + 1}`);
+}
+
+function ganttTooltipLines(step) {
+  return [
     `step: ${Number(step.step_index) + 1}`,
     `state: ${step.state}`,
     `exit_code: ${step.exit_code == null ? "-" : step.exit_code}`,
     `duration_ms: ${step.duration_ms == null ? "-" : step.duration_ms}`,
   ];
-  tip.textContent = lines.join("\n");
+}
+
+function showGanttTooltip(e, step) {
+  const tip = $("gantt-tooltip");
+  if (!tip) return;
+  tip.textContent = ganttTooltipLines(step).join("\n");
   tip.style.display = "block";
   tip.setAttribute("aria-hidden", "false");
   // Position relative to viewport; clamp to keep the tooltip on-screen.
