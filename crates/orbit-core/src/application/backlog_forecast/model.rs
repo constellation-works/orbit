@@ -62,7 +62,10 @@ use super::review_modes::ReviewMode;
 /// instead of withholding them [ORB-25806].
 /// 22: residual correction can widen each task's own p50–p90 range,
 /// with the same mapping checked on held-out tasks.
-pub(super) const MODEL_VERSION: u32 = 22;
+/// 23: the weighted quantile accepts a cumulative weight within a relative
+/// tolerance of the target, so equal residuals at a finite-sample rank
+/// select that rank instead of the next one [ORB-26752].
+pub(super) const MODEL_VERSION: u32 = 23;
 /// The revision of each backlog-forecast-v2 factor this model applies;
 /// `None` for one not yet modelled.
 pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [

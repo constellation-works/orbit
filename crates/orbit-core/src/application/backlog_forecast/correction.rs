@@ -70,6 +70,11 @@ const P90_TARGET: f64 = 0.9;
 /// Relative slack when comparing an actual with a quantile, so a corrected
 /// quantile that reproduces the actual through `ln`/`exp` still counts.
 const HIT_TOLERANCE: f64 = 1e-9;
+/// Relative slack, as a share of the total weight, when a cumulative weight
+/// is compared with a quantile target. Rounding in the target and the running
+/// sum scales with the total, so an absolute epsilon cannot absorb it once
+/// the total is above 2 [ORB-26752].
+const WEIGHT_TOLERANCE: f64 = 1e-9;
 
 /// Why a cohort with residuals is not applied.
 #[derive(Clone, Copy)]
@@ -703,12 +708,13 @@ fn weighted_quantile(samples: &[(f64, f64)], q: f64) -> Option<f64> {
         return None;
     }
     let target = q.clamp(0.0, 1.0) * total;
+    let slack = total * WEIGHT_TOLERANCE;
     let mut covered = 0.0;
     let mut last = None;
     for (value, weight) in rows {
         covered += weight;
         last = Some(value);
-        if covered + f64::EPSILON >= target {
+        if covered + slack >= target {
             return Some(value);
         }
     }
