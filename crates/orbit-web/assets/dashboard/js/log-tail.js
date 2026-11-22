@@ -227,7 +227,16 @@ export function chooseDockMode(mode) {
   setDockMode(mode);
   const url = new URL(window.location.href);
   const [route, query = ""] = url.hash.slice(1).split("?");
-  if (route !== "tasks") return;
+  const isResidentsRoute = route === "tasks/residents" || route.startsWith("tasks/residents/");
+  if (route !== "tasks" && !isResidentsRoute) return;
+  if (isResidentsRoute && mode === "residents") {
+    if (route !== "tasks/residents") {
+      url.hash = "tasks/residents";
+      window.history.replaceState(null, "", url);
+      recordRoutedHref();
+    }
+    return;
+  }
   const params = new URLSearchParams(query);
   // The selection itself is remembered in the dock prefs (setDockMode). Only a
   // tab chosen in the one-column dock route is part of the address: there the
@@ -266,7 +275,7 @@ export function setDockMode(mode) {
   applyDockMode();
   // Dialogs live outside their panes; a dock switch rewrites the hash
   // without a hashchange, so leaving their tab closes them here.
-  for (const [view, id] of [["notices", "notices-post-dialog"], ["residents", "resident-start-dialog"]]) {
+  for (const [view, id] of [["notices", "notices-post-dialog"], ["residents", "resident-start-dialog"], ["residents", "resident-detail-dialog"]]) {
     const dialog = $(id);
     if (mode !== view && dialog?.open) dialog.close();
   }

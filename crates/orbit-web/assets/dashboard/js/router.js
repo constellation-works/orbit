@@ -565,27 +565,59 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   let head = segments[0] || "tasks";
   let legacyRoute = false;
   let dockView = query.get("dock") || query.get("dockMode") || query.get("panel");
+  let residentRoute = false;
+  let residentId = null;
+  // Residents keeps its own dock route (`#tasks/residents` and
+  // `#tasks/residents/<task-id>` for the modal details dialog). Legacy
+  // `#operations/residents` normalizes to it in place.
+  if (head === "operations" && segments[1] === "residents") {
+    residentRoute = true;
+    dockView = "residents";
+    legacyRoute = true;
+    if (segments[2]) {
+      try {
+        residentId = decodeURIComponent(segments[2]);
+      } catch {
+        residentId = null;
+      }
+    }
+    head = "tasks";
+    segments.splice(0, segments.length, "tasks", "residents", ...(residentId ? [encodeURIComponent(residentId)] : []));
+  } else if (head === "tasks" && segments[1] === "residents") {
+    residentRoute = true;
+    dockView = "residents";
+    if (segments[2]) {
+      try {
+        residentId = decodeURIComponent(segments[2]);
+      } catch {
+        residentId = null;
+        legacyRoute = true;
+      }
+    }
+  }
   // Retired panel pages open their Tasks dock tab, preserving scope and
   // rewriting the address in place so Back never loops through a redirect.
-  if (head === "notices" || (head === "operations" && segments[1] === "residents")) {
-    dockView = head === "notices" ? "notices" : "residents";
+  if (head === "notices") {
+    dockView = "notices";
     head = "tasks";
     segments.splice(0, segments.length, "tasks");
     legacyRoute = true;
   }
-  if (["drain", "auto-drain"].includes(head) || (head === "operations" && segments[1] === "auto-drain") ||
-      (head === "tasks" && ["drain", "fleet", "auto-drain", "log", "locks", "start", "notices", "residents"].includes(segments[1]))) {
-    dockView = ["log", "fleet", "start", "locks", "notices", "residents"].includes(segments.at(-1)) ? segments.at(-1) : dockView || "drain";
+  if (!residentRoute && (["drain", "auto-drain"].includes(head) || (head === "operations" && segments[1] === "auto-drain") ||
+      (head === "tasks" && ["drain", "fleet", "auto-drain", "log", "locks", "start", "notices"].includes(segments[1])))) {
+    dockView = ["log", "fleet", "start", "locks", "notices"].includes(segments.at(-1)) ? segments.at(-1) : dockView || "drain";
     head = "tasks";
     segments.splice(0, segments.length, "tasks");
     legacyRoute = true;
   }
-  if (head === "tasks" && ["drain", "fleet", "auto-drain", "start", "locks", "log", "notices", "residents"].includes(dockView)) {
-    dockView = ["auto-drain", "locks"].includes(dockView) ? "drain" : dockView;
-    query.set("dock", dockView);
-    query.delete("dockMode");
-    query.delete("panel");
-  } else dockView = null;
+  if (!residentRoute) {
+    if (head === "tasks" && ["drain", "fleet", "auto-drain", "start", "locks", "log", "notices", "residents"].includes(dockView)) {
+      dockView = ["auto-drain", "locks"].includes(dockView) ? "drain" : dockView;
+      query.set("dock", dockView);
+      query.delete("dockMode");
+      query.delete("panel");
+    } else dockView = null;
+  }
   // Retired host settings and aggregate dock links retain the address's
   // host/workspace scope; only the destination changes.
   if ((head === "config" && segments[1] === "hosts") || (head === "tasks" && dockView === "fleet")) {
@@ -824,40 +856,52 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     setConfigSubtabImpl(ctx, sub);
     hash = `#config/${sub}` + (linkedKey ? `?key=${encodeURIComponent(linkedKey)}` : "");
   } else if (top === "tasks") {
-    // The status chips are represented in the hash
-    // (mirroring the audit tab) so they survive a reload or the browser's
-    // back/forward navigation instead of resetting to the in-memory default.
-    // `#tasks/<id>` is one task's full-page view; a malformed id falls back
-    // to the list.
-    let page = null;
-    try {
-      page = segments[1] ? decodeURIComponent(segments[1]) : null;
-    } catch {
-      page = null;
-    }
-    if (ctx.applyTasksHashQuery) ctx.applyTasksHashQuery(query, page);
-    if (ctx.syncTaskControls) ctx.syncTaskControls();
-    hash = ctx.buildTasksHash ? ctx.buildTasksHash() : "#tasks";
-    const dockRouteShown = ctx.setDockRouteShown
-      ? ctx.setDockRouteShown(Boolean(dockView))
-      : Boolean(dockView);
-    if (dockView) {
-      if (ctx.setDrainView) ctx.setDrainView(dockView);
-      // Above the one-column breakpoint an explicit dock target shows the
-      // dock beside the list and remembers it shown. A Tasks route with no
-      // dock target never reaches here, so a collapsed choice stays put.
-      // One column already shows the dock as its own route.
-      if (ctx.showDockBesideList) ctx.showDockBesideList();
-      if (dockRouteShown) {
-        const [route, taskQuery = ""] = hash.split("?");
-        const params = new URLSearchParams(taskQuery);
-        params.set("dock", dockView);
-        hash = `${route}?${params}`;
+    if (residentRoute) {
+      if (ctx.applyTasksHashQuery) ctx.applyTasksHashQuery(query, null);
+      if (ctx.syncTaskControls) ctx.syncTaskControls();
+      ctx.setDockRouteShown?.(true);
+      ctx.setDrainView?.("residents");
+      ctx.showDockBesideList?.();
+      hash = residentId
+        ? `#tasks/residents/${encodeURIComponent(residentId)}`
+        : "#tasks/residents";
+    } else {
+      // The status chips are represented in the hash
+      // (mirroring the audit tab) so they survive a reload or the browser's
+      // back/forward navigation instead of resetting to the in-memory default.
+      // `#tasks/<id>` is one task's full-page view; a malformed id falls back
+      // to the list.
+      let page = null;
+      try {
+        page = segments[1] ? decodeURIComponent(segments[1]) : null;
+      } catch {
+        page = null;
+      }
+      if (ctx.applyTasksHashQuery) ctx.applyTasksHashQuery(query, page);
+      if (ctx.syncTaskControls) ctx.syncTaskControls();
+      hash = ctx.buildTasksHash ? ctx.buildTasksHash() : "#tasks";
+      const dockRouteShown = ctx.setDockRouteShown
+        ? ctx.setDockRouteShown(Boolean(dockView))
+        : Boolean(dockView);
+      if (dockView) {
+        if (ctx.setDrainView) ctx.setDrainView(dockView);
+        // Above the one-column breakpoint an explicit dock target shows the
+        // dock beside the list and remembers it shown. A Tasks route with no
+        // dock target never reaches here, so a collapsed choice stays put.
+        // One column already shows the dock as its own route.
+        if (ctx.showDockBesideList) ctx.showDockBesideList();
+        if (dockRouteShown) {
+          const [route, taskQuery = ""] = hash.split("?");
+          const params = new URLSearchParams(taskQuery);
+          params.set("dock", dockView);
+          hash = `${route}?${params}`;
+        }
       }
     }
   } else {
     hash = `#${top}`;
   }
+  ctx.setResidentDetailId?.(top === "tasks" && residentRoute ? residentId : null);
   syncSkipLinkTarget();
   // Reveal the current destination on initial deep links and history changes,
   // as well as clicks. Phone subtabs scroll within the space beside their tab.
@@ -874,7 +918,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   // full filter hash after it would leave two entries, and Back from the second
   // would land on the first and push again. So is a task page route the list
   // replaced (a malformed id).
-  const taskLink = top === "tasks" && (query.has("open") || segments.length > 1);
+  const taskLink = top === "tasks" && !residentRoute && (query.has("open") || segments.length > 1);
   const runLink = top === "run-detail" && query.has("run_id");
   // The router reacting to an address (hashchange, popstate, first load) only
   // normalizes it: the entry is rewritten in place, so Back never lands on a
