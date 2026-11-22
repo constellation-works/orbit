@@ -404,6 +404,7 @@ td.codebase-empty { padding: var(--space-16) var(--space-14); }
   border-bottom: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.02);
 }
+#tools-meta { display: none; }
 /* The tool-call failures card's header holds two rows: the title, then the
    By tool | By model tab strip. Each row stays on one line at every width
    (STD-07 §R39), so the strip never wraps under the title on a phone. */
@@ -440,6 +441,7 @@ td.codebase-empty { padding: var(--space-16) var(--space-14); }
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   overflow-wrap: anywhere;
 }
+.summary-table td[data-column="tool"] { overflow-wrap: normal; }
 .summary-table th:first-child, .summary-table td:first-child { padding-inline-start: var(--space-12); }
 .summary-table th:last-child, .summary-table td:last-child { padding-inline-end: var(--space-12); }
 .summary-table tr:last-child td { border-bottom: none; }
@@ -495,10 +497,14 @@ td.codebase-empty { padding: var(--space-16) var(--space-14); }
   flex-wrap: wrap;
   gap: var(--space-12);
 }
-.health-card { flex: 1 1 240px; }
-.health-card.critical { border-top: 3px solid var(--state-failed); }
-.health-card.warning  { border-top: 3px solid var(--warn-fg); }
-.health-card.normal   { border-top-width: 3px; }
+.audit-summary-card .health-card {
+  flex: 1 1 240px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
 .health-card .card-header {
   display: flex;
   justify-content: space-between;
@@ -514,7 +520,7 @@ td.codebase-empty { padding: var(--space-16) var(--space-14); }
   font-weight: 600;
   font-size: var(--text-sm);
   color: var(--fg);
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
   white-space: normal;
 }
 .health-card .metric-trend {
