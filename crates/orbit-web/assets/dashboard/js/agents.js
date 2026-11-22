@@ -712,9 +712,27 @@ function provisionalTerm(term, row) {
 
 function contribution(term, row) {
   if (provisionalTerm(term, row) || noReviewedDeliveries(term, row)) return 0;
+  // The score's own signed excess. Display `per_100` and `expected` are
+  // rounded, so recomputing from them can call a real credit zero.
+  const scored = row.contributions && row.contributions[term.key];
+  if (typeof scored === "number" && Number.isFinite(scored)) return scored;
   const rate = row.per_100 ? row.per_100[term.key] : null;
   const expected = row.expected && typeof row.expected[term.key] === "number" ? row.expected[term.key] * 100 / Math.max(1, row.term_units?.[term.key] ?? row.units) : 0;
   return typeof rate === "number" ? term.weight * (rate - expected) : null;
+}
+
+// One decimal hides a contribution the score still counts: one nit among
+// 600 peer tasks is about +0.02. Two decimals match the payload's display
+// rounding of rates; anything smaller keeps four decimals so the sign stays
+// visible. An exact zero stays 0, the middle ring.
+function contributionLabel(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  if (Object.is(value, 0)) return "0";
+  const abs = Math.abs(value);
+  let digits = 1;
+  if (abs.toFixed(1) === "0.0") digits = abs.toFixed(2) === "0.00" ? 4 : 2;
+  const text = abs.toFixed(digits);
+  return value < 0 ? `−${text}` : `+${text}`;
 }
 
 function render() {
@@ -1076,11 +1094,12 @@ function noReviewedDeliveries(term, row) {
 }
 
 // The radar compares each axis across the ranked fleet with outward as better.
-// When a scored axis supplies row.expected, rows are ranked by their
-// expectation-adjusted excess weight × (rate − expected rate), anchored with
-// meeting expectation (0) on the middle ring (0.5). Roles without row.expected
-// and unscored context axes retain the fleet-median rate percentile with the
-// fleet median on the middle ring.
+// When a scored axis supplies row.expected, rows are ranked by the score's
+// signed excess (`row.contributions`: weight × (rate − expected rate) at full
+// precision), anchored with meeting expectation (0) on the middle ring (0.5).
+// A nonzero excess that the rounded display rates would hide stays on its
+// signed side. Roles without row.expected and unscored context axes retain
+// the fleet-median rate percentile with the fleet median on the middle ring.
 function radarNode(row) {
   const axes = terms().map((term) => ({ ...term }));
   // Only count-valued context with a clear better direction may extend a
@@ -1110,17 +1129,17 @@ function radarNode(row) {
     const denominator = units(axis, each);
     return exp == null || !(denominator > 0) ? null : exp * 100 / denominator;
   };
+  // The server's signed excess. Exact zero meets expectation and sits on
+  // the middle ring. Display rounding of counts must not force that zero:
+  // a contribution smaller than the displayed rate still has a side.
   const excess = (axis, each) => {
+    const scored = !axis.unscored && each.contributions ? each.contributions[axis.key] : null;
+    if (typeof scored === "number" && Number.isFinite(scored)) return Object.is(scored, 0) ? 0 : scored;
     const ownRate = rate(axis, each);
     const expRate = expectedRate(axis, each);
     if (!Number.isFinite(ownRate) || !Number.isFinite(expRate)) return null;
-    // Exact count equality avoids 2-decimal per_100 rounding artifacts moving
-    // a zero-excess vertex off the middle reference ring.
-    const ownCount = count(axis, each);
-    const expCount = expectedCount(axis, each);
-    if (Number.isFinite(ownCount) && Number.isFinite(expCount) && Math.abs(ownCount - expCount) < 1e-9) return 0;
     const value = axis.weight * (ownRate - expRate);
-    return Math.abs(value) < 1e-12 ? 0 : value;
+    return Object.is(value, 0) ? 0 : value;
   };
   const percentileRank = (list, value) => {
     const under = list.filter((each) => each < value).length;
@@ -1159,12 +1178,9 @@ function radarNode(row) {
         return negatives.length ? 0.5 * percentileRank(negatives, value) : 0.25;
       };
       const reason = gap(axis, row) || (!fleetExcesses.length ? "no supported fleet comparison" : null);
-      const ownRate = rate(axis, row);
       const expRate = expectedRate(axis, row);
       const ownExcess = excess(axis, row);
-      const axisContribution = !reason && Number.isFinite(ownRate) && Number.isFinite(expRate)
-        ? axis.weight * (ownRate - expRate)
-        : null;
+      const axisContribution = !reason && Number.isFinite(ownExcess) ? ownExcess : null;
       return {
         axis,
         usesExpected: true,
@@ -1263,7 +1279,7 @@ function radarNode(row) {
     const refRateText = referenceRate == null ? "unavailable" : `${number(referenceRate)} per 100 ${termUnit(axis)}`;
     const fleetText = anyExpected && !allExpected && referenceRate != null ? `${refRateText} (${refBasis})` : refRateText;
     const weightText = axis.unscored ? "unscored" : weight(axis.weight);
-    const contributionText = axis.unscored ? "unscored" : axisContribution == null ? "—" : signed(axisContribution);
+    const contributionText = axis.unscored ? "unscored" : axisContribution == null ? "—" : contributionLabel(axisContribution);
     const evidence = usesExpected
       ? `${number(count(axis, row))} raw (${referenceRate == null ? "expected unavailable" : `${number(expectedAxisCount)} expected`}); ${number(units(axis, row))} ${termUnit(axis)}`
       : `${number(count(axis, row))} raw; ${number(units(axis, row))} ${termUnit(axis)}`;
@@ -1363,7 +1379,7 @@ function detailNode(rankedRow) {
       label,
       el("span", { class: "agents-term-weight", text: `× ${weight(term.weight)}`, title: "weight" }),
       el("span", { class: "agents-bar agents-bar-centered", "aria-hidden": "true" }, [fill, el("span", { class: "agents-bar-zero", style: { left: "50%" } })]),
-      el("span", { class: "agents-term-value", text: signed(value), title: `${number(row.counts && row.counts[term.key])} counted, ${number(row.per_100 && row.per_100[term.key])} per 100 ${termUnit(term)}` }),
+      el("span", { class: "agents-term-value", text: contributionLabel(value), title: `${number(row.counts && row.counts[term.key])} counted, ${number(row.per_100 && row.per_100[term.key])} per 100 ${termUnit(term)}` }),
     ]);
     item.dataset.term = term.key;
     breakdown.append(item);

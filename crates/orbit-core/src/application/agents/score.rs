@@ -531,6 +531,16 @@ impl Scored<'_> {
                     .collect::<serde_json::Map<String, Value>>()
             );
             payload["score_base"] = json!(100);
+            // The rounded `expected` and `per_100` fields stay the display
+            // contract. The chart and score breakdown need the same signed
+            // excess the raw score sums, including a term whose displayed
+            // expected count rounds to zero.
+            payload["contributions"] = json!(
+                terms
+                    .iter()
+                    .map(|term| (term.key.to_string(), json!(self.contribution(term))))
+                    .collect::<serde_json::Map<String, Value>>()
+            );
         }
         payload
     }

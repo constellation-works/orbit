@@ -11,8 +11,8 @@ use orbit_types::task::{DefectSeverity, RegressionEscape, RegressionNature, Task
 use serde_json::{Value, json};
 
 use super::agents::{
-    Owned, WS, add, append, as_f64, comment, implementation_run, regression, retag,
-    sited_regression,
+    Owned, WS, add, append, as_f64, comment, implementation_run, rated_regression, regression,
+    retag, sited_regression,
 };
 use super::support::{Fixture, isolated, json_ok};
 
@@ -1181,6 +1181,111 @@ fn escape_expectation_uses_other_rows_when_a_bucket_has_no_peer() {
                 .find(|term| term["key"] == "escaped_regressions")
                 .unwrap();
             assert_eq!(term["contribution"], -50);
+        },
+    );
+}
+
+/// A nit among 600 peer tasks is smaller than the displayed expected count
+/// (two decimals) but the score still credits it. The ranking payload keeps
+/// that signed excess so a chart can plot the same side the score uses.
+#[test]
+fn escaped_regression_below_display_precision_keeps_its_score_sign() {
+    isolated(
+        "agents_implementers::escaped_regression_below_display_precision_keeps_its_score_sign",
+        || {
+            let fixture = Fixture::new();
+            for index in 0..10 {
+                landed_with_tags(
+                    &fixture,
+                    &format!("jrun-clean-{index}"),
+                    "clean",
+                    Vec::new(),
+                );
+            }
+            let mut peer_ids = Vec::new();
+            for index in 0..600 {
+                peer_ids.push(landed_with_tags(
+                    &fixture,
+                    &format!("jrun-peers-{index}"),
+                    "peers",
+                    Vec::new(),
+                ));
+            }
+            rated_regression(
+                &fixture,
+                &peer_ids[0],
+                RegressionNature::DefectInNew,
+                RegressionEscape::NoTest,
+                DefectSeverity::Nit,
+            );
+            let server = fixture.server(false);
+            let card = json_ok(server.get(&format!(
+                "/api/agents/implementers/scorecard?{WS}&window=30d&min_support=10"
+            )));
+            let clean = row(&card, "clean");
+            let peers = row(&card, "peers");
+            let nit = DefectSeverity::Nit.weight();
+            let clean_tasks = 10.0;
+            let peer_tasks = 600.0;
+            // Leave-one-row-out in one tier and size bucket: the clean row's
+            // expected count is its tasks times the peers' severity-weighted
+            // escapes per task.
+            let expected_count = clean_tasks * nit / peer_tasks;
+            let excess = -0.5 * (0.0 - expected_count * 100.0 / clean_tasks);
+            let peer_excess = -0.5 * (nit * 100.0 / peer_tasks);
+            assert_eq!(
+                (expected_count * 100.0).round() / 100.0,
+                0.0,
+                "this fixture's expected count rounds to a displayed zero"
+            );
+            assert!(
+                excess > 0.0 && (excess * 100.0).round() / 100.0 > 0.0,
+                "the score still credits a positive contribution ({excess})"
+            );
+            assert_eq!(clean["counts"]["escaped_regressions"], 0);
+            assert_eq!(clean["per_100"]["escaped_regressions"], 0);
+            assert_eq!(as_f64(&clean["expected"]["escaped_regressions"]), 0.0);
+            assert_eq!(clean["score_base"], 100);
+            assert_eq!(card["rows"][0]["crew"], "clean");
+            assert_eq!(clean["rank"], 1);
+            assert!(
+                (as_f64(&clean["contributions"]["escaped_regressions"]) - excess).abs() < 1e-9,
+                "clean excess {excess} payload {}",
+                clean["contributions"]["escaped_regressions"]
+            );
+            assert!(
+                (as_f64(&peers["contributions"]["escaped_regressions"]) - peer_excess).abs() < 1e-9,
+                "peer excess {peer_excess} payload {}",
+                peers["contributions"]["escaped_regressions"]
+            );
+            assert!(as_f64(&peers["contributions"]["escaped_regressions"]) < 0.0);
+            for key in ["weighted_landed", "crew_rework"] {
+                assert_eq!(
+                    as_f64(&clean["contributions"][key]),
+                    0.0,
+                    "{key} meets its expectation, so its contribution is zero"
+                );
+            }
+            assert!(clean["per_100"]["first_pass_accepts"].is_null());
+            assert_eq!(as_f64(&clean["contributions"]["first_pass_accepts"]), 0.0);
+            let sum: f64 = clean["contributions"]
+                .as_object()
+                .expect("contributions")
+                .values()
+                .map(as_f64)
+                .sum();
+            assert!(
+                (as_f64(&clean["raw"]) - (100.0 + sum)).abs() < 0.01,
+                "displayed raw {} is the rounded 100 plus {}",
+                clean["raw"],
+                sum
+            );
+            for field in ["counts", "per_100", "expected", "score", "score_base"] {
+                assert!(
+                    clean.get(field).is_some(),
+                    "existing display field {field} stays on the row"
+                );
+            }
         },
     );
 }

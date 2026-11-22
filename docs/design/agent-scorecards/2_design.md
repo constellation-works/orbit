@@ -1,8 +1,8 @@
 ---
 title: Agent Scorecards — Design
 owner: claude
-last_updated: 2026-11-15
-last_validated: 2026-11-15
+last_updated: 2026-11-22
+last_validated: 2026-11-22
 status: Draft
 feature: agent-scorecards
 doc_role: design
@@ -63,18 +63,23 @@ some inward axes still ranks where it does. The chart does not reconstruct the
 smoothed final score; the **Score breakdown** beside it carries those exact
 contributions.
 
-- Each `scorecard.terms` entry is an axis, using `row.per_100[key]`. The
-  denominator is `row.term_units[key]` when present, otherwise `row.units`,
-  labelled with the term's `unit` or the role's `unit`. Credit axes point out
-  for higher rates; negative-weight axes invert and say **fewer is better**.
-- Expectation-adjusted axes place the row by its signed excess, not by its rate.
-  Zero excess, including a raw count exactly equal to its expected count, sits at
-  radius 0.5. Positive excess (it helps the score: credit above expectation, or a
+- Each `scorecard.terms` entry is an axis. The denominator is
+  `row.term_units[key]` when present, otherwise `row.units`, labelled with the
+  term's `unit` or the role's `unit`. Displayed rates use `row.per_100[key]`.
+  Credit axes point out for higher rates; negative-weight axes invert and say
+  **fewer is better**.
+- Expectation-adjusted axes place the row by `row.contributions[key]`, the
+  unrounded signed excess the score sums (`weight × (full-precision rate −
+  full-precision expected rate)`), not by a difference of the two-decimal
+  display rates. A positive or negative excess that those display rates would
+  turn into zero still plots on that side of the middle ring. Exact zero
+  excess, including a raw count equal to its expected count, sits at radius
+  0.5. Positive excess (it helps the score: credit above expectation, or a
   penalty below it) ranks by percentile among the fleet's positive excesses and
-  fills 0.5 to 1; negative excess ranks among the negatives and fills 0 to 0.5. The
-  worst excess sits nearest the centre, and an outlier stretches only its own half. If
-  the supported fleet has no excess of that sign on the axis, a positive value sits
-  at 0.75 and a negative one at 0.25.
+  fills 0.5 to 1; negative excess ranks among the negatives and fills 0 to 0.5.
+  The worst excess sits nearest the centre, and an outlier stretches only its
+  own half. If the supported fleet has no excess of that sign on the axis, a
+  positive value sits at 0.75 and a negative one at 0.25.
 - On a fleet-median axis, the row's rate scales independently by its percentile
   among ranked rows with supported evidence for that term: the share of
   supported rates below the row's rate, plus half the share equal to it,
@@ -136,9 +141,11 @@ contributions.
   units, the reference rate with its basis, the axis weight, its signed
   contribution, raw count, denominator and evidence state. The reference is
   labelled `expected` on an expectation-adjusted axis and `fleet median` on a
-  fleet-median axis. The contribution is `weight × (agent rate − reference
-  rate)` on both, labelled **contribution** against expected and
-  **contribution vs fleet median** against the median. The count reads
+  fleet-median axis. On an expectation-adjusted axis the contribution is the
+  score's unrounded signed excess (`row.contributions`), labelled
+  **contribution**, and the Score Breakdown uses that same excess. On a
+  fleet-median axis it is `weight × (agent rate − median rate)`, labelled
+  **contribution vs fleet median**. The count reads
   `N raw (E expected)` on expectation-adjusted axes, where E is the expected
   count, and `N raw` otherwise. Unscored axes show **unscored** for weight and
   contribution; gaps show **—** for the agent rate and contribution and name
@@ -432,12 +439,15 @@ remain for compatibility; both now use **unit landings**, with labels **Landed**
 and **Cost per landed task (USD)**. Each implementer row adds `reviewed_units`, the count of its tasks with a settled first review (§1.1), `term_units` naming
 that denominator for each review term, `expected`, a map
 of term keys to expected counts on the same term population, and `score_base: 100`.
-The term metadata names `unit: "reviewed deliveries"` for the three review terms;
+`expected` and `per_100` stay rounded to two decimals. The same row adds
+`contributions`, a map of term keys to the unrounded signed excess the raw
+score sums. The radar and Score Breakdown read that map, so a term whose
+displayed expected count rounds to zero still plots and reads on the side the
+score used. Other roles omit `contributions` and keep the fleet-median
+comparison. The term metadata names `unit: "reviewed deliveries"` for the three review terms;
 `per_100` is per 100 of that unit and `expected × 100 / term_units` is its
 expected rate. With zero reviewed deliveries, those rates are null and each
-contribution is zero. Actual `counts` remain counts; detail term `contribution` is weight times the
-actual-minus-expected rate, so `score_base + Σ contribution` equals raw before
-rounding. Other roles have neither additive field and retain their formulas.
+contribution is zero. Actual `counts` remain counts. Detail term `contribution` stays the two-decimal display of that excess, so `score_base` plus the sum of the unrounded `contributions` equals raw before display rounding. Other roles have neither `expected` nor `score_base` and retain their formulas.
 The former `tier_comparison` stat is removed: scored expectations supersede it.
 
 **Escaped regressions are scored against a size-adjusted expectation [ORB-21789].**
