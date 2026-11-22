@@ -203,7 +203,7 @@ fn emit_human(doc: Value, view: View, sink: &OutputSink) -> Result<(), OrbitErro
                 }
             }
             if truncated {
-                println!(
+                eprintln!(
                     "{}",
                     sink.wrap_prose(
                         "\nTable details shortened. Use --format plain or --json for full output."

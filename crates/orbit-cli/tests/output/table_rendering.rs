@@ -58,35 +58,57 @@ fn shortened_cli_tables_print_a_hint_only_in_terminal_table_mode() {
         let output = run_cli_on_terminal_at_width(&workspace, &args, "80");
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let output = format!("{stdout}{stderr}");
         assert_eq!(
-            output.matches(SHORTENING_HINT).count(),
+            stderr.matches(SHORTENING_HINT).count(),
             1,
-            "{label} reports one shortening hint at 80 columns: {output:?}"
+            "{label} reports one shortening hint on stderr at 80 columns: {stderr:?}"
+        );
+        assert!(
+            !stdout.contains(SHORTENING_HINT),
+            "{label} stdout contains only the table payload: {stdout:?}"
+        );
+        assert!(
+            !stdout.trim().is_empty(),
+            "{label} keeps its table payload on stdout: {stdout:?}"
         );
     }
 
-    let wide = run_cli_on_terminal_at_width(&workspace, &["task", "list"], "500");
-    let wide_output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&wide.stdout),
-        String::from_utf8_lossy(&wide.stderr)
+    let doctor = run_cli_on_terminal_at_width(&workspace, &["doctor"], "20");
+    let doctor_stdout = String::from_utf8_lossy(&doctor.stdout);
+    let doctor_stderr = String::from_utf8_lossy(&doctor.stderr);
+    let doctor_stderr_collapsed = doctor_stderr
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(
+        doctor_stderr_collapsed.matches(SHORTENING_HINT).count(),
+        1,
+        "doctor reports one shortening hint on stderr at 20 columns: {doctor_stderr:?}"
     );
     assert!(
-        !wide_output.contains(SHORTENING_HINT),
-        "a table that fits its terminal has no shortening hint: {wide_output:?}"
+        !doctor_stdout.contains(SHORTENING_HINT),
+        "doctor stdout contains only the table payload: {doctor_stdout:?}"
+    );
+    assert!(
+        !doctor_stdout.trim().is_empty(),
+        "doctor keeps its table payload on stdout: {doctor_stdout:?}"
+    );
+
+    let wide = run_cli_on_terminal_at_width(&workspace, &["task", "list"], "500");
+    let wide_stdout = String::from_utf8_lossy(&wide.stdout);
+    let wide_stderr = String::from_utf8_lossy(&wide.stderr);
+    assert!(
+        !wide_stdout.contains(SHORTENING_HINT) && !wide_stderr.contains(SHORTENING_HINT),
+        "a table that fits its terminal has no shortening hint: {wide:?}"
     );
 
     let empty =
         run_cli_on_terminal_at_width(&workspace, &["task", "list", "--status", "done"], "80");
-    let empty_output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&empty.stdout),
-        String::from_utf8_lossy(&empty.stderr)
-    );
+    let empty_stdout = String::from_utf8_lossy(&empty.stdout);
+    let empty_stderr = String::from_utf8_lossy(&empty.stderr);
     assert!(
-        !empty_output.contains(SHORTENING_HINT),
-        "a table with no rows has no shortened content: {empty_output:?}"
+        !empty_stdout.contains(SHORTENING_HINT) && !empty_stderr.contains(SHORTENING_HINT),
+        "a table with no rows has no shortened content: {empty:?}"
     );
 
     for (args, label) in [
