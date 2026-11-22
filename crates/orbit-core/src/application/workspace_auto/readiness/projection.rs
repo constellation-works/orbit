@@ -189,9 +189,10 @@ pub(super) fn project_readiness_tasks(
                     // `not_before`; the detail names the run, the
                     // failure, the excluded crews and the time.
                     | BacklogTaskExclusionReason::ProviderBackoff
-                    // Does not lift by time: an eligible crew, a verified
-                    // success of the model, or a different account clears it.
-                    // The detail names the model and the condition.
+                    // Lifts after the 12-hour refusal window, or via an
+                    // eligible crew, a verified success of the model, or a
+                    // different account. The detail names the model and the
+                    // condition.
                     | BacklogTaskExclusionReason::ProviderModelAccessHold
                     // [ORB-14697] Lifts by itself at the reading's reset;
                     // the detail names the provider, window, used
