@@ -21,15 +21,23 @@ candidate on any overlap with a held claim, reservation or wave member
 via the `overlaps` closure in `selection.rs`, and by `owner_wave.rs` and the runtime lock index;
 a footprint-less editing task was treated as a whole-tree lock in multi-slot drains by [ORB-15191]). Three settings already
 relax that per path: [`workflow.unlocked_context_paths`](../../CONFIG.md#unlocked-context-paths)
-takes no lock for a matching entry of a task that also declares a non-matching one, so admission
+takes no lock for a matching entry of a task that also declares a non-matching one, so the lock
 never blocks it on that path; a task whose every entry matches keeps them all locked, because two
 rewrites of one document are where a merge produces contradictory text (built-in default
 `["**/*.md"]`; init template value `["**/*.json", "**/*.txt", "**/*.md", "**/mod.rs", "**/*.toml"]`);
 [`workflow.generated_paths`](../../CONFIG.md#generated-paths-are-regenerated-not-merged)
 ([ORB-16784]) regenerates a conflicting generated file at landing instead of merging it; and
 [`workflow.lock_modes`](../../CONFIG.md#footprint-lock-modes) ([ORB-18157], done) waives an
-overlap at a path whose mode is `shared`. A
-conflict that reaches landing is repaired by `pr_conflict_recovery`, whose crew comes from
+overlap at a path whose mode is `shared`. `unlocked_context_paths` filters the context lock only.
+A live execution claim in a footprint-protecting phase is a separate check: the work-start guard
+([ORB-23894]) compares a candidate's whole canonical context, unlocked paths included, with the
+claim's frozen footprint, and admission defers the candidate on that answer until the claim settles.
+That comparison takes only the lock-mode table, so a `shared` path is waived there too, while
+`unlocked_context_paths` and `generated_paths` do not waive it. Backlog discovery, classification,
+readiness, explicit selection and local drain admission all apply it. So a task that mixes a
+Markdown file with distinct code is still deferred by a claim on that Markdown file: `design.md`
+beside `queued.rs` takes no lock, yet a live claim holding `design.md` defers the task until it
+settles. A conflict that reaches landing is repaired by `pr_conflict_recovery`, whose crew comes from
 `workflow.purpose_crews.failure_recovery` ([ORB-15663]). This scope makes the lock a priced decision instead of a
 static allow-list.
 
