@@ -220,6 +220,12 @@ export function startDashboardPolling(refresh) {
   let timer = null;
   let timerRefreshes = false;
   let interval = REFRESH_INTERVAL_MS;
+  // One refresh and one background read at a time. A refresh asked for while
+  // one is in flight (refreshNow, becoming visible) runs once it settles, so
+  // its answer is fresh, and only the settling read arms the next timer.
+  let refreshInFlight = false;
+  let refreshQueued = false;
+  let backgroundInFlight = false;
 
   const clearScheduled = () => {
     if (timer !== null) {
@@ -253,7 +259,18 @@ export function startDashboardPolling(refresh) {
     timer = null;
     timerRefreshes = false;
     if (document.hidden) return;
-    Promise.resolve(refresh())
+    if (refreshInFlight) {
+      refreshQueued = true;
+      return;
+    }
+    refreshInFlight = true;
+    let pending;
+    try {
+      pending = Promise.resolve(refresh());
+    } catch (error) {
+      pending = Promise.reject(error);
+    }
+    pending
       .then((succeeded) => {
         if (succeeded === true) interval = REFRESH_INTERVAL_MS;
         if (succeeded === false) interval = Math.min(interval * 2, MAX_REFRESH_INTERVAL_MS);
@@ -261,21 +278,35 @@ export function startDashboardPolling(refresh) {
       .catch(() => {
         interval = Math.min(interval * 2, MAX_REFRESH_INTERVAL_MS);
       })
-      .finally(scheduleRefresh);
+      .finally(() => {
+        refreshInFlight = false;
+        if (refreshQueued) {
+          refreshQueued = false;
+          clearScheduled();
+          runRefresh();
+          return;
+        }
+        scheduleRefresh();
+      });
   };
 
   const runBackground = () => {
     timer = null;
-    if (!document.hidden) return;
+    if (!document.hidden || backgroundInFlight) return;
+    backgroundInFlight = true;
     checkBackground()
       .catch((error) => console.error(error))
-      .finally(scheduleBackground);
+      .finally(() => {
+        backgroundInFlight = false;
+        scheduleBackground();
+      });
   };
 
   document.addEventListener("visibilitychange", () => {
     visibilityGeneration += 1;
     clearScheduled();
     if (document.hidden) {
+      refreshQueued = false;
       runBackground();
       return;
     }

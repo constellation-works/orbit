@@ -55,8 +55,10 @@ export function providerReadingAge(reading, now = Date.now()) {
     stale = observed.toISOString().slice(0, 10) < new Date(now).toISOString().slice(0, 10);
   }
   if (!stale) return { label: 'today', stale: false };
-  const seconds = Number.isFinite(Number(reading?.age_seconds))
-    ? Math.max(0, Math.floor(Number(reading.age_seconds)))
+  // `Number(null)` is 0: only a real number of seconds counts as an age.
+  const ageSeconds = typeof reading?.age_seconds === 'number' ? reading.age_seconds : NaN;
+  const seconds = Number.isFinite(ageSeconds)
+    ? Math.max(0, Math.floor(ageSeconds))
     : valid ? Math.max(0, Math.floor((now - observed.getTime()) / 1000)) : 0;
   const minutes = Math.floor(seconds / 60);
   const hours = Math.floor(seconds / 3600);
@@ -390,7 +392,7 @@ function providerDialog(view) {
   return [
     el('div', { class: 'usage-head dialog-header' }, [
       el('h2', { text: view.title }),
-      el('span', { class: 'pill', 'data-tone': resourcePillTone(view.pill.tone), text: view.pill.text, title: view.pill.text }),
+      el('span', { class: 'pill', 'data-tone': resourcePillTone(view.pill.tone), text: view.pill.text }),
       ...(view.observed ? [el('span', { class: 'usage-observed', text: view.observed })] : []),
     ]),
     ...(view.pressure ? [el('section', { class: 'usage-section usage-pressure' }, [
