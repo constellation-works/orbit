@@ -635,11 +635,15 @@
       <!-- Analytics › Cost: managed-execution cost and token usage. -->
       <main id="analytics-cost-main" style="grid-template-columns: 1fr; display: none;">
         <section class="panel" id="scoreboard-orchestration-panel">
-          <!-- Header band: the title, window and scope apply to both tabs and
-               stay on screen while either is open. -->
+          <!-- Header band: the title with its bucket count and cost hint, then the
+               window and the scope. -->
           <div class="band" id="scoreboard-controls">
             <div class="cost-band-head">
-              <h2 class="cost-band-title">Managed execution cost &amp; token usage</h2>
+              <div class="cost-band-title-group">
+                <h2 class="cost-band-title">Managed execution cost &amp; token usage</h2>
+                <span id="scoreboard-cost-hint"></span>
+                <span class="cost-band-count" id="scoreboard-orchestration-count">—</span>
+              </div>
               <div class="scoreboard-control-group">
                 <span class="scoreboard-control-label">window</span>
                 <div class="scoreboard-window-selector" id="scoreboard-window-selector" role="tablist" aria-label="Cost time window">
@@ -656,12 +660,9 @@
               <span>Interactive orchestration-session overhead is excluded.</span>
               <span class="cost-window-range" id="scoreboard-window-range"></span>
             </div>
-            <div class="band-tabs" id="scoreboard-tabs" role="tablist" aria-label="Cost views">
-              <button type="button" role="tab" class="band-tab" id="scoreboard-tab-spend" data-cost-tab="spend" aria-selected="true" aria-controls="scoreboard-panel-spend" tabindex="0">Spend &amp; tokens<span class="band-tab-count" id="scoreboard-orchestration-count">—</span></button>
-            </div>
           </div>
-          <div class="body cost-tabpanel" id="scoreboard-panel-spend" role="tabpanel" aria-labelledby="scoreboard-tab-spend">
-            <div class="cost-tab-body" id="scoreboard-orchestration">
+          <div class="body">
+            <div class="cost-body" id="scoreboard-orchestration">
               <div class="empty-state">
                 <div class="icon">✧</div>
                 <div class="text">No managed execution cost data yet.</div>

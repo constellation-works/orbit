@@ -1,11 +1,11 @@
 // Analytics › Cost: managed-execution cost and token usage.
 // The family leaderboard, narrative, agent cards and insights panel are gone.
 // The page reads managed execution spend from GET /api/cost.
-// A header band (title, window, scope, range) sits above the Spend & tokens
-// view, which renders into #scoreboard-orchestration.
+// A header band (title, bucket count, window, scope, range) sits above the cost
+// body, which renders into #scoreboard-orchestration.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { el, syncNodes, fetchJson, getWindow, payloadHonorsWindow, wireWindowSelector, syncWindowSelectors, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, infoHint } from './common.js';
+import { el, syncNodes, fetchJson, getWindow, payloadHonorsWindow, wireWindowSelector, syncWindowSelectors, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, infoHint, pinnedInfoHint } from './common.js';
 
 // The selector writes the shared dashboard window. app.js refresh is the
 // single fetch path so Cost cannot drift onto a different cutoff.
@@ -16,6 +16,18 @@ function wireScoreboardWindowSelector() {
 }
 
 const $ = (id) => document.getElementById(id);
+
+const COST_HINT = "Provider-reported values come first. Derived values are labelled estimates with their own coverage. Compare the two only on the same-invocation population.";
+
+// The hint sits beside the view's title, the first heading it explains. The
+// band is static markup, so the hint mounts once when this module loads. It is
+// a pinned hint: it opens on hover, keyboard focus and tap, and its bubble is
+// fixed to the viewport so the panel's overflow clip cannot cut it.
+function mountCostHint() {
+  const slot = $("scoreboard-cost-hint");
+  if (slot && !slot.firstChild) slot.append(pinnedInfoHint(COST_HINT));
+}
+mountCostHint();
 
 const COST_CHROME = ["scoreboard-orchestration"];
 const COST_COUNTS = ["scoreboard-orchestration-count"];
@@ -285,7 +297,6 @@ function paintWindowRange(orchestration) {
 function renderOrchestrationSummary(orchestration) {
   if (!orchestration || !Array.isArray(orchestration.buckets)) return [emptyOrchestrationNode()];
   const children = [
-    el("div", { class: "scoreboard-orchestration-policy" }, [el("span", { text: "Cost" }), infoHint("Provider-reported values come first. Derived values are labelled estimates with their own coverage. Compare the two only on the same-invocation population.")]),
     renderNormalizedTokenUsage(orchestration.normalized_tokens, orchestration.previous_normalized_tokens),
   ];
   if (orchestration.buckets.length === 0) {
