@@ -438,6 +438,8 @@ fn an_active_member_settles_when_its_request_is_answered() {
                 to_status: None,
                 operation_id: Some(request.id.clone()),
                 decision: None,
+                surface: None,
+                caller: None,
             }],
             ..Default::default()
         },

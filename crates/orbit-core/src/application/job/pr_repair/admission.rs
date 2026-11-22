@@ -121,6 +121,8 @@ impl OrbitRuntime {
                                 to_status: None,
                                 operation_id: None,
                                 decision: None,
+                                surface: None,
+                                caller: None,
                             }],
                             ..TaskAutomationUpdate::default()
                         },
@@ -192,6 +194,8 @@ impl OrbitRuntime {
                                 to_status: None,
                                 operation_id: None,
                                 decision: None,
+                                surface: None,
+                                caller: None,
                             }],
                             ..TaskAutomationUpdate::default()
                         },
@@ -324,6 +328,8 @@ impl OrbitRuntime {
                                 to_status: None,
                                 operation_id: None,
                                 decision: None,
+                                surface: None,
+                                caller: None,
                             }],
                             ..Default::default()
                         },

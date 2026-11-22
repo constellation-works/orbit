@@ -148,6 +148,8 @@ pub(in crate::application::admission) fn record_readiness_override(
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             }],
             ..Default::default()
         },

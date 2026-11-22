@@ -201,6 +201,8 @@ impl TaskV2Store {
                     to_status: Some(b.envelope.status),
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 };
                 pending_events.push(approval.clone());
                 b.events.push(approval);
@@ -217,6 +219,8 @@ impl TaskV2Store {
                     to_status: entry.to_status,
                     operation_id: None,
                     decision: entry.decision.clone(),
+                    surface: entry.surface,
+                    caller: entry.caller.clone(),
                 };
                 pending_events.push(event.clone());
                 b.events.push(event);
@@ -239,6 +243,8 @@ impl TaskV2Store {
                     request_id: p.request_id.clone(),
                     payload_digest: p.payload_digest.clone(),
                 })),
+                surface: None,
+                caller: None,
             };
             pending_events.push(event.clone());
             b.events.push(event);
@@ -251,6 +257,11 @@ impl TaskV2Store {
                 now,
                 &mut pending_events,
             )?;
+            stamp_pending_events(
+                &mut b.events,
+                &mut pending_events,
+                p.write_provenance.as_ref(),
+            );
             self.bundle_store.append_events(id, &pending_events)?;
             self.bundle_store.append_comments(id, &pending_comments)?;
             b.envelope.updated_at = now;

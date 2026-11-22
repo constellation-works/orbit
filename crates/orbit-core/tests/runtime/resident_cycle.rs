@@ -352,6 +352,8 @@ impl Fixture {
                         to_status: None,
                         operation_id: None,
                         decision: None,
+                        surface: None,
+                        caller: None,
                     }],
                     ..Default::default()
                 },
@@ -1380,6 +1382,8 @@ fn restoring_lint_refuses_resident_cycles_without_partial_context_writes() {
                         to_status: None,
                         operation_id: None,
                         decision: None,
+                        surface: None,
+                        caller: None,
                     }],
                     ..Default::default()
                 },

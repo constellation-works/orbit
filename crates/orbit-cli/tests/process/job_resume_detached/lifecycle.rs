@@ -813,7 +813,9 @@ fn latest_resume_event(fx: &Delivery) -> orbit_types::task::TaskHistoryEntry {
                 "resume_readmitted" | "resume_review_restored"
             )
         })
-        .unwrap()
+        .unwrap(),
+    surface: None,
+    caller: None,
 }
 
 /// Promotion remains reused when a later non-completion step fails or the

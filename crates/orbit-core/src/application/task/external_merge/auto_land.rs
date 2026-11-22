@@ -328,6 +328,8 @@ impl OrbitRuntime {
                         to_status: None,
                         operation_id: None,
                         decision: Some(orbit_types::task::TaskDecision::CompletionHeld(hold)),
+                        surface: None,
+                        caller: None,
                     }],
                     expected_status: Some(vec![TaskStatus::Review]),
                     ..Default::default()

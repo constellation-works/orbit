@@ -102,6 +102,8 @@ impl CommitTestHost {
                 to_status: None,
                 operation_id: None,
                 decision: Some(TaskDecision::ReviewSettlement(settlement)),
+                surface: None,
+                caller: None,
             },
         ));
         self
@@ -321,6 +323,8 @@ impl orbit_engine::test_support::NullRuntimeHost for CommitTestHost {
                 to_status: None,
                 operation_id: None,
                 decision: Some(TaskDecision::ContextFilesWidened(widening)),
+                surface: None,
+                caller: None,
             },
         ));
         Ok(added)

@@ -499,6 +499,8 @@ fn transient_requeues_are_bounded_per_publication() {
         to_status: None,
         operation_id: None,
         decision: None,
+        surface: None,
+        caller: None,
     };
     f.runtime
         .apply_task_automation_update(
@@ -750,6 +752,8 @@ fn a_refused_publication_is_recorded_once() {
                     to_status: None,
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },

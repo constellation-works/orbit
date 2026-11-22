@@ -190,6 +190,8 @@ fn seed_legacy(workspace: &Workspace, task: &Task, audit: &serde_json::Value, op
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             }],
             ..Default::default()
         },
@@ -673,6 +675,8 @@ fn legacy_note_only_host_operational_handoff_is_recovered_and_not_recorded_again
             to_status: None,
             operation_id: None,
             decision: None,
+            surface: None,
+            caller: None,
         },
     );
     assert_admission(&workspace, &task, Some("host_operational_handoff"));

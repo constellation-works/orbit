@@ -2633,6 +2633,8 @@ fn record_owner_landing(runtime: &OrbitRuntime, task_id: &str, landed: &str) {
                     to_status: Some(TaskStatus::Done),
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },

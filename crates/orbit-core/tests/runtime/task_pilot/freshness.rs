@@ -406,6 +406,8 @@ fn automatic_discovery_retries_failed_repilot_only_after_new_requirements() {
                         to_status: None,
                         operation_id: None,
                         decision: None,
+                        surface: None,
+                        caller: None,
                     }],
                     ..Default::default()
                 },

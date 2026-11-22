@@ -199,7 +199,9 @@ impl Workspace {
         self.history(task)
             .into_iter()
             .find(|entry| entry.event == "proposal_approved")
-            .expect("approve transition")
+            .expect("approve transition"),
+        surface: None,
+        caller: None,
     }
     fn last_comment(&self, task: &Task) -> orbit_types::task::TaskComment {
         self.runtime
@@ -1476,6 +1478,8 @@ fn append_history(
         to_status: None,
         operation_id: None,
         decision: None,
+        surface: None,
+        caller: None,
     };
     let params = orbit_store::contracts::TaskHistoryUpdateParams {
         actor: actor.into(),

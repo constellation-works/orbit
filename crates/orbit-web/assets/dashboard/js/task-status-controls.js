@@ -1,6 +1,6 @@
 // Orbit dashboard task status and crew controls: the status and crew selects, their forced-status confirmation and their apply functions.
 
-import { captureWorkspaceVisit, el, patchJson, isAggregateView, confirmForceOverride, forceOverrideGuardText } from './common.js';
+import { captureWorkspaceVisit, el, escCloseButton, patchJson, isAggregateView, confirmForceOverride, forceOverrideGuardText } from './common.js';
 import { taskState, rerender, statusOrder, statusTransitions, statusTransition, usesHumanCrewBypass, canMutateTask, aggregateRefusalTitle, taskMutationPath, MUTATION_UNDO_WINDOW_MS, STATUS_LABELS, taskDispatchIdentity, isSelectedTask } from './task-shared.js';
 import { scheduleFeedbackExpiry, buildMutationFeedback, explicitCrewValue, hasStaleExplicitCrew, findConfiguredCrew, resolvedCrewName, defaultCrewOptionText, crewOptionTitle, aggregateCrewPayload, aggregateCrewUnavailable } from './task-crew.js';
 import { applyUpdatedTask, currentCrewTask, loadTaskDetail, mergeTaskRecord } from './task-data.js';
@@ -9,6 +9,13 @@ import { collapseTask, stopRowInteraction } from './task-nav.js';
 // Group heading for the status targets the lifecycle table refuses. Choosing one
 // is the operator override recorded in task history as `forced`.
 const FORCED_STATUS_GROUP_LABEL = "force (off-table)";
+
+// Hold-like status targets that stop or drop active work. Selecting one from the
+// status dropdown asks for confirmation and offers an optional note before the
+// PATCH leaves the browser.
+const HOLD_STATUS_TARGETS = new Set(["blocked", "archived", "rejected"]);
+
+let holdDialogSequence = 0;
 
 export function buildStatusUpdateControl(task, context) {
   const cell = el("span", { class: "status-cell" });
@@ -75,6 +82,7 @@ export function buildStatusUpdateControl(task, context) {
   select.addEventListener("change", (event) => {
     event.stopPropagation();
     const targetStatus = select.value;
+    select.value = "";
     if (!targetStatus) return;
     applyTaskStatusChange(task, targetStatus, context);
   });
@@ -264,7 +272,17 @@ export async function applyTaskStatusChange(task, nextStatus, context) {
     refuse(`status update unavailable: ${task.status} cannot move to ${nextStatus}`);
     return;
   }
-  if (forced && !confirmForcedStatusChange(task, nextStatus)) {
+  const requiresHoldConfirm = HOLD_STATUS_TARGETS.has(nextStatus);
+  let holdNote = "";
+  if (requiresHoldConfirm) {
+    const confirmedHold = await confirmHoldStatusChange(task, nextStatus, { forced });
+    if (!visit.isCurrent()) return;
+    if (!confirmedHold) {
+      refuse("status update cancelled");
+      return;
+    }
+    holdNote = confirmedHold.note;
+  } else if (forced && !confirmForcedStatusChange(task, nextStatus)) {
     refuse(typeof window.confirm === "function"
       ? "status update cancelled"
       : `status update unavailable: forcing ${task.status} → ${nextStatus} needs a confirmation`);
@@ -272,6 +290,7 @@ export async function applyTaskStatusChange(task, nextStatus, context) {
   }
 
   const payload = forced ? { status: nextStatus, force: true } : { status: nextStatus };
+  if (holdNote) payload.note = holdNote;
   if (!humanBypass && !forced && transition.required_field) {
     const evidence = collectStatusTransitionEvidence(task, nextStatus, transition.required_field);
     if (!evidence) {
@@ -348,6 +367,143 @@ export async function applyTaskStatusChange(task, nextStatus, context) {
   if (!visit.isCurrent()) return;
   rerender(context);
   scheduleFeedbackExpiry(taskState.statusFeedback, taskDispatchIdentity(task), context, MUTATION_UNDO_WINDOW_MS + 500);
+}
+
+function holdStatusConsequence(nextStatus) {
+  if (nextStatus === "blocked") {
+    return "Moving this task to blocked holds automated dispatch until an operator requeues or updates it.";
+  }
+  if (nextStatus === "archived") {
+    return "Archiving removes this task from the active backlog without completing its work.";
+  }
+  return "Rejecting closes this task without completing its work.";
+}
+
+// Accessible modal confirmation + optional history note before moving a task to
+// `blocked`, `archived`, or `rejected` from the status select.
+function confirmHoldStatusChange(task, nextStatus, { forced = false } = {}) {
+  const fromLabel = STATUS_LABELS[task.status] || task.status || "current status";
+  const toLabel = STATUS_LABELS[nextStatus] || nextStatus;
+  const heading = forced
+    ? `Force ${task.id} from ${fromLabel} to ${toLabel}?`
+    : `Move ${task.id} from ${fromLabel} to ${toLabel}?`;
+  const consequence = holdStatusConsequence(nextStatus);
+  const forcedNote = "This overrides the lifecycle table and is recorded in task history as a forced change.";
+  const fallback = () => {
+    if (typeof window.confirm !== "function") return null;
+    const promptText = forced
+      ? `${heading}\n\n${consequence}\n\n${forcedNote}`
+      : `${heading}\n\n${consequence}`;
+    return window.confirm(promptText) ? { note: "" } : null;
+  };
+  if (typeof document === "undefined" || typeof document.createElement !== "function") {
+    return Promise.resolve(fallback());
+  }
+  const dialog = document.createElement("dialog");
+  if (!dialog || typeof dialog.showModal !== "function") {
+    return Promise.resolve(fallback());
+  }
+  return new Promise((resolve) => {
+    holdDialogSequence += 1;
+    const headingId = `status-hold-heading-${holdDialogSequence}`;
+    const bodyId = `status-hold-body-${holdDialogSequence}`;
+    const noteId = `status-hold-note-${holdDialogSequence}`;
+    dialog.className = "force-override-dialog status-hold-dialog dialog-surface";
+    dialog.setAttribute("aria-labelledby", headingId);
+    dialog.setAttribute("aria-describedby", bodyId);
+
+    const title = el("h3", { id: headingId, text: heading });
+    const noteLabel = el("label", {
+      class: "status-hold-note-label",
+      for: noteId,
+      text: "Note (optional)",
+    });
+    const noteInput = el("input", {
+      id: noteId,
+      class: "status-hold-note-input",
+      type: "text",
+      maxlength: "500",
+      placeholder: "Reason recorded in task history",
+    });
+    const bodyParagraphs = [el("p", { text: consequence })];
+    if (forced) bodyParagraphs.push(el("p", { text: forcedNote }));
+    const copy = el("div", { id: bodyId, class: "dialog-body" }, [
+      ...bodyParagraphs,
+      el("div", { class: "status-hold-note-field" }, [noteLabel, noteInput]),
+    ]);
+
+    const confirmTone = nextStatus === "rejected" ? "reject" : nextStatus === "archived" ? "archive" : "save";
+    const confirmLabel = forced ? `Force to ${toLabel}` : `Move to ${toLabel}`;
+    const confirmButton = el("button", {
+      class: `action ${confirmTone}`,
+      text: confirmLabel,
+      type: "button",
+    });
+    const cancelButton = el("button", {
+      class: "action cancel",
+      text: "Cancel",
+      type: "button",
+    });
+    const actions = el("div", { class: "force-override-actions dialog-actions" }, [
+      confirmButton,
+      cancelButton,
+    ]);
+
+    const previouslyFocused = document.activeElement;
+    let settled = false;
+    const onDocumentEscape = (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      settle(null);
+    };
+    const settle = (result) => {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener("keydown", onDocumentEscape, true);
+      if (dialog.open) dialog.close();
+      dialog.remove();
+      if (previouslyFocused && typeof previouslyFocused.focus === "function") {
+        previouslyFocused.focus();
+      }
+      resolve(result);
+    };
+
+    const closeButton = escCloseButton("Cancel (Esc)", { onClick: () => settle(null) });
+    dialog.append(el("header", { class: "dialog-header" }, [title, closeButton]), copy, actions);
+
+    confirmButton.addEventListener("click", () => settle({ note: noteInput.value.trim() }));
+    cancelButton.addEventListener("click", () => settle(null));
+    noteInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        settle({ note: noteInput.value.trim() });
+      }
+    });
+    dialog.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      settle(null);
+    });
+    dialog.addEventListener("close", () => settle(null));
+    dialog.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        settle(null);
+        return;
+      }
+      if (event.key !== "Tab" || event.altKey || event.ctrlKey || event.metaKey) return;
+      const controls = [closeButton, noteInput, confirmButton, cancelButton].filter((node) => !node.disabled);
+      if (!controls.length) return;
+      const active = document.activeElement;
+      if (event.shiftKey ? active === controls[0] : active === controls[controls.length - 1]) {
+        event.preventDefault();
+        (event.shiftKey ? controls[controls.length - 1] : controls[0]).focus();
+      }
+    });
+    document.addEventListener("keydown", onDocumentEscape, true);
+    document.body.appendChild(dialog);
+    dialog.showModal();
+    noteInput.focus();
+  });
 }
 
 // One confirm, naming the exact move, before the override leaves the browser.

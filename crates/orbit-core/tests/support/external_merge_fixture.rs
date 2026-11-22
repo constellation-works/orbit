@@ -900,7 +900,9 @@ impl Fixture {
             .unwrap()
             .into_iter()
             .find(|e| e.event == EXTERNAL_MERGE_SETTLED_EVENT)
-            .expect("settlement recorded in history")
+            .expect("settlement recorded in history"),
+        surface: None,
+        caller: None,
     }
     pub(crate) fn settled_note(&self, task: &str) -> String {
         self.settled_entry(task).note.unwrap_or_default()

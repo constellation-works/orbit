@@ -357,6 +357,8 @@ fn widened(fixture: &Fixture, id: &str, at: DateTime<Utc>, selectors: &[&str]) {
                     to_status: None,
                     operation_id: None,
                     decision: Some(TaskDecision::ContextFilesWidened(widening)),
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },

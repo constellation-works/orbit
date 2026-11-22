@@ -88,6 +88,8 @@ fn attempt_history(blocker: &str) -> Vec<TaskHistoryEntry> {
         to_status: None,
         operation_id: None,
         decision: None,
+        surface: None,
+        caller: None,
     }]
 }
 

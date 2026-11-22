@@ -1895,6 +1895,8 @@ fn history_entry(at: chrono::DateTime<Utc>, by: &str, event: &str) -> TaskHistor
         to_status: None,
         operation_id: None,
         decision: None,
+        surface: None,
+        caller: None,
     }
 }
 

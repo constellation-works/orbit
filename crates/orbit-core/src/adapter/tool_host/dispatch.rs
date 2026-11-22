@@ -1,12 +1,21 @@
+use std::time::Instant;
+
 use orbit_common::OrbitError;
+use orbit_common::governance::decision::DecisionVerb;
+use orbit_common::governance::task::TaskVerb;
 use orbit_tools::{OrbitBuiltinAction, OrbitTaskScope, ReservationOwnerContext};
+use orbit_types::task::{TaskWriteProvenance, TaskWriteSurface};
+use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use orbit_types::workflow::JobRunTrigger;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::agents::AgentDetailSurface;
 use crate::application::resident::ResidentCallAdmission;
+use crate::application::task::{
+    TaskMutationAudit, audit_status_for_task_mutation_error, with_task_write_provenance,
+};
 use crate::runtime::authorization::resolved_caller_capabilities;
 
 /// Everything the dispatch table knows about *who* is making this call.
@@ -43,6 +52,55 @@ fn agent_detail_surface(session: &ToolSessionContext) -> AgentDetailSurface {
         AgentDetailSurface::ToolRun
     } else {
         AgentDetailSurface::Cli
+    }
+}
+
+fn session_write_provenance(session: &ToolSessionContext) -> TaskWriteProvenance {
+    let surface = session.write_surface.unwrap_or_else(|| {
+        if session.origin_session_id.is_some() || session.transport == Some(McpTransport::SshMcp) {
+            TaskWriteSurface::Mcp
+        } else {
+            TaskWriteSurface::Cli
+        }
+    });
+    let caller = match surface {
+        TaskWriteSurface::Mcp => session.resolved_session_caller(),
+        TaskWriteSurface::Cli | TaskWriteSurface::Web => session
+            .write_caller
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .or_else(|| session.remote_caller_machine_id().map(ToOwned::to_owned)),
+    };
+    TaskWriteProvenance::new(Some(surface), caller)
+}
+
+fn task_verb_mutation_name(verb: TaskVerb, input: &Value) -> Option<&'static str> {
+    match verb {
+        TaskVerb::Add => Some("add"),
+        TaskVerb::Update => Some("update"),
+        TaskVerb::ArtifactPut => Some("artifact_put"),
+        TaskVerb::ReviewReset => Some("review_reset"),
+        TaskVerb::Repilot => Some("repilot"),
+        TaskVerb::Requeue => Some("requeue"),
+        TaskVerb::BlockTriage => (input.get("action").and_then(Value::as_str) != Some("candidates"))
+            .then_some("block_triage"),
+        TaskVerb::ReconcileReview => Some("reconcile_review"),
+        TaskVerb::RetryHandoff => Some("retry_handoff"),
+        TaskVerb::RecoverClaim => Some("recover_claim"),
+        TaskVerb::RevokeHandoff => Some("revoke_handoff"),
+        TaskVerb::Reject => Some("reject"),
+        TaskVerb::Delete => Some("delete"),
+        TaskVerb::Lint => (input.get("restore_pruned").and_then(Value::as_bool) == Some(true))
+            .then_some("lint_restore_pruned"),
+        TaskVerb::ArtifactGet
+        | TaskVerb::LocksList
+        | TaskVerb::LocksReserve
+        | TaskVerb::LocksRelease
+        | TaskVerb::List
+        | TaskVerb::Eligible
+        | TaskVerb::Show => None,
     }
 }
 
@@ -141,7 +199,47 @@ fn execute_admitted(
             super::desktop::task::snapshot(runtime, session_context, input)
         }
         OrbitBuiltinAction::DesktopTaskWrite => {
-            super::desktop::task::write(runtime, session_context, input, agent, model)
+            let provenance = session_write_provenance(session_context);
+            let surface = provenance.surface.unwrap_or(TaskWriteSurface::Mcp);
+            let caller = provenance.caller.clone();
+            let started = Instant::now();
+            let result = with_task_write_provenance(provenance, || {
+                super::desktop::task::write(runtime, session_context, input, agent, model)
+            });
+            if session_context.transport.is_some()
+                || session_context.origin_session_id.is_some()
+                || session_context.write_surface.is_some()
+            {
+                let target_id = result
+                    .as_ref()
+                    .ok()
+                    .and_then(|value| value.get("id").and_then(Value::as_str))
+                    .map(ToOwned::to_owned);
+                let (status, error_message) = match &result {
+                    Ok(_) => (AuditEventStatus::Success, None),
+                    Err(error) => (
+                        audit_status_for_task_mutation_error(error),
+                        Some(error.to_string()),
+                    ),
+                };
+                let role = runtime.resolve_task_mutation_audit_role(
+                    agent_for_audit.as_deref(),
+                    model_for_audit.as_deref(),
+                );
+                runtime.record_task_mutation_audit(TaskMutationAudit {
+                    verb: "desktop_write",
+                    target_id: target_id.as_deref(),
+                    role: &role,
+                    surface,
+                    caller: caller.as_deref(),
+                    status,
+                    duration_ms: started.elapsed().as_millis() as i64,
+                    error_message,
+                    detail: json!({"tool": "orbit.desktop.task.write"}),
+                    session_context: Some(session_context),
+                });
+            }
+            result
         }
         OrbitBuiltinAction::Agents(verb) => super::agents_tools::dispatch(
             runtime,
@@ -171,14 +269,61 @@ fn execute_admitted(
         OrbitBuiltinAction::Automation(verb) => {
             super::automation_tools::dispatch(runtime, verb, input)
         }
-        OrbitBuiltinAction::Decision(verb) => super::decision_tools::dispatch(
-            runtime,
-            verb,
-            input,
-            session_context,
-            agent.as_deref(),
-            model.as_deref(),
-        ),
+        OrbitBuiltinAction::Decision(verb) => {
+            let provenance = session_write_provenance(session_context);
+            let surface = provenance.surface.unwrap_or(TaskWriteSurface::Mcp);
+            let caller = provenance.caller.clone();
+            let started = Instant::now();
+            let result = with_task_write_provenance(provenance, || {
+                super::decision_tools::dispatch(
+                    runtime,
+                    verb,
+                    input,
+                    session_context,
+                    agent.as_deref(),
+                    model.as_deref(),
+                )
+            });
+            if matches!(verb, DecisionVerb::Submit | DecisionVerb::Raise)
+                && (session_context.transport.is_some()
+                    || session_context.origin_session_id.is_some()
+                    || session_context.write_surface.is_some())
+            {
+                let target_id = result
+                    .as_ref()
+                    .ok()
+                    .and_then(|value| value.get("task_id").and_then(Value::as_str))
+                    .map(ToOwned::to_owned);
+                let (status, error_message) = match &result {
+                    Ok(_) => (AuditEventStatus::Success, None),
+                    Err(error) => (
+                        audit_status_for_task_mutation_error(error),
+                        Some(error.to_string()),
+                    ),
+                };
+                let role = runtime.resolve_task_mutation_audit_role(
+                    agent_for_audit.as_deref(),
+                    model_for_audit.as_deref(),
+                );
+                let verb_label = match verb {
+                    DecisionVerb::Submit => "decision_submit",
+                    _ => "decision_raise",
+                };
+                runtime.record_task_mutation_audit(TaskMutationAudit {
+                    verb: verb_label,
+                    target_id: target_id.as_deref(),
+                    role: &role,
+                    surface,
+                    caller: caller.as_deref(),
+                    status,
+                    duration_ms: started.elapsed().as_millis() as i64,
+                    error_message,
+                    detail: json!({"tool": "orbit.decision"}),
+                    session_context: Some(session_context),
+                });
+            }
+            result
+        }
         OrbitBuiltinAction::Experiment(verb) => super::experiment_tools::dispatch(
             runtime,
             verb,
@@ -208,19 +353,76 @@ fn execute_admitted(
         }
         OrbitBuiltinAction::Search(verb) => super::search_tools::dispatch(runtime, verb, input),
         OrbitBuiltinAction::Task(verb) => {
-            let (response, written) = super::task::operation::dispatch(
-                runtime,
-                ToolCaller {
-                    session_context,
-                    agent,
-                    model,
-                    reservation_owner,
-                },
-                operator,
-                resident_cycle_admitted,
-                verb,
-                input,
-            )?;
+            let provenance = session_write_provenance(session_context);
+            let surface = provenance.surface.unwrap_or(TaskWriteSurface::Cli);
+            let caller = provenance.caller.clone();
+            let mutation_verb = task_verb_mutation_name(verb, &input);
+            let input_task_id = input
+                .get("id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            let requested_status = input
+                .get("status")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            let should_audit_mutation = mutation_verb.is_some()
+                && (session_context.transport.is_some()
+                    || session_context.origin_session_id.is_some()
+                    || session_context.write_surface.is_some());
+            let started = Instant::now();
+            let result = with_task_write_provenance(provenance, || {
+                super::task::operation::dispatch(
+                    runtime,
+                    ToolCaller {
+                        session_context,
+                        agent,
+                        model,
+                        reservation_owner,
+                    },
+                    operator,
+                    resident_cycle_admitted,
+                    verb,
+                    input,
+                )
+            });
+            if let Some(mutation_verb) = mutation_verb
+                && should_audit_mutation
+            {
+                let (status, error_message, resolved_target) = match &result {
+                    Ok((_, written_id)) => (
+                        AuditEventStatus::Success,
+                        None,
+                        written_id.clone().or(input_task_id),
+                    ),
+                    Err(error) => (
+                        audit_status_for_task_mutation_error(error),
+                        Some(error.to_string()),
+                        input_task_id,
+                    ),
+                };
+                let role = runtime.resolve_task_mutation_audit_role(
+                    agent_for_audit.as_deref(),
+                    model_for_audit.as_deref(),
+                );
+                let mut detail = serde_json::Map::new();
+                detail.insert("tool".into(), json!(verb.spec().tool_name));
+                if let Some(requested_status) = requested_status {
+                    detail.insert("status".into(), json!(requested_status));
+                }
+                runtime.record_task_mutation_audit(TaskMutationAudit {
+                    verb: mutation_verb,
+                    target_id: resolved_target.as_deref(),
+                    role: &role,
+                    surface,
+                    caller: caller.as_deref(),
+                    status,
+                    duration_ms: started.elapsed().as_millis() as i64,
+                    error_message,
+                    detail: Value::Object(detail),
+                    session_context: Some(session_context),
+                });
+            }
+            let (response, written) = result?;
             persisted_task_id = written;
             Ok(response)
         }

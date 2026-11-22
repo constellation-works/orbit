@@ -113,6 +113,11 @@ impl DestinationProbe for SshDestinationProbe {
                 authority: McpSessionAuthority::Agent,
                 internal: true,
                 host_call: false,
+                origin_session_id: None,
+                origin_client_name: None,
+                self_reported_actor: None,
+                write_surface: None,
+                write_caller: None,
             },
         )?))
     }
@@ -122,6 +127,16 @@ impl DestinationProbe for SshDestinationProbe {
         context: &ToolSessionContext,
     ) -> Result<Box<dyn RoutedSession>, OrbitError> {
         let binding = context.worker_invocation.as_ref();
+        let write_surface = Some(
+            context
+                .write_surface
+                .unwrap_or(orbit_types::task::TaskWriteSurface::Mcp),
+        );
+        let write_caller = context
+            .write_caller
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
         Ok(Box::new(self.open_pooled_route(
             destination,
             SessionShape {
@@ -129,6 +144,11 @@ impl DestinationProbe for SshDestinationProbe {
                 authority: self.session_authority(binding),
                 internal: false,
                 host_call: context.worker_host_call,
+                origin_session_id: context.origin_session_id.as_deref(),
+                origin_client_name: context.mcp_client_name.as_deref(),
+                self_reported_actor: context.self_reported_actor.as_deref(),
+                write_surface,
+                write_caller,
             },
         )?))
     }
@@ -154,19 +174,29 @@ impl DestinationProbe for SshDestinationProbe {
                 authority: self.authority,
                 internal: false,
                 host_call: false,
+                origin_session_id: None,
+                origin_client_name: None,
+                self_reported_actor: None,
+                write_surface: Some(orbit_types::task::TaskWriteSurface::Mcp),
+                write_caller: None,
             },
         )?))
     }
 }
 
 /// What a session asks of its destination: the argv flags `ssh` passes and
-/// the worker binding its handshake sends.
+/// the worker binding and caller provenance its handshake sends.
 #[derive(Clone, Copy)]
 struct SessionShape<'a> {
     binding: Option<&'a orbit_types::tool::WorkerInvocation>,
     authority: McpSessionAuthority,
     internal: bool,
     host_call: bool,
+    origin_session_id: Option<&'a str>,
+    origin_client_name: Option<&'a str>,
+    self_reported_actor: Option<&'a str>,
+    write_surface: Option<orbit_types::task::TaskWriteSurface>,
+    write_caller: Option<&'a str>,
 }
 
 impl SshDestinationProbe {
@@ -179,6 +209,11 @@ impl SshDestinationProbe {
             authority: self.authority,
             internal: false,
             host_call: false,
+            origin_session_id: None,
+            origin_client_name: None,
+            self_reported_actor: None,
+            write_surface: None,
+            write_caller: None,
         };
         self.pool
             .close_idle_for_destination(&self.pool_key(destination, shape));
@@ -213,7 +248,16 @@ impl SshDestinationProbe {
         // The session is one process; the guard ends it on every path,
         // including the timeout path where the child is still mid-answer.
         let mut session = self.session_from_child(destination, child)?;
-        session.handshake_with_worker(shape.binding)?;
+        session.handshake_with_provenance(
+            shape.binding,
+            super::session::HandshakeProvenance {
+                origin_session_id: shape.origin_session_id,
+                origin_client_name: shape.origin_client_name,
+                self_reported_actor: shape.self_reported_actor,
+                write_surface: shape.write_surface,
+                write_caller: shape.write_caller,
+            },
+        )?;
         Ok(session)
     }
 
@@ -231,6 +275,11 @@ impl SshDestinationProbe {
             internal: shape.internal,
             worker_host: shape.host_call,
             worker_invocation: shape.binding.cloned(),
+            origin_session_id: shape.origin_session_id.map(ToOwned::to_owned),
+            origin_client_name: shape.origin_client_name.map(ToOwned::to_owned),
+            self_reported_actor: shape.self_reported_actor.map(ToOwned::to_owned),
+            write_surface: shape.write_surface,
+            write_caller: shape.write_caller.map(ToOwned::to_owned),
             line_cap,
         }
     }

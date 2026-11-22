@@ -21,7 +21,8 @@ pub(super) use records::{
     pilot_admission_task_action, post_deploy_met_task_action, post_deploy_task_action,
 };
 pub(super) use writes::{
-    add_task_comment_action, create_task_action, human_comment_author, update_task_action,
+    WebTaskMutationMeta, add_task_comment_action, create_task_action, human_comment_author,
+    run_audited_web_task_mutation, update_task_action,
 };
 
 /// Actor recorded in task history for dashboard recovery actions.

@@ -562,6 +562,8 @@ impl OrbitRuntime {
             to_status: None,
             operation_id: None,
             decision: None,
+            surface: None,
+            caller: None,
         });
         Ok(Some(plan))
     }
@@ -605,6 +607,8 @@ impl OrbitRuntime {
                 fault_evidence: fault.fault_evidence.clone(),
                 fault_judged_by: fault.judged_by.clone(),
             }),
+            surface: None,
+            caller: None,
         });
         let published =
             if matches!(plan.outcome, FinalRecoveryOutcome::Requeued) && !plan.readmitted {

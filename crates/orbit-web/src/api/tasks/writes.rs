@@ -3,20 +3,115 @@
 use super::request::{
     CommentBody, CreateTaskBody, UpdateTaskBody, reject_unsupported_task_body_fields,
 };
+use crate::api::forward::web_write_caller;
 use crate::api::helpers;
 use crate::api::{bad_request, map_runtime_error, non_empty_string, server_error, validate_id};
-use crate::state::Ws;
-use axum::extract::Path;
+use crate::state::{DashboardState, Ws};
+use axum::extract::{Path, State};
+use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_core::application::task::{
-    ScreenedTaskWrite, TaskAddParams, TaskUpdateAuthority, TaskUpdateParams,
-    TaskWriteResponsePolicy, TaskWriteScreen, screened_task_write_response_json,
+    ScreenedTaskWrite, TaskAddParams, TaskMutationAudit, TaskUpdateAuthority, TaskUpdateParams,
+    TaskWriteResponsePolicy, TaskWriteScreen, audit_status_for_task_mutation_error,
+    screened_task_write_response_json, with_task_write_provenance,
 };
 use orbit_core::{OrbitRuntime, TaskComplexity};
 use orbit_types::identity::{
     agent_family_from_cli, all_agent_families, infer_agent_family_from_model,
 };
+use orbit_types::task::{TaskWriteProvenance, TaskWriteSurface};
+use orbit_types::telemetry::AuditEventStatus;
+use serde_json::{Value, json};
 use std::sync::Arc;
+use std::time::Instant;
+
+/// Audit and provenance metadata attached to one web task mutation.
+pub(in crate::api) struct WebTaskMutationMeta {
+    pub(in crate::api) verb: &'static str,
+    pub(in crate::api) target_id: Option<String>,
+    pub(in crate::api) caller: Option<String>,
+    pub(in crate::api) role: Option<String>,
+    pub(in crate::api) model: Option<String>,
+    pub(in crate::api) detail: Value,
+}
+
+impl WebTaskMutationMeta {
+    pub(in crate::api) fn new(
+        state: &DashboardState,
+        headers: &HeaderMap,
+        verb: &'static str,
+        target_id: Option<String>,
+        detail: Value,
+    ) -> Self {
+        Self {
+            verb,
+            target_id,
+            caller: web_write_caller(state, headers),
+            role: None,
+            model: None,
+            detail,
+        }
+    }
+}
+
+/// Run `mutate` on the current blocking worker with web write provenance active
+/// and record an owner-side `task.mutation` audit row.
+pub(in crate::api) fn run_audited_web_task_mutation<T, F>(
+    runtime: &OrbitRuntime,
+    meta: WebTaskMutationMeta,
+    resolved_target_id: impl FnOnce(&T) -> Option<String>,
+    mutate: F,
+) -> Result<T, orbit_core::OrbitError>
+where
+    F: FnOnce(&OrbitRuntime) -> Result<T, orbit_core::OrbitError>,
+{
+    let WebTaskMutationMeta {
+        verb,
+        target_id,
+        caller,
+        role,
+        model,
+        detail,
+    } = meta;
+    let provenance = TaskWriteProvenance::new(Some(TaskWriteSurface::Web), caller.clone());
+    let started = Instant::now();
+    let result = with_task_write_provenance(provenance, || mutate(runtime));
+    let duration_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
+    let resolved_role = role
+        .unwrap_or_else(|| runtime.resolve_task_mutation_audit_role(None, model.as_deref()));
+    match &result {
+        Ok(value) => {
+            let final_target = resolved_target_id(value).or(target_id);
+            runtime.record_task_mutation_audit(TaskMutationAudit {
+                verb,
+                target_id: final_target.as_deref(),
+                role: &resolved_role,
+                surface: TaskWriteSurface::Web,
+                caller: caller.as_deref(),
+                status: AuditEventStatus::Success,
+                duration_ms,
+                error_message: None,
+                detail,
+                session_context: None,
+            });
+        }
+        Err(error) => {
+            runtime.record_task_mutation_audit(TaskMutationAudit {
+                verb,
+                target_id: target_id.as_deref(),
+                role: &resolved_role,
+                surface: TaskWriteSurface::Web,
+                caller: caller.as_deref(),
+                status: audit_status_for_task_mutation_error(error),
+                duration_ms,
+                error_message: Some(error.to_string()),
+                detail,
+                session_context: None,
+            });
+        }
+    }
+    result
+}
 
 /// Actor recorded for a dashboard-authored comment when the request supplies no
 /// usable human identity. The dashboard is a human-operated surface, so this is
@@ -45,13 +140,20 @@ enum TaskMutationFailure {
 pub(super) async fn task_mutation_response<F>(
     runtime: Arc<OrbitRuntime>,
     label: &'static str,
+    meta: WebTaskMutationMeta,
     mutate: F,
 ) -> Response
 where
     F: FnOnce(&OrbitRuntime) -> Result<ScreenedTaskWrite, orbit_core::OrbitError> + Send + 'static,
 {
     let rendered = helpers::blocking_join(label, move || {
-        let written = mutate(&runtime).map_err(TaskMutationFailure::Mutation)?;
+        let written = run_audited_web_task_mutation(
+            &runtime,
+            meta,
+            |written: &ScreenedTaskWrite| Some(written.task.id.clone()),
+            mutate,
+        )
+        .map_err(TaskMutationFailure::Mutation)?;
         let mut value = screened_task_write_response_json(
             &runtime,
             &written,
@@ -83,6 +185,8 @@ where
 /// `workspace` body key is rejected with a 400 (see
 /// [`CreateTaskBody::workspace`], ORB-00042).
 pub(in crate::api) async fn create_task_action(
+    State(state): State<DashboardState>,
+    headers: HeaderMap,
     Ws(runtime): Ws,
     Json(body): Json<CreateTaskBody>,
 ) -> Response {
@@ -146,7 +250,15 @@ pub(in crate::api) async fn create_task_action(
         creation_decision: None,
         not_before: None,
     };
-    task_mutation_response(runtime, "task creation", move |runtime| {
+    let mut meta = WebTaskMutationMeta::new(
+        &state,
+        &headers,
+        "add",
+        None,
+        json!({ "status": params.status }),
+    );
+    meta.model = model.clone();
+    task_mutation_response(runtime, "task creation", meta, move |runtime| {
         runtime.add_task_screened(
             params,
             &TaskWriteScreen::unbound(allow_missing_context),
@@ -170,6 +282,8 @@ pub(in crate::api) async fn create_task_action(
 /// surface, so it carries the same human override the bare CLI does; the agent
 /// tool and MCP surfaces still do not declare the field.
 pub(in crate::api) async fn update_task_action(
+    State(state): State<DashboardState>,
+    headers: HeaderMap,
     Ws(runtime): Ws,
     Path(id): Path<String>,
     Json(body): Json<UpdateTaskBody>,
@@ -197,6 +311,14 @@ pub(in crate::api) async fn update_task_action(
         return bad_request(
             "`force` overrides the lifecycle table for a status change, so it requires \
              `status`; send the target status or drop `force`"
+                .to_string(),
+        );
+    }
+    let status_note = body.note.as_deref().and_then(non_empty_string);
+    if status_note.is_some() && body.status.is_none() {
+        return bad_request(
+            "`note` records a status-transition note, so it requires `status`; \
+             send the target status or use `comment` instead"
                 .to_string(),
         );
     }
@@ -257,14 +379,26 @@ pub(in crate::api) async fn update_task_action(
         not_before,
     };
     let id = id.to_string();
-    task_mutation_response(runtime, "task update", move |runtime| {
-        runtime.update_task_screened(
+    let mut meta = WebTaskMutationMeta::new(
+        &state,
+        &headers,
+        "update",
+        Some(id.clone()),
+        json!({
+            "status": params.status,
+            "force": body.force,
+        }),
+    );
+    meta.model = model.clone();
+    task_mutation_response(runtime, "task update", meta, move |runtime| {
+        runtime.update_task_screened_with_note(
             &id,
             params,
             &TaskWriteScreen::unbound(allow_missing_context),
             authority,
             None,
             model,
+            status_note,
         )
     })
     .await
@@ -282,6 +416,8 @@ pub(in crate::api) async fn update_task_action(
 /// model would be a lie, so the author comes from the request (sanitized by
 /// [`human_comment_author`]) and never from the ambient identity.
 pub(in crate::api) async fn add_task_comment_action(
+    State(state): State<DashboardState>,
+    headers: HeaderMap,
     Ws(runtime): Ws,
     Path(id): Path<String>,
     Json(body): Json<CommentBody>,
@@ -299,7 +435,9 @@ pub(in crate::api) async fn add_task_comment_action(
         ..TaskUpdateParams::default()
     };
     let id = id.to_string();
-    task_mutation_response(runtime, "task comment", move |runtime| {
+    let mut meta = WebTaskMutationMeta::new(&state, &headers, "comment", Some(id.clone()), json!({}));
+    meta.role = Some(author.clone());
+    task_mutation_response(runtime, "task comment", meta, move |runtime| {
         runtime
             .update_task_as_human(&id, params, author)
             .map(ScreenedTaskWrite::from)

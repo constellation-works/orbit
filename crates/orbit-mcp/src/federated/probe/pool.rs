@@ -40,6 +40,11 @@ pub(super) struct RoutedSessionKey {
     pub(super) internal: bool,
     pub(super) worker_host: bool,
     pub(super) worker_invocation: Option<orbit_types::tool::WorkerInvocation>,
+    pub(super) origin_session_id: Option<String>,
+    pub(super) origin_client_name: Option<String>,
+    pub(super) self_reported_actor: Option<String>,
+    pub(super) write_surface: Option<orbit_types::task::TaskWriteSurface>,
+    pub(super) write_caller: Option<String>,
     pub(super) line_cap: Option<u64>,
 }
 

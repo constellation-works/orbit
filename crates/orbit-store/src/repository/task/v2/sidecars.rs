@@ -297,6 +297,7 @@ pub(crate) fn task_history_from_events(events: Vec<TaskEventRowV2>) -> Vec<TaskH
                 .with_status_change(event.from_status, event.to_status)
                 .with_operation_id(event.operation_id)
                 .with_decision(event.decision)
+                .with_provenance(event.surface, event.caller)
         })
         .collect()
 }

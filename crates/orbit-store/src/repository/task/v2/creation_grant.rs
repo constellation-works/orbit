@@ -57,6 +57,8 @@ pub(super) fn append_creation_grant(
         to_status: None,
         operation_id: None,
         decision: None,
+        surface: None,
+        caller: None,
     };
     pending_events.push(event.clone());
     bundle.events.push(event);

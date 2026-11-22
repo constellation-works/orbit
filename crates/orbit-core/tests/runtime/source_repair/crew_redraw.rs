@@ -66,6 +66,8 @@ fn redraw_crew(f: &Fixture, to: &str, recorded: Recorded) {
                             ),
                         )),
                     },
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },

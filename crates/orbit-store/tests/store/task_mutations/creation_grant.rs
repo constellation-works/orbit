@@ -381,6 +381,8 @@ fn a_history_append_cannot_forge_a_grant() {
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             }],
             ..Default::default()
         },

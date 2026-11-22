@@ -383,6 +383,8 @@ fn reconcile_task(runtime: &OrbitRuntime, metadata: &Task) -> Result<Option<Task
                             to_status: None,
                             operation_id: None,
                             decision: None,
+                            surface: None,
+                            caller: None,
                         }],
                         ..Default::default()
                     },

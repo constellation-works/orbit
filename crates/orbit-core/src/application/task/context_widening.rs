@@ -68,6 +68,8 @@ impl OrbitRuntime {
                             to_status: None,
                             operation_id: None,
                             decision: Some(TaskDecision::ContextFilesWidened(widening.clone())),
+                            surface: None,
+                            caller: None,
                         }],
                         ..Default::default()
                     },

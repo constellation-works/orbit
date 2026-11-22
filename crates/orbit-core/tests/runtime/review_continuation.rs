@@ -457,7 +457,9 @@ fn latest_decision(fixture: &Fixture) -> orbit_types::task::TaskHistoryEntry {
         .into_iter()
         .rev()
         .find(|entry| entry.to_status.is_some())
-        .unwrap()
+        .unwrap(),
+    surface: None,
+    caller: None,
 }
 
 fn fresh_run_timeouts_are_bounded_by_task_and_tree_not_commit_or_lineage() {

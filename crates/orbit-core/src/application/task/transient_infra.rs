@@ -376,6 +376,8 @@ impl OrbitRuntime {
                             to_status: None,
                             operation_id: None,
                             decision: None,
+                            surface: None,
+                            caller: None,
                         }],
                     },
                 )?;
@@ -456,6 +458,8 @@ impl OrbitRuntime {
                             to_status: None,
                             operation_id: None,
                             decision: None,
+                            surface: None,
+                            caller: None,
                         }],
                         expected_status: Some(vec![TaskStatus::Blocked]),
                         ..Default::default()

@@ -27,6 +27,8 @@ fn entry(event: &str, note: String, decision: Option<TaskDecision>) -> TaskHisto
         to_status: None,
         operation_id: None,
         decision,
+        surface: None,
+        caller: None,
     }
 }
 
@@ -423,4 +425,89 @@ fn a_task_revision_request_stays_superseded_after_the_task_is_restored() {
         state(&[raise, moves[0].clone(), moves[1].clone()]),
         DecisionRequestState::Superseded
     );
+}
+
+/// Pre-change `TaskHistoryEntry` and `TaskEventRowV2` JSON without `surface`
+/// or `caller` still deserialize and validate, and human provenance stamps
+/// only human-attributed non-auto-drain events.
+#[test]
+fn legacy_history_and_event_rows_without_surface_or_caller_load_and_omit_unset_fields() {
+    use orbit_types::task::{
+        TASK_ARTIFACT_SCHEMA_VERSION, TaskEventRowV2, TaskStatus, TaskWriteProvenance,
+        TaskWriteSurface, validate_task_event_row,
+    };
+
+    let legacy_history: TaskHistoryEntry = serde_json::from_value(json!({
+        "at": "2026-11-01T12:00:00Z",
+        "by": "human:daniel",
+        "event": "status_changed",
+        "note": null,
+        "from_status": "proposed",
+        "to_status": "backlog"
+    }))
+    .expect("legacy history entry deserializes");
+    assert_eq!(legacy_history.surface, None);
+    assert_eq!(legacy_history.caller, None);
+    let roundtrip_history = serde_json::to_value(&legacy_history).expect("serialize legacy entry");
+    assert!(roundtrip_history.get("surface").is_none());
+    assert!(roundtrip_history.get("caller").is_none());
+
+    let mut legacy_event: TaskEventRowV2 = serde_json::from_value(json!({
+        "schemaVersion": TASK_ARTIFACT_SCHEMA_VERSION,
+        "event_id": "evt-0001",
+        "at": "2026-11-01T12:00:00Z",
+        "by": "human:daniel",
+        "event_type": "status_changed",
+        "note": null,
+        "from_status": "proposed",
+        "to_status": "backlog"
+    }))
+    .expect("legacy event row deserializes");
+    validate_task_event_row(&legacy_event).expect("legacy event row validates");
+    assert_eq!(legacy_event.surface, None);
+    assert_eq!(legacy_event.caller, None);
+    let roundtrip_event = serde_json::to_value(&legacy_event).expect("serialize legacy event");
+    assert!(roundtrip_event.get("surface").is_none());
+    assert!(roundtrip_event.get("caller").is_none());
+
+    let mcp_provenance = TaskWriteProvenance::new(
+        Some(TaskWriteSurface::Mcp),
+        Some("claude-code:mcp-session-42".into()),
+    );
+    legacy_event.stamp_human_provenance(&mcp_provenance);
+    validate_task_event_row(&legacy_event).expect("stamped event row validates");
+    assert_eq!(legacy_event.surface, Some(TaskWriteSurface::Mcp));
+    assert_eq!(
+        legacy_event.caller.as_deref(),
+        Some("claude-code:mcp-session-42")
+    );
+
+    let mut agent_event = TaskEventRowV2 {
+        by: "codex".into(),
+        surface: None,
+        caller: None,
+        ..legacy_event.clone()
+    };
+    agent_event.stamp_human_provenance(&mcp_provenance);
+    assert_eq!(agent_event.surface, None);
+    assert_eq!(agent_event.caller, None);
+
+    let mut drain_event = TaskEventRowV2 {
+        by: "human:daniel".into(),
+        from_status: Some(TaskStatus::Proposed),
+        to_status: Some(TaskStatus::Backlog),
+        decision: Some(TaskDecision::DrainApproved),
+        surface: None,
+        caller: None,
+        ..legacy_event
+    };
+    drain_event.stamp_human_provenance(&TaskWriteProvenance::new(
+        Some(TaskWriteSurface::Cli),
+        None,
+    ));
+    assert_eq!(
+        drain_event.surface, None,
+        "auto-drain promotion must not stamp operator CLI provenance"
+    );
+    assert_eq!(drain_event.caller, None);
 }

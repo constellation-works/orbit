@@ -259,6 +259,8 @@ impl OrbitRuntime {
                 to_status: None,
                 operation_id: Some(request.id.clone()),
                 decision: Some(TaskDecision::CompletionHeld(hold)),
+                surface: None,
+                caller: None,
             });
         }
         let note = format!(

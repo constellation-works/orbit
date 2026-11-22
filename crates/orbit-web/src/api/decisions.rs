@@ -80,6 +80,7 @@ pub(super) async fn list_decisions(
 /// operator session as the Scripts or Residents view's own action.
 pub(super) async fn answer_decision(
     State(state): State<DashboardState>,
+    headers: axum::http::HeaderMap,
     Ws(runtime): Ws,
     Path(id): Path<String>,
     Json(body): Json<DecisionAnswerBody>,
@@ -91,14 +92,15 @@ pub(super) async fn answer_decision(
     let author = human_comment_author(body.author.as_deref());
     let reader = std::sync::Arc::clone(&runtime);
     let lookup = id.clone();
-    let gate = match blocking("decision lookup", move || {
+    let (gate, existing_task_id) = match blocking("decision lookup", move || {
         Ok(reader
             .get_decision_request(&lookup)?
-            .map(|request| request.gate))
+            .map(|request| (Some(request.gate), Some(request.task_id)))
+            .unwrap_or((None, None)))
     })
     .await
     {
-        Ok(gate) => gate,
+        Ok(found) => found,
         Err(response) => return *response,
     };
     // An answer that writes authority takes the operator session of the
@@ -113,13 +115,28 @@ pub(super) async fn answer_decision(
     {
         return authorization_denied(denial);
     }
+    let mut meta = super::tasks::WebTaskMutationMeta::new(
+        &state,
+        &headers,
+        "decision_answer",
+        existing_task_id,
+        json!({ "decision_id": id, "answer": answer }),
+    );
+    meta.role = Some(author.clone());
     match blocking("decision answer", move || {
-        runtime.answer_decision_request_as_human(
-            &id,
-            &answer,
-            note,
-            author,
-            Some("dashboard".to_string()),
+        super::tasks::run_audited_web_task_mutation(
+            &runtime,
+            meta,
+            |request| Some(request.task_id.clone()),
+            move |runtime| {
+                runtime.answer_decision_request_as_human(
+                    &id,
+                    &answer,
+                    note,
+                    author,
+                    Some("dashboard".to_string()),
+                )
+            },
         )
     })
     .await

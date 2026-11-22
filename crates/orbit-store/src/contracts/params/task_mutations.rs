@@ -3,6 +3,7 @@ use orbit_types::identity::OrbitId;
 use orbit_types::task::{
     CrewSource, ExternalRef, OrchestratorModelSource, TaskArtifact, TaskComment, TaskComplexity,
     TaskDecision, TaskHistoryEntry, TaskOrigin, TaskPriority, TaskRelation, TaskStatus, TaskType,
+    TaskWriteProvenance,
 };
 use serde::{Deserialize, Serialize};
 
@@ -74,6 +75,9 @@ pub struct TaskCreateParams {
     /// Typed decision recorded on the task's `created` history event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub creation_decision: Option<TaskDecision>,
+    /// Surface and caller provenance stamped onto human-attributed creation events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_provenance: Option<TaskWriteProvenance>,
 }
 
 /// Parameters for a partial update to an existing task.
@@ -126,6 +130,8 @@ pub struct TaskDocumentUpdateParams {
     /// `context_files` changes: grants for kept selectors survive, these are
     /// added, and grants for removed selectors are revoked.
     pub context_creation: Vec<String>,
+    /// Surface and caller provenance stamped onto human-attributed document events.
+    pub write_provenance: Option<TaskWriteProvenance>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -156,6 +162,8 @@ pub struct TaskHistoryUpdateParams {
     pub planned_by: Option<Option<String>>,
     /// See [`Self::planned_by`].
     pub implemented_by: Option<Option<String>>,
+    /// Surface and caller provenance stamped onto human-attributed history events.
+    pub write_provenance: Option<TaskWriteProvenance>,
 }
 
 /// One task-bundle mutation whose freshness guard, durable receipt, history
@@ -219,4 +227,6 @@ pub struct TaskArtifactUpdateParams {
     /// Artifact files to write under the task bundle `artifacts/` directory.
     /// Existing files at the same relative path are overwritten.
     pub upsert_artifacts: Vec<TaskArtifact>,
+    /// Surface and caller provenance stamped onto human-attributed artifact events.
+    pub write_provenance: Option<TaskWriteProvenance>,
 }

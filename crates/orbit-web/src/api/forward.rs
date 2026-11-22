@@ -40,6 +40,38 @@ use crate::state::host_error_code;
 /// an event stream, the whole body. A slow host holds only its own request.
 const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Header carrying the originating dashboard's operator session identifier across
+/// `/api/on/<host>/…` forwards so the owning host records the forwarding
+/// operator session on task history and `task.mutation` audit rows.
+pub(in crate::api) const FORWARDED_WEB_CALLER_HEADER: &str = "x-orbit-web-caller";
+
+/// Resolve the web operator session caller for a dashboard task mutation.
+///
+/// Only an `--operator` server trusts a forwarded caller header (the tunnel
+/// forwarder strips client-supplied headers and stamps its own session id), and
+/// values are bounded to printable identifier characters.
+pub(in crate::api) fn web_write_caller(
+    state: &DashboardState,
+    headers: &axum::http::HeaderMap,
+) -> Option<String> {
+    if state.operator_session()
+        && let Some(forwarded) = headers
+            .get(FORWARDED_WEB_CALLER_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| {
+                !value.is_empty()
+                    && value.len() <= 128
+                    && value.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
+                    })
+            })
+    {
+        return Some(forwarded.to_string());
+    }
+    state.operator_session_id().map(ToOwned::to_owned)
+}
+
 /// Request headers passed to the remote. Host and Origin are replaced with the
 /// remote's own loopback authority; cookies and the rest stay here.
 const FORWARDED_REQUEST_HEADERS: [HeaderName; 4] = [
@@ -117,7 +149,14 @@ pub(super) async fn forward(
         }
     };
     let remote_port = state.host_tunnels().remote_port();
-    let upstream = match upstream_request(request, &raw_rest, &query, remote_port) {
+    let forwarded_caller = state.operator_session_id().map(ToOwned::to_owned);
+    let upstream = match upstream_request(
+        request,
+        &raw_rest,
+        &query,
+        remote_port,
+        forwarded_caller.as_deref(),
+    ) {
         Ok(upstream) => upstream,
         Err(message) => return failure(&target.name, "invalid_input", message),
     };
@@ -405,6 +444,7 @@ fn upstream_request(
     raw_rest: &str,
     query: &str,
     remote_port: u16,
+    forwarded_caller: Option<&str>,
 ) -> Result<Request, String> {
     let (parts, body) = request.into_parts();
     let authority = format!("localhost:{remote_port}");
@@ -417,6 +457,9 @@ fn upstream_request(
         for value in parts.headers.get_all(&name) {
             builder = builder.header(&name, value);
         }
+    }
+    if let Some(caller) = forwarded_caller {
+        builder = builder.header(FORWARDED_WEB_CALLER_HEADER, caller);
     }
     builder
         .body(body)

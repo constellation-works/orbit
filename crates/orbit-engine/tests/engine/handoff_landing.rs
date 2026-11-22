@@ -995,6 +995,8 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             });
         }
         Ok(decision)
@@ -1024,6 +1026,8 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             });
         Ok(())
     }
@@ -1062,6 +1066,8 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             });
         Ok(())
     }
@@ -2250,6 +2256,8 @@ fn suspicion_only_history_cannot_admit_repair_from_a_non_pr_run() {
                         to_status: None,
                         operation_id: None,
                         decision: None,
+                        surface: None,
+                        caller: None,
                     });
                 let outcome = land_now(&forge);
                 assert_not_sent(&forge, &["pr.merge", "pr.update_branch"], case);

@@ -720,3 +720,120 @@ fn dashboard_answers_a_decision_request_as_human() {
         },
     );
 }
+
+/// ORB-26919: Web status updates stamp `surface: "web"` and the operator
+/// session `caller` in task history, accept both legacy payloads without
+/// `note`/`surface`/`caller` and hold transitions carrying `note`, write an
+/// owner-side `task.mutation` audit row, and load alongside pre-change
+/// `events.jsonl` rows that lack the new fields.
+#[test]
+fn web_status_updates_record_surface_caller_note_audit_and_preserve_legacy_events() {
+    isolated(
+        "task_writes::web_status_updates_record_surface_caller_note_audit_and_preserve_legacy_events",
+        || {
+            let fixture = Fixture::new();
+            let id = seed(&fixture, "Trace web status move", TaskStatus::Proposed);
+
+            // Append a pre-change event row (no `surface` or `caller` keys)
+            // directly to `events.jsonl` to prove older history still loads.
+            let events_path = fixture
+                .global
+                .join("tasks/by-id")
+                .join(&id)
+                .join("events.jsonl");
+            let mut raw_events =
+                std::fs::read_to_string(&events_path).expect("read seeded events.jsonl");
+            if !raw_events.ends_with('\n') {
+                raw_events.push('\n');
+            }
+            raw_events.push_str(
+                &serde_json::to_string(&json!({
+                    "schemaVersion": 1,
+                    "event_id": "evt-legacy-pre-26919",
+                    "at": "2026-11-01T00:00:00Z",
+                    "by": "human:legacy",
+                    "event_type": "status_changed",
+                    "note": "legacy pre-change transition",
+                    "from_status": "proposed",
+                    "to_status": "proposed"
+                }))
+                .expect("serialize legacy event"),
+            );
+            raw_events.push('\n');
+            std::fs::write(&events_path, raw_events).expect("append legacy event");
+
+            let server = fixture.server(true);
+            let uri = format!("/api/tasks/{id}{WORKSPACE}");
+
+            // 1. Client payload without `note` / `surface` / `caller` is accepted.
+            let backlog = json_ok(server.send(
+                "PATCH",
+                &uri,
+                json!({ "status": "backlog", "force": true }),
+            ));
+            assert_eq!(backlog["status"], json!("backlog"), "{backlog}");
+
+            // 2. Hold move to `blocked` carrying `note` records `surface`,
+            //    `caller` (`web-operator-...`), and `note` in history.
+            let hold_note = "Holding for upstream contract verification";
+            let blocked = json_ok(server.send(
+                "PATCH",
+                &uri,
+                json!({ "status": "blocked", "note": hold_note }),
+            ));
+            assert_eq!(blocked["status"], json!("blocked"), "{blocked}");
+
+            let history = blocked["history"].as_array().expect("history array");
+            let legacy = history
+                .iter()
+                .find(|entry| entry["by"] == json!("human:legacy"))
+                .unwrap_or_else(|| panic!("legacy event missing: {blocked}"));
+            assert!(legacy.get("surface").is_none(), "{legacy}");
+            assert!(legacy.get("caller").is_none(), "{legacy}");
+
+            let hold_entry = history
+                .iter()
+                .rev()
+                .find(|entry| {
+                    entry["event"] == json!("status_changed") && entry["to_status"] == json!("blocked")
+                })
+                .unwrap_or_else(|| panic!("blocked status_changed entry missing: {blocked}"));
+            assert_eq!(hold_entry["surface"], json!("web"), "{hold_entry}");
+            let web_caller = hold_entry["caller"]
+                .as_str()
+                .unwrap_or_else(|| panic!("web caller missing: {hold_entry}"));
+            assert!(
+                web_caller.starts_with("web-operator-"),
+                "unexpected web caller `{web_caller}`: {hold_entry}"
+            );
+            assert_eq!(hold_entry["note"], json!(hold_note), "{hold_entry}");
+
+            // `note` without `status` is rejected cleanly as 400.
+            let invalid_note = server.send("PATCH", &uri, json!({ "note": "orphan note" }));
+            assert_eq!(invalid_note.status().as_u16(), 400);
+
+            // 3. Owning host recorded `task.mutation` audit rows for the web writes.
+            let audits = fixture
+                .runtime
+                .list_audit_events(None, Some("task.mutation"), None, None, 20)
+                .expect("list task.mutation audit rows");
+            let task_audits = audits
+                .iter()
+                .filter(|event| event.target_id.as_deref() == Some(id.as_str()))
+                .collect::<Vec<_>>();
+            assert_eq!(task_audits.len(), 2, "{audits:?}");
+            for row in &task_audits {
+                assert_eq!(row.command, "task.mutation");
+                assert_eq!(row.subcommand.as_deref(), Some("update"));
+                assert_eq!(row.target_type.as_deref(), Some("task"));
+                assert_eq!(row.origin_session_id.as_deref(), Some(web_caller));
+                let args: Value = serde_json::from_str(
+                    row.arguments_json.as_deref().expect("arguments_json"),
+                )
+                .expect("parse arguments_json");
+                assert_eq!(args["surface"], json!("web"), "{args}");
+                assert_eq!(args["caller"], json!(web_caller), "{args}");
+            }
+        },
+    );
+}

@@ -733,6 +733,8 @@ fn shipped_local_completion_hold_survives_mark_review() {
         to_status: Some(to),
         operation_id: None,
         decision: None,
+        surface: None,
+        caller: None,
     };
     stale.push(transition(
         orbit_types::task::TaskStatus::Review,
@@ -931,6 +933,8 @@ impl orbit_engine::test_support::NullRuntimeHost for LocalCompletionHost {
                 to_status: Some(update.status),
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             });
         Ok(task.clone())
     }
