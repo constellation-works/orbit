@@ -1172,6 +1172,11 @@ fn terminal_findings_preserve_messages_commands_and_one_line_rows() {
     let ordered = findings.find("review  ERROR").unwrap() < findings.find("index  WARN").unwrap();
     assert!(ordered, "{findings}");
     let collapsed = findings.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert_eq!(
+        stdout.matches("Table details shortened").count(),
+        1,
+        "doctor prints the shared shortening hint once: {stdout}"
+    );
     for message in [ERROR_MESSAGE, WARNING_MESSAGE] {
         has(&collapsed, message);
     }
@@ -1215,9 +1220,18 @@ fn terminal_findings_preserve_messages_commands_and_one_line_rows() {
     );
     assert!(!wide.contains("Table details shortened"), "{wide}");
     let ok = render_fixture("ok");
-    assert_eq!(ok.lines().count(), 4, "{ok}");
+    let (ok_table, _) = ok
+        .split_once("Table details shortened")
+        .expect("a shortened doctor table carries the shared hint");
+    assert_eq!(
+        ok_table.lines().filter(|line| !line.is_empty()).count(),
+        4,
+        "{ok}"
+    );
+    assert_eq!(ok.matches("Table details shortened").count(), 1, "{ok}");
+    let ok_collapsed = ok.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        !ok.contains("Findings:") && !ok.contains("--format plain"),
+        !ok.contains("Findings:") && ok_collapsed.contains("--format plain or --json"),
         "{ok}"
     );
 }

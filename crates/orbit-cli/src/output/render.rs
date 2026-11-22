@@ -189,15 +189,18 @@ fn emit_human(doc: Value, view: View, sink: &OutputSink) -> Result<(), OrbitErro
                             let findings = doctor_findings(&rows, sink.width());
                             if !findings.is_empty() {
                                 println!("\n{findings}");
-                                if truncated {
-                                    println!("{}", sink.wrap_prose(
-                                        "\nTable details shortened. Use --format plain or --json for full output."
-                                    ));
-                                }
                             }
                         }
                     }
                 }
+            }
+            if truncated {
+                println!(
+                    "{}",
+                    sink.wrap_prose(
+                        "\nTable details shortened. Use --format plain or --json for full output."
+                    )
+                );
             }
             Ok(())
         }
