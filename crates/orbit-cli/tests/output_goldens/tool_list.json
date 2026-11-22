@@ -533,7 +533,7 @@
       },
       {
         "name": "workspace",
-        "description": "From orbit_workspace_list.",
+        "description": "orbit_workspace_list ID; resolved globally by default.",
         "param_type": "string",
         "required": false
       },
@@ -1812,7 +1812,7 @@
       },
       {
         "name": "workspace",
-        "description": "From orbit_workspace_list.",
+        "description": "orbit_workspace_list ID; resolved globally by default.",
         "param_type": "string",
         "required": false
       },
@@ -2156,7 +2156,7 @@
     "parameters": [
       {
         "name": "workspace",
-        "description": "From orbit_workspace_list.",
+        "description": "orbit_workspace_list ID; resolved globally by default.",
         "param_type": "string",
         "required": true
       },
@@ -2387,7 +2387,7 @@
       },
       {
         "name": "workspace",
-        "description": "From orbit_workspace_list.",
+        "description": "orbit_workspace_list ID; resolved globally by default.",
         "param_type": "string",
         "required": false
       },
@@ -2542,7 +2542,7 @@
       },
       {
         "name": "workspace",
-        "description": "From orbit_workspace_list.",
+        "description": "orbit_workspace_list ID; resolved globally by default.",
         "param_type": "string",
         "required": false
       },
@@ -2565,7 +2565,7 @@
     "parameters": [
       {
         "name": "workspace",
-        "description": "From orbit_workspace_list.",
+        "description": "orbit_workspace_list ID; resolved globally by default.",
         "param_type": "string",
         "required": false
       },
@@ -2915,7 +2915,7 @@
       },
       {
         "name": "workspace",
-        "description": "From orbit_workspace_list.",
+        "description": "orbit_workspace_list ID; resolved globally by default.",
         "param_type": "string",
         "required": false
       },
@@ -3070,7 +3070,7 @@
       },
       {
         "name": "workspace",
-        "description": "From orbit_workspace_list.",
+        "description": "orbit_workspace_list ID; resolved globally by default.",
         "param_type": "string",
         "required": false
       },
@@ -3440,7 +3440,7 @@
       },
       {
         "name": "workspace",
-        "description": "From orbit_workspace_list.",
+        "description": "orbit_workspace_list ID; resolved globally by default.",
         "param_type": "string",
         "required": false
       },

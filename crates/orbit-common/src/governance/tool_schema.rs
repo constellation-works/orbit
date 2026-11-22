@@ -32,7 +32,8 @@ const AGENT_MODEL_PATTERN: &str = concat!(
 ///
 /// Required versus optional stays in the schema `required` array. Routing
 /// rules live in the installed Orbit skill `references/task-fields.md`.
-pub const WORKSPACE_SELECTOR_DESCRIPTION: &str = "From orbit_workspace_list.";
+pub const WORKSPACE_SELECTOR_DESCRIPTION: &str =
+    "orbit_workspace_list ID; resolved globally by default.";
 
 /// Build the canonical JSON input schema for an Orbit tool.
 pub fn tool_input_schema(schema: &ToolSchema) -> Map<String, Value> {
