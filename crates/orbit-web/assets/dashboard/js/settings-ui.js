@@ -35,16 +35,28 @@ export function syncSettingsBarHeight(bar) {
 }
 
 /// The one bar at the top of every Settings page: the page's own controls
-/// (`lead`), then its actions and Reload at the right end.
+/// (`lead`), then its actions and Reload at the right end. A page with neither
+/// lead nor actions draws no bar: Reload moves to the top right of its first
+/// section header, so it never sits alone in an empty band.
 export function renderSettingsBar({ lead = [], actions = [], onReload, reloadDescription = null, sticky = false }) {
   const bar = document.getElementById('config-controls');
   if (!bar) return;
-  bar.hidden = false;
-  bar.classList.toggle('sticky', sticky);
+  const leadNodes = lead.filter(Boolean);
+  const actionNodes = actions.filter(Boolean);
   const reload = el('button', { class: 'settings-icon-btn settings-reload', "aria-description": reloadDescription, 'aria-label': 'Reload' }, [settingsIcon('reload')]);
   reload.type = 'button';
   reload.addEventListener('click', onReload);
-  bar.replaceChildren(...lead.filter(Boolean), el('div', { class: 'settings-bar-actions' }, [...actions.filter(Boolean), reload]));
+  const sectionHead = leadNodes.length || actionNodes.length ? null : document.querySelector('#config-body .settings-section-head');
+  if (sectionHead) {
+    bar.hidden = true;
+    bar.classList.remove('sticky');
+    bar.replaceChildren();
+    sectionHead.appendChild(reload);
+  } else {
+    bar.hidden = false;
+    bar.classList.toggle('sticky', sticky);
+    bar.replaceChildren(...leadNodes, el('div', { class: 'settings-bar-actions' }, [...actionNodes, reload]));
+  }
   syncSettingsBarHeight(bar);
 }
 
