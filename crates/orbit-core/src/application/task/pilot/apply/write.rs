@@ -92,6 +92,7 @@ fn admit(
                 complexity: assessed.complexity,
                 dependencies: &dependencies,
                 is_done: &is_done,
+                no_diff_expected: assessed.no_diff_expected,
             },
             drain,
         )

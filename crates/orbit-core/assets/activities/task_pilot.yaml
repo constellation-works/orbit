@@ -766,7 +766,13 @@ spec:
       grants. No selectors are retained for this disposition. A
       `no-diff-expected` task whose outputs are only tasks, comments or
       artifacts belongs here, for example a parity audit that files each gap as
-      a task and attaches `surface-parity.json`.
+      a task and attaches `surface-parity.json`. Apply tags such a task
+      `no-diff-expected` itself, so do not return `context_files_after` to
+      satisfy the readiness gap. Work that already landed, duplicates another
+      task, needs an operator release action or rests on an invalid finding
+      keeps its typed `already_landed`, `duplicate_of`,
+      `release_action_required` or `finding_invalid` finding, and a task you
+      verify that way is not tagged.
     - `host_operational`: a deliverable needs an action no managed lane can
       perform: restarting or reloading a service or the clock, deploying or
       installing a binary, changing host or global config, credentials or the

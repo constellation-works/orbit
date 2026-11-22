@@ -47,6 +47,7 @@ pub(super) struct Assessed {
     pub(super) required_machine: Option<MachineRequirement>,
     pub(super) post_deploy: Vec<PostDeployRequirement>,
     pub(super) user_facing_ui: bool,
+    pub(super) no_diff_expected: bool,
 }
 
 pub(super) fn settle_task(
@@ -147,6 +148,7 @@ pub(super) fn settle_task(
         required_machine: assessed.required_machine,
         post_deploy: assessed.post_deploy,
         user_facing_ui: assessed.user_facing_ui,
+        no_diff_expected: assessed.no_diff_expected,
         applied_material: None,
         pilot_run_id: context.run_id.map(str::to_string),
         pilot_crew: context.partition_crew(partition_index).map(str::to_string),
