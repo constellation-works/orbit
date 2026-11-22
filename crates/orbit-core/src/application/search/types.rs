@@ -101,20 +101,22 @@ impl GlobalSearchParams {
     }
 }
 
-/// Explain multi-word semantics for an empty or partially matched search.
-pub(crate) fn whitespace_query_note(query: &str, kind: GlobalSearchKind) -> Option<String> {
+/// The next-step note for a multi-word query with no hits, or with partial
+/// hits. The matching rules live in the orbit skill's search reference, so the
+/// note names only the next step and points there.
+pub(crate) fn whitespace_query_note(query: &str, results_empty: bool) -> Option<String> {
     let trimmed = query.trim();
     if trimmed.split_whitespace().count() < 2 {
         return None;
     }
-    let mut semantics = Vec::new();
-    if kind.includes_tasks() {
-        semantics.push("task search matches non-adjacent indexed terms: all terms first, then any term to fill the limit. Partial labels count terms in the best matching chunk. Bundle-only fields use a case-insensitive substring; an unavailable index uses only that fallback");
-    }
-    if kind.includes_frictions() {
-        semantics.push("friction search matches a single case-insensitive substring, so words must be adjacent; retry a distinctive term if the phrase has no hits");
-    }
-    Some(format!("query {trimmed:?}: {}.", semantics.join("; ")))
+    let outcome = if results_empty {
+        "no hit"
+    } else {
+        "some hits match only some terms"
+    };
+    Some(format!(
+        "query {trimmed:?}: {outcome}; retry one distinctive term (matching rules: the orbit skill's search reference)."
+    ))
 }
 
 #[derive(Debug, Clone, Serialize)]

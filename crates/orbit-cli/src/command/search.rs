@@ -1,6 +1,6 @@
 //! Search query arguments derive from the operation spec; reindex remains local maintenance.
 use super::operation_args::{Invocation, augment_operation_args, input_from_matches};
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{Block, CommandOut, Execute, Payload};
 use clap::{ArgMatches, Args, Command, FromArgMatches, Subcommand};
 use orbit_common::governance::{operation::OperationVerb, search::SearchVerb};
 use orbit_core::{OrbitError, OrbitRuntime, SearchRequestProfile};
@@ -103,15 +103,20 @@ impl SearchCommand {
 }
 
 fn render(value: &Value) -> CommandOut {
-    if let Some(notes) = value["notes"].as_array() {
-        for note in notes.iter().filter_map(Value::as_str) {
-            eprintln!("note: {note}");
-        }
-    }
     let results = value["results"]
         .as_array()
         .ok_or_else(|| OrbitError::Execution("search response missing results".into()))?;
-    Ok(Payload::detail_table(value.clone(), search_table(results)).into())
+    // Every note is already in the document. A terminal also reads it on
+    // stderr, ahead of the table; `json` and `ndjson` do not repeat it.
+    let mut blocks: Vec<Block> = value["notes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|note| Block::terminal_notice(format!("note: {note}")))
+        .collect();
+    blocks.push(Block::table(search_table(results)));
+    Ok(Payload::blocks(value.clone(), blocks).into())
 }
 
 fn search_table(results: &[Value]) -> crate::output::table::Table {

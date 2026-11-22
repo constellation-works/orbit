@@ -69,6 +69,7 @@ impl std::fmt::Debug for Block {
             Self::ConfigShow(text) => f.debug_tuple("ConfigShow").field(text).finish(),
             Self::Prose(text) => f.debug_tuple("Prose").field(text).finish(),
             Self::Notice(text) => f.debug_tuple("Notice").field(text).finish(),
+            Self::TerminalNotice(text) => f.debug_tuple("TerminalNotice").field(text).finish(),
             Self::Attention(rows) => f.debug_tuple("Attention").field(rows).finish(),
             Self::Table(_) => f.write_str("Table"),
             Self::DoctorFindings(rows) => f.debug_tuple("DoctorFindings").field(rows).finish(),
@@ -139,6 +140,10 @@ pub enum Block {
     /// every mode (`output-modes.md` §5), so a pipe receives only records
     /// while a human still sees the notice.
     Notice(String),
+    /// A stderr notice for a human at a terminal. Table and plain modes write
+    /// it to stderr; `json` and `ndjson` drop it, because the document already
+    /// carries the same text. Use only when the document has the text.
+    TerminalNotice(String),
     /// Operator attention rows, wrapped as associated per-item details on a
     /// terminal and rendered as one escaped tab-separated record per item in
     /// plain mode.
@@ -263,6 +268,16 @@ impl Block {
             text.pop();
         }
         Self::Notice(text)
+    }
+
+    /// A stderr notice for the terminal only, for the common single-`String`
+    /// case. Like [`Block::notice`], one trailing newline is dropped.
+    pub fn terminal_notice(text: impl Into<String>) -> Self {
+        let mut text = text.into();
+        if text.ends_with('\n') {
+            text.pop();
+        }
+        Self::TerminalNotice(text)
     }
 
     /// A grid block.

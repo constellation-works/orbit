@@ -18,6 +18,7 @@ execution summary chunks with SQLite FTS5 BM25. Query words need not be adjacent
 `limit` full matches survive filtering, any-term matches fill the remaining
 slots, ordered by matched-term count in the best chunk, then BM25. These hits
 carry `matched_by: ["partial", "terms:1/2"]`, also shown in the CLI MATCH column.
+The `terms:n/m` label counts query terms in the best matching chunk.
 Terms are quoted literally before FTS parsing. Prefer a few distinctive terms from
 the task; search does not infer synonyms. Task create/update writes chunks
 synchronously in both CLI and long-lived hosts; deletion retracts them.
@@ -30,12 +31,15 @@ a token. That supplement is a literal contiguous substring match: it is
 case-insensitive with Unicode case folding, and it preserves the field's
 raw whitespace, so a multi-word substring query matches only where the
 words appear contiguously with the same internal whitespace. Tasks not yet
-indexed with those sidecar fields still fall back
-to a bundle-document matcher with the same substring semantics; an
-`orbit search reindex` after upgrade indexes every task with them. Artifact
-payloads are not searched. Frictions match a single case-insensitive substring, so query
-words must be adjacent. Empty multi-word results and partial task results carry
-notes explaining the semantics for each searched kind.
+indexed with those sidecar fields still fall back to a bundle-document matcher
+with the same substring semantics. With no usable lexical index, or a status
+selection the generated index cannot answer, that matcher supplements every
+task instead. An `orbit search reindex` after upgrade indexes every task with
+those fields. Artifact payloads are not searched. Frictions match a single
+case-insensitive substring, so query words must be adjacent.
+
+An empty multi-word result, or one with partial task hits, carries one short
+note naming the next step. The rules in this file are the full semantics.
 
 Before creating a task, search its distinctive title or description terms to
 check for duplicates. Use the same query form for prior context after loading a

@@ -79,6 +79,7 @@ fn table_notices(view: &View) -> Vec<&str> {
             | Block::ConfigShow(_)
             | Block::Prose(_)
             | Block::Notice(_)
+            | Block::TerminalNotice(_)
             | Block::Attention(_)
             | Block::DoctorFindings(_) => None,
         })
@@ -102,6 +103,7 @@ fn block_notices(view: &View) -> Vec<&str> {
             | Block::ConfigShow(_)
             | Block::Prose(_)
             | Block::Table(_)
+            | Block::TerminalNotice(_)
             | Block::Attention(_)
             | Block::DoctorFindings(_) => None,
         })
@@ -162,7 +164,9 @@ fn emit_human(doc: Value, view: View, sink: &OutputSink) -> Result<(), OrbitErro
                         }
                     }
                     Block::Prose(text) => println!("{}", sink.wrap_prose(&text)),
-                    Block::Notice(text) => eprintln!("{}", sink.wrap_prose(&text)),
+                    Block::Notice(text) | Block::TerminalNotice(text) => {
+                        eprintln!("{}", sink.wrap_prose(&text));
+                    }
                     Block::Table(table) => truncated |= table.emit(sink),
                     Block::Attention(rows) => {
                         if sink.mode() == OutputMode::Table {
