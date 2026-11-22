@@ -250,13 +250,21 @@ pub(super) fn parse_landing_output(
         .as_object()
         .ok_or(DeliveryEvidenceGap::OutputMalformed)?;
     if step.activity == LOCAL_LANDING_ACTIVITY {
-        // `git_merge` records `{}` when the run carried no task, and the
-        // fast-forward target otherwise. The landed SHA is not recorded.
+        // `git_merge` records `{}` when the run carried no task. A
+        // fast-forward records the base and, when the host knows it,
+        // `landed_commit`: the commit the base is at after the merge,
+        // including a merge that follows a rebase. An older checkpoint
+        // omits that SHA. The landing stays merged; the caller treats the
+        // missing identity as unresolved rather than as no culprit.
         return match object.get("base").and_then(Value::as_str) {
-            Some(_) => Ok(Some(LandingObservation {
-                method: Some(LandingMethod::LocalFastForward),
-                ..landing(LandingObservationStatus::Merged)
-            })),
+            Some(_) => {
+                let landed_commit = optional_sha(object.get("landed_commit"))?;
+                Ok(Some(LandingObservation {
+                    method: Some(LandingMethod::LocalFastForward),
+                    landed_commit,
+                    ..landing(LandingObservationStatus::Merged)
+                }))
+            }
             None if object.is_empty() => Ok(None),
             None => Err(DeliveryEvidenceGap::OutputMalformed),
         };
