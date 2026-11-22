@@ -1,8 +1,8 @@
 ---
 title: "Scope: randomized experiments over agent treatments"
 owner: claude
-last_updated: 2026-11-07
-last_validated: 2026-11-07
+last_updated: 2026-11-21
+last_validated: 2026-11-21
 status: Draft
 stage: building
 next: "The horizon decision-channel step remains unfiled"
@@ -173,9 +173,9 @@ activities themselves.
 |---|---|---|---|
 | Instructions | A repository file per role (`implement`, `review`, `recovery`), or `false` to suppress a shipped default | The tag-instruction slot; an experiment's text follows tag-instruction text | File exists at the current base |
 | Skills | Replace a named skill with a bundle directory in the repository | Invocation-local Claude skill root on Unix; control keeps global links, other providers refuse | Bundle exists and parses at the base; provider supports isolated replacement |
-| Tools | Add tools to, or remove optional tools from, the activity baseline | Adding reuses `admit_required_tools`; removal applies a per-run denial after `resolve_activity_tool_grant` | Tools exist and are agent-facing; a run-bound tool (`orbit.memory.*`) cannot be added; a tool the activity contract requires cannot be removed |
+| Tools | Add tools to, or remove optional tools from, the activity baseline | Adding reuses `admit_required_tools`; removal applies a per-run denial after `resolve_activity_tool_grant` | Tools exist and are agent-facing; a run-bound tool (`orbit.memory.*`) cannot be added ([ORB-26553]); a tool the activity contract requires cannot be removed |
 | Crew | A crew pool (members and weights) for the arm | The admission crew draw, as the run-level `<complexity>_complexity_crews` override does today; the arm's pool skips performance weighting | Crews exist and may run the task's complexity |
-| Memory | `roles` and `global`: deliver the drawn crew's model memory space (and the reviewed global memory) as data ([crew memory §5](../crew-memory/2_design.md#5-delivery-the-memory-overlay-surface)) | Resolved after the crew draw into the admission capture; a `crew_memory` envelope field plus one fixed precedence sentence | None beyond the usual checks: a running memory arm switches crew memory on ([crew memory §1](../crew-memory/2_design.md#1-experimental-gate)) |
+| Memory | `roles` and `global`: deliver the drawn crew's model memory space (and the reviewed global memory) as data ([crew memory §5](../crew-memory/2_design.md#5-delivery-the-memory-overlay-surface)) | Resolved after the crew draw into the admission capture; a `crew_memory` envelope field plus one fixed precedence sentence | A running memory arm switches the retained machinery on; [ORB-26501] retired its external surfaces ([crew memory §1](../crew-memory/2_design.md#1-experimental-gate)) |
 | Config | Values for allowlisted keys only | `orbit_config::ExperimentConfigKey` admits `workflow.explore.max_calls_per_run` (integer 1–100) and `visual_review.reviewer` (boolean); both are inert and kept so historical experiments still validate | Key is on both the code list and the workspace allowlist |
 
 Each overlay entry names the roles it applies to; the default is `implement` only. Review and
@@ -276,7 +276,9 @@ comments only for records written before that event. `review_repairs` counts
 a task's `accept_with_fixes` settlements, and that count (zero included) is
 measured only for a task with at least one settlement; a terminal task with no review
 gate settlement is `unmeasured` for `review_repairs`, not a measured zero,
-because no review happened. A non-terminal task stays open.
+because no review happened. A non-terminal task stays open. [ORB-24133] updated
+these outcomes for typed settlements; [ORB-23879] added the unmeasured rule and
+the warnings below.
 
 When the primary metric is unmeasured on every
 settled task in every active arm, the readout carries a
@@ -417,7 +419,7 @@ fixed them at those defaults.
   shared trend ladder, the per-complexity table, health warnings (sample ratio, drift, open
   lagging outcomes), the event timeline, and the conclude action for operators. Operators
   also create a draft, edit a draft and start one there, through the same core lifecycle as
-  `orbit.experiment.create`, `update` and `start`. [ORB-22359] organized the detail around a
+  `orbit.experiment.create`, `update` and `start`; [ORB-24173] added pause and resume. [ORB-22359] organized the detail around a
   decision band and three tabs: Result holds arm cards and primary/guardrail differences;
   Trust holds health, delivery, crew mix, cumulative series and the per-complexity table;
   Setup holds the definition and timeline. [ORB-22445] separated record and readout loading:
@@ -476,10 +478,11 @@ fixed them at those defaults.
    code: the tag-instruction slot and the tool allowlist, on owner and claimed runs, with
    digests.
 3. **Skills, crew and config keys.** Done ([ORB-18476] added crew and allowlisted config-key
-   overlays; [ORB-18477] added the per-run skill overlay). The remaining surfaces, each
+   overlays; [ORB-18477] added the per-run skill overlay; [ORB-23114] added the memory overlay). The remaining surfaces, each
    validated at start.
 4. **Readout.** Done ([ORB-18478] built the per-arm readout; [ORB-18479] built the
-   Analytics › Experiments dashboard page; [ORB-19368] added create, edit and start there).
+   Analytics › Experiments dashboard page; [ORB-19368] added create, edit and start there;
+   [ORB-24173] added pause and resume).
    The analysis endpoint and Analytics › Experiments.
 5. **Decision and promotion.** Done in part ([ORB-18480] made conclude store the readout
    snapshot and file one promotion task). Conclude stores the readout snapshot and files one promotion
@@ -545,7 +548,7 @@ fixed them at those defaults.
 - [ORB-19390] — enrolls eligible tasks after experiments are enabled while a drain is already running
 - [ORB-19982] — added the live visual-review experiment and its reviewer config overlay
 - [ORB-20370] — added guarded deletion of experiments that never applied a live treatment
-- [ORB-20383] — is approved to remove explorer tooling and reconcile affected experiment surfaces
+- [ORB-20383] — removed explorer tooling and reconciled affected experiment surfaces
 - [ORB-20572] — records incomplete tool traces and excludes them from first-edit measurements
 - [ORB-20590] — separates later retry trace warnings from first-invocation first-edit measurement
 - [ORB-20597] — withholds the verdict when a treatment arm's overlay was not delivered, and adds
@@ -556,6 +559,15 @@ fixed them at those defaults.
 - [ORB-22445] — loads the experiment record independently and reduces readout cost
 - [ORB-22475] — preserves a stale-readout notice and Retry in each result-bearing tab
 - [ORB-22524] — documents both typed config keys and the visual-review role exception
+- [ORB-22804] — removed crew-performance weighting.
+- [ORB-22805] — removed explore briefs.
+- [ORB-22808] — fixed the experiment limits at their former defaults.
+- [ORB-23114] — added the crew-memory experiment overlay and receipt capture.
+- [ORB-23879] — added primary-metric unmeasurability warnings and the review-repairs measurement rule.
+- [ORB-24133] — changed experiment outcome documentation to typed review settlements.
+- [ORB-24173] — added dashboard pause and resume for experiments.
+- [ORB-26553] — refused run-bound memory tools in experiment tool additions.
+- [ORB-26501] — retired crew memory's external surfaces while retaining experiment machinery.
 - [ORB-22807] — removed visual review: the `visual-review` template, the visual metrics, and the
   effect of `visual_review.reviewer`, which stays allowlisted for historical experiments
 
