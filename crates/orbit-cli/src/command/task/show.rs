@@ -34,7 +34,7 @@ pub(super) fn render(
             // before rendering either surface.
             let value = single_field_value(&value, &fields);
             let text = fields_text(&value, &fields)?;
-            Ok(Payload::detail(value, text).into())
+            Ok(Payload::blocks(value, vec![Block::prose(text)]).into())
         }
         None => record(runtime, input, value),
     }
@@ -391,7 +391,9 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
         bold("Updated:"),
         dimmed(&timestamp(field("updated_at").unwrap_or_default()))
     );
-    Ok(Payload::blocks(doc, vec![Block::text(out)]).into())
+    // Prose: a terminal word-wraps each line to its width, keeping the indent;
+    // pipes and `--format plain` keep the text whole.
+    Ok(Payload::blocks(doc, vec![Block::prose(out)]).into())
 }
 
 /// The operator-facing run summary belongs only on active and review tasks.
