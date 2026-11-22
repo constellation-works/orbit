@@ -110,7 +110,10 @@ contributions.
   row whose `reviewed_units` is 0 has no reviewed denominator, so its
   review-derived axes (`first_pass_accepts`, `review_rejects` and
   `reviewer_repairs`) are gaps with the reason **no reviewed deliveries**,
-  never a centre (worst) or rim (best) zero. `reviewed_units` is a
+  never a centre (worst) or rim (best) zero. Their expected rate is
+  **unavailable** in the vertex disclosure, accessible name and table: the
+  zero expected count has no denominator, so it is not an expected rate of 0.
+  A measured zero with reviewed deliveries keeps its zero rate. `reviewed_units` is a
   count of the row's tasks with a settled first review and the scoring
   denominator for those three terms. With none, API rates are null and contributions are zero. In the
   ranking, a review column that no row can score leaves the table and one note

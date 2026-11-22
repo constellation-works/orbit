@@ -1103,9 +1103,12 @@ function radarNode(row) {
   const expectedCount = (axis, each) => (!axis.unscored && each.expected && typeof each.expected[axis.key] === "number"
     ? each.expected[axis.key]
     : null);
+  // No denominator means no expected rate: the producer's zero expected count
+  // for an unreviewed row is not an expectation of a zero rate.
   const expectedRate = (axis, each) => {
     const exp = expectedCount(axis, each);
-    return exp == null ? null : exp * 100 / Math.max(1, units(axis, each));
+    const denominator = units(axis, each);
+    return exp == null || !(denominator > 0) ? null : exp * 100 / denominator;
   };
   const excess = (axis, each) => {
     const ownRate = rate(axis, each);
@@ -1262,7 +1265,7 @@ function radarNode(row) {
     const weightText = axis.unscored ? "unscored" : weight(axis.weight);
     const contributionText = axis.unscored ? "unscored" : axisContribution == null ? "—" : signed(axisContribution);
     const evidence = usesExpected
-      ? `${number(count(axis, row))} raw (${number(expectedAxisCount)} expected); ${number(units(axis, row))} ${termUnit(axis)}`
+      ? `${number(count(axis, row))} raw (${referenceRate == null ? "expected unavailable" : `${number(expectedAxisCount)} expected`}); ${number(units(axis, row))} ${termUnit(axis)}`
       : `${number(count(axis, row))} raw; ${number(units(axis, row))} ${termUnit(axis)}`;
     const contribLabel = usesExpected ? "contribution" : "contribution vs fleet median";
     const info = `${label}: agent ${ownText}; ${refBasis} ${refRateText}; weight ${weightText}; ${contribLabel} ${contributionText}; ${evidence}${reason ? `; gap: ${reason}` : ""}.`;
