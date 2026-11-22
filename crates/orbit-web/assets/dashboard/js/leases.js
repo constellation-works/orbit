@@ -7,7 +7,7 @@
 // [ORB-22808], so the rail hides this tab wherever `lease_enabled` is false.
 // Every node is built with `el()`.
 
-import { el, fetchJson, formatClock, formatDateTime, getWorkspaceRevision, isAggregateView, isPanelPoll, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
+import { captureWorkspaceVisit, el, fetchJson, formatClock, formatDateTime, getWorkspaceRevision, isAggregateView, isPanelPoll, onWorkspaceChange, renderPanelPlaceholder, requestPanel, syncNodes } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -18,6 +18,9 @@ const NOTICE_PAGE = 500;
 const NOTICE_PAGES_PER_REFRESH = 10;
 const RECENT_LANDINGS = 20;
 let landings = { revision: null, cursor: 0, notices: [], caughtUp: false, reading: null };
+onWorkspaceChange(() => {
+  landings = { revision: null, cursor: 0, notices: [], caughtUp: false, reading: null };
+});
 
 const text = (value) => (typeof value === "string" ? value : "");
 const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === "string") : []);
@@ -75,11 +78,12 @@ export async function fetchAndRenderLeases() {
     return;
   }
   if (isPanelPoll() && leasesOff()) return;
-  const revision = getWorkspaceRevision();
+  const visit = captureWorkspaceVisit();
+  const revision = visit.revision;
   await requestPanel(
     "leases-body",
     `leases:${revision}`,
-    () => readLeaseRoute(revision, () => fetchJson("/api/leases")),
+    () => readLeaseRoute(revision, () => fetchJson("/api/leases", { visit })),
     (payload) => (payload === OFF
       ? renderLeasesOff()
       : renderLeases(Array.isArray(payload?.leases) ? payload.leases : [])),
@@ -94,33 +98,38 @@ export async function fetchAndRenderLeaseLandings() {
     return;
   }
   if (isPanelPoll() && leasesOff()) return;
-  const revision = getWorkspaceRevision();
+  const visit = captureWorkspaceVisit();
+  const revision = visit.revision;
   await requestPanel(
     "lease-landings-body",
     `lease-landings:${revision}`,
-    () => readLeaseRoute(revision, readLandings),
+    () => readLeaseRoute(revision, () => readLandings(visit)),
     (state) => (state === OFF ? renderLandingsOff() : renderLandings(state)),
     "lease-landings-count",
   );
 }
 
 // One reader per visit: an overlapping refresh waits for the read in flight
-// rather than advancing the same cursor twice.
-function readLandings() {
-  const revision = getWorkspaceRevision();
+// rather than advancing the same cursor twice. Each reader is fenced by its
+// captured host/workspace visit so a retired read cannot issue continuation
+// requests under a newly selected scope.
+function readLandings(visit) {
+  const revision = visit.revision;
   if (landings.revision !== revision) {
     landings = { revision, cursor: 0, notices: [], caughtUp: false, reading: null };
   }
   const state = landings;
   if (!state.reading) {
-    state.reading = readLandingPages(state).finally(() => { state.reading = null; });
+    state.reading = readLandingPages(state, visit).finally(() => { state.reading = null; });
   }
   return state.reading;
 }
 
-async function readLandingPages(state) {
+async function readLandingPages(state, visit) {
   for (let page = 0; page < NOTICE_PAGES_PER_REFRESH; page++) {
-    const body = await fetchJson(`/api/leases/notices?after=${state.cursor}&limit=${NOTICE_PAGE}`);
+    if (!visit.isCurrent()) return state;
+    const body = await fetchJson(`/api/leases/notices?after=${state.cursor}&limit=${NOTICE_PAGE}`, { visit });
+    if (!visit.isCurrent()) return state;
     const notices = Array.isArray(body?.notices) ? body.notices : [];
     for (const notice of notices) {
       if (notice?.kind === "overlap_landed" && Number(notice.seq) > state.cursor) state.notices.push(notice);

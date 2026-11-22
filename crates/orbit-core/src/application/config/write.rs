@@ -2,13 +2,15 @@ use std::path::PathBuf;
 
 use orbit_common::OrbitError;
 use orbit_config::{
-    ConfigScope, ConfigStore, WorkspaceInitMode, admit_config_key, load_effective_config,
+    ConfigScope, ConfigStore, ConfigValueSourceKind, WorkspaceInitMode, admit_config_key,
+    load_effective_config,
 };
 use serde_json::{Map, Value as JsonValue, json};
 
 use crate::runtime::OrbitRuntime;
 
 use super::paths::{config_roots, global_config_path, workspace_config_path};
+use super::provenance::fallback_preserves_effective;
 use super::rows::{CREW_FIELDS, CREW_REFERENCE_KEYS, crew_rows, effective_row};
 use super::view::{crew_value, effective_value};
 
@@ -105,6 +107,26 @@ pub fn set_key_literal(
     write_outcome(runtime, scope, &store, old_value, &[key.to_string()])
 }
 
+/// Why a guarded config removal refused to clear a key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigUnsetRefusal {
+    /// Stable machine-readable refusal code.
+    pub code: &'static str,
+    /// Human-readable reason explaining why the value was preserved.
+    pub message: String,
+}
+
+/// Result of a guarded config key removal that requires preserving the
+/// effective value.
+#[derive(Debug, Clone)]
+pub enum GuardedConfigUnset {
+    /// The key was cleared without changing the effective value.
+    Unset(ConfigWriteOutcome),
+    /// The key was preserved because removal would change or cannot predict
+    /// the effective value.
+    Refused(ConfigUnsetRefusal),
+}
+
 /// Clear one key from `scope`'s file so the layer below takes over again.
 pub fn unset_key(
     runtime: &OrbitRuntime,
@@ -125,6 +147,101 @@ pub fn unset_key(
             Ok(old_value)
         })?;
     write_outcome(runtime, scope, &store, old_value, &[key.to_string()])
+}
+
+/// Clear one key from `scope`'s file only when its admitted current effective
+/// value still equals its admitted current removal fallback.
+///
+/// Re-resolves the layered configuration under the target file's write lock so
+/// a concurrent edit to either layer cannot turn bulk cleanup into a silent
+/// effective-value change. An unknown (`None`) or mismatched fallback refuses
+/// without modifying the file.
+pub fn unset_key_preserving_effective(
+    runtime: &OrbitRuntime,
+    key: &str,
+    scope: ConfigScope,
+) -> Result<GuardedConfigUnset, OrbitError> {
+    admit_config_key(key)?;
+    let expected_layer = match scope {
+        ConfigScope::Workspace if runtime.shared_root() != runtime.global_root() => {
+            ConfigValueSourceKind::Workspace
+        }
+        _ => ConfigValueSourceKind::Global,
+    };
+    let result = write_store_conditional(
+        runtime,
+        scope,
+        ConfigWriteInit::RequireExisting,
+        |store| {
+            if !store.is_key_set(key) {
+                return Err(OrbitError::InvalidInput(format!(
+                    "'{key}' is not set in the {} config; nothing to clear",
+                    scope.label()
+                )));
+            }
+            let effective = load_effective_config(&config_roots(runtime))?;
+            let Some(entry) = effective.values().iter().find(|entry| entry.key == key) else {
+                return Ok(ConditionalEdit::Abort(ConfigUnsetRefusal {
+                    code: "unknown_fallback",
+                    message: format!(
+                        "removal fallback for '{key}' is unknown; {} value preserved",
+                        scope.label()
+                    ),
+                }));
+            };
+            if entry.source.kind() != expected_layer {
+                return Ok(ConditionalEdit::Abort(ConfigUnsetRefusal {
+                    code: "effective_source_changed",
+                    message: format!(
+                        "'{key}' currently resolves from {} rather than {}; {} value preserved",
+                        entry.source.kind().label(),
+                        expected_layer.label(),
+                        scope.label()
+                    ),
+                }));
+            }
+            let Some(fallback) = entry.fallback.as_ref() else {
+                return Ok(ConditionalEdit::Abort(ConfigUnsetRefusal {
+                    code: "unknown_fallback",
+                    message: format!(
+                        "removal fallback for '{key}' is unknown; {} value preserved",
+                        scope.label()
+                    ),
+                }));
+            };
+            if !fallback_preserves_effective(entry, expected_layer) {
+                return Ok(ConditionalEdit::Abort(ConfigUnsetRefusal {
+                    code: "effective_value_would_change",
+                    message: format!(
+                        "removing '{key}' from the {} config would change the effective value from {} to {} ({}); value preserved",
+                        scope.label(),
+                        entry.value,
+                        fallback.value,
+                        fallback.layer.label()
+                    ),
+                }));
+            }
+            let old_value = entry.value.clone();
+            if !store.unset_value(key)? {
+                return Err(OrbitError::InvalidInput(format!(
+                    "'{key}' is not set in the {} config; nothing to clear",
+                    scope.label()
+                )));
+            }
+            validate_store(runtime, scope, store)?;
+            Ok(ConditionalEdit::Save(old_value))
+        },
+    )?;
+    match result {
+        ConditionalWrite::Saved(store, old_value) => Ok(GuardedConfigUnset::Unset(write_outcome(
+            runtime,
+            scope,
+            &store,
+            old_value,
+            &[key.to_string()],
+        )?)),
+        ConditionalWrite::Aborted(refusal) => Ok(GuardedConfigUnset::Refused(refusal)),
+    }
 }
 
 /// Create or edit one crew table. Only the supplied fields are written; a
@@ -234,6 +351,16 @@ fn validate_store(
     }
 }
 
+enum ConditionalEdit<T, R> {
+    Save(T),
+    Abort(R),
+}
+
+enum ConditionalWrite<T, R> {
+    Saved(Box<ConfigStore>, T),
+    Aborted(R),
+}
+
 /// One write of `scope`'s file as a transaction: under the file's write lock,
 /// open it, let `edit` mutate and validate the staged document, then save
 /// exactly what was validated. A concurrent writer of the same file waits for
@@ -244,6 +371,22 @@ fn write_store<T>(
     init: ConfigWriteInit,
     edit: impl FnOnce(&mut ConfigStore) -> Result<T, OrbitError>,
 ) -> Result<(ConfigStore, T), OrbitError> {
+    match write_store_conditional(runtime, scope, init, |store| {
+        edit(store).map(ConditionalEdit::<T, std::convert::Infallible>::Save)
+    })? {
+        ConditionalWrite::Saved(store, value) => Ok((*store, value)),
+        ConditionalWrite::Aborted(never) => match never {},
+    }
+}
+
+/// Locked config transaction whose `edit` may refuse before saving, leaving
+/// the underlying file untouched.
+fn write_store_conditional<T, R>(
+    runtime: &OrbitRuntime,
+    scope: ConfigScope,
+    init: ConfigWriteInit,
+    edit: impl FnOnce(&mut ConfigStore) -> Result<ConditionalEdit<T, R>, OrbitError>,
+) -> Result<ConditionalWrite<T, R>, OrbitError> {
     if scope == ConfigScope::Workspace {
         let cwd = std::env::current_dir().map_err(|err| OrbitError::Io(err.to_string()))?;
         // `--root` pins global and shared to one directory. `ORBIT_ROOT` is
@@ -270,9 +413,13 @@ fn write_store<T>(
                 init.mode(),
             )?,
         };
-        let edited = edit(&mut store)?;
-        store.save()?;
-        Ok((store, edited))
+        match edit(&mut store)? {
+            ConditionalEdit::Save(edited) => {
+                store.save()?;
+                Ok(ConditionalWrite::Saved(Box::new(store), edited))
+            }
+            ConditionalEdit::Abort(refusal) => Ok(ConditionalWrite::Aborted(refusal)),
+        }
     })
 }
 

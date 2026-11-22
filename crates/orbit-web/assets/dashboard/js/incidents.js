@@ -19,7 +19,7 @@
 // Counts stay per signature: a cause header counts signatures, never runs or
 // events added across them.
 
-import { incidentClassLabel, INCIDENT_CLASS_TITLES, auditActorLabel, el, fetchJson, syncNodes, getWindow, setWindow, notifyScopeChange, DASHBOARD_WINDOWS, getWorkspace, getHost, getWorkspaceRevision, onWorkspaceChange, formatAge, formatDateTime, bindRunLink, bindTaskLink, makeCopyButton, truncate } from './common.js';
+import { currentHostToken, incidentClassLabel, INCIDENT_CLASS_TITLES, auditActorLabel, el, fetchJson, syncNodes, getWindow, setWindow, notifyScopeChange, DASHBOARD_WINDOWS, getWorkspace, getHost, getWorkspaceRevision, onWorkspaceChange, formatAge, formatDateTime, bindRunLink, bindTaskLink, makeCopyButton, truncate } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 const $ = (id) => document.getElementById(id);
@@ -59,6 +59,7 @@ let selectedKey = null;
 let runsOpen = false;
 let evidenceOpen = false;
 let lastPayload = null;
+let lastPayloadHost = null;
 let lastCtx = {};
 let layout = null;
 // Full messages loaded for the detail panel, by host, workspace and audit row.
@@ -77,6 +78,7 @@ function cacheFullMessage(key, value) {
 onWorkspaceChange(() => {
   fullMessageLoads.clear();
   lastPayload = null;
+  lastPayloadHost = null;
 });
 
 export function getIncidentClass() { return incidentClass; }
@@ -875,6 +877,7 @@ function openAuditEvents(group) {
     role: eventIds ? null : (sharedIncidentActor(group.incidents) || null),
     tool: eventIds || sample.has_tool_identity === false ? null : (sample.surface || null),
     eventIds,
+    eventHost: eventIds ? (lastPayloadHost || currentHostToken()) : null,
   });
 }
 
@@ -1164,6 +1167,7 @@ function rerender() {
 
 export function renderIncidents(payload, ctx = {}, { interactive = false } = {}) {
   lastPayload = payload || {};
+  lastPayloadHost = currentHostToken();
   lastCtx = ctx;
   const body = $("diag-body");
   if (!body) return;

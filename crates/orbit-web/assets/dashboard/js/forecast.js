@@ -96,7 +96,53 @@ let tabPickListener = null;
 // read succeeds in the workspace, so an unknown count never reads as zero.
 let proposedKnown = null;
 
+// Single size observer for the currently mounted one-row forecast header.
+// Allocated only once a header is mounted (never for discarded candidate nodes)
+// and released on replacement, empty render or workspace reset.
+let headerResizeObserver = null;
+let observedHeader = null;
+
+function releaseHeaderObservation() {
+  if (headerResizeObserver && observedHeader) {
+    headerResizeObserver.unobserve(observedHeader);
+    observedHeader = null;
+  }
+}
+
+function observeMountedHeader(body) {
+  const header = body?.querySelector(".fc-header-row") || null;
+  if (!header) {
+    releaseHeaderObservation();
+    return;
+  }
+  if (header === observedHeader) {
+    fitForecastHeaderRow(header);
+    return;
+  }
+  releaseHeaderObservation();
+  if (typeof ResizeObserver === "function") {
+    headerResizeObserver ||= new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.target.isConnected) {
+          headerResizeObserver.unobserve(entry.target);
+          if (observedHeader === entry.target) observedHeader = null;
+          continue;
+        }
+        fitForecastHeaderRow(entry.target);
+      }
+    });
+    observedHeader = header;
+    headerResizeObserver.observe(header);
+    header.teardown = () => {
+      if (headerResizeObserver) headerResizeObserver.unobserve(header);
+      if (observedHeader === header) observedHeader = null;
+    };
+  }
+  fitForecastHeaderRow(header);
+}
+
 function clearForecast() {
+  releaseHeaderObservation();
   view.payload = null;
   liveRefresh = null;
   view.historyPage = 0;
@@ -269,6 +315,7 @@ export function renderForecast() {
   root.dataset.key = "forecast-view";
   root.dataset.hash = JSON.stringify([view.history, view.scenario, view.payload, view.historyPage, view.residualMetric]);
   syncNodes(body, [root]);
+  observeMountedHeader(body);
   applyForecastTab();
 }
 view.render = renderForecast;
@@ -324,6 +371,8 @@ function applyForecastTab() {
     button.tabIndex = on ? 0 : -1;
   }
   for (const node of body.querySelectorAll(".fc-tabbed")) node.hidden = node.dataset.fcTab !== view.tab;
+  const header = body.querySelector(".fc-header-row");
+  if (header && !header.hidden) fitForecastHeaderRow(header);
   // A long residual series scrolls inside its plot; start at the newest
   // forecast, which needs the plot on screen to measure.
   for (const plot of body.querySelectorAll(".fc-res-plot")) {
@@ -425,9 +474,7 @@ function fitForecastHeaderRow(header) {
 }
 
 function oneRowHeader(children, extraClass = "") {
-  const header = el("div", { class: `fc-header fc-header-row${extraClass}` }, children);
-  if (typeof ResizeObserver === "function") new ResizeObserver(() => fitForecastHeaderRow(header)).observe(header);
-  return header;
+  return el("div", { class: `fc-header fc-header-row${extraClass}` }, children);
 }
 
 function tabbedHeader(tab, children) {
@@ -470,6 +517,7 @@ function renderViewControls() {
   // learned count must replace the node rather than reuse the old one.
   root.dataset.hash = JSON.stringify(["controls", view.history, view.scenario, proposedKnown]);
   syncNodes(body, [root]);
+  observeMountedHeader(body);
 }
 
 // ---- scenario -------------------------------------------------------------

@@ -1,6 +1,6 @@
 // Start policy and checkout information shared by the Tasks dock.
 
-export const AUTO_DRAIN_APPROVE_RULE = "Approval needs context files and an assessed complexity (or the no-diff-expected tag) plus a clean task-pilot verification. Tasks tagged no-auto-approve are skipped.";
+export const AUTO_DRAIN_APPROVE_RULE = "Approval needs context files and an assessed complexity (or the no-diff-expected tag) plus a clean task-pilot verification. Tasks tagged no-drain or no-auto-approve are skipped.";
 
 export function drainCheckout(payload, workspaceId = "") {
   const options = payload?.start_options && typeof payload.start_options === "object" ? payload.start_options : {};

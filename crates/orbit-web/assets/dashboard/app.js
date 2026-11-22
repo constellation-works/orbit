@@ -2141,7 +2141,20 @@ function selectHost(name, { fromHistory = false } = {}) {
   const changed = chooseHost(name);
   if (changed) workspacesWanted = true;
   if (fromHistory) return;
-  if (changed) persistScopeToUrl();
+  if (changed) {
+    persistScopeToUrl();
+    // Exiting a host invalidates any Events exact-ID hash bound to that host.
+    // Rewrite the Events hash in place so the address matches the cleared state.
+    if (window.location.hash.startsWith("#diagnostics/incidents/events")) {
+      const nextHash = buildAuditHash();
+      if (window.location.hash !== nextHash) {
+        const url = new URL(window.location.href);
+        url.hash = nextHash.replace(/^#/, "");
+        window.history.replaceState(window.history.state, "", url);
+        recordRoutedHref();
+      }
+    }
+  }
   refreshDashboard();
 }
 
