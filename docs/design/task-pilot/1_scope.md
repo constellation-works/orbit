@@ -89,8 +89,12 @@ rejects empty `context_files_after` with the `selectors` disposition before writ
 does not add the tag, and the task keeps its readiness gap. The host-computed comment-hygiene hold
 is a separate case: apply accepts its empty selectors with the `selectors` disposition, then the
 host attaches `evidence_gaps` and a holding `utility_warnings` finding that keeps the task held.
-An empty comment-hygiene batch means there is no work, not a no-diff deliverable. A task that
-already holds context files keeps the ordinary `selectors` path and gets no tag.
+An empty comment-hygiene batch means there is no work, not a no-diff deliverable. The tag turns on
+the applied disposition and the footprint apply leaves, not on the selectors the task started with.
+An eligible `verified_no_diff` verdict clears the ordinary selectors the task already held and tags
+it. An ordinary `selectors` verdict keeps its selectors and gets no tag, whatever the task held
+before. A creation grant that `verified_no_diff` meets keeps its scope as an `already_landed` hold
+once its covering commits prove the work landed (otherwise apply refuses it), and never tags.
 
 A drain judges the task as the tagged task it becomes, so the pass that applies an eligible
 deliverable verdict also approves it when no other hold applies. Tagging is never removed by a
