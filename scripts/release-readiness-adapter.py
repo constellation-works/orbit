@@ -176,13 +176,47 @@ def judge_native_rows(request, scenario, rows):
         unavailable("platform-evidence-missing", f"{name} has no valid macOS evidence: {error}")
 
 
-def authenticated_imported_evidence(request, row, name):
-    """An imported row's evidence digest, bound to an owner-authenticated artifact.
+def imported_linux_qa_passes(body, scenario, candidate_id, revision, inventory_sha):
+    """Whether an owner-authenticated artifact is a clean Linux QA report for this
+    candidate that passes `scenario`: the candidate, pinned revision and coverage
+    inventory match, the checkout was clean, the report ran on Linux, and every
+    row for the scenario is a PASS for this candidate with the scenario's command
+    and required assertions. The sweep's own import (`import_platform_evidence`)
+    applies the same candidate, command and assertion checks."""
+    if not isinstance(body, dict) or body.get("schema_version") != 2:
+        return False
+    candidate = body.get("candidate")
+    if not isinstance(candidate, dict) or candidate.get("id") != candidate_id \
+            or candidate.get("source_revision") != revision:
+        return False
+    if body.get("inventory_sha256") != inventory_sha:
+        return False
+    state, environment = body.get("source_state"), body.get("environment")
+    if not isinstance(state, dict) or state.get("status") != []:
+        return False
+    if not isinstance(environment, dict) or environment.get("os") != "Linux":
+        return False
+    results = body.get("results")
+    if not isinstance(results, list):
+        return False
+    rows = [row for row in results if isinstance(row, dict) and row.get("scenario") == scenario["id"]]
+    if not rows or any(row.get("candidate_id") != candidate_id or row.get("outcome") != "PASS"
+                       or row.get("command") != scenario.get("command") for row in rows):
+        return False
+    observed = {item for row in rows for item in row.get("assertions", [])}
+    return observed == set(scenario.get("assertions", []))
+
+
+def authenticated_imported_evidence(request, report, scenario, row):
+    """An imported Linux row, bound to an owner-authenticated Linux QA report.
 
     `imported_from` and `evidence_sha256` are candidate-written, so a truthy
-    value proves nothing. The digest must be exact, the owner's artifact
-    authority must record an operator or Orbit writer for it, and the listed
-    artifact must carry that same digest."""
+    value proves nothing. The digest must be exact and name an artifact the
+    owner's authority records as operator- or Orbit-written. That artifact must
+    itself be a clean Linux QA report for this candidate that passes the
+    scenario (see `imported_linux_qa_passes`). Any other authenticated artifact,
+    such as a macOS certificate, earns no Linux row."""
+    name = scenario["id"]
     digest = row.get("evidence_sha256")
     if not isinstance(row.get("imported_from"), str) or not row["imported_from"]:
         unavailable("platform-evidence-missing", f"{name} has an imported row with no source")
@@ -193,26 +227,33 @@ def authenticated_imported_evidence(request, row, name):
         unavailable("platform-evidence-unauthenticated",
                     f"{name}: the owner supplied no artifact authority for imported evidence")
     artifacts = request["evidence"]["artifacts"]
+    revision = request["trusted"]["source_revision"]
     for path, entry in authority.items():
         if not (isinstance(entry, dict) and entry.get("sha256") == digest
                 and entry.get("writer") in AUTHORITATIVE_WRITERS):
             continue
         listed = artifacts.get(path)
-        if isinstance(listed, dict) and listed.get("sha256") == digest:
+        if not isinstance(listed, dict) or listed.get("sha256") != digest:
+            continue
+        if imported_linux_qa_passes(listed.get("json"), scenario, report["candidate"]["id"], revision,
+                                    report["inventory_sha256"]):
             return
+        unavailable("platform-evidence-missing",
+                    f"{name}: the authenticated artifact `{path}` is not a clean Linux QA report "
+                    f"that passes this scenario for this candidate")
     unavailable("platform-evidence-unauthenticated",
                 f"{name}: no operator- or Orbit-written artifact has the imported evidence digest {digest}")
 
 
-def judge_linux_rows(request, report, name, rows):
+def judge_linux_rows(request, report, scenario, rows):
     """A Linux scenario's rows ran on this trusted Linux host, or were imported
-    from evidence the owner authenticated. The report's own environment block
-    is candidate-written, so it can only agree with the host, never replace it."""
+    from a Linux QA report the owner authenticated. The report's own environment
+    block is candidate-written, so it can only agree with the host, never replace it."""
     for row in rows:
         if row.get("imported_from") or row.get("evidence_sha256"):
-            authenticated_imported_evidence(request, row, name)
+            authenticated_imported_evidence(request, report, scenario, row)
         elif HOST_OS != "Linux" or (report.get("environment") or {}).get("os") != "Linux":
-            unavailable("platform-evidence-missing", f"{name} has no matching Linux evidence")
+            unavailable("platform-evidence-missing", f"{scenario['id']} has no matching Linux evidence")
 
 
 def judge_qa_results(request, inventory, report, candidate_id):
@@ -264,7 +305,7 @@ def judge_qa_results(request, inventory, report, candidate_id):
                 unavailable("retired-case-not-executed",
                             f"required scenario {name} retired case {case.get('retired')} has no executed command")
         if capability == "linux":
-            judge_linux_rows(request, report, name, rows)
+            judge_linux_rows(request, report, scenario, rows)
     return discharged
 
 

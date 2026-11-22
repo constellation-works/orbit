@@ -62,10 +62,14 @@ definition would split that sign-off, so the owner adds one block to the native 
        adapter as `trusted.artifact_authority`; a certificate without one earns nothing,
        whatever its producer fields say. The adapter then uses the QA harness's native
        certificate validator. A required Linux row ran on the adapter's own Linux host,
-       or was imported with an exact `evidence_sha256` the owner authenticated the same
-       way; the report's own `environment` never decides it. Linux evidence
-       never stands in for the macOS certificate. Record what is missing rather than filling it in: a gap
-       leaves the step unavailable.
+       or was imported from a Linux QA report: its `evidence_sha256` must be the exact
+       digest of an artifact the owner authenticated (as above), and that artifact must be
+       a clean QA report of the `qa-full-sweep-report.json` form for this candidate and
+       revision, run on Linux, whose rows for the scenario all pass with its required
+       command and assertions. The report's own `environment` never decides it. No other
+       authenticated artifact earns a Linux row, and Linux evidence never stands in for the
+       macOS certificate. Record what is missing rather than filling it in: a gap leaves
+       the step unavailable.
    ```
 
 4. Bind each step in a job with `require_result: release-readiness/v1`, for example
