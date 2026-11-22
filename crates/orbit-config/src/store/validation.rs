@@ -125,6 +125,30 @@ impl ConfigStore {
         self.staged_workspace_resolved(global_root).map(|_| ())
     }
 
+    /// The value `key` would resolve to if this staged workspace document were
+    /// saved over the global config at `global_root`, or `None` for a key the
+    /// fixed registry snapshot does not hold.
+    pub fn staged_workspace_effective_value(
+        &self,
+        key: &str,
+        global_root: &Path,
+    ) -> Result<Option<JsonValue>, OrbitError> {
+        let resolved = self.staged_workspace_resolved(global_root)?;
+        Ok(resolved.snapshot.value_for(key))
+    }
+
+    /// Whether the staged workspace document would still load as a config
+    /// policy layer. A document left holding only `[plugin_enablement]` (for
+    /// example once an edit empties an implicit dotted table, which TOML
+    /// serialization omits) is not one, so replace-only keys would silently
+    /// resolve from global instead.
+    pub fn staged_workspace_sets_policy(&self) -> bool {
+        match toml::from_str::<toml::Value>(&self.doc.to_string()) {
+            Ok(mut document) => crate::plugin_enablement::strip_plugin_enablement(&mut document),
+            Err(_) => true,
+        }
+    }
+
     /// Validate a staged workspace write and the specific value being set
     /// against the effective config formed by the global and workspace files.
     pub fn validate_workspace_for_set(

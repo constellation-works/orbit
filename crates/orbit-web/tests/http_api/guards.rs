@@ -891,3 +891,48 @@ fn guarded_config_delete_preserves_effective_value_and_keeps_single_delete_uncon
         },
     );
 }
+
+#[test]
+fn guarded_config_delete_refuses_when_only_plugin_enablement_would_remain() {
+    isolated(
+        "guards::guarded_config_delete_refuses_when_only_plugin_enablement_would_remain",
+        || {
+            let fixture = Fixture::new();
+            let global_path = fixture.global.join("config.toml");
+            let workspace_path = fixture.work.join("config.toml");
+            let base_global = std::fs::read_to_string(&global_path).unwrap();
+            std::fs::write(
+                &global_path,
+                format!("{base_global}\n[execution.codex]\nsandbox = \"danger-full-access\"\n"),
+            )
+            .unwrap();
+            // A dotted key lives in an implicit table that serialization drops
+            // once emptied, leaving a file that is no longer a policy layer.
+            std::fs::write(
+                &workspace_path,
+                concat!(
+                    "execution.codex.sandbox = \"workspace-write\"\n",
+                    "[plugin_enablement]\n",
+                ),
+            )
+            .unwrap();
+
+            let server = fixture.server(true);
+            let before = std::fs::read(&workspace_path).unwrap();
+            let refused = server.send(
+                "DELETE",
+                "/api/config/keys/execution.codex.sandbox?scope=workspace&preserve_effective=true&workspace=ws_http_fixture",
+                json!({}),
+            );
+            let status = refused.status().as_u16();
+            let body: Value = refused.json().unwrap();
+            assert_eq!(status, 409, "unexpected response: {body}");
+            assert_eq!(body["code"], "effective_value_would_change");
+            assert_eq!(
+                std::fs::read(&workspace_path).unwrap(),
+                before,
+                "refused guarded delete must not modify workspace config"
+            );
+        },
+    );
+}
