@@ -50,14 +50,15 @@ the mechanisms below are built inside them.
    admission checks before promotion
    (`crates/orbit-core/src/application/task/decision/answering.rs::ensure_proposal_admissible`):
    while a pilot admission hold or an untagged `verified_no_diff` finding
-   stands, or the task has no prepared footprint (empty `context_files` without
-   the `no-diff-expected` tag, or an unassessed complexity), the answer is
-   refused, nothing is written and the request stays open — it never lands in
-   `backlog` with an empty footprint. An eligible no-diff deliverable is tagged
-   in the same pilot write as its assessment; that tag clears the finding hold
-   and permits its intentionally empty footprint, subject to the other
-   admission checks. A later `verified_no_diff` assessment does not reinstate
-   that hold while the task remains tagged. The direct operator approval beside
+   stands, or the task has no prepared footprint or complexity (empty
+   `context_files` or an unassessed complexity; a task tagged `no-diff-expected`
+   has neither gap), the answer is refused, nothing is written and the request
+   stays open — it never lands in `backlog` with an empty footprint. An eligible
+   no-diff deliverable is tagged in the same pilot write as its assessment; that
+   tag clears the finding hold, permits its intentionally empty footprint and
+   satisfies the complexity check, subject to the other admission checks. A later
+   `verified_no_diff` assessment does not reinstate that hold while the task remains
+   tagged. The direct operator approval beside
    its warnings stays advisory. No `--force`, no free-form task edits, no
    requeue by email.
 4. **Host: dk-server-2**, owner of the workspaces the channel serves. The channel
