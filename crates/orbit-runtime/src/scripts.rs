@@ -274,6 +274,17 @@ pub struct ScriptGrantOptions {
     pub output_max_files: Option<u32>,
     /// The largest output file one step may keep, in bytes.
     pub output_max_file_bytes: Option<u64>,
+    /// The script scope's `MemoryMax=`, in bytes. Unset takes the host's
+    /// `machine.worker_memory_max`; a set value is capped at it when the
+    /// scope is built. A re-grant never inherits it.
+    pub memory_max_bytes: Option<u64>,
+    /// The script scope's `TasksMax=`. Unset takes the host's
+    /// `machine.worker_tasks_max`; a set value is capped at it.
+    pub tasks_max: Option<u32>,
+    /// The script scope's `CPUQuota=`, as a percentage of one core. Unset
+    /// takes the host's `machine.worker_cpu_quota`; a set value is capped
+    /// at it when that is set.
+    pub cpu_quota_percent: Option<u32>,
     /// Who the grant records as grantor. Unset is this process's actor
     /// label (the operator at the CLI).
     pub grantor: Option<String>,
@@ -340,6 +351,31 @@ fn grant_output_limits(
             )));
         }
         limits.output_max_file_bytes = bytes;
+    }
+    if let Some(bytes) = options.memory_max_bytes {
+        if bytes == 0 {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` memory ceiling must be at least 1 byte; nothing was granted"
+            )));
+        }
+        limits.memory_max_bytes = Some(bytes);
+    }
+    if let Some(tasks) = options.tasks_max {
+        if tasks == 0 {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` task ceiling must be at least 1; nothing was granted"
+            )));
+        }
+        limits.tasks_max = Some(tasks);
+    }
+    if let Some(percent) = options.cpu_quota_percent {
+        if percent == 0 {
+            return Err(OrbitError::InvalidInput(format!(
+                "script `{name}` CPU quota must be at least 1 percent of one core; nothing \
+                 was granted"
+            )));
+        }
+        limits.cpu_quota_percent = Some(percent);
     }
     Ok(limits)
 }

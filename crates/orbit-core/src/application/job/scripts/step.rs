@@ -295,6 +295,7 @@ fn prepare_and_run(
         &request.run_id,
         &request.step_id,
         runtime.context.settings().worker_containment(),
+        &grant.limits,
         &launcher_env,
     )
     .map_err(|reason| {

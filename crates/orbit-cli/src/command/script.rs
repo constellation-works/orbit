@@ -189,6 +189,33 @@ pub struct ScriptGrantArgs {
     /// bounded by files times bytes and never exceeds 256 MiB.
     #[arg(long, value_name = "BYTES")]
     pub output_max_file_bytes: Option<u64>,
+    /// Memory ceiling of the script's own systemd scope: bytes with an
+    /// optional K, M, G or T suffix (default: this host's
+    /// `machine.worker_memory_max`). Never above the host's value; a
+    /// re-grant without it returns to the default.
+    #[arg(long, value_name = "SIZE", value_parser = parse_script_memory_max)]
+    pub memory_max: Option<u64>,
+    /// Process and thread ceiling of the script's own scope (default:
+    /// `machine.worker_tasks_max`). Never above the host's value.
+    #[arg(long, value_name = "COUNT")]
+    pub tasks_max: Option<u32>,
+    /// CPU ceiling of the script's own scope, as a percentage of one core
+    /// (`200` = two cores; default: `machine.worker_cpu_quota`). Never above
+    /// the host's value when that is set. Enforced only where systemd
+    /// delegates the cpu controller.
+    #[arg(long, value_name = "PERCENT")]
+    pub cpu_quota: Option<u32>,
+}
+
+fn parse_script_memory_max(value: &str) -> Result<u64, String> {
+    orbit_config::MemoryLimit::parse(value)
+        .and_then(orbit_config::MemoryLimit::byte_count)
+        .ok_or_else(|| {
+            format!(
+                "invalid memory size `{value}` (want a positive byte count with an optional \
+                 K, M, G or T suffix)"
+            )
+        })
 }
 
 fn parse_script_network(value: &str) -> Result<ScriptNetwork, String> {
@@ -209,6 +236,9 @@ impl ScriptGrantArgs {
                 follower: self.follower,
                 output_max_files: self.output_max_files,
                 output_max_file_bytes: self.output_max_file_bytes,
+                memory_max_bytes: self.memory_max,
+                tasks_max: self.tasks_max,
+                cpu_quota_percent: self.cpu_quota,
                 ..Default::default()
             },
         )?;
@@ -260,6 +290,25 @@ impl ScriptGrantArgs {
             orbit_types::workflow::activity_job::script_output_total_cap(
                 grant.limits.output_max_files,
                 grant.limits.output_max_file_bytes,
+            ),
+        ));
+        let machine_default =
+            |value: Option<String>| value.unwrap_or_else(|| "host default".to_string());
+        text.push_str(&format!(
+            "granted scope ceilings (capped at this host's machine.worker_* values): memory {}, \
+             tasks {}, cpu {}\n",
+            machine_default(
+                grant
+                    .limits
+                    .memory_max_bytes
+                    .map(|bytes| format!("{bytes} bytes"))
+            ),
+            machine_default(grant.limits.tasks_max.map(|tasks| tasks.to_string())),
+            machine_default(
+                grant
+                    .limits
+                    .cpu_quota_percent
+                    .map(|percent| format!("{percent}%"))
             ),
         ));
         if !grant.interpreter_paths.is_empty() {
