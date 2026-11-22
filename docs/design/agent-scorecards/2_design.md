@@ -69,9 +69,10 @@ contributions.
   Credit axes point out for higher rates; negative-weight axes invert and say
   **fewer is better**.
 - Expectation-adjusted axes place the row by `row.contributions[key]`, the
-  unrounded signed excess the score sums (`weight × (full-precision rate −
-  full-precision expected rate)`), not by a difference of the two-decimal
-  display rates. A positive or negative excess that those display rates would
+  signed excess the score sums (`weight × (full-precision rate −
+  full-precision expected rate)`) snapped to nine decimals so that float noise
+  from the summation order and an exact zero are stable across loads. It is not
+  a difference of the two-decimal display rates. A positive or negative excess that those display rates would
   turn into zero still plots on that side of the middle ring. Exact zero
   excess, including a raw count equal to its expected count, sits at radius
   0.5. Positive excess (it helps the score: credit above expectation, or a
@@ -142,7 +143,7 @@ contributions.
   contribution, raw count, denominator and evidence state. The reference is
   labelled `expected` on an expectation-adjusted axis and `fleet median` on a
   fleet-median axis. On an expectation-adjusted axis the contribution is the
-  score's unrounded signed excess (`row.contributions`), labelled
+  score's signed excess (`row.contributions`, nine-decimal grid), labelled
   **contribution**, and the Score Breakdown uses that same excess. On a
   fleet-median axis it is `weight × (agent rate − median rate)`, labelled
   **contribution vs fleet median**. The count reads
