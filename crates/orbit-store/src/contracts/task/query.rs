@@ -319,6 +319,16 @@ pub struct TaskChangeStamp {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// One task's lifecycle timestamps and current status, projected from a
+/// validated index row without hydrating its envelope on disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskLifecycleStamp {
+    pub id: String,
+    pub status: TaskStatus,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// One fully validated bundle, retaining sidecars from that same read.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRow {

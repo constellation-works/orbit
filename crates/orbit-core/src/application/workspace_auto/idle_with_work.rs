@@ -13,12 +13,14 @@
 
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use orbit_common::OrbitError;
-use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{TaskHistoryEntry, TaskStatus};
 
 use crate::OrbitRuntime;
 use crate::application::job::DrainAdmissionWindow;
 
 type Span = (DateTime<Utc>, DateTime<Utc>);
+
+const WAITING_STATUSES: [TaskStatus; 2] = [TaskStatus::Backlog, TaskStatus::Proposed];
 
 /// One UTC day of [`IdleWithWork`].
 #[derive(Debug, Clone, PartialEq)]
@@ -72,26 +74,25 @@ impl OrbitRuntime {
         let mut unreadable_histories = 0;
         // Each task's waiting time that fell outside every admission window.
         let mut idle_by_task: Vec<(String, Vec<Span>)> = Vec::new();
-        for task in self.list_task_metadata()? {
-            if !is_waiting(task.status) && task.updated_at < since {
-                continue;
-            }
-            let id = task.id.to_string();
-            let history = match self.get_task_history(&id) {
+        let candidates = self.task_lifecycle_stamps_matching(&WAITING_STATUSES, since)?;
+        let candidate_ids: Vec<String> = candidates.iter().map(|task| task.id.clone()).collect();
+        let histories = self.get_task_histories(&candidate_ids)?;
+        for (task, history) in candidates.into_iter().zip(histories) {
+            let history = match history {
                 Ok(history) => history,
                 Err(error) => {
-                    tracing::debug!(task_id = %id, %error, "idle-with-work: history unreadable");
+                    tracing::debug!(task_id = %task.id, %error, "idle-with-work: history unreadable");
                     unreadable_histories += 1;
                     continue;
                 }
             };
-            let idle: Vec<Span> = waiting_spans(&task, &history, now)
+            let idle: Vec<Span> = waiting_spans(task.status, task.created_at, &history, now)
                 .into_iter()
                 .filter_map(|span| clip(span, (since, now)))
                 .flat_map(|span| subtract(span, &windows))
                 .collect();
             if !idle.is_empty() {
-                idle_by_task.push((id, idle));
+                idle_by_task.push((task.id, idle));
             }
         }
         let mut days_out = Vec::new();
@@ -120,20 +121,25 @@ fn is_waiting(status: TaskStatus) -> bool {
     matches!(status, TaskStatus::Backlog | TaskStatus::Proposed)
 }
 
-/// When `task` was `backlog` or `proposed`, from its recorded status
+/// When a task was `backlog` or `proposed`, from its recorded status
 /// changes. A task with none has held its current status since creation; a
 /// history whose first change is not a creation starts from that change's
 /// `from_status` at creation time.
-fn waiting_spans(task: &Task, history: &[TaskHistoryEntry], now: DateTime<Utc>) -> Vec<Span> {
+fn waiting_spans(
+    status: TaskStatus,
+    created_at: DateTime<Utc>,
+    history: &[TaskHistoryEntry],
+    now: DateTime<Utc>,
+) -> Vec<Span> {
     let mut transitions = history
         .iter()
         .filter_map(|entry| entry.to_status.map(|to| (entry, to)))
         .peekable();
     let mut current: Option<(TaskStatus, DateTime<Utc>)> = match transitions.peek() {
-        None => Some((task.status, task.created_at)),
+        None => Some((status, created_at)),
         Some((entry, _)) => entry
             .from_status
-            .map(|from| (from, task.created_at.min(entry.at))),
+            .map(|from| (from, created_at.min(entry.at))),
     };
     let mut spans = Vec::new();
     for (entry, to) in transitions {

@@ -288,6 +288,16 @@ pub trait TaskStoreBackend: Send + Sync {
     fn task_metadata_scan_stamps(
         &self,
     ) -> Result<Vec<crate::contracts::TaskChangeStamp>, OrbitError>;
+    /// Lifecycle timestamps and status for settled tasks whose current status
+    /// is in `statuses` or whose `updated_at` is at or after `updated_since`.
+    /// Validates the generated index once and projects matching rows without
+    /// hydrating every envelope on disk, falling back to a bundle scan when
+    /// the index is missing or stale.
+    fn task_lifecycle_stamps_matching(
+        &self,
+        statuses: &[TaskStatus],
+        updated_since: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<crate::contracts::TaskLifecycleStamp>, OrbitError>;
     /// Which of the given ids carry a tag.
     fn task_ids_with_tag(
         &self,
