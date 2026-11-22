@@ -14,8 +14,8 @@ use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use serde_json::{Value, json};
 
 use super::backlog_forecast::{
-    ENDPOINT, completed, completed_work, drain_hours, initial_work_forecast_baseline, prediction,
-    retimestamp_invocation,
+    ENDPOINT, backlog_task, completed, completed_work, drain_hours, forecast_tick,
+    initial_work_forecast_baseline, prediction, retimestamp_invocation,
 };
 use super::support::{Fixture, isolated, json_ok};
 
@@ -1060,16 +1060,19 @@ fn cohort_withheld_when_holdout_p50_error_worsens() {
 /// finite-sample upper rank is ceil(0.9 × 30) = 27, so the upper log
 /// adjustment is ln(27/20). Rounding in the cumulative target used to reject
 /// that rank and report ln(28/20). Residual weights are `0.5^(age / 14 days)`
-/// with whole-second truncation, so they are exactly 0.5 while the server
-/// clock stays within a second of this test's start, the condition under
-/// which the rounding is reproduced.
+/// with whole-second truncation, and the rounding is reproduced only at an
+/// exact weight of 0.5. The server clock cannot be pinned, so the forecast is
+/// fitted by the owner clock at a whole-second `now` and read back as the
+/// stored snapshot: every residual is then exactly 14 days old and the weight
+/// is 0.5 on every run [ORB-26772].
 #[test]
 fn equal_weight_upper_rank_is_the_finite_sample_rank() {
     isolated(
         "backlog_correction::equal_weight_upper_rank_is_the_finite_sample_rank",
         || {
             let fixture = Fixture::new();
-            let now = Utc::now();
+            // Whole seconds keep every stored timestamp exactly 14 days apart.
+            let now = DateTime::from_timestamp(Utc::now().timestamp() - 300, 0).unwrap();
             let done_at = now - Duration::days(14);
             let mut medium = Vec::new();
             for hours in 1..=29 {
@@ -1090,10 +1093,13 @@ fn equal_weight_upper_rank_is_the_finite_sample_rank() {
                     .collect(),
             );
 
+            // The clock tick stores the canonical forecast fitted at `now`;
+            // the default read serves it, so the server clock never enters.
+            backlog_task(&fixture, "Open work", &["file:open.rs"], &[], &[]);
+            forecast_tick(&fixture, now, false);
             let server = fixture.server(false);
-            let response = initial_work_forecast_baseline(json_ok(
-                server.get(&format!("{ENDPOINT}&history_tasks=5&concurrency=1")),
-            ));
+            let response = json_ok(server.get(ENDPOINT));
+            assert_eq!(response["served_from"], "stored", "{response}");
             let work = cohort(&response["inputs"]["correction"], "medium", "work_hours");
             assert_eq!(work["n"], 29, "{work}");
             let upper = work["p90_log_adjust"].as_f64().unwrap();
