@@ -65,8 +65,8 @@ definition would split that sign-off, so the owner adds one block to the native 
        or was imported from a Linux QA report: its `evidence_sha256` must be the exact
        digest of an artifact the owner authenticated (as above), and that artifact must be
        a clean QA report of the `qa-full-sweep-report.json` form for this candidate and
-       revision, run on Linux, whose rows for the scenario all pass with its required
-       command and assertions. The report's own `environment` never decides it. No other
+       revision, run on Linux, whose rows for the scenario each pass with its required
+       command, assertions and execution evidence. The report's own `environment` never decides it. No other
        authenticated artifact earns a Linux row, and Linux evidence never stands in for the
        macOS certificate. Record what is missing rather than filling it in: a gap leaves
        the step unavailable.

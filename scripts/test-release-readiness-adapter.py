@@ -242,8 +242,38 @@ class NativeReadinessRegression(unittest.TestCase):
         scenario = next(s for s in inventory["scenarios"] if s.get("required") and s.get("capability") == "linux")
         linux = scenario["id"]
         inventory_sha = hashlib.sha256((self.inputs / "qa-full-sweep-inventory.json").read_bytes()).hexdigest()
-        passing_row = {"scenario": linux, "candidate_id": CANDIDATE, "outcome": "PASS",
-                       "command": scenario["command"], "assertions": scenario["assertions"]}
+        tests = scenario.get("required_tests") or ["linux_case"]
+        target_name = (
+            scenario["command"][scenario["command"].index("--test") + 1]
+            if "--test" in scenario["command"] else None
+        )
+        stderr = (
+            f"     Running tests/{target_name}/main.rs (target/debug/deps/{target_name.replace('-', '_')}-fixture)\n"
+            if target_name else
+            "     Running unittests src/lib.rs (target/debug/deps/linux-fixture)\n"
+        )
+        rows_output = "\n".join(f"qa-scenario-pass: {row}" for row in scenario.get("required_rows", []))
+        test_lines = "\n".join(f"test {test} ... ok" for test in tests)
+        diagnostic_blocks = "\n\n".join(
+            f"---- {test} stdout ----\n{rows_output}" if idx == 0 and rows_output else f"---- {test} stdout ----"
+            for idx, test in enumerate(tests)
+        )
+        success_list = "\n".join(f"    {test}" for test in tests)
+        stdout = (
+            f"running {len(tests)} test{'s' if len(tests) != 1 else ''}\n"
+            f"{test_lines}\n\n"
+            f"successes:\n\n"
+            f"{diagnostic_blocks}\n\n"
+            f"successes:\n"
+            f"{success_list}\n\n"
+            f"test result: ok. {len(tests)} passed; 0 failed; 0 ignored; 0 measured; "
+            f"0 filtered out; finished in 0.00s\n"
+        )
+        passing_row = {
+            "scenario": linux, "candidate_id": CANDIDATE, "outcome": "PASS",
+            "command": scenario["command"], "assertions": scenario["assertions"],
+            "exit_code": 0, "cleanup_verified": True, "stdout": stdout, "stderr": stderr,
+        }
 
         def qa_report(**changes):
             """A Linux QA report for this candidate whose row passes the Linux scenario."""
@@ -310,6 +340,63 @@ class NativeReadinessRegression(unittest.TestCase):
                                     "platform-evidence-missing"),
             "imported-other-inventory": (imported(evidence=qa_report(inventory_sha256="0" * 64)),
                                          "platform-evidence-missing"),
+            # Per-row completeness: every matching row must carry all assertions
+            # and satisfy the harness cargo-test and finalize_result contract.
+            "unioned-assertions-across-rows": (
+                imported(evidence=qa_report(results=[
+                    {**passing_row, "assertions": scenario["assertions"][:-1]},
+                    {**passing_row, "assertions": scenario["assertions"][-1:]},
+                ])),
+                "platform-evidence-missing"),
+            "second-row-incomplete": (
+                imported(evidence=qa_report(results=[
+                    dict(passing_row),
+                    {"scenario": linux, "candidate_id": CANDIDATE, "outcome": "PASS",
+                     "command": scenario["command"], "assertions": scenario["assertions"]},
+                ])),
+                "platform-evidence-missing"),
+            "missing-execution-evidence": (
+                imported(evidence=qa_report(results=[{
+                    "scenario": linux, "candidate_id": CANDIDATE, "outcome": "PASS",
+                    "command": scenario["command"], "assertions": scenario["assertions"],
+                }])),
+                "platform-evidence-missing"),
+            "missing-required-test": (
+                imported(evidence=qa_report(results=[{
+                    **passing_row,
+                    "stdout": stdout.replace(tests[0], "unrelated_case"),
+                }])),
+                "platform-evidence-missing"),
+            "missing-required-row": (
+                imported(evidence=qa_report(results=[{
+                    **passing_row,
+                    "stdout": stdout.replace(f"qa-scenario-pass: {scenario['required_rows'][-1]}\n", ""),
+                }])),
+                "platform-evidence-missing"),
+            "wrong-test-target": (
+                imported(evidence=qa_report(results=[{
+                    **passing_row,
+                    "stderr": "     Running tests/other.rs (target/debug/deps/other-fixture)\n",
+                }])),
+                "platform-evidence-missing"),
+            "cleanup-unverified": (
+                imported(evidence=qa_report(results=[{**passing_row, "cleanup_verified": False}])),
+                "platform-evidence-missing"),
+            "output-truncated": (
+                imported(evidence=qa_report(results=[{**passing_row, "output_truncated": True}])),
+                "platform-evidence-missing"),
+            "skip-notice": (
+                imported(evidence=qa_report(results=[{
+                    **passing_row,
+                    "stderr": stderr + "SKIP: linux capability missing\n",
+                }])),
+                "platform-evidence-missing"),
+            "boolean-exit-code": (
+                imported(evidence=qa_report(results=[{**passing_row, "exit_code": False}])),
+                "platform-evidence-missing"),
+            "non-list-assertions": (
+                imported(evidence=qa_report(results=[{**passing_row, "assertions": None}])),
+                "platform-evidence-missing"),
         }
         for name, (mutate, code) in cases.items():
             with self.subTest(name=name):
