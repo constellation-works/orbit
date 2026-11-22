@@ -175,7 +175,7 @@
 }
 .why-stuck-value {
   margin: 0;
-  color: var(--fg);
+  color: var(--fg-soft);
   font-size: var(--text-md);
   line-height: 1.45;
   overflow-wrap: anywhere;
@@ -336,7 +336,7 @@
   align-items: start;
   gap: var(--space-2) var(--space-8);
   font-size: var(--text-sm);
-  color: var(--fg);
+  color: var(--fg-soft);
 }
 .readiness-gap > .badge {
   justify-self: start;
@@ -351,6 +351,9 @@
 .readiness-fix {
   color: var(--fg-dim);
   font-size: var(--text-xs);
+}
+.readiness-message {
+  color: var(--fg-soft);
 }
 /* An operator's skip of a pilot-held task, under the hold it lifts, the
    operator's readiness waiver, and the host-operational remedy that skip
@@ -1137,7 +1140,7 @@ input.field-editor-input {
   display: block;
   font-size: var(--text-md);
   line-height: 1.5;
-  color: var(--fg-soft);
+  color: var(--fg);
   cursor: auto;
 }
 .task-markdown-panel .markdown-body > :first-child,
@@ -1157,7 +1160,7 @@ input.field-editor-input {
   padding: 0 var(--space-4);
   border: 1px solid var(--hair);
   background: rgba(255, 255, 255, 0.045);
-  color: var(--fg-soft);
+  color: var(--fg);
   font-size: var(--text-sm);
 }
 .description-block.clamped .markdown-body,
@@ -1342,8 +1345,8 @@ input.field-editor-input {
   min-width: 0;
 }
 .history-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2) var(--space-10); min-width: 0; }
-.history-sentence { color: var(--fg); }
-.history-sentence strong { font-weight: 600; }
+.history-sentence { color: var(--fg-soft); }
+.history-sentence strong { color: var(--fg); font-weight: 600; }
 .row-detail .history-line .actor { color: var(--accent-hover); font-weight: 600; }
 .history-sentence a { color: var(--accent); }
 .history-summary, .history-note { color: var(--fg-dim); font-size: var(--text-sm); }
@@ -1764,15 +1767,18 @@ input.field-editor-input {
   margin: var(--space-10) 0 0;
   padding-left: 0;
   list-style: none;
+  color: var(--fg-soft);
   line-height: 1.5;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
+.pilot-warning-findings strong { color: var(--fg); }
 .pilot-warning-findings li + li { margin-top: var(--space-8); }
+.completion-hold > p:not(.muted) { color: var(--fg-soft); }
 .operator-record-actions { margin-top: var(--space-12); }
 .owed-criteria { display: grid; gap: var(--space-8); }
 .owed-criterion { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8) var(--space-12); }
-.owed-criterion > span { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+.owed-criterion > span { flex: 1 1 240px; min-width: 0; color: var(--fg-soft); overflow-wrap: anywhere; }
 
 .decision-requests { display: grid; gap: var(--space-12); }
 .decision-request { display: grid; gap: var(--space-8); }
@@ -1787,9 +1793,9 @@ input.field-editor-input {
 .decision-pending { color: var(--fg-mute); font-size: var(--text-sm); }
 .decision-fields { display: grid; gap: var(--space-10); margin-top: var(--space-6); min-width: 0; }
 .decision-answer-refusal { display: grid; gap: var(--space-8); justify-items: start; margin: 0; }
-.decision-answer-refusal-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.decision-answer-refusal-text { margin: 0; color: var(--fg-soft); white-space: pre-wrap; overflow-wrap: anywhere; }
 .decision-answer-refusal .action { font-family: var(--font-sans); }
-.decision-summary { margin: 0; font-size: var(--text-md); line-height: 1.5; color: var(--fg-strong); overflow-wrap: anywhere; }
+.decision-summary { margin: 0; font-size: var(--text-md); line-height: 1.5; color: var(--fg-soft); overflow-wrap: anywhere; }
 .decision-human-action { margin: var(--space-6) 0 0; font-size: var(--text-md); line-height: 1.5; color: var(--fg-soft); overflow-wrap: anywhere; white-space: pre-line; }
 .decision-human-action strong { color: var(--attention-fg, var(--fg-strong)); }
 .decision-fields .decision-human-action { margin: 0; }
@@ -1826,7 +1832,7 @@ input.field-editor-input {
 .human-task-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-8); }
 .human-task-label { font-size: var(--text-sm); font-weight: 600; color: var(--warn-fg, var(--fg-strong)); }
 .human-task-summary { margin: 0; font-size: var(--text-md); line-height: 1.5; color: var(--fg-soft); overflow-wrap: anywhere; }
-.human-task-steps { margin: 0; padding-left: var(--space-20); display: grid; gap: var(--space-4); font-size: var(--text-md); line-height: 1.45; }
+.human-task-steps { margin: 0; padding-left: var(--space-20); display: grid; gap: var(--space-4); color: var(--fg-soft); font-size: var(--text-md); line-height: 1.45; }
 .human-command { display: flex; align-items: flex-start; gap: var(--space-8); }
 .human-command-code { flex: 1 1 auto; min-width: 0; margin: 0; padding: var(--space-8) var(--space-10); overflow: auto; font-family: var(--font-mono); font-size: var(--text-sm); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
 .human-copy-cmd, .human-copy-all { flex: none; }

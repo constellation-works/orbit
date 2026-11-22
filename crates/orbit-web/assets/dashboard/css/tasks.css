@@ -1097,12 +1097,13 @@ main.tasks-layout.task-page-mode > .task-detail-pane { grid-column: 1; grid-row:
 /* The actions stay in reach while a short viewport scrolls the fields. */
 .task-create-actions { display: flex; flex-wrap: wrap; gap: var(--space-8); margin-top: var(--space-12); padding: var(--space-8) 0 0; position: sticky; bottom: -16px; background: var(--bg-elev); }
 .task-create [aria-invalid="true"] { border-color: var(--state-error); }
+#task-create-intro { color: var(--fg-soft); }
 #task-create-feedback { overflow-wrap: anywhere; }
 
 /* Force-override confirmation for a guard refusal: a modal <dialog> in the
    top layer, like task creation, so it moves no board layout. */
 .force-override-dialog { width: min(480px, calc(100vw - var(--space-32))); margin: auto; padding: 0; }
-.force-override-dialog p { margin: 0; overflow-wrap: anywhere; }
+.force-override-dialog p { margin: 0; color: var(--fg-soft); overflow-wrap: anywhere; }
 .force-override-actions .action { min-height: 36px; }
 
 .task-active-triage { display: flex; flex-wrap: wrap; gap: var(--space-6); margin: var(--space-8) 0; }

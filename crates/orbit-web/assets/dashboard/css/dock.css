@@ -176,7 +176,7 @@
 .resident-request-head { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-6); min-width: 0; }
 .resident-request-gate { color: var(--fg-dim); font-size: var(--text-xs); }
 .resident-request-id { font: 600 var(--text-xs)/1.4 var(--font-mono); }
-.resident-request-text { flex: 1 1 160px; font-size: var(--text-sm); overflow-wrap: anywhere; min-width: 0; }
+.resident-request-text { flex: 1 1 160px; color: var(--fg-soft); font-size: var(--text-sm); overflow-wrap: anywhere; min-width: 0; }
 .resident-request .resident-actions { margin-left: 0; }
 .resident-quote { display: block; flex-basis: 100%; color: var(--fg-dim); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .resident-actions, .resident-control { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-6); }
@@ -203,7 +203,7 @@
 }
 .resident-step > legend { padding: 0 var(--space-4); color: var(--fg-strong); font-size: var(--text-sm); font-weight: 600; }
 .resident-step > .resident-rights, .resident-step-note { grid-column: 1 / -1; }
-.resident-step-note { margin: 0; color: var(--fg); font-size: var(--text-sm); }
+.resident-step-note { margin: 0; color: var(--fg-soft); font-size: var(--text-sm); }
 .resident-step-note.warn { color: var(--warn-fg); }
 .resident-start-status { flex: 1 1 auto; margin: 0; color: var(--fg-dim); font-size: var(--text-sm); }
 .resident-form {
@@ -236,17 +236,17 @@
 .resident-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-4) var(--space-12); }
 .resident-fact { display: contents; }
 .resident-fact-value { font: var(--text-xs)/1.4 var(--font-mono); overflow-wrap: anywhere; }
-.resident-fact-prose { font: var(--text-sm)/1.45 var(--font-sans, inherit); }
+.resident-fact-prose { color: var(--fg-soft); font: var(--text-sm)/1.45 var(--font-sans, inherit); }
 .resident-checkpoint-summary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-6); margin: 0; font-size: var(--text-sm); }
 .resident-wake { display: flex; align-items: center; gap: var(--space-6); flex-wrap: wrap; }
 .resident-records h4 { margin-top: var(--space-8); }
 .resident-record-list { margin: 0; padding-left: var(--space-20); }
 .resident-record-list li { overflow-wrap: anywhere; }
 .resident-record-list a { margin-left: var(--space-8); }
-.resident-history, .resident-detail ul { margin: 0; padding-left: var(--space-20); font-size: var(--text-xs); }
+.resident-history, .resident-detail ul { margin: 0; padding-left: var(--space-20); color: var(--fg-soft); font-size: var(--text-xs); }
 .resident-history li { overflow-wrap: anywhere; }
-.resident-history-head { font-family: var(--font-mono); }
-.resident-notes { margin: 0 0 var(--space-6); font-size: var(--text-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.resident-history-head { color: var(--fg); font-family: var(--font-mono); }
+.resident-notes { margin: 0 0 var(--space-6); color: var(--fg-soft); font-size: var(--text-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 #residents-panel { display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
 #residents-panel > .body { flex: 1 1 auto; min-height: 0; min-width: 0; overflow-y: auto; padding: var(--space-10) 0; }

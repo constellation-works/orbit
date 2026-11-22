@@ -54,7 +54,7 @@
   font-size: var(--text-sm);
   line-height: 1.45;
 }
-.notice-coverage-lead { margin: 0; }
+.notice-coverage-lead { margin: 0; color: var(--fg-soft); }
 .notice-coverage-reason {
   margin: var(--space-4) 0 0;
   color: var(--fg-dim);
@@ -155,7 +155,7 @@
 /* The open notice sits under the row, inside the dock's width. */
 .notice-detail { padding: var(--space-2) var(--space-12) var(--space-14); min-width: 0; }
 .notice-body, .notice-ended-text { margin: 0 0 var(--space-10); max-width: 72ch; overflow-wrap: anywhere; }
-.notice-body { white-space: pre-wrap; line-height: 1.5; }
+.notice-body { color: var(--fg-soft); white-space: pre-wrap; line-height: 1.5; }
 .notice-ended-text { color: var(--fg-dim); }
 .notice-ended-text::first-letter { text-transform: uppercase; }
 .notice-facts { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-14); color: var(--fg-mute); font-size: var(--text-sm); overflow-wrap: anywhere; }

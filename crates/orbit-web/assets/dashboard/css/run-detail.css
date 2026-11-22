@@ -39,7 +39,7 @@
   border: 1px solid #3a1c1a;
   border-radius: var(--radius-sm);
   background: #0d0808;
-  color: #e0b0a9;
+  color: var(--fg-soft);
   font-size: var(--text-sm);
   line-height: 1.55;
   white-space: pre-wrap;
@@ -49,19 +49,20 @@
 }
 .run-hold { border-color: var(--state-held); background: #15101f; color: var(--fg); }
 .run-hold strong { color: var(--state-held); }
-.run-hold-message { border-color: #3c2c55; background: #0d0914; color: #dac8fa; }
-.run-hold p { margin: 0; font-size: var(--text-md); line-height: 1.55; }
+.run-hold-message { border-color: #3c2c55; background: #0d0914; }
+.run-hold p { margin: 0; color: var(--fg-soft); font-size: var(--text-md); line-height: 1.55; }
+.run-failure > p { color: var(--fg-soft); }
 .run-cancelled { border-color: var(--state-cancelled); }
 .run-cancelled .run-failure-head { color: var(--state-cancelled); }
 .run-cancelled-reason,
 .run-failure-root {
   margin: 0;
+  color: var(--fg-soft);
   font-size: var(--text-md);
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
-.run-cancelled-reason { color: #e7c7c2; }
-.run-failure-root { color: #ffd9d4; }
+.run-failure-root strong { color: var(--fg); }
 button.failure-id-link,
 a.failure-id-link {
   display: inline;
@@ -123,7 +124,8 @@ a.failure-id-link:focus-visible {
 .child-dispatch-error { color: var(--state-failed); }
 .child-dispatch-summary { margin-bottom: var(--space-8); }
 .child-dispatch-row .duration { white-space: nowrap; }
-.provider-process-message { overflow-wrap: anywhere; }
+.provider-process-message { color: var(--fg-soft); overflow-wrap: anywhere; }
+.stopped-descendant, .waiting-idle { color: var(--fg-soft); }
 
 /* ORB-12516: distributed claim provenance and the owner's handoff
    actions, rendered inside the existing task detail and run meta rather
@@ -308,7 +310,7 @@ a.failure-id-link:focus-visible {
   background: var(--danger-wash);
   padding: var(--space-8) var(--space-12);
   margin: var(--space-8) 0;
-  color: var(--fg);
+  color: var(--fg-soft);
 }
 .claim-warning .label {
   color: var(--danger-fg);

@@ -103,7 +103,7 @@ The shared classes live in `crates/orbit-web/assets/dashboard/css/components.css
 
 ### Semantic Colors
 Colors are muted but distinct, avoiding harsh neon tones while maintaining semantic meaning.
-- **Text:** `--fg-strong` (`#f2f4f7`, titles and selected entries), `--fg` (`#e7eaee`), `--fg-soft` (`#c9d0d9`, rail entries, field labels and long-form body text such as task descriptions, failure messages and friction reports), `--fg-dim` (`#a3acb8`), `--fg-mute` (`#8b95a3`)
+- **Text:** `--fg-strong` (`#f2f4f7`, selected entries and heightened titles), `--fg` (`#e7eaee`, titles, naming labels and scanned values such as ids, counts and states), `--fg-soft` (`#c9d0d9`, prose: descriptions, comment bodies, reasons, messages and rendered markdown paragraphs; inline code, ids and links inside prose keep `--fg` or `--accent`), `--fg-dim` (`#a3acb8`, secondary metadata: timestamps, authors, counts beside a title), `--fg-mute` (`#8b95a3`, hints and placeholders)
 - **Disabled text:** `--fg-disabled` (`#66707d`), reserved for disabled states. Muted text stays above 4.5:1 contrast on `--bg`, `--bg-rail` and `--bg-elev`; disabled plugin cards keep full text contrast so their status and diagnostics remain readable.
 - **Accent (Blue):** `--accent` (`#7aa7ff`)
 - **Success/Done (Green):** `--status-done` (`#63d297`)

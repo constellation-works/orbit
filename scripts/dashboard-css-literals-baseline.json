@@ -37,7 +37,7 @@
       "raw_font_sizes": 0
     },
     "crates/orbit-web/assets/dashboard/css/markdown.css": {
-      "colour_literals": 4,
+      "colour_literals": 3,
       "raw_font_sizes": 0
     },
     "crates/orbit-web/assets/dashboard/css/notices.css": {
@@ -45,7 +45,7 @@
       "raw_font_sizes": 0
     },
     "crates/orbit-web/assets/dashboard/css/run-detail.css": {
-      "colour_literals": 29,
+      "colour_literals": 25,
       "raw_font_sizes": 0
     },
     "crates/orbit-web/assets/dashboard/css/runs.css": {

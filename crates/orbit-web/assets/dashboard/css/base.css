@@ -34,7 +34,13 @@
      #333333, which made the grid read as loud as its contents. */
   --border: #22272e;
   --hair: #1b1f25;
+  /* Text colour follows role, not length or view (STD-07 R45):
+     --fg      titles, naming labels and scanned values (ids, counts, states)
+     --fg-soft prose: descriptions, comment bodies, reasons, messages, markdown
+     --fg-dim  secondary metadata: timestamps, authors, counts beside a title
+     --fg-mute hints and placeholders */
   --fg: #e7eaee;
+  --fg-soft: #c9d0d9;
   --fg-dim: #a3acb8;
   --fg-mute: #8b95a3;
   --fg-disabled: #66707d;
@@ -162,7 +168,6 @@
   --bg-well: #0f1216;
   --border-strong: #2e343c;
   --fg-strong: #f2f4f7;
-  --fg-soft: #c9d0d9;
 
   /* Why a backlog task is or is not starting: one colour per readiness pool
      (drain-waits.js). Every dot also carries its words in a label. */
