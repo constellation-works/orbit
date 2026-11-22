@@ -24,7 +24,8 @@ jobs:
   build-release:
     name: Build ${{ matrix.slug }}
     # Only a tag push releases the CLI. A desktop backfill skips this job, and
-    # with it every job that needs publish-release.
+    # with it every job that needs publish-release except publish-desktop,
+    # which attaches its bundles to the existing release.
     if: ${{ github.event_name == 'push' }}
     runs-on: ${{ matrix.runs_on }}
     permissions:
@@ -381,6 +382,9 @@ jobs:
           take() {
             local pattern="$1" asset="$2" matches
             shopt -s nullglob
+            # Unquoted on purpose: $pattern is a glob that must expand to the
+            # bundle files. The bundle paths contain no whitespace, so splitting
+            # yields one element per match.
             # shellcheck disable=SC2206
             matches=($pattern)
             shopt -u nullglob
@@ -675,8 +679,8 @@ jobs:
             openssl dgst -sha256 -sign "$signing_key" \
               -out "dist/$signature" "dist/$manifest"
           fi
-          # Also verify an existing signature before any uploads. A retry may
-          # have inherited an orphan signature from the old publication order.
+          # Also verify an existing signature before any uploads. A release can
+          # carry an orphan signature with no manifest beside it.
           openssl dgst -sha256 \
             -verify npm/release-signing.pub \
             -signature "dist/$signature" "dist/$manifest"

@@ -1,4 +1,4 @@
-//! Run-record reads that step and final recovery admission depend on.
+//! Adapter hooks through which the engine's step and final recovery reach the runtime.
 
 use orbit_common::OrbitError;
 
