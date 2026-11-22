@@ -382,6 +382,146 @@ fn routed_task_show_prints_the_same_blocked_guidance() {
     );
 }
 
+/// A routed `task show` argv: `base` with the route's selector flags after it.
+fn with_route<'a>(base: &[&'a str], route: &[&'a str]) -> Vec<&'a str> {
+    base.iter().chain(route.iter()).copied().collect()
+}
+
+/// A terminal's output with the PTY's CRLF line endings folded to LF.
+fn terminal_text(output: std::process::Output) -> String {
+    String::from_utf8(output.stdout)
+        .expect("terminal output is UTF-8")
+        .replace("\r\n", "\n")
+}
+
+fn assert_fits(text: &str, columns: u16) {
+    for line in text.lines() {
+        assert!(
+            line.chars().count() <= usize::from(columns),
+            "{columns}-column terminal overflows: {line:?}\n{text}"
+        );
+    }
+}
+
+/// Routed `orbit task show` wraps its record and `--fields` prose to the
+/// terminal width through each route spelling, keeping the criterion's
+/// indent. Pipe, `--format plain` and `--json` output stay whole.
+fn routed_task_show_prose_wraps_on_terminals_and_preserves_pipe_plain_and_json() {
+    const FIRST_PARAGRAPH: &str = "The routed description is long enough to wrap on every checked terminal width, so each field has prose to fold.";
+    const CRITERION: &str = "The routed criterion is one long sentence naming several observable outcomes, so it must wrap onto continuation lines at every width the command supports.";
+    let routed = Routed::new();
+    let id = routed
+        .remote_runtime
+        .add_task(TaskAddParams {
+            title: "Wrapped routed task show".into(),
+            description: format!(
+                "{FIRST_PARAGRAPH}\nA second paragraph keeps its own explicit line break."
+            ),
+            acceptance_criteria: vec![CRITERION.into()],
+            complexity: TaskComplexity::Low,
+            ..Default::default()
+        })
+        .expect("fixture task")
+        .id
+        .to_string();
+    let id = id.as_str();
+    let selector = routed.bravo_selector();
+    // The id's prefix alone, a host-qualified `--workspace`, and `--host`.
+    let routes: [Vec<&str>; 3] = [
+        Vec::new(),
+        vec!["--workspace", selector.as_str()],
+        vec!["--host", "bravo", "--workspace", "bravo-ws"],
+    ];
+    let fleet = &routed.fleet;
+    let home = fleet.local.home.as_path();
+    let cwd = fleet.local_repo.as_path();
+
+    for route in &routes {
+        let show = with_route(&["task", "show", id], route);
+        let piped =
+            String::from_utf8(fleet.orbit_ok(cwd, &show).stdout).expect("piped task show is UTF-8");
+        assert!(
+            piped
+                .lines()
+                .any(|line| line == format!("Description: {FIRST_PARAGRAPH}")),
+            "{show:?} keeps the description whole in a pipe:\n{piped}"
+        );
+        assert!(
+            piped.lines().any(|line| line == format!("  - {CRITERION}")),
+            "{show:?} keeps the criterion whole in a pipe:\n{piped}"
+        );
+        let piped_words = piped.split_whitespace().collect::<Vec<_>>();
+        for columns in [60, 80, 120] {
+            let shown = terminal_text(fleet.orbit_on_terminal(home, cwd, &show, columns));
+            assert_fits(&shown, columns);
+            assert_eq!(
+                shown.split_whitespace().collect::<Vec<_>>(),
+                piped_words,
+                "{show:?} at {columns} columns must keep every word, in order:\n{shown}"
+            );
+            assert!(
+                shown.lines().count() > piped.lines().count(),
+                "{show:?} at {columns} columns must wrap its prose:\n{shown}"
+            );
+            let lines = shown.lines().collect::<Vec<_>>();
+            let item = lines
+                .iter()
+                .position(|line| line.starts_with("  - The routed criterion"))
+                .unwrap_or_else(|| panic!("criterion item at {columns} columns:\n{shown}"));
+            let wrapped = lines[item + 1..]
+                .iter()
+                .take_while(|line| line.starts_with(' '))
+                .collect::<Vec<_>>();
+            assert!(
+                !wrapped.is_empty() && wrapped.iter().all(|line| line.starts_with("  ")),
+                "the wrapped criterion keeps its two-space indent at {columns} columns:\n{shown}"
+            );
+        }
+    }
+
+    // The routes converge on one renderer, so the field, plain and JSON
+    // shapes run once, on the prefix route.
+    let route = &routes[0];
+    let record = with_route(&["task", "show", id], route);
+    let record_piped =
+        String::from_utf8(fleet.orbit_ok(cwd, &record).stdout).expect("piped task show is UTF-8");
+    let fields = with_route(
+        &["task", "show", id, "--fields", "title,description"],
+        route,
+    );
+    let fields_piped =
+        String::from_utf8(fleet.orbit_ok(cwd, &fields).stdout).expect("piped --fields is UTF-8");
+    let plain = with_route(&["task", "show", id, "--format", "plain"], route);
+    let json = with_route(&["task", "show", id, "--json"], route);
+    let expected_json = parse(&fleet.orbit_ok(cwd, &json).stdout, &json);
+    for columns in [60, 80, 120] {
+        let shown = terminal_text(fleet.orbit_on_terminal(home, cwd, &fields, columns));
+        assert_fits(&shown, columns);
+        assert_eq!(
+            shown.split_whitespace().collect::<Vec<_>>(),
+            fields_piped.split_whitespace().collect::<Vec<_>>(),
+            "--fields at {columns} columns must keep every word, in order:\n{shown}"
+        );
+        assert!(
+            shown.lines().count() > fields_piped.lines().count(),
+            "--fields at {columns} columns must wrap its prose:\n{shown}"
+        );
+
+        let plain_shown = terminal_text(fleet.orbit_on_terminal(home, cwd, &plain, columns));
+        assert_eq!(
+            plain_shown, record_piped,
+            "--format plain at {columns} columns must match the pipe"
+        );
+
+        let json_shown = fleet.orbit_on_terminal(home, cwd, &json, columns);
+        assert_eq!(
+            parse(&json_shown.stdout, &json),
+            expected_json,
+            "--json at {columns} columns"
+        );
+    }
+}
+
 fn cli_task_ids_route_to_the_host_their_prefix_names() {
     let routed = Routed::new();
     let remote = routed.remote_task.as_str();
@@ -1594,6 +1734,10 @@ fn host_routing_contracts_0() {
         (
             "routed_task_show_prints_the_same_blocked_guidance",
             routed_task_show_prints_the_same_blocked_guidance as fn(),
+        ),
+        (
+            "routed_task_show_prose_wraps_on_terminals_and_preserves_pipe_plain_and_json",
+            routed_task_show_prose_wraps_on_terminals_and_preserves_pipe_plain_and_json as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");
