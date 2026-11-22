@@ -74,6 +74,10 @@ impl MuseModelRefusals {
         self.refused_at(crew).is_some()
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     /// When the provider last refused `crew`'s exact model on its account.
     pub(crate) fn refused_at(&self, crew: &Crew) -> Option<DateTime<Utc>> {
         if !is_muse_crew(crew) {
@@ -154,7 +158,7 @@ impl OrbitRuntime {
 
     /// Workspace-wide recent Muse model refusals, cached lazily for the active
     /// [`AdmissionModelAccessPass`] so backlog snapshots query run history once.
-    pub(super) fn pass_workspace_muse_model_refusals(
+    pub(crate) fn pass_workspace_muse_model_refusals(
         &self,
     ) -> Result<MuseModelRefusals, OrbitError> {
         let in_pass = MODEL_ACCESS_PASS_DEPTH.with(|depth| depth.get()) > 0;

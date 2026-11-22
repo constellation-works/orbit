@@ -531,10 +531,16 @@ pub(super) fn backlog_snapshot_in_mode(
                         .is_ok_and(|provider| provider == Provider::Muse)
             })
     });
+    // A fresh task has no run of its own, so only a live refusal recorded by
+    // another task can hold or redraw it. The pass caches that workspace scan;
+    // with no live refusal, fresh rows skip the per-row crew resolution.
+    let live_muse_refusals = LazyCell::new(|| {
+        runtime
+            .pass_workspace_muse_model_refusals()
+            .is_ok_and(|refusals| !refusals.is_empty())
+    });
     backlog.retain(|task| {
-        // Any task with an enabled Muse crew can be held or redrawn by a
-        // recent same-host, same-account refusal recorded by another task.
-        let model_access_applies = *has_muse;
+        let model_access_applies = *has_muse && (task.job_run_id.is_some() || *live_muse_refusals);
         if allowlist.is_none() && crew_unset.is_empty() && !model_access_applies {
             return true;
         }
