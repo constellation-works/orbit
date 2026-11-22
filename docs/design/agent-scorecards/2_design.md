@@ -32,7 +32,7 @@ The core, dashboard and role tracks have landed. Sections marked **Current** des
 Every role tab has the same layout:
 
 1. **Ranking.** One row per model and recorded reasoning effort, labelled `model @ effort`: rank, the row label with its contributing crews as secondary detail, support (the role's unit of work), four or five role-specific columns, and the score as a bar and number. Ranks are dense over the ranked rows: an unranked (below-support or unjudged) row never consumes a rank, and tied band ranks on the model-ranking board advance by one band, never by the band's size, so no rank number is skipped. A row is a button that selects it. Rows below the minimum support are greyed, tagged `below 10` and listed last. An unjudged row (§4.3) is greyed, tagged `unjudged`, shows `unjudged` instead of a score and listed after them.
-2. **Detail** (right column) for the selected row: rank, score, raw score and the fleet average it was pulled toward, an **Agent profile** radar comparing its rates with the ranked fleet (§1.1), a **Score breakdown** (each term's weight, contribution and bar), and **Shown, not scored** (cost, time and other context). Under the row label, **Completed invocations** lists that row's `effort_breakdown`: completed invocations for the model across the crews that contributed its units, at every recorded effort, each entry naming its crew. An info hint states that these counts are not the row's scored units (each unit counts once, under its main invocation's effort), and that provider default and effort unknown stay distinct and are not read from current crew settings. The ranking button's title carries the same list. The same header is used for Implementers, Reviewers and Pilots.
+2. **Detail** (right column) for the selected row: rank, score, raw score and the fleet average it was pulled toward, an **Agent profile** radar comparing each axis with its expected rate or the ranked fleet's median (§1.1), a **Score breakdown** (each term's weight, contribution and bar), and **Shown, not scored** (cost, time and other context). Under the row label, **Completed invocations** lists that row's `effort_breakdown`: completed invocations for the model across the crews that contributed its units, at every recorded effort, each entry naming its crew. An info hint states that these counts are not the row's scored units (each unit counts once, under its main invocation's effort), and that provider default and effort unknown stay distinct and are not read from current crew settings. The ranking button's title carries the same list. The same header is used for Implementers, Reviewers and Pilots.
 3. **One role-specific panel**, for the roles that have one. Implementers show **Regression rate by change size**, a display-only view of regression rate by landed change size, one curve per crew reference as dispatched, served by the size-curves route (§6). Models recorded under one crew reference pool into that reference's single curve and appear as metadata, so the `opus@medium` and `opus@high` crew references stay separate curves; the ranking above stays one row per model and recorded effort. The score-against-cost chart and first-reviews tier comparison were removed as a product decision and stay removed, so cost appears only under **Shown, not scored**. Reviewers show how each reviewer's verdicts turned out, and flag an accept rate well above peers. Pilots show assessed tier against observed tier.
 4. **How the score works.** A disclosure listing every term with its weight and definition, plus the smoothing formula.
 5. **Who each problem counts against.** A collapsed disclosure: one bar across the window's problems, split by owning role plus a **Not scored** segment, with the current role highlighted and each role's legend entry linking to its tab. The retired **Orchestrators** owner has no tab and no link, and no problem counts against it now (§5.1 moves its problems to **Not scored**), so its segment and legend entry appear only if the payload counts a problem against it. This strip is how a reader sees the one-owner rule at work.
@@ -45,33 +45,59 @@ The view opens on a count window, `last 500`, and offers `last 1000` beside the 
 
 Every role's detail column places an inline SVG radar between the score header
 and **Score breakdown**. It compares the selected model-and-effort row with the fleet in
-the same role and window. Each axis is the row's percentile in the ranked
-fleet, so the chart and the ranking tell the same story; the per-axis weight
-and signed contribution versus the fleet median (below) explain why a row
-with some inward axes still ranks where it does. It does not reconstruct
-the smoothed final score or the implementers' tier-adjusted expected counts:
-the **Score breakdown** beside it carries those exact contributions.
+the same role and window. Each axis is one scored term or one shown-not-scored
+context axis, and it is drawn against one of two references, chosen per axis:
+
+- **Expectation-adjusted** axes have an expected count for the row's term, which
+  the implementers' tier- and size-adjusted expectations supply (§5.2). The dashed
+  middle ring is meeting expectation (zero excess), and the axis ranks the row's
+  signed excess, `weight × (agent rate − expected rate)`, within the ranked fleet.
+- **Fleet-median** axes have no expected count. The dashed middle ring is the
+  ranked fleet's median rate, and the axis is the row's percentile in that fleet.
+  Reviewers and Pilots carry no expected counts, so every one of their axes is
+  fleet-median, and so is every shown-not-scored context axis.
+
+On both kinds outward is better and the reference sits on the middle ring (radius
+0.5). The per-axis weight and signed contribution (below) explain why a row with
+some inward axes still ranks where it does. The chart does not reconstruct the
+smoothed final score; the **Score breakdown** beside it carries those exact
+contributions.
 
 - Each `scorecard.terms` entry is an axis, using `row.per_100[key]`. The
   denominator is `row.term_units[key]` when present, otherwise `row.units`,
   labelled with the term's `unit` or the role's `unit`. Credit axes point out
   for higher rates; negative-weight axes invert and say **fewer is better**.
-- Each axis scales independently by the row's percentile among ranked rows
-  with supported evidence for that term: the share of supported rates below
-  the row's rate, plus half the share equal to it, inverted for a penalty.
+- Expectation-adjusted axes place the row by its signed excess, not by its rate.
+  Zero excess, including a raw count exactly equal to its expected count, sits at
+  radius 0.5. Positive excess (it helps the score: credit above expectation, or a
+  penalty below it) ranks by percentile among the fleet's positive excesses and
+  fills 0.5 to 1; negative excess ranks among the negatives and fills 0 to 0.5. The
+  worst excess sits nearest the centre, and an outlier stretches only its own half. If
+  the supported fleet has no excess of that sign on the axis, a positive value sits
+  at 0.75 and a negative one at 0.25.
+- On a fleet-median axis, the row's rate scales independently by its percentile
+  among ranked rows with supported evidence for that term: the share of
+  supported rates below the row's rate, plus half the share equal to it,
+  inverted for a penalty.
   A rate equal to the fleet median uses radius 0.5. One extreme outlier
   occupies only the outer percentile steps, so it cannot stretch a span and
   squeeze every normal crew toward the good or bad end, and different rate
   magnitudes do not dominate. A constant fleet axis sits at 0.5 for every
   supported value. These are relative positions, not absolute quality
   targets.
-- The contrasting dashed polygon is the unweighted median of those same
-  supported ranked rates on each axis. With an even population it averages
-  the two middle rates. Scaled by the percentile rule it always plots on
-  the middle ring (radius 0.5) on every axis, regardless of outliers. An
-  agent with more units has no extra weight here. The selected polygon has
-  a solid stroke and fill; medians and scales refresh whenever the
-  scorecard rows change.
+- The contrasting dashed polygon is the reference on every axis. It sits on the
+  middle ring (radius 0.5) wherever that axis has a supported fleet comparison,
+  and an axis with none leaves a gap in it. On an expectation-adjusted axis it is
+  zero excess, meaning the row's expected rate, not a fleet statistic. On a
+  fleet-median axis it is the unweighted median of those same supported ranked
+  rates, averaging the two middle rates when the population is even. Outliers do
+  not move it off the ring. An agent with more units has no extra weight here.
+  The selected polygon has a solid stroke and fill; medians, expected rates and
+  scales refresh whenever the scorecard rows change.
+- The legend's reference key names the chart's basis: **Expected (tier/size)**
+  when every axis is expectation-adjusted, **Expected / fleet median** when the
+  chart mixes the two kinds, and **Fleet median** when none is. The plot's
+  accessible name says the same.
 - Roles with fewer than five scored terms add count-valued **Shown, not
   scored** axes, stopping at five. The fixed preference order is unclassified
   rework/regressions, dropped initiative, unknown origin, infrastructure
@@ -103,14 +129,33 @@ the **Score breakdown** beside it carries those exact contributions.
   adjacent available vertices and incomplete polygons have no fill.
 - Numbered spokes map to full axis labels beneath the plot at narrow widths.
   Hovering a vertex or its numbered endpoint, focusing or clicking it
-  discloses its term, agent rate,
-  fleet median rate, its weight, its signed contribution versus the fleet
-  median (`weight × (agent rate − fleet median rate)`; unscored axes and
-  gaps carry no contribution), raw count, denominator and evidence state.
-  The SVG has an accessible name and a visually hidden table carries the
-  same numbers, with weight and contribution versus the fleet median as
-  columns. No chart library is needed; the implementers' `reviewed_units`
-  and `term_units` fields name the review denominator.
+  discloses one line for that axis: its term, the agent's rate per 100
+  units, the reference rate with its basis, the axis weight, its signed
+  contribution, raw count, denominator and evidence state. The reference is
+  labelled `expected` on an expectation-adjusted axis and `fleet median` on a
+  fleet-median axis. The contribution is `weight × (agent rate − reference
+  rate)` on both, labelled **contribution** against expected and
+  **contribution vs fleet median** against the median. The count reads
+  `N raw (E expected)` on expectation-adjusted axes, where E is the expected
+  count, and `N raw` otherwise. Unscored axes show **unscored** for weight and
+  contribution; gaps show **—** for the agent rate and contribution and name
+  their reason.
+  The SVG has an accessible name, and a visually hidden table carries the same
+  numbers, one row per axis. Its headings follow the mix of bases:
+  - All expectation-adjusted: Axis, Agent rate, Expected rate, Weight,
+    Contribution, Raw and expected counts, Evidence.
+  - Mixed: Axis, Agent rate, Reference rate, Weight, Contribution, Counts and
+    units, Evidence. Each Reference rate cell names its basis in brackets,
+    `(expected)` or `(fleet median)`, and that row's Contribution is measured
+    against the same reference. The Contribution heading names no basis, so the
+    reference cell is where a reader finds it.
+  - All fleet-median: Axis, Agent rate, Fleet median rate, Weight, Contribution
+    vs fleet median, Raw count and units, Evidence.
+
+  The table caption says expectation-adjusted when any axis is, and ranked fleet
+  otherwise. The Evidence column gives the gap reason or `supported`. No chart
+  library is needed; the implementers' `reviewed_units` and `term_units` fields
+  name the review denominator.
 
 ## 2. Ranking Unit
 
