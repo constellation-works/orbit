@@ -226,7 +226,7 @@ and are not waiting on a single task.
 | `claim_stale` | high | high | none |
 | `ci_red` | high | critical | critical after the age thresholds are both passed |
 | `friction_untriaged` | low | medium | none |
-| `host_unhealthy` | high | critical | critical when the host is the owner of an in-scope workspace, or its failure is the reason another item is degraded |
+| `host_unhealthy` | high | critical | critical when the host owns an in-scope workspace and a default `orbit doctor` check on it errors, or when the federated read cannot read it or it is skewed (the owner's unreachable or version-skew item); a doctor result that only warns stays high, whoever owns the workspace, so warnings never outrank work-stopping conditions. Or when its failure is the reason another item is degraded |
 | `resident_stalled` | medium | high | none; fingerprint state is the stall reason, `last_checkpoint_at`, and the routine state (`cycle_routine_disabled`, `cycle_routine_name`) |
 | `routine_tripped` | high | high | none; fingerprint state is `tripped_at` and `trips`, so a re-opened breaker after a failed trial is a new episode |
 | `drain_paused` | medium | medium | none; fingerprint state is the pause's `since` |
