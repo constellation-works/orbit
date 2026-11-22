@@ -95,10 +95,12 @@ resets the fixed root from the pristine copy with `rsync -aX --checksum --delete
 as well as file contents); rsync is required on the host. Checksumming reads both copies,
 while only changed files are copied and newly created files are deleted. Setup and
 checksum scans can still cause substantial disk IO for a live-sized fixture, and
-other host activity also contributes to pressure. For example, a 33 GiB snapshot with
-550,927 files on dk-server-2 took about 76 minutes for a 3 × 10 CLI run in November
-2026; its one-minute IO-full readings peaked at 27.25%, with four consecutive readings
-at or above 20%. These host-dependent figures are not a guarantee. No reset overlaps
+other host activity also contributes to pressure. For example, the 33.4 GB,
+547,840-file `ws_orbit` snapshot on dk-server-2 took about 62 minutes for a 3 × 10
+`doctor` CLI run in November 2026. That run used Orbit binaries from `dcd16ce91` and
+`2c38e9f8` with `paired.py` from current `agent-main` revision `a1082a9f`; its
+one-minute IO-full readings peaked at 27.54%, with two consecutive readings at or
+above 20%. These host-dependent figures are not a guarantee. No reset overlaps
 sampling. With `--keep`, each parity observation and round instead gets its own full
 restore, labelled `root-parity-<arm>` or `root-<arm>-<round>` under `<results>/.work/`
 and retained for diagnosis at more IO cost.
