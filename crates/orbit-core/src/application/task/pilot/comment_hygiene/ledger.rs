@@ -60,6 +60,7 @@ pub(super) struct LedgerResolution {
     pub(super) completed_tasks_scanned: usize,
     pub(super) base_v2_task_id: Option<String>,
     pub(super) v1_layered_task_ids: Vec<String>,
+    pub(super) skipped_without_ledger_task_ids: Vec<String>,
     pub(super) carried_state: BTreeMap<String, Vec<AttemptRow>>,
     pub(super) dropped_untracked_paths: usize,
     pub(super) notes: String,
@@ -79,6 +80,7 @@ pub(super) fn ledger_json(ledger: &LedgerResolution) -> Value {
         "completed_tasks_scanned": ledger.completed_tasks_scanned,
         "base_v2_task_id": ledger.base_v2_task_id,
         "v1_layered_task_ids": ledger.v1_layered_task_ids,
+        "skipped_without_ledger_task_ids": ledger.skipped_without_ledger_task_ids,
         "carried_paths": ledger.carried_state.len(),
         "dropped_untracked_paths": ledger.dropped_untracked_paths,
         "notes": ledger.notes,
@@ -186,14 +188,9 @@ pub(super) fn load_carried_ledger(
             .iter()
             .any(|entry| entry.path == LEDGER_ARTIFACT_PATH);
         if !has_ledger {
-            hold_reasons.push(HoldReason {
-                code: "missing_predecessor_ledger",
-                source: format!("{}:{LEDGER_ARTIFACT_PATH}", pred.id),
-                detail: format!(
-                    "completed comment-hygiene predecessor {} is missing required artifact {LEDGER_ARTIFACT_PATH}",
-                    pred.id
-                ),
-            });
+            resolution
+                .skipped_without_ledger_task_ids
+                .push(pred.id.clone());
             continue;
         }
         let artifact = match runtime.get_task_artifact(&pred.id, LEDGER_ARTIFACT_PATH) {
@@ -283,7 +280,15 @@ pub(super) fn load_carried_ledger(
     }
 
     if !hold_reasons.is_empty() {
-        resolution.notes = "required predecessor ledger evidence missing or unreadable".to_string();
+        resolution.notes = if resolution.skipped_without_ledger_task_ids.is_empty() {
+            "required predecessor ledger evidence missing or unreadable".to_string()
+        } else {
+            format!(
+                "required predecessor ledger evidence missing or unreadable; skipped {} completed predecessor(s) without {LEDGER_ARTIFACT_PATH}: {}",
+                resolution.skipped_without_ledger_task_ids.len(),
+                resolution.skipped_without_ledger_task_ids.join(", ")
+            )
+        };
         return resolution;
     }
 
@@ -296,8 +301,35 @@ pub(super) fn load_carried_ledger(
                 predecessors.len()
             ),
         });
-        resolution.notes =
-            "ledger history truncated past 60-task window without a v2 ledger".into();
+    }
+
+    if base_v2_state.is_none() && v1_layers.is_empty() {
+        let skipped_list = resolution.skipped_without_ledger_task_ids.join(", ");
+        let source = if resolution.skipped_without_ledger_task_ids.len() == 1 {
+            format!("{skipped_list}:{LEDGER_ARTIFACT_PATH}")
+        } else {
+            format!("[{skipped_list}]:{LEDGER_ARTIFACT_PATH}")
+        };
+        hold_reasons.push(HoldReason {
+            code: "missing_predecessor_ledger",
+            source,
+            detail: format!(
+                "no predecessor {LEDGER_ARTIFACT_PATH} could be read across {} completed comment-hygiene predecessor(s) (skipped without ledger: {skipped_list})",
+                resolution.completed_tasks_scanned
+            ),
+        });
+    }
+
+    if !hold_reasons.is_empty() {
+        resolution.notes = if base_v2_state.is_none() && predecessors.len() > LEDGER_WINDOW {
+            "ledger history truncated past 60-task window without a v2 ledger".to_string()
+        } else {
+            format!(
+                "no predecessor {LEDGER_ARTIFACT_PATH} could be read across {} completed predecessor(s) (skipped without ledger: {})",
+                resolution.completed_tasks_scanned,
+                resolution.skipped_without_ledger_task_ids.join(", ")
+            )
+        };
         return resolution;
     }
 
@@ -320,7 +352,7 @@ pub(super) fn load_carried_ledger(
 
     resolution.status = "loaded";
     resolution.carried_state = state;
-    resolution.notes = match &resolution.base_v2_task_id {
+    let base_note = match &resolution.base_v2_task_id {
         Some(base_id) if resolution.v1_layered_task_ids.is_empty() => {
             format!("loaded cumulative schema_version 2 ledger from {base_id}")
         }
@@ -329,9 +361,18 @@ pub(super) fn load_carried_ledger(
             resolution.v1_layered_task_ids.len()
         ),
         None => format!(
-            "loaded {} schema_version 1 ledger(s) across all completed predecessors",
+            "loaded {} schema_version 1 ledger(s) across completed predecessors",
             resolution.v1_layered_task_ids.len()
         ),
+    };
+    resolution.notes = if resolution.skipped_without_ledger_task_ids.is_empty() {
+        base_note
+    } else {
+        format!(
+            "{base_note}; skipped {} completed predecessor(s) without {LEDGER_ARTIFACT_PATH}: {}",
+            resolution.skipped_without_ledger_task_ids.len(),
+            resolution.skipped_without_ledger_task_ids.join(", ")
+        )
     };
     resolution
 }

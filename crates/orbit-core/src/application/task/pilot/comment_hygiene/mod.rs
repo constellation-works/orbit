@@ -651,6 +651,7 @@ fn hold_payload(
             "completed_tasks_scanned": 0,
             "base_v2_task_id": Value::Null,
             "v1_layered_task_ids": [],
+            "skipped_without_ledger_task_ids": [],
             "carried_paths": 0,
             "dropped_untracked_paths": 0,
             "notes": "ledger reconciliation did not complete",
