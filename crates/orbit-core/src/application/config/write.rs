@@ -229,6 +229,24 @@ pub fn unset_key_preserving_effective(
                 )));
             }
             validate_store(runtime, scope, store)?;
+            if scope == ConfigScope::Workspace {
+                // The staged document is what a reload will see: the removal
+                // can empty an implicit dotted table that serialization
+                // omits, leaving a file that no longer layers as policy.
+                let staged_value =
+                    store.staged_workspace_effective_value(key, &runtime.global_root())?;
+                if !store.staged_workspace_sets_policy()
+                    || staged_value.is_some_and(|value| value != old_value)
+                {
+                    return Ok(ConditionalEdit::Abort(ConfigUnsetRefusal {
+                        code: "effective_value_would_change",
+                        message: format!(
+                            "removing '{key}' from the {} config would change the effective configuration; value preserved",
+                            scope.label()
+                        ),
+                    }));
+                }
+            }
             Ok(ConditionalEdit::Save(old_value))
         },
     )?;
