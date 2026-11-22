@@ -2040,10 +2040,16 @@ fn no_edit_distinct_run_unobserved_reservation_and_legacy_budget_never_report_re
                     },
                 );
                 let error = super::complete_with_logical_clock(&host, &auto_fix_input(&fx))
-                    .expect_err("legacy spent budget stops without a second send");
+                    .expect_err("legacy spent budget holds without a second send");
                 assert!(
-                    !matches!(error, OrbitError::DeliveryRefused { .. }),
-                    "{case}: legacy budget exhaustion stops via BudgetSpent, not NoEditRerunFailed: {error}"
+                    matches!(
+                        error,
+                        OrbitError::DeliveryRefused {
+                            refusal: orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                            ..
+                        }
+                    ),
+                    "{case}: legacy budget exhaustion holds as RepairDispatched: {error}"
                 );
                 let message = error.to_string();
                 assert!(

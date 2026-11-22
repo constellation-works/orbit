@@ -167,8 +167,15 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
             super::super::super::checks::CiRerunStep::Acted(_) => {
                 return Ok(CiRerunRecovery::Retried);
             }
+            // The repair was already admitted and its one rerun is already
+            // spent (legacy CI history or an exhausted classification). That
+            // proves no rerun result, so it is a typed hold, not a failed
+            // retry and not a generic stop that finalizes the run as failed.
             super::super::super::checks::CiRerunStep::BudgetSpent(reason) => {
-                return Ok(CiRerunRecovery::Stopped(reason));
+                return Ok(CiRerunRecovery::Held {
+                    refusal: DeliveryRefusal::RepairDispatched,
+                    reason,
+                });
             }
             super::super::super::checks::CiRerunStep::NoEditRerunFailed(reason) => {
                 return Ok(CiRerunRecovery::Held {
@@ -231,8 +238,9 @@ pub(in crate::executor::automation::vcs::pr) enum CiRerunRecovery {
     /// The retry budget is spent on stopped jobs or logged infrastructure
     /// failures. The reason names the hold. Do not admit a repair.
     Stopped(String),
-    /// The no-edit repair's rerun failed again; hold with the named typed
-    /// delivery refusal instead of failing.
+    /// The no-edit repair's rerun failed again, or its one rerun budget is
+    /// already spent; hold with the named typed delivery refusal instead of
+    /// failing.
     Held {
         refusal: DeliveryRefusal,
         reason: String,
