@@ -242,9 +242,13 @@ It has three tabs, each with its own address:
   sparse profiles. The per-minute curves are in **Analytics › Resources**.
 - **Accuracy** (`#analytics/forecast/resources/accuracy`): forecast error per
   offset over the newest 5,000 host forecasts (`orbit run profiles
-  --accuracy`). It shows paired and unmeasured minutes, mean and absolute CPU
-  and memory error, the share forecast under the measured load (marked above
-  60%), and the worst CPU and memory misses with their runs.
+  --accuracy`). Two tables: the covered cohort first (the forecast against its
+  saved baseline plus the deliveries it covered, the admission model's own
+  error), then the whole host, which also counts deliveries admitted after the
+  forecast. Each shows paired minutes, mean and absolute CPU and memory error,
+  and the share forecast under the measured load; only covered-cohort shares
+  above 60% are marked. The whole host table also shows unmeasured minutes. The
+  worst CPU and memory misses with their runs are listed for each population.
 - **Decisions** (`#analytics/forecast/resources/decisions`): per drain run,
   newest first, its mode, passes and admissions, the tasks enforce held, and
   the tasks shadow would have held or added. When a drain sent pull requests,

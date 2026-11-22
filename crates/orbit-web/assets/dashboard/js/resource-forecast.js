@@ -376,25 +376,47 @@ function share(value) {
   return value == null || !Number.isFinite(number) ? "—" : `${Math.round(number * 100)}%`;
 }
 
-function underCell(value) {
+// `flagged` says whether an over-60% under-rate is the admission model's own
+// error (covered cohort with pairs) and so earns the warning.
+function underCell(value, flagged) {
   // A forecast under the measured load more often than not admits too much.
-  const high = Number(value) > 0.6;
+  const high = flagged && Number(value) > 0.6;
   return el("td", { class: `num${high ? " bad" : ""}`, text: share(value) });
 }
 
-function offsetRow(offset) {
-  const cpu = offset.cpu || {};
-  const memory = offset.memory || {};
+const ERROR_HEAD = [["CPU mean err", true], ["CPU MAE", true], ["CPU under", true], ["Mem mean err", true], ["Mem MAE", true], ["Mem under", true]];
+
+function errorCells(cpu, memory, flagged) {
+  return [
+    el("td", { class: "num", text: signed(cpu.mean_error, 1) }),
+    el("td", { class: "num", text: signed(cpu.mean_absolute_error, 1).replace(/^\+/, "") }),
+    underCell(cpu.under_rate, flagged),
+    el("td", { class: "num", text: signed(memory.mean_error == null ? null : memory.mean_error / GIB, 1, " GiB") }),
+    el("td", { class: "num", text: signed(memory.mean_absolute_error == null ? null : memory.mean_absolute_error / GIB, 1, " GiB").replace(/^\+/, "") }),
+    underCell(memory.under_rate, flagged),
+  ];
+}
+
+// The whole measured host, including deliveries admitted after the forecast.
+function wholeHostRow(offset) {
   return el("tr", {}, [
     el("th", { scope: "row", text: `+${offset.offset_minutes}m` }),
     el("td", { class: "num", text: Number(offset.paired ?? 0).toLocaleString() }),
     el("td", { class: "num", text: Number(offset.unmeasured ?? 0).toLocaleString(), title: `${offset.pending ?? 0} pending · ${offset.missing ?? 0} missing` }),
-    el("td", { class: "num", text: signed(cpu.mean_error, 1) }),
-    el("td", { class: "num", text: signed(cpu.mean_absolute_error, 1).replace(/^\+/, "") }),
-    underCell(cpu.under_rate),
-    el("td", { class: "num", text: signed(memory.mean_error == null ? null : memory.mean_error / GIB, 1, " GiB") }),
-    el("td", { class: "num", text: signed(memory.mean_absolute_error == null ? null : memory.mean_absolute_error / GIB, 1, " GiB").replace(/^\+/, "") }),
-    underCell(memory.under_rate),
+    ...errorCells(offset.cpu || {}, offset.memory || {}, false),
+  ]);
+}
+
+// The covered cohort: the forecast against its saved baseline plus the
+// deliveries it covered. A report from before attribution has no
+// `attributed_paired`; its cells show a dash rather than a number.
+function coveredRow(offset) {
+  const known = offset.attributed_paired != null && Number.isFinite(Number(offset.attributed_paired));
+  const paired = known ? Number(offset.attributed_paired) : 0;
+  return el("tr", {}, [
+    el("th", { scope: "row", text: `+${offset.offset_minutes}m` }),
+    el("td", { class: "num", text: known ? paired.toLocaleString() : "—" }),
+    ...errorCells(offset.attributed_cpu || {}, offset.attributed_memory || {}, paired > 0),
   ]);
 }
 
@@ -428,18 +450,23 @@ function accuracyPanel(accuracy) {
   const since = accuracy.since ? new Date(accuracy.since).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "the start";
   const cpuFormat = (value, sign) => (sign ? signed(value, 1, " cores") : `${Number(value).toFixed(1)}`);
   const memFormat = (value, sign) => (sign ? signed(Number(value) / GIB, 1, " GiB") : `${(Number(value) / GIB).toFixed(1)} GiB`);
+  const covered = offsets.some((offset) => offset.attributed_paired != null);
   return [
     el("p", { class: "fc-meta", text: `${Number(accuracy.forecasts).toLocaleString()} forecasts on this host since ${since} · error = forecast − measured` }),
-    forecastTable("Forecast accuracy by offset", [
-      ["Offset"], ["Paired", true], ["Unmeasured", true], ["CPU mean err", true], ["CPU MAE", true], ["CPU under", true],
-      ["Mem mean err", true], ["Mem MAE", true], ["Mem under", true],
-    ], offsets.map(offsetRow)),
+    forecastTable("Covered-cohort forecast accuracy by offset", [["Offset"], ["Paired", true], ...ERROR_HEAD], offsets.map(coveredRow),
+      "Covered cohort: the forecast against its saved baseline plus the deliveries it covered."),
+    forecastTable("Whole-host forecast accuracy by offset", [
+      ["Offset"], ["Paired", true], ["Unmeasured", true], ...ERROR_HEAD,
+    ], offsets.map(wholeHostRow), "Whole host: includes deliveries admitted after the forecast."),
     el("div", { class: "rf-misses" }, [
-      missLine("Worst CPU miss", worstMiss(offsets, "cpu"), cpuFormat),
-      missLine("Worst memory miss", worstMiss(offsets, "memory"), memFormat),
+      missLine("Covered-cohort CPU miss", worstMiss(offsets, "attributed_cpu"), cpuFormat),
+      missLine("Covered-cohort memory miss", worstMiss(offsets, "attributed_memory"), memFormat),
+      missLine("Whole-host CPU miss", worstMiss(offsets, "cpu"), cpuFormat),
+      missLine("Whole-host memory miss", worstMiss(offsets, "memory"), memFormat),
     ].filter(Boolean)),
-    el("p", { class: "fc-line rf-foot", text: "Under is the share of paired minutes whose measured load was above the forecast; above 60% is marked. CPU in cores. Same data as orbit run profiles --accuracy." }),
-  ];
+    covered ? null : el("p", { class: "fc-line rf-foot", text: "This host's report has no covered-cohort figures, so those cells show —." }),
+    el("p", { class: "fc-line rf-foot", text: "Under is the share of paired minutes whose measured load was above the forecast. Covered-cohort under-rates above 60% are marked. CPU in cores. Whole-host columns match orbit run profiles --accuracy; covered-cohort columns match its --wide ATTR_ columns." }),
+  ].filter(Boolean);
 }
 
 // ---- Decisions ----------------------------------------------------------------
