@@ -1535,6 +1535,12 @@ fn no_edit_check_repair_reruns_failed_checks_once() {
         |mode, row| {
             let (fx, host) = docs_only_pr(row);
             host.script("test_ci_repair", json!({"mode":mode}));
+            if mode.contains("red") {
+                host.script(
+                    "ci.job_log",
+                    json!({"log":"test contracts::flaky_smoke ... FAILED\n"}),
+                );
+            }
             host.script(
                 "test_checkpoint",
                 json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
@@ -1568,24 +1574,211 @@ fn no_edit_check_repair_reruns_failed_checks_once() {
                     "{mode}: the green rerun clears the unchanged head"
                 );
             } else {
-                let error = match outcome {
-                    Ok(result) => {
-                        assert!(!result.success, "{mode}: {result:?}");
-                        result.message.unwrap_or_default()
+                let message = match outcome {
+                    Err(DispatchError::DeliveryRefused {
+                        refusal, message, ..
+                    }) => {
+                        assert_eq!(
+                            refusal,
+                            orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                            "{mode}: {message}"
+                        );
+                        message
                     }
-                    Err(error) => error.to_string(),
+                    other => panic!("{mode}: expected RepairDispatched hold, got {other:?}"),
                 };
                 assert!(
-                    error.contains("made no edit and wrote no scope record")
-                        && error.contains("failed again"),
-                    "{mode}: {error}"
+                    message.contains("made no edit and wrote no scope record")
+                        && message.contains("rerun")
+                        && message.contains("failed again")
+                        && message.contains("CI / test")
+                        && message.contains("contracts::flaky_smoke"),
+                    "{mode}: {message}"
                 );
                 assert!(
-                    !error.contains("No such file or directory"),
-                    "{mode}: {error}"
+                    !message.contains("No such file or directory"),
+                    "{mode}: {message}"
                 );
                 assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, mode);
             }
+        },
+    );
+}
+
+#[test]
+fn no_edit_check_repair_decision_slot_flake_lands_to_done_and_enforces_edit_guard() {
+    auto_fix_table(
+        "auto_fix::no_edit_check_repair_decision_slot_flake_lands_to_done_and_enforces_edit_guard",
+        "not_recovered absent not_recovered_with_edit",
+        |case, row| {
+            let (fx, host) = if case == "not_recovered_with_edit" {
+                one_char_pr(row)
+            } else {
+                docs_only_pr(row)
+            };
+            match case {
+                "not_recovered" => {
+                    host.script_step_recovery_decision(
+                        orbit_engine::StepRecoveryDecisionRead::Verified {
+                            verdict: orbit_engine::StepRecoveryVerdict::NotRecovered,
+                            reason: Some("flake outside candidate".into()),
+                            blocker: None,
+                        },
+                    );
+                    host.script("test_ci_repair", json!({"mode":"no_edit_green"}));
+                }
+                "absent" => {
+                    host.script_step_recovery_decision(
+                        orbit_engine::StepRecoveryDecisionRead::Absent,
+                    );
+                    host.script("test_ci_repair", json!({"mode":"no_edit_green"}));
+                }
+                "not_recovered_with_edit" => {
+                    host.script_step_recovery_decision(
+                        orbit_engine::StepRecoveryDecisionRead::Verified {
+                            verdict: orbit_engine::StepRecoveryVerdict::NotRecovered,
+                            reason: Some("partial edit left behind".into()),
+                            blocker: None,
+                        },
+                    );
+                    host.script("test_ci_repair", json!({"mode":"one_char_modified"}));
+                }
+                _ => unreachable!(),
+            }
+            host.script(
+                "test_checkpoint",
+                json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+            );
+            host.require_commands(&["true"]);
+            fx.script_checks(&["source_contract"]);
+            let mut input = auto_fix_input(&fx);
+            input["completion"] = json!("done");
+            let outcome = run_repair_job(&host, input);
+            assert_candidate_head_unchanged(&fx, case);
+            assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+            if case == "not_recovered_with_edit" {
+                match outcome {
+                    Err(DispatchError::DeliveryRefused { refusal, .. }) => {
+                        assert_eq!(
+                            refusal,
+                            orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                            "{case}"
+                        );
+                    }
+                    other => panic!("{case}: expected RepairDispatched hold, got {other:?}"),
+                }
+                assert_eq!(
+                    host.history(TASK_ID)
+                        .iter()
+                        .filter(|entry| entry.event == "ci_check_rerun")
+                        .count(),
+                    0,
+                    "{case}: an edited worktree with not_recovered must not rerun checks"
+                );
+                assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+            } else {
+                let result = outcome.expect(case);
+                assert!(result.success, "{case}: {result:?}");
+                assert_eq!(
+                    host.history(TASK_ID)
+                        .iter()
+                        .filter(|entry| entry.event == "ci_check_rerun")
+                        .count(),
+                    1,
+                    "{case}: exactly one rerun is sent"
+                );
+                assert_eq!(
+                    host.status(TASK_ID),
+                    TaskStatus::Done,
+                    "{case}: lands without operator action"
+                );
+                assert_eq!(fx.merge_requests().len(), 1, "{case}");
+            }
+        },
+    );
+}
+
+#[test]
+fn no_edit_check_repair_repeat_failure_holds_and_caps_rerun_at_one_per_head() {
+    auto_fix_table(
+        "auto_fix::no_edit_check_repair_repeat_failure_holds_and_caps_rerun_at_one_per_head",
+        "not_recovered_repeat_failure",
+        |case, row| {
+            let (fx, host) = docs_only_pr(row);
+            host.script_step_recovery_decision(orbit_engine::StepRecoveryDecisionRead::Verified {
+                verdict: orbit_engine::StepRecoveryVerdict::NotRecovered,
+                reason: Some("flaky integration test".into()),
+                blocker: None,
+            });
+            host.script("test_ci_repair", json!({"mode":"no_edit_red"}));
+            host.script(
+                "ci.job_log",
+                json!({"log":"FAIL [ 0.042s] orbit-engine::tests integration::stale_clock\n"}),
+            );
+            host.script(
+                "test_checkpoint",
+                json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+            );
+            host.require_commands(&["true"]);
+            fx.script_checks(&["source_contract"]);
+            let first = run_repair_job(&host, auto_fix_input(&fx));
+            let first_msg = match first {
+                Err(DispatchError::DeliveryRefused {
+                    refusal, message, ..
+                }) => {
+                    assert_eq!(
+                        refusal,
+                        orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                        "{case}: {message}"
+                    );
+                    message
+                }
+                other => panic!("{case}: expected RepairDispatched hold, got {other:?}"),
+            };
+            assert!(
+                first_msg.contains("rerun")
+                    && first_msg.contains("CI / test")
+                    && first_msg.contains("integration::stale_clock"),
+                "{case}: {first_msg}"
+            );
+            assert_eq!(
+                host.history(TASK_ID)
+                    .iter()
+                    .filter(|entry| entry.event == "ci_check_rerun")
+                    .count(),
+                1,
+                "{case}: first repeat failure stops after one rerun"
+            );
+            assert_candidate_head_unchanged(&fx, case);
+
+            let second = action(&host, "pr_complete", &auto_fix_input(&fx));
+            match second {
+                Err(OrbitError::DeliveryRefused {
+                    refusal, message, ..
+                }) => {
+                    assert_eq!(
+                        refusal,
+                        orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                        "{case}: {message}"
+                    );
+                    assert!(
+                        message.contains("rerun") && message.contains("CI / test"),
+                        "{case}: {message}"
+                    );
+                }
+                other => panic!("{case}: expected DeliveryRefused on repeat poll, got {other:?}"),
+            }
+            assert_eq!(
+                host.history(TASK_ID)
+                    .iter()
+                    .filter(|entry| entry.event == "ci_check_rerun")
+                    .count(),
+                1,
+                "{case}: rerun happens at most once per head and repair"
+            );
+            assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+            assert_candidate_head_unchanged(&fx, case);
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
         },
     );
 }

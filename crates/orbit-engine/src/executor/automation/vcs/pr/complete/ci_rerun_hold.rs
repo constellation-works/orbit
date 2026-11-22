@@ -45,6 +45,11 @@ pub(super) enum CiRerunRecoveryOutcome<'a> {
     NotEligible,
     /// The planner stopped completion with this reason.
     Stopped(&'a str),
+    /// The no-edit repair's rerun failed again; hold with a typed refusal.
+    Held {
+        refusal: orbit_types::workflow::DeliveryRefusal,
+        reason: &'a str,
+    },
     /// A throttled log read deferred this poll; preserve the hold clock.
     ThrottledReadDeferred,
     /// A non-throttled planner read failed; clear and use evidence gates.
@@ -57,6 +62,11 @@ pub(super) enum CiRerunHoldStep {
     Hold(bool),
     /// Stop completion with this reason.
     Stop(String),
+    /// Hold completion with this typed delivery refusal and reason.
+    HoldRefused {
+        refusal: orbit_types::workflow::DeliveryRefusal,
+        reason: String,
+    },
     /// Preserve the hold; the caller defers the throttled read and repolls.
     PreserveHold,
 }
@@ -103,6 +113,13 @@ impl CiRerunHold {
             CiRerunRecoveryOutcome::Stopped(reason) => {
                 self.clear();
                 CiRerunHoldStep::Stop(reason.to_owned())
+            }
+            CiRerunRecoveryOutcome::Held { refusal, reason } => {
+                self.clear();
+                CiRerunHoldStep::HoldRefused {
+                    refusal,
+                    reason: reason.to_owned(),
+                }
             }
             CiRerunRecoveryOutcome::ThrottledReadDeferred => CiRerunHoldStep::PreserveHold,
         })

@@ -169,20 +169,46 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
             attempt,
             max_attempts,
         ) {
-            RecoveryAdmission::Retry(model) => model,
+            RecoveryAdmission::Retry(model) => Some(model),
+            // A check repair that made no edit and wrote no scope record may
+            // have written `not_recovered` or omitted the decision file. Record
+            // the unchanged head and retry completion once so the watcher can
+            // rerun the failed checks instead of holding prematurely.
+            RecoveryAdmission::Original {
+                no_edit_eligible: true,
+            } if check_repair && recovery.name == STEP_FAILURE_RECOVERY_ACTIVITY => {
+                let mut bound = Value::Object(serde_json::Map::new());
+                let recorded = bind_recovery_context(step, ctx, &mut bound)
+                    .map_err(|error| RecoveryCommitRefusal::Uncommittable(error.to_string()))
+                    .and_then(|()| {
+                        super::check_scope::bind_no_edit_only(
+                            ctx,
+                            step,
+                            &failure.diagnostic(),
+                            &bound,
+                        )
+                    });
+                match recorded {
+                    Ok(true) => None,
+                    Ok(false) => return hold_unrepaired_check_repair(failure),
+                    Err(ref refusal) => return failure.into_refused_repair(refusal),
+                }
+            }
             // The watcher admitted this in-budget repair and the recovery ran,
             // but it did not repair the head or admit a retry. Recording the
             // handoff as the terminal step failure would fail a run still
             // inside its repair budget, so it holds instead.
-            RecoveryAdmission::Original if check_repair => {
+            RecoveryAdmission::Original { .. } if check_repair => {
                 return hold_unrepaired_check_repair(failure);
             }
-            RecoveryAdmission::Original => return failure.into_result(),
+            RecoveryAdmission::Original { .. } => return failure.into_result(),
             RecoveryAdmission::Blocked(blocker) => return failure.into_blocked(&blocker),
         };
         // [ORB-14822] The agent cannot commit its repair; the host does,
         // and the retry below runs on that commit.
-        if recovery.name == STEP_FAILURE_RECOVERY_ACTIVITY {
+        if recovery.name == STEP_FAILURE_RECOVERY_ACTIVITY
+            && let Some(recovery_model) = recovery_model
+        {
             let mut bound = Value::Object(serde_json::Map::new());
             let committed = bind_recovery_context(step, ctx, &mut bound)
                 .map_err(|error| RecoveryCommitRefusal::Uncommittable(error.to_string()))

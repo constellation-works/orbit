@@ -489,3 +489,117 @@ fn bounded_dependency_cycle_cannot_cover_failed_siblings() {
         },
     );
 }
+
+#[test]
+fn no_edit_repair_authenticates_waiter_and_ambiguous_raw_log() {
+    isolated(
+        "ci_rerun::bounded::no_edit_repair_authenticates_waiter_and_ambiguous_raw_log",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let (fx, host, mut flaky_request) = prepared_workflow_fixture(row);
+                bounded_logs(&fx, true);
+                let path = fx.forge.join("retry-config.json");
+                let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                config["job_overrides"]["1001"]["steps"] = json!([
+                    {"name":"Check out producer","number":1,"status":"completed","conclusion":"success","started_at":"2026-10-29T10:00:00Z","completed_at":"2026-10-29T10:01:00Z"},
+                    {"name":"Wait","number":2,"status":"completed","conclusion":"failure","started_at":"2026-10-29T10:00:10Z","completed_at":"2026-10-29T10:00:50Z"},
+                    {"name":"Own check","number":3,"status":"completed","conclusion":"success"}
+                ]);
+                fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+
+                // Verify ambiguous raw timestamps still refuse classification reruns.
+                flaky_request["roots"] = json!([
+                    CiRerunRoot {
+                        job_id: 1000,
+                        check: "CI / test".into(),
+                        classification: "flaky".into(),
+                        signature: "error: source failure at src/stable:<n>:<n>".into()
+                    },
+                    CiRerunRoot {
+                        job_id: 1001,
+                        check: "CI / lint".into(),
+                        classification: "flaky".into(),
+                        signature: "failed step Wait".into()
+                    },
+                ]);
+                let raw_err = run_private_vcs_operation("ci.rerun_plan", &flaky_request)
+                    .expect_err(
+                        "ambiguous raw timestamps remain refused for classification reruns",
+                    );
+                assert!(raw_err.to_string().contains("ambiguous"), "{raw_err}");
+
+                // Mixed classifications are rejected by the provider adapter.
+                let mut mixed_request = flaky_request.clone();
+                mixed_request["roots"][0]["classification"] = json!("no_edit_repair");
+                let mixed_err = run_private_vcs_operation("ci.rerun_plan", &mixed_request)
+                    .expect_err("mixed classifications are rejected");
+                assert!(
+                    mixed_err.to_string().contains("ineligible retry roots"),
+                    "{mixed_err}"
+                );
+
+                // With all failed jobs in the run marked `no_edit_repair`, the
+                // adapter authenticates both the root job and the waiter over
+                // raw fallback logs with ambiguous step timing.
+                let mut no_edit_request = flaky_request;
+                no_edit_request["roots"] = json!([
+                    CiRerunRoot {
+                        job_id: 1000,
+                        check: "CI / test".into(),
+                        classification: "no_edit_repair".into(),
+                        signature: "failed step Tests".into()
+                    },
+                    CiRerunRoot {
+                        job_id: 1001,
+                        check: "CI / lint".into(),
+                        classification: "no_edit_repair".into(),
+                        signature: "failed step Wait".into()
+                    },
+                ]);
+                let plan_val = run_private_vcs_operation("ci.rerun_plan", &no_edit_request)
+                    .expect("no_edit_repair authenticates waiter and raw fallback logs");
+                let plan: CiRerunPlan = serde_json::from_value(plan_val["plan"].clone()).unwrap();
+                assert_eq!(plan.failed_jobs.len(), 2);
+
+                assert_eq!(
+                    RuntimeHost::admit_ci_rerun(&host, &[TASK_ID.into()], None, &plan, 1_000)
+                        .unwrap(),
+                    orbit_types::workflow::CiRerunAdmission::Refused(
+                        orbit_types::workflow::CiRerunRefusal::InvalidAuthorization
+                    )
+                );
+                locked(&host.history)
+                    .entry(TASK_ID.into())
+                    .or_default()
+                    .push(
+                        TaskHistoryEntry::new(
+                            Utc::now(),
+                            "system",
+                            orbit_types::workflow::PR_AUTO_FIX_NO_EDIT_RERUN_EVENT,
+                        )
+                        .with_note(Some(
+                            serde_json::to_string(&orbit_types::workflow::PrAutoFixNoEditRerun {
+                                pr_number: "42".into(),
+                                head_sha: fx.candidate.clone(),
+                                run_id: RUN_ID.into(),
+                                attempt: 1,
+                            })
+                            .unwrap(),
+                        )),
+                    );
+                assert_eq!(
+                    RuntimeHost::admit_ci_rerun(&host, &[TASK_ID.into()], None, &plan, 1_000)
+                        .unwrap(),
+                    orbit_types::workflow::CiRerunAdmission::Reserved
+                );
+                let mut repeat = plan.clone();
+                repeat.run_attempt = 2;
+                assert_eq!(
+                    RuntimeHost::admit_ci_rerun(&host, &[TASK_ID.into()], None, &repeat, 2_000)
+                        .unwrap(),
+                    orbit_types::workflow::CiRerunAdmission::Observe(Box::new(plan))
+                );
+            });
+        },
+    );
+}

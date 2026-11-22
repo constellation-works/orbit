@@ -257,6 +257,49 @@ pub struct ErrorSignature {
     pub step_fallback: bool,
 }
 
+/// Concrete failing test names exposed in `log` (nextest `FAIL [...]` verdicts,
+/// libtest `test <name> ... FAILED` verdicts, and libtest `failures:` entries),
+/// deduplicated in emission order.
+pub(crate) fn failing_test_names(log: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for (kind, line) in classify_log_lines(log) {
+        if kind != LineKind::ConcreteDiagnostic || is_captured_panic(line) {
+            continue;
+        }
+        let payload = strip_ansi_sequences(log_payload(line));
+        let trimmed = payload.trim();
+        let lowered = trimmed.to_ascii_lowercase();
+        let extracted = if is_nextest_fail_line(&lowered) {
+            trimmed
+                .split_once(']')
+                .map(|(_, rest)| rest.trim())
+                .map(|rest| {
+                    if rest.starts_with('(')
+                        && let Some((_, after)) = rest.split_once(')')
+                    {
+                        after.trim()
+                    } else {
+                        rest
+                    }
+                })
+        } else if is_failed_test_result(&lowered) {
+            let prefix_len = "test ".len();
+            trimmed
+                .get(prefix_len..)
+                .and_then(|rest| rest.rsplit_once(" ... "))
+                .map(|(name, _)| name.trim())
+        } else {
+            (!trimmed.contains(' ')).then_some(trimmed)
+        };
+        if let Some(name) = extracted.filter(|name| !name.is_empty())
+            && !names.iter().any(|existing| existing == name)
+        {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
 /// What one runner log line is, for signature and excerpt selection.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LineKind {

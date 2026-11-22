@@ -170,6 +170,12 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
             super::super::super::checks::CiRerunStep::BudgetSpent(reason) => {
                 return Ok(CiRerunRecovery::Stopped(reason));
             }
+            super::super::super::checks::CiRerunStep::NoEditRerunFailed(reason) => {
+                return Ok(CiRerunRecovery::Held {
+                    refusal: DeliveryRefusal::RepairDispatched,
+                    reason,
+                });
+            }
             super::super::super::checks::CiRerunStep::NotEligible => {}
         }
     }
@@ -202,6 +208,12 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
         super::super::super::checks::CiRerunStep::BudgetSpent(reason) => {
             Ok(CiRerunRecovery::Stopped(reason))
         }
+        super::super::super::checks::CiRerunStep::NoEditRerunFailed(reason) => {
+            Ok(CiRerunRecovery::Held {
+                refusal: DeliveryRefusal::RepairDispatched,
+                reason,
+            })
+        }
     }
 }
 
@@ -219,6 +231,12 @@ pub(in crate::executor::automation::vcs::pr) enum CiRerunRecovery {
     /// The retry budget is spent on stopped jobs or logged infrastructure
     /// failures. The reason names the hold. Do not admit a repair.
     Stopped(String),
+    /// The no-edit repair's rerun failed again (or the head's rerun budget is
+    /// spent); hold with the named typed delivery refusal instead of failing.
+    Held {
+        refusal: DeliveryRefusal,
+        reason: String,
+    },
 }
 
 /// Whether a repair of `head` on a task this run watches ended with no

@@ -5785,6 +5785,7 @@ struct DeliveryHost {
     /// The workspace's PR settings and delivery conventions.
     pr_config: Mutex<orbit_engine::PrConfig>,
     completion_hold_rules: Mutex<Vec<orbit_types::workflow::CompletionHoldRule>>,
+    step_recovery_decision: Mutex<Option<orbit_engine::StepRecoveryDecisionRead>>,
 }
 type Widening = (String, ContextWideningStep, String, Vec<String>);
 type StatusEvent = (
@@ -5832,6 +5833,9 @@ impl DeliveryHost {
     }
     fn baseline_commands(&self, commands: &[&str]) {
         *locked(&self.baseline_commands) = commands.iter().map(ToString::to_string).collect();
+    }
+    fn script_step_recovery_decision(&self, decision: orbit_engine::StepRecoveryDecisionRead) {
+        *locked(&self.step_recovery_decision) = Some(decision);
     }
     /// Require `true` and name `gate` as the deferred baseline gate.
     fn gate_commands(&self, gate: &Gate) {
@@ -6523,6 +6527,31 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
             ));
         }
         Ok(())
+    }
+    fn allocate_step_recovery_decision(
+        &self,
+        request: &orbit_engine::StepRecoveryDecisionRequest,
+    ) -> Res<Option<orbit_engine::StepRecoveryDecisionSlot>> {
+        if locked(&self.step_recovery_decision).is_none() {
+            return Ok(None);
+        }
+        let root = PathBuf::from(&request.workspace_path);
+        Ok(Some(orbit_engine::StepRecoveryDecisionSlot {
+            run_id: request.run_id.clone(),
+            failed_step_id: request.failed_step_id.clone(),
+            attempt: request.attempt,
+            nonce: "fixture-nonce".to_string(),
+            path: root.join(".orbit/tmp/step-recovery-decision.json"),
+            workspace_root: root,
+        }))
+    }
+    fn read_step_recovery_decision(
+        &self,
+        _slot: &orbit_engine::StepRecoveryDecisionSlot,
+    ) -> Res<orbit_engine::StepRecoveryDecisionRead> {
+        Ok(locked(&self.step_recovery_decision)
+            .clone()
+            .unwrap_or(orbit_engine::StepRecoveryDecisionRead::Absent))
     }
 }
 fn git(current_dir: &Path, args: &[&str]) -> String {

@@ -132,11 +132,11 @@ pub(in crate::executor::automation::vcs) fn request_no_edit_repair_rerun<
     }) {
         return Ok(CiRerunStep::NotEligible);
     }
-    let failed_jobs = jobs
+    let failed_required_jobs = jobs
         .iter()
         .filter(|job| unsuccessful(job) && failed.iter().any(|check| answers(job, check)))
         .collect::<Vec<_>>();
-    let runs = failed_jobs
+    let runs = failed_required_jobs
         .iter()
         .filter_map(|job| job.run_id.number())
         .collect::<BTreeSet<_>>();
@@ -145,33 +145,38 @@ pub(in crate::executor::automation::vcs) fn request_no_edit_repair_rerun<
             "CI retry holds: the failed checks are not in one workflow run".into(),
         ));
     };
+    let run_failed_jobs = jobs
+        .iter()
+        .filter(|job| unsuccessful(job) && job.run_id.number() == Some(run_id))
+        .collect::<Vec<_>>();
     let mut roots = Vec::new();
-    for job in &failed_jobs {
+    for job in &run_failed_jobs {
         let Some(id) = job.job_id.number() else {
             return Ok(CiRerunStep::Wait(
                 "CI retry job identity is incomplete".into(),
             ));
         };
         if super::super::jobs::concluded_stopped(job).is_some() {
-            let Some(root) = conclusion_root(job) else {
+            let Some(mut root) = conclusion_root(job) else {
                 return Ok(CiRerunStep::Wait(
                     "CI retry job identity is incomplete".into(),
                 ));
             };
+            root.classification = "no_edit_repair".into();
             roots.push(root);
             continue;
         }
-        let log = job_log(host, workspace, run_id, id, job, Some(deadline_ms))?;
-        let signature =
-            super::super::super::super::ci::log_signature::error_signature(&log, failed_step(job));
-        if signature.step_fallback || signature.text.is_empty() {
-            return Ok(CiRerunStep::NotEligible);
-        }
+        let step = failed_step(job);
+        let signature = if step.is_empty() {
+            job_label(job)
+        } else {
+            format!("failed step {step}")
+        };
         roots.push(CiRerunRoot {
             job_id: id,
             check: job_label(job),
-            classification: "unattributed".into(),
-            signature: signature.text,
+            classification: "no_edit_repair".into(),
+            signature,
         });
     }
     if roots.is_empty() {
@@ -228,15 +233,20 @@ pub(in crate::executor::automation::vcs) fn request_no_edit_repair_rerun<
         CiRerunAdmission::Observe(previous) => {
             // The authenticated plan is built from the current completed
             // failed jobs. Only a later attempt than the reserved rerun's
-            // original attempt is that rerun's result; the original attempt
-            // (or an ambiguous send with no later attempt yet) keeps
-            // observing without a second send.
-            if previous.run_id == plan.run_id && plan.run_attempt > previous.run_attempt {
-                Ok(CiRerunStep::BudgetSpent(format!(
-                    "the CI repair made no edit and wrote no scope record; its one rerun of the \
-                     failed checks on head {} failed again, so no further repair or rerun runs \
-                     for this head",
-                    plan.head_sha
+            // original attempt (or a distinct failed run on the same head) is
+            // that rerun's result; the original attempt keeps observing without
+            // a second send.
+            if (previous.run_id == plan.run_id && plan.run_attempt > previous.run_attempt)
+                || previous.run_id != plan.run_id
+            {
+                Ok(CiRerunStep::NoEditRerunFailed(no_edit_rerun_failed_reason(
+                    host,
+                    workspace,
+                    &plan.head_sha,
+                    run_id,
+                    failed,
+                    &run_failed_jobs,
+                    deadline_ms,
                 )))
             } else {
                 Ok(CiRerunStep::Wait(format!(
@@ -253,9 +263,17 @@ pub(in crate::executor::automation::vcs) fn request_no_edit_repair_rerun<
                 "ci_infrastructure_retry_exhausted: classification=transient attempts={attempts}; the candidate stays in review"
             )))
         }
-        CiRerunAdmission::Refused(reason @ CiRerunRefusal::SharedBudgetSpent) => Ok(
-            CiRerunStep::BudgetSpent(format!("the no-edit repair rerun is spent: {reason}")),
-        ),
+        CiRerunAdmission::Refused(CiRerunRefusal::SharedBudgetSpent) => {
+            Ok(CiRerunStep::NoEditRerunFailed(no_edit_rerun_failed_reason(
+                host,
+                workspace,
+                &plan.head_sha,
+                run_id,
+                failed,
+                &run_failed_jobs,
+                deadline_ms,
+            )))
+        }
         CiRerunAdmission::Refused(
             reason @ (CiRerunRefusal::InvalidAuthorization
             | CiRerunRefusal::UnreadableReservation
@@ -268,4 +286,68 @@ pub(in crate::executor::automation::vcs) fn request_no_edit_repair_rerun<
             | CiRerunRefusal::LedgerAbsent),
         ) => Ok(CiRerunStep::Wait(format!("CI retry holds: {reason}"))),
     }
+}
+
+fn no_edit_rerun_failed_reason<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &Path,
+    head_sha: &str,
+    run_id: u64,
+    failed: &[(Option<String>, String)],
+    run_failed_jobs: &[&super::super::super::operations::CiCommitJobEvidence],
+    deadline_ms: u64,
+) -> String {
+    const MAX_REPORTED_TESTS: usize = 20;
+    let mut check_names = BTreeSet::new();
+    for job in run_failed_jobs {
+        check_names.insert(job_label(job));
+    }
+    for (workflow, name) in failed {
+        if !run_failed_jobs
+            .iter()
+            .any(|job| answers(job, &(workflow.clone(), name.clone())))
+        {
+            match workflow {
+                Some(workflow) => {
+                    check_names.insert(format!("{workflow} / {name}"));
+                }
+                None => {
+                    check_names.insert(name.clone());
+                }
+            }
+        }
+    }
+    let mut test_names = Vec::new();
+    for job in run_failed_jobs {
+        let Some(id) = job.job_id.number() else {
+            continue;
+        };
+        if super::super::jobs::concluded_stopped(job).is_some() {
+            continue;
+        }
+        if let Ok(log) = job_log(host, workspace, run_id, id, job, Some(deadline_ms)) {
+            for name in super::super::super::super::ci::log_signature::failing_test_names(&log) {
+                if !test_names.iter().any(|existing| existing == &name) {
+                    test_names.push(name);
+                }
+            }
+        }
+    }
+    let checks_text = check_names.into_iter().collect::<Vec<_>>().join(", ");
+    let tests_suffix = if test_names.is_empty() {
+        String::new()
+    } else if test_names.len() > MAX_REPORTED_TESTS {
+        let omitted = test_names.len() - MAX_REPORTED_TESTS;
+        format!(
+            " (failing tests: {}, +{omitted} more)",
+            test_names[..MAX_REPORTED_TESTS].join(", ")
+        )
+    } else {
+        format!(" (failing tests: {})", test_names.join(", "))
+    };
+    format!(
+        "the CI repair made no edit and wrote no scope record; its one rerun of the \
+         failed checks on head {head_sha} failed again for [{checks_text}]{tests_suffix}, \
+         so no further repair or rerun runs for this head"
+    )
 }

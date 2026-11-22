@@ -552,6 +552,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                     Ok(CiRerunRecovery::Stopped(reason)) => {
                         CiRerunRecoveryOutcome::Stopped(reason.as_str())
                     }
+                    Ok(CiRerunRecovery::Held { refusal, reason }) => CiRerunRecoveryOutcome::Held {
+                        refusal: *refusal,
+                        reason: reason.as_str(),
+                    },
                     Err(error) => {
                         let deferred = self
                             .diagnostic
@@ -595,6 +599,9 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                     }
                     CiRerunHoldStep::Stop(reason) => {
                         return Err(stopped(pr_number, &reason));
+                    }
+                    CiRerunHoldStep::HoldRefused { refusal, reason } => {
+                        return Err(hold_auto_fix_stop(stopped(pr_number, &reason), refusal));
                     }
                     CiRerunHoldStep::PreserveHold => {}
                 }
