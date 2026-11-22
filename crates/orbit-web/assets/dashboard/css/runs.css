@@ -3,8 +3,8 @@
 .runs-row {
   display: grid;
   grid-template-columns:
-    104px minmax(156px, 1.2fr) minmax(124px, 1.3fr) minmax(184px, 1.2fr)
-    56px 68px 84px 84px 96px;
+    104px minmax(156px, 1.1fr) minmax(124px, 1.6fr) minmax(184px, 1.1fr)
+    56px 84px 96px;
   gap: var(--space-12);
   min-height: 42px;
   padding: var(--space-4) var(--space-16);
@@ -16,8 +16,7 @@
 .runs-row:not(.runs-header):hover { background: var(--bg-hover); }
 .runs-row:not(.runs-header) .id,
 .runs-row:not(.runs-header) .run-id,
-.runs-row:not(.runs-header) .duration,
-.runs-row:not(.runs-header) .num {
+.runs-row:not(.runs-header) .duration {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
 }
@@ -25,8 +24,8 @@
 #runs-body { overflow-x: auto; }
 .runs-row.workspace-attributed {
   grid-template-columns:
-    104px minmax(70px, 0.6fr) minmax(156px, 1.2fr) minmax(124px, 1.3fr) minmax(184px, 1.2fr)
-    56px 68px 84px 84px 96px;
+    104px minmax(70px, 0.6fr) minmax(156px, 1.1fr) minmax(124px, 1.6fr) minmax(184px, 1.1fr)
+    56px 84px 96px;
 }
 .runs-row .run-workspace {
   color: var(--accent);
@@ -34,12 +33,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.run-tasks { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; max-width: 100%; }
-.run-task-link { display: flex; flex-direction: column; min-width: 0; color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
+.run-tasks { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; max-width: 100%; overflow: hidden; }
+.run-task-link { display: flex; flex-direction: column; min-width: 0; max-width: 100%; color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
 .run-task-link:hover { text-decoration: underline; }
 .run-task-id { font-family: var(--font-mono); font-size: var(--text-sm); }
 .run-task-title { color: var(--fg-dim); }
-.runs-row .run-task-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runs-row .run-task-title { display: block; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Keep the actionable failure readable across the row, below its fields. */
 .runs-row .run-failed-at { display: flex; flex-direction: column; min-width: 0; gap: var(--space-2); grid-column: 2 / -1; grid-row: 2; }
 .runs-row .run-failed-at:empty { display: none; }
@@ -50,10 +49,6 @@
 }
 .runs-row .run-failed-excerpt { color: var(--fg-dim); font-size: var(--text-sm); line-height: 1.35; overflow-wrap: anywhere; }
 .runs-row .run-failed-at.empty { color: var(--fg-mute); font-size: var(--text-sm); }
-/* An in-flight run names its crew where a failed one names its error. */
-.runs-row .run-crew { flex-direction: row; flex-wrap: wrap; gap: var(--space-2) var(--space-12); color: var(--fg-dim); font-size: var(--text-sm); }
-.runs-row .run-crew-entry { display: inline-flex; gap: var(--space-6); }
-.runs-row .run-crew-label, .runs-row .run-crew-job { color: var(--fg-mute); }
 .runs-row .run-failed-step,
 .runs-row .run-failed-at.empty { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A task's pipeline runs fold under one header row; opened, they indent below it. */
@@ -67,13 +62,13 @@
 }
 .runs-row.runs-group-child > .state,
 .runs-row.runs-group-child > .id { padding-left: var(--space-14); }
+.runs-row .run-child-state {
+  color: var(--dot, var(--fg-dim));
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
 .runs-row.runs-group-child + .runs-row:not(.runs-group-child) {
   border-top: 1px solid var(--border-strong);
-}
-/* An in-flight group has no Run ID cell, so on the desktop grid its task spans
-   that track and the title gets the room. Phones keep the named areas. */
-@media (min-width: 601px) {
-  .runs-row.runs-group-running > .run-tasks { grid-column: span 2; }
 }
 .runs-toolbar {
   display: flex;
@@ -220,11 +215,7 @@
 .runs-row .run-lineage.resumed-as {
   color: var(--accent-hover);
 }
-.runs-row .duration { color: var(--fg-dim); text-align: right; }
-.runs-row .num { text-align: right; color: var(--fg-dim); }
-.runs-row .num.unavailable { color: var(--fg-mute); }
-.runs-row .duration, .runs-row .num { white-space: nowrap; }
-.runs-row .num.hot { color: var(--state-failed); }
+.runs-row .duration { color: var(--fg-dim); text-align: right; white-space: nowrap; }
 .runs-row .state { text-align: left; }
 .runs-row .long-run-flag {
   display: inline-flex;
@@ -294,12 +285,12 @@
 /* The runs card, not the viewport, decides when the grid overflows: the rail
    and page padding make a 1280px window's card about 1038px. Chromium's
    minimum scroll width is the track minimums, the 12px gaps and the 16px
-   start padding it counts: 1068px for the default grid and 1150px with the
+   start padding it counts: 892px for the default grid and 974px with the
    Workspace column. Pin State and fade the scroll edges while the card is
    narrower than that by more than the 1px overflow tolerance. A card that
    can hold the tracks keeps the plain grid. */
 #runs-panel { container: runs-card / inline-size; }
-@container runs-card (max-width: 1066px) {
+@container runs-card (max-width: 890px) {
   /* The grid's tracks overflow the row's auto-sized box at these widths.
      Give the row its table width so its sticky State cell stays pinned for
      the full scroll range. */
@@ -311,8 +302,8 @@
       radial-gradient(farthest-side at 100% 50%, rgba(255, 255, 255, 0.16), transparent) right center / 12px 100% no-repeat scroll,
       var(--bg-elev);
   }
-  .runs-row { min-width: 1158px; }
-  .runs-row.workspace-attributed { min-width: 1260px; }
+  .runs-row { min-width: 982px; }
+  .runs-row.workspace-attributed { min-width: 1084px; }
   .runs-row > :first-child {
     position: sticky;
     left: 0;
@@ -336,7 +327,7 @@
   }
 }
 /* All-workspaces still overflows after the default grid fits. */
-@container runs-card (max-width: 1148px) {
+@container runs-card (max-width: 972px) {
   #runs-body:has(.runs-row.workspace-attributed) {
     background:
       linear-gradient(to right, var(--bg-elev) 30%, transparent) left center / 28px 100% no-repeat local,
@@ -345,7 +336,7 @@
       radial-gradient(farthest-side at 100% 50%, rgba(255, 255, 255, 0.16), transparent) right center / 12px 100% no-repeat scroll,
       var(--bg-elev);
   }
-  .runs-row.workspace-attributed { min-width: 1260px; }
+  .runs-row.workspace-attributed { min-width: 1084px; }
   .runs-row.workspace-attributed > :first-child {
     position: sticky;
     left: 0;
@@ -374,8 +365,8 @@
    the viewport. */
 @media (max-width: 768px) {
   #runs-body { container-type: inline-size; }
-  .runs-row { min-width: 1158px; }
-  .runs-row.workspace-attributed { min-width: 1260px; }
+  .runs-row { min-width: 982px; }
+  .runs-row.workspace-attributed { min-width: 1084px; }
   .runs-toolbar,
   .runs-filter,
   .runs-source-warning,
@@ -397,16 +388,15 @@
   .runs-row,
   .runs-row.workspace-attributed {
     min-width: 0;
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
-      "state state when"
-      "job job job"
-      "workspace workspace workspace"
-      "task task task"
-      "failed failed failed"
-      "runid runid runid"
-      "denials toolfails duration"
-      "actions actions actions";
+      "state when"
+      "job job"
+      "workspace workspace"
+      "task task"
+      "failed failed"
+      "runid duration"
+      "actions actions";
     column-gap: var(--space-12);
     row-gap: 0;
     padding: var(--space-8) var(--space-16);
@@ -434,12 +424,8 @@
   .runs-row .run-failed-at { grid-area: failed; }
   .runs-row .run-failed-at:empty { display: none; }
   .runs-row .run-id-cell { grid-area: runid; }
-  .runs-row .num.denials { grid-area: denials; text-align: left; }
-  .runs-row .num.tool-fails { grid-area: toolfails; text-align: left; }
   .runs-row .duration { grid-area: duration; }
   .runs-row .run-actions { grid-area: actions; min-height: 0; margin-top: var(--space-4); }
-  .runs-row .num.denials::before { content: "denials "; font-family: var(--font-sans); }
-  .runs-row .num.tool-fails::before { content: "tool fails "; font-family: var(--font-sans); }
   .runs-row.runs-header {
     display: flex;
     flex-wrap: wrap;
