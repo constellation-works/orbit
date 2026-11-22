@@ -51,6 +51,9 @@ pub(crate) struct TestWorkspace {
     pub(crate) home: PathBuf,
     pub(crate) work: PathBuf,
     template: TaskSeed,
+    /// `RUST_LOG` pinned for the `orbit` CLI children this fixture spawns, piped and
+    /// PTY alike. `None` inherits the runner's filter.
+    pub(crate) child_log_filter: Option<&'static str>,
 }
 
 impl TestWorkspace {
@@ -70,6 +73,7 @@ impl TestWorkspace {
             home,
             work,
             template,
+            child_log_filter: None,
         };
         workspace.run(
             &["workspace", "init", "--name", name],
@@ -139,6 +143,12 @@ impl TestWorkspace {
         seeded
     }
 
+    /// Pins `RUST_LOG` for the `orbit` CLI commands this fixture spawns afterward.
+    pub(crate) fn with_child_log_filter(mut self, filter: &'static str) -> Self {
+        self.child_log_filter = Some(filter);
+        self
+    }
+
     pub(crate) fn task_seed(&self, title: &str) -> TaskSeed {
         TaskSeed {
             title: title.into(),
@@ -194,7 +204,14 @@ impl TestWorkspace {
     }
 
     pub(crate) fn run_with_stdin(&self, args: &[&str], stdin: Option<&str>, label: &str) -> Output {
-        let output = run_orbit(&self.work, &self.home, args, stdin, false);
+        let output = run_orbit_with_log_filter(
+            &self.work,
+            &self.home,
+            args,
+            stdin,
+            false,
+            self.child_log_filter,
+        );
         assert!(
             output.status.success(),
             "{label} failed\nstdout:\n{}\nstderr:\n{}",
@@ -205,7 +222,14 @@ impl TestWorkspace {
     }
 
     pub(crate) fn run_raw(&self, args: &[&str]) -> Output {
-        run_orbit(&self.work, &self.home, args, None, false)
+        run_orbit_with_log_filter(
+            &self.work,
+            &self.home,
+            args,
+            None,
+            false,
+            self.child_log_filter,
+        )
     }
 
     /// Run a governed command as an explicit operator [ORB-10453].
@@ -214,7 +238,14 @@ impl TestWorkspace {
     /// it as an unidentified caller; claiming the capability is the same
     /// deliberate act the denial message asks for.
     pub(crate) fn run_as_operator(&self, args: &[&str], label: &str) -> Output {
-        let output = run_orbit(&self.work, &self.home, args, None, true);
+        let output = run_orbit_with_log_filter(
+            &self.work,
+            &self.home,
+            args,
+            None,
+            true,
+            self.child_log_filter,
+        );
         assert!(
             output.status.success(),
             "{label} failed\nstdout:\n{}\nstderr:\n{}",
@@ -251,6 +282,18 @@ pub(crate) fn run_orbit(
     stdin: Option<&str>,
     operator: bool,
 ) -> Output {
+    run_orbit_with_log_filter(work, home, args, stdin, operator, None)
+}
+
+/// [`run_orbit`] with the child's `RUST_LOG` pinned to `log_filter` when set.
+pub(crate) fn run_orbit_with_log_filter(
+    work: &Path,
+    home: &Path,
+    args: &[&str],
+    stdin: Option<&str>,
+    operator: bool,
+    log_filter: Option<&str>,
+) -> Output {
     let mut command = cargo_bin_cmd!("orbit");
     // ORB-11300: resetting HOME is not isolation. `ORBIT_REGISTRY_ROOT` and
     // `ORBIT_WORKSPACE` outrank it, so a suite launched from inside a managed
@@ -268,6 +311,9 @@ pub(crate) fn run_orbit(
         .args(args);
     if operator {
         command.env("ORBIT_OPERATOR", "1");
+    }
+    if let Some(filter) = log_filter {
+        command.env("RUST_LOG", filter);
     }
     if let Some(input) = stdin {
         command.write_stdin(input);
