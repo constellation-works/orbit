@@ -251,11 +251,11 @@ fn biased_history_corrects_quantiles_and_does_not_train_on_itself() {
                     .map(|id| stored_task(id, "medium", 100.0, false))
                     .collect(),
             );
-            record(&fixture, now - Duration::days(12), 21, eligible);
+            record(&fixture, now - Duration::days(12), 22, eligible);
             record(
                 &fixture,
                 now - Duration::days(9),
-                21,
+                22,
                 medium
                     .iter()
                     .map(|id| stored_task(id, "medium", 100.0, true))
@@ -266,7 +266,7 @@ fn biased_history_corrects_quantiles_and_does_not_train_on_itself() {
             let response = initial_work_forecast_baseline(json_ok(
                 server.get(&format!("{ENDPOINT}&history_tasks=5&concurrency=1")),
             ));
-            assert_eq!(response["model_version"], 21);
+            assert_eq!(response["model_version"], 22);
             assert_eq!(response["inputs"]["history_deliveries"], 5, "{response}");
             assert_eq!(
                 response["assumptions"]["residual_correction"],
@@ -345,7 +345,7 @@ fn biased_history_corrects_quantiles_and_does_not_train_on_itself() {
                 older["task_level"]["hours"]["n"].as_u64().unwrap() >= 8,
                 "version 14 must still be scored on its own measure: {older}"
             );
-            let current = version(21);
+            let current = version(22);
             assert_eq!(
                 current["task_level"]["hours"]["n"], 10,
                 "each done task counts once, and a forecast made after done is not in the population: {current}"
@@ -406,7 +406,7 @@ fn repeated_snapshots_count_one_residual_per_task() {
                 record(
                     &fixture,
                     now - Duration::days(days_ago),
-                    21,
+                    22,
                     training.clone(),
                 );
             }
@@ -504,7 +504,7 @@ fn correction_applies_p50_shift_to_the_full_script_total() {
             record(
                 &fixture,
                 now - Duration::days(12),
-                21,
+                22,
                 medium
                     .iter()
                     .map(|id| stored_task_spread(id, "medium"))
@@ -671,9 +671,9 @@ fn fit_and_calibration_read_the_first_not_started_forecast_per_task() {
                 };
             // Oldest first: the first not-started forecast, a later
             // not-started one, then one taken after work started.
-            record(&fixture, now - Duration::days(14), 21, row(1.0, false));
-            record(&fixture, now - Duration::days(13), 21, row(100.0, false));
-            record(&fixture, now - Duration::days(12), 21, row(0.01, true));
+            record(&fixture, now - Duration::days(14), 22, row(1.0, false));
+            record(&fixture, now - Duration::days(13), 22, row(100.0, false));
+            record(&fixture, now - Duration::days(12), 22, row(0.01, true));
 
             let server = fixture.server(false);
             let response = initial_work_forecast_baseline(json_ok(
@@ -725,7 +725,7 @@ fn fit_and_calibration_read_the_first_not_started_forecast_per_task() {
                 .as_array()
                 .unwrap()
                 .iter()
-                .find(|row| row["model_version"] == 21)
+                .find(|row| row["model_version"] == 22)
                 .unwrap();
             assert_eq!(
                 current["task_population"],
@@ -736,12 +736,87 @@ fn fit_and_calibration_read_the_first_not_started_forecast_per_task() {
     );
 }
 
+#[test]
+fn heavy_tailed_work_hours_corrects_the_median_without_losing_p90_coverage() {
+    isolated(
+        "backlog_correction::heavy_tailed_work_hours_corrects_the_median_without_losing_p90_coverage",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            // This open task's base median is ten times the cohort center.
+            for hours in [80, 80, 80, 220, 220] {
+                completed_work(
+                    &fixture,
+                    now - Duration::days(1),
+                    TaskComplexity::Medium,
+                    hours,
+                );
+            }
+            let done_at = now - Duration::days(10);
+            let rows = [
+                1, 2, 2, 3, 3, 3, 4, 4, 4, 4, 4, 5, 5, 6, 7, 10, 13, 17, 21, 32,
+            ]
+            .into_iter()
+            .map(|hours| {
+                let id = completed_work(&fixture, done_at, TaskComplexity::Medium, hours);
+                retimestamp_invocation(&fixture, &id, done_at - Duration::hours(1));
+                stored_task_state(&id, "medium", 8.0, 22.0, false)
+            })
+            .collect();
+            let pending = super::backlog_forecast::backlog_task(
+                &fixture,
+                "Open task with a wide work estimate",
+                &["file:medium.rs"],
+                &[],
+                &[],
+            );
+            record(&fixture, now - Duration::days(12), 22, rows);
+
+            let server = fixture.server(false);
+            let response = initial_work_forecast_baseline(json_ok(
+                server.get(&format!("{ENDPOINT}&history_tasks=5&concurrency=1")),
+            ));
+            let correction = &response["inputs"]["correction"];
+            let term = cohort(correction, "medium", "work_hours");
+            assert_eq!(term["n"], 20, "{term}");
+            assert_eq!(term["applied"], true, "{term}");
+            assert!(term["withheld"].is_null(), "{term}");
+            let holdout = &term["holdout"];
+            assert_eq!(holdout["base_under_p50"], 0.75, "{holdout}");
+            assert_eq!(holdout["base_under_p90"], 0.95, "{holdout}");
+            let corrected_under_p50 = holdout["corrected_under_p50"].as_f64().unwrap();
+            assert!((0.45..=0.55).contains(&corrected_under_p50), "{holdout}");
+            assert!(
+                holdout["corrected_under_p90"].as_f64().unwrap() >= 0.9,
+                "{holdout}"
+            );
+            assert!(
+                holdout["corrected_median_abs_log_p50_error"]
+                    .as_f64()
+                    .unwrap()
+                    < holdout["base_median_abs_log_p50_error"].as_f64().unwrap(),
+                "{holdout}"
+            );
+
+            let row = prediction(&response, &pending);
+            assert_eq!(
+                row["base"]["work_hours"],
+                json!({"p50": 80.0, "p90": 220.0}),
+                "{row}"
+            );
+            assert_eq!(
+                row["work_hours"],
+                json!({"p50": 40.0, "p90": 210.0}),
+                "{row}"
+            );
+        },
+    );
+}
+
 /// Twelve medium tasks against a base p50 of two hours (p90 20): nine
-/// took one hour and three took 10, 14 and 18. The fitted p50 shift
-/// halves every draw, so held out the 14- and 18-hour tasks miss the
-/// corrected p90 of ten the other eleven fit, and leave-one-out coverage
-/// is 10/12 against a base of 12/12. The cohort meets the minimum and is
-/// withheld, and the open draw stays at the base.
+/// recent tasks took one hour and three much older tasks took 10, 14 and
+/// 18. The age-weighted tail fit misses the 14- and 18-hour tasks when
+/// held out. The cohort is withheld and the open task stays at the base.
 #[test]
 fn cohort_withheld_when_holdout_p90_falls_below_base() {
     isolated(
@@ -752,12 +827,12 @@ fn cohort_withheld_when_holdout_p90_falls_below_base() {
             for _ in 0..5 {
                 completed(&fixture, now - Duration::days(1));
             }
-            let done_at = now - Duration::days(10);
-            let observed = now - Duration::days(8);
             let mut medium = Vec::new();
             for hours in [1, 1, 1, 1, 1, 1, 1, 1, 1, 10, 14, 18] {
+                let age_days = if hours == 1 { 10 } else { 75 };
+                let done_at = now - Duration::days(age_days);
                 let id = completed_work(&fixture, done_at, TaskComplexity::Medium, hours);
-                retimestamp_invocation(&fixture, &id, observed);
+                retimestamp_invocation(&fixture, &id, done_at - Duration::hours(1));
                 medium.push(id);
             }
             let pending = super::backlog_forecast::backlog_task(
@@ -769,8 +844,8 @@ fn cohort_withheld_when_holdout_p90_falls_below_base() {
             );
             record(
                 &fixture,
-                now - Duration::days(12),
-                21,
+                now - Duration::days(80),
+                22,
                 medium
                     .iter()
                     .map(|id| stored_task_state(id, "medium", 2.0, 20.0, false))
@@ -856,7 +931,7 @@ fn audit_scale_task_tokens_p50_is_not_clamped_to_ten_times_base() {
             record(
                 &fixture,
                 now - Duration::days(12),
-                21,
+                22,
                 medium
                     .iter()
                     .map(|id| stored_task_audit(id, "medium"))
@@ -929,7 +1004,7 @@ fn cohort_withheld_when_holdout_p50_error_worsens() {
             record(
                 &fixture,
                 now - Duration::days(12),
-                21,
+                22,
                 medium
                     .iter()
                     .map(|id| stored_task_state(id, "medium", 1.0, 100.0, false))

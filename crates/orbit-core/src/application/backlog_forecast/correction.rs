@@ -27,11 +27,11 @@
 //! applied: each kept task's base quantiles are corrected by the cohort fitted
 //! without it, and when that leave-one-out p90 coverage is below both the
 //! base coverage and the 90% target, or its held-out p50 error is worse than
-//! the base's, the cohort is withheld. The map itself is only the fitted p50
-//! shift, `ln(x') = ln(x) + q50`: it never stretches a draw by its distance
-//! from the cohort's median base p50, so a task far from that center is
-//! shifted by the same factor as every other task in the cohort. Bumping the version
-//! starts the correction over. Rows written by this version store each
+//! the base's, the cohort is withheld. The fitted median shift applies to
+//! every task's own p50. Draws above that p50 can retain more of their
+//! tail when the fitted p90 shift is larger. This uses the task's own
+//! uncorrected quantiles, independent of its size relative to other tasks.
+//! Bumping the version starts the correction over. Rows store each
 //! task's uncorrected quantiles under `forecast.base`; the fit reads those,
 //! so a later forecast does not treat an already-corrected quantile as the
 //! raw prediction. A row with no `base` object is an uncorrected prediction,
@@ -44,6 +44,8 @@ use orbit_store::contracts::StoredBacklogForecast;
 use orbit_types::task::{Task, TaskStatus, complexity_bucket};
 use serde::Deserialize;
 use serde_json::{Value, json};
+
+use crate::application::statistics::SplitMix64;
 
 use super::model::{self, Draw, Script};
 use super::outcomes::TaskEpisodes;
@@ -165,9 +167,7 @@ struct Term {
     n: u64,
     weight: f64,
     bias: Option<f64>,
-    p50_log_adjust: f64,
-    p90_log_adjust: f64,
-    spread: f64,
+    adjustment: MetricCorrection,
     center: f64,
     scale_ratio: Option<f64>,
 }
@@ -181,37 +181,51 @@ impl Default for Term {
             n: 0,
             weight: 0.0,
             bias: None,
-            p50_log_adjust: 0.0,
-            p90_log_adjust: 0.0,
-            spread: 0.0,
+            adjustment: MetricCorrection::default(),
             center: 1.0,
             scale_ratio: None,
         }
     }
 }
 
-impl Term {
-    fn apply(self, value: f64) -> f64 {
-        if !self.applied {
-            return value;
-        }
-        self.map(value)
+/// A bounded, monotone mapping of an uncorrected full-task draw.
+#[derive(Clone, Copy, Default)]
+struct MetricCorrection {
+    median_shift: f64,
+    upper_shift: f64,
+}
+
+type QuantileAnchors = (Option<f64>, Option<f64>);
+
+impl MetricCorrection {
+    fn widens_tail(self) -> bool {
+        self.upper_shift > self.median_shift
     }
 
-    /// The corrected value, whether or not the cohort is applied. Only the
-    /// fitted p50 shift moves a draw: `ln(x') = ln(x) + q50`, so the
-    /// corrected p50 of any task is its base p50 times `exp(q50)`, however
-    /// far that base p50 sits from the cohort `center`. There is no
-    /// dispersion stretch around the cohort center; `spread` is kept at
-    /// zero and `center` is reported only as a cohort diagnostic.
-    fn map(self, value: f64) -> f64 {
+    fn map(self, value: f64, (p50, p90): QuantileAnchors) -> f64 {
         if value <= 0.0 || !value.is_finite() {
             return value;
         }
-        let log_value = value.ln();
-        let shift = self.p50_log_adjust.clamp(-MAX_LOG_ADJUST, MAX_LOG_ADJUST);
-        (log_value + shift).exp()
+        // The shift is nondecreasing with the draw, so the map preserves
+        // draw order and maps each task's own p50 and p90 to those targets.
+        // A missing or collapsed range can only support the median shift.
+        let tail_fraction = match (p50, p90) {
+            (Some(p50), Some(p90)) if p50 > 0.0 && p90 > p50 && p90.is_finite() => {
+                ((value - p50) / (p90 - p50)).clamp(0.0, 1.0)
+            }
+            _ => 0.0,
+        };
+        let shift =
+            self.median_shift + tail_fraction * (self.upper_shift - self.median_shift).max(0.0);
+        value * shift.exp()
     }
+}
+
+/// Fitted adjustments and the uncorrected quantiles of one task's scripts.
+#[derive(Default)]
+pub(super) struct ScriptCorrection {
+    metrics: [MetricCorrection; 3],
+    anchors: [QuantileAnchors; 3],
 }
 
 /// The correction in use for this forecast. Cohorts below [`MIN_COHORT_N`]
@@ -237,9 +251,10 @@ impl Correction {
                     "withheld": term.withheld.map(Withheld::key),
                     "holdout": term.holdout.map(Holdout::to_json),
                     "bias": term.bias.map(round3),
-                    "p50_log_adjust": estimated.then(|| round3(term.p50_log_adjust)),
-                    "p90_log_adjust": estimated.then(|| round3(term.p90_log_adjust)),
-                    "spread": estimated.then(|| round3(term.spread)),
+                    "p50_log_adjust": estimated.then(|| round3(term.adjustment.median_shift)),
+                    "p90_log_adjust": estimated.then(|| round3(term.adjustment.upper_shift)),
+                    // The former stretch around the cohort center is disabled.
+                    "spread": estimated.then_some(0.0),
                     "center": estimated.then(|| round3(term.center)),
                     "scale_ratio": term.scale_ratio.map(round3),
                 }));
@@ -256,10 +271,42 @@ impl Correction {
         })
     }
 
-    fn apply_metric(&self, metric: usize, complexity: &str, value: f64) -> f64 {
-        self.by_complexity
-            .get(complexity)
-            .map_or(value, |terms| terms[metric].apply(value))
+    /// Sample the task's own full-script quantiles only for metrics that
+    /// need an upper-tail anchor. Seed the actual initial-task draws the
+    /// same way so they replay the sample used to set their anchors.
+    pub(super) fn prepare_script_correction(
+        &self,
+        complexity: &str,
+        seed: u64,
+        mut draw_script: impl FnMut(&mut SplitMix64, &mut Script),
+    ) -> ScriptCorrection {
+        let Some(terms) = self.by_complexity.get(complexity) else {
+            return ScriptCorrection::default();
+        };
+        let metrics = terms.map(|term| {
+            if term.applied {
+                term.adjustment
+            } else {
+                MetricCorrection::default()
+            }
+        });
+        let mut anchors = [QuantileAnchors::default(); 3];
+        if metrics.iter().any(|metric| metric.widens_tail()) {
+            let mut rng = SplitMix64::seeded(seed);
+            let mut script = Script::default();
+            let mut samples: [Vec<Option<f64>>; 3] = Default::default();
+            for _ in 0..model::ITERATIONS {
+                draw_script(&mut rng, &mut script);
+                let draw = script_spend(&script);
+                for (metric, value) in [draw.hours, draw.tokens, draw.usd].into_iter().enumerate() {
+                    if metrics[metric].widens_tail() {
+                        samples[metric].push(value);
+                    }
+                }
+            }
+            anchors = samples.map(|mut values| model::forecast_quantile_values(&mut values));
+        }
+        ScriptCorrection { metrics, anchors }
     }
 }
 
@@ -421,21 +468,11 @@ pub(super) fn script_spend(script: &Script) -> Draw {
 
 /// Apply the cohort correction to the script as a whole.
 ///
-/// The fit's residuals are per full task: `base_p50`, `center` and the
-/// actual are all full-script totals (see [`script_spend`]), so the map is
-/// applied to that same unit. Model 20 uses a uniform per-metric multiplier;
-/// applying it to each finite positive step value would give the same sum,
-/// up to floating-point rounding. With the former nonzero spread correction, the
-/// nonlinear map could make per-step and full-script correction differ; that
-/// historical rationale no longer applies. The steps are scaled by
-/// `corrected_total / total` so their corrected sum equals that total, and a
-/// step with a missing metric stays missing.
-/// A single-step script therefore keeps its previous behaviour, and a
-/// metric's total is the sum of the steps that carry it.
-pub(super) fn apply_script(correction: &Correction, complexity: &str, script: &mut Script) {
-    if script.steps.is_empty() {
-        return;
-    }
+/// The residuals and the task's base quantiles are full-script totals
+/// (see [`script_spend`]). Scaling every measured step by its share of the
+/// total correction keeps their sum consistent and leaves missing metrics
+/// missing. Slot time receives the same factor as work-hour spend.
+pub(super) fn apply_script_correction(correction: &ScriptCorrection, script: &mut Script) {
     let present_total = |metric: usize| -> Option<f64> {
         let mut total = 0.0;
         let mut present = false;
@@ -453,13 +490,17 @@ pub(super) fn apply_script(correction: &Correction, complexity: &str, script: &m
         present.then_some(total)
     };
     let factor = |metric: usize| -> f64 {
+        let adjustment = correction.metrics[metric];
+        if adjustment.median_shift == 0.0 && !adjustment.widens_tail() {
+            return 1.0;
+        }
         let Some(total) = present_total(metric) else {
             return 1.0;
         };
         if !total.is_finite() || total <= 0.0 {
             return 1.0;
         }
-        let corrected = correction.apply_metric(metric, complexity, total);
+        let corrected = adjustment.map(total, correction.anchors[metric]);
         if !corrected.is_finite() {
             return 1.0;
         }
@@ -540,8 +581,9 @@ fn leave_one_out_holdout(samples: &[Sample]) -> Option<Holdout> {
         let hit = |quantile: f64| sample.actual <= quantile * (1.0 + HIT_TOLERANCE);
         holdout.n += 1;
         holdout.base_hits += u64::from(hit(base_p90));
-        holdout.corrected_hits += u64::from(hit(without.map(base_p90)));
-        let corrected_p50 = without.map(sample.base_p50);
+        let anchors = (Some(sample.base_p50), Some(base_p90));
+        holdout.corrected_hits += u64::from(hit(without.adjustment.map(base_p90, anchors)));
+        let corrected_p50 = without.adjustment.map(sample.base_p50, anchors);
         holdout.base_under_p50_hits += u64::from(hit(sample.base_p50));
         holdout.corrected_under_p50_hits += u64::from(hit(corrected_p50));
         if corrected_p50 > 0.0 && corrected_p50.is_finite() {
@@ -610,7 +652,13 @@ fn estimate_term(samples: &[&Sample]) -> Term {
         .iter()
         .filter_map(|sample| sample.e90.map(|value| (value, sample.weight)))
         .collect();
-    let q90 = weighted_quantile(&e90, 0.9).unwrap_or(q50);
+    // Use the finite-sample upper rank ceil((n + 1) * 0.9), capped
+    // at n. With equally weighted distinct residuals this keeps one held-out
+    // observation from making the ordinary 90th rank miss the coverage
+    // target by construction. Age weights still govern the fitted quantile,
+    // and the holdout still checks actual coverage.
+    let tail_fraction = (1.0 + 1.0 / e90.len().max(1) as f64) * P90_TARGET;
+    let q90 = weighted_quantile(&e90, tail_fraction).unwrap_or(q50);
     let centers: Vec<(f64, f64)> = samples
         .iter()
         .map(|sample| (sample.base_p50, sample.weight))
@@ -623,11 +671,6 @@ fn estimate_term(samples: &[&Sample]) -> Term {
     let scale_ratio = weighted_quantile(&ratios, 0.5);
     let q50 = q50.clamp(-MAX_LOG_ADJUST, MAX_LOG_ADJUST);
     let q90 = q90.clamp(-MAX_LOG_ADJUST, MAX_LOG_ADJUST);
-    // No dispersion stretch: a within-task spread rescaled around the
-    // cohort center moved large tasks by up to the clamp and shrank small
-    // ones. `spread` stays in the payload at zero so its absence of effect
-    // is explicit; `center` and `scale_ratio` remain diagnostics.
-    let spread = 0.0;
     Term {
         applied: false,
         withheld: None,
@@ -635,9 +678,10 @@ fn estimate_term(samples: &[&Sample]) -> Term {
         n: samples.len() as u64,
         weight,
         bias: bias.is_finite().then_some(bias),
-        p50_log_adjust: q50,
-        p90_log_adjust: q90,
-        spread,
+        adjustment: MetricCorrection {
+            median_shift: q50,
+            upper_shift: q90,
+        },
         center,
         scale_ratio,
     }
