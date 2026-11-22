@@ -28,7 +28,9 @@ impl WorkspaceCatalog for HostWorkspaces {
                 .iter()
                 .filter(|target| {
                     selectors.iter().any(|selector| {
-                        selector == &target.workspace_id || selector == &target.name
+                        selector == &target.workspace_id
+                            || selector == &target.name
+                            || selector == target.repo_root.to_string_lossy().as_ref()
                     })
                 })
                 .cloned()
@@ -326,4 +328,252 @@ fn drain_controls_from_a_cycle_and_status_outside_a_cycle_keep_operator_requirem
     let operator_reply = drain_status(&fx.runtime, &workspace, McpCapability::Operator)
         .expect("operator caller still reads drain status");
     assert_status_payload(&operator_reply, &workspace, true);
+}
+
+struct RegisteredWorkspace {
+    id: String,
+    name: String,
+    repo_root: PathBuf,
+    runtime: OrbitRuntime,
+    _keep: TempDir,
+}
+
+/// Attach three sibling workspaces sharing the home checkout's directory
+/// basename (`repo`), with distinct registered names — including one whose
+/// registered name coincides with that checkout label.
+fn add_colliding_basename_workspaces(
+    fx: &mut Fixture,
+) -> (
+    RegisteredWorkspace,
+    RegisteredWorkspace,
+    RegisteredWorkspace,
+) {
+    let label = fx.runtime.workspace_label();
+    let create = |registered_name: &str| {
+        let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        let repo_root = root.path().join(&label);
+        std::fs::create_dir_all(repo_root.join(".orbit")).unwrap();
+        std::fs::write(repo_root.join(".orbit/config.toml"), CONFIG).unwrap();
+        let runtime = OrbitRuntime::from_roots(&fx.global, &repo_root.join(".orbit")).unwrap();
+        assert_eq!(runtime.workspace_label(), label);
+        let id = runtime.workspace_id().unwrap();
+        (id, registered_name.to_string(), repo_root, runtime, root)
+    };
+
+    let home_id = fx.runtime.workspace_id().unwrap();
+    let (covered_id, covered_name, covered_root, covered_raw, covered_keep) =
+        create("covered-registered");
+    let (label_id, label_name, label_root, label_raw, label_keep) = create(&label);
+    let (other_id, other_name, other_root, other_raw, other_keep) = create("uncovered-registered");
+
+    let unique_ids: std::collections::BTreeSet<_> = [&home_id, &covered_id, &label_id, &other_id]
+        .into_iter()
+        .collect();
+    assert_eq!(unique_ids.len(), 4, "all workspaces have distinct IDs");
+
+    let catalog = Arc::new(HostWorkspaces {
+        targets: vec![
+            FederatedWorkspaceTarget {
+                workspace_id: home_id,
+                name: "home-registered".into(),
+                repo_root: fx.repo.clone(),
+            },
+            FederatedWorkspaceTarget {
+                workspace_id: covered_id.clone(),
+                name: covered_name.clone(),
+                repo_root: covered_root.clone(),
+            },
+            FederatedWorkspaceTarget {
+                workspace_id: label_id.clone(),
+                name: label_name.clone(),
+                repo_root: label_root.clone(),
+            },
+            FederatedWorkspaceTarget {
+                workspace_id: other_id.clone(),
+                name: other_name.clone(),
+                repo_root: other_root.clone(),
+            },
+        ],
+        runtimes: OnceLock::new(),
+    });
+    let home = fx.runtime.clone().with_workspace_catalog(catalog.clone());
+    let covered_runtime = covered_raw.with_workspace_catalog(catalog.clone());
+    let label_runtime = label_raw.with_workspace_catalog(catalog.clone());
+    let other_runtime = other_raw.with_workspace_catalog(catalog.clone());
+    let _ = catalog.runtimes.set(vec![
+        home.clone(),
+        covered_runtime.clone(),
+        label_runtime.clone(),
+        other_runtime.clone(),
+    ]);
+    fx.runtime = home;
+    (
+        RegisteredWorkspace {
+            id: covered_id,
+            name: covered_name,
+            repo_root: covered_root,
+            runtime: covered_runtime,
+            _keep: covered_keep,
+        },
+        RegisteredWorkspace {
+            id: label_id,
+            name: label_name,
+            repo_root: label_root,
+            runtime: label_runtime,
+            _keep: label_keep,
+        },
+        RegisteredWorkspace {
+            id: other_id,
+            name: other_name,
+            repo_root: other_root,
+            runtime: other_runtime,
+            _keep: other_keep,
+        },
+    )
+}
+
+#[test]
+fn colliding_checkout_basenames_and_labels_cannot_authorize_uncovered_drain_status() {
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::drain_status_read::colliding_checkout_basenames_and_labels_cannot_authorize_uncovered_drain_status",
+    ) {
+        return;
+    }
+    let mut fx = fixture();
+    let (covered_other, uncovered_label_collision, uncovered_distinct_name) =
+        add_colliding_basename_workspaces(&mut fx);
+    let home_id = fx.runtime.workspace_id().unwrap();
+    let home_path = fx.repo.to_string_lossy().into_owned();
+    let covered_path = covered_other.repo_root.to_string_lossy().into_owned();
+    let label_collision_path = uncovered_label_collision
+        .repo_root
+        .to_string_lossy()
+        .into_owned();
+    let distinct_uncovered_path = uncovered_distinct_name
+        .repo_root
+        .to_string_lossy()
+        .into_owned();
+    let watched = fx.task("Watched");
+
+    // Grant covers home and `covered_other` (granted by registered name to verify
+    // canonical catalog resolution) while leaving both colliding-basename siblings uncovered.
+    let mandate = fx.add_task(TaskAddParams {
+        title: "[orchestration]: colliding basenames - sol".into(),
+        tags: vec!["resident".into()],
+        ..Default::default()
+    });
+    let mandate_body = json!({
+        "schema": "resident.mandate/v1",
+        "goal": "Read drain status only in covered workspaces",
+        "exit_criteria": ["Covered work completes"],
+        "workspaces": [home_id, covered_other.name],
+        "watch": {"tasks": [watched], "tags": []},
+        "crew": "sol",
+        "cadence": {"floor_minutes": 10, "heartbeat_minutes": 120}
+    });
+    fx.update_task(
+        &mandate,
+        TaskUpdateParams {
+            upsert_artifacts: vec![TaskArtifact::from_text(
+                "resident/mandate.json",
+                mandate_body.to_string(),
+            )],
+            ..Default::default()
+        },
+    );
+    fx.operator_call(
+        "orbit.resident.grant",
+        json!({"task_id": mandate, "workspaces": [home_id, covered_other.name]}),
+    );
+    let run = fx.cycle_run(&mandate, "resident-drain-status-colliding-labels");
+    fx.begin_cycle(&run, Utc::now());
+
+    fx.as_cycle_agent(&run, || {
+        // Covered workspaces succeed via canonical ID, registered name, and
+        // MCP-style checkout path replacement.
+        for selector in [&home_id, "home-registered", &home_path] {
+            let reply = drain_status(&fx.runtime, selector, McpCapability::Agent)
+                .unwrap_or_else(|err| panic!("covered home `{selector}` should succeed: {err}"));
+            assert_status_payload(&reply, selector, false);
+        }
+        for selector in [&covered_other.id, &covered_other.name, &covered_path] {
+            let reply = drain_status(&covered_other.runtime, selector, McpCapability::Agent)
+                .unwrap_or_else(|err| panic!("covered sibling `{selector}` should succeed: {err}"));
+            assert_status_payload(&reply, selector, false);
+        }
+
+        // Uncovered workspace whose registered name coincides with the covered
+        // checkout label (`repo`) is refused whether routed to its runtime (including
+        // with MCP's checkout-path selector) or named from the covered home runtime.
+        for (target_runtime, label, selector) in [
+            (
+                &uncovered_label_collision.runtime,
+                "routed label-collision checkout path",
+                label_collision_path.as_str(),
+            ),
+            (
+                &uncovered_label_collision.runtime,
+                "routed label-collision registered name",
+                uncovered_label_collision.name.as_str(),
+            ),
+            (
+                &uncovered_label_collision.runtime,
+                "routed label-collision canonical id",
+                uncovered_label_collision.id.as_str(),
+            ),
+            (
+                &fx.runtime,
+                "home runtime naming label-collision registered name",
+                uncovered_label_collision.name.as_str(),
+            ),
+            (
+                &fx.runtime,
+                "home runtime naming label-collision checkout path",
+                label_collision_path.as_str(),
+            ),
+        ] {
+            let error = drain_status(target_runtime, selector, McpCapability::Agent)
+                .expect_err(&format!("{label} must be refused"));
+            assert!(error.contains("resident_scope_refused"), "{label}: {error}");
+        }
+
+        // Uncovered workspace sharing the directory basename with a distinct
+        // registered name is also refused across all selectors and runtimes.
+        for (target_runtime, label, selector) in [
+            (
+                &uncovered_distinct_name.runtime,
+                "routed distinct-name checkout path",
+                distinct_uncovered_path.as_str(),
+            ),
+            (
+                &uncovered_distinct_name.runtime,
+                "routed distinct-name registered name",
+                uncovered_distinct_name.name.as_str(),
+            ),
+            (
+                &uncovered_distinct_name.runtime,
+                "routed distinct-name canonical id",
+                uncovered_distinct_name.id.as_str(),
+            ),
+            (
+                &fx.runtime,
+                "home runtime naming distinct-name checkout path",
+                distinct_uncovered_path.as_str(),
+            ),
+            (
+                &fx.runtime,
+                "home runtime naming distinct-name registered name",
+                uncovered_distinct_name.name.as_str(),
+            ),
+            (
+                &uncovered_distinct_name.runtime,
+                "routed uncovered runtime even with covered home selector",
+                home_id.as_str(),
+            ),
+        ] {
+            let error = drain_status(target_runtime, selector, McpCapability::Agent)
+                .expect_err(&format!("{label} must be refused"));
+            assert!(error.contains("resident_scope_refused"), "{label}: {error}");
+        }
+    });
 }

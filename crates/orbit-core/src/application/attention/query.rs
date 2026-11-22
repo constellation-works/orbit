@@ -70,8 +70,8 @@ fn attention_local_workspace(runtime: &OrbitRuntime) -> Result<AttentionWorkspac
 ///
 /// The runtime kinds and host health need the Operator capability, except
 /// that a live resident cycle reads them, read-only, for the workspaces in
-/// `resident_scope` (ids and names its mandate covers). The session gains no
-/// capability: every write stays operator-only.
+/// `resident_scope` (canonical workspace IDs its mandate covers). The session
+/// gains no capability: every write stays operator-only.
 pub(crate) fn attention_query(
     runtime: &OrbitRuntime,
     input: Value,
@@ -261,9 +261,7 @@ pub(crate) fn attention_query(
             }
         };
         let reads_runtime = operator
-            || resident_scope.is_some_and(|covered| {
-                covered.contains(&target.workspace_id) || covered.contains(&target.name)
-            });
+            || resident_scope.is_some_and(|covered| covered.contains(&target.workspace_id));
         host_health_withheld |= !reads_runtime;
         runtime_sources::read_runtime_attention(
             &source_context,

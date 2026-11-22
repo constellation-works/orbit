@@ -215,12 +215,12 @@ impl OrbitRuntime {
     fn resident_cycle_home_target(&self, run_id: &str) -> Option<FederatedWorkspaceTarget> {
         let catalog = self.workspace_catalog()?;
         let store = self.sqlite_store().ok()?;
-        let home = self.workspace_id().ok()?;
+        let current_ids = self.canonical_workspace_ids().ok()?;
         catalog
             .resolve_scope(&WorkspaceScope::AllRegistered)
             .ok()?
             .into_iter()
-            .filter(|target| target.workspace_id != home)
+            .filter(|target| !current_ids.contains(&target.workspace_id))
             .find(|target| {
                 orbit_store::compose::workspace_job_run_store(
                     store.clone(),
@@ -233,23 +233,43 @@ impl OrbitRuntime {
             })
     }
 
-    /// The ids a selector names: this workspace's id for its own id or
-    /// label, otherwise what the catalog resolves it to (or itself).
-    fn resident_workspace_ids(&self, selector: &str) -> BTreeSet<String> {
-        let mut ids = BTreeSet::from([selector.to_string()]);
-        if let Ok(home) = self.workspace_id()
-            && (selector == home || selector == self.workspace_label())
-        {
-            ids.insert(home);
-            return ids;
+    /// Canonical workspace IDs for this runtime (its partition ID plus, when
+    /// bound to a registered checkout, its logical catalog ID and partition
+    /// ID). Never includes checkout basenames or registered names.
+    fn canonical_workspace_ids(&self) -> Result<BTreeSet<String>, OrbitError> {
+        let mut ids = BTreeSet::from([self.workspace_id()?]);
+        if let Some(binding) = self.workspace_runtime_binding() {
+            ids.insert(binding.logical_workspace_id.clone());
+            ids.insert(binding.task_partition_id.clone());
         }
+        Ok(ids)
+    }
+
+    /// Canonical workspace IDs that `selector` resolves to: this runtime's
+    /// canonical IDs when `selector` names one of them, otherwise the
+    /// canonical workspace ID resolved by the catalog. Checkout directory
+    /// labels and registered names are never included as IDs, and unknown or
+    /// ambiguous selectors return an empty set.
+    fn resident_workspace_ids(&self, selector: &str) -> BTreeSet<String> {
+        let selector = selector.trim();
+        if selector.is_empty() {
+            return BTreeSet::new();
+        }
+        let own_ids = self.canonical_workspace_ids().unwrap_or_default();
+        if own_ids.contains(selector) {
+            return own_ids;
+        }
+        let mut ids = BTreeSet::new();
         if let Some(catalog) = self.workspace_catalog()
             && let Ok(targets) =
                 catalog.resolve_scope(&WorkspaceScope::Selectors(vec![selector.to_string()]))
+            && targets.len() == 1
         {
-            for target in targets {
-                ids.insert(target.workspace_id);
-                ids.insert(target.name);
+            let target = &targets[0];
+            if own_ids.contains(&target.workspace_id) {
+                ids.extend(own_ids.iter().cloned());
+            } else {
+                ids.insert(target.workspace_id.clone());
             }
         }
         ids
@@ -258,7 +278,7 @@ impl OrbitRuntime {
     fn live_cycle_home_grant_local(
         &self,
         run_id: &str,
-    ) -> Option<(String, String, ResidentCycleGrant)> {
+    ) -> Option<(BTreeSet<String>, ResidentCycleGrant)> {
         let run = self.show_job_run_observed(run_id).ok()?;
         if run.job_id != RESIDENT_CYCLE_JOB {
             return None;
@@ -273,10 +293,13 @@ impl OrbitRuntime {
             .ok()?
             .filter(|live| live.run_id == run_id && live.expires_at > Utc::now())
             .and_then(|live| cycle_grant(&history, &live.cycle))?;
-        Some((self.workspace_id().ok()?, self.workspace_label(), grant))
+        Some((self.canonical_workspace_ids().ok()?, grant))
     }
 
-    fn live_cycle_home_grant(&self, run_id: &str) -> Option<(String, String, ResidentCycleGrant)> {
+    fn live_cycle_home_grant(
+        &self,
+        run_id: &str,
+    ) -> Option<(BTreeSet<String>, ResidentCycleGrant)> {
         let run_id = run_id.trim();
         if run_id.is_empty() {
             return None;
@@ -290,7 +313,9 @@ impl OrbitRuntime {
                 let catalog = self.workspace_catalog()?;
                 let target = self.resident_cycle_home_target(run_id)?;
                 let foreign = Self::from_kernel(catalog.open_observational(&target).ok()?);
-                foreign.live_cycle_home_grant_local(run_id)
+                let (mut home_ids, grant) = foreign.live_cycle_home_grant_local(run_id)?;
+                home_ids.insert(target.workspace_id);
+                Some((home_ids, grant))
             }
             Err(_) => None,
         }
@@ -298,11 +323,10 @@ impl OrbitRuntime {
 
     fn covered_workspaces_from_grant(
         &self,
-        home_id: String,
-        home_label: String,
+        home_ids: BTreeSet<String>,
         grant: &ResidentCycleGrant,
     ) -> BTreeSet<String> {
-        let mut covered = BTreeSet::from([home_id, home_label]);
+        let mut covered = home_ids;
         for selector in &grant.workspaces {
             covered.extend(self.resident_workspace_ids(selector));
         }
@@ -324,12 +348,12 @@ impl OrbitRuntime {
         run_id: &str,
         input: &Value,
     ) -> Result<bool, OrbitError> {
-        let Some((home_id, home_label, grant)) = self.live_cycle_home_grant(run_id) else {
+        let Some((home_ids, grant)) = self.live_cycle_home_grant(run_id) else {
             return Ok(false);
         };
-        let covered = self.covered_workspaces_from_grant(home_id, home_label, &grant);
-        let current_id = self.workspace_id()?;
-        if !covered.contains(&current_id) && !covered.contains(&self.workspace_label()) {
+        let covered = self.covered_workspaces_from_grant(home_ids, &grant);
+        let current_ids = self.canonical_workspace_ids()?;
+        if current_ids.is_disjoint(&covered) {
             return Err(refused(
                 "resident_scope_refused",
                 format!(
@@ -342,7 +366,7 @@ impl OrbitRuntime {
         Ok(true)
     }
 
-    /// The workspaces (ids and names) a live resident cycle may read runtime
+    /// The canonical workspace IDs a live resident cycle may read runtime
     /// attention for: its mandate's own workspace and the ones its frozen
     /// grant covers. `None` for any session that is not the live cycle of a
     /// mandate: no run binding, another job's run, a stale or expired cycle,
@@ -354,8 +378,8 @@ impl OrbitRuntime {
         run_id: Option<&str>,
     ) -> Option<BTreeSet<String>> {
         let run_id = run_id.map(str::trim).filter(|id| !id.is_empty())?;
-        let (home_id, home_label, grant) = self.live_cycle_home_grant_local(run_id)?;
-        Some(self.covered_workspaces_from_grant(home_id, home_label, &grant))
+        let (home_ids, grant) = self.live_cycle_home_grant_local(run_id)?;
+        Some(self.covered_workspaces_from_grant(home_ids, &grant))
     }
 
     /// Admit the call before dispatch. Only the authenticated resident broker may
@@ -482,15 +506,11 @@ impl OrbitRuntime {
                     "this run holds no live resident cycle; it may only read",
                 )
             })?;
-        let allowed = self.covered_workspaces_from_grant(
-            self.workspace_id()?,
-            self.workspace_label(),
-            &grant,
-        );
+        let allowed = self.covered_workspaces_from_grant(self.canonical_workspace_ids()?, &grant);
         if cross_workspace {
-            let target_id = target.workspace_id()?;
-            let target_label = target.workspace_label();
-            if !allowed.contains(&target_id) && !allowed.contains(&target_label) {
+            let target_ids = target.canonical_workspace_ids()?;
+            if target_ids.is_disjoint(&allowed) {
+                let target_label = target.workspace_label();
                 return Err(refused(
                     "resident_scope_refused",
                     format!(
@@ -561,7 +581,8 @@ impl OrbitRuntime {
         input: &Value,
     ) -> Result<(), OrbitError> {
         for selector in named_workspaces(input) {
-            if self.resident_workspace_ids(&selector).is_disjoint(allowed) {
+            let resolved = self.resident_workspace_ids(&selector);
+            if resolved.is_empty() || resolved.is_disjoint(allowed) {
                 return Err(refused(
                     "resident_scope_refused",
                     format!("workspace `{selector}` is outside the resident mandate's authority"),
