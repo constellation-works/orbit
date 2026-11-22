@@ -8,9 +8,11 @@
 //! decision cannot be made in 154 places any more — it is made here, once,
 //! from the sink `main` already resolved.
 //!
-//! Everything that is not a record goes to stderr in every mode (spec §5):
-//! empty-state lines, dropped-column notices, trailing notices such as a
-//! truncation count, and progress.
+//! Non-record notices follow spec §5. Ordinary notices and table trailing
+//! notices go to stderr in every mode. A `TerminalNotice` whose text is
+//! already in the structured document goes to stderr only in table and plain
+//! modes; `json` and `ndjson` carry the text in the document without a
+//! duplicate. Progress follows spec §6.
 
 use std::io::Write;
 
@@ -88,9 +90,11 @@ fn table_notices(view: &View) -> Vec<&str> {
         .collect()
 }
 
-/// The non-record notices carried as blocks, if the view has any. Read here
-/// rather than inside `emit_human` so a `json`/`ndjson` caller — which never
-/// reaches `emit_human` — still receives them on stderr (spec §5).
+/// The ordinary non-record notices carried as blocks, if the view has any.
+/// Read here rather than inside `emit_human` so a `json`/`ndjson` caller —
+/// which never reaches `emit_human` — still receives them on stderr (spec
+/// §5). `TerminalNotice` is excluded because its text is already in the
+/// document and it is written to stderr only in table and plain modes.
 fn block_notices(view: &View) -> Vec<&str> {
     let View::Blocks(blocks) = view else {
         return Vec::new();
