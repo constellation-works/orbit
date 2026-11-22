@@ -60,6 +60,8 @@ fn a_validate_repair_is_committed_by_the_host_and_retried_on_that_head() {
             },
         );
         assert_eq!(observed.result, Ok((true, None)), "{name}");
+        assert!(observed.decision().retry_admitted, "{name}");
+        assert!(observed.projection.attempts[0].retry_admitted, "{name}");
         assert_eq!(observed.post_recovery, ["success"], "{name}");
         let [(implementation, failed_status), (retried, retried_status)] =
             observed.attempts_saw.as_slice()
@@ -239,7 +241,18 @@ fn a_repair_the_host_must_not_commit_is_refused_by_name_and_nothing_is_committed
                 ..Case::default()
             },
         );
-        assert!(observed.decision().retry_admitted, "{reason}");
+        assert_eq!(observed.decision().status, "verified", "{reason}");
+        assert_eq!(
+            observed.decision().verdict.as_deref(),
+            Some("retry"),
+            "{reason}"
+        );
+        assert!(!observed.decision().retry_admitted, "{reason}");
+        let projected = &observed.projection.attempts[0];
+        assert!(!projected.retry_admitted, "{reason}");
+        let decision = projected.decision.as_ref().unwrap();
+        assert_eq!(decision.status, "verified", "{reason}");
+        assert_eq!(decision.verdict.as_deref(), Some("retry"), "{reason}");
         assert_eq!(observed.deliveries, 1, "{reason}: no post-recovery attempt");
         assert!(observed.post_recovery.is_empty(), "{reason}");
         let failure = failure_text(&observed);

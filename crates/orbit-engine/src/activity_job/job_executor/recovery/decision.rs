@@ -23,8 +23,8 @@ pub(super) enum RecoveryAdmission {
 }
 
 /// Deferred `StepRecoveryAttempted` event so `retry.rs` can settle check-repair
-/// scope and no-edit rerun admission before the audit event and no-retry
-/// warning are emitted.
+/// scope, commit and no-edit rerun admission before the audit event and
+/// no-retry warning are emitted.
 pub(super) struct PendingRecoveryAttempt {
     step_id: String,
     recovery_activity: String,
@@ -44,8 +44,8 @@ impl PendingRecoveryAttempt {
         }
     }
 
-    /// Record that a check-repair scope check or no-edit ledger write refused
-    /// the post-recovery attempt while preserving the decision file's outcome.
+    /// Record that a host guard refused the post-recovery attempt while
+    /// preserving the decision file's outcome.
     pub(super) fn refuse_retry(&mut self) {
         if let Some(decision) = &mut self.decision {
             decision.retry_admitted = false;

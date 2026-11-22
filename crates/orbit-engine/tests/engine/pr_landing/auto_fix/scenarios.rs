@@ -1407,7 +1407,37 @@ fn docs_only_auto_fix_repairs_shared_source_and_watches_published_green_head() {
             if mode == "budget" {
                 seed_spent(&host, 1, PrAutoFixBlocker::FailedChecks, RUN_ID);
             }
-            let outcome = run_repair_job(&host, input);
+            if matches!(mode, "unrelated" | "repair") {
+                host.script_step_recovery_decision(
+                    orbit_engine::StepRecoveryDecisionRead::Verified {
+                        verdict: orbit_engine::StepRecoveryVerdict::Retry,
+                        reason: Some("fixed the source contract".into()),
+                        blocker: None,
+                    },
+                );
+            }
+            let (outcome, events) = run_repair_job_with_audit(&host, input);
+            if matches!(mode, "unrelated" | "repair") {
+                let decision = events
+                    .iter()
+                    .find_map(|event| {
+                        match &event.kind {
+                    orbit_types::workflow::activity_job::V2AuditEventKind::StepRecoveryAttempted {
+                        decision: Some(decision), ..
+                    } => Some(decision),
+                    _ => None,
+                }
+                    })
+                    .expect("recovery decision recorded");
+                assert_eq!(decision.status, "verified", "{mode}");
+                assert_eq!(decision.verdict.as_deref(), Some("retry"), "{mode}");
+                assert_eq!(decision.retry_admitted, mode == "repair", "{mode}");
+                let retried = events.iter().any(|event| matches!(
+                    event.kind,
+                    orbit_types::workflow::activity_job::V2AuditEventKind::StepPostRecoveryAttempt { .. }
+                ));
+                assert_eq!(retried, mode == "repair", "{mode}");
+            }
             if matches!(mode, "repair" | "landed") {
                 let result = outcome.expect(mode);
                 assert!(result.success, "{result:?}");
