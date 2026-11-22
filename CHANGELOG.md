@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.53.0 — 2026-11-22
+
+### Breaking Changes
+
+- **Crew memory surface removed**: The `orbit memory` CLI, the `orbit.memory.*` tool listing and grants, the `crew_memory.enabled` key and the dashboard's Knowledge › Memory page are gone. Crew memory now runs only under an experiment with a memory arm. ([ORB-26501])
+  `orbit memory` and `crew_memory.enabled` removed → run crew memory through an experiment's memory arm
+
+### Highlights
+
+- **Jobs opens on Running**: Jobs folds its Live subtab into History, whose state filter now reads Running, All and Failed with Running selected. History and Catalogue are the two subtabs. ([ORB-26506])
+- **One tool-failures card**: Audit › Tools shows tool-call failures in one card with By tool and By model tabs, and the MCP vs CLI split is gone. ([ORB-26507])
+- **Tab-specific Metrics panels**: Each Analytics › Metrics trend tab shows its own panels. Turns to first edit adds a turns-by-provider comparison, also returned as `provider_summary` in its API. ([ORB-26290])
+- **Faster resident list**: The Tasks dock's resident list now reads in under 500 ms on a live-sized store. ([ORB-26324])
+- **Reproducible perf timing**: `scripts/perf` checks in a paired timing protocol: a frozen store snapshot, a locked base and candidate build, and interleaved timed rounds. Paired runs share one perf lane per host and no longer throttle drain admissions. ([ORB-26322])
+
 ## 0.52.0 — 2026-11-21
 
 ### Breaking Changes
