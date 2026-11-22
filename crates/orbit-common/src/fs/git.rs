@@ -412,22 +412,11 @@ pub fn run_git(workspace_path: &Path, args: &[&str]) -> Result<GitCommandOutput,
     run_git_within(workspace_path, args, GIT_LOCAL_TIMEOUT)
 }
 
-/// [`run_git`] with an explicit `deadline`.
-///
-/// Git runs in its own process group with [`GIT_OUTPUT_LIMIT`] of each stream
-/// kept, and never prompts on a terminal. When `deadline` elapses the group is
-/// killed and the error is [`OrbitError::ProcessTimeout`] naming the argv and
-/// the workspace: a timeout is never an exit status, so a caller cannot read
-/// it as Git's answer.
-/// Children use the C locale without `LANGUAGE` so stderr classification is
-/// stable, and discard inherited `GIT_DIR` and `GIT_CONFIG*` overrides. Callers
-/// select repositories and admitted configuration explicitly through argv.
 /// Build a sanitized `git` [`Command`] rooted at `workspace_path` after
 /// validating `args` through the same argv admission rules as [`run_git`].
-///
-/// Callers that need streaming or larger capture limits than [`run_git_within`]
-/// use this constructor so every `git` invocation shares one argv admission
-/// barrier and clean environment.
+/// The child runs under the C locale without `LANGUAGE`, so stderr
+/// classification is stable, never prompts (`GIT_TERMINAL_PROMPT=0`), and has
+/// inherited `GIT_DIR` and `GIT_CONFIG*` overrides removed.
 pub fn git_command(workspace_path: &Path, args: &[&str]) -> Result<Command, OrbitError> {
     let admitted = admitted_git_args(args)?;
     let mut command = Command::new("git");
@@ -448,6 +437,16 @@ pub fn git_command(workspace_path: &Path, args: &[&str]) -> Result<Command, Orbi
     Ok(command)
 }
 
+/// [`run_git`] with an explicit `deadline`.
+///
+/// Git runs in its own process group with [`GIT_OUTPUT_LIMIT`] of each stream
+/// kept, and never prompts on a terminal. When `deadline` elapses the group is
+/// killed and the error is [`OrbitError::ProcessTimeout`] naming the argv and
+/// the workspace: a timeout is never an exit status, so a caller cannot read
+/// it as Git's answer.
+/// Children use the C locale without `LANGUAGE` so stderr classification is
+/// stable, and discard inherited `GIT_DIR` and `GIT_CONFIG*` overrides. Callers
+/// select repositories and admitted configuration explicitly through argv.
 pub fn run_git_within(
     workspace_path: &Path,
     args: &[&str],
