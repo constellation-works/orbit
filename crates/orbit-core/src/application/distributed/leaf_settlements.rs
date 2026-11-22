@@ -13,7 +13,7 @@ use orbit_store::contracts::{
     ClaimInspection, ClaimSettlementKind, ExecutionClaimPhase, LeafRootCause, LeafRunEvidence,
 };
 use orbit_types::workflow::{
-    BASELINE_RED_HOLD_EVENT, ClaimFailureClass, OrbitBuild, ReviewGateHistoryEvent,
+    BASELINE_RED_HOLD_EVENT, ClaimFailureClass, DeliveryRefusal, OrbitBuild, ReviewGateHistoryEvent,
 };
 use serde::Serialize;
 
@@ -94,6 +94,9 @@ pub enum SettlementOutcome {
     /// An Orbit upgrade paused the leaf at a step boundary. Its claim is
     /// released for a later drain to re-admit: nothing broke.
     UpgradePaused,
+    /// A typed delivery refusal held the leaf for operator inspection instead
+    /// of failing it: nothing broke.
+    DeliveryHold,
     /// A required check failed on the base as well. It keeps its existing
     /// accounting: it counts as a failure.
     BaselineRed,
@@ -173,6 +176,23 @@ impl SettlementAccounting {
                     == Some(UPGRADE_QUIESCE_ERROR_CODE) =>
             {
                 Self::of(Outcome::UpgradePaused, UPGRADE_QUIESCE_ERROR_CODE)
+            }
+            // A retained stale-branch setup refusal settles under `environment`
+            // so the owner holds the task for operator inspection without
+            // spending release budget; the leaf's recorded step code sets that
+            // designed hold apart from an environment failure.
+            _ if class == Some(ClaimFailureClass::Environment)
+                && settlement
+                    .run_evidence
+                    .root_cause
+                    .as_ref()
+                    .and_then(|cause| cause.code.as_deref())
+                    == Some(DeliveryRefusal::StaleBranch.error_code()) =>
+            {
+                Self::of(
+                    Outcome::DeliveryHold,
+                    DeliveryRefusal::StaleBranch.error_code(),
+                )
             }
             _ if settlement.kind.is_none() => Self::of(Outcome::Failure, "legacy_release_class"),
             _ if class == Some(ClaimFailureClass::Candidate) => {

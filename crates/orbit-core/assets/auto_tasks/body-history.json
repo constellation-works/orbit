@@ -4711,6 +4711,31 @@
           "pilot-block-patterns"
         ]
       }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Collect",
+        "## 3. Group by cause and route to the source",
+        "## 4. Dedupe and file",
+        "## 5. Check earlier fixes",
+        "## 6. Corpus proposal, report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "fff4a9401abe81824fc3ad0ce53248276e95790f8d03a5cdb508ef947b66431b",
+      "revision": "29b3a1d572eb2f860518da5ce0cd84134b2e36cc",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 6 * * *"
+        },
+        "tags": [
+          "pilot-block-patterns"
+        ]
+      }
     }
   ],
   "qa-full-sweep": [

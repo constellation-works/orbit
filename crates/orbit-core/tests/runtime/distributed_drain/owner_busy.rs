@@ -263,6 +263,7 @@ fn the_owner_honours_the_busy_owner_mark_only_on_a_transient_release() {
                 provider_limit: false,
                 provider_refusal: false,
                 owner_busy: true,
+                delivery_hold: false,
             }),
             ..ClaimEvidence::default()
         });

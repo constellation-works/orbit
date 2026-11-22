@@ -1581,6 +1581,7 @@ fn a_pending_decision_flag_on_a_release_stays_a_failure() {
             provider_limit: false,
             provider_refusal: false,
             owner_busy: false,
+            delivery_hold: false,
         }),
         ..ClaimEvidence::default()
     });
@@ -2395,6 +2396,315 @@ model = \"gpt-luna\"
             );
         }
     }
+}
+
+/// [ORB-26784] A claimed delivery leaf whose `worktree_setup` refuses a
+/// retained branch with unexplained history holds as `delivery_stale_branch`,
+/// leaves the branch and checkout untouched, settles for operator inspection
+/// without suppressing the drain's host or crew, and is excluded from failure
+/// accounting (`delivery_hold`). A valid matching branch still proceeds on the
+/// same drain, and an unrelated setup failure remains a counted failure.
+#[test]
+fn a_stale_branch_setup_refusal_holds_and_settles_outside_failure_accounting() {
+    if !isolated(
+        module_path!(),
+        "a_stale_branch_setup_refusal_holds_and_settles_outside_failure_accounting",
+    ) {
+        return;
+    }
+    use orbit_types::workflow::DeliveryRefusal;
+
+    let pair = Pair::with_crews(&[Some("sol"), Some("sol"), Some("sol")]);
+    let origin = pair._root.path().join("origin.git");
+    git(
+        pair._root.path(),
+        &["init", "--bare", "-q", origin.to_str().unwrap()],
+    );
+    git(&pair.follower_repo, &["init", "-q", "-b", "main"]);
+    git(&pair.follower_repo, &["config", "user.name", "Orbit Test"]);
+    git(
+        &pair.follower_repo,
+        &["config", "user.email", "orbit-test@example.invalid"],
+    );
+    std::fs::write(pair.follower_repo.join(".gitignore"), ".orbit/\n").unwrap();
+    std::fs::write(pair.follower_repo.join("base.txt"), "v1\n").unwrap();
+    git(&pair.follower_repo, &["add", ".gitignore", "base.txt"]);
+    git(&pair.follower_repo, &["commit", "-q", "-m", "base v1"]);
+    git(
+        &pair.follower_repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&pair.follower_repo, &["push", "-q", "-u", "origin", "main"]);
+
+    orbit_core::bootstrap::init::init_workspace_at_root(
+        &pair.follower.global_root(),
+        orbit_core::bootstrap::init::InitOptions {
+            global_only: true,
+            refresh_defaults: true,
+            ..Default::default()
+        },
+    )
+    .expect("deploy shipped activities");
+    let jobs_dir = pair.follower.global_root().join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+    std::fs::write(
+        jobs_dir.join("task_claimed_pr_pipeline.yaml"),
+        serde_json::to_string(&json!({
+            "schemaVersion": 2,
+            "kind": "Job",
+            "metadata": {"name": "task_claimed_pr_pipeline"},
+            "spec": {
+                "state": "enabled",
+                "steps": [{
+                    "id": "worktree",
+                    "target": "activity:worktree_setup",
+                    "retry": {
+                        "max_attempts": 4,
+                        "initial_backoff_ms": 10,
+                        "backoff_cap_ms": 50,
+                        "backoff_strategy": "exponential",
+                    },
+                    "default_input": {
+                        "task_ids": "{{ input.task_ids }}",
+                        "base": "{{ input.base_branch }}",
+                        "base_sync": "{{ input.base_sync }}",
+                        "dependency_delivery": "ignore",
+                    },
+                }],
+            },
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let drain = pair.run_drain();
+    let launch_pending_leaf = |pair: &Pair| {
+        let leaf = pair.queued_leaf(&drain, 1);
+        pair.advance(&leaf, LocalPullMutation::Bound);
+        pair.advance(&leaf, LocalPullMutation::LaunchIntent);
+        pair.advance(&leaf, LocalPullMutation::Launched);
+        leaf
+    };
+
+    // 1. Stale retained branch: leaf holds with `delivery_stale_branch`, keeps
+    //    branch and worktree untouched, blocks owner task for operator
+    //    inspection without suppressing host/crew, and settles as `delivery_hold`.
+    let leaf_stale = launch_pending_leaf(&pair);
+    let task_stale = pair.claimed_task(&leaf_stale);
+    let bound_stale = bound_to(
+        &pair.follower,
+        &pair,
+        &leaf_stale,
+        Arc::new(super::claimed_review::ToOwner(pair.wire.owner.clone())),
+    );
+    let seeded = orbit_engine::execute_deterministic_action(
+        &bound_stale,
+        "worktree_setup",
+        &json!({}),
+        &json!({
+            "run_id": leaf_stale,
+            "task_ids": [task_stale],
+            "base": "main",
+            "base_sync": "remote",
+            "dependency_delivery": "ignore",
+        }),
+        false,
+        &std::collections::HashMap::new(),
+        None,
+    )
+    .expect("seed retained worktree at base v1");
+    let stale_checkout = PathBuf::from(seeded["workspace_path"].as_str().unwrap());
+    let stale_branch = seeded["head_ref"].as_str().unwrap().to_string();
+    std::fs::write(stale_checkout.join("candidate.txt"), "inspect me\n").unwrap();
+    git(&stale_checkout, &["add", "candidate.txt"]);
+    git(
+        &stale_checkout,
+        &["commit", "-q", "-m", "retained candidate"],
+    );
+    let retained_tip = git(&stale_checkout, &["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
+
+    std::fs::write(pair.follower_repo.join("base.txt"), "v2\n").unwrap();
+    git(&pair.follower_repo, &["commit", "-q", "-am", "base v2"]);
+    git(&pair.follower_repo, &["push", "-q", "origin", "main"]);
+    let base_v2 = git(&pair.follower_repo, &["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
+
+    let err = bound_stale
+        .execute_pipeline_run_worker(&leaf_stale)
+        .expect_err("stale branch refuses setup");
+    assert!(
+        matches!(
+            err,
+            orbit_common::OrbitError::DeliveryRefused {
+                refusal: DeliveryRefusal::StaleBranch,
+                ..
+            }
+        ),
+        "expected typed StaleBranch delivery refusal: {err:?}"
+    );
+    assert_eq!(pair.run_state(&leaf_stale), JobRunState::Held);
+    let run = pair.follower.show_job_run(&leaf_stale).unwrap();
+    let step = run.steps.last().expect("diagnostic step");
+    assert_eq!(
+        step.error_code.as_deref(),
+        Some(DeliveryRefusal::StaleBranch.error_code()),
+        "{step:?}"
+    );
+    let step_msg = step.error_message.as_deref().unwrap_or_default();
+    assert!(
+        step_msg.contains("worktree setup refusing stale branch")
+            && step_msg.contains(&stale_branch)
+            && step_msg.contains(&retained_tip)
+            && step_msg.contains(&base_v2)
+            && step_msg.contains("untouched"),
+        "step diagnostic must carry inspection details: {step_msg}"
+    );
+    assert_eq!(
+        git(&stale_checkout, &["rev-parse", "HEAD"]).trim(),
+        retained_tip,
+        "retained worktree HEAD stays untouched"
+    );
+    assert_eq!(
+        git(
+            &pair.follower_repo,
+            &["rev-parse", &format!("refs/heads/{stale_branch}")]
+        )
+        .trim(),
+        retained_tip,
+        "retained branch tip stays untouched"
+    );
+    assert_eq!(
+        std::fs::read_to_string(stale_checkout.join("candidate.txt")).unwrap(),
+        "inspect me\n",
+        "retained candidate file stays untouched"
+    );
+
+    settle_only(&pair, &drain);
+    assert_eq!(pair.owner_status(&task_stale), "blocked");
+    assert_eq!(
+        pair.owner_claim_for_leaf(&leaf_stale)["claim"]["phase"],
+        "failed"
+    );
+    let settlement = settlement_of(&pair, &leaf_stale);
+    assert_eq!(
+        settlement["Release"]["failure"]["class"], "environment",
+        "{settlement}"
+    );
+    assert!(
+        pair.wire
+            .owner
+            .blocked_recovery_view(Utc::now())
+            .unwrap()
+            .is_empty(),
+        "stale-branch hold must not spawn blocked recovery"
+    );
+    let owner_task = pair.owner_task(&task_stale);
+    let task_comments = comments_of(&owner_task);
+    assert!(
+        task_comments.contains("worktree setup refusing stale branch")
+            && task_comments.contains(&stale_branch)
+            && task_comments.contains("Inspect the leftover"),
+        "owner task carries actionable inspection evidence: {task_comments}"
+    );
+    let listed = pair.wire.owner.leaf_settlements(None, false).unwrap();
+    let stale_record = listed
+        .iter()
+        .find(|row| row.task_id == task_stale)
+        .expect("settled stale-branch leaf");
+    assert_eq!(
+        serde_json::to_value(stale_record).unwrap()["accounting"],
+        json!({
+            "outcome": "delivery_hold",
+            "counts_as_failure": false,
+            "reason": "delivery_stale_branch",
+        }),
+        "{stale_record:?}"
+    );
+    assert_eq!(
+        window(&pair, &drain).host_suppressed,
+        None,
+        "task-local stale branch must not suppress the host"
+    );
+    assert_eq!(
+        sol_exclusion(&pair, &drain),
+        None,
+        "task-local stale branch must not exclude the crew"
+    );
+
+    // 2. Valid matching branch on the same drain still proceeds.
+    let leaf_valid = launch_pending_leaf(&pair);
+    let task_valid = pair.claimed_task(&leaf_valid);
+    let bound_valid = bound_to(
+        &pair.follower,
+        &pair,
+        &leaf_valid,
+        Arc::new(super::claimed_review::ToOwner(pair.wire.owner.clone())),
+    );
+    let valid_seeded = orbit_engine::execute_deterministic_action(
+        &bound_valid,
+        "worktree_setup",
+        &json!({}),
+        &json!({
+            "run_id": leaf_valid,
+            "task_ids": [task_valid],
+            "base": "main",
+            "base_sync": "remote",
+            "dependency_delivery": "ignore",
+        }),
+        false,
+        &std::collections::HashMap::new(),
+        None,
+    )
+    .expect("seed matching branch at base v2");
+    assert_eq!(valid_seeded["base_sha"], base_v2);
+    bound_valid
+        .execute_pipeline_run_worker(&leaf_valid)
+        .expect("matching branch proceeds through worker setup");
+    assert_eq!(pair.run_state(&leaf_valid), JobRunState::Success);
+    let valid_state = pair.follower.read_run_state(&leaf_valid).unwrap().unwrap();
+    assert_eq!(
+        valid_state.pipeline["worktree"]["base_sha"], base_v2,
+        "{valid_state:?}"
+    );
+    assert_eq!(
+        valid_state.pipeline["worktree"]["head_ref"], valid_seeded["head_ref"],
+        "{valid_state:?}"
+    );
+    settle_only(&pair, &drain);
+
+    // 3. Unrelated setup failure remains a counted failure.
+    git(&origin, &["update-ref", "-d", "refs/heads/main"]);
+    let leaf_fail = launch_pending_leaf(&pair);
+    let task_fail = pair.claimed_task(&leaf_fail);
+    let bound_fail = bound_to(
+        &pair.follower,
+        &pair,
+        &leaf_fail,
+        Arc::new(super::claimed_review::ToOwner(pair.wire.owner.clone())),
+    );
+    let _ = bound_fail
+        .execute_pipeline_run_worker(&leaf_fail)
+        .expect_err("missing base ref fails setup");
+    assert_eq!(pair.run_state(&leaf_fail), JobRunState::Failed);
+    settle_only(&pair, &drain);
+    assert_eq!(pair.owner_status(&task_fail), "blocked");
+    let listed = pair.wire.owner.leaf_settlements(None, false).unwrap();
+    let fail_record = listed
+        .iter()
+        .find(|row| row.task_id == task_fail)
+        .expect("settled unrelated setup failure");
+    assert_eq!(
+        serde_json::to_value(fail_record).unwrap()["accounting"],
+        json!({
+            "outcome": "failure",
+            "counts_as_failure": true,
+            "reason": "candidate_failure",
+        }),
+        "{fail_record:?}"
+    );
 }
 
 // Related boundary scenarios share the isolated table fixture.

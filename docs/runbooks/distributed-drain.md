@@ -1476,8 +1476,9 @@ the scan counts it, derived from the typed kind, class,
 `review_decision_pending` flag and the leaf's recorded step code, never from the
 reason text [ORB-21840].
 `review_decision_hold` (a failed `candidate` settlement awaiting a recorded
-landing decision), `evidence_hold`, `operator_cancel` and `upgrade_paused` (a
-`transient` settlement whose leaf recorded `upgrade_quiesce`) are held, not failed;
+landing decision), `evidence_hold`, `operator_cancel`, `upgrade_paused` (a
+`transient` settlement whose leaf recorded `upgrade_quiesce`) and `delivery_hold` (an
+`environment` settlement whose leaf recorded `delivery_stale_branch`) are held, not failed;
 `failure`, `baseline_red` and legacy `unrecorded` count. The flag on any other
 settlement stays a `failure` with reason
 `review_decision_pending_without_candidate_failure`. Accounting is read-only:

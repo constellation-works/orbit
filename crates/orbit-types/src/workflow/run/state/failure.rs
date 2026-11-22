@@ -525,7 +525,11 @@ impl ClaimFailureClass {
                 || message
                     .is_some_and(|message| failure_classification_text(message).contains(marker))
         };
-        if is_provider_failure(error_code, message) {
+        if error_code == Some(super::super::DeliveryRefusal::StaleBranch.error_code()) {
+            // A retained stale-branch setup refusal protects unexplained history
+            // and requires operator inspection before another attempt.
+            Some(Self::Environment)
+        } else if is_provider_failure(error_code, message) {
             Some(Self::Provider)
         } else if is_validation_environment_failure(error_code, message) {
             Some(Self::Environment)

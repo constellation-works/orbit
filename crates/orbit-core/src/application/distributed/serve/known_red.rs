@@ -63,6 +63,7 @@ impl OrbitRuntime {
                 provider_limit: false,
                 provider_refusal: false,
                 owner_busy: false,
+                delivery_hold: false,
             }),
             ..ClaimEvidence::default()
         };

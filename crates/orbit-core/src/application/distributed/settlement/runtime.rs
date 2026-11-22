@@ -281,6 +281,8 @@ impl crate::OrbitRuntime {
             }
             if let Some(failure) = &evidence.failure
                 && failure.class.suppresses_host()
+                && !failure.delivery_hold
+                && !is_stale_branch_release(evidence)
                 && host_suppressed.is_none()
             {
                 host_suppressed = Some(format!(
@@ -355,7 +357,9 @@ impl crate::OrbitRuntime {
                 // host's, so its release excludes nothing.
                 // [ORB-15573] Nor is a provider's content refusal.
                 (None, Some(failure))
-                    if failure.excludes_crew() && evidence.forge_hold.is_none() =>
+                    if failure.excludes_crew()
+                        && evidence.forge_hold.is_none()
+                        && !is_stale_branch_release(evidence) =>
                 {
                     (
                         failure
@@ -646,6 +650,17 @@ impl crate::OrbitRuntime {
             settlement_refusal,
         }))
     }
+}
+
+/// A stale-branch setup refusal protects one task's retained branch rather than
+/// indicting the host environment or the crew, so it suppresses neither.
+fn is_stale_branch_release(evidence: &orbit_store::contracts::ClaimEvidence) -> bool {
+    evidence
+        .leaf_run
+        .as_ref()
+        .and_then(|report| report.root_cause.as_ref())
+        .and_then(|cause| cause.code.as_deref())
+        == Some(orbit_types::workflow::DeliveryRefusal::StaleBranch.error_code())
 }
 
 /// Whether the owner answered a pull with a refusal, as opposed to a lost or
