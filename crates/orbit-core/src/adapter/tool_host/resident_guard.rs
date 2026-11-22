@@ -130,6 +130,14 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
             | TaskVerb::Delete => Refused,
         },
         OrbitBuiltinAction::Workflow(verb) => match verb {
+            WorkflowVerb::Auto
+                if input
+                    .get("action")
+                    .and_then(Value::as_str)
+                    .is_some_and(|action| action.trim() == "status") =>
+            {
+                Read
+            }
             WorkflowVerb::Auto | WorkflowVerb::Ship | WorkflowVerb::RunResume => Gated(Dispatch),
             WorkflowVerb::Land => Gated(Merge),
             WorkflowVerb::RunList | WorkflowVerb::RunObserve | WorkflowVerb::RunShow => Read,

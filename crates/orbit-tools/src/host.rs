@@ -297,6 +297,12 @@ pub trait OrbitToolHost: Send + Sync {
     }
 
     fn task_scope(&self) -> OrbitTaskScope;
+
+    /// Whether this host's active run is a live resident cycle permitted to
+    /// observe drain readiness (`orbit.workflow.auto` action `status`).
+    fn allows_resident_drain_status(&self) -> bool {
+        false
+    }
 }
 
 impl From<SearchVerb> for OrbitBuiltinAction {
